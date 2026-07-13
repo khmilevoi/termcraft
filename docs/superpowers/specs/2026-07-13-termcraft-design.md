@@ -15,8 +15,11 @@ coding agent that implements the real application.
 
 Core principles:
 
-- **Pure AI generator.** No manual WYSIWYG editing. All design changes go through the
-  agent. The mouse annotates and inspects; it never edits geometry directly.
+- **Pure AI generator.** No manual WYSIWYG editing. All changes to design content —
+  page documents, their elements, geometry, styles — go through the agent. The mouse
+  annotates and inspects; it never edits geometry directly. Project structure (page
+  order, titles, removal) is ordinary bookkeeping, manageable from both the UI and
+  agent operations.
 - **No API keys.** Agents are driven through their locally installed CLIs in headless
   mode, using whatever auth the user already has.
 - **Local-first storage.** Everything lives in a `.termcraft/` folder in the directory
@@ -44,17 +47,21 @@ truth for screens, states, palette, and status-bar language.
 
 `termcraft` looks for `.termcraft/` in the current working directory.
 
-- Missing → first-run wizard: create folder, check agent CLI availability
-  (`codex --version`), pick target stack for exports (rust-ratatui | go-bubbletea |
-  generic), preview defaults. MVP keeps the wizard minimal (agent check + defaults).
+- Missing → the Home screen opens immediately; `.termcraft/` is created lazily, at the
+  moment the first project is created (Enter on the prompt), with default config. The
+  agent CLI check (`codex --version`) runs in the background at startup and shows in
+  the status bar; a missing agent produces a clear error on send. MVP has no wizard.
+  The v1.0 first-run wizard adds the explicit choices: target stack for exports
+  (rust-ratatui | go-bubbletea | generic) and preview defaults.
 - Present but older format → offers bulk migration (see §7).
 
 Home screen: a large centered prompt input ("Describe the TUI you want to design"),
 below it the list of projects from `./.termcraft/projects/` (name, updated date, page
-count), navigable by mouse and arrows. Typing a prompt and pressing Enter creates a
+count), navigable by mouse and arrows. The prompt is focused on entry; `Esc`/`Tab`
+unfocuses it (focus rules: §3.8). Typing a prompt and pressing Enter creates a
 project and immediately starts the first generation. Clicking a project opens its
 Workspace with chat history restored. Inline selectors under the prompt show the
-current agent · model · effort combo (`m` opens the picker, §3.6).
+current agent · model · effort combo (`m` or a mouse click opens the picker, §3.6).
 
 ### 3.2 Workspace
 
@@ -63,7 +70,10 @@ bottom (agent name, page + version, preview size, mode, hotkey hints). Page tabs
 the preview. `F2` toggles fullscreen preview.
 
 While the agent works, its status streams into the chat; the preview updates when a new
-version is applied. Generation is cancellable (`Esc`).
+version is applied. Generation is cancellable (`Esc`, per the focus rules in §3.8).
+Typing the next message while a turn runs is allowed, but sending is disabled (the
+status bar hints why) — there is no message queue. Version switching and rollback are
+locked while a turn runs.
 
 Mouse in the preview (static mode):
 
@@ -72,40 +82,62 @@ Mouse in the preview (static mode):
   attached to the chat composer, so "make it blue" reaches the agent with context.
   `Esc` deselects.
 - **Right click** drops a **pin comment**: a mini input opens at the click point; the
-  comment is stored anchored to (page, element id, relative coordinates) and shown as a
-  numbered pin on the preview and as a list in the chat panel. All open pins are sent
-  with the next message; pins attached to a successfully applied message are marked
-  resolved (user can reopen them).
+  comment is stored anchored to (page, element id, coordinates relative to the
+  element's rect) and shown as a numbered pin on the preview and as a list in the chat
+  panel. Open pins whose anchor resolves are sent with the next message; pins attached
+  to a successfully applied message are marked resolved (user can reopen them).
+
+Pins are anchored to element ids, not versions. A pin is drawn on the preview only
+when the viewed version contains its element; otherwise it disappears from the preview
+but stays in the chat panel's pin list with an orphan marker ("element missing in
+v3"). Orphaned pins are never deleted automatically and are skipped when sending to
+the agent.
 
 ### 3.3 Pages
 
 Project → **Pages** (one design screen each) → per-page version history. Tabs switch
 pages. The agent manages pages itself through operations (§6): it can add a "Settings"
-page, edit the active one, rename or remove pages. In v1.0 pages are also formally
-linked by `goTo` interactions, forming a clickable prototype flow.
+page, edit the active one, rename, reorder or remove pages. Removal only unlists — the
+page's files stay on disk, and adding the same slug resurrects its history (§6.2). In
+v1.0 pages are also formally linked by `goTo` interactions, forming a clickable
+prototype flow.
 
 ### 3.4 Versions
 
-Every applied agent operation that changes a page creates `vN.json` for that page.
-MVP: `[` / `]` switch prev/next version, status bar shows `vN`. v1.0: history UI with
-timestamps, prompt excerpts, and rollback ("make v3 the head").
+Every applied agent turn creates exactly one new `vN.json` for each page it changed —
+versions map 1:1 to chat messages, and each turn's record in `chat.jsonl` carries an
+`applied` map (`{"main": 5}`) linking the message to the versions it produced. The
+head of a page is simply its highest version; there is no head pointer.
+
+Browsing is free: `[` / `]` switch prev/next version read-only, the status bar shows
+`vN`, nothing is written. Sending a message while viewing a non-head version first
+auto-rolls that version back to head — the agent always edits what the user sees.
+
+Rollback ("make v3 the head") copies v3 forward as the new highest version — history
+stays linear and append-only, nothing is deleted (the git-revert model). Rollbacks,
+auto or explicit, are recorded as system entries in the chat. MVP: `[` / `]` switching
+only. v1.0: history UI with timestamps and prompt excerpts (from the `applied` map),
+explicit rollback.
 
 ### 3.5 Interactive prototype (v1.0)
 
 `F4` toggles static ↔ interactive mode. In interactive mode clicks drive the design
-instead of selecting: buttons fire their `interactions`, tabs switch, menus/dialogs
-open and close, `goTo:` navigates between pages, focus traverses with Tab, and bound
-inputs accept real typing with Enter firing `submit`. `F3` opens the Tweaks panel
-(§5.6) in either mode.
+instead of selecting: buttons fire their `interactions`, tabs switch (via their
+`<id>.active` variable, §5.5), menus/dialogs open and close, `goTo:` navigates between
+pages, focus traverses with `Tab` in document order (depth-first over elements with
+`bind` or `interactions`; `Shift+Tab` reverses), and bound inputs accept real typing
+with Enter firing `submit`. `F3` opens the Tweaks panel (§5.6) in either mode.
 
 ### 3.6 Agent · model · effort picker (v1.0)
 
-Pressing `m` (Home or Workspace) opens a popup over the dimmed screen listing
-selectable (agent, model, reasoning effort) combinations — one row each, current
-choice marked. The chosen triple is stored in `config.toml` and shown as a chip in the
-status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on the Home
-prompt. Each `AgentBackend` reports its available models/efforts and maps the triple
-to its CLI flags.
+Pressing `m` (Home or Workspace, when no text input is focused — §3.8) or clicking
+the status-bar chip / Home inline selectors opens a popup over the dimmed screen
+listing selectable (agent, model, reasoning effort) combinations — one row each,
+current choice marked. The chosen triple is stored in `config.toml` and shown as a
+chip in the status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on
+the Home prompt. Each `AgentBackend` reports its available models/efforts and maps the
+triple to its CLI flags. Switching agent or model starts a fresh agent session (§6.2);
+chat history is unaffected.
 
 ### 3.7 Export
 
@@ -114,8 +146,32 @@ to its CLI flags.
 - `design-prompt.md` — implementation prompt: product overview, per-page structure and
   behavior, interactions and tweak states, theme/palette, recommended libraries for the
   configured target stack, and an ASCII snapshot of each page rendered by termcraft
-  itself.
+  itself at the page's `minSize` (deterministic — independent of the current preview
+  size or theme override).
 - `pages/*.json` — the exact head-version DSL files (machine-readable source of truth).
+
+Re-export silently overwrites `exports/<project>/` in place: exports are derived data,
+and their history is git's job.
+
+### 3.8 Focus and hotkeys
+
+Hotkeys come in two tiers:
+
+- **Global** — `F2`/`F3`/`F4`, `Ctrl+E`: work always, even while a text input is
+  focused.
+- **Single-char** — `m`, `[`, `]`, arrow navigation: work only when no text input is
+  focused.
+
+Exactly one widget owns focus. The Home prompt is focused on entry; the Workspace
+composer is focused by default; `Tab` cycles focus between the composer and the
+preview. Anything reachable by a single-char hotkey is also reachable by mouse.
+
+`Esc` follows a strict layered priority — one press pops the topmost layer:
+
+1. an open popup (picker, pin input) → close it;
+2. a focused text input → unfocus;
+3. a running generation → cancel it;
+4. a selected element → deselect.
 
 ## 4. Architecture
 
@@ -176,8 +232,25 @@ Catalog:
 |------|----------|
 | MVP containers | `row`, `column`, `panel` (border + title), `tabs` |
 | MVP primitives | `text` (styled spans), `button`, `input`, `list`, `table`, `gauge`, `sparkline`, `separator`, `spacer` |
-| MVP escape hatch | `canvas` — per-cell character grid (char + fg/bg per cell) for ASCII art, logos, custom widgets |
+| MVP escape hatch | `canvas` — rows of styled character runs (text + fg/bg) for ASCII art, logos, custom widgets |
 | v1.0 additions | `modal`, `menu`, `tree`, `progress`, `chart` (bar/line), scroll container |
+
+Content fields per element:
+
+| Element | Fields |
+|---------|--------|
+| `text` | `text: string \| span[]` — a span is `{ "text": "…", "style": {…} }`; an array mixes styles inline |
+| `button` | `label` |
+| `input` | `label`, `placeholder`, `text` (initial value), `bind` (§5.5) |
+| `list` | `items: string[]` |
+| `table` | `headers: string[]`, `rows: string[][]` |
+| `gauge` | `value: 0..100` |
+| `sparkline` | `data: number[]` |
+| `tabs` | children are the tabs (tab title from `label`), `active` — the **id** of the initially active tab child (id, not index — stable across reorders, matches `<id>.active`, §5.5) |
+| `canvas` | rows of runs `{ "text": "…", "fg": …, "bg": … }` |
+
+The JSON Schema shipped with the `dsl` module is generated from these types and is the
+machine-readable contract; this table normalizes the semantics.
 
 Unknown fields are ignored with a warning during validation (forward compatibility on
 top of the migration system).
@@ -186,35 +259,72 @@ top of the migration system).
 
 Mirrors ratatui's model 1:1 (LLMs handle it well): containers split their area among
 children with constraints — `"30%"`, `12` (fixed cells), `"fill"`, `"min:10"` — plus
-`padding` and `align`. Direction comes from the container type (`row` / `column`).
+`padding`. Direction comes from the container type (`row` / `column`); alignment is
+expressed with `spacer` elements and constraints.
 
 ### 5.4 Styles and themes
 
-Elements reference **palette roles** (`primary`, `accent`, `surface`, `text-muted`, …);
-a theme is a named palette bound at page level. Switching themes never touches the
-tree. Raw hex values are allowed; the renderer degrades colors to the terminal's
-capability. Style fields: fg/bg (role or hex), modifiers (bold, dim, italic,
-underline), border (none | plain | rounded | double | thick).
+Elements reference **palette roles** — the closed set: `background`, `surface`,
+`text`, `text-muted`, `text-faint`, `border`, `primary`, `accent`, `selection`, `ok`,
+`error`. Unknown role names are validation errors. Themes come from a built-in
+registry: `dark-default` (MVP; palette values from the UI design file) and
+`light-default` (v1.0). A theme is a named palette bound at page level via the `theme`
+field; switching themes never touches the tree, and the preview theme switcher
+(§8.1) is a non-persistent override for checking — it never rewrites the document.
+Agent-defined palettes are backlog (§8.3); until then raw hex values are the escape
+hatch. The renderer degrades colors to the terminal's capability. Style fields: fg/bg
+(role or hex), modifiers (bold, dim, italic, underline), border (none | plain |
+rounded | double | thick).
 
 ### 5.5 Reactive variable system (v1.0)
 
-One **variable store per page**: `map<name, bool | string>`, initialized from declared
-defaults. It is session runtime state — never written into `vN.json`, reset on version
-switch. Everything that "moves" in a prototype reads and writes this single map:
+One **variable store per page**: `map<name, bool | string>`. It is session runtime
+state — never written into `vN.json`, reset on version switch.
+
+Variables are implicit — there is no declaration block; a variable exists by being
+referenced. Initial values resolve in priority order:
+
+1. a tweak's `default`, if a tweak declares the variable (§5.6);
+2. element-derived initials: an input's `text` initializes its bound variable, a tabs'
+   `active` initializes `<id>.active`, and visibility auto-variables (`<id>.visible`)
+   default to `false` — dialogs and menus start hidden;
+3. otherwise the type's zero: `false` / `""`.
+
+Everything that "moves" in a prototype reads and writes this single map:
 
 - **Conditions.** `visibleWhen: {"var": "show-error"}` or
   `{"var": "density", "equals": "compact"}` (plus `"not": true`) controls element
   visibility — the mechanism behind initially hidden dialogs, menus, dropdowns, error
-  banners.
+  banners. A bare `{"var": …}` means truthiness: `true` for bools, non-empty for
+  strings.
 - **Overrides.** Per element: `overrides: [{"when": {…}, "style": {…}, "text": "…"}]` —
   an error state can recolor an existing input's border, not just reveal hidden nodes.
 - **Interactions.** Per element: `interactions: [{"on": "click" | "submit" | "change",
   "action": "…"}]` with actions `goTo:<page>`, `open:<id>`, `close:<id>`,
-  `toggle:<id>`, `set:<var>=<value>`. `open/close/toggle` are sugar over a boolean
-  variable tied to the target element's `visibleWhen`.
+  `toggle:<id>`, `set:<var>=<value>`. In `set:`, the values `true`/`false` parse as
+  bools; anything else is a string.
 - **Bound inputs.** `input` may declare `bind: "<var>"`. In interactive mode the input
   is real: click/Tab focuses it, typing writes the variable (visible live anywhere the
   variable is referenced), Enter fires the `submit` interaction.
+
+**Element runtime state lives in the same map, as auto-variables.** A widget with
+runtime state exposes it under `<element-id>.<slot>`: tabs keep their active tab in
+`<id>.active` (the value is the child element's id — stable across reorders; the
+doc's `active` field is only the initial value), visibility sugar uses `<id>.visible`.
+`bind` overrides the auto-name. Conditions, overrides, and tweaks reference these like
+any variable — a hint can appear only on the Settings tab. Keyboard focus is UI
+chrome, not part of the map.
+
+**`open:<id>` / `close:<id>` / `toggle:<id>` are pure sugar:** they expand to
+`set:<id>.visible=true/false/invert`. If the target element declares no `visibleWhen`
+of its own, it implicitly gets `visibleWhen: {"var": "<id>.visible"}` — the common
+"button opens dialog" case needs zero boilerplate, and the dialog starts hidden. If
+the target declares a custom `visibleWhen`, the sugar does not try to inverse-solve
+it — validation warns, and the agent should use `set:` directly.
+
+Variable hygiene is lint, not errors (§6.3): a variable read but never written (no
+tweak, no `set:`, no `bind`), or written but never read, produces a warning fed back
+to the agent — the typical typo surfaces on the next turn.
 
 Because rendering is immediate-mode, reactivity is simply "re-render the frame after
 every mutation"; conditions are evaluated during render. No dependency graph.
@@ -262,30 +372,65 @@ supports.
 ### 6.2 Task protocol
 
 Each turn termcraft sends: role system prompt (TUI designer), the DSL JSON Schema and
-output rules, the project manifest (pages, active page), DSL of the affected pages, the
-current selection, open pins, and the user message.
+output rules, the project manifest (pages with titles, head version numbers, active
+page), the full DSL of the **active page**, the current selection, open pins (only
+those whose anchors resolve), and the user message. If the combined size of all pages'
+head documents is small (≈32 KB — an implementation constant, checked per turn), all
+pages are prefetched into the prompt; prefetch policy is a per-turn decision, not a
+protocol mode.
 
 The agent replies with a JSON **operations list** — the same shape as kernel commands:
 
 ```json
 { "ops": [
-  { "op": "add_page",    "page": "settings", "title": "Settings", "doc": { } },
-  { "op": "update_page", "page": "main",     "doc": { } },
-  { "op": "remove_page", "page": "old" },
-  { "op": "rename_page", "page": "main", "title": "Overview" },
+  { "op": "read_page",       "page": "settings" },
+  { "op": "add_page",        "page": "settings", "title": "Settings", "doc": { } },
+  { "op": "update_page",     "page": "main",     "doc": { } },
+  { "op": "remove_page",     "page": "old" },
+  { "op": "rename_page",     "page": "main", "title": "Overview" },
+  { "op": "reorder_pages",   "order": ["main", "settings"] },
   { "op": "set_active_page", "page": "settings" }
 ] }
 ```
 
-`doc` payloads are full page documents (no diffs in v1.0).
+`doc` payloads are full page documents (no diffs in v1.0). `op.page` must equal
+`doc.page`; a mismatch is a validation error. `reorder_pages` must list a permutation
+of the manifest.
+
+**Read-before-edit.** A response consisting of `read_page` ops continues the turn:
+termcraft replies (via session resume) with the requested head documents and waits for
+the next response — at most 3 read rounds per turn, then an honest error. A response
+consisting of mutation ops ends the turn; mixing reads and mutations is a validation
+error. termcraft tracks which head version of each page the agent has seen — in
+memory, per agent session — via prefetch, `read_page`, or authorship of an applied
+`update_page`. An `update_page` against a page whose current head the agent has not
+seen fails validation ("page changed since last read — read it first") and enters the
+retry loop. `add_page` and the metadata ops (`rename_page`, `reorder_pages`,
+`remove_page`, `set_active_page`) require no read.
+
+`remove_page` only unlists the page from the project manifest; its directory
+(versions, comments) stays on disk, invisible to the UI, export, and validation.
+`add_page` with the same slug resurrects it: the page returns to the manifest and
+version numbering continues where it left off.
+
+**Sessions.** Conversation continuity uses the CLI's session resume; the session id is
+stored per project in a local, non-versioned file (§7.1). If resume fails (stale
+session, another machine, switched backend), termcraft silently starts a fresh session
+and includes a short excerpt of the recent chat for continuity. Switching agent or
+model starts a fresh session; the seen-versions map resets with it. After a termcraft
+restart the map starts empty — safe by construction, and cheap because the active page
+is always sent.
 
 ### 6.3 Validation and application
 
-Response → JSON parse → schema validation → semantic checks (unique ids, known pages,
-variable references resolve). Invalid → automatic retry with the validation errors
-appended to the prompt (max 3), then an honest error in chat. Valid → ops applied
-atomically by the kernel; each changed page gets a new `vN.json` written via
-tmp + rename. The last valid version is never lost.
+Response → JSON parse → schema validation → semantic checks (unique ids, pages known
+to the manifest, `op.page` = `doc.page`, the unseen-head guard, unknown palette
+roles). Variable hygiene (read-but-never-written, written-but-never-read, sugar
+targeting a custom `visibleWhen`) produces warnings fed back to the agent, not errors.
+Invalid → automatic retry with the validation errors appended to the prompt (one
+initial attempt plus at most 3 retries), then an honest error in chat. Valid → ops
+applied atomically by the kernel; each changed page gets exactly one new `vN.json`
+written via tmp + rename. The last valid version is never lost.
 
 Diagram: [`architecture/generation-sequence.mmd`](../../../architecture/generation-sequence.mmd) —
 the full turn from user message to applied version, including the retry loop.
@@ -296,11 +441,14 @@ the full turn from user message to applied version, including the retry loop.
 
 ```
 .termcraft/
+  .gitignore                  # written by termcraft: lock, *.local.toml, backup-*/
   config.toml                 # format_version, agent+model+effort, target_stack, preview defaults
-  lock                        # single-instance lock file
+  lock                        # single-instance lock file (holds the owner's PID)
   projects/<slug>/
     project.toml              # format_version, name, dates, ordered pages, active page
-    chat.jsonl                # dialog log (first line: {"kind":"chat","version":1})
+    chat.jsonl                # dialog log (first line: {"kind":"chat","version":1});
+                              #   turn records carry applied: {"<page>": N} (§3.4)
+    session.local.toml        # agent session id — machine-local, never committed
     pages/<page>/
       v1.json … vN.json       # page documents (schemaVersion inside)
       comments.jsonl          # pins (first line: {"kind":"comments","version":1})
@@ -309,7 +457,9 @@ the full turn from user message to applied version, including the retry loop.
     pages/*.json
 ```
 
-All plain text — designs diff and commit alongside the target project's code.
+All plain text. Files matched by the generated `.gitignore` (`lock`, `*.local.toml`,
+`backup-*/`) are machine-local state; everything else diffs and commits alongside the
+target project's code.
 
 ### 7.2 Format versioning and migrations
 
@@ -353,38 +503,49 @@ All plain text — designs diff and commit alongside the target project's code.
 
 ### 8.2 MVP cut
 
-- Home with input + project list; `.termcraft` auto-created with minimal config (agent
-  presence check instead of full wizard).
+- Home with input + project list; `.termcraft` created lazily when the first project
+  is created, with default config (target stack `rust-ratatui`); background agent
+  presence check (no wizard).
 - Workspace: chat + preview + status bar + `F2`. Codex only with its default model; no
   picker UI, but the (agent, model, effort) triple already lives in `config.toml` so
   the format needs no migration when the picker lands.
-- Multiple pages with tabs; agent ops `add_page` / `update_page` / `set_active_page`.
+- Multiple pages with tabs; agent ops `add_page` / `update_page` / `set_active_page`;
+  every turn prefetches all pages (MVP projects sit under the size threshold), so
+  `read_page` and the seen-version guard land with v1.0.
 - DSL without the reactive system (§5.5–5.6 fields reserved): MVP catalog of §5.2, one
   dark theme, color degradation.
 - Mouse: hover, click-select, right-click **pin comments** (explicitly in MVP).
-- Versions written from day one; `[` / `]` prev/next switching.
+- Versions written from day one; `[` / `]` prev/next switching; sending from a
+  non-head view auto-rolls back (§3.4).
 - Export: `design-prompt.md` + DSL + ASCII snapshots (renderer already exists — cheap
   and high-value for the implementing agent).
 - Migration infrastructure live from the first commit (even with zero migrations).
-- Preview auto-sized to the available area, honoring `minSize`.
+- Preview auto-sized to the available area; when it is smaller than the page's
+  `minSize`, the status-bar size indicator turns error-colored (`78×22 < 80×24`) and
+  `F2` fullscreen shows the true-size view. Rendering never blanks out — constraints
+  simply squeeze.
 
 ### 8.3 Backlog (post-1.0)
 
 Daemon + IPC, workspace crate split, agent diffs/patches, ratatui code generation,
-additional agent backends (Gemini CLI behind the same trait), spatial canvas boards.
+additional agent backends (Gemini CLI behind the same trait), spatial canvas boards,
+agent-defined palettes/themes.
 
 ## 9. Error handling
 
 - **Agent missing / not logged in** → clear message with install instructions; checked
-  by the wizard and before each send.
+  in the background at startup and before each send.
 - **Invalid agent output** → auto-retry with validation errors (≤3), then chat error.
   Head version untouched; new versions are written atomically post-validation.
-- **Cancelled / hung generation** → process killed on `Esc` or timeout; status in chat;
-  project state intact.
+- **Cancelled / hung generation** → process killed on `Esc` or after stream inactivity
+  (no JSONL events for 120 s); status in chat; project state intact.
 - **Corrupt or too-new file** → error naming the file; a broken page version is
   skipped and the project opens at the last valid one.
-- **Terminal below `minSize`** → "enlarge the window" placeholder screen.
-- **Second instance** → lock file refuses politely.
+- **Terminal too small for the app frame** → "enlarge the window" placeholder screen.
+  (A preview merely smaller than the page's `minSize` is the status-bar warning of
+  §8.2, not this placeholder.)
+- **Second instance** → the lock file (holding the owner's PID) refuses politely; a
+  lock whose owner process is dead is removed automatically on startup.
 - **Panic** → panic hook restores the terminal (raw mode off, mouse capture off) and
   reports via color-eyre. The user's terminal is never left broken.
 
@@ -394,8 +555,8 @@ additional agent backends (Gemini CLI behind the same trait), spatial canvas boa
   versions (§7.2).
 - `render`: snapshot tests via ratatui `TestBackend` (DSL fixture → buffer → golden);
   hit-testing unit tests.
-- `agent`: JSONL stream parser units over recorded real `codex exec` output; retry /
-  cancel pipeline against a fake agent.
+- `agent`: JSONL stream parser units over recorded real `codex exec` output; retry,
+  read-round, and cancel pipelines against a fake agent.
 - `core`: Command/Event contract tests over the channels — doubles as the future IPC
   contract test suite.
 - Smoke: app driven on a test backend with injected events (open project → prompt →
@@ -403,7 +564,8 @@ additional agent backends (Gemini CLI behind the same trait), spatial canvas boa
 
 ## 11. Success criteria (MVP)
 
-From an empty directory: `termcraft` → wizard creates `.termcraft` → prompt "a system
-monitor dashboard" → Codex generates pages → live render → right-click pin "make this
-gauge red" → send → new version applies → `Ctrl+E` → `design-prompt.md` + DSL that a
-coding agent can implement from without seeing termcraft.
+From an empty directory: `termcraft` → Home opens → prompt "a system monitor
+dashboard" → Enter creates `.termcraft` and the project → Codex generates pages →
+live render → right-click pin "make this gauge red" → send → new version applies →
+`Ctrl+E` → `design-prompt.md` + DSL that a coding agent can implement from without
+seeing termcraft.
