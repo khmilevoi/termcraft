@@ -129,6 +129,51 @@ a pair of async channels (`Command` → core, `Event` → UI). When daemon mode 
 this contract becomes the wire protocol and the UI does not change. Terminal events and
 core events merge in a single tokio select loop.
 
+```mermaid
+flowchart LR
+    term["Terminal<br/>(crossterm: key / mouse / resize)"] --> ui
+
+    subgraph ui["ui — ratatui app (Elm: Model / Msg / update / view)"]
+        home["Home"]
+        ws["Workspace: chat · preview · pins · tweaks"]
+    end
+
+    ui -- "Command channel<br/>(future IPC)" --> core
+    core -- "Event channel<br/>(future IPC)" --> ui
+
+    subgraph core["core — kernel"]
+        orch["orchestration: apply ops,<br/>versions, export"]
+    end
+
+    subgraph agent["agent"]
+        trait["AgentBackend trait"]
+        codex["CodexCli (MVP)"]
+        claude["ClaudeCli (later)"]
+    end
+
+    core --> trait
+    trait --> codex
+    trait --> claude
+    codex -- "spawn · JSONL stream" --> cli["codex exec<br/>(local CLI, no API keys)"]
+
+    subgraph dsl["dsl"]
+        schema["types · JSON Schema · validation"]
+    end
+
+    subgraph render["render"]
+        eng["layout · drawing · hit-testing ·<br/>color degradation"]
+    end
+
+    subgraph store["store"]
+        files[".termcraft/ · atomic writes ·<br/>migrations"]
+    end
+
+    core --> dsl
+    core --> store
+    ui --> render
+    render --> dsl
+```
+
 ## 5. The design DSL
 
 Goals: trivial for an LLM to emit reliably; deterministic to render; every element
@@ -203,6 +248,15 @@ switch. Everything that "moves" in a prototype reads and writes this single map:
 Because rendering is immediate-mode, reactivity is simply "re-render the frame after
 every mutation"; conditions are evaluated during render. No dependency graph.
 
+```mermaid
+flowchart LR
+    tw["Tweaks panel (F3)<br/>toggle · select · text"] --> vars
+    ix["interactions<br/>click · submit · change"] --> vars
+    inp["bound inputs<br/>(typing in prototype)"] --> vars
+    vars["variable store<br/>map&lt;name, bool | string&gt;<br/>(per page, session-only)"] --> pass
+    pass["render pass evaluates<br/>visibleWhen · overrides · bind"] --> frame["new frame"]
+```
+
 ### 5.6 Tweaks (v1.0)
 
 Declared per page; each tweak is a labeled control over the same variable map:
@@ -263,6 +317,31 @@ variable references resolve). Invalid → automatic retry with the validation er
 appended to the prompt (max 3), then an honest error in chat. Valid → ops applied
 atomically by the kernel; each changed page gets a new `vN.json` written via
 tmp + rename. The last valid version is never lost.
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant UI as ui
+    participant K as core
+    participant A as agent (CodexCli)
+    participant S as store
+
+    U->>UI: message + selection + open pins
+    UI->>K: Command::SendMessage
+    K->>S: append chat.jsonl
+    K->>A: start(schema + manifest + page DSL + message)
+    A-->>K: AgentEvent stream (status)
+    K-->>UI: Event::AgentStatus → chat
+    A-->>K: final ops JSON
+    K->>K: parse → schema → semantic checks
+    loop invalid, max 3
+        K->>A: retry with validation errors
+        A-->>K: corrected ops JSON
+    end
+    K->>S: apply ops atomically (new vN.json per page)
+    K-->>UI: Event::VersionApplied
+    UI->>UI: re-render preview, resolve sent pins
+```
 
 ## 7. Storage and data versioning
 
