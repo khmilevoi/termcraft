@@ -37,6 +37,9 @@ Core principles:
 
 ## 3. User flows
 
+UI reference: `design/Termcraft UI.dc.html` (Claude Design source) — visual source of
+truth for screens, states, palette, and status-bar language.
+
 ### 3.1 Launch and Home screen
 
 `termcraft` looks for `.termcraft/` in the current working directory.
@@ -50,7 +53,8 @@ Home screen: a large centered prompt input ("Describe the TUI you want to design
 below it the list of projects from `./.termcraft/projects/` (name, updated date, page
 count), navigable by mouse and arrows. Typing a prompt and pressing Enter creates a
 project and immediately starts the first generation. Clicking a project opens its
-Workspace with chat history restored.
+Workspace with chat history restored. Inline selectors under the prompt show the
+current agent · model · effort combo (`m` opens the picker, §3.6).
 
 ### 3.2 Workspace
 
@@ -94,7 +98,16 @@ open and close, `goTo:` navigates between pages, focus traverses with Tab, and b
 inputs accept real typing with Enter firing `submit`. `F3` opens the Tweaks panel
 (§5.6) in either mode.
 
-### 3.6 Export
+### 3.6 Agent · model · effort picker (v1.0)
+
+Pressing `m` (Home or Workspace) opens a popup over the dimmed screen listing
+selectable (agent, model, reasoning effort) combinations — one row each, current
+choice marked. The chosen triple is stored in `config.toml` and shown as a chip in the
+status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on the Home
+prompt. Each `AgentBackend` reports its available models/efforts and maps the triple
+to its CLI flags.
+
+### 3.7 Export
 
 `Ctrl+E` (or `termcraft export`) writes to `.termcraft/exports/<project>/`:
 
@@ -242,6 +255,10 @@ no file access, exact flags verified during implementation). Claude Code CLI bec
 the second backend once/if its terms permit headless embedding; the trait is designed
 against it from the start.
 
+`AgentTask` carries the configured (model, reasoning effort) from the picker triple
+(§3.6); each backend maps them to its own CLI flags and reports which combinations it
+supports.
+
 ### 6.2 Task protocol
 
 Each turn termcraft sends: role system prompt (TUI designer), the DSL JSON Schema and
@@ -279,7 +296,7 @@ the full turn from user message to applied version, including the retry loop.
 
 ```
 .termcraft/
-  config.toml                 # format_version, agent, target_stack, preview defaults
+  config.toml                 # format_version, agent+model+effort, target_stack, preview defaults
   lock                        # single-instance lock file
   projects/<slug>/
     project.toml              # format_version, name, dates, ordered pages, active page
@@ -331,12 +348,16 @@ All plain text — designs diff and commit alongside the target project's code.
     for menus/dropdowns/dialogs, bound inputs with typing + Enter, Tweaks panel with
     toggle/select/text controls over the reactive variable store.
 12. Export: `design-prompt.md` + DSL files + ASCII page snapshots.
+13. Agent · model · effort picker (`m`): popup selection, status-bar chip, inline
+    selectors on Home (§3.6).
 
 ### 8.2 MVP cut
 
 - Home with input + project list; `.termcraft` auto-created with minimal config (agent
   presence check instead of full wizard).
-- Workspace: chat + preview + status bar + `F2`. Codex only.
+- Workspace: chat + preview + status bar + `F2`. Codex only with its default model; no
+  picker UI, but the (agent, model, effort) triple already lives in `config.toml` so
+  the format needs no migration when the picker lands.
 - Multiple pages with tabs; agent ops `add_page` / `update_page` / `set_active_page`.
 - DSL without the reactive system (§5.5–5.6 fields reserved): MVP catalog of §5.2, one
   dark theme, color degradation.
@@ -350,7 +371,7 @@ All plain text — designs diff and commit alongside the target project's code.
 ### 8.3 Backlog (post-1.0)
 
 Daemon + IPC, workspace crate split, agent diffs/patches, ratatui code generation,
-additional agent backends, spatial canvas boards.
+additional agent backends (Gemini CLI behind the same trait), spatial canvas boards.
 
 ## 9. Error handling
 
