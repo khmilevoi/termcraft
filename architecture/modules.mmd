@@ -1,0 +1,44 @@
+%% termcraft — module architecture and kernel boundary
+%% The Command/Event channel pair between ui and core is the future daemon IPC.
+flowchart LR
+    term["Terminal<br/>(crossterm: key / mouse / resize)"] --> ui
+
+    subgraph ui["ui — ratatui app (Elm: Model / Msg / update / view)"]
+        home["Home"]
+        ws["Workspace: chat · preview · pins · tweaks"]
+    end
+
+    ui -- "Command channel<br/>(future IPC)" --> core
+    core -- "Event channel<br/>(future IPC)" --> ui
+
+    subgraph core["core — kernel"]
+        orch["orchestration: apply ops,<br/>versions, export"]
+    end
+
+    subgraph agent["agent"]
+        trait["AgentBackend trait"]
+        codex["CodexCli (MVP)"]
+        claude["ClaudeCli (later)"]
+    end
+
+    core --> trait
+    trait --> codex
+    trait --> claude
+    codex -- "spawn · JSONL stream" --> cli["codex exec<br/>(local CLI, no API keys)"]
+
+    subgraph dsl["dsl"]
+        schema["types · JSON Schema · validation"]
+    end
+
+    subgraph render["render"]
+        eng["layout · drawing · hit-testing ·<br/>color degradation"]
+    end
+
+    subgraph store["store"]
+        files[".termcraft/ · atomic writes ·<br/>migrations"]
+    end
+
+    core --> dsl
+    core --> store
+    ui --> render
+    render --> dsl
