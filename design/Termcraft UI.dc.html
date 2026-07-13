@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#0a0908;}
+  *{box-sizing:border-box;}
+  @keyframes tcblink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+  a{color:#e6a23c;text-decoration:none;}
+  a:hover{color:#f6c163;text-decoration:underline;}
+  ::selection{background:#392c11;color:#f6c163;}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0a0908;background-image:radial-gradient(circle at 1px 1px,#17140f 1px,transparent 0);background-size:26px 26px;color:#d7d0c2;font-family:'JetBrains Mono',ui-monospace,monospace;padding:56px 60px 140px;">
+
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:40px;flex-wrap:wrap;border-bottom:1px solid #211d16;padding-bottom:26px;margin-bottom:8px;">
+    <div>
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:22px;letter-spacing:.02em;">❯ termcraft</span>
+        <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
+      </div>
+      <p style="color:#8f877a;font-size:13px;line-height:1.55;margin:12px 0 0;max-width:78ch;">Describe a TUI in chat, a local agent generates it, and it renders live in the terminal. Below: the tool itself — one dark theme, one amber accent, ratatui-style widgets on a strict character grid. Everything is real monospace cells (JetBrains Mono), box-drawing chrome, no pixel geometry.</p>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;">
+      {{ legend }}
+    </div>
+  </div>
+
+  <section id="sec-home">
+    <div style="margin:52px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">01 · Home</span>
+        <span style="color:#5b544a;font-size:12px;">home-120 · home-80 · home-empty</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Centered prompt to describe a TUI, recent projects list below (arrow/mouse navigable), hotkey status bar. Populated and empty states.</p>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+      <div id="home-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home · 120×36</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-120</span>
+        </div>
+        {{ homePop120 }}
+      </div>
+      <div style="flex:none;display:flex;flex-direction:column;gap:34px;">
+        <div id="home-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+          <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+            <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+            <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home · 80×24</span>
+            <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-80</span>
+          </div>
+          {{ homePop80 }}
+        </div>
+        <div id="home-empty" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+          <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+            <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+            <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home · empty state</span>
+            <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-empty</span>
+          </div>
+          {{ homeEmpty80 }}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-ws">
+    <div style="margin:60px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">02 · Workspace — idle</span>
+        <span style="color:#5b544a;font-size:12px;">ws-idle-120 · ws-idle-80</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Chat with the agent on the left, live preview of the current page on the right, clickable page tabs above it, context + hotkeys in the status bar. Preview shows a finished system-monitor design.</p>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+      <div id="ws-idle-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · 120×36</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-idle-120</span>
+        </div>
+        {{ wsIdle120 }}
+      </div>
+      <div id="ws-idle-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · 80×24</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-idle-80</span>
+        </div>
+        {{ wsIdle80 }}
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-gen">
+    <div style="margin:60px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">03 · Workspace — generating</span>
+        <span style="color:#5b544a;font-size:12px;">ws-gen-120</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Agent status streams in the chat (spinner + step lines); the preview keeps the previous version dimmed with a subtle generating indicator; the composer is disabled.</p>
+    </div>
+    <div id="ws-gen-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · generating</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-gen-120</span>
+      </div>
+      {{ wsGen120 }}
+    </div>
+  </section>
+
+  <section id="sec-tweaks">
+    <div style="margin:60px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">04 · Tweaks panel (F3)</span>
+        <span style="color:#5b544a;font-size:12px;">ws-tweaks-120 · ws-tweaks-80</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">A right-side panel of state controls — toggles, selects, text inputs. Flipping <span style="color:#dd7b60;">Error state</span> ON makes the error banner appear in the preview and the search input border turn red.</p>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+      <div id="ws-tweaks-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 120×36</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-120</span>
+        </div>
+        {{ wsTweaks120 }}
+      </div>
+      <div id="ws-tweaks-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 80×24</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-80</span>
+        </div>
+        {{ wsTweaks80 }}
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-ver">
+    <div style="margin:60px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">05 · Version history</span>
+        <span style="color:#5b544a;font-size:12px;">ws-ver-120</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Stepping through versions with <span style="color:#e6a23c;">[</span> / <span style="color:#e6a23c;">]</span> opens a compact popup over the dimmed workspace: version, time, prompt excerpt, rollback.</p>
+    </div>
+    <div id="ws-ver-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · version history</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-ver-120</span>
+      </div>
+      {{ verHist120 }}
+    </div>
+  </section>
+
+  <section id="sec-agent">
+    <div style="margin:60px 0 22px;">
+      <div style="display:flex;align-items:baseline;gap:14px;">
+        <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">06 · Agent / model / effort picker</span>
+        <span style="color:#5b544a;font-size:12px;">ws-agent-120</span>
+      </div>
+      <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Pressing <span style="color:#e6a23c;">m</span> opens a popup over the dimmed workspace to pick agent, model and reasoning effort together — one selectable row per combination, current choice marked. The chosen combo shows as a chip in the status bar everywhere (<span style="color:#e6a23c;">codex · gpt5.5 · high</span>) and as inline selectors on the home prompt.</p>
+    </div>
+    <div id="ws-agent-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · agent / model / effort</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-agent-120</span>
+      </div>
+      {{ agentPicker120 }}
+    </div>
+  </section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  pal = {
+    bg:'#14110d', fg:'#d7d0c2', dim:'#8f877a', faint:'#5b544a',
+    border:'#403a2f', line:'#2c2820',
+    amber:'#e6a23c', amberHi:'#f6c163', amberDim:'#8a6d33',
+    sel:'#392c11', selFg:'#f6c163',
+    green:'#8fb96b', red:'#dd7b60', redDim:'#4d2a20',
+    statusBg:'#231d12'
+  };
+  FS = 15;
+  LH = 17;
+  cw = 9;            // fixed cell width (px); remeasured once fonts load
+  glyphScale = {};   // per-glyph horizontal scale so odd-width glyphs fill exactly one cell
+
+  componentDidMount(){
+    const SPECIAL = "│─╭╮╰╯┌┐└┘├┤┬┴┼█▁▂▃▄▅▆▇▌▏╬║═❏▸●↑↓⏎✓✗⠹…‹›·⚠◎≡";
+    const measure = () => {
+      try {
+        const probe = document.createElement('span');
+        probe.style.cssText = "position:absolute;left:-9999px;top:-9999px;visibility:hidden;white-space:pre;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:"+this.FS+"px";
+        document.body.appendChild(probe);
+        const adv = (s) => { probe.textContent = s.repeat(24); return probe.getBoundingClientRect().width/24; };
+        const cw = adv('0') || 9;
+        const scales = {};
+        for (const g of SPECIAL) { const a = adv(g); if (a > 0) { const s = cw/a; if (Math.abs(1-s) > 0.015) scales[g] = +s.toFixed(4); } }
+        document.body.removeChild(probe);
+        this.cw = cw; this.glyphScale = scales; this.forceUpdate();
+      } catch(e) {}
+    };
+    if (document.fonts && document.fonts.ready) { document.fonts.ready.then(measure); setTimeout(measure, 500); }
+    else measure();
+  }
+
+  // ---- buffer helpers ----
+  mk(w,h){ const c=[]; for(let y=0;y<h;y++){ const r=[]; for(let x=0;x<w;x++) r.push({ch:' ',fg:this.pal.fg,bg:this.pal.bg,bold:false,blink:false}); c.push(r);} return {w,h,c}; }
+  put(b,x,y,ch,s){ if(x<0||y<0||x>=b.w||y>=b.h) return; const cell=b.c[y][x]; cell.ch=ch; if(s){ if(s.fg)cell.fg=s.fg; if(s.bg)cell.bg=s.bg; if('bold'in s)cell.bold=s.bold; if('blink'in s)cell.blink=s.blink; } }
+  text(b,x,y,str,s){ str=String(str); for(let i=0;i<str.length;i++) this.put(b,x+i,y,str[i],s); }
+  hline(b,x,y,w,s){ for(let i=0;i<w;i++) this.put(b,x+i,y,'─',s); }
+  fillRow(b,y,ch,s){ for(let x=0;x<b.w;x++) this.put(b,x,y,ch,s); }
+  fillRect(b,x,y,w,h,s){ const ch=(s&&s.ch)||' '; for(let j=0;j<h;j++) for(let i=0;i<w;i++) this.put(b,x+i,y+j,ch,s); }
+  box(b,x,y,w,h,o){ o=o||{}; const fg=o.fg||this.pal.border, bg=o.bg; const r=o.rounded!==false; let tl=r?'╭':'┌',tr=r?'╮':'┐',bl=r?'╰':'└',br=r?'╯':'┘';
+    if(o.tee){ tl='├'; tr='┤'; bl='├'; br='┤'; }
+    this.put(b,x,y,tl,{fg,bg}); this.put(b,x+w-1,y,tr,{fg,bg}); this.put(b,x,y+h-1,bl,{fg,bg}); this.put(b,x+w-1,y+h-1,br,{fg,bg});
+    for(let i=1;i<w-1;i++){ this.put(b,x+i,y,'─',{fg,bg}); this.put(b,x+i,y+h-1,'─',{fg,bg}); }
+    if(!o.tee){ for(let j=1;j<h-1;j++){ this.put(b,x,y+j,'│',{fg,bg}); this.put(b,x+w-1,y+j,'│',{fg,bg}); } }
+    if(o.title){ this.text(b,x+2,y,' '+o.title+' ',{fg:o.titleFg||this.pal.fg,bg,bold:o.titleBold!==false}); } }
+  pad(s,n){ s=String(s); return s.length>=n? s.slice(0,n) : s+' '.repeat(n-s.length); }
+  padl(s,n){ s=String(s); return s.length>=n? s.slice(0,n) : ' '.repeat(n-s.length)+s; }
+
+  gauge(b,x,y,w,label,pct,dim){ const P=this.pal; const lw=4; this.text(b,x,y,this.pad(label,lw),{fg:dim?P.faint:P.dim});
+    const pctS=pct+'%'; const bw=w-lw-1-5; const bx=x+lw+1; const fill=Math.round(bw*pct/100);
+    for(let i=0;i<bw;i++) this.put(b,bx+i,y, i<fill?'█':'╌', {fg: i<fill?(dim?P.faint:P.amber):(dim?P.line:P.border)});
+    this.text(b,bx+bw+1,y,this.padl(pctS,4),{fg:dim?P.faint:P.fg,bold:!dim}); }
+
+  spark(b,x,y,vals,dim){ const g='▁▂▃▄▅▆▇█'; const P=this.pal; const mx=Math.max.apply(null,vals);
+    for(let i=0;i<vals.length;i++){ const lv=Math.max(0,Math.min(7,Math.round(vals[i]/mx*7))); this.put(b,x+i,y,g[lv],{fg:dim?P.faint:P.green}); } }
+
+  statusBar(b,y,left,keys){ const P=this.pal; this.fillRow(b,y,' ',{fg:P.dim,bg:P.statusBg});
+    let x=1; left.forEach(seg=>{ this.text(b,x,y,seg.t,{fg:seg.fg||P.dim,bg:seg.bg||P.statusBg,bold:seg.bold}); x+=seg.t.length; });
+    // build key segs from right
+    const segs=[]; keys.forEach(k=>{ const kt=' '+k[0]+' '; const lt=(k[1]?' '+k[1]:'')+'  '; segs.push({t:kt,active:k[2]}); segs.push({t:lt,label:true}); });
+    let total=segs.reduce((a,s)=>a+s.t.length,0); let rx=b.w-1-total;
+    segs.forEach(s=>{ if(s.label){ this.text(b,rx,y,s.t,{fg:P.dim,bg:P.statusBg}); } else { this.text(b,rx,y,s.t,{fg:s.active?P.bg:P.amber,bg:s.active?P.amber:P.statusBg,bold:true}); } rx+=s.t.length; }); }
+
+  // ---- render buffer to element (fixed grid: no dependence on font glyph metrics) ----
+  render(b){ const P=this.pal; const cw=this.cw||9; const SC=this.glyphScale||{}; const LH=this.LH;
+    const special=(ch)=> SC[ch]!==undefined;
+    const styleKey=(c)=> c.fg+'|'+c.bg+'|'+(c.bold?1:0)+'|'+(c.blink?1:0);
+    const rows=[];
+    for(let y=0;y<b.h;y++){ const line=b.c[y]; const cells=[]; let x=0;
+      while(x<b.w){ const c=line[x]; const sk=styleKey(c); const sp=special(c.ch); let end=x+1;
+        // coalesce: same special glyph repeated, OR a run of normal glyphs — same style
+        if(sp){ while(end<b.w && line[end].ch===c.ch && styleKey(line[end])===sk) end++; }
+        else { while(end<b.w && !special(line[end].ch) && styleKey(line[end])===sk) end++; }
+        const n=end-x; let str=''; for(let k=x;k<end;k++) str+=line[k].ch;
+        const st={display:'inline-block',verticalAlign:'top',width:(n*cw)+'px',height:LH+'px',whiteSpace:'pre',overflow:'hidden',
+          color:c.fg,background:c.bg!==P.bg?c.bg:undefined,fontWeight:c.bold?700:400,
+          animation:c.blink?'tcblink 1.05s steps(1,end) infinite':undefined};
+        if(sp){ st.textAlign='center';
+          cells.push(React.createElement('span',{key:x,style:st},
+            React.createElement('span',{style:{display:'inline-block',transform:'scaleX('+SC[c.ch]+')',transformOrigin:'center'}},str))); }
+        else cells.push(React.createElement('span',{key:x,style:st},str));
+        x=end; }
+      rows.push(React.createElement('div',{key:y,style:{height:LH+'px',lineHeight:LH+'px',whiteSpace:'nowrap'}},cells)); }
+    return React.createElement('div',{style:{fontFamily:"'JetBrains Mono',ui-monospace,monospace",fontSize:this.FS+'px',lineHeight:LH+'px',background:P.bg,color:P.fg,width:(b.w*cw)+'px'}},rows); }
+
+  // ---- reusable content ----
+  drawMonitor(b,x,y,w,h,o){ o=o||{}; const P=this.pal; const d=o.dim; const F=d?P.faint:P.fg, A=d?P.faint:P.amber, D=P.faint, BD=d?P.line:P.border;
+    const cl=x+2, cw=w-4;
+    this.text(b,cl,y,'system-monitor',{fg:F,bold:!d}); this.text(b,x+w-8,y,'● live',{fg:d?P.faint:P.green});
+    // resources
+    this.box(b,x,y+2,w,9,{title:'resources',fg:BD,titleFg:d?P.faint:P.dim,titleBold:false,tee:true});
+    this.gauge(b,cl,y+4,cw,'CPU',63,d); this.gauge(b,cl,y+6,cw,'MEM',72,d); this.gauge(b,cl,y+8,cw,'SWP',18,d);
+    this.text(b,x+w-24,y+2,' load 0.84 0.79 0.61 ',{fg:D});
+    // network
+    this.box(b,x,y+12,w,4,{title:'network',fg:BD,titleFg:d?P.faint:P.dim,titleBold:false,tee:true});
+    this.spark(b,cl,y+14,[2,3,5,4,6,7,5,8,6,4,3,5,7,8,6,5,4,6,7,8,6,4,3,5,6,7,8,6],d);
+    this.text(b,x+w-25,y+14,'↑ 1.2 MB/s   ↓ 4.8 MB/s',{fg:F});
+    // processes
+    const py=y+17; const ph=h-17; this.box(b,x,py,w,ph,{title:'processes',fg:BD,titleFg:d?P.faint:P.dim,titleBold:false,tee:true});
+    const cols=(pid,cmd,cpu,mem,st)=> this.pad(pid,6)+this.pad(cmd,18)+this.padl(cpu,6)+this.padl(mem,7)+'   '+st;
+    this.text(b,cl,py+1,cols('PID','COMMAND','CPU%','MEM%','STATE'),{fg:D,bold:!d});
+    const procs=[['1481','ratatui-preview','12.4','3.1','run'],['  22','tokio-runtime','8.7','1.9','run'],['1902','codex-agent','6.2','5.4','run'],['  91','fs-watcher','2.1','0.8','idle'],['3310','render-loop','1.4','0.4','run'],['  --','systemd','0.9','—','—']];
+    for(let i=0;i<procs.length && py+2+i<py+ph-1;i++){ const r=procs[i]; const line=cols(r[0],r[1],r[2],r[3],r[4]);
+      const sel=i===0; if(sel){ for(let k=1;k<w-1;k++) this.put(b,x+k,py+2+i,' ',{bg:d?P.line:P.sel}); this.put(b,x+1,py+2+i,'▸',{fg:d?P.faint:P.amber,bg:d?P.line:P.sel}); }
+      this.text(b,cl,py+2+i,line,{fg:sel?(d?P.faint:P.selFg):F, bg:sel?(d?P.line:P.sel):undefined, bold:sel&&!d}); }
+  }
+
+  drawFormDesign(b,x,y,w,h,err){ const P=this.pal; const cl=x+2, cw=w-4;
+    this.text(b,cl,y,'invoices',{fg:P.fg,bold:true}); this.text(b,x+w-12,y,'32 records',{fg:P.faint});
+    let cy=y+2;
+    if(err){ for(let k=1;k<w-1;k++) this.put(b,x+k,cy,' ',{bg:P.redDim}); this.text(b,cl,cy,'✗ Failed to sync — connection refused. Retry?',{fg:P.red,bg:P.redDim,bold:true}); cy+=2; }
+    // search input (border red when err)
+    const ibC = err?P.red:P.border;
+    this.box(b,x,cy,w,3,{title:'search',fg:ibC,titleFg:err?P.red:P.dim,titleBold:false,tee:true});
+    this.text(b,cl,cy+1,'invoices q3',{fg:P.fg}); this.put(b,cl+11,cy+1,'█',{fg:P.amber,blink:true});
+    cy+=4;
+    this.box(b,x,cy,w,h-(cy-y),{title:'results',fg:P.border,titleFg:P.dim,titleBold:false,tee:true});
+    const cols=(a,c,d)=> this.pad(a,10)+this.pad(c,16)+this.padl(d,9);
+    this.text(b,cl,cy+1,cols('INVOICE','CLIENT','AMOUNT'),{fg:P.faint,bold:true});
+    const rows=[['#4821','Northwind','$12,400'],['#4820','Aperture','$3,150'],['#4819','Initech','$980'],['#4818','Umbrella','$22,010']];
+    for(let i=0;i<rows.length && cy+2+i<cy+(h-(cy-y))-1;i++){ this.text(b,cl,cy+2+i,cols(rows[i][0],rows[i][1],rows[i][2]),{fg:P.fg}); }
+  }
+
+  // ---- HOME ----
+  home(w,h,empty){ const P=this.pal; const b=this.mk(w,h);
+    const cx=Math.floor(w/2);
+    const logo='❯ termcraft'; this.text(b,cx-Math.floor(logo.length/2),2,logo,{fg:P.amber,bold:true});
+    const tag='design terminal UIs by describing them'; this.text(b,cx-Math.floor(tag.length/2),3,tag,{fg:P.dim});
+    // prompt input
+    const iw=w-12, ix=6, iy=6, ih=5;
+    this.box(b,ix,iy,iw,ih,{title:'describe',fg:P.amber,titleFg:P.amberHi});
+    this.text(b,ix+2,iy+1,'❯ ',{fg:P.amber,bold:true});
+    this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint});
+    this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true});
+    this.text(b,ix+2,iy+2,'⏎ create',{fg:P.dim});
+    // agent / model / effort chips
+    let acx=ix+2;
+    this.text(b,acx,iy+3,'agent',{fg:P.faint}); acx+=6;
+    this.text(b,acx,iy+3,'‹codex›',{fg:P.amberHi,bold:true}); acx+=10;
+    this.text(b,acx,iy+3,'model',{fg:P.faint}); acx+=6;
+    this.text(b,acx,iy+3,'‹gpt-5.5›',{fg:P.amberHi,bold:true}); acx+=12;
+    this.text(b,acx,iy+3,'effort',{fg:P.faint}); acx+=7;
+    this.text(b,acx,iy+3,'‹high›',{fg:P.amberHi,bold:true}); acx+=9;
+    this.text(b,acx,iy+3,'· m change',{fg:P.faint});
+    // recent
+    const ry=iy+ih+1;
+    this.text(b,ix,ry,'recent projects',{fg:P.dim,bold:true});
+    const lh=h-ry-3; this.box(b,ix,ry+1,iw,lh,{fg:P.border});
+    const listX=ix+2;
+    if(empty){ const m1='no projects yet'; const m2='describe a TUI above and press ⏎ to create your first';
+      this.text(b,cx-Math.floor(m1.length/2),ry+Math.floor(lh/2)-1,m1,{fg:P.fg,bold:true});
+      this.text(b,cx-Math.floor(m2.length/2),ry+Math.floor(lh/2)+1,m2,{fg:P.faint});
+      const hint='▸ new project'; this.text(b,cx-Math.floor(hint.length/2),ry+Math.floor(lh/2)+3,hint,{fg:P.amber});
+    } else {
+      const hdr=this.pad('NAME',20)+this.pad('UPDATED',14)+'PAGES'; this.text(b,listX,ry+2,hdr,{fg:P.faint,bold:true});
+      const projs=[['dashboard-kit','2m ago','6'],['onboarding-flow','1h ago','4'],['pos-terminal','yesterday','9'],['log-viewer','3d ago','3'],['git-tui','last week','7'],['deploy-console','2 wk ago','5']];
+      const rowStart=ry+3; const maxRows=Math.min(projs.length, lh-4);
+      for(let i=0;i<maxRows;i++){ const p=projs[i]; const yy=rowStart+i; const sel=i===0;
+        if(sel){ for(let k=1;k<iw-1;k++) this.put(b,ix+k,yy,' ',{bg:P.sel}); }
+        this.put(b,listX-1,yy, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:undefined,bold:true});
+        this.text(b,listX,yy,this.pad(p[0],20),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:undefined,bold:sel});
+        this.text(b,listX+20,yy,this.pad(p[1],14),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:undefined});
+        this.text(b,listX+34,yy,p[2]+' pages',{fg:sel?P.selFg:P.dim,bg:sel?P.sel:undefined}); }
+    }
+    const homeKeys = (w<100)? [['↑↓','nav'],['⏎','open'],['n','new'],['/','find'],['q','quit']] : [['↑↓','navigate'],['⏎','open'],['n','new'],['/','search'],['q','quit']];
+    this.statusBar(b,h-1,[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true},{t:'  '+(empty?'0':'6')+' projects',fg:P.dim},{t:'  gpt5.5 · high',fg:P.dim}],
+      homeKeys);
+    return this.render(b);
+  }
+
+  // ---- WORKSPACE (idle / gen) ----
+  workspace(w,h,state){ const P=this.pal; const b=this.mk(w,h); const gen=state==='gen';
+    const chatW=Math.round(w*0.37); // border cols 0..chatW-1
+    const div=chatW-1; const frameH=h-1;
+    // chat box
+    this.box(b,0,0,chatW,frameH,{title: gen?'❯ chat · working':'❯ chat · codex', fg:gen?P.amberDim:P.border, titleFg:P.amber});
+    // preview box (shares column `div`)
+    this.box(b,div,0,w-div,frameH,{title:null,fg:P.border});
+    this.put(b,div,0,'┬',{fg:P.border}); this.put(b,div,frameH-1,'┴',{fg:P.border});
+    // tabs row inside preview
+    const px=div+2;
+    this.text(b,px,1,'▸ Main',{fg:P.amber,bold:true});
+    this.text(b,px+7,1,'  Settings',{fg:P.dim}); this.text(b,px+17,1,'  Login',{fg:P.dim}); this.text(b,px+24,1,'  +',{fg:P.faint});
+    this.text(b,w-14,1, gen?'⠹ generating':'main · v4',{fg: gen?P.amber:P.faint,bold:gen});
+    // tab separator
+    this.hline(b,div+1,2,w-div-2,{fg:P.border}); this.put(b,div,2,'├',{fg:P.border}); this.put(b,w-1,2,'┤',{fg:P.border});
+    // design region
+    const dx=div, dy=4, dw=w-div, dh=frameH-5;
+    this.drawMonitor(b,dx,dy,dw,dh,{dim:gen});
+    // chat content
+    this.drawChat(b,1,chatW-2,frameH,gen);
+    // status bar
+    const mode = gen? {t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true} : {t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
+    const left=[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode];
+    const keys = gen? [['esc','cancel'],['F2','fullscreen'],['[ ]','versions'],['^E','export']]
+                    : [['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']];
+    if(w<100){ this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:' v4 ',fg:P.dim}, mode], gen?[['esc','cancel'],['[ ]','ver']]:[['F3','tweak'],['F4','act'],['^E','exp']]); }
+    else this.statusBar(b,h-1,left,keys);
+    return this.render(b);
+  }
+
+  drawChat(b,x,w,frameH,gen){ const P=this.pal; const composerTop=frameH-4;
+    const tx=x+1, iw=w-2, maxX=x+w-1;   // text area is cols [tx .. maxX]; chat border sits at x+w
+    let y=1;
+    // connection header — meta on same line if it fits, else its own line
+    this.text(b,tx,y,'● codex',{fg:P.green,bold:true});
+    const meta='ratatui · connected';
+    if((9+meta.length)<=w){ this.ctext(b,x+9,y,meta,{fg:P.faint},maxX); }
+    else { y++; this.ctext(b,tx,y,meta,{fg:P.faint},maxX); }
+    y+=2;
+    const seq=[
+      {role:'❯ you'}, {body:'build a system monitor dashboard with cpu/mem gauges'}, {gap:1},
+      {role:'● codex'}, {status:'✓ created page main · v1',c:P.dim}, {status:'✓ added resources + processes',c:P.dim}, {gap:1},
+      {role:'❯ you'}, {body:'add a network throughput sparkline'}, {gap:1}
+    ];
+    if(gen){ seq.push(
+      {role:'● codex'}, {status:'⠹ generating design…',c:P.amber,bold:true},
+      {status:'✓ read main · v3',c:P.green}, {status:'✓ planned layout',c:P.green},
+      {status:'▸ writing widgets',c:P.fg,spark:true}, {status:'  network gauge · sparkline',c:P.faint}); }
+    else { seq.push(
+      {role:'● codex'}, {status:'✓ added network sparkline → v4',c:P.dim}, {status:'✓ ↑/↓ throughput labels',c:P.dim}); }
+    for(const e of seq){ if(y>=composerTop-1) break;
+      if(e.gap){ y+=e.gap; continue; }
+      if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; continue; }
+      const txt = e.body!==undefined ? e.body : e.status;
+      const lines = this.wrapLines(txt, iw);
+      for(let li=0; li<lines.length && y<composerTop-1; li++){
+        this.ctext(b,tx,y,lines[li],{fg:e.c||P.fg,bold:!!e.bold},maxX);
+        if(e.spark && li===lines.length-1){ const sx=tx+lines[li].length+1; if(sx+5<=maxX) this.spark(b,sx,y,[3,5,7,6,8],false); }
+        y++; }
+    }
+    // composer separator
+    this.put(b,0,composerTop,'├',{fg:P.border}); this.hline(b,1,composerTop,w+1,{fg:P.border}); this.put(b,x+w,composerTop,'┤',{fg:P.border});
+    if(gen){ this.text(b,tx,composerTop+2,'❯ ',{fg:P.faint,bold:true}); this.ctext(b,x+3,composerTop+2,'generating… esc to cancel',{fg:P.faint},maxX); }
+    else { this.text(b,tx,composerTop+2,'❯ ',{fg:P.amber,bold:true}); this.ctext(b,x+3,composerTop+2,'Ask for changes…',{fg:P.faint},maxX); this.put(b,x+3,composerTop+2,'█',{fg:P.amber,blink:true}); }
+  }
+
+  // clipped text: never draws past maxX (keeps content inside its panel regardless of length)
+  ctext(b,x,y,str,s,maxX){ str=String(str); for(let i=0;i<str.length;i++){ const cx=x+i; if(maxX!==undefined && cx>maxX) break; this.put(b,cx,y,str[i],s); } }
+  // word-wrap to a column width, hard-breaking any word longer than the width
+  wrapLines(str,width){ str=String(str); const words=str.split(' '); const lines=[]; let cur='';
+    words.forEach(w=>{ if(cur==='') cur=w; else if((cur+' '+w).length<=width) cur+=' '+w; else { lines.push(cur); cur=w; } });
+    if(cur!=='') lines.push(cur);
+    const out=[]; lines.forEach(l=>{ while(l.length>width){ out.push(l.slice(0,width)); l=l.slice(width); } out.push(l); });
+    return out.length?out:['']; }
+
+  // ---- TWEAKS ----
+  tweaks(w,h){ const P=this.pal; const b=this.mk(w,h); const frameH=h-1; const wide=w>=100;
+    let previewX0, previewW, twX0, twW, chatW=0;
+    if(wide){ chatW=Math.round(w*0.30); const rest=w-(chatW-1); twW=32; previewX0=chatW-1; previewW=rest-twW+1; twX0=previewX0+previewW-1; }
+    else { previewX0=0; twW=32; twW=Math.min(32,Math.round(w*0.42)); previewW=w-twW+1; twX0=previewW-1; }
+    // chat
+    if(wide){ this.box(b,0,0,chatW,frameH,{title:'❯ chat · codex',fg:P.border,titleFg:P.amber});
+      this.text(b,2,1,'● codex',{fg:P.green,bold:true}); this.text(b,2,3,'❯ you',{fg:P.amber,bold:true});
+      this.text(b,2,4,'show the error state',{fg:P.fg});
+      this.text(b,2,6,'● codex',{fg:P.green,bold:true}); this.text(b,2,7,'✓ opened tweaks (F3)',{fg:P.dim}); this.text(b,2,8,'toggle states on the right',{fg:P.faint});
+      this.put(b,0,frameH-4,'├',{fg:P.border}); this.hline(b,1,frameH-4,chatW-2,{fg:P.border}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.border});
+      this.text(b,2,frameH-2,'❯ ',{fg:P.amber,bold:true}); this.text(b,4,frameH-2,'Ask for changes…',{fg:P.faint}); this.put(b,4,frameH-2,'█',{fg:P.amber,blink:true});
+    }
+    // preview
+    this.box(b,previewX0,0,previewW,frameH,{fg:P.border});
+    this.text(b,previewX0+2,1,'▸ Main',{fg:P.amber,bold:true}); this.text(b,previewX0+9,1,'  Settings',{fg:P.dim});
+    this.text(b,previewX0+previewW-11,1,'main · v4',{fg:P.faint});
+    this.hline(b,previewX0+1,2,previewW-2,{fg:P.border}); this.put(b,previewX0,2,'├',{fg:P.border}); this.put(b,previewX0+previewW-1,2,'┤',{fg:P.border});
+    this.drawFormDesign(b,previewX0,4,previewW,frameH-5,true);
+    if(wide){ this.put(b,previewX0,0,'┬',{fg:P.border}); this.put(b,previewX0,frameH-1,'┴',{fg:P.border}); }
+    // tweaks panel
+    this.box(b,twX0,0,twW,frameH,{title:'tweaks · F3',fg:P.amber,titleFg:P.amberHi});
+    this.put(b,twX0,0,'┬',{fg:P.border}); this.put(b,twX0,frameH-1,'┴',{fg:P.border});
+    const tx=twX0+2; let ty=2;
+    const section=(t)=>{ this.text(b,tx,ty,t,{fg:P.faint,bold:true}); ty++; };
+    const toggle=(on,lbl)=>{ this.text(b,tx,ty,on?'[x]':'[ ]',{fg:on?P.amber:P.dim,bold:on}); this.text(b,tx+4,ty,lbl,{fg:on?P.fg:P.dim}); ty++; };
+    const select=(lbl,val)=>{ this.text(b,tx,ty,this.pad(lbl,11),{fg:P.dim}); this.text(b,tx+11,ty,'‹ '+val+' ›',{fg:P.amberHi}); ty++; };
+    const input=(lbl,val,active)=>{ this.text(b,tx,ty,lbl,{fg:P.dim}); ty++; const iw=twW-6; this.box(b,tx,ty,iw,3,{fg:active?P.red:P.border}); this.text(b,tx+2,ty+1,val,{fg:P.fg}); if(active){ this.put(b,tx+2+val.length,ty+1,'█',{fg:P.amber,blink:true}); } ty+=3; };
+    section('STATE'); toggle(true,'Error state'); toggle(false,'Loading'); toggle(true,'Show footer'); ty++;
+    section('LAYOUT'); select('Density','comfortable'); select('Columns','3'); ty++;
+    section('CONTENT'); input('Search text',this.pad('invoices q3',twW-9).trim(),true);
+    // footer hint
+    this.text(b,tx,frameH-3,'⏎ apply   ␣ toggle',{fg:P.faint}); this.text(b,tx,frameH-2,'esc close',{fg:P.faint});
+    // status
+    const mode={t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
+    if(w<100) this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},mode],[['F3','tweaks',true],['esc','close']]);
+    else this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode],[['F2','fullscreen'],['F3','tweaks',true],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]);
+    return this.render(b);
+  }
+
+  // ---- VERSION HISTORY ----
+  verHist(w,h){ const P=this.pal;
+    const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
+    // ghosted background (faint outlines only)
+    this.box(b,0,0,chatW,frameH,{fg:P.line,titleFg:P.faint,title:'❯ chat · codex',titleBold:false});
+    this.box(b,div,0,w-div,frameH,{fg:P.line});
+    this.put(b,div,0,'┬',{fg:P.line}); this.put(b,div,frameH-1,'┴',{fg:P.line});
+    this.text(b,div+2,1,'▸ Main',{fg:P.faint}); this.text(b,div+9,1,'  Settings',{fg:P.line});
+    this.hline(b,div+1,2,w-div-2,{fg:P.line}); this.put(b,div,2,'├',{fg:P.line}); this.put(b,w-1,2,'┤',{fg:P.line});
+    const gx=div, gw=w-div;
+    this.text(b,gx+2,4,'system-monitor',{fg:P.line});
+    this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    // popup
+    const pw=72, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg}); // clear behind (+margin/shadow)
+    this.box(b,pxs,pys,pw,ph,{title:'version history',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=pxs+2; let ly=pys+2;
+    this.text(b,lx,ly,this.pad('',3)+this.pad('VERSION',9)+this.pad('WHEN',12)+'PROMPT',{fg:P.faint,bold:true}); ly++;
+    const vers=[['v4','just now','add network throughput sparkline',true],['v3','2m ago','widen the process table',false],['v2','6m ago','add cpu / mem gauges',false],['v1','11m ago','initial system-monitor layout',false]];
+    vers.forEach(v=>{ const sel=v[3]; if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
+      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
+      this.text(b,lx+1,ly, sel?'●':' ',{fg:sel?P.amber:P.dim,bg:sel?P.sel:P.bg});
+      this.text(b,lx+3,ly,this.pad(v[0],7),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
+      this.text(b,lx+10,ly,this.pad(v[1],12),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg});
+      this.text(b,lx+22,ly,this.pad('"'+v[2]+'"',pw-26),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); ly++; });
+    ly++;
+    this.hline(b,pxs+1,ly,pw-2,{fg:P.line}); this.put(b,pxs,ly,'├',{fg:P.amber}); this.put(b,pxs+pw-1,ly,'┤',{fg:P.amber}); ly++;
+    let fx=lx;
+    this.put(b,fx,ly,'[',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' prev ',{fg:P.dim}); fx+=6;
+    this.put(b,fx,ly,']',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' next',{fg:P.dim}); fx+=9;
+    this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'rollback to v4',{fg:P.dim}); fx+=18;
+    this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
+    // status
+    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions',true],['^E','export']]);
+    return this.render(b);
+  }
+
+  // ---- AGENT / MODEL / EFFORT PICKER ----
+  agentPicker(w,h){ const P=this.pal;
+    const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
+    // ghosted workspace behind the popup (same treatment as version history)
+    this.box(b,0,0,chatW,frameH,{fg:P.line,titleFg:P.faint,title:'❯ chat · codex',titleBold:false});
+    this.box(b,div,0,w-div,frameH,{fg:P.line});
+    this.put(b,div,0,'┬',{fg:P.line}); this.put(b,div,frameH-1,'┴',{fg:P.line});
+    this.text(b,div+2,1,'▸ Main',{fg:P.faint}); this.text(b,div+9,1,'  Settings',{fg:P.line});
+    this.hline(b,div+1,2,w-div-2,{fg:P.line}); this.put(b,div,2,'├',{fg:P.line}); this.put(b,w-1,2,'┤',{fg:P.line});
+    const gx=div, gw=w-div;
+    this.text(b,gx+2,4,'system-monitor',{fg:P.line});
+    this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    // popup
+    const pw=74, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
+    this.box(b,pxs,pys,pw,ph,{title:'agent · model · effort',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=pxs+2; let ly=pys+2;
+    this.text(b,lx,ly,this.pad('',3)+this.pad('AGENT',9)+this.pad('MODEL',16)+'EFFORT',{fg:P.faint,bold:true}); ly++;
+    const rows=[
+      ['codex','gpt-5.5','high',true],
+      ['codex','gpt-5.5','medium',false],
+      ['codex','gpt-5.1-mini','high',false],
+      ['claude','sonnet-4.5','high',false],
+      ['gemini','2.5-pro','medium',false]
+    ];
+    rows.forEach(r=>{ const sel=r[3]; if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
+      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
+      this.text(b,lx+1,ly, sel?'●':'○',{fg:sel?P.amber:P.dim,bg:sel?P.sel:P.bg});
+      this.text(b,lx+3,ly,this.pad(r[0],7),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
+      this.text(b,lx+10,ly,this.pad(r[1],14),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg});
+      this.text(b,lx+24,ly,r[2],{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); ly++; });
+    ly++;
+    this.hline(b,pxs+1,ly,pw-2,{fg:P.line}); this.put(b,pxs,ly,'├',{fg:P.amber}); this.put(b,pxs+pw-1,ly,'┤',{fg:P.amber}); ly++;
+    let fx=lx;
+    this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
+    this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'apply',{fg:P.dim}); fx+=8;
+    this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
+    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent',true],['[ ]','versions'],['^E','export']]);
+    return this.render(b);
+  }
+
+  legendEl(){ const P=this.pal; const sw=(c,l)=>React.createElement('div',{style:{display:'flex',alignItems:'center',gap:7}},
+      React.createElement('span',{style:{width:14,height:14,borderRadius:3,background:c,border:'1px solid rgba(255,255,255,.08)'}}),
+      React.createElement('span',{style:{color:P.dim,fontSize:11}},l));
+    const col=(title,items)=>React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+      React.createElement('span',{style:{color:P.faint,fontSize:10,letterSpacing:'.18em',textTransform:'uppercase'}},title),
+      ...items);
+    return React.createElement('div',{style:{display:'flex',gap:26}},
+      col('accent',[sw(P.amber,'amber #e6a23c'),sw(P.amberHi,'focus #f6c163'),sw(P.sel,'selection')]),
+      col('neutral',[sw(P.fg,'text'),sw(P.dim,'muted'),sw(P.faint,'faint')]),
+      col('semantic',[sw(P.green,'ok'),sw(P.red,'error'),sw(P.bg,'bg #14110d')]) );
+  }
+
+  renderVals(){
+    return {
+      legend: this.legendEl(),
+      homePop120: this.home(120,36,false),
+      homePop80: this.home(80,24,false),
+      homeEmpty80: this.home(80,24,true),
+      wsIdle120: this.workspace(120,36,'idle'),
+      wsIdle80: this.workspace(80,24,'idle'),
+      wsGen120: this.workspace(120,36,'gen'),
+      wsTweaks120: this.tweaks(120,36),
+      wsTweaks80: this.tweaks(80,24),
+      verHist120: this.verHist(120,36),
+      agentPicker120: this.agentPicker(120,36)
+    };
+  }
+}
+</script>
+</body>
+</html>
