@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#0a0908;}
+  *{box-sizing:border-box;}
+  @keyframes tcblink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+  a{color:#e6a23c;text-decoration:none;}
+  a:hover{color:#f6c163;text-decoration:underline;}
+  ::selection{background:#392c11;color:#f6c163;}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0a0908;background-image:radial-gradient(circle at 1px 1px,#17140f 1px,transparent 0);background-size:26px 26px;color:#d7d0c2;font-family:'JetBrains Mono',ui-monospace,monospace;padding:56px 60px 100px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;border-bottom:1px solid #211d16;padding-bottom:18px;margin-bottom:40px;">
+    <a href="./Termcraft%20UI.dc.html" style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:18px;letter-spacing:.02em;">❯ termcraft</span>
+      <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
+    </a>
+    <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
+      <a href="./11-interactive-mode.dc.html" style="color:#8f877a;">‹ Interactive mode</a>
+      <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
+      <a href="./13-export-feedback.dc.html" style="color:#8f877a;">Export feedback ›</a>
+    </div>
+  </div>
+
+  <div style="margin:0 0 22px;">
+    <div style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">12 · Errors &amp; edge states</span>
+      <span style="color:#5b544a;font-size:12px;">err-agent-80 · ws-err-retry-120 · ws-cancelled-120 · term-small-80 · lock-80</span>
+    </div>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">The honest failure surface, all using the <span style="color:#8a6d33;">⟲</span> system-entry style. Missing agent (with healthy/error health indicator), the schema-retry loop (last good version stays undimmed), a cancelled turn, a corrupt/too-new file entry, plus the two full-screen refusals: terminal-too-small and second-instance lock.</p>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-err-retry-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · retry loop · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-err-retry-120</span>
+      </div>
+      {{ wsErrRetry120 }}
+    </div>
+    <div id="ws-cancelled-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · cancelled · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-cancelled-120</span>
+      </div>
+      {{ wsCancelled120 }}
+    </div>
+    <div id="err-agent-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · agent missing · 80×24</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">err-agent-80</span>
+      </div>
+      {{ errAgent80 }}
+    </div>
+    <div id="term-small-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · window too small</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">term-small-80</span>
+      </div>
+      {{ termSmall80 }}
+    </div>
+    <div id="lock-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · already running</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">lock-80</span>
+      </div>
+      {{ lock80 }}
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { ready: false };
+  async componentDidMount(){
+    const mod = await import('./termcraft-engine.js');
+    this.engine = new mod.Engine();
+    this.engine.measure(() => this.forceUpdate());
+    this.setState({ ready: true });
+  }
+  renderVals(){
+    if (!this.state.ready) return {};
+    const e = this.engine;
+    return {
+      wsErrRetry120: e.wsErrRetry(120,36),
+      wsCancelled120: e.wsCancelled(120,36),
+      errAgent80: e.homeErr(80,24),
+      termSmall80: e.termSmall(80,24),
+      lock80: e.lockScreen(80,24)
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -48,8 +48,9 @@ Core principles:
 
 ## 3. User flows
 
-UI reference: `design/Termcraft UI.dc.html` (Claude Design source) — visual source of
-truth for screens, states, palette, and status-bar language.
+UI reference: `design/Termcraft UI.dc.html` (Claude Design source; index over the
+per-section `design/NN-*.dc.html` files) — visual source of truth for screens,
+states, palette, and status-bar language.
 
 ### 3.1 Launch and Home screen
 
@@ -72,9 +73,6 @@ working directory.
 - Present → the Workspace opens directly with chat history restored. There is no
   project picker; separate projects live in separate directories.
 - Present but older format → offers bulk migration (see §7).
-
-(The Home project list shown in the UI reference file predates this decision and is
-superseded.)
 
 ### 3.2 Workspace
 
@@ -157,7 +155,7 @@ pages, focus traverses with `Tab` in document order (depth-first over elements w
 with Enter firing `submit`. `F3` opens the Tweaks panel (§5.6) in either mode.
 Right-click pin comments keep working in interactive mode — the user can annotate
 mid-flow. A `goTo:` whose target page has since been removed is a no-op with a
-status-bar notice.
+quiet notice above the composer (per the UI reference).
 
 ### 3.6 Agent · model · effort picker (v1.0)
 
