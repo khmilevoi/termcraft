@@ -233,7 +233,13 @@ into a workspace crate later without rewrites:
   switch version, toggle tweak, export…), orchestrates agents, applies operations,
   emits **Events** (agent status stream, version applied, error…).
 - `ui` — ratatui app: Home and Workspace screens, mouse/keyboard handling, Tweaks
-  panel, pins.
+  panel, pins. All user-triggerable actions are declared in a single **action
+  table** — `id`, label, hotkey, `available(state)` predicate, and the Msg/Command
+  it dispatches. The keyboard handler resolves keys through this table (honoring
+  the two hotkey tiers of §3.8, including the turn-time locks), and the status-bar
+  hint row renders from it — an action's availability decides whether its hint
+  shows or dims. Nothing binds a key or checks a lock anywhere else. A future
+  command palette (backlog, §8.3) is just another view over the same table.
 
 **The kernel boundary is the future IPC.** UI and core communicate exclusively through
 a pair of async channels (`Command` → core, `Event` → UI). When daemon mode arrives,
@@ -631,7 +637,9 @@ additional agent backends (Gemini CLI behind the same trait), spatial canvas boa
 agent-defined palettes/themes, multi-project workspaces + a global user config
 (`~/.config/termcraft` with defaults for new projects), version compare (change
 highlighting between versions), file watching / reload of external edits, keyboard
-element navigation (selection and pins without a mouse).
+element navigation (selection and pins without a mouse), command palette
+(`Ctrl+Shift+P`): a filterable popup over the `ui` action table (§4) — same entries,
+labels, hotkeys, and availability predicates.
 
 ## 9. Error handling
 
