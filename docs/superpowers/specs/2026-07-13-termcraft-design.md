@@ -142,8 +142,10 @@ head — the agent always edits what the user sees.
 Rollback ("make v3 the head") copies v3 forward as the new highest version — history
 stays linear and append-only, nothing is deleted (the git-revert model). Rollbacks,
 auto or explicit, are recorded as system entries in the chat. MVP: `[` / `]` switching
-only. v1.0: history UI with timestamps and prompt excerpts (from the `applied` map),
-explicit rollback.
+only. v1.0: a history popup — opened with `v` or by clicking the version segment in
+the status bar (the same pattern as the agent chip and `m`, §3.6) — listing versions
+with timestamps and prompt excerpts (from the `applied` map), with explicit rollback.
+It renders over the dimmed workspace (§3.8) and is locked while a turn runs (§3.2).
 
 ### 3.5 Interactive prototype (v1.0)
 
@@ -191,8 +193,9 @@ Hotkeys come in two tiers:
 - **Global** — `F2`/`F3`/`F4`, `Ctrl+E`, `Ctrl+P` (preview controls popup: theme
   override and size presets, §8.1 items 9–10): work always, even while a text input
   is focused.
-- **Single-char** — `m`, `[`, `]`, arrow navigation, `r` (re-check agent health, on
-  the Home agent-error state): work only when no text input is focused.
+- **Single-char** — `m`, `v` (version history popup, §3.4), `[`, `]`, arrow
+  navigation, `r` (re-check agent health, on the Home agent-error state): work only
+  when no text input is focused.
 
 All popups (the picker, the pin input, preview controls) render over a dimmed
 backdrop, so their inputs never blend with the design underneath. In the preview
@@ -206,7 +209,7 @@ preview. Anything reachable by a single-char hotkey is also reachable by mouse.
 
 `Esc` follows a strict layered priority — one press pops the topmost layer:
 
-1. an open popup (picker, pin input, preview controls) → close it;
+1. an open popup (picker, history, pin input, preview controls) → close it;
 2. a focused text input → unfocus;
 3. an active version-browse view (§3.4) → return to head;
 4. a running generation → cancel it;
@@ -586,7 +589,8 @@ version, never an overwrite.
 6. Mouse: hover highlight, click-select with composer chip, right-click pin comments.
 7. Multiple pages with tabs; agent-driven page operations; page rename/remove/reorder
    from the UI.
-8. Per-page version history UI (timestamps, prompt excerpts) with explicit rollback.
+8. Per-page version history popup (`v` / click the version segment; timestamps,
+   prompt excerpts) with explicit rollback.
 9. Preview palette/theme switching (light/dark, 16/256/truecolor simulation).
 10. Preview size presets: 80×24, 120×40, custom (inline `W×H` input, §3.8), auto.
 11. Interactive prototype: focus traversal, `goTo` page transitions, open/close/toggle
