@@ -246,7 +246,7 @@ a pair of async channels (`Command` → core, `Event` → UI). When daemon mode 
 this contract becomes the wire protocol and the UI does not change. Terminal events and
 core events merge in a single tokio select loop.
 
-Diagram: [`architecture/modules.mmd`](../../../architecture/modules.mmd) — module
+Diagram: [`docs/architecture/modules.md`](../../architecture/modules.md) — module
 graph with the kernel boundary marked as the future IPC.
 
 ## 5. The design DSL
@@ -383,7 +383,7 @@ to the agent — the typical typo surfaces on the next turn.
 Because rendering is immediate-mode, reactivity is simply "re-render the frame after
 every mutation"; conditions are evaluated during render. No dependency graph.
 
-Diagram: [`architecture/reactive-system.mmd`](../../../architecture/reactive-system.mmd) —
+Diagram: [`docs/architecture/flows/interactive-prototype.md`](../../architecture/flows/interactive-prototype.md) —
 three mutation sources feeding one variable map, read by the render pass.
 
 ### 5.6 Tweaks (v1.0)
@@ -513,7 +513,7 @@ initial attempt plus at most 3 retries), then an honest error in chat. Valid →
 applied atomically by the kernel; each changed page gets exactly one new `vN.json`
 written via tmp + rename. The last valid version is never lost.
 
-Diagram: [`architecture/generation-sequence.mmd`](../../../architecture/generation-sequence.mmd) —
+Diagram: [`docs/architecture/flows/generation-turn.md`](../../architecture/flows/generation-turn.md) —
 the full turn from user message to applied version, including the retry loop.
 
 ## 7. Storage and data versioning

@@ -1,8 +1,0 @@
-%% termcraft — reactive variable system (v1.0 prototype runtime)
-%% Three mutation sources write the same per-page variable map; the render pass reads it.
-flowchart LR
-    tw["Tweaks panel (F3)<br/>toggle · select · text"] --> vars
-    ix["interactions<br/>click · submit · change"] --> vars
-    inp["bound inputs<br/>(typing in prototype)"] --> vars
-    vars["variable store<br/>map&lt;name, bool | string&gt;<br/>(per page, session-only)"] --> pass
-    pass["render pass evaluates<br/>visibleWhen · overrides · bind"] --> frame["new frame"]
