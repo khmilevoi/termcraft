@@ -62,22 +62,23 @@ working directory.
   §3.8). Inline selectors under the prompt show the current agent · model · effort
   combo (`m` or a mouse click opens the picker, §3.6). Pressing Enter creates
   `.termcraft/` with default config and a project manifest with zero pages, writes
-  the first `user` record to `chat.jsonl`, opens the Workspace, and starts the first
-  generation. The project name is the prompt's first line truncated to ~60 chars —
+  the first `user` record to the project's first chat (`chats/c1.jsonl`, §3.9), opens
+  the Workspace, and starts the first generation. The project name is the prompt's first line truncated to ~60 chars —
   cosmetic only, stored in `project.toml`. A failed first turn rolls none of this
   back: the error lands in chat and the user simply sends the next message. The
   agent CLI check (`codex --version`) runs in the background at startup and shows in
   the status bar; a missing agent produces a clear error on send. MVP has no wizard.
   The v1.0 first-run wizard adds the explicit choices: target stack for exports
   (rust-ratatui | go-bubbletea | generic) and preview defaults.
-- Present → the Workspace opens directly with chat history restored. There is no
-  project picker; separate projects live in separate directories.
+- Present → the Workspace opens directly with the active chat's history restored
+  (§3.9). There is no project picker; separate projects live in separate directories.
 - Present but older format → offers bulk migration (see §7).
 
 ### 3.2 Workspace
 
-Layout: chat panel on the left (~35%), live preview on the right, status bar at the
-bottom (agent name, page + version, preview size, mode, hotkey hints). Page tabs above
+Layout: chat panel on the left (~35%, showing the active chat — §3.9), live preview
+on the right, status bar at the bottom (agent name, page + version, preview size,
+mode, context usage (§3.9), hotkey hints). Page tabs above
 the preview. `F2` toggles fullscreen preview. With zero pages (a brand-new or
 all-failed project) the preview shows an empty-state placeholder ("No pages yet —
 describe what to build") and the tab strip is empty.
@@ -86,8 +87,8 @@ While the agent works, its status streams into the chat; the preview updates whe
 version is applied. Generation is cancellable (`Esc`, per the focus rules in §3.8).
 Typing the next message while a turn runs is allowed, but sending is disabled (the
 status bar hints why) — there is no message queue. Version switching, rollback,
-export (§3.7), and the agent picker (§3.6) are locked while a turn runs; each refused
-action hints why in the status bar.
+export (§3.7), the agent picker (§3.6), and chat creation and switching (§3.9) are
+locked while a turn runs; each refused action hints why in the status bar.
 
 Mouse in the preview:
 
@@ -129,7 +130,7 @@ prototype flow.
 ### 3.4 Versions
 
 Every applied agent turn creates exactly one new `vN.json` for each page it changed —
-versions map 1:1 to chat messages, and each turn's record in `chat.jsonl` carries an
+versions map 1:1 to chat messages, and each turn's record in the chat log carries an
 `applied` map (`{"main": 5}`) linking the message to the versions it produced. The
 head of a page is simply its highest version; there is no head pointer.
 
@@ -144,7 +145,8 @@ stays linear and append-only, nothing is deleted (the git-revert model). Rollbac
 auto or explicit, are recorded as system entries in the chat. MVP: `[` / `]` switching
 only. v1.0: a history popup — opened with `v` or by clicking the version segment in
 the status bar (the same pattern as the agent chip and `m`, §3.6) — listing versions
-with timestamps and prompt excerpts (from the `applied` map), with explicit rollback.
+with timestamps and prompt excerpts (found by scanning the project's chats for the
+agent record whose `applied` map names the version), with explicit rollback.
 It renders over the dimmed workspace (§3.8) and is locked while a turn runs (§3.2).
 
 ### 3.5 Interactive prototype (v1.0)
@@ -215,6 +217,35 @@ preview. Anything reachable by a single-char hotkey is also reachable by mouse.
 4. a running generation → cancel it;
 5. a selected element → deselect.
 
+### 3.9 Chats
+
+A project holds one or more **chats** — independent conversation lines over the same
+pages. A chat is only a conversation: switching chats swaps the visible history and
+the agent session (§6.2) and touches nothing else — active page, preview state,
+selection, and pins all stay put. Pages are shared state; whichever chat sends the
+next message sees the current heads, and the prefetch and unseen-head guard
+(§6.2–6.3) already handle edits made from another chat exactly as they handle
+rollbacks. One turn runs at a time per project regardless of chat; system records
+(rollbacks, errors, cancellations) land in the chat that was active when they
+happened.
+
+Starting a new chat is the context-reset gesture: a fresh chat file and a fresh agent
+session, no carried context. termcraft never trims or compacts a conversation itself —
+the CLI owns its own context management, and the context budget is the user's call.
+The status bar's context-usage segment is the prompt to make that call: it is fed by
+token usage the backend reports in its event stream (§6.1), and a backend that
+reports nothing simply hides the segment.
+
+Chat ids are termcraft-assigned (`c1`, `c2`, …, create-new semantics like version
+files). A chat's display name is derived, not stored: the first line of its first
+`user` record, truncated to ~60 chars (the project-name rule, §3.1).
+
+MVP ships the full storage model plus minimal management: create a new chat and
+switch between existing ones. The exact management surface (list layout, hotkey,
+status-bar affordance) is deliberately unspecified here — it lands with the next
+UI-reference iteration (`design/`, §3), following the existing popup pattern
+(§3.6, §3.8). Rename, deletion, and AI-generated titles are backlog (§8.3).
+
 ## 4. Architecture
 
 Single binary crate, Rust + ratatui + crossterm + tokio. Elm architecture in the UI
@@ -228,7 +259,7 @@ into a workspace crate later without rewrites:
 - `agent` — `AgentBackend` trait (start task, stream events, cancel) + `CodexCli`
   implementation (MVP); `ClaudeCli` later. Spawns CLI processes; no API keys.
 - `store` — everything under `.termcraft/`: the project manifest, pages, versions,
-  comments, chat, config; atomic writes (tmp + rename); the migration registry (§7).
+  comments, chats, config; atomic writes (tmp + rename); the migration registry (§7).
 - `core` — the kernel: accepts **Commands** from the UI (create project, send message,
   switch version, toggle tweak, export…), orchestrates agents, applies operations,
   emits **Events** (agent status stream, version applied, error…).
@@ -431,6 +462,10 @@ against it from the start.
 (§3.6); each backend maps them to its own CLI flags and reports which combinations it
 supports.
 
+The `AgentEvent` stream also carries the backend's reported token usage when the CLI
+emits it; this feeds the status bar's context-usage segment (§3.9). Reporting is
+optional per backend — no usage events, no segment.
+
 ### 6.2 Task protocol
 
 Each turn termcraft sends: role system prompt (TUI designer), the DSL JSON Schema and
@@ -488,14 +523,16 @@ free while a turn runs (it is read-only); on apply, the UI moves to another page
 only on an explicit `set_active_page` — `add_page` alone does not switch, and
 without the op the user stays on whatever tab they are viewing.
 
-**Sessions.** Conversation continuity uses the CLI's session resume; the session id is
-stored per project in a local, non-versioned file (§7.1). If resume fails (stale
+**Sessions.** Conversation continuity uses the CLI's session resume; each chat (§3.9)
+has its own session, and the chat → session id map is stored in a local, non-versioned
+file (§7.1). Switching chats resumes that chat's session. If resume fails (stale
 session, another machine, switched backend), termcraft silently starts a fresh session
 and includes a short excerpt of the recent chat for continuity (the last N
-`user`/`agent` records from `chat.jsonl`; N is an implementation constant). Switching agent or
-model starts a fresh session; the seen-versions map resets with it. After a termcraft
-restart the map starts empty — safe by construction, and cheap because the active page
-is always sent.
+`user`/`agent` records from that chat's log; N is an implementation constant).
+Switching agent or model starts a fresh session for the active chat — other chats'
+stored session ids simply fail resume later and take the same fallback. The
+seen-versions map resets with any fresh session. After a termcraft restart the map
+starts empty — safe by construction, and cheap because the active page is always sent.
 
 ### 6.3 Validation and application
 
@@ -526,9 +563,10 @@ the full turn from user message to applied version, including the retry loop.
   config.toml                 # format_version, agent+model+effort, target_stack,
                               #   preview defaults (incl. last custom size, §3.8)
   lock                        # single-instance lock file (holds the owner's PID)
-  project.toml                # format_version, name, dates, ordered pages, active page
-  chat.jsonl                  # dialog log (record schema below)
-  session.local.toml          # agent session id — machine-local, never committed
+  project.toml                # format_version, name, dates, ordered pages, active page,
+                              #   active chat
+  chats/c1.jsonl … cN.jsonl   # dialog logs, one file per chat (record schema below)
+  session.local.toml          # chat → agent session id map — machine-local, never committed
   pages/<page>/
     v1.json … vN.json         # page documents (schemaVersion inside)
     comments.jsonl            # pins (record schema below)
@@ -543,8 +581,10 @@ target project's code. There is no global user config; per-project `config.toml`
 the only configuration (a `~/.config/termcraft` with defaults for new projects is
 backlog, §8.3).
 
-`chat.jsonl` starts with the header `{"kind":"chat","version":1}`, then one record
-per line, each with an ISO 8601 `ts`:
+The chat list is the directory scan of `chats/` ordered by id; `project.toml` names
+the active chat, and a dangling reference falls back to the newest chat on disk (or a
+fresh `c1` when none exist). Each chat file starts with the header
+`{"kind":"chat","version":1}`, then one record per line, each with an ISO 8601 `ts`:
 
 - `{"kind":"user", "text", "selection"?, "pins":[…]}` — exactly what was sent to the
   agent: the message, the selection chip's element id, the ids of the pins included.
@@ -605,6 +645,8 @@ version, never an overwrite.
 12. Export: `design-prompt.md` + DSL files + ASCII page snapshots.
 13. Agent · model · effort picker (`m`): popup selection, status-bar chip, inline
     selectors on Home (§3.6).
+14. Multiple chats per project (§3.9): new chat, chat switching and list, per-chat
+    agent sessions, status-bar context-usage segment.
 
 ### 8.2 MVP cut
 
@@ -622,6 +664,10 @@ version, never an overwrite.
 - Mouse: hover, click-select, right-click **pin comments** (explicitly in MVP).
 - Versions written from day one; `[` / `]` prev/next switching; sending from a
   non-head view auto-rolls back (§3.4).
+- Multiple chats (§3.9) from day one: the `chats/` layout, new-chat command, and chat
+  switching, with per-chat CLI sessions and the context-usage status segment. The
+  management surface stays minimal (the §3.9 open point); rename, deletion, and AI
+  titles are backlog.
 - Export: `design-prompt.md` + DSL + ASCII snapshots (renderer already exists — cheap
   and high-value for the implementing agent).
 - Migration infrastructure live from the first commit (even with zero migrations).
@@ -636,7 +682,8 @@ Daemon + IPC, workspace crate split, agent diffs/patches, ratatui code generatio
 additional agent backends (Gemini CLI behind the same trait), spatial canvas boards,
 agent-defined palettes/themes, multi-project workspaces + a global user config
 (`~/.config/termcraft` with defaults for new projects), version compare (change
-highlighting between versions), file watching / reload of external edits, keyboard
+highlighting between versions), chat management extras (rename, deletion/archival,
+AI-generated chat titles), file watching / reload of external edits, keyboard
 element navigation (selection and pins without a mouse), command palette
 (`Ctrl+Shift+P`): a filterable popup over the `ui` action table (§4) — same entries,
 labels, hotkeys, and availability predicates.

@@ -31,10 +31,10 @@ flowchart LR
    |------|----------------|
    | **UI shell** | Screens, input interpretation, and the action table — the single registry of user actions: hotkey, availability predicate, dispatched command |
    | **Kernel** | The only decision-maker: commands in, events out, the agent-turn lifecycle, the turn-time locks, applying operations |
-   | **Agent gateway** | Start, stream, cancel, and health-check local agent CLIs; session continuity; mapping (model, effort) to CLI flags |
+   | **Agent gateway** | Start, stream, cancel, and health-check local agent CLIs; per-chat session continuity; mapping (model, effort) to CLI flags |
    | **Design language** | The document model: types, schema, structural and semantic validation, format version |
    | **Renderer** | A pure function of (document, area, theme) → frame: layout, drawing, color degradation, hit-testing |
-   | **Project store** | Everything under `.termcraft/`: manifest, versions, chat, pins, config; atomic writes; the migration registry |
+   | **Project store** | Everything under `.termcraft/`: manifest, versions, chats, pins, config; atomic writes; the migration registry |
 
 2. The runtime loop: terminal events (keys, mouse, resize) and Kernel events merge into one loop. The UI shell translates input into commands through the action table; the Kernel answers with events; the UI shell redraws. No other channel exists between the layers.
 3. The Kernel boundary is the future IPC: when daemon mode arrives, the command/event channel contract becomes the wire protocol and the UI shell does not change.

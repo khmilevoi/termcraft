@@ -14,8 +14,8 @@ stateDiagram-v2
 
 1. Version creation: one new version file per page changed by an applied turn; versions map 1:1 to chat messages via the agent record's applied map; the head of a page is simply its highest version — no head pointer.
 2. Browsing: bracket keys switch prev/next read-only; the status bar shows a caution-tinted `vN/total ‹read-only›`; nothing is written; `Enter` (no input focused) or `Esc` returns to head.
-3. History popup (v1.0): opened with `v` or by clicking the status bar's version segment; lists versions with timestamps and prompt excerpts (from the applied map); offers explicit rollback; renders over a dimmed backdrop.
-4. Rollback semantics: "make v3 the head" copies v3 forward as the new highest version — the git-revert model; auto and explicit rollbacks are recorded as system entries in chat.
+3. History popup (v1.0): opened with `v` or by clicking the status bar's version segment; lists versions with timestamps and prompt excerpts (found by scanning the project's chats for the agent record whose applied map names the version); offers explicit rollback; renders over a dimmed backdrop.
+4. Rollback semantics: "make v3 the head" copies v3 forward as the new highest version — the git-revert model; auto and explicit rollbacks are recorded as system entries in the active chat.
 5. Auto-rollback: sending a message while viewing a non-head version first rolls that version back to head — the agent always edits what the designer sees.
 6. Failure branch: version switching and rollback are locked while a turn runs; each refused action hints why in the status bar.
 7. Interaction with selection and pins: selection survives version switches while its element id resolves in the viewed version; pins draw only where their element exists (details: `flows/pins-and-selection.md`).
