@@ -15,7 +15,7 @@ together. Written for a reader who does not read the source language.
 1. [overview.md](overview.md) — system context: the designer, the agent CLIs,
    the project folder, and the export consumer.
 2. [modules.md](modules.md) — the six components, their boundaries, and the
-   runtime loop; the kernel boundary that becomes the future IPC.
+   runtime loop; the Kernel boundary that becomes the future IPC.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning.
 

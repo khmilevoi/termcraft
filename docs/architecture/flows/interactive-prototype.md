@@ -23,7 +23,7 @@ flowchart LR
 3. Implicit variables and initial-value priority: a tweak's default → element-derived initials (input text, tabs' active id, `<id>.visible` defaulting to false) → the type's zero.
 4. The four consumers: conditions (`visibleWhen` with truthiness/equals/not), per-element overrides (style/text when a condition holds), interactions (`goTo:`/`open:`/`close:`/`toggle:`/`set:` on click/submit), and bound inputs (typing writes the variable live, Enter fires submit).
 5. Element runtime state lives in the same map as auto-variables (`<id>.active`, `<id>.visible`); `open/close/toggle` are pure sugar over `set:<id>.visible` with an implicit `visibleWhen` when the target declares none.
-6. All three mutation sources go through the same kernel code path — tweaks, interactions, bound inputs are three doors into one room.
+6. All three mutation sources go through the same Kernel code path — tweaks, interactions, bound inputs are three doors into one room.
 7. Reactivity is re-render: immediate-mode rendering means every mutation just triggers a new frame; conditions are evaluated during render; no dependency graph.
 8. Focus traversal: `Tab` walks elements with `bind` or interactions in document order, `Shift+Tab` reverses.
 9. Failure branch: `goTo:` to a page removed since generation → no-op with a quiet notice above the composer.

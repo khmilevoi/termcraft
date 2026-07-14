@@ -5,7 +5,7 @@ stateDiagram-v2
     [*] --> Open: right-click + comment entered
     Open --> Sent: included with the next message (anchor resolves)
     Sent --> Resolved: that turn applies successfully
-    Resolved --> Open: user reopens the pin
+    Resolved --> Open: designer reopens the pin
     note right of Open
         A pin whose element is missing in the
         viewed version shows as orphaned in the
@@ -20,7 +20,7 @@ stateDiagram-v2
 3. Selection is stored as (page, element id); the rectangle is recomputed every frame. It survives version switches while the id resolves in the viewed version, is silently cleared when the element disappears, and is cleared by switching page tabs. The chip is included in the prompt only if the id resolves in the active page's head at send time.
 4. Right click, in either mode, drops a pin: a mini input opens over a dimmed preview. The pin anchors to (element id, a fractional position inside the element's rect) and renders clamped inside that rect — pins stay proportionally placed as the element resizes.
 5. Pin records persist in the page's comments log (`comments.jsonl`) with a status of open or resolved.
-6. Lifecycle: open pins whose anchors resolve are sent with the next message; pins attached to a successfully applied message become resolved; the user can reopen a resolved pin.
+6. Lifecycle: open pins whose anchors resolve are sent with the next message; pins attached to a successfully applied message become resolved; the designer can reopen a resolved pin.
 7. Failure branch (orphans): a pin whose element is missing in the viewed version disappears from the preview but stays in the chat panel's pin list, marked as an orphan naming the version it went missing in. Orphaned pins are never auto-deleted and are skipped when sending to the agent.
 8. Scope note: selection and pins are mouse-only in v1.0; keyboard element navigation is backlog.
 
