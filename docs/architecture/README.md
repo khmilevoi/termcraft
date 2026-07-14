@@ -27,6 +27,8 @@ One document per user-visible process:
   Workspace: lock check, project discovery, first-run wizard, first generation.
 - [flows/generation-turn.md](flows/generation-turn.md) — one chat turn: prompt
   assembly, the operations protocol, validation with retries, atomic apply.
+- [flows/chats.md](flows/chats.md) — several conversations over one project: the
+  slash menu, creating and switching chats, per-chat agent sessions.
 - [flows/versions.md](flows/versions.md) — append-only page versions: browsing,
   the history popup, rollback by copy-forward.
 - [flows/interactive-prototype.md](flows/interactive-prototype.md) — the

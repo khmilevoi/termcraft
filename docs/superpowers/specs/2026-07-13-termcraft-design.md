@@ -60,7 +60,7 @@ working directory.
 - Missing → the Home screen opens: a large centered prompt input ("Describe the TUI
   you want to design"), focused on entry; `Esc`/`Tab` unfocuses it (focus rules:
   §3.8). Inline selectors under the prompt show the current agent · model · effort
-  combo (`m` or a mouse click opens the picker, §3.6). Pressing Enter creates
+  combo (`/model` (§3.10) or a mouse click opens the picker, §3.6). Pressing Enter creates
   `.termcraft/` with default config and a project manifest with zero pages, writes
   the first `user` record to the project's first chat (`chats/c1.jsonl`, §3.9), opens
   the Workspace, and starts the first generation. The project name is the prompt's first line truncated to ~60 chars —
@@ -77,8 +77,13 @@ working directory.
 ### 3.2 Workspace
 
 Layout: chat panel on the left (~35%, showing the active chat — §3.9), live preview
-on the right, status bar at the bottom (agent name, page + version, preview size,
-mode, context usage (§3.9), hotkey hints). Page tabs above
+on the right, status bar at the bottom. The status bar's composition is fixed, left
+to right: the agent chip (agent · model · effort — click opens the picker, §3.6),
+the page + version segment (click opens the history popup, §3.4), preview size
+(error-colored when smaller than the page's `minSize`, §8.2), mode, context usage
+(§3.9, hidden when the backend reports none), and a short hint row rendered from
+the action table (§4) — `/ commands` plus the few live view keys. The chip and the
+version segment are the only clickable segments; everything else is display. Page tabs above
 the preview. `F2` toggles fullscreen preview. With zero pages (a brand-new or
 all-failed project) the preview shows an empty-state placeholder ("No pages yet —
 describe what to build") and the tab strip is empty.
@@ -144,7 +149,7 @@ Rollback ("make v3 the head") copies v3 forward as the new highest version — h
 stays linear and append-only, nothing is deleted (the git-revert model). Rollbacks,
 auto or explicit, are recorded as system entries in the chat. MVP: `[` / `]` switching
 only. v1.0: a history popup — opened with `v` or by clicking the version segment in
-the status bar (the same pattern as the agent chip and `m`, §3.6) — listing versions
+the status bar (the same pattern as the agent chip, §3.6) — listing versions
 with timestamps and prompt excerpts (found by scanning the project's chats for the
 agent record whose `applied` map names the version), with explicit rollback.
 It renders over the dimmed workspace (§3.8) and is locked while a turn runs (§3.2).
@@ -163,8 +168,8 @@ quiet notice above the composer (per the UI reference).
 
 ### 3.6 Agent · model · effort picker (v1.0)
 
-Pressing `m` (Home or Workspace, when no text input is focused — §3.8) or clicking
-the status-bar chip / Home inline selectors opens a popup over the dimmed screen
+Typing `/model` (§3.10) or clicking the status-bar chip / Home inline selectors
+opens a popup over the dimmed screen
 listing selectable (agent, model, reasoning effort) combinations — one row each,
 current choice marked. The chosen triple is stored in `config.toml` and shown as a
 chip in the status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on
@@ -195,9 +200,10 @@ Hotkeys come in two tiers:
 - **Global** — `F2`/`F3`/`F4`, `Ctrl+E`, `Ctrl+P` (preview controls popup: theme
   override and size presets, §8.1 items 9–10): work always, even while a text input
   is focused.
-- **Single-char** — `m`, `v` (version history popup, §3.4), `[`, `]`, arrow
+- **Single-char** — `v` (version history popup, §3.4), `[`, `]`, arrow
   navigation, `r` (re-check agent health, on the Home agent-error state): work only
-  when no text input is focused.
+  when no text input is focused. Configuration- and conversation-level actions have
+  no single-char keys — they are slash commands (§3.10).
 
 All popups (the picker, the pin input, preview controls) render over a dimmed
 backdrop, so their inputs never blend with the design underneath. In the preview
@@ -211,7 +217,8 @@ preview. Anything reachable by a single-char hotkey is also reachable by mouse.
 
 `Esc` follows a strict layered priority — one press pops the topmost layer:
 
-1. an open popup (picker, history, pin input, preview controls) → close it;
+1. an open popup or the slash menu (picker, history, pin input, preview controls,
+   §3.10) → close it;
 2. a focused text input → unfocus;
 3. an active version-browse view (§3.4) → return to head;
 4. a running generation → cancel it;
@@ -240,11 +247,39 @@ Chat ids are termcraft-assigned (`c1`, `c2`, …, create-new semantics like vers
 files). A chat's display name is derived, not stored: the first line of its first
 `user` record, truncated to ~60 chars (the project-name rule, §3.1).
 
-MVP ships the full storage model plus minimal management: create a new chat and
-switch between existing ones. The exact management surface (list layout, hotkey,
-status-bar affordance) is deliberately unspecified here — it lands with the next
-UI-reference iteration (`design/`, §3), following the existing popup pattern
-(§3.6, §3.8). Rename, deletion, and AI-generated titles are backlog (§8.3).
+MVP ships the full storage model, managed through slash commands (§3.10): `/new`
+starts a fresh chat and switches to it; `/chats` opens the chat list popup — chats
+listed by derived name with timestamps, newest first, the active chat marked, Enter
+switches — following the existing popup pattern (§3.6, §3.8). The popup's exact
+visual layout lands with the next UI-reference iteration (`design/`, §3). Rename,
+deletion, and AI-generated titles are backlog (§8.3).
+
+### 3.10 Composer commands
+
+Typing `/` as the first character of an empty primary input (the Workspace composer
+or the Home prompt) opens the **slash menu**: an autocomplete list anchored to the
+input, filtering as you type, each command with a one-line description. Enter runs
+the highlighted command; Esc closes the menu (§3.8). The menu is not a modal popup —
+it never dims the screen — and it is just another view over the §4 action table: a
+command whose availability predicate fails (e.g. anything but sending while a turn
+runs, §3.2) shows dimmed with the same hint the status bar would give; a command
+meaningless on the current screen is hidden (on Home only `/model` applies, and when
+nothing applies the menu simply does not open). On Enter, composer text that exactly
+names a known command runs it; anything else is sent as a chat message.
+
+Commands are argument-less; each dispatches the same action-table entry as its
+hotkey or mouse twin:
+
+- `/new` — start a new chat and switch to it (§3.9). MVP.
+- `/chats` — open the chat list popup (§3.9). MVP.
+- `/export` — run the export, same as `Ctrl+E` (§3.7). MVP.
+- `/model` — open the agent · model · effort picker (§3.6). v1.0.
+
+The set is deliberately small: slash commands cover conversation- and
+configuration-level actions, while live view controls (fullscreen, mode, version
+browsing) stay on keys — and everything mouse-reachable stays mouse-reachable
+(§3.8): the status-bar chip and version segment keep their clicks as parallel
+triggers of the same actions.
 
 ## 4. Architecture
 
@@ -269,8 +304,8 @@ into a workspace crate later without rewrites:
   it dispatches. The keyboard handler resolves keys through this table (honoring
   the two hotkey tiers of §3.8, including the turn-time locks), and the status-bar
   hint row renders from it — an action's availability decides whether its hint
-  shows or dims. Nothing binds a key or checks a lock anywhere else. A future
-  command palette (backlog, §8.3) is just another view over the same table.
+  shows or dims. The slash menu (§3.10) is just another view over the same table.
+  Nothing binds a key or checks a lock anywhere else.
 
 **The kernel boundary is the future IPC.** UI and core communicate exclusively through
 a pair of async channels (`Command` → core, `Event` → UI). When daemon mode arrives,
@@ -643,10 +678,12 @@ version, never an overwrite.
     for menus/dropdowns/dialogs, bound inputs with typing + Enter, Tweaks panel with
     toggle/select/text controls over the reactive variable store.
 12. Export: `design-prompt.md` + DSL files + ASCII page snapshots.
-13. Agent · model · effort picker (`m`): popup selection, status-bar chip, inline
-    selectors on Home (§3.6).
-14. Multiple chats per project (§3.9): new chat, chat switching and list, per-chat
-    agent sessions, status-bar context-usage segment.
+13. Agent · model · effort picker (via `/model` or the status-bar chip): popup
+    selection, status-bar chip, inline selectors on Home (§3.6).
+14. Multiple chats per project (§3.9): `/new`, `/chats` with the chat list popup,
+    per-chat agent sessions, status-bar context-usage segment.
+15. Composer slash menu (§3.10) with the full v1.0 command set: `/new`, `/chats`,
+    `/export`, `/model`.
 
 ### 8.2 MVP cut
 
@@ -664,10 +701,11 @@ version, never an overwrite.
 - Mouse: hover, click-select, right-click **pin comments** (explicitly in MVP).
 - Versions written from day one; `[` / `]` prev/next switching; sending from a
   non-head view auto-rolls back (§3.4).
-- Multiple chats (§3.9) from day one: the `chats/` layout, new-chat command, and chat
-  switching, with per-chat CLI sessions and the context-usage status segment. The
-  management surface stays minimal (the §3.9 open point); rename, deletion, and AI
-  titles are backlog.
+- Multiple chats (§3.9) from day one: the `chats/` layout with per-chat CLI sessions
+  and the context-usage status segment, managed through `/new` and `/chats`; rename,
+  deletion, and AI titles are backlog.
+- Composer slash menu (§3.10) with `/new`, `/chats`, `/export` (`/model` arrives
+  with the picker in v1.0).
 - Export: `design-prompt.md` + DSL + ASCII snapshots (renderer already exists — cheap
   and high-value for the implementing agent).
 - Migration infrastructure live from the first commit (even with zero migrations).
@@ -683,10 +721,9 @@ additional agent backends (Gemini CLI behind the same trait), spatial canvas boa
 agent-defined palettes/themes, multi-project workspaces + a global user config
 (`~/.config/termcraft` with defaults for new projects), version compare (change
 highlighting between versions), chat management extras (rename, deletion/archival,
-AI-generated chat titles), file watching / reload of external edits, keyboard
-element navigation (selection and pins without a mouse), command palette
-(`Ctrl+Shift+P`): a filterable popup over the `ui` action table (§4) — same entries,
-labels, hotkeys, and availability predicates.
+AI-generated chat titles), file watching / reload of external edits, and keyboard
+element navigation (selection and pins without a mouse). A separate command palette
+is no longer planned — the slash menu (§3.10) is that view over the action table.
 
 ## 9. Error handling
 

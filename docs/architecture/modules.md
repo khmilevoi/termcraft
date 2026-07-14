@@ -29,7 +29,7 @@ flowchart LR
 
    | Component | Owns |
    |------|----------------|
-   | **UI shell** | Screens, input interpretation, and the action table — the single registry of user actions: hotkey, availability predicate, dispatched command |
+   | **UI shell** | Screens; input interpretation (keys, mouse, the composer slash menu); the action table — the single registry of user actions: hotkey or slash command, availability predicate, dispatched command |
    | **Kernel** | The only decision-maker: commands in, events out, the agent-turn lifecycle, the turn-time locks, applying operations |
    | **Agent gateway** | Start, stream, cancel, and health-check local agent CLIs; per-chat session continuity; mapping (model, effort) to CLI flags |
    | **Design language** | The document model: types, schema, structural and semantic validation, format version |
@@ -45,4 +45,4 @@ flowchart LR
 
 ## Source anchors
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4 architecture and module boundaries, §3.8 action table and hotkey tiers, §5.7 rendering determinism, §6.1 backend abstraction
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4 architecture and module boundaries, §3.8 action table and hotkey tiers, §3.10 slash menu, §5.7 rendering determinism, §6.1 backend abstraction
