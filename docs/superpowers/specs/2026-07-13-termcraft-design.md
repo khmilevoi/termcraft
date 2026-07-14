@@ -110,8 +110,10 @@ versions map 1:1 to chat messages, and each turn's record in `chat.jsonl` carrie
 head of a page is simply its highest version; there is no head pointer.
 
 Browsing is free: `[` / `]` switch prev/next version read-only, the status bar shows
-`vN`, nothing is written. Sending a message while viewing a non-head version first
-auto-rolls that version back to head — the agent always edits what the user sees.
+a caution-tinted `vN/total ‹read-only›`, nothing is written. `Enter` (with no text
+input focused) jumps back to head; `Esc` exits browsing the same way (§3.8). Sending
+a message while viewing a non-head version first auto-rolls that version back to
+head — the agent always edits what the user sees.
 
 Rollback ("make v3 the head") copies v3 forward as the new highest version — history
 stays linear and append-only, nothing is deleted (the git-revert model). Rollbacks,
@@ -157,10 +159,11 @@ and their history is git's job.
 
 Hotkeys come in two tiers:
 
-- **Global** — `F2`/`F3`/`F4`, `Ctrl+E`: work always, even while a text input is
-  focused.
-- **Single-char** — `m`, `[`, `]`, arrow navigation: work only when no text input is
-  focused.
+- **Global** — `F2`/`F3`/`F4`, `Ctrl+E`, `Ctrl+P` (preview controls popup: theme
+  override and size presets, §8.1 items 9–10): work always, even while a text input
+  is focused.
+- **Single-char** — `m`, `[`, `]`, arrow navigation, `r` (re-check agent health, on
+  the Home agent-error state): work only when no text input is focused.
 
 Exactly one widget owns focus. The Home prompt is focused on entry; the Workspace
 composer is focused by default; `Tab` cycles focus between the composer and the
@@ -168,10 +171,11 @@ preview. Anything reachable by a single-char hotkey is also reachable by mouse.
 
 `Esc` follows a strict layered priority — one press pops the topmost layer:
 
-1. an open popup (picker, pin input) → close it;
+1. an open popup (picker, pin input, preview controls) → close it;
 2. a focused text input → unfocus;
-3. a running generation → cancel it;
-4. a selected element → deselect.
+3. an active version-browse view (§3.4) → return to head;
+4. a running generation → cancel it;
+5. a selected element → deselect.
 
 ## 4. Architecture
 
@@ -534,7 +538,8 @@ agent-defined palettes/themes.
 ## 9. Error handling
 
 - **Agent missing / not logged in** → clear message with install instructions; checked
-  in the background at startup and before each send.
+  in the background at startup and before each send. The Home error state offers `r`
+  to re-run the health check without restarting.
 - **Invalid agent output** → auto-retry with validation errors (≤3), then chat error.
   Head version untouched; new versions are written atomically post-validation.
 - **Cancelled / hung generation** → process killed on `Esc` or after stream inactivity
