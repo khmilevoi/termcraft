@@ -24,7 +24,9 @@ Core principles:
   mode, using whatever auth the user already has.
 - **Local-first storage.** Everything lives in a `.termcraft/` folder in the directory
   where termcraft is launched, so designs sit next to the code they describe and are
-  committed to the same repository.
+  committed to the same repository. One `.termcraft/` holds exactly one project — the
+  design of this codebase's TUI. Separate tools (e.g. in a monorepo) get their own
+  folders; design experiments are git branches.
 - **Data outlives binaries.** Every stored file carries a format version; migrations are
   part of the architecture from day one.
 
@@ -37,6 +39,12 @@ Core principles:
 - Agent-side diffs/patches; the agent always returns full page documents.
 - Data-driven logic in prototypes (real lists, conditions, arithmetic). Simulated
   interactivity only.
+- Multi-project workspaces: one `.termcraft/` is one project (§3.1); a global user
+  config is backlog.
+- Watching for external file changes while running; termcraft is the folder's single
+  writer (§7.1).
+- Keyboard-driven element selection and pin placement; selection and pins are
+  mouse-only in v1.0 (§3.2).
 
 ## 3. User flows
 
@@ -45,53 +53,71 @@ truth for screens, states, palette, and status-bar language.
 
 ### 3.1 Launch and Home screen
 
-`termcraft` looks for `.termcraft/` in the current working directory.
+One `.termcraft/` = one project. `termcraft` looks for `.termcraft/` in the current
+working directory.
 
-- Missing → the Home screen opens immediately; `.termcraft/` is created lazily, at the
-  moment the first project is created (Enter on the prompt), with default config. The
+- Missing → the Home screen opens: a large centered prompt input ("Describe the TUI
+  you want to design"), focused on entry; `Esc`/`Tab` unfocuses it (focus rules:
+  §3.8). Inline selectors under the prompt show the current agent · model · effort
+  combo (`m` or a mouse click opens the picker, §3.6). Pressing Enter creates
+  `.termcraft/` with default config and a project manifest with zero pages, writes
+  the first `user` record to `chat.jsonl`, opens the Workspace, and starts the first
+  generation. The project name is the prompt's first line truncated to ~60 chars —
+  cosmetic only, stored in `project.toml`. A failed first turn rolls none of this
+  back: the error lands in chat and the user simply sends the next message. The
   agent CLI check (`codex --version`) runs in the background at startup and shows in
   the status bar; a missing agent produces a clear error on send. MVP has no wizard.
   The v1.0 first-run wizard adds the explicit choices: target stack for exports
   (rust-ratatui | go-bubbletea | generic) and preview defaults.
+- Present → the Workspace opens directly with chat history restored. There is no
+  project picker; separate projects live in separate directories.
 - Present but older format → offers bulk migration (see §7).
 
-Home screen: a large centered prompt input ("Describe the TUI you want to design"),
-below it the list of projects from `./.termcraft/projects/` (name, updated date, page
-count), navigable by mouse and arrows. The prompt is focused on entry; `Esc`/`Tab`
-unfocuses it (focus rules: §3.8). Typing a prompt and pressing Enter creates a
-project and immediately starts the first generation. Clicking a project opens its
-Workspace with chat history restored. Inline selectors under the prompt show the
-current agent · model · effort combo (`m` or a mouse click opens the picker, §3.6).
+(The Home project list shown in the UI reference file predates this decision and is
+superseded.)
 
 ### 3.2 Workspace
 
 Layout: chat panel on the left (~35%), live preview on the right, status bar at the
 bottom (agent name, page + version, preview size, mode, hotkey hints). Page tabs above
-the preview. `F2` toggles fullscreen preview.
+the preview. `F2` toggles fullscreen preview. With zero pages (a brand-new or
+all-failed project) the preview shows an empty-state placeholder ("No pages yet —
+describe what to build") and the tab strip is empty.
 
 While the agent works, its status streams into the chat; the preview updates when a new
 version is applied. Generation is cancellable (`Esc`, per the focus rules in §3.8).
 Typing the next message while a turn runs is allowed, but sending is disabled (the
-status bar hints why) — there is no message queue. Version switching and rollback are
-locked while a turn runs.
+status bar hints why) — there is no message queue. Version switching, rollback,
+export (§3.7), and the agent picker (§3.6) are locked while a turn runs; each refused
+action hints why in the status bar.
 
-Mouse in the preview (static mode):
+Mouse in the preview:
 
-- **Hover** highlights element boundaries.
-- **Left click** selects an element (deepest hit); a chip like `chart "CPU Usage"` is
-  attached to the chat composer, so "make it blue" reaches the agent with context.
-  `Esc` deselects.
-- **Right click** drops a **pin comment**: a mini input opens at the click point; the
-  comment is stored anchored to (page, element id, coordinates relative to the
-  element's rect) and shown as a numbered pin on the preview and as a list in the chat
-  panel. Open pins whose anchor resolves are sent with the next message; pins attached
-  to a successfully applied message are marked resolved (user can reopen them).
+- **Hover** (static mode) highlights element boundaries.
+- **Left click** (static mode) selects an element (deepest hit); a chip like
+  `chart "CPU Usage"` is attached to the chat composer, so "make it blue" reaches the
+  agent with context. `Esc` deselects. The selection is stored as (page, element id);
+  the rect is recomputed every frame. It survives version switches while the id
+  resolves in the viewed version and is silently cleared when the element disappears;
+  switching page tabs clears it. The chip is included in the prompt only if the id
+  resolves in the active page's head at send time.
+- **Right click** (works in both modes, §3.5) drops a **pin comment**: a mini input
+  opens at the click point over a dimmed preview (§3.8); the comment is stored
+  anchored to (element id, fractional position fx/fy ∈ [0..1] inside the element's
+  rect) and shown as a numbered pin on the preview and as a list in the chat panel.
+  On render the pin sits at `rect.origin + (fx·width, fy·height)`, clamped inside the
+  rect — pins stay proportionally where they were dropped when the element resizes.
+  Open pins whose anchor resolves are sent with the next message; pins attached to a
+  successfully applied message are marked resolved (user can reopen them).
 
 Pins are anchored to element ids, not versions. A pin is drawn on the preview only
 when the viewed version contains its element; otherwise it disappears from the preview
 but stays in the chat panel's pin list with an orphan marker ("element missing in
 v3"). Orphaned pins are never deleted automatically and are skipped when sending to
 the agent.
+
+Selection and pins are mouse-only in v1.0; keyboard element navigation is backlog
+(§8.3).
 
 ### 3.3 Pages
 
@@ -129,6 +155,9 @@ instead of selecting: buttons fire their `interactions`, tabs switch (via their
 pages, focus traverses with `Tab` in document order (depth-first over elements with
 `bind` or `interactions`; `Shift+Tab` reverses), and bound inputs accept real typing
 with Enter firing `submit`. `F3` opens the Tweaks panel (§5.6) in either mode.
+Right-click pin comments keep working in interactive mode — the user can annotate
+mid-flow. A `goTo:` whose target page has since been removed is a no-op with a
+status-bar notice.
 
 ### 3.6 Agent · model · effort picker (v1.0)
 
@@ -137,13 +166,14 @@ the status-bar chip / Home inline selectors opens a popup over the dimmed screen
 listing selectable (agent, model, reasoning effort) combinations — one row each,
 current choice marked. The chosen triple is stored in `config.toml` and shown as a
 chip in the status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on
-the Home prompt. Each `AgentBackend` reports its available models/efforts and maps the
+the Home prompt. On Home, before `.termcraft/` exists, the choice is held in memory
+and written to `config.toml` when the project is created. Each `AgentBackend` reports its available models/efforts and maps the
 triple to its CLI flags. Switching agent or model starts a fresh agent session (§6.2);
-chat history is unaffected.
+chat history is unaffected. While a turn runs the picker is locked (§3.2).
 
 ### 3.7 Export
 
-`Ctrl+E` (or `termcraft export`) writes to `.termcraft/exports/<project>/`:
+`Ctrl+E` (or `termcraft export`) writes to `.termcraft/export/`:
 
 - `design-prompt.md` — implementation prompt: product overview, per-page structure and
   behavior, interactions and tweak states, theme/palette, recommended libraries for the
@@ -152,8 +182,9 @@ chat history is unaffected.
   size or theme override).
 - `pages/*.json` — the exact head-version DSL files (machine-readable source of truth).
 
-Re-export silently overwrites `exports/<project>/` in place: exports are derived data,
-and their history is git's job.
+Re-export silently overwrites `export/` in place: exports are derived data, and their
+history is git's job. Export is refused while a turn runs (§3.2) and when the project
+has zero pages — both hinted in the status bar.
 
 ### 3.8 Focus and hotkeys
 
@@ -164,6 +195,12 @@ Hotkeys come in two tiers:
   is focused.
 - **Single-char** — `m`, `[`, `]`, arrow navigation, `r` (re-check agent health, on
   the Home agent-error state): work only when no text input is focused.
+
+All popups (the picker, the pin input, preview controls) render over a dimmed
+backdrop, so their inputs never blend with the design underneath. In the preview
+controls popup the `custom` size preset expands an inline `W×H` input (`100x30`,
+`100 30`, and `100×30` all parse); Enter applies, invalid input shows an inline error
+and applies nothing; the last custom size is remembered in `config.toml`.
 
 Exactly one widget owns focus. The Home prompt is focused on entry; the Workspace
 composer is focused by default; `Tab` cycles focus between the composer and the
@@ -189,8 +226,8 @@ into a workspace crate later without rewrites:
   click → deepest element).
 - `agent` — `AgentBackend` trait (start task, stream events, cancel) + `CodexCli`
   implementation (MVP); `ClaudeCli` later. Spawns CLI processes; no API keys.
-- `store` — everything under `.termcraft/`: projects, pages, versions, comments, chat,
-  config; atomic writes (tmp + rename); the migration registry (§7).
+- `store` — everything under `.termcraft/`: the project manifest, pages, versions,
+  comments, chat, config; atomic writes (tmp + rename); the migration registry (§7).
 - `core` — the kernel: accepts **Commands** from the UI (create project, send message,
   switch version, toggle tweak, export…), orchestrates agents, applies operations,
   emits **Events** (agent status stream, version applied, error…).
@@ -264,7 +301,9 @@ top of the migration system).
 Mirrors ratatui's model 1:1 (LLMs handle it well): containers split their area among
 children with constraints — `"30%"`, `12` (fixed cells), `"fill"`, `"min:10"` — plus
 `padding`. Direction comes from the container type (`row` / `column`); alignment is
-expressed with `spacer` elements and constraints.
+expressed with `spacer` elements and constraints. `padding` is either a number
+(uniform) or `{"x": …, "y": …}` (per-axis — the common horizontal-only case in a 2:1
+cell grid); there is no per-side form — asymmetry is expressed with `spacer`s.
 
 ### 5.4 Styles and themes
 
@@ -278,7 +317,11 @@ field; switching themes never touches the tree, and the preview theme switcher
 Agent-defined palettes are backlog (§8.3); until then raw hex values are the escape
 hatch. The renderer degrades colors to the terminal's capability. Style fields: fg/bg
 (role or hex), modifiers (bold, dim, italic, underline), border (none | plain |
-rounded | double | thick).
+rounded | double | thick; default rounded). `border` is meaningful on `panel` and
+`input`; `none` suppresses the frame — a borderless panel renders its `label` as a
+muted header line above the content, a borderless input renders as a single
+`label value` line with the value underlined. On other elements `border` is ignored
+with a validation warning.
 
 ### 5.5 Reactive variable system (v1.0)
 
@@ -303,7 +346,7 @@ Everything that "moves" in a prototype reads and writes this single map:
   strings.
 - **Overrides.** Per element: `overrides: [{"when": {…}, "style": {…}, "text": "…"}]` —
   an error state can recolor an existing input's border, not just reveal hidden nodes.
-- **Interactions.** Per element: `interactions: [{"on": "click" | "submit" | "change",
+- **Interactions.** Per element: `interactions: [{"on": "click" | "submit",
   "action": "…"}]` with actions `goTo:<page>`, `open:<id>`, `close:<id>`,
   `toggle:<id>`, `set:<var>=<value>`. In `set:`, the values `true`/`false` parse as
   bools; anything else is a string.
@@ -350,6 +393,14 @@ bound to the same variable as some input, e.g. to preview long/empty/cyrillic va
 The Tweaks panel (`F3`) lists these controls, mouse-clickable. Tweak controls, design
 interactions, and bound inputs all mutate variables through the same
 `core` code path — three doors into one room.
+
+### 5.7 Rendering determinism
+
+Rendering is a pure function of (document, area, theme): the same input produces a
+byte-identical buffer, which is what makes the export snapshots (§3.7) reproducible.
+Only `text` wraps (word wrap, spaces preserved); every other content field — button
+labels, list items, table cells, input values, tab and panel titles, canvas rows —
+renders on a single line hard-clipped at its area boundary, no ellipsis.
 
 ## 6. Agent integration
 
@@ -414,13 +465,27 @@ retry loop. `add_page` and the metadata ops (`rename_page`, `reorder_pages`,
 
 `remove_page` only unlists the page from the project manifest; its directory
 (versions, comments) stays on disk, invisible to the UI, export, and validation.
-`add_page` with the same slug resurrects it: the page returns to the manifest and
+The manifest is the protocol's universe: every op except `add_page` must name a page
+currently in it — an unlisted slug is an "unknown page" validation error. `add_page`
+with the same slug is the only door back: the page returns to the manifest and
 version numbering continues where it left off.
+
+Page slugs are agent-chosen and validated: `^[a-z0-9][a-z0-9-]{0,31}$`, minus
+Windows-reserved device names (`con`, `nul`, `aux`, `prn`, `com1`–`com9`,
+`lpt1`–`lpt9`) — a slug is a directory name on disk. The mask is stated in the
+system prompt; a violation is a normal validation error.
+
+The turn's context (active page, selection, pins) is snapshotted at send time —
+switching tabs mid-turn does not change what the agent sees. Tab switching stays
+free while a turn runs (it is read-only); on apply, the UI moves to another page
+only on an explicit `set_active_page` — `add_page` alone does not switch, and
+without the op the user stays on whatever tab they are viewing.
 
 **Sessions.** Conversation continuity uses the CLI's session resume; the session id is
 stored per project in a local, non-versioned file (§7.1). If resume fails (stale
 session, another machine, switched backend), termcraft silently starts a fresh session
-and includes a short excerpt of the recent chat for continuity. Switching agent or
+and includes a short excerpt of the recent chat for continuity (the last N
+`user`/`agent` records from `chat.jsonl`; N is an implementation constant). Switching agent or
 model starts a fresh session; the seen-versions map resets with it. After a termcraft
 restart the map starts empty — safe by construction, and cheap because the active page
 is always sent.
@@ -428,9 +493,14 @@ is always sent.
 ### 6.3 Validation and application
 
 Response → JSON parse → schema validation → semantic checks (unique ids, pages known
-to the manifest, `op.page` = `doc.page`, the unseen-head guard, unknown palette
-roles). Variable hygiene (read-but-never-written, written-but-never-read, sugar
-targeting a custom `visibleWhen`) produces warnings fed back to the agent, not errors.
+to the manifest for every op except `add_page`, the page slug mask, `op.page` =
+`doc.page`, the unseen-head guard, unknown palette roles, `tabs.active` naming one of
+the element's children, `open:/close:/toggle:` targets existing in the same document,
+`goTo:` targets present in the manifest as it stands after the whole ops list).
+Variable hygiene (read-but-never-written, written-but-never-read, sugar targeting a
+custom `visibleWhen`) produces warnings fed back to the agent, not errors — as do
+`border` on non-bordered elements and a `remove_page` that leaves dangling `goTo:`
+references on other pages.
 Invalid → automatic retry with the validation errors appended to the prompt (one
 initial attempt plus at most 3 retries), then an honest error in chat. Valid → ops
 applied atomically by the kernel; each changed page gets exactly one new `vN.json`
@@ -446,24 +516,46 @@ the full turn from user message to applied version, including the retry loop.
 ```
 .termcraft/
   .gitignore                  # written by termcraft: lock, *.local.toml, backup-*/
-  config.toml                 # format_version, agent+model+effort, target_stack, preview defaults
+  config.toml                 # format_version, agent+model+effort, target_stack,
+                              #   preview defaults (incl. last custom size, §3.8)
   lock                        # single-instance lock file (holds the owner's PID)
-  projects/<slug>/
-    project.toml              # format_version, name, dates, ordered pages, active page
-    chat.jsonl                # dialog log (first line: {"kind":"chat","version":1});
-                              #   turn records carry applied: {"<page>": N} (§3.4)
-    session.local.toml        # agent session id — machine-local, never committed
-    pages/<page>/
-      v1.json … vN.json       # page documents (schemaVersion inside)
-      comments.jsonl          # pins (first line: {"kind":"comments","version":1})
-  exports/<slug>/
+  project.toml                # format_version, name, dates, ordered pages, active page
+  chat.jsonl                  # dialog log (record schema below)
+  session.local.toml          # agent session id — machine-local, never committed
+  pages/<page>/
+    v1.json … vN.json         # page documents (schemaVersion inside)
+    comments.jsonl            # pins (record schema below)
+  export/
     design-prompt.md
     pages/*.json
 ```
 
 All plain text. Files matched by the generated `.gitignore` (`lock`, `*.local.toml`,
 `backup-*/`) are machine-local state; everything else diffs and commits alongside the
-target project's code.
+target project's code. There is no global user config; per-project `config.toml` is
+the only configuration (a `~/.config/termcraft` with defaults for new projects is
+backlog, §8.3).
+
+`chat.jsonl` starts with the header `{"kind":"chat","version":1}`, then one record
+per line, each with an ISO 8601 `ts`:
+
+- `{"kind":"user", "text", "selection"?, "pins":[…]}` — exactly what was sent to the
+  agent: the message, the selection chip's element id, the ids of the pins included.
+- `{"kind":"agent", "text", "applied":{"<page>": N}}` — the agent's final message and
+  the versions the turn produced (empty map if the turn failed). Streaming status
+  (reasoning, command execution) is ephemeral UI and is never persisted.
+- `{"kind":"system", "event":"rollback"|"error"|"cancelled", "text"}` — rollbacks
+  (auto and explicit), honest post-retry errors, cancellations.
+
+`comments.jsonl` starts with `{"kind":"comments","version":1}`; pin records are
+`{"id", "element", "fx", "fy", "text", "status":"open"|"resolved", "ts"}` (§3.2).
+
+A running termcraft is the folder's single writer: external modifications (a
+`git pull`, a manual edit) while it runs are unsupported — restart to pick them up;
+file watching is backlog (§8.3). As a data-loss guard, version files are written
+create-new: if `vN.json` unexpectedly exists, termcraft rescans the directory and
+writes the next free number — with append-only history the worst case is a duplicate
+version, never an overwrite.
 
 ### 7.2 Format versioning and migrations
 
@@ -486,7 +578,8 @@ target project's code.
 
 ### 8.1 v1.0
 
-1. Home: prompt input + project list from `./.termcraft`.
+1. Home: prompt input when no project exists; an existing project opens straight
+   into the Workspace (§3.1).
 2. `.termcraft` wizard: setup, agent health check, target stack, bulk migrations.
 3. Workspace: chat + live preview, `F2` fullscreen, status bar.
 4. Agents behind `AgentBackend`: Codex CLI (primary); Claude Code CLI second, terms
@@ -495,9 +588,9 @@ target project's code.
 6. Mouse: hover highlight, click-select with composer chip, right-click pin comments.
 7. Multiple pages with tabs; agent-driven page operations; page rename/remove/reorder
    from the UI.
-8. Per-page version history UI with rollback and compare.
+8. Per-page version history UI (timestamps, prompt excerpts) with explicit rollback.
 9. Preview palette/theme switching (light/dark, 16/256/truecolor simulation).
-10. Preview size presets: 80×24, 120×40, custom, auto.
+10. Preview size presets: 80×24, 120×40, custom (inline `W×H` input, §3.8), auto.
 11. Interactive prototype: focus traversal, `goTo` page transitions, open/close/toggle
     for menus/dropdowns/dialogs, bound inputs with typing + Enter, Tweaks panel with
     toggle/select/text controls over the reactive variable store.
@@ -507,9 +600,9 @@ target project's code.
 
 ### 8.2 MVP cut
 
-- Home with input + project list; `.termcraft` created lazily when the first project
-  is created, with default config (target stack `rust-ratatui`); background agent
-  presence check (no wizard).
+- Home prompt when no project exists; `.termcraft` created lazily on the first
+  prompt, with default config (target stack `rust-ratatui`); an existing project
+  opens straight into the Workspace; background agent presence check (no wizard).
 - Workspace: chat + preview + status bar + `F2`. Codex only with its default model; no
   picker UI, but the (agent, model, effort) triple already lives in `config.toml` so
   the format needs no migration when the picker lands.
@@ -533,7 +626,10 @@ target project's code.
 
 Daemon + IPC, workspace crate split, agent diffs/patches, ratatui code generation,
 additional agent backends (Gemini CLI behind the same trait), spatial canvas boards,
-agent-defined palettes/themes.
+agent-defined palettes/themes, multi-project workspaces + a global user config
+(`~/.config/termcraft` with defaults for new projects), version compare (change
+highlighting between versions), file watching / reload of external edits, keyboard
+element navigation (selection and pins without a mouse).
 
 ## 9. Error handling
 
@@ -569,8 +665,9 @@ agent-defined palettes/themes.
 
 ## 11. Success criteria (MVP)
 
-From an empty directory: `termcraft` → Home opens → prompt "a system monitor
-dashboard" → Enter creates `.termcraft` and the project → Codex generates pages →
+From an empty directory: `termcraft` → the Home prompt opens → "a system monitor
+dashboard" → Enter creates `.termcraft` (the project) → Codex generates pages →
 live render → right-click pin "make this gauge red" → send → new version applies →
 `Ctrl+E` → `design-prompt.md` + DSL that a coding agent can implement from without
-seeing termcraft.
+seeing termcraft. Relaunching in the same directory reopens the Workspace with chat
+and design intact.
