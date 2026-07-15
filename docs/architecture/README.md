@@ -41,6 +41,6 @@ One document per user-visible process:
 - [flows/pins-and-selection.md](flows/pins-and-selection.md) — mouse selection
   and pin comments: anchoring, lifecycle, unresolved pins.
 - [flows/export.md](flows/export.md) — the export package: deterministic
-  snapshots plus exact design files.
+  multi-size snapshots, resolved layout trees, plus exact design files.
 - [flows/migration.md](flows/migration.md) — upgrading stored data: lazy and
   bulk migration, backups, the too-new-file error.

@@ -18,6 +18,8 @@ flowchart TB
         subgraph ex["export/ — derived, overwritten in place"]
             dp["design-prompt.md"]
             ptsx["pages/*.tsx — head-version copies"]
+            snaps["snapshots/ — ASCII frames per page × size"]
+            lay["layout/ — resolved layout trees per page"]
         end
     end
     trust["trust ledger — machine-local user state, outside the project, keyed by project path"]

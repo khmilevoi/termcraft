@@ -18,8 +18,9 @@ Claude Code second) writes real design code — OpenTUI/React components compose
 the `@termcraft/kit` design system — and termcraft renders it live in the terminal.
 Iteration happens through chat; the mouse is used to select elements, pin comments,
 and flip state tweaks. The final deliverable is an export package: a prompt file
-describing the interface plus the exact design sources and deterministic text
-snapshots, ready to be fed to a coding agent that implements the real application.
+describing the interface plus the exact design sources, deterministic text
+snapshots at several sizes, and resolved layout trees, ready to be fed to a coding
+agent that implements the real application.
 
 Core principles:
 
@@ -246,18 +247,37 @@ chat history is unaffected. While a turn runs the picker is locked (§3.2).
 
 - `design-prompt.md` — implementation prompt: product overview, per-page structure and
   behavior, interactions and tweak states, theme/palette tokens, recommended libraries
-  for the configured target stack, and an ASCII snapshot of each page rendered by the
-  design host at the page's `minSize` (deterministic — independent of the current
-  preview size or theme override, §5.7).
+  for the configured target stack, and — embedded per page — the canonical ASCII
+  snapshot at the page's `minSize`. The prompt frames the snapshot files as
+  acceptance fixtures ("your implementation at 80×24 must render
+  `snapshots/checkout/80x24.txt`; diff your output against it") and explains how to
+  read `layout/*.json` (boxes in terminal cells; ids match the ids in the sources —
+  the code ↔ geometry link).
 - `pages/*.tsx` — the exact head-version design sources (machine-readable source of
   truth; precise enough for an implementing agent in any target stack to read as a
   spec).
+- `snapshots/<page>/<WxH>.txt` — one ASCII frame per export size, rendered by the
+  design host (deterministic — independent of the current preview size or theme
+  override, §5.7). Separate files so the implementing agent can diff its own render
+  output against them programmatically.
+- `layout/<page>.json` — the resolved layout tree at every export size: per node its
+  `id` (as declared in the design, else `null`), `kind` (kit component or raw
+  element name), computed `box` (`x`/`y`/`w`/`h` in cells), `text` for text nodes,
+  and `children`. No styles — colors already live in the frames and the theme
+  tokens; the tree answers exactly "which box is where", so an implementing agent
+  never has to simulate flexbox.
+
+Export sizes are a fixed ladder: the page's `minSize` always, plus 120×30 and
+160×40; a standard size is included only when it is at least `minSize` on both
+axes (a page is never rendered below its minimum), and duplicates collapse. Several sizes turn resize behavior into data instead of code:
+the frames show which regions stretch and which stay fixed, without the agent
+reading flexbox props.
 
 Re-export silently overwrites `export/` in place: exports are derived data, and their
-history is git's job. Export is all-or-nothing: if any page fails to render at its
-`minSize` (a head broken by rollback or kit drift, §3.4, §9), the whole export
-refuses, naming the page and the error — a package with a silently missing page
-would lie to the implementing agent. Export is likewise refused while a turn runs
+history is git's job. Export is all-or-nothing: if any page fails to render at any
+export size (a head broken by rollback or kit drift, §3.4, §9), the whole export
+refuses, naming the page, the size, and the error — a package with a silently
+missing page would lie to the implementing agent. Export is likewise refused while a turn runs
 (§3.2), when the project has zero pages, and on an untrusted project — export
 executes design code, so `termcraft export` on an untrusted folder prints the trust
 error and points at the TUI (§3.1). In-app refusals hint in the status bar.
@@ -425,8 +445,9 @@ the shell over stdio:
   §5.6); page-emitted events (kit navigation calls, §5.5).
 - **shell → host**: resize, theme and capability override (§8.1), forwarded input
   (interactive mode, §3.5), tweak changes (§5.6), and queries — `checkHit(x, y) →
-  id`, `rectOf(id) → Rect` (selection and pins, §3.2), and `describe(id) →
-  component kind + label` (the selection chip, §3.2).
+  id`, `rectOf(id) → Rect` (selection and pins, §3.2), `describe(id) →
+  component kind + label` (the selection chip, §3.2), and `layoutTree() → the
+  resolved node tree` (id, kind, box, text, children — export capture, §3.7).
 
 Isolation layers, each with its honest job:
 
@@ -466,7 +487,7 @@ import { definePage, Panel, Row, Gauge } from "@termcraft/kit"
 
 export const meta = definePage({
   title: "Dashboard",          // tab label, the page's display name
-  minSize: { w: 80, h: 24 },   // export snapshot size, status-bar warning threshold
+  minSize: { w: 80, h: 24 },   // smallest export size, status-bar warning threshold
   theme: "dark-default",       // token palette (§5.4)
 })
 
@@ -577,9 +598,11 @@ runtime state — never written to versions, reset with the host on version swit
 
 ### 5.7 Rendering determinism
 
-Export snapshots must be reproducible. The recipe: a fresh host process, the page
-mounted at `minSize` with the page's own theme, exactly one render pass
-(`renderOnce` at t = 0), the frame captured, the host killed. Kit components
+Export snapshots must be reproducible. The recipe: a fresh host process per
+(page, size), the page mounted at that size with the page's own theme, exactly one
+render pass (`renderOnce` at t = 0), the frame and the resolved layout tree both
+captured from that same pass — consistent by construction — and the host killed.
+Kit components
 suppress animation under the host's export flag; design-code conventions (§5.8) ban
 timers and randomness outside explicit animation, so the first frame is stable.
 Deviations are visible in export diffs — derived data under git review.
@@ -847,7 +870,8 @@ version, never an overwrite.
 11. Interactive prototype (`F4`): input forwarding to the design host — real
     handlers, focus traversal, kit navigation between pages, typing in inputs;
     Tweaks panel (`F3`) with toggle/select/text controls.
-12. Export: `design-prompt.md` + design sources + ASCII page snapshots.
+12. Export: `design-prompt.md` + design sources + multi-size ASCII snapshots +
+    resolved layout trees.
 13. Agent · model · effort picker (via `/model` or the composer's model chip):
     popup selection, composer chip, inline selectors on Home (§3.6).
 14. Multiple chats per project (§3.9): `/new`, `/chats` with the chat list popup,
@@ -880,8 +904,9 @@ version, never an overwrite.
   rename, deletion, and AI titles are backlog.
 - Composer slash menu (§3.10) with `/new`, `/chats`, `/export` (`/model` arrives
   with the picker in v1.0).
-- Export: `design-prompt.md` + sources + ASCII snapshots (the host already renders —
-  cheap and high-value for the implementing agent).
+- Export: `design-prompt.md` + sources + multi-size ASCII snapshots + resolved
+  layout trees (the host already renders and computes layout — cheap and
+  high-value for the implementing agent).
 - Migration infrastructure live from the first commit (even with zero migrations).
 - Preview auto-sized to the available area; when it is smaller than the page's
   `minSize`, the status-bar size indicator turns error-colored (`78×22 < 80×24`) and
@@ -944,7 +969,7 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   type errors, render crashes) → exact error output; id-lint and warning cases.
 - `host`: protocol contract tests — frames, hit/rect queries, input forwarding,
   watchdog behavior — against scripted pages; determinism test: same page + size +
-  theme → byte-identical snapshot across fresh host runs.
+  theme → byte-identical snapshot and layout tree across fresh host runs.
 - `agent`: backends against SDK fakes — event streams, session resume and its
   fallback, confinement configuration, cancel.
 - `store`: migration fixtures for all historical versions (§7.2); create-new version

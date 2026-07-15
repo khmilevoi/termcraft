@@ -20,7 +20,7 @@ flowchart LR
     termcraft -- "diff + validation gate" --> staging
     termcraft -- "atomic reads and writes" --> folder
     folder -- "committed alongside the code" --> repo
-    termcraft -- "export: prompt + design sources" --> coder
+    termcraft -- "export: prompt + design sources +<br/>snapshots + layout trees" --> coder
 ```
 
 ## Walkthrough
@@ -30,7 +30,7 @@ flowchart LR
 3. The agent writes design code — components composed from termcraft's embedded design kit — by editing files directly in a scratch staging directory, confined there by the CLI's own sandbox where the platform provides one. When the turn ends, termcraft diffs the staging directory and validates the changes (types, import allowlist, a smoke render) before anything is stored; the gate, not the sandbox, is what correctness rests on.
 4. Accepted changes render live in the terminal preview. The design code executes only inside an isolated design-host subprocess — never in the shell — and only in projects the user has explicitly trusted on this machine, since designs arriving through git are code. The designer iterates through chat messages, mouse selection of preview elements, and pin comments anchored to specific elements, never by editing the rendered output directly.
 5. Failure branch: if the agent CLI is missing or not logged in, a background health check performed at startup — and repeated before each send — surfaces the problem in the status bar. Attempting to send a message while unhealthy then fails with a clear error and install instructions rather than silently hanging.
-6. The final deliverable is an export package — an implementation prompt with deterministic text snapshots plus the exact design sources — handed off to a separate implementing coding agent that builds the real application. termcraft itself never emits implementation code for the target stack; its only output toward implementation is this package.
+6. The final deliverable is an export package — an implementation prompt, deterministic text snapshots at several terminal sizes, resolved layout trees, and the exact design sources — handed off to a separate implementing coding agent that builds the real application. termcraft itself never emits implementation code for the target stack; its only output toward implementation is this package.
 7. Several non-goals bound this context: there is no manual drag/resize (WYSIWYG) editing of designs, since all content changes flow through the agent; termcraft in v1.0 runs as a single-user, single-instance tool with no daemon or multi-client mode; and each project folder holds exactly one project, so separate tools or design experiments live in separate folders or git branches rather than one shared workspace.
 
 ## Source anchors
