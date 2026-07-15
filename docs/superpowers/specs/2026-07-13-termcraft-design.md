@@ -424,6 +424,20 @@ a pair of async channels (`Command` → core, `Event` → UI). When daemon mode 
 this contract becomes the wire protocol and the UI does not change. Terminal events,
 core events, and host frames merge in a single event loop.
 
+**State and logic are Reatom.** termcraft's own logic — kernel state and turn
+orchestration in `core`, screen and action-table state in `ui` — is written with
+Reatom v1001 (`@reatom/core@1001`): named atoms and computeds for state, actions
+for commands, `wrap` at every async boundary so reactive context survives awaits
+and callbacks, async flows through `withAsync`/`withAsyncData` instead of manual
+loading/error flags, and long-lived resources (host watchdog, channel
+subscriptions) owned by connect hooks that return their cleanup. Reatom does not
+blur the kernel boundary: each side holds its own atoms, and only Commands and
+Events cross the channel — the UI mirrors kernel state from Events, never imports
+kernel atoms. The OpenTUI shell binds components to atoms through the React
+adapter. Design code is unaffected: pages import only the kit, React, and OpenTUI
+(§5.8) — Reatom is termcraft's internal dependency, never part of the design
+surface or the export package.
+
 Diagram: [`docs/architecture/modules.md`](../../architecture/modules.md) — module
 graph with the kernel boundary marked as the future IPC.
 
