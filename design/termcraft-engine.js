@@ -187,7 +187,7 @@ export class Engine {
     if(gen){ seq.push(
       {role:'● codex'}, {status:'⠹ generating design…',c:P.amber,bold:true},
       {status:'✓ read main · v3',c:P.green}, {status:'✓ planned layout',c:P.green},
-      {status:'▸ writing widgets',c:P.fg,spark:true}, {status:'  network gauge · sparkline',c:P.faint}); }
+      {status:'▸ writing widgets',c:P.fg}, {status:'  network gauge · sparkline',c:P.faint}); }
     else { seq.push(
       {role:'● codex'}, {status:'✓ added network sparkline → v4',c:P.dim}, {status:'✓ ↑/↓ throughput labels',c:P.dim}); }
     for(const e of seq){ if(y>=composerTop-1) break;
@@ -597,7 +597,7 @@ export class Engine {
     this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)+1,'writing main · v1',{fg:P.faint});
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'a system monitor with cpu, memory and network'},{gap:1},
-      {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true,spark:true},{status:'✓ planned layout',c:P.green},{status:'▸ writing widgets',c:P.fg},{status:'  resources · processes',c:P.faint} ],
+      {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true},{status:'✓ planned layout',c:P.green},{status:'▸ writing widgets',c:P.fg},{status:'  resources · processes',c:P.faint} ],
       composerDisabled:true, placeholder:'generating… esc to cancel', composerMeta:{model:'codex · gpt5.5 · high',ctx:8}});
     this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · v1',mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
     return this.render(b); }
