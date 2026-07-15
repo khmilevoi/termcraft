@@ -566,6 +566,19 @@ Implementations wrap the vendors' official TypeScript SDKs — `@openai/codex-sd
 (MVP) and `@anthropic-ai/claude-agent-sdk` (v1.0, terms permitting) — which drive
 the locally installed CLIs and inherit their auth; termcraft holds no API keys.
 
+**The backend contract is mechanism-blind.** A backend's obligation is: stream
+`AgentEvent`s, and by the end of the run have the turn's proposed changes present
+in the staging directory — nothing else touched. *How* the changes get there is
+the backend's private business. Codex and Claude Code fulfill it natively — the
+CLI edits staging files with its own tools under its own confinement. A future
+backend whose agent cannot edit files usably (a bare LLM API, a CLI without file
+tools or without confinement) fulfills the same contract by emulation: it asks
+the model for full-file structured output and writes the files into staging
+itself. The kernel, the diff, the gate, and the apply pipeline are identical
+either way — adding such a backend touches nothing outside its own module.
+Retries follow the same rule: the kernel hands the gate errors to the backend as
+turn feedback, and the backend decides how to carry them into its conversation.
+
 `AgentTask` carries the staging directory path, the system prompt, the user message
 (with selection and pins), and the configured (model, reasoning effort) from the
 picker triple (§3.6); each backend maps them to its SDK options and reports which
