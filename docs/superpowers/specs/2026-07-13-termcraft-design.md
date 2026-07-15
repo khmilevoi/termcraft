@@ -113,9 +113,10 @@ on the right, status bar at the bottom. The composer's top border carries the
 conversation-level indicators: the model chip (agent · model · effort — click opens
 the picker, v1.0, §3.6) on the left and the context-usage indicator (§3.9, hidden when
 the backend reports none) on the right. The status bar's composition is fixed, left
-to right: mode, the page + version segment (click opens the history popup, v1.0, §3.4),
-preview size (error-colored when smaller than the page's `minSize`, §8.2), and a
-short hint row rendered from the action table (§4) — only the few live view keys.
+to right: the page + version segment (click opens the history popup, v1.0, §3.4),
+preview size (error-colored when smaller than the page's `minSize`, §8.2), and mode;
+a short hint row rendered from the action table (§4) — only the few live view keys —
+sits right-aligned.
 Slash commands are deliberately not hinted in the status bar; the slash menu is its
 own discoverability (§3.10). The version segment is the status bar's only clickable
 segment; the model chip keeps its click on the composer border. Everything else is
@@ -267,11 +268,13 @@ chat history is unaffected. While a turn runs the picker is locked (§3.2).
   tokens; the tree answers exactly "which box is where", so an implementing agent
   never has to simulate flexbox.
 
-Export sizes are a fixed ladder: the page's `minSize` always, plus 120×30 and
-160×40; a standard size is included only when it is at least `minSize` on both
-axes (a page is never rendered below its minimum), and duplicates collapse. Several sizes turn resize behavior into data instead of code:
-the frames show which regions stretch and which stay fixed, without the agent
-reading flexbox props.
+Export sizes are a fixed ladder: the page's `minSize` always, plus 120×40 (also a
+preview preset, §8.1 — what the user saw is what ships) and 160×40; a standard
+size is included only when it is at least `minSize` on both axes (a page is never
+rendered below its minimum), and duplicates collapse. Several sizes turn resize
+behavior into data instead of code: the frames show which regions stretch and
+which stay fixed, without the agent reading flexbox props — and the
+120×40 → 160×40 step grows width only, isolating horizontal stretch.
 
 Re-export silently overwrites `export/` in place: exports are derived data, and their
 history is git's job. Export is all-or-nothing: if any page fails to render at any
