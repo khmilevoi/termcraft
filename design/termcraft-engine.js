@@ -226,6 +226,8 @@ export class Engine {
       this.text(b,2,4,'show the error state',{fg:P.fg});
       this.text(b,2,6,'● codex',{fg:P.green,bold:true}); this.text(b,2,7,'✓ opened tweaks (F3)',{fg:P.dim}); this.text(b,2,8,'toggle states on the right',{fg:P.faint});
       this.put(b,0,frameH-4,'├',{fg:P.border}); this.hline(b,1,frameH-4,chatW-2,{fg:P.border}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.border});
+      this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.amberHi,bold:true});
+      { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,' ctx ',{fg:P.faint}); this.text(b,rx+5,frameH-4,'42% ',{fg:P.fg,bold:true}); }
       this.text(b,2,frameH-2,'❯ ',{fg:P.amber,bold:true}); this.text(b,4,frameH-2,'Ask for changes…',{fg:P.faint}); this.put(b,4,frameH-2,'█',{fg:P.amber,blink:true});
     }
     this.box(b,previewX0,0,previewW,frameH,{fg:P.border});
@@ -246,8 +248,8 @@ export class Engine {
     section('CONTENT'); input('Search text',this.pad('invoices q3',twW-9).trim(),true);
     this.text(b,tx,frameH-3,'⏎ apply   ␣ toggle',{fg:P.faint}); this.text(b,tx,frameH-2,'esc close',{fg:P.faint});
     const mode={t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
-    if(w<100) this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},mode],[['F3','tweaks',true],['esc','close']]);
-    else this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode,{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks',true],['F4','act'],['[ ]','vers']]);
+    if(w<100) this.statusBar(b,h-1,[mode],[['F3','tweaks',true],['esc','close']]);
+    else this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode],[['F2','full'],['F3','tweaks',true],['F4','act'],['[ ]','vers']]);
     return this.render(b);
   }
 
@@ -265,6 +267,9 @@ export class Engine {
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
     this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
+    this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
+    { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
     const pw=72, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
     this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
     this.box(b,pxs,pys,pw,ph,{title:'version history',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
@@ -284,7 +289,7 @@ export class Engine {
     this.put(b,fx,ly,']',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' next',{fg:P.dim}); fx+=9;
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'rollback to v4',{fg:P.dim}); fx+=18;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks'],['F4','act'],['v','history',true]]);
+    this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','full'],['F3','tweaks'],['F4','act'],['v','history',true]]);
     return this.render(b);
   }
 
@@ -302,6 +307,9 @@ export class Engine {
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
     this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
+    this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
+    { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
     const pw=74, ph=12, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
     this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
     this.box(b,pxs,pys,pw,ph,{title:'agent · model · effort',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
@@ -325,7 +333,7 @@ export class Engine {
     this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'apply',{fg:P.dim}); fx+=8;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']]);
+    this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']]);
     return this.render(b);
   }
 
@@ -765,6 +773,9 @@ export class Engine {
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
     this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
+    this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
+    { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
     const pw=74, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
     this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
     this.box(b,pxs,pys,pw,ph,{title:'chats',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
@@ -788,7 +799,7 @@ export class Engine {
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'switch',{fg:P.dim}); fx+=9;
     this.text(b,fx,ly,'/new',{fg:P.amber,bold:true}); fx+=5; this.text(b,fx,ly,'fresh chat',{fg:P.dim}); fx+=13;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.wsStatus(b,w,h,{keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
     return this.render(b); }
 
   wsChatFresh(w,h){ const P=this.pal; const b=this.mk(w,h);
