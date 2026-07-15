@@ -20,7 +20,7 @@ flowchart LR
 
 ## Walkthrough
 
-1. Mode toggle: `F4` switches static ↔ interactive. In static mode input is never forwarded — clicks select elements and the design renders its initial frame only. In interactive mode the shell forwards mouse and keyboard input to the design host (keeping its own global-tier keys and `Esc` layers), and the design behaves as the real application would: real handlers, real focus traversal, real typing. Right-click pins keep working mid-flow; `F3` opens Tweaks in either mode.
+1. Mode toggle: `F4` switches static ↔ interactive. In static mode input is never forwarded — the shell interprets it instead, so clicks select elements. In interactive mode the shell forwards mouse and keyboard input to the design host (keeping its own global-tier keys and `Esc` layers), and the design behaves as the real application would: real handlers, real focus traversal, real typing. The preview stays live in both modes — an animated design animates in static mode too; the modes differ only in where input goes. Right-click pins keep working mid-flow; `F3` opens Tweaks in either mode.
 2. No bespoke variable system exists: everything that "moves" in a prototype is component state private to the design code — `useState`, conditional rendering, controlled inputs. Reactivity is the framework's own re-render, and the host ships a new frame whenever output changes.
 3. Exactly two behaviors cross the host boundary, both as kit APIs:
    - **Tweaks** — a page exports its tweak declarations (toggle, select, text); the host reports them to the shell, the Tweaks panel renders them, and flipping a control pushes the value back so the design re-renders with it.

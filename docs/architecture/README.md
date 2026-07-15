@@ -39,7 +39,7 @@ One document per user-visible process:
   component state inside the design host; what crosses the boundary for
   interactive mode and the Tweaks panel.
 - [flows/pins-and-selection.md](flows/pins-and-selection.md) — mouse selection
-  and pin comments: anchoring, lifecycle, orphans.
+  and pin comments: anchoring, lifecycle, unresolved pins.
 - [flows/export.md](flows/export.md) — the export package: deterministic
   snapshots plus exact design files.
 - [flows/migration.md](flows/migration.md) — upgrading stored data: lazy and

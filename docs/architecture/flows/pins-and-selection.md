@@ -7,8 +7,8 @@ stateDiagram-v2
     Sent --> Resolved: that turn applies successfully
     Resolved --> Open: designer reopens the pin
     note right of Open
-        A pin whose element is missing in the
-        viewed version shows as orphaned in the
+        A pin whose anchor does not resolve in the
+        current render shows as "not visible" in the
         pin list; never auto-deleted, never sent.
     end note
 ```
@@ -21,7 +21,7 @@ stateDiagram-v2
 4. Right click, in either mode, drops a pin: a mini input opens over a dimmed preview. The pin anchors to (element id, a fractional position inside the element's rect) and renders clamped inside that rect — pins stay proportionally placed as the element resizes.
 5. Pin records persist in the page's comments log (`comments.jsonl`) with a status of open or resolved.
 6. Lifecycle: open pins whose anchors resolve are sent with the next message; pins attached to a successfully applied message become resolved; the designer can reopen a resolved pin.
-7. Failure branch (orphans): a pin whose element is missing in the viewed version disappears from the preview but stays in the chat panel's pin list, marked as an orphan naming the version it went missing in. Orphaned pins are never auto-deleted and are skipped when sending to the agent.
+7. Failure branch (unresolved pins): a pin is drawn exactly when its anchor resolves in the host's current render; otherwise it stays in the chat panel's pin list marked "not visible in the current render (hidden or removed)" — no claim about the version, since the design's own state can hide and reveal elements: a pin inside a closed dialog reappears when the dialog opens. Unresolved pins are never auto-deleted and are skipped when sending to the agent.
 8. Scope note: selection and pins are mouse-only in v1.0; keyboard element navigation is backlog.
 
 ## Source anchors

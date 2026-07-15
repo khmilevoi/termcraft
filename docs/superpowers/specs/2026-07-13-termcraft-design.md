@@ -156,11 +156,13 @@ Mouse in the preview:
   Open pins whose anchor resolves are sent with the next message; pins attached to a
   successfully applied message are marked resolved (user can reopen them).
 
-Pins are anchored to element ids, not versions. A pin is drawn on the preview only
-when the viewed version contains its element; otherwise it disappears from the preview
-but stays in the chat panel's pin list with an orphan marker ("element missing in
-v3"). Orphaned pins are never deleted automatically and are skipped when sending to
-the agent.
+Pins are anchored to element ids, not versions. A pin is drawn on the preview
+exactly when its anchor resolves in the host's current render (`rectOf`, §4.2);
+otherwise it stays in the chat panel's pin list marked "not visible in the current
+render (hidden or removed)" — no claim is made about the version, because the
+design's own state can hide and reveal elements: a pin inside a closed dialog
+reappears when the dialog opens. Unresolved pins are never deleted automatically
+and are skipped when sending to the agent.
 
 Selection and pins are mouse-only in v1.0; keyboard element navigation is backlog
 (§8.3).
@@ -201,6 +203,15 @@ with timestamps and prompt excerpts (found by scanning the project's chats for t
 record — agent or system — whose `applied` map names the version), with explicit rollback.
 It renders over the dimmed workspace (§3.8) and is locked while a turn runs (§3.2).
 
+Rollback never checks whether the copied source still renders: a rollback may
+deliberately mint a broken head — §9 shows it as a broken version, and the repair
+path is the agent itself. Auto-rollback is safe by construction: the viewed version
+is being rendered by the live preview. Sending a message while the active page's
+head fails to render first asks for confirmation (a popup over the dimmed screen,
+§3.8): the agent receives the broken source in staging and can be told to fix it;
+declining aborts the send. The same guard covers heads broken by kit drift after a
+termcraft update (§7.2).
+
 ### 3.5 Interactive prototype (v1.0)
 
 `F4` toggles static ↔ interactive mode. The design is real code, so interactivity is
@@ -208,8 +219,9 @@ native: in interactive mode the shell forwards mouse and keyboard input to the d
 host instead of interpreting it — buttons fire their real `onClick` handlers, tabs
 switch their own state, dialogs open and close, kit navigation calls (§5.5) switch
 pages, focus traverses with `Tab` through OpenTUI's focus system, and inputs accept
-real typing. In static mode input is not forwarded at all; clicks select (§3.2) and
-the design stays a still image. `F3` opens the Tweaks panel (§5.6) in either mode.
+real typing. In static mode input is not forwarded at all — the shell interprets it
+instead: clicks select (§3.2). The preview stays live in both modes (an animated
+design animates in static mode too); the modes differ only in where input goes. `F3` opens the Tweaks panel (§5.6) in either mode.
 `Esc` is never forwarded: it follows the shell's layer rules (§3.8) and doubles as
 the keyboard exit from the interactive preview.
 Right-click pin comments keep working in interactive mode — the user can annotate
@@ -242,8 +254,13 @@ chat history is unaffected. While a turn runs the picker is locked (§3.2).
   spec).
 
 Re-export silently overwrites `export/` in place: exports are derived data, and their
-history is git's job. Export is refused while a turn runs (§3.2) and when the project
-has zero pages — both hinted in the status bar.
+history is git's job. Export is all-or-nothing: if any page fails to render at its
+`minSize` (a head broken by rollback or kit drift, §3.4, §9), the whole export
+refuses, naming the page and the error — a package with a silently missing page
+would lie to the implementing agent. Export is likewise refused while a turn runs
+(§3.2), when the project has zero pages, and on an untrusted project — export
+executes design code, so `termcraft export` on an untrusted folder prints the trust
+error and points at the TUI (§3.1). In-app refusals hint in the status bar.
 
 ### 3.8 Focus and hotkeys
 
@@ -485,6 +502,12 @@ ids are how selection, pins, and chat references address the design (§3.2). The
 agent is instructed to preserve the ids of surviving elements across iterations;
 the gate warns when an iteration drops previously present ids (§6.3).
 
+Ids must be unique among simultaneously rendered elements, enforced where each case
+is detectable: duplicates visible at the gate's smoke render are validation errors
+(§6.3); duplicates that only appear later — a dialog opened, a tweak flipped — are
+reported by the host as warnings into the same channel as gate warnings, and
+`checkHit`/`rectOf` deterministically resolve to the first mounted element.
+
 | Tier | Components |
 |------|-----------|
 | MVP containers | `Row`, `Column`, `Panel` (border + title), `Tabs` |
@@ -530,7 +553,8 @@ exists. Two behaviors cross the design/shell boundary and go through kit APIs:
 - **Tweaks.** `useTweak("density")` reads a shell-controlled value (§5.6).
 
 Interactivity runs only in interactive mode (§3.5), when input is forwarded; in
-static mode the same code renders its initial frame and nothing more.
+static mode the same code still renders — animations included — but receives no
+input.
 
 ### 5.6 Tweaks (v1.0)
 
@@ -628,8 +652,9 @@ backend — no usage events, no indicator.
 
 ### 6.2 Turn protocol
 
-Each turn termcraft assembles a fresh **staging directory** (scratch, machine-local,
-gitignored territory — never inside `.termcraft/`):
+Each turn termcraft rebuilds the project's **staging directory** — machine-local
+scratch at a stable path derived from the project's location (OS temp area, never
+inside `.termcraft/`), cleared and repopulated at the start of every turn:
 
 - `pages/<slug>.tsx` — the head version of every listed page, flat by slug;
 - `pages.json` — the manifest slice: ordered slugs and the active page;
@@ -639,10 +664,16 @@ gitignored territory — never inside `.termcraft/`):
 Terminology, used consistently: the **project manifest** is `project.toml` (§7.1);
 the **manifest slice** is this staging `pages.json`.
 
+The staging path is deliberately stable across turns and restarts: resumed agent
+sessions carry file references from earlier turns, and a stable root keeps them
+valid — it also makes the Codex sandbox's writable root a configuration constant.
+"Discarding" staging after a failed or cancelled turn means clearing its contents.
+
 The agent runs against staging with its native file tools — reading whatever it
 wants, editing in place. The prompt: role system prompt (TUI designer), the
 design-code rules (§5.8), the project manifest (page list with cached titles,
-order, active page), the previous turn's gate warnings, the current selection,
+order, active page), the outstanding warnings (from the gate and from
+host-reported runtime lints, §5.2), the current selection,
 open pins (only those whose anchors resolve), and the user message. No prefetch
 policy, no read protocol, no seen-version bookkeeping: reading files is the agent's
 own business now.
@@ -684,15 +715,16 @@ proposal: changed/added/deleted page files plus `pages.json` edits. The gate run
 2. **Per changed page** — import allowlist (§5.8), TypeScript check against the
    embedded types, page contract (`meta` as a static literal, default export),
    **smoke render**: the
-   host mounts the page once at `minSize` — import errors, render crashes, and
-   contract violations surface here, before anything is applied.
+   host mounts the page once at `minSize` — import errors, render crashes, contract
+   violations, and duplicate ids visible in that render surface here, before
+   anything is applied.
 3. **Lints (warnings, not errors)** — dropped ids that selection or open pins
    currently reference, pointable raw elements without ids, timer/randomness use
    outside the export-flag guard, navigation to unlisted pages.
 
 Errors → automatic retry: the errors are appended to the conversation and the agent
 continues in the same staging (one initial attempt plus at most 3 retries), then an
-honest error in chat and the staging is discarded. Valid → applied atomically by the
+honest error in chat and the staging is cleared. Valid → applied atomically by the
 kernel: each changed page gets exactly one new `vN.tsx` written via tmp + rename
 (create-new numbering, §7.1), the evaluated `meta` of each applied page is cached
 in the project manifest (titles for tabs, `minSize` for the status bar, §5.1),
@@ -740,9 +772,9 @@ state directory, keyed by project path — precisely so that a cloned repository
 cannot ship its own trust grant (§3.1). It is the one piece of state deliberately
 not in `.termcraft/`.
 
-The staging directories of §6.2 are scratch state in the OS temp area, created per
-turn and deleted after apply, final failure, or cancellation; they never touch
-`.termcraft/`.
+The staging directory of §6.2 is scratch state in the OS temp area at a stable
+per-project path — rebuilt at the start of every turn, cleared after apply, final
+failure, or cancellation; it never touches `.termcraft/`.
 
 The chat list is the directory scan of `chats/` ordered by id; `project.toml` names
 the active chat, and a dangling reference falls back to the newest chat on disk (or a
@@ -865,7 +897,8 @@ palettes/themes, multi-project workspaces + user-level defaults for new projects
 version compare (change highlighting between versions), chat management extras
 (rename, deletion/archival, AI-generated chat titles), file watching / reload of
 external edits, keyboard element navigation (selection and pins without a mouse),
-kit codemod tooling for breaking kit changes, and OS-level sandboxing of the design
+kit codemod tooling for breaking kit changes, a typecheck toolchain inside staging
+so agents can self-check before ending a turn, and OS-level sandboxing of the design
 host where platforms allow it. A separate command palette
 is no longer planned — the slash menu (§3.10) is that view over the action table.
 
@@ -878,7 +911,7 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   a silent `workspace-write` → read-only downgrade is reported as an explicit error
   with the config fix, instead of turns that mysteriously change nothing (§6.1).
 - **Gate-rejected turn** → automatic retry with the errors in context (≤3), then an
-  honest error in chat. Heads untouched; staging discarded; new versions are written
+  honest error in chat. Heads untouched; staging cleared; new versions are written
   atomically post-validation.
 - **Cancelled / hung generation** → the SDK run is aborted on `Esc` or after stream
   inactivity (no events for 120 s); status in chat; project state intact.
@@ -886,9 +919,12 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   preview region shows an error panel with the failure (compile error text, crash
   stack) while the rest of the app keeps working; a head version that no longer
   loads is treated like a corrupt version — the previous one renders and the status
-  bar says why.
+  bar says why. A broken head is a legal state (a rollback may deliberately mint
+  one, §3.4); sending with a broken active head asks confirmation before handing
+  the agent the broken source to fix.
 - **Untrusted project** → the trust prompt (§3.1); declining leaves the project
-  closed with chat history visible and rendering disabled.
+  closed with chat history visible and rendering disabled — export included, also
+  in its `termcraft export` CLI form (§3.7).
 - **Corrupt or too-new data file** → error naming the file; a broken page version is
   skipped and the project opens at the last valid one.
 - **Terminal too small for the app frame** → "enlarge the window" placeholder screen.

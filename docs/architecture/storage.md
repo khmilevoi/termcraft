@@ -21,7 +21,7 @@ flowchart TB
         end
     end
     trust["trust ledger — machine-local user state, outside the project, keyed by project path"]
-    scratch["staging directories — OS temp, one per turn, deleted after apply or failure"]
+    scratch["staging directory — OS temp, stable per-project path, rebuilt per turn"]
 ```
 
 ## Walkthrough
@@ -29,7 +29,7 @@ flowchart TB
 1. Creation: the folder appears when the first prompt is submitted from Home — default config plus a zero-page manifest. No JS tooling ever appears in it: designs import from the kit embedded in the termcraft binary, so there is no `package.json` and no `node_modules`.
 2. What commits: everything except the generated `.gitignore` matches (`lock`, `*.local.toml`, `backup-*/`); designs diff and commit alongside the target project's code.
 3. Page versions are TSX modules — real code. Because committed designs execute on whoever opens the project, the trust decision must not be forgeable by the repository itself: the trust ledger lives in termcraft's machine-local user state directory, outside the project, keyed by project path. A project created on this machine is trusted implicitly; a cloned one prompts before anything renders.
-4. Staging directories — where the agent edits during a turn — are scratch state in the OS temp area: created per turn from the current heads, diffed and validated when the turn ends, deleted after apply or final failure. They never touch `.termcraft/`.
+4. The staging directory — where the agent edits during a turn — is scratch state in the OS temp area at a stable per-project path: cleared and repopulated from the current heads at the start of every turn, diffed and validated when the turn ends, cleared after apply, final failure, or cancellation. The stable path keeps resumed agent sessions' file references valid across turns and restarts. It never touches `.termcraft/`.
 5. Chats: a project holds one or more chats — independent conversation lines over the same pages. Chat ids are termcraft-assigned (`c1`, `c2`, …) with the same create-new semantics as version files; the chat list is the directory scan of `chats/` ordered by id; `project.toml` names the active chat, and a dangling reference falls back to the newest chat on disk (or a fresh `c1` when none exist). A chat's display name is derived, never stored: the first line of its first `user` record, truncated like the project name.
 6. Record schemas: each chat file starts with the header `{"kind":"chat","version":1}`, then one record per line, each with an ISO 8601 `ts`:
    - `user` — `{"kind":"user", "text", "selection"?, "pins":[…]}`, exactly what was sent to the agent.

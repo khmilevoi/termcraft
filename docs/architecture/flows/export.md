@@ -2,12 +2,15 @@ Export turns a design project into a package another coding agent can implement 
 
 ```mermaid
 flowchart TD
-    trigger(["Ctrl+E · /export · CLI export command"]) --> busy{"turn running?"}
+    trigger(["Ctrl+E · /export · CLI export command"]) --> trust{"project trusted?"}
+    trust -- "no" --> hint0["refused — export executes design code (CLI prints the trust error)"]
+    trust -- "yes" --> busy{"turn running?"}
     busy -- "yes" --> hint1["refused — status-bar hint"]
     busy -- "no" --> empty{"zero pages?"}
     empty -- "yes" --> hint2["refused — status-bar hint"]
     empty -- "no" --> snap["fresh design host per page: one render at minSize, capture, kill"]
-    snap --> prompt["assemble design-prompt.md: overview, per-page structure, interactions, theme tokens, stack advice, snapshots"]
+    snap -- "a page fails to render" --> fail["whole export refused — names the page and the error"]
+    snap -- "all pages captured" --> prompt["assemble design-prompt.md: overview, per-page structure, interactions, theme tokens, stack advice, snapshots"]
     prompt --> copy["copy head-version design sources to export/pages/"]
     copy --> done["export/ overwritten in place — history is git's job"]
 ```
@@ -15,7 +18,8 @@ flowchart TD
 ## Walkthrough
 
 1. Trigger: `Ctrl+E` (a global-tier hotkey — works even while typing), the `/export` slash command in the composer, or the CLI export command.
-2. Refusal checks, each hinted in the status bar: a running turn, or a project with zero pages.
+2. Refusal checks: an untrusted project (export executes design code — the CLI form prints the trust error and points at the TUI), a running turn, or a project with zero pages; in-app refusals hint in the status bar.
+   - *Failure:* export is all-or-nothing — if any page fails to render its snapshot (a head broken by rollback or kit drift), the whole export refuses, naming the page and the error; a package with a silently missing page would lie to the implementing agent.
 3. Snapshot rendering: the Kernel spawns a fresh design host per page, mounts the head version at the page's declared minimum size with the page's own theme, renders exactly once at t = 0, captures the frame, and kills the host — independent of the current preview size or theme override. Determinism comes from the recipe (fresh process, single render pass) plus the design-code rules: kit components suppress animation under the export flag, and timers or randomness outside that guard are gate warnings.
 4. `design-prompt.md` contents: product overview, per-page structure and behavior, interactions and tweak states, theme/palette tokens, recommended libraries for the configured target stack, and the ASCII snapshot of each page.
 5. `pages/*.tsx`: exact head-version design sources — precise enough for an implementing agent in any target stack to read as a spec.
