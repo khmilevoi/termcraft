@@ -130,7 +130,19 @@ isolated subprocess that actually executes the page's code. The shell composits
 pins and selection highlights over those frames; a host crash shows an error panel
 in the preview region only, never taking down the app (§9).
 
-While the agent works, its status streams into the chat; the preview updates when a new
+While the agent works, its status streams into the chat as an ephemeral block
+under the agent's header, rendered from the normalized `AgentEvent` stream
+(§6.1): a spinner line; the turn's tool steps accumulating beneath it
+(`✓ read main.tsx` done, `▸ editing main.tsx` current); and below those, one to
+three faint lines carrying the *latest* reasoning chunk — each new chunk
+replaces the previous, a ticker, not a log, so the chat stays compact while
+still visibly alive. Gate retries add a kernel-emitted line
+(`✗ invalid design · retry 2/3`). When the turn ends the block collapses into
+the persisted agent record (§6.5): the final message rendered in markdown-lite —
+bold, italic, inline code, and bullet lists; headings flatten to bold lines;
+tables, code blocks, and links flatten to plain text — plus one `✓ <page> → vN`
+line per entry in the applied map. Ephemeral lines are always plain text. The
+preview updates when a new
 version is applied. Generation is cancellable (`Esc`, per the focus rules in §3.8).
 Typing the next message while a turn runs is allowed, but sending is disabled (the
 status bar hints why) — there is no message queue. Version switching, rollback,
@@ -686,9 +698,30 @@ combinations it supports.
 Confinement is defense-in-depth, not the load-bearing wall: correctness comes from
 the gate only accepting what landed in staging and validated (§6.3).
 
-The `AgentEvent` stream carries backend-reported token usage when available; this
-feeds the composer's context-usage indicator (§3.2, §3.9). Reporting is optional per
-backend — no usage events, no indicator.
+**The `AgentEvent` stream** is the turn's only live output — everything the UI
+shows while an agent works derives from it:
+
+```ts
+type AgentEvent =
+  | { kind: "reasoning", text: string }   // a chunk of the model's reasoning summary
+  | { kind: "tool", op: "read" | "edit" | "run" | "search" | "other", target: string }
+  | { kind: "final", text: string }       // the agent's final message for the turn
+  | { kind: "usage", tokens: TokenUsage } // backend-reported token usage
+  | { kind: "error", message: string }    // a backend-level failure
+```
+
+Normalization is each backend's job — the kernel and the UI never see vendor
+event shapes. Codex maps reasoning-summary items to `reasoning`; command
+executions, file changes, and web searches to `tool`; the closing agent message
+to `final`; turn usage to `usage`. Claude Code maps thinking blocks and interim
+assistant text to `reasoning`, `tool_use` blocks to `tool` (tool name → `op`,
+primary argument → `target`), and the result message to `final` plus `usage`.
+Vendor events with no mapping are dropped silently — forward-compatible by
+default. A backend that emits no `reasoning` events is legal — the chat simply
+shows less while it works (§3.2). Usage reporting stays optional per backend: it
+feeds the composer's context-usage indicator (§3.2, §3.9) — no usage events, no
+indicator. Any event resets the 120-second stream-silence watchdog (§9), so a
+long-thinking agent that streams reasoning is never mistaken for a hung one.
 
 ### 6.2 Turn protocol
 
@@ -714,7 +747,9 @@ wants, editing in place. The prompt: role system prompt (TUI designer), the
 design-code rules (§5.8), the project manifest (page list with cached titles,
 order, active page), the outstanding warnings (from the gate and from
 host-reported runtime lints, §5.2), the current selection,
-open pins (only those whose anchors resolve), and the user message. No prefetch
+open pins (only those whose anchors resolve), answer-style guidance (keep the
+final message short and in light markdown — the chat renders only the
+markdown-lite subset of §3.2), and the user message. No prefetch
 policy, no read protocol, no seen-version bookkeeping: reading files is the agent's
 own business now.
 
@@ -989,8 +1024,9 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
 - `host`: protocol contract tests — frames, hit/rect queries, input forwarding,
   watchdog behavior — against scripted pages; determinism test: same page + size +
   theme → byte-identical snapshot and layout tree across fresh host runs.
-- `agent`: backends against SDK fakes — event streams, session resume and its
-  fallback, confinement configuration, cancel.
+- `agent`: backends against SDK fakes — event-stream normalization (scripted
+  vendor events → the exact expected `AgentEvent` sequence, per backend), session
+  resume and its fallback, confinement configuration, cancel.
 - `store`: migration fixtures for all historical versions (§7.2); create-new version
   numbering; trust-ledger reads.
 - `core`: Command/Event contract tests over the channels — doubles as the future IPC
@@ -998,7 +1034,9 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   pipelines against a scripted fake agent.
 - `ui`: action-table units — availability predicates against the turn-time locks,
   hotkey resolution through the two tiers, status-bar hints and slash-menu dimming
-  derived from the same entries.
+  derived from the same entries; markdown-lite rendering units and ephemeral
+  status-block snapshots (turn running, gate retry, collapse into the persisted
+  record).
 - Smoke: app driven on a scripted terminal with injected events (open project →
   prompt → fake agent edits staging → gate → render → export).
 
