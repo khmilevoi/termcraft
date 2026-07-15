@@ -36,7 +36,7 @@
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">
-    <sc-for list="{{ pages }}" as="p" hint-placeholder-count="21">
+    <sc-for list="{{ pages }}" as="p" hint-placeholder-count="23">
       <a href="{{ p.file }}" style="display:block;border:1px solid #2a251d;border-radius:8px;background:#14110d;padding:16px 18px;color:#d7d0c2;">
         <div style="display:flex;align-items:baseline;gap:10px;">
           <span style="color:#e6a23c;font-weight:700;font-size:12px;letter-spacing:.14em;">{{ p.num }}</span>
@@ -62,11 +62,11 @@ class Component extends DCLogic {
   renderVals(){
     const pages = [
       {num:'01', title:'Home', ids:'home-120 · home-80', file:'./01-home.dc.html', blurb:'The large centered prompt with inline agent · model · effort selectors — only state before a project exists.'},
-      {num:'02', title:'Workspace — idle', ids:'ws-idle-120 · ws-idle-80', file:'./02-workspace-idle.dc.html', blurb:'Chat left, live preview right, page tabs, status bar with context + hotkeys.'},
+      {num:'02', title:'Workspace — idle', ids:'ws-idle-120 · ws-idle-80', file:'./02-workspace-idle.dc.html', blurb:'Chat left, live preview right, page tabs, status bar with context usage + / commands.'},
       {num:'03', title:'Workspace — generating', ids:'ws-gen-120', file:'./03-workspace-generating.dc.html', blurb:'Streaming step lines in chat; preview dims with a generating indicator; composer disabled.'},
       {num:'04', title:'Tweaks panel (F3)', ids:'ws-tweaks-120 · ws-tweaks-80', file:'./04-tweaks-panel.dc.html', blurb:'A right-side panel of toggles, selects and text inputs that drive live preview state.'},
-      {num:'05', title:'Version history', ids:'ws-ver-120', file:'./05-version-history.dc.html', blurb:'[ / ] opens a popup over the dimmed workspace: version, time, prompt excerpt, rollback.'},
-      {num:'06', title:'Agent / model / effort picker', ids:'ws-agent-120', file:'./06-agent-model-picker.dc.html', blurb:'m opens a popup to pick agent, model and reasoning effort together.'},
+      {num:'05', title:'Version history', ids:'ws-ver-120', file:'./05-version-history.dc.html', blurb:'v (or clicking the version segment) opens the history popup over the dimmed workspace: version, time, prompt excerpt, rollback.'},
+      {num:'06', title:'Agent / model / effort picker', ids:'ws-agent-120', file:'./06-agent-model-picker.dc.html', blurb:'/model or the agent chip opens a popup to pick agent, model and reasoning effort together.'},
       {num:'07', title:'Selection & hover', ids:'ws-hover-120 · ws-select-120 · ws-select-80', file:'./07-selection-hover.dc.html', blurb:'Point to name an element, click to select — amber corner ticks read on the character grid.'},
       {num:'08', title:'Pin comments', ids:'ws-pin-input-120 · ws-pins-120 · ws-pins-80', file:'./08-pin-comments.dc.html', blurb:'Right-click drops a numbered pin; open / resolved / orphaned states in the chat pin list.'},
       {num:'09', title:'Browsing an older version', ids:'ws-ver-browse-120', file:'./09-version-browse.dc.html', blurb:'[ twice browses a version read-only, no popup — status bar warns sending returns to head.'},
@@ -81,7 +81,9 @@ class Component extends DCLogic {
       {num:'18', title:'Page tab management', ids:'ws-tabs-120', file:'./18-tab-management.dc.html', blurb:'Tab context menu (rename · move · remove) and overflow scroll indicators.'},
       {num:'20', title:'Zero-pages empty state', ids:'ws-empty-120 · ws-empty-80', file:'./20-empty-state.dc.html', blurb:'Project exists but has no pages — first generation failed, or every page was removed.'},
       {num:'21', title:'Custom preview size', ids:'ws-preview-ctl-custom-120', file:'./21-custom-preview-size.dc.html', blurb:'The custom W×H preset mid-error: invalid input, red border, popup stays open.'},
-      {num:'22', title:'Pin dropped in interactive mode', ids:'ws-interact-pin-120', file:'./22-interactive-pin.dc.html', blurb:'Right-click drops a pin without leaving INTERACT mode.'}
+      {num:'22', title:'Pin dropped in interactive mode', ids:'ws-interact-pin-120', file:'./22-interactive-pin.dc.html', blurb:'Right-click drops a pin without leaving INTERACT mode.'},
+      {num:'23', title:'Slash menu', ids:'ws-slash-120 · ws-slash-filter-120', file:'./23-slash-menu.dc.html', blurb:'Typing / in an empty composer opens an anchored autocomplete — no backdrop — for /new, /chats, /export and /model; filters as you type.'},
+      {num:'24', title:'Chats', ids:'ws-chats-120 · ws-chat-fresh-120', file:'./24-chats.dc.html', blurb:'/chats lists a project\u2019s conversations over the dimmed workspace; /new starts a fresh chat while pages, preview and pins stay put.'}
     ];
     if (!this.state.ready) return { pages, legend: null };
     return { pages, legend: this.engine.legendEl() };

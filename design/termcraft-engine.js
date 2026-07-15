@@ -63,8 +63,11 @@ export class Engine {
 
   statusBar(b,y,left,keys){ const P=this.pal; this.fillRow(b,y,' ',{fg:P.dim,bg:P.statusBg});
     let x=1; left.forEach(seg=>{ this.text(b,x,y,seg.t,{fg:seg.fg||P.dim,bg:seg.bg||P.statusBg,bold:seg.bold}); x+=seg.t.length; });
-    const segs=[]; keys.forEach(k=>{ const kt=' '+k[0]+' '; const lt=(k[1]?' '+k[1]:'')+'  '; segs.push({t:kt,active:k[2]}); segs.push({t:lt,label:true}); });
-    let total=segs.reduce((a,s)=>a+s.t.length,0); let rx=b.w-1-total;
+    const leftEnd=x;
+    const build=(ks)=>{ const s=[]; ks.forEach(k=>{ const kt=' '+k[0]+' '; const lt=(k[1]?' '+k[1]:'')+' '; s.push({t:kt,active:k[2]}); s.push({t:lt,label:true}); }); return s; };
+    let ks=keys.slice(); let segs=build(ks); let total=segs.reduce((a,s)=>a+s.t.length,0);
+    while(ks.length>1 && leftEnd+2+total>b.w){ ks=ks.slice(0,-1); segs=build(ks); total=segs.reduce((a,s)=>a+s.t.length,0); }
+    let rx=Math.max(b.w-1-total, leftEnd+2);
     segs.forEach(s=>{ if(s.label){ this.text(b,rx,y,s.t,{fg:P.dim,bg:P.statusBg}); } else { this.text(b,rx,y,s.t,{fg:s.active?P.bg:P.amber,bg:s.active?P.amber:P.statusBg,bold:true}); } rx+=s.t.length; }); }
 
   render(b){ const P=this.pal; const cw=this.cw||9; const SC=this.glyphScale||{}; const LH=this.LH;
@@ -136,10 +139,10 @@ export class Engine {
     let acx=ix+2; const yy=iy+4;
     const sel=(lbl,val)=>{ this.text(b,acx,yy,lbl,{fg:P.faint}); acx+=lbl.length+1; this.text(b,acx,yy,'‹'+val+'›',{fg:P.amberHi,bold:true}); acx+=val.length+3; };
     sel('agent','codex'); sel('model','gpt-5.5'); sel('effort','high');
-    if(acx+10<=ix+iw-2) this.text(b,acx,yy,'· m change',{fg:P.faint});
+    if(acx+10<=ix+iw-2) this.text(b,acx,yy,'· / model',{fg:P.faint});
     const health='● codex 0.34 · agent ready'; this.text(b,cx-Math.floor(health.length/2),iy+boxH+1,health,{fg:P.green,bold:true});
     this.statusBar(b,h-1,[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true},{t:'  no project yet',fg:P.dim},{t:'  gpt5.5 · high',fg:P.dim}],
-      [['⏎','create'],['m','agent'],['q','quit']]);
+      [['⏎','create'],['q','quit']]);
     return this.render(b);
   }
 
@@ -157,18 +160,18 @@ export class Engine {
     this.hline(b,div+1,2,w-div-2,{fg:P.border}); this.put(b,div,2,'├',{fg:P.border}); this.put(b,w-1,2,'┤',{fg:P.border});
     const dx=div, dy=4, dw=w-div, dh=frameH-5;
     this.drawMonitor(b,dx,dy,dw,dh,{dim:gen});
-    this.drawChat(b,1,chatW-2,frameH,gen);
+    this.drawChat(b,1,chatW-2,frameH,gen,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     const mode = gen? {t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true} : {t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
-    const left=[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode];
+    const left=[mode,{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim}];
     if(gen) left.push({t:' ⚠ turn running — export locked ',fg:P.amberHi,bg:P.line,bold:true});
-    const keys = gen? [['esc','cancel'],['F2','fullscreen']]
-                    : [['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']];
-    if(w<100){ this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:' v4 ',fg:P.dim}, mode], gen?[['esc','cancel']]:[['F3','tweak'],['F4','act'],['^E','exp']]); }
+    const keys = gen? [['esc','cancel'],['F2','full']]
+                    : [['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']];
+    if(w<100){ this.statusBar(b,h-1,[mode,{t:' v4 ',fg:P.dim}], gen?[['esc','cancel']]:[['F3','tweak'],['F4','act']]); }
     else this.statusBar(b,h-1,left,keys);
     return this.render(b);
   }
 
-  drawChat(b,x,w,frameH,gen){ const P=this.pal; const composerTop=frameH-4;
+  drawChat(b,x,w,frameH,gen,o){ o=o||{}; const P=this.pal; const composerTop=frameH-4;
     const tx=x+1, iw=w-2, maxX=x+w-1;
     let y=1;
     this.text(b,tx,y,'● codex',{fg:P.green,bold:true});
@@ -198,6 +201,10 @@ export class Engine {
         y++; }
     }
     this.put(b,0,composerTop,'├',{fg:P.border}); this.hline(b,1,composerTop,w+1,{fg:P.border}); this.put(b,x+w,composerTop,'┤',{fg:P.border});
+    if(o.composerMeta){ const cm=o.composerMeta;
+      this.text(b,2,composerTop,' '+cm.model+' ',{fg:P.amberHi,bold:true});
+      const tag=' ctx '+cm.ctx+'% ', rx=(x+w)-2-tag.length;
+      this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,cm.ctx+'% ',{fg:P.fg,bold:true,bg:P.bg}); }
     if(gen){ this.text(b,tx,composerTop+2,'❯ ',{fg:P.faint,bold:true}); this.ctext(b,x+3,composerTop+2,'generating… esc to cancel',{fg:P.faint},maxX); }
     else { this.text(b,tx,composerTop+2,'❯ ',{fg:P.amber,bold:true}); this.ctext(b,x+3,composerTop+2,'Ask for changes…',{fg:P.faint},maxX); this.put(b,x+3,composerTop+2,'█',{fg:P.amber,blink:true}); }
   }
@@ -240,7 +247,7 @@ export class Engine {
     this.text(b,tx,frameH-3,'⏎ apply   ␣ toggle',{fg:P.faint}); this.text(b,tx,frameH-2,'esc close',{fg:P.faint});
     const mode={t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
     if(w<100) this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},mode],[['F3','tweaks',true],['esc','close']]);
-    else this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode],[['F2','fullscreen'],['F3','tweaks',true],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]);
+    else this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode,{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks',true],['F4','act'],['[ ]','vers']]);
     return this.render(b);
   }
 
@@ -277,7 +284,7 @@ export class Engine {
     this.put(b,fx,ly,']',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' next',{fg:P.dim}); fx+=9;
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'rollback to v4',{fg:P.dim}); fx+=18;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions',true],['^E','export']]);
+    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks'],['F4','act'],['v','history',true]]);
     return this.render(b);
   }
 
@@ -318,7 +325,7 @@ export class Engine {
     this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'apply',{fg:P.dim}); fx+=8;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent',true],['[ ]','versions'],['^E','export']]);
+    this.statusBar(b,h-1,[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},{t:' ctx 42% ',fg:P.faint}],[['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']]);
     return this.render(b);
   }
 
@@ -342,7 +349,7 @@ export class Engine {
   paneShell(b,w,h,o){ o=o||{}; const P=this.pal; const frameH=h-1;
     const chatW=o.noChat?0:(o.chatW!==undefined?o.chatW:Math.round(w*0.37)); const div=chatW-1;
     const pbf=o.prevBorderFg||P.border;
-    if(!o.noChat) this.box(b,0,0,chatW,frameH,{title:o.chatTitle||'❯ chat · codex',fg:o.chatBorderFg||P.border,titleFg:o.chatTitleFg||P.amber});
+    if(!o.noChat) this.box(b,0,0,chatW,frameH,{title:o.chatTitle||'❯ chat · codex',fg:o.chatBorderFg||P.border,titleFg:o.chatTitleFg||P.amber,titleBold:o.chatTitleBold});
     const px0=o.noChat?0:div; const pw=w-px0;
     this.box(b,px0,0,pw,frameH,{fg:pbf});
     if(!o.noChat){ this.put(b,div,0,'┬',{fg:pbf}); this.put(b,div,frameH-1,'┴',{fg:pbf}); }
@@ -350,14 +357,20 @@ export class Engine {
       this.hline(b,px0+1,2,pw-2,{fg:pbf}); this.put(b,px0,2,'├',{fg:pbf}); this.put(b,px0+pw-1,2,'┤',{fg:pbf}); }
     return {frameH,chatW,div,px0,pw,dx:px0,dy:o.noTabs?2:4,dw:pw,dh:frameH-(o.noTabs?3:5)}; }
 
-  wsStatus(b,w,h,o){ o=o||{}; const P=this.pal; const combo=o.combo||'codex · gpt5.5 · high';
-    const left=[{t:' '+combo+' ',fg:P.bg,bg:P.amber,bold:true}];
+  wsStatus(b,w,h,o){ o=o||{}; const P=this.pal;
+    const left=[];
+    if(o.combo!==false){ const combo=o.combo||'codex · gpt5.5 · high'; left.push({t:' '+combo+' ',fg:P.bg,bg:P.amber,bold:true}); }
     if(o.ver!==false) left.push({t:'  '+(o.ver||'main · v4')+' ',fg:o.verFg||P.dim,bold:!!o.verBold});
     if(o.size) left.push({t:' '+o.size+' ',fg:o.sizeErr?P.bg:P.dim,bg:o.sizeErr?P.red:P.statusBg,bold:!!o.sizeErr});
     else if(!o.noSize) left.push({t:' '+w+'×'+h+' ',fg:P.dim});
     if(o.hint) left.push({t:' '+o.hint+' ',fg:o.hintFg||P.amberHi,bg:o.hintBg||P.line,bold:true});
     left.push(o.mode||{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true});
-    this.statusBar(b,h-1,left,o.keys||[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]); }
+    if(o.ctx!==false && (w>=100||o.ctxCaution)){ const cv=o.ctx!==undefined?o.ctx:42; const caution=!!o.ctxCaution||cv>=80; left.push({t:' ctx '+cv+'% ',fg:caution?P.amberHi:P.faint,bold:caution}); }
+    this.statusBar(b,h-1,left,this.hintKeys(o.keys)); }
+  hintKeys(keys){ const base=keys||[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']];
+    const short={fullscreen:'full',interact:'act',versions:'vers'};
+    const filtered=base.filter(k=>k[0]!=='m'&&k[0]!=='^E'&&k[0]!=='/').map(k=>[k[0],short[k[1]]||k[1],k[2]]);
+    return filtered; }
 
   baseSeq(){ const P=this.pal; return [
     {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
@@ -384,6 +397,10 @@ export class Engine {
       for(let li=0;li<lines.length&&y<composerTop-1;li++){ this.ctext(b,tx,y,lines[li],{fg:col,bold:!!e.bold},maxX);
         if(e.spark&&li===lines.length-1){ const sx=tx+lines[li].length+1; if(sx+5<=maxX) this.spark(b,sx,y,[3,5,7,6,8],false); } y++; } });
     this.put(b,chatX,composerTop,'├',{fg:P.border}); this.hline(b,chatX+1,composerTop,chatW-2,{fg:P.border}); this.put(b,chatX+chatW-1,composerTop,'┤',{fg:P.border});
+    if(o.composerMeta){ const cm=o.composerMeta;
+      this.text(b,chatX+2,composerTop,' '+cm.model+' ',{fg:P.amberHi,bold:true});
+      const tag=' ctx '+cm.ctx+'% ', rx=chatX+chatW-3-tag.length;
+      this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,cm.ctx+'% ',{fg:cm.caution?P.amberHi:P.fg,bold:true,bg:P.bg}); }
     if(o.attach) this.ctext(b,tx,composerTop+1,o.attach,{fg:o.attachFg||P.amberHi,bold:true},maxX);
     else if(o.chip) this.chipTag(b,tx,composerTop+1,o.chip,{glyph:o.chipGlyph});
     const dis=o.composerDisabled;
@@ -412,8 +429,8 @@ export class Engine {
     const lbl='panel "network"'; const lx=s.dx+s.dw-lbl.length-4;
     for(let i=-1;i<=lbl.length;i++) this.put(b,lx+i,s.dy+11,' ',{bg:P.line});
     this.text(b,lx,s.dy+11,lbl,{fg:P.amberHi,bg:P.line});
-    this.drawChat(b,1,s.chatW-2,s.frameH,false);
-    this.wsStatus(b,w,h,{keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]});
+    this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   wsSelect(w,h){ const P=this.pal; const b=this.mk(w,h);
@@ -421,15 +438,15 @@ export class Engine {
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     const cl=s.dx+2, gy=s.dy+4; this.selCorners(b,cl,gy,s.dw-6,1);
     this.text(b,cl,gy,'CPU',{fg:P.amberHi,bold:true});
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), chip:'gauge "CPU"', placeholder:'make it blue…'});
-    this.wsStatus(b,w,h,{keys:[['esc','deselect'],['F3','tweaks'],['F4','interact'],['[ ]','versions'],['^E','export']]});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), chip:'gauge "CPU"', placeholder:'make it blue…', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','deselect'],['F3','tweaks'],['F4','interact'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   // ---- 08 pins ----
   wsPinInput(w,h){ const P=this.pal; const b=this.mk(w,h);
     const s=this.paneShell(b,w,h,{right:'main · v4'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), placeholder:'right-click the preview to pin…'});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), placeholder:'right-click the preview to pin…', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     this.dim(b,0,0,w,s.frameH);
     const cx=s.dx+8, cy=s.dy+19; this.badge(b,cx,cy,1);
     const pw=Math.min(40,s.dw-14), pxs=cx+2, pys=cy;
@@ -437,7 +454,7 @@ export class Engine {
     this.box(b,pxs,pys,pw,3,{title:'new pin',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     this.text(b,pxs+2,pys+1,'why is this always on top?',{fg:P.fg,bg:P.bg}); this.put(b,pxs+2+26,pys+1,'█',{fg:P.amber,blink:true,bg:P.bg});
     this.text(b,pxs+1,pys+3,'⏎ save · esc cancel',{fg:P.faint,bg:P.bg});
-    this.wsStatus(b,w,h,{keys:[['esc','cancel'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','cancel'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   wsPins(w,h){ const P=this.pal; const b=this.mk(w,h); const narrow=w<100;
@@ -451,8 +468,8 @@ export class Engine {
       {n:2,text:'table · why always top?'},
       {resolved:true,text:'network · add labels · reopen'},
       {orphan:true,text:'header · missing in v3'} ]});
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:narrow?null:'▲ 8 earlier messages', attach:'2 open pins attached · sent next', attachFg:P.amberHi});
-    this.wsStatus(b,w,h,{keys:narrow?[['esc','clear'],['^E','export']]:[['esc','clear pins'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:narrow?null:'▲ 8 earlier messages', attach:'2 open pins attached · sent next', attachFg:P.amberHi, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:narrow?[['esc','clear'],['^E','export']]:[['esc','clear pins'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   // ---- 09 version browse ----
@@ -465,8 +482,8 @@ export class Engine {
       {role:'❯ you'},{body:'add a network sparkline'},{gap:1},
       {role:'● codex'},{status:'✓ added sparkline → v4',c:P.dim},{gap:1},
       {system:'⟲ rolled back v3 → head (v5)'} ],
-      attach:'viewing v2 — sending returns to v5', attachFg:P.amberHi});
-    this.wsStatus(b,w,h,{ver:'main · v2/5 ‹read-only›',verFg:P.amberHi,verBold:true,mode:{t:' READ-ONLY ',fg:P.amberHi,bg:P.line,bold:true},keys:[['[ ]','browse',true],['⏎','to head'],['esc','exit'],['^E','export']]});
+      attach:'viewing v2 — sending returns to v5', attachFg:P.amberHi, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · v2/5 ‹read-only›',verFg:P.amberHi,verBold:true,mode:{t:' READ-ONLY ',fg:P.amberHi,bg:P.line,bold:true},keys:[['[ ]','browse',true],['⏎','to head'],['esc','exit'],['^E','export']]});
     return this.render(b); }
 
   // ---- 10 fullscreen ----
@@ -484,8 +501,8 @@ export class Engine {
   wsSmallSize(w,h){ const P=this.pal; const b=this.mk(w,h);
     const s=this.paneShell(b,w,h,{right:'main · v4'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), attach:'⚠ preview 74w < design 80 — F2 for full size', attachFg:P.red});
-    this.wsStatus(b,w,h,{size:'74×30 < 80×24',sizeErr:true,keys:[['F2','fullscreen'],['[ ]','versions'],['^E','export']]});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), attach:'⚠ preview 74w < design 80 — F2 for full size', attachFg:P.red, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,size:'74×30 < 80×24',sizeErr:true,keys:[['F2','fullscreen'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   // ---- 11 interact ----
@@ -500,8 +517,8 @@ export class Engine {
     items.forEach((it,i)=>{ const yy=ddy+1+i, sel=it[1]; if(sel) for(let k=1;k<ddw-1;k++) this.put(b,ddx+k,yy,' ',{bg:P.sel});
       this.put(b,ddx+1,yy,sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
       this.text(b,ddx+3,yy,it[0],{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel}); });
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), attach:'⚠ goTo "settings" — page removed', attachFg:P.amberHi, placeholder:'clicks drive the design — F4 for static'});
-    this.wsStatus(b,w,h,{noSize:true, mode:{t:' INTERACT ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['click','design'],['tab','focus'],['F4','static'],['rclick','pin'],['^E','export']]});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), attach:'⚠ goTo "settings" — page removed', attachFg:P.amberHi, placeholder:'clicks drive the design — F4 for static', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,noSize:true, mode:{t:' INTERACT ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['click','design'],['tab','focus'],['F4','static'],['rclick','pin'],['^E','export']]});
     return this.render(b); }
 
   // ---- 12 errors ----
@@ -526,8 +543,8 @@ export class Engine {
       {role:'❯ you'},{body:'make it a 3-column layout'},{gap:1},
       {role:'● codex'},{status:'✗ invalid design (schema) · retry 1/3',c:P.red},{status:'✗ retry 2/3',c:P.red},{status:'✗ retry 3/3',c:P.red},{gap:1},
       {system:'⟲ generation failed after 3 tries — main · v4 is unchanged'} ]);
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:'▲ 4 earlier messages'});
-    this.wsStatus(b,w,h,{keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:'▲ 4 earlier messages', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   wsCancelled(w,h){ const P=this.pal; const b=this.mk(w,h);
@@ -539,8 +556,8 @@ export class Engine {
       {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
       {role:'● codex'},{status:'⠹ generating…',c:P.faint},{gap:1},
       {system:'⟲ generation cancelled — main · v4 kept'},{gap:1},
-      {system:'✗ pages/main/v3.json needs a newer termcraft',c:P.red} ], scrollback:'▲ 4 earlier messages'});
-    this.wsStatus(b,w,h,{keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
+      {system:'✗ pages/main/v3.json needs a newer termcraft',c:P.red} ], scrollback:'▲ 4 earlier messages', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
     return this.render(b); }
 
   termSmall(w,h){ const P=this.pal; const b=this.mk(w,h); const cyc=Math.floor(h/2);
@@ -561,7 +578,7 @@ export class Engine {
   // ---- 13 export ----
   wsExport(w,h){ const P=this.pal; const b=this.mk(w,h);
     const s=this.paneShell(b,w,h,{right:'main · v4'});
-    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false);
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     const pw=58, ph=8, px=s.dx+Math.floor((s.dw-pw)/2), py=Math.floor((h-ph)/2)-1;
     this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
     this.box(b,px,py,pw,ph,{title:'export ^E',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
@@ -570,7 +587,7 @@ export class Engine {
     this.text(b,lx,y,'.termcraft/export/design-prompt.md',{fg:P.fg,bg:P.bg}); y++;
     this.text(b,lx,y,'.termcraft/export/pages/{main,settings,login}.json',{fg:P.dim,bg:P.bg}); y+=2;
     this.text(b,lx,y,'⏎ ok',{fg:P.amber,bold:true,bg:P.bg});
-    this.wsStatus(b,w,h,{});
+    this.wsStatus(b,w,h,{combo:false,ctx:false});
     return this.render(b); }
 
   // ---- 14 first generation ----
@@ -581,8 +598,8 @@ export class Engine {
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'a system monitor with cpu, memory and network'},{gap:1},
       {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true,spark:true},{status:'✓ planned layout',c:P.green},{status:'▸ writing widgets',c:P.fg},{status:'  resources · processes',c:P.faint} ],
-      composerDisabled:true, placeholder:'generating… esc to cancel'});
-    this.wsStatus(b,w,h,{ver:'main · v1',mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
+      composerDisabled:true, placeholder:'generating… esc to cancel', composerMeta:{model:'codex · gpt5.5 · high',ctx:8}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · v1',mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
     return this.render(b); }
 
   // ---- 15 focus ----
@@ -591,8 +608,8 @@ export class Engine {
       prevBorderFg:cf?P.line:P.amber, right:'main · v4', rightFg:cf?P.faint:P.amberHi, rightBold:!cf});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[{role:'❯ you'},{body:'add a network sparkline'},{gap:1},{role:'● codex'},{status:'✓ added → v4',c:P.dim}],
-      composerDisabled:!cf, placeholder:cf?'Ask for changes…':'tab → focus composer'});
-    this.wsStatus(b,w,h,{mode:{t:cf?' FOCUS: CHAT ':' FOCUS: PREVIEW ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['tab','focus'],['F3','tweaks'],['esc','unfocus']]});
+      composerDisabled:!cf, placeholder:cf?'Ask for changes…':'tab → focus composer', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,mode:{t:cf?' FOCUS: CHAT ':' FOCUS: PREVIEW ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['tab','focus'],['F3','tweaks'],['esc','unfocus']]});
     return this.render(b); }
 
   // ---- 16 wizard / migrate ----
@@ -628,7 +645,7 @@ export class Engine {
     const s=this.paneShell(b,w,h,{right:'main · v4 · light'});
     for(let yy=3;yy<s.frameH-1;yy++) for(let xx=s.dx+1;xx<w-1;xx++) this.put(b,xx,yy,' ',{bg:LP.bg,fg:LP.fg});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{pal:LP});
-    this.drawChat(b,1,s.chatW-2,s.frameH,false);
+    this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     this.dim(b,0,0,s.chatW,s.frameH); this.dim(b,s.px0,0,s.pw,s.frameH,LP);
     const pw=32, ph=8, px=w-pw-3, py=s.frameH-ph-1;
     this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
@@ -639,20 +656,20 @@ export class Engine {
     this.text(b,lx,y,'size',{fg:P.dim,bg:P.bg}); this.text(b,lx+8,y,'‹ 80×24 ›',{fg:P.amberHi,bg:P.bg,bold:true}); y++;
     this.text(b,lx+8,y,'80×24·120×40·auto',{fg:P.faint,bg:P.bg}); y++;
     this.text(b,lx,y,'preview only — not saved',{fg:P.faint,bg:P.bg});
-    this.wsStatus(b,w,h,{keys:[['^P','preview',true],['F3','tweaks'],['esc','close']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['^P','preview',true],['F3','tweaks'],['esc','close']]});
     return this.render(b); }
 
   // ---- 18 tab management ----
   wsTabs(w,h){ const P=this.pal; const b=this.mk(w,h);
     const s=this.paneShell(b,w,h,{tabs:[['Login',false],['Main',true],['Settings',false],['Report',false],['Stats',false]], tabScroll:true, right:'main · v4'});
-    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false);
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     const mx=s.dx+9, my=2, items=['rename','move left','move right','remove'], mw=16, mh=items.length+2;
     this.fillRect(b,mx,my,mw,mh,{ch:' ',bg:P.bg});
     this.box(b,mx,my,mw,mh,{title:'tab',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     items.forEach((it,i)=>{ const yy=my+1+i, sel=i===0; if(sel) for(let k=1;k<mw-1;k++) this.put(b,mx+k,yy,' ',{bg:P.sel});
       this.put(b,mx+1,yy,sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
       this.text(b,mx+3,yy,it,{fg:sel?P.selFg:(it==='remove'?P.red:P.fg),bg:sel?P.sel:P.bg,bold:sel}); });
-    this.wsStatus(b,w,h,{keys:[['↑↓','select'],['⏎','apply'],['esc','close']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['↑↓','select'],['⏎','apply'],['esc','close']]});
     return this.render(b); }
 
   // ---- 20 zero-pages empty state ----
@@ -663,8 +680,8 @@ export class Engine {
       {role:'❯ you'},{body:'a kanban board with three columns'},{gap:1},
       {role:'● codex'},{status:'⠹ generating design…',c:P.faint},{status:'✗ invalid design (schema) · retry 3/3',c:P.red},{gap:1},
       {system:'✗ generation failed — invalid design after 3 retries',c:P.red} ],
-      placeholder:'describe the first page…'});
-    this.wsStatus(b,w,h,{ver:false,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','fullscreen'],['m','agent']]});
+      placeholder:'describe the first page…', composerMeta:{model:'codex · gpt5.5 · high',ctx:0}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:false,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','fullscreen'],['m','agent']]});
     return this.render(b); }
 
   // ---- 21 custom preview size (invalid input) ----
@@ -672,7 +689,7 @@ export class Engine {
     const s=this.paneShell(b,w,h,{right:'main · v4 · light'});
     for(let yy=3;yy<s.frameH-1;yy++) for(let xx=s.dx+1;xx<w-1;xx++) this.put(b,xx,yy,' ',{bg:LP.bg,fg:LP.fg});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{pal:LP});
-    this.drawChat(b,1,s.chatW-2,s.frameH,false);
+    this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:87,caution:true}});
     this.dim(b,0,0,s.chatW,s.frameH); this.dim(b,s.px0,0,s.pw,s.frameH,LP);
     const pw=40, ph=11, px=w-pw-3, py=s.frameH-ph-1;
     this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
@@ -686,7 +703,7 @@ export class Engine {
     y+=3;
     this.text(b,lx,y,'⚠ use W×H, e.g. 100x30',{fg:P.red,bg:P.bg,bold:true}); y++;
     this.text(b,lx,y,'⏎ apply · esc close',{fg:P.faint,bg:P.bg});
-    this.wsStatus(b,w,h,{keys:[['^P','preview',true],['F3','tweaks'],['esc','close']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['^P','preview',true],['F3','tweaks'],['esc','close']]});
     return this.render(b); }
 
   // ---- 22 pin dropped in interactive mode ----
@@ -698,7 +715,7 @@ export class Engine {
     items.forEach((it,i)=>{ const yy=ddy+1+i, sel=it[1]; if(sel) for(let k=1;k<ddw-1;k++) this.put(b,ddx+k,yy,' ',{bg:P.sel});
       this.put(b,ddx+1,yy,sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:undefined,bold:true});
       this.text(b,ddx+3,yy,it[0],{fg:sel?P.selFg:P.fg,bg:sel?P.sel:undefined,bold:sel}); });
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), placeholder:'right-click to pin — no need to leave INTERACT'});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), placeholder:'right-click to pin — no need to leave INTERACT', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     this.dim(b,0,0,w,s.frameH);
     const by=ddy+3, bx=ddx+3; this.badge(b,bx,by,3);
     const pw=40, pxs=s.dx+6, pys=by;
@@ -706,7 +723,88 @@ export class Engine {
     this.box(b,pxs,pys,pw,3,{title:'new pin',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     this.text(b,pxs+2,pys+1,'default this to paid',{fg:P.fg,bg:P.bg}); this.put(b,pxs+2+20,pys+1,'█',{fg:P.amber,blink:true,bg:P.bg});
     this.text(b,pxs+1,pys+3,'⏎ save · esc cancel',{fg:P.faint,bg:P.bg});
-    this.wsStatus(b,w,h,{noSize:true,mode:{t:' INTERACT ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['esc','cancel'],['rclick','pin',true],['F4','static']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,noSize:true,mode:{t:' INTERACT ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['esc','cancel'],['rclick','pin',true],['F4','static']]});
+    return this.render(b); }
+
+  // ---- 23 slash menu ----
+  wsSlash(w,h,filtered){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH;
+    this.chatSeq(b,0,chatW,frameH,{seq:[
+      {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
+      {role:'● codex'},{status:'✓ added network sparkline → v4',c:P.dim} ], composerMeta:{model:'codex · gpt5.5 · high',ctx:filtered?87:42,caution:!!filtered}});
+    const composerTop=frameH-4, maxX=chatW-2;
+    const typed=filtered?'/ch':'/';
+    for(let k=3;k<chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
+    this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
+    this.text(b,3,composerTop+2,typed,{fg:P.fg,bold:true}); this.put(b,3+typed.length,composerTop+2,'█',{fg:P.amber,blink:true});
+    const cmds=[['/new','start a new chat'],['/chats','switch or list chats'],['/export','write the export package'],['/model','agent · model · effort']];
+    const rows=filtered?[['/chats','switch or list chats']]:cmds;
+    const boxW=chatW-2, boxH=rows.length+2, bx=1, by=composerTop-boxH;
+    this.fillRect(b,bx,by,boxW,boxH,{ch:' ',bg:P.bg});
+    this.box(b,bx,by,boxW,boxH,{title:filtered?'/ch':'commands',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    rows.forEach((c,i)=>{ const yy=by+1+i, sel=i===0;
+      if(sel) for(let k=1;k<boxW-1;k++) this.put(b,bx+k,yy,' ',{bg:P.sel});
+      this.put(b,bx+1,yy,sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
+      this.text(b,bx+3,yy,this.pad(c[0],8),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
+      this.text(b,bx+11,yy,c[1],{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); });
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    return this.render(b); }
+
+  // ---- 24 chats ----
+  wsChats(w,h){ const P=this.pal; const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
+    this.box(b,0,0,chatW,frameH,{fg:P.line,titleFg:P.faint,title:'❯ chat · codex',titleBold:false});
+    this.box(b,div,0,w-div,frameH,{fg:P.line});
+    this.put(b,div,0,'┬',{fg:P.line}); this.put(b,div,frameH-1,'┴',{fg:P.line});
+    this.text(b,div+2,1,'▸ Main',{fg:P.faint}); this.text(b,div+9,1,'  Settings',{fg:P.line});
+    this.hline(b,div+1,2,w-div-2,{fg:P.line}); this.put(b,div,2,'├',{fg:P.line}); this.put(b,w-1,2,'┤',{fg:P.line});
+    const gx=div, gw=w-div;
+    this.text(b,gx+2,4,'system-monitor',{fg:P.line});
+    this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
+    this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    const pw=74, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
+    this.box(b,pxs,pys,pw,ph,{title:'chats',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=pxs+2; let ly=pys+2;
+    this.text(b,lx,ly,this.pad('',3)+this.pad('CHAT',44)+'WHEN',{fg:P.faint,bold:true}); ly++;
+    const chats=[
+      ['build a system monitor with cpu / mem gauges','now',true],
+      ['make the process table sortable','8m ago',false],
+      ['try a 256-color palette variant','1h ago',false],
+      ['login screen with a centered form','yesterday',false],
+      ['first draft — kanban board','2d ago',false] ];
+    chats.forEach(c=>{ const sel=c[2]; if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
+      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
+      this.text(b,lx+1,ly, sel?'●':'○',{fg:sel?P.amber:P.dim,bg:sel?P.sel:P.bg});
+      this.text(b,lx+3,ly,this.pad(c[0].length>41?c[0].slice(0,40)+'…':c[0],44),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
+      this.text(b,lx+47,ly,this.pad(c[1],pw-51),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); ly++; });
+    ly++;
+    this.hline(b,pxs+1,ly,pw-2,{fg:P.line}); this.put(b,pxs,ly,'├',{fg:P.amber}); this.put(b,pxs+pw-1,ly,'┤',{fg:P.amber}); ly++;
+    let fx=lx;
+    this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
+    this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'switch',{fg:P.dim}); fx+=9;
+    this.text(b,fx,ly,'/new',{fg:P.amber,bold:true}); fx+=5; this.text(b,fx,ly,'fresh chat',{fg:P.dim}); fx+=13;
+    this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
+    this.wsStatus(b,w,h,{keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    return this.render(b); }
+
+  wsChatFresh(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, maxX=chatW-2;
+    this.text(b,1,1,'● codex',{fg:P.green,bold:true}); this.ctext(b,9,1,'ratatui · connected',{fg:P.faint},maxX);
+    const composerTop=frameH-4;
+    const midY=Math.floor((3+composerTop)/2);
+    const ph1='new chat — fresh context'; this.text(b,1+Math.max(0,Math.floor((chatW-2-ph1.length)/2)),midY,ph1,{fg:P.faint});
+    const ph2='ask for a change to begin'; this.text(b,1+Math.max(0,Math.floor((chatW-2-ph2.length)/2)),midY+1,ph2,{fg:P.line});
+    this.put(b,0,composerTop,'├',{fg:P.border}); this.hline(b,1,composerTop,chatW-2,{fg:P.border}); this.put(b,chatW-1,composerTop,'┤',{fg:P.border});
+    this.text(b,2,composerTop,' codex · gpt5.5 · high ',{fg:P.amberHi,bold:true});
+    { const tag=' ctx 3% ', rx=chatW-3-tag.length; this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,'3% ',{fg:P.fg,bold:true,bg:P.bg}); }
+    this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true}); this.ctext(b,3,composerTop+2,'Ask for changes…',{fg:P.faint},maxX); this.put(b,3,composerTop+2,'█',{fg:P.amber,blink:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
     return this.render(b); }
 
   legendEl(){ const P=this.pal; const React = window.React;

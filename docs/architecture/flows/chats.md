@@ -28,3 +28,5 @@ flowchart TD
 ## Source anchors
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.9 chats, §3.10 composer commands, §6.2 per-chat sessions, §7.1 chats storage layout
+- `design/23-slash-menu.dc.html` — slash menu open and filtered states
+- `design/24-chats.dc.html` — chat list popup and the fresh-chat state
