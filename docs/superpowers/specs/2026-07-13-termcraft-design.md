@@ -77,15 +77,17 @@ working directory.
 ### 3.2 Workspace
 
 Layout: chat panel on the left (~35%, showing the active chat — §3.9), live preview
-on the right, status bar at the bottom. The status bar's composition is fixed, left
-to right: the agent chip (agent · model · effort — click opens the picker, §3.6),
-the page + version segment (click opens the history popup, §3.4), preview size
-(error-colored when smaller than the page's `minSize`, §8.2), mode, context usage
-(§3.9, hidden when the backend reports none), and a short hint row rendered from
-the action table (§4) — only the few live view keys. Slash commands are deliberately
-not hinted in the status bar; the slash menu is its own discoverability (§3.10).
-The chip and the version segment are the only clickable segments; everything else
-is display. Page tabs above
+on the right, status bar at the bottom. The composer's top border carries the
+conversation-level indicators: the model chip (agent · model · effort — click opens
+the picker, §3.6) on the left and the context-usage indicator (§3.9, hidden when
+the backend reports none) on the right. The status bar's composition is fixed, left
+to right: mode, the page + version segment (click opens the history popup, §3.4),
+preview size (error-colored when smaller than the page's `minSize`, §8.2), and a
+short hint row rendered from the action table (§4) — only the few live view keys.
+Slash commands are deliberately not hinted in the status bar; the slash menu is its
+own discoverability (§3.10). The version segment is the status bar's only clickable
+segment; the model chip keeps its click on the composer border. Everything else is
+display. Page tabs above
 the preview. `F2` toggles fullscreen preview. With zero pages (a brand-new or
 all-failed project) the preview shows an empty-state placeholder ("No pages yet —
 describe what to build") and the tab strip is empty.
@@ -170,12 +172,12 @@ quiet notice above the composer (per the UI reference).
 
 ### 3.6 Agent · model · effort picker (v1.0)
 
-Typing `/model` (§3.10) or clicking the status-bar chip / Home inline selectors
-opens a popup over the dimmed screen
+Typing `/model` (§3.10) or clicking the composer's model chip / Home inline
+selectors opens a popup over the dimmed screen
 listing selectable (agent, model, reasoning effort) combinations — one row each,
 current choice marked. The chosen triple is stored in `config.toml` and shown as a
-chip in the status bar everywhere (`codex · gpt5.5 · high`) and as inline selectors on
-the Home prompt. On Home, before `.termcraft/` exists, the choice is held in memory
+chip on the Workspace composer's border (`codex · gpt5.5 · high`) and as inline
+selectors on the Home prompt. On Home, before `.termcraft/` exists, the choice is held in memory
 and written to `config.toml` when the project is created. Each `AgentBackend` reports its available models/efforts and maps the
 triple to its CLI flags. Switching agent or model starts a fresh agent session (§6.2);
 chat history is unaffected. While a turn runs the picker is locked (§3.2).
@@ -241,9 +243,9 @@ happened.
 Starting a new chat is the context-reset gesture: a fresh chat file and a fresh agent
 session, no carried context. termcraft never trims or compacts a conversation itself —
 the CLI owns its own context management, and the context budget is the user's call.
-The status bar's context-usage segment is the prompt to make that call: it is fed by
-token usage the backend reports in its event stream (§6.1), and a backend that
-reports nothing simply hides the segment.
+The composer's context-usage indicator (§3.2) is the prompt to make that call: it is
+fed by token usage the backend reports in its event stream (§6.1), and a backend
+that reports nothing simply hides the indicator.
 
 Chat ids are termcraft-assigned (`c1`, `c2`, …, create-new semantics like version
 files). A chat's display name is derived, not stored: the first line of its first
@@ -280,8 +282,8 @@ hotkey or mouse twin:
 The set is deliberately small: slash commands cover conversation- and
 configuration-level actions, while live view controls (fullscreen, mode, version
 browsing) stay on keys — and everything mouse-reachable stays mouse-reachable
-(§3.8): the status-bar chip and version segment keep their clicks as parallel
-triggers of the same actions.
+(§3.8): the composer's model chip and the status bar's version segment keep their
+clicks as parallel triggers of the same actions.
 
 ## 4. Architecture
 
@@ -500,8 +502,8 @@ against it from the start.
 supports.
 
 The `AgentEvent` stream also carries the backend's reported token usage when the CLI
-emits it; this feeds the status bar's context-usage segment (§3.9). Reporting is
-optional per backend — no usage events, no segment.
+emits it; this feeds the composer's context-usage indicator (§3.2, §3.9). Reporting
+is optional per backend — no usage events, no indicator.
 
 ### 6.2 Task protocol
 
@@ -680,10 +682,10 @@ version, never an overwrite.
     for menus/dropdowns/dialogs, bound inputs with typing + Enter, Tweaks panel with
     toggle/select/text controls over the reactive variable store.
 12. Export: `design-prompt.md` + DSL files + ASCII page snapshots.
-13. Agent · model · effort picker (via `/model` or the status-bar chip): popup
-    selection, status-bar chip, inline selectors on Home (§3.6).
+13. Agent · model · effort picker (via `/model` or the composer's model chip):
+    popup selection, composer chip, inline selectors on Home (§3.6).
 14. Multiple chats per project (§3.9): `/new`, `/chats` with the chat list popup,
-    per-chat agent sessions, status-bar context-usage segment.
+    per-chat agent sessions, the composer's context-usage indicator.
 15. Composer slash menu (§3.10) with the full v1.0 command set: `/new`, `/chats`,
     `/export`, `/model`.
 
@@ -704,8 +706,8 @@ version, never an overwrite.
 - Versions written from day one; `[` / `]` prev/next switching; sending from a
   non-head view auto-rolls back (§3.4).
 - Multiple chats (§3.9) from day one: the `chats/` layout with per-chat CLI sessions
-  and the context-usage status segment, managed through `/new` and `/chats`; rename,
-  deletion, and AI titles are backlog.
+  and the composer's context-usage indicator, managed through `/new` and `/chats`;
+  rename, deletion, and AI titles are backlog.
 - Composer slash menu (§3.10) with `/new`, `/chats`, `/export` (`/model` arrives
   with the picker in v1.0).
 - Export: `design-prompt.md` + DSL + ASCII snapshots (renderer already exists — cheap
