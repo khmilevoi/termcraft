@@ -53,8 +53,8 @@ Core principles:
 - Manual drag/resize editing of elements.
 - Spatial multi-frame canvases (Figma-style boards). The model is a flat list of pages.
 - Implementation code generation for the target stack (ratatui/bubbletea source
-  output). The export is a prompt + the design sources; the design is a prototype,
-  not the product.
+  output). The export is a prompt plus design sources, snapshots, and layout trees
+  (§3.7); the design is a prototype, not the product.
 - Daemon mode and multi-client operation (architecture must allow it later, see §4).
 - Real data in prototypes: designs must not fetch, read files, or talk to processes —
   held by the cage's layers (§4.2): the import allowlist (§5.8), the global scrub,
@@ -346,9 +346,9 @@ files). A chat's display name is derived, not stored: the first line of its firs
 MVP ships the full storage model, managed through slash commands (§3.10): `/new`
 starts a fresh chat and switches to it; `/chats` opens the chat list popup — chats
 listed by derived name with timestamps, newest first, the active chat marked, Enter
-switches — following the existing popup pattern (§3.6, §3.8). The popup's exact
-visual layout lands with the next UI-reference iteration (`design/`, §3). Rename,
-deletion, and AI-generated titles are backlog (§8.3).
+switches — following the existing popup pattern (§3.6, §3.8; UI reference:
+`design/24-chats.dc.html`). Rename, deletion, and AI-generated titles are backlog
+(§8.3).
 
 ### 3.10 Composer commands
 
@@ -793,7 +793,9 @@ the full turn from user message to applied version, including the retry loop.
     comments.jsonl            # pins (record schema below)
   export/
     design-prompt.md
-    pages/*.tsx
+    pages/*.tsx               # head-version copies
+    snapshots/<page>/<WxH>.txt  # ASCII frames, one per export size (§3.7)
+    layout/<page>.json        # resolved layout trees (§3.7)
 ```
 
 All plain text. Files matched by the generated `.gitignore` (`lock`, `*.local.toml`,
@@ -1002,6 +1004,7 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
 From an empty directory: `termcraft` → the Home prompt opens → "a system monitor
 dashboard" → Enter creates `.termcraft` (the project) → Codex writes page code →
 live render via the design host → right-click pin "make this gauge red" → send →
-new version applies → `Ctrl+E` → `design-prompt.md` + TSX sources that a coding
-agent can implement from without seeing termcraft. Relaunching in the same directory
+new version applies → `Ctrl+E` → the export package — `design-prompt.md`, TSX sources,
+multi-size ASCII snapshots, layout trees — that a coding agent can implement from
+without seeing termcraft. Relaunching in the same directory
 reopens the Workspace with chat and design intact.
