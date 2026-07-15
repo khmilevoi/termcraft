@@ -7,7 +7,7 @@ flowchart LR
 
     uishell["UI shell<br/>screens · action table · input"]
     kernel["Kernel<br/>turn lifecycle · staging · locks"]
-    gateway["Agent gateway<br/>official TS SDKs · sessions · confinement"]
+    gateway["Agent gateway<br/>official TS SDKs · event normalization · sessions · confinement"]
     gate["Gate<br/>type check · import allowlist · smoke render"]
     kit["Design kit<br/>themed components · tokens · tweaks & nav APIs"]
     host["Design host (subprocess)<br/>executes page code · frames · hit grid"]
@@ -33,7 +33,7 @@ flowchart LR
    |------|----------------|
    | **UI shell** | Screens; input interpretation (keys, mouse, the composer slash menu); preview compositing of host frames; the action table — the single registry of user actions: hotkey or slash command, availability predicate, dispatched command |
    | **Kernel** | The only decision-maker: commands in, events out, the agent-turn lifecycle (staging assembly → turn → gate → apply), the turn-time locks, the design host's lifecycle |
-   | **Agent gateway** | Backends over the vendors' official TypeScript SDKs: start, stream, cancel, health-check; per-chat session continuity; mapping (model, effort) to SDK options; per-backend confinement of the turn to the staging directory |
+   | **Agent gateway** | Backends over the vendors' official TypeScript SDKs: start, stream, cancel, health-check; normalization of each vendor's event stream into the backend-neutral turn events (reasoning chunks, tool steps, final message, token usage) — the Kernel and UI shell never see vendor event shapes; per-chat session continuity; mapping (model, effort) to SDK options; per-backend confinement of the turn to the staging directory |
    | **Design kit** | `@termcraft/kit`, the design system agent code composes from: themed components with mandatory stable ids, palette tokens, the tweaks and navigation APIs; embedded in the binary so projects need no `node_modules` |
    | **Gate** | Validation of the staging diff: manifest checks, TypeScript checking against embedded types, the import allowlist, page-contract checks, smoke rendering, id lints |
    | **Design host** | An isolated subprocess that executes one page version headlessly: styled frames out, forwarded input and tweak changes in, hit/rect/describe/layout-tree queries answered, the page's evaluated metadata and tweak declarations reported after mount; killed and respawned on page/version switch |
