@@ -82,8 +82,10 @@ to right: the agent chip (agent · model · effort — click opens the picker, �
 the page + version segment (click opens the history popup, §3.4), preview size
 (error-colored when smaller than the page's `minSize`, §8.2), mode, context usage
 (§3.9, hidden when the backend reports none), and a short hint row rendered from
-the action table (§4) — `/ commands` plus the few live view keys. The chip and the
-version segment are the only clickable segments; everything else is display. Page tabs above
+the action table (§4) — only the few live view keys. Slash commands are deliberately
+not hinted in the status bar; the slash menu is its own discoverability (§3.10).
+The chip and the version segment are the only clickable segments; everything else
+is display. Page tabs above
 the preview. `F2` toggles fullscreen preview. With zero pages (a brand-new or
 all-failed project) the preview shows an empty-state placeholder ("No pages yet —
 describe what to build") and the tab strip is empty.
