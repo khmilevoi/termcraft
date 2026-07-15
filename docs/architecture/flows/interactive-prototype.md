@@ -1,37 +1,39 @@
-In interactive mode the design stops being a picture: buttons fire, tabs switch, dialogs open, inputs accept typing. Everything that moves reads and writes one per-page variable map — this document shows the three mutation sources, the map, and the render pass that reacts.
+In interactive mode the design stops being a picture: buttons fire, tabs switch, dialogs open, inputs accept typing. Designs are real components, so their behavior is ordinary component state running inside the design host — this document shows what crosses the boundary between the shell and that host, and what stays private to the design.
 
 ```mermaid
 flowchart LR
-    subgraph sources["three doors into one room"]
+    subgraph shell["UI shell"]
+        f4["F4: static ↔ interactive"]
         tweaks["Tweaks panel (F3): toggle · select · text"]
-        inter["element interactions: click · submit"]
-        bound["bound inputs: typing in interactive mode"]
+        tabs["page tabs"]
     end
-    tweaks --> path["Kernel mutation path"]
-    inter --> path
-    bound --> path
-    path --> vars["per-page variable map (session-only, reset on version switch)"]
-    vars --> pass["render pass evaluates visibleWhen · overrides · bind"]
-    pass --> frame["new frame"]
-    inter -- "goTo: target page" --> nav["page navigation"]
+    subgraph host["design host (subprocess)"]
+        code["page component: own state, own handlers"]
+        kitapi["kit APIs: tweak values · navigation"]
+    end
+    f4 -- "interactive: forward mouse + keys" --> code
+    tweaks -- "tweak values" --> kitapi
+    kitapi -- "navigation events (goTo page)" --> tabs
+    code -- "frames on change" --> shell
+    respawn["page/version switch respawns the host"] -.-> code
 ```
 
 ## Walkthrough
 
-1. Mode toggle: `F4` switches static ↔ interactive; in interactive mode clicks drive the design instead of selecting; right-click pins keep working mid-flow; `F3` opens Tweaks in either mode.
-2. The variable map: one per page, `name → bool | string`, session runtime state — never written into version files, reset on version switch.
-3. Implicit variables and initial-value priority: a tweak's default → element-derived initials (input text, tabs' active id, `<id>.visible` defaulting to false) → the type's zero.
-4. The four consumers: conditions (`visibleWhen` with truthiness/equals/not), per-element overrides (style/text when a condition holds), interactions (`goTo:`/`open:`/`close:`/`toggle:`/`set:` on click/submit), and bound inputs (typing writes the variable live, Enter fires submit).
-5. Element runtime state lives in the same map as auto-variables (`<id>.active`, `<id>.visible`); `open/close/toggle` are pure sugar over `set:<id>.visible` with an implicit `visibleWhen` when the target declares none.
-6. All three mutation sources go through the same Kernel code path — tweaks, interactions, bound inputs are three doors into one room.
-7. Reactivity is re-render: immediate-mode rendering means every mutation just triggers a new frame; conditions are evaluated during render; no dependency graph.
-8. Focus traversal: `Tab` walks elements with `bind` or interactions in document order, `Shift+Tab` reverses.
-9. Failure branch: `goTo:` to a page removed since generation → no-op with a quiet notice above the composer.
-10. Failure branch: sugar targeting an element with a custom `visibleWhen` → validation warning, agent told to use `set:` directly; variable hygiene (read-never-written / written-never-read) → lint warnings fed to the agent next turn.
+1. Mode toggle: `F4` switches static ↔ interactive. In static mode input is never forwarded — clicks select elements and the design renders its initial frame only. In interactive mode the shell forwards mouse and keyboard input to the design host (keeping its own global-tier keys and `Esc` layers), and the design behaves as the real application would: real handlers, real focus traversal, real typing. Right-click pins keep working mid-flow; `F3` opens Tweaks in either mode.
+2. No bespoke variable system exists: everything that "moves" in a prototype is component state private to the design code — `useState`, conditional rendering, controlled inputs. Reactivity is the framework's own re-render, and the host ships a new frame whenever output changes.
+3. Exactly two behaviors cross the host boundary, both as kit APIs:
+   - **Tweaks** — a page exports its tweak declarations (toggle, select, text); the host reports them to the shell, the Tweaks panel renders them, and flipping a control pushes the value back so the design re-renders with it.
+   - **Navigation** — a kit navigation call in design code emits a page-navigation event through the host protocol; the shell switches tabs, exactly as if the designer had clicked the tab.
+4. Tweak state and all other prototype state is session runtime state: never written into version files, and reset by the host respawn that page and version switches already perform.
+5. Focus traversal inside the design is the UI framework's own focus system, driven by the forwarded `Tab`/`Shift+Tab` — the shell does not maintain a parallel focus model for design content.
+6. Failure branch: a navigation call to a page removed since generation → no-op with a quiet notice above the composer.
+7. Failure branch: design code that crashes or hangs mid-interaction takes down only the host — the watchdog respawns it and the preview shows an error panel; the shell, chat, and stored state are untouched.
+8. Failure branch: timers or randomness outside the export-flag guard → gate warnings fed to the agent next turn (they threaten snapshot determinism, not interactivity).
 
 ## Source anchors
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.5 interactive mode, §5.5 reactive variable system, §5.6 tweaks, §6.3 hygiene warnings
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.5 interactive mode, §5.5 interactivity and kit APIs, §5.6 tweaks, §4.2 the design host and input forwarding, §6.3 lint warnings
 - `design/11-interactive-mode.dc.html` — interactive mode states
 - `design/04-tweaks-panel.dc.html` — Tweaks panel
 - `design/22-interactive-pin.dc.html` — pins during interactive flow

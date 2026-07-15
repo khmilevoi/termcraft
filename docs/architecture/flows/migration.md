@@ -18,8 +18,8 @@ flowchart TD
 
 ## Walkthrough
 
-1. Versioning ground rules (statics in `storage.md`): every file kind carries its own independent version counter — `schemaVersion` in JSON, a typed header line in JSONL, `format_version` in TOML.
-2. The migration registry: an ordered chain of single-step upgrades per file kind; reading an old file runs the chain to the current model; writing always emits the current version.
+1. Versioning ground rules (statics in `storage.md`): every data file kind carries its own independent version counter — `schemaVersion` in JSON, a typed header line in JSONL, `format_version` in TOML. Page sources are the exception: they are code, versioned by the embedded design kit's semver rather than a counter in the file.
+2. The migration registry: an ordered chain of single-step upgrades per file kind; reading an old file runs the chain to the current model; writing always emits the current version. A breaking kit change ships as a codemod step for the page-source file kind in the same registry — machinery with zero entries until the first breaking change, like the rest of the registry.
 3. Lazy trigger: any read of an old file migrates in memory; the file on disk is rewritten in the current format on its next write.
 4. Bulk trigger: opening an old `.termcraft/` offers bulk migration in the wizard; a dedicated migrate command does the same from the CLI.
 5. Backup policy: bulk migration first backs up the whole folder to a timestamped backup directory — unless the folder is under git, where a warning suffices (backup dirs are gitignored).
@@ -29,5 +29,5 @@ flowchart TD
 
 ## Source anchors
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §7.2 format versioning and migration registry, §3.1 bulk offer, §9 too-new file error, §10 migration fixtures
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §7.2 format versioning, kit semver, and the migration registry, §3.1 bulk offer, §9 too-new file error, §10 migration fixtures
 - `design/16-wizard-migration.dc.html` — migration offer screen
