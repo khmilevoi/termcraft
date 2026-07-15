@@ -2,7 +2,7 @@ Export turns a design project into a package another coding agent can implement 
 
 ```mermaid
 flowchart TD
-    trigger(["Ctrl+E or the export command"]) --> busy{"turn running?"}
+    trigger(["Ctrl+E · /export · CLI export command"]) --> busy{"turn running?"}
     busy -- "yes" --> hint1["refused — status-bar hint"]
     busy -- "no" --> empty{"zero pages?"}
     empty -- "yes" --> hint2["refused — status-bar hint"]
@@ -14,7 +14,7 @@ flowchart TD
 
 ## Walkthrough
 
-1. Trigger: `Ctrl+E` (a global-tier hotkey — works even while typing) or the CLI export command.
+1. Trigger: `Ctrl+E` (a global-tier hotkey — works even while typing), the `/export` slash command in the composer, or the CLI export command.
 2. Refusal checks, each hinted in the status bar: a running turn, or a project with zero pages.
 3. Snapshot rendering: the Kernel calls the Renderer to render every page at the page's declared minimum size, independent of the current preview size or theme override — possible because rendering is a pure function of (document, area, theme), so snapshots are byte-reproducible.
 4. `design-prompt.md` contents: product overview, per-page structure and behavior, interactions and tweak states, theme/palette, recommended libraries for the configured target stack, and the ASCII snapshot of each page.
@@ -24,5 +24,5 @@ flowchart TD
 
 ## Source anchors
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.7 export package, §5.7 rendering determinism, §3.2 turn-time locks, §6.2 manifest visibility
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.7 export package, §3.10 the /export command, §5.7 rendering determinism, §3.2 turn-time locks, §6.2 manifest visibility
 - `design/13-export-feedback.dc.html` — export feedback states
