@@ -36,7 +36,7 @@ flowchart LR
    | **Agent gateway** | Backends over the vendors' official TypeScript SDKs: start, stream, cancel, health-check; per-chat session continuity; mapping (model, effort) to SDK options; per-backend confinement of the turn to the staging directory |
    | **Design kit** | `@termcraft/kit`, the design system agent code composes from: themed components with mandatory stable ids, palette tokens, the tweaks and navigation APIs; embedded in the binary so projects need no `node_modules` |
    | **Gate** | Validation of the staging diff: manifest checks, TypeScript checking against embedded types, the import allowlist, page-contract checks, smoke rendering, id lints |
-   | **Design host** | An isolated subprocess that executes one page version headlessly: styled frames out, forwarded input and tweak changes in, hit-grid and rect queries answered; killed and respawned on page/version switch |
+   | **Design host** | An isolated subprocess that executes one page version headlessly: styled frames out, forwarded input and tweak changes in, hit/rect/describe queries answered, the page's evaluated metadata and tweak declarations reported after mount; killed and respawned on page/version switch |
    | **Project store** | Everything under `.termcraft/`: manifest, versions, chats, pins, config; atomic writes; the migration registry; the machine-local trust ledger kept outside the project |
 
 2. The runtime loop: terminal events (keys, mouse, resize), Kernel events, and design-host frames merge into one loop. The UI shell translates input into commands through the action table; the Kernel answers with events; host frames blit into the preview region; the UI shell redraws. No other channel exists between the layers.

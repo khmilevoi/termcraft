@@ -27,7 +27,8 @@ Core principles:
   page components, their structure, styles — go through the agent. The mouse
   annotates and inspects; it never edits the design directly. Project structure (page
   order, titles, removal) is ordinary bookkeeping, manageable from both the UI and
-  agent turns.
+  agent turns — retitling from the UI is the one mechanical code edit termcraft
+  itself performs: a literal rewrite of the page's `meta.title` (§3.3).
 - **Designs are code, running in a cage.** A page is a TSX module. That buys
   unlimited expressiveness (anything OpenTUI/React can render) at the price of
   execution: design code runs only inside an isolated design-host subprocess, under
@@ -40,7 +41,8 @@ Core principles:
   design of this codebase's TUI. Separate tools (e.g. in a monorepo) get their own
   folders; design experiments are git branches. The project folder needs no
   `package.json` or `node_modules`: the kit, React, and OpenTUI ship embedded in the
-  termcraft binary.
+  termcraft binary. Sole exception to "everything in the folder": the machine-local
+  workspace-trust ledger, which must live outside the repository's reach (§7.1).
 - **Data outlives binaries.** Every stored data file carries a format version;
   migrations are part of the architecture from day one. Page sources are code and are
   versioned by the kit's semver instead (§7.2).
@@ -54,7 +56,8 @@ Core principles:
   not the product.
 - Daemon mode and multi-client operation (architecture must allow it later, see §4).
 - Real data in prototypes: designs must not fetch, read files, or talk to processes —
-  enforced by the import allowlist (§5.8). Simulated data lives in the component.
+  held by the cage's layers (§4.2): the import allowlist (§5.8), the global scrub,
+  and the design-code conventions. Simulated data lives in the component.
 - Multi-project workspaces: one `.termcraft/` is one project (§3.1); a global user
   config is backlog.
 - Watching for external file changes while running; termcraft is the folder's single
@@ -79,7 +82,8 @@ working directory.
 - Missing → the Home screen opens: a large centered prompt input ("Describe the TUI
   you want to design"), focused on entry; `Esc`/`Tab` unfocuses it (focus rules:
   §3.8). Inline selectors under the prompt show the current agent · model · effort
-  combo (`/model` (§3.10) or a mouse click opens the picker, §3.6). Pressing Enter creates
+  combo (`/model` (§3.10) or a mouse click opens the picker — v1.0, §3.6; in MVP the
+  combo is display-only). Pressing Enter creates
   `.termcraft/` with default config and a project manifest with zero pages, writes
   the first `user` record to the project's first chat (`chats/c1.jsonl`, §3.9), opens
   the Workspace, and starts the first generation. The project name is the prompt's first line truncated to ~60 chars —
@@ -106,9 +110,9 @@ working directory.
 Layout: chat panel on the left (~35%, showing the active chat — §3.9), live preview
 on the right, status bar at the bottom. The composer's top border carries the
 conversation-level indicators: the model chip (agent · model · effort — click opens
-the picker, §3.6) on the left and the context-usage indicator (§3.9, hidden when
+the picker, v1.0, §3.6) on the left and the context-usage indicator (§3.9, hidden when
 the backend reports none) on the right. The status bar's composition is fixed, left
-to right: mode, the page + version segment (click opens the history popup, §3.4),
+to right: mode, the page + version segment (click opens the history popup, v1.0, §3.4),
 preview size (error-colored when smaller than the page's `minSize`, §8.2), and a
 short hint row rendered from the action table (§4) — only the few live view keys.
 Slash commands are deliberately not hinted in the status bar; the slash menu is its
@@ -167,16 +171,20 @@ Project → **Pages** (one design screen each) → per-page version history. Tab
 pages. The agent manages pages itself through the staging directory (§6.2): creating
 `pages/<slug>.tsx` adds a page, deleting it unlists one, editing the manifest slice
 reorders pages or switches the active page, and a page's title lives in its own
-`meta` export (§5.1). Removal only unlists — the page's files stay on disk, and
-recreating the same slug resurrects its history (§6.2). In v1.0 pages are also
+`meta` export (§5.1). Renaming from the UI is a mechanical kernel edit: `meta` is a
+static literal (§5.1), so the kernel rewrites `meta.title` in place, mints a new
+version like any content change, and records it as a `rename` system entry carrying
+the version it produced (§3.4, §7.1). Removal only unlists — the page's files stay
+on disk, and recreating the same slug resurrects its history (§6.2). In v1.0 pages are also
 formally linked by kit navigation calls (§5.5), forming a clickable prototype flow.
 
 ### 3.4 Versions
 
-Every applied agent turn creates exactly one new `vN.tsx` for each page it changed —
-versions map 1:1 to chat messages, and each turn's record in the chat log carries an
-`applied` map (`{"main": 5}`) linking the message to the versions it produced. The
-head of a page is simply its highest version; there is no head pointer.
+Every applied agent turn creates exactly one new `vN.tsx` for each page it changed.
+Every version traces to a chat record: an applied turn's agent record carries an
+`applied` map (`{"main": 5}`) naming the versions it produced, and the system
+records of version-minting events — rollbacks and UI renames — carry the same map
+(§7.1). The head of a page is simply its highest version; there is no head pointer.
 
 Browsing is free: `[` / `]` switch prev/next version read-only, the status bar shows
 a caution-tinted `vN/total ‹read-only›`, nothing is written. `Enter` (with no text
@@ -188,9 +196,9 @@ Rollback ("make v3 the head") copies v3 forward as the new highest version — h
 stays linear and append-only, nothing is deleted (the git-revert model). Rollbacks,
 auto or explicit, are recorded as system entries in the chat. MVP: `[` / `]` switching
 only. v1.0: a history popup — opened with `v` or by clicking the version segment in
-the status bar (the same pattern as the agent chip, §3.6) — listing versions
+the status bar (the same pattern as the model chip, §3.6) — listing versions
 with timestamps and prompt excerpts (found by scanning the project's chats for the
-agent record whose `applied` map names the version), with explicit rollback.
+record — agent or system — whose `applied` map names the version), with explicit rollback.
 It renders over the dimmed workspace (§3.8) and is locked while a turn runs (§3.2).
 
 ### 3.5 Interactive prototype (v1.0)
@@ -202,6 +210,8 @@ switch their own state, dialogs open and close, kit navigation calls (§5.5) swi
 pages, focus traverses with `Tab` through OpenTUI's focus system, and inputs accept
 real typing. In static mode input is not forwarded at all; clicks select (§3.2) and
 the design stays a still image. `F3` opens the Tweaks panel (§5.6) in either mode.
+`Esc` is never forwarded: it follows the shell's layer rules (§3.8) and doubles as
+the keyboard exit from the interactive preview.
 Right-click pin comments keep working in interactive mode — the user can annotate
 mid-flow. A navigation call whose target page has since been removed is a no-op with
 a quiet notice above the composer (per the UI reference).
@@ -240,9 +250,10 @@ has zero pages — both hinted in the status bar.
 Hotkeys come in two tiers:
 
 - **Global** — `F2`/`F3`/`F4`, `Ctrl+E`, `Ctrl+P` (preview controls popup: theme
-  override and size presets, §8.1 items 9–10): work always, even while a text input
-  is focused.
-- **Single-char** — `v` (version history popup, §3.4), `[`, `]`, arrow
+  override and size presets — v1.0, §8.1 items 9–10): work always, even while a text
+  input is focused.
+- **Single-char** — `v` (version history popup, §3.4), `[`, `]`, `Enter` (return to
+  head while browsing, §3.4), arrow
   navigation, `r` (re-check agent health, on the Home agent-error state): work only
   when no text input is focused. Configuration- and conversation-level actions have
   no single-char keys — they are slash commands (§3.10).
@@ -258,13 +269,16 @@ and applies nothing; the last custom size is remembered in `config.toml`.
 
 Exactly one widget owns focus. The Home prompt is focused on entry; the Workspace
 composer is focused by default; `Tab` cycles focus between the composer and the
-preview. Anything reachable by a single-char hotkey is also reachable by mouse.
+preview. Anything reachable by a single-char hotkey is also reachable by mouse
+(v1.0 — in MVP version browsing rides on `[` / `]` alone until the history popup
+lands, §3.4).
 
 `Esc` follows a strict layered priority — one press pops the topmost layer:
 
 1. an open popup or the slash menu (picker, history, pin input, preview controls,
    §3.10) → close it;
-2. a focused text input → unfocus;
+2. a focused text input — or the preview focused in interactive mode — → unfocus,
+   returning focus to the composer;
 3. an active version-browse view (§3.4) → return to head;
 4. a running generation → cancel it;
 5. a selected element → deselect.
@@ -307,7 +321,7 @@ input, filtering as you type, each command with a one-line description. Enter ru
 the highlighted command; Esc closes the menu (§3.8). The menu is not a modal popup —
 it never dims the screen — and it is just another view over the §4 action table: a
 command whose availability predicate fails (e.g. anything but sending while a turn
-runs, §3.2) shows dimmed with the same hint the status bar would give; a command
+runs — sending included, §3.2) shows dimmed with the same hint the status bar would give; a command
 meaningless on the current screen is hidden (on Home only `/model` applies, and when
 nothing applies the menu simply does not open). On Enter, composer text that exactly
 names a known command runs it; anything else is sent as a chat message.
@@ -333,7 +347,11 @@ clicks as parallel triggers of the same actions.
 TypeScript on Bun; the shell UI is OpenTUI (React bindings). One `bun build
 --compile` binary ships everything: the shell, the design host entry, and the
 embedded `@termcraft/kit` + React + OpenTUI the designs import — the user's project
-folder never grows a `package.json`. Strict module boundaries; each module is
+folder never grows a `package.json`. Three of this paragraph's claims are
+load-bearing and get spike-verified before implementation planning: dynamic TSX
+import with embedded-module resolution from the compiled binary (Windows included),
+styled cell-frame capture from the headless renderer, and running the TypeScript
+check inside the compiled binary. Strict module boundaries; each module is
 extractable into a workspace package later without rewrites:
 
 - `kit` — `@termcraft/kit`: the design system the agent composes designs from —
@@ -386,10 +404,12 @@ OpenTUI headless renderer at the preview's size, and speaks a small protocol wit
 the shell over stdio:
 
 - **host → shell**: styled cell frames (char + fg + bg + attributes) on change; a
-  heartbeat; page-emitted events (kit navigation calls, §5.5).
+  heartbeat; the page's evaluated `meta` and tweak declarations after mount (§5.1,
+  §5.6); page-emitted events (kit navigation calls, §5.5).
 - **shell → host**: resize, theme and capability override (§8.1), forwarded input
   (interactive mode, §3.5), tweak changes (§5.6), and queries — `checkHit(x, y) →
-  id` and `rectOf(id) → Rect` (selection and pins, §3.2).
+  id`, `rectOf(id) → Rect` (selection and pins, §3.2), and `describe(id) →
+  component kind + label` (the selection chip, §3.2).
 
 Isolation layers, each with its honest job:
 
@@ -444,8 +464,12 @@ export default function Page() {
 }
 ```
 
-`meta` (validated by the gate, §6.3) is the only structured data termcraft reads
-from a page without rendering it. The default export is the page component. The
+`meta` must be a plain object literal of constants — no computed values; the gate
+rejects anything else (§6.3). It is the only part of a page termcraft itself reads
+and writes: the gate captures the evaluated `meta` at smoke render and caches it in
+the project manifest (tabs and the status bar read the cache, never the source,
+§7.1), and a UI rename mechanically rewrites the `meta.title` literal (§3.3).
+The default export is the page component. The
 optional `tweaks` export is §5.6. Everything else is ordinary React: local state,
 handlers, composition, extracted helper components in the same file.
 
@@ -501,7 +525,7 @@ exists. Two behaviors cross the design/shell boundary and go through kit APIs:
 
 - **Navigation.** `usePages().goTo("settings")` — the kit emits a page-navigation
   event through the host protocol; the shell switches tabs. A target missing from
-  the manifest is a no-op with a quiet notice (§3.5). This is what links pages into
+  the project manifest is a no-op with a quiet notice (§3.5). This is what links pages into
   a clickable prototype flow.
 - **Tweaks.** `useTweak("density")` reads a shell-controlled value (§5.6).
 
@@ -612,9 +636,13 @@ gitignored territory — never inside `.termcraft/`):
 - `KIT.md` + kit type declarations — the design-language reference the agent codes
   against.
 
+Terminology, used consistently: the **project manifest** is `project.toml` (§7.1);
+the **manifest slice** is this staging `pages.json`.
+
 The agent runs against staging with its native file tools — reading whatever it
 wants, editing in place. The prompt: role system prompt (TUI designer), the
-design-code rules (§5.8), the manifest, the active page name, the current selection,
+design-code rules (§5.8), the project manifest (page list with cached titles,
+order, active page), the previous turn's gate warnings, the current selection,
 open pins (only those whose anchors resolve), and the user message. No prefetch
 policy, no read protocol, no seen-version bookkeeping: reading files is the agent's
 own business now.
@@ -651,10 +679,11 @@ stored session ids simply fail resume later and take the same fallback.
 The CLI exits → termcraft diffs staging against the turn's snapshot. The diff is the
 proposal: changed/added/deleted page files plus `pages.json` edits. The gate runs:
 
-1. **Manifest checks** — `pages.json` parses, slugs match the mask, order is a
+1. **Manifest-slice checks** — `pages.json` parses, slugs match the mask, order is a
    permutation of listed pages, the active page exists.
 2. **Per changed page** — import allowlist (§5.8), TypeScript check against the
-   embedded types, page contract (`meta`, default export), **smoke render**: the
+   embedded types, page contract (`meta` as a static literal, default export),
+   **smoke render**: the
    host mounts the page once at `minSize` — import errors, render crashes, and
    contract violations surface here, before anything is applied.
 3. **Lints (warnings, not errors)** — dropped ids that selection or open pins
@@ -665,9 +694,13 @@ Errors → automatic retry: the errors are appended to the conversation and the 
 continues in the same staging (one initial attempt plus at most 3 retries), then an
 honest error in chat and the staging is discarded. Valid → applied atomically by the
 kernel: each changed page gets exactly one new `vN.tsx` written via tmp + rename
-(create-new numbering, §7.1), manifest changes land in `project.toml`, the chat's
+(create-new numbering, §7.1), the evaluated `meta` of each applied page is cached
+in the project manifest (titles for tabs, `minSize` for the status bar, §5.1),
+manifest-slice changes land in `project.toml`, the chat's
 agent record carries the `applied` map, warnings are stored with it for the next
-turn's context. The last valid version is never lost.
+turn's context. An empty diff is a valid outcome — a purely conversational turn
+writes nothing and the agent record's `applied` map stays empty. The last valid
+version is never lost.
 
 Diagram: [`docs/architecture/flows/generation-turn.md`](../../architecture/flows/generation-turn.md) —
 the full turn from user message to applied version, including the retry loop.
@@ -682,8 +715,8 @@ the full turn from user message to applied version, including the retry loop.
   config.toml                 # format_version, agent+model+effort, target_stack,
                               #   preview defaults (incl. last custom size, §3.8)
   lock                        # single-instance lock file (holds the owner's PID)
-  project.toml                # format_version, name, dates, ordered pages, active page,
-                              #   active chat
+  project.toml                # format_version, name, dates, ordered pages with
+                              #   cached meta (title · minSize), active page, active chat
   chats/c1.jsonl … cN.jsonl   # dialog logs, one file per chat (record schema below)
   session.local.toml          # chat → agent session id map — machine-local, never committed
   pages/<page>/
@@ -708,7 +741,8 @@ cannot ship its own trust grant (§3.1). It is the one piece of state deliberate
 not in `.termcraft/`.
 
 The staging directories of §6.2 are scratch state in the OS temp area, created per
-turn and deleted after apply or final failure; they never touch `.termcraft/`.
+turn and deleted after apply, final failure, or cancellation; they never touch
+`.termcraft/`.
 
 The chat list is the directory scan of `chats/` ordered by id; `project.toml` names
 the active chat, and a dangling reference falls back to the newest chat on disk (or a
@@ -718,11 +752,15 @@ fresh `c1` when none exist). Each chat file starts with the header
 - `{"kind":"user", "text", "selection"?, "pins":[…]}` — exactly what was sent to the
   agent: the message, the selection chip's element id, the ids of the pins included.
 - `{"kind":"agent", "text", "applied":{"<page>": N}, "warnings":[…]}` — the agent's
-  final message, the versions the turn produced (empty map if the turn failed), and
+  final message, the versions the turn produced (empty map when the turn produced
+  no versions — a failure or a purely conversational turn), and
   the gate warnings carried into the next turn. Streaming status (reasoning, tool
   activity) is ephemeral UI and is never persisted.
-- `{"kind":"system", "event":"rollback"|"error"|"cancelled", "text"}` — rollbacks
-  (auto and explicit), honest post-retry errors, cancellations.
+- `{"kind":"system", "event":"rollback"|"rename"|"error"|"cancelled", "text",
+  "applied"?:{…}}` — rollbacks
+  (auto and explicit) and UI renames — the version-minting system events, carrying
+  the same `applied` map as agent records (§3.4) — plus honest post-retry errors
+  and cancellations.
 
 `comments.jsonl` starts with `{"kind":"comments","version":1}`; pin records are
 `{"id", "element", "fx", "fy", "text", "status":"open"|"resolved", "ts"}` (§3.2).
@@ -871,12 +909,16 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
 - `host`: protocol contract tests — frames, hit/rect queries, input forwarding,
   watchdog behavior — against scripted pages; determinism test: same page + size +
   theme → byte-identical snapshot across fresh host runs.
-- `agent`: backends against SDK fakes; staging assembly, diff detection, retry,
-  and cancel pipelines against a scripted fake agent.
+- `agent`: backends against SDK fakes — event streams, session resume and its
+  fallback, confinement configuration, cancel.
 - `store`: migration fixtures for all historical versions (§7.2); create-new version
   numbering; trust-ledger reads.
 - `core`: Command/Event contract tests over the channels — doubles as the future IPC
-  contract test suite.
+  contract test suite; staging assembly, diff detection, retry, and no-change
+  pipelines against a scripted fake agent.
+- `ui`: action-table units — availability predicates against the turn-time locks,
+  hotkey resolution through the two tiers, status-bar hints and slash-menu dimming
+  derived from the same entries.
 - Smoke: app driven on a scripted terminal with injected events (open project →
   prompt → fake agent edits staging → gate → render → export).
 

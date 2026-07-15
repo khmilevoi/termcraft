@@ -20,7 +20,7 @@ flowchart TD
 4. `design-prompt.md` contents: product overview, per-page structure and behavior, interactions and tweak states, theme/palette tokens, recommended libraries for the configured target stack, and the ASCII snapshot of each page.
 5. `pages/*.tsx`: exact head-version design sources — precise enough for an implementing agent in any target stack to read as a spec.
 6. Re-export silently overwrites `export/` in place: exports are derived data; their history is git's job.
-7. Removed pages are unlisted from the manifest and therefore invisible to export.
+7. Removed pages are unlisted from the project manifest and therefore invisible to export.
 
 ## Source anchors
 

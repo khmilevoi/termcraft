@@ -4,7 +4,7 @@ Everything termcraft persists lives in one plain-text folder, `.termcraft/`, nex
 flowchart TB
     subgraph tc[".termcraft/ — one folder, one project"]
         cfg["config.toml — agent · model · effort, target stack, preview defaults"]
-        proj["project.toml — name, ordered pages, active page, active chat"]
+        proj["project.toml — name, ordered pages with cached meta (title · minSize), active page, active chat"]
         chats["chats/c1.jsonl … cN.jsonl — one dialog log per chat"]
         gi[".gitignore — written by termcraft"]
         subgraph localonly["machine-local (gitignored)"]
@@ -33,8 +33,8 @@ flowchart TB
 5. Chats: a project holds one or more chats — independent conversation lines over the same pages. Chat ids are termcraft-assigned (`c1`, `c2`, …) with the same create-new semantics as version files; the chat list is the directory scan of `chats/` ordered by id; `project.toml` names the active chat, and a dangling reference falls back to the newest chat on disk (or a fresh `c1` when none exist). A chat's display name is derived, never stored: the first line of its first `user` record, truncated like the project name.
 6. Record schemas: each chat file starts with the header `{"kind":"chat","version":1}`, then one record per line, each with an ISO 8601 `ts`:
    - `user` — `{"kind":"user", "text", "selection"?, "pins":[…]}`, exactly what was sent to the agent.
-   - `agent` — `{"kind":"agent", "text", "applied":{"<page>": N}, "warnings":[…]}`, the agent's final message, the versions the turn produced, and the gate warnings carried into the next turn.
-   - `system` — `{"kind":"system", "event":"rollback"|"error"|"cancelled", "text"}`, rollbacks, honest post-retry errors, and cancellations.
+   - `agent` — `{"kind":"agent", "text", "applied":{"<page>": N}, "warnings":[…]}`, the agent's final message, the versions the turn produced (an empty map for a failed or purely conversational turn), and the gate warnings carried into the next turn.
+   - `system` — `{"kind":"system", "event":"rollback"|"rename"|"error"|"cancelled", "text", "applied"?:{…}}`, rollbacks and UI renames (version-minting events carrying the same applied map as agent records), honest post-retry errors, and cancellations.
 
    `comments.jsonl` starts with its own header, then pin records `{id, element, fx, fy, text, status, ts}`.
 7. Version files are append-only and written create-new: if `vN.tsx` unexpectedly exists, termcraft rescans the page's folder and takes the next free number — worst case a duplicate version, never an overwrite.
