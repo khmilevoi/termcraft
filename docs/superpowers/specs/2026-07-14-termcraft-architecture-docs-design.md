@@ -1,156 +1,111 @@
 # termcraft — Architecture Docs Design
 
 Date: 2026-07-14
-Status: approved for planning
+Status: completed and revised
 Parent spec: [2026-07-13-termcraft-design.md](2026-07-13-termcraft-design.md)
+Production-hardening register: [2026-07-16-production-hardening-decisions-design.md](2026-07-16-production-hardening-decisions-design.md)
 
 ## 1. Purpose
 
-First step of implementing the termcraft spec: bootstrap `docs/architecture/` with the
-/architecture plugin (architecture-generate skill), describing the **stack-agnostic
-v1.0 target architecture** before any code exists. The docs become the shared map that
-the MVP implementation plan builds against, and the plugin's audit tooling keeps them
-honest as code lands.
+Bootstrap and maintain `docs/architecture/` as the compact, stack-aware map of the
+v1 target before production code exists. The architecture documents summarize the
+normative specifications; they do not introduce a second product contract. When a
+detailed production-hardening design changes a boundary, the corresponding
+architecture walkthrough changes in the same documentation commit.
 
-## 2. Decisions
+## 2. Governing decisions
 
-- **Scope: full v1.0 target architecture**, not the MVP cut. Structure and flows for
-  the reactive system, interactive mode, and the agent picker are documented from the
-  start; the MVP plan implements a subset of an already-described system.
-- **Location: `docs/architecture/`** — the plugin's contract. Its three skills and the
-  Stop-hook auditor are hardwired to this path; a root-level `architecture/` would be
-  invisible to them.
-- **Legacy diagrams absorbed.** The three root-level `architecture/*.mmd` files
-  (`modules.mmd`, `reactive-system.mmd`, `generation-sequence.mmd`) are folded into
-  the new docs and the folder is removed. The three links in the parent spec (§4,
-  §5.5, §6.3) are repointed to the new documents.
-- **Source anchors point at the spec.** No code exists yet, so every doc's
-  `Source anchors` section references parent-spec sections
-  (`docs/superpowers/specs/2026-07-13-termcraft-design.md §…`) and, where UI behavior
-  is described, `design/NN-*.dc.html` files. Anchors migrate to real source paths via
-  the architecture-update skill as modules land — an explicit step in the MVP
-  implementation plan.
-- **English only**, per the plugin conventions.
+- **Scope:** production-grade local, single-user, single-process v1. Daemon,
+  multi-client IPC, network filesystems, and distributed coordination are outside
+  the documented contract.
+- **Location:** `docs/architecture/`, with `README.md` as the reading-order and
+  precedence index.
+- **Source anchors:** until code exists, every architecture document points to the
+  governing design specs and relevant `design/NN-*.dc.html` prototype. Anchors move
+  to implementation paths as modules land.
+- **No hidden authority:** architecture summaries must preserve the Kernel guards,
+  storage identities, transaction boundaries, protocol ownership, and limits from
+  the detailed specs. A summary may omit detail but may not weaken it.
+- **English only**, matching the repository's architecture-document convention.
 
-## 3. Component model (stack-agnostic)
+## 3. Component vocabulary
 
-The six modules of parent spec §4, named by role. This is the vocabulary every
-diagram and walkthrough uses; code identifiers never appear.
+The architecture uses these seven roles consistently:
 
 | Role | Responsibility |
-|------|----------------|
-| **UI shell** | Screens (Home, Workspace), input interpretation, the action table (single registry: hotkey, availability predicate, dispatched command), presentation of chat / preview / status bar |
-| **Kernel** | The only decision-maker: accepts commands, owns the agent-turn lifecycle and the turn-time locks, applies operations, emits events |
-| **Agent gateway** | Abstraction over local agent CLIs: start task, stream events, cancel, health check; maps (model, effort) to CLI flags; session continuity |
-| **Design language** | The document model: types, schema, structural and semantic validation, format version |
-| **Renderer** | Pure function (document, area, theme) → frame; layout, drawing, color degradation, hit-testing (element → rectangle map for the mouse) |
-| **Project store** | Everything under `.termcraft/`: manifest, versions, chat, pins, config; atomic writes; the migration registry |
+|---|---|
+| **UI shell** | Screens, local focus/applicability, the action table, chat and preview presentation; no domain or process authority |
+| **Kernel** | Authoritative Reatom state machines, Commands/Results/Events, capabilities, revisions, turn admission, and project-write coordination |
+| **Agent gateway** | Vendor SDK confinement, normalized events, fenced attempts, session checkpoints, deadlines, and confirmed cancellation |
+| **Runtime** | The only saved-page import surface: Reatom-first page model, supported components, low-level primitives, navigation, tweaks, and compatibility version |
+| **Gate** | Safe candidate semantics: import/type/page-contract checks, smoke render, and diagnostics |
+| **HostSupervisor** | Sole owner of host subprocesses, framed protocol, `PreviewSession`, bounded frame delivery, timeouts, and crash-loop protection |
+| **Project store** | Portable/local state split, `SafeProjectFs`, OS lease, transactions and startup recovery, migrations, projections, trust, and Git adapter |
 
-```mermaid
-flowchart LR
-    designer(["Designer (terminal)"]) --> uishell
-    cli["Local agent CLI<br/>(Codex; Claude Code later)"]
+The UI and Kernel exchange serializable, versioned DTOs over an in-process channel;
+this is transport-neutral but not a finished daemon wire protocol. Preview frame
+bytes use a separate bounded stream. The UI never accesses the Project store or host
+stdio directly. Critical subprocess, cancellation, and transaction lifetimes are
+owned explicitly. Reatom connection hooks own only connection-scoped
+subscriptions/resources and return cleanup; scoped-model lookup uses the facade's
+context hook and does not own resource lifetime.
 
-    uishell["UI shell<br/>screens · action table · input"]
-    kernel["Kernel<br/>turn lifecycle · ops · locks"]
-    gateway["Agent gateway<br/>start · stream · cancel · sessions"]
-    lang["Design language<br/>document model · validation"]
-    renderer["Renderer<br/>pure (doc, area, theme) → frame"]
-    pstore["Project store<br/>.termcraft/ · atomic writes · migrations"]
+## 4. Document set and owned questions
 
-    uishell -- "Command channel<br/>(future IPC)" --> kernel
-    kernel -- "Event channel<br/>(future IPC)" --> uishell
-    kernel --> gateway
-    gateway -- "spawn · event stream" --> cli
-    kernel --> lang
-    kernel --> pstore
-    uishell -- "live preview" --> renderer
-    kernel -- "export snapshots" --> renderer
-    renderer --> lang
-```
-
-Key boundaries:
-
-- **UI shell ↔ Kernel: exclusively the async command/event channel pair** — the
-  future IPC seam. The UI never touches the project store directly.
-- **Design language is the shared vocabulary**: the kernel validates with it, the
-  renderer consumes it, the store persists it, the agent gateway ships its schema to
-  the agent.
-- **The reactive variable store (v1.0) belongs to the kernel**: all three mutation
-  sources (tweaks, interactions, bound inputs) go through one kernel code path; the
-  renderer reads the map when evaluating `visibleWhen` / overrides.
-- **Correction over the legacy `modules.mmd`**: there, the renderer hung off the UI
-  only. Export (§3.7) renders deterministic ASCII snapshots, and export is a kernel
-  operation — so **the kernel also depends on the renderer**. This is why the
-  renderer must stay a pure function with no terminal coupling. The new structural
-  doc shows this edge.
-
-Runtime loop (goes into the structural doc): terminal events (keys, mouse, resize)
-and kernel events merge into one loop; the UI translates input into commands through
-the action table (which also answers availability — the turn-time locks), the kernel
-answers with events, the UI redraws the frame. No other channel exists between the
-layers.
-
-## 4. Document set
-
-```
+```text
 docs/architecture/
-  README.md                     # index + reading order + status note
-  overview.md                   # context: designer, agent CLIs, project folder
-  modules.md                    # components, boundaries, runtime loop (absorbs modules.mmd)
-  storage.md                    # .termcraft/: layout, record schemas, format versions
+  README.md
+  overview.md
+  modules.md
+  storage.md
   flows/
     launch.md
     generation-turn.md
     versions.md
+    chats.md
     interactive-prototype.md
     pins-and-selection.md
     export.md
     migration.md
 ```
 
-`storage.md` describes the statics (what commits vs. what stays machine-local, the
-chat/comments record schemas, per-file-kind version counters); the flows describe the
-dynamics on top of it.
+| Document | Required contract |
+|---|---|
+| `overview.md` | actors, trust gate, local operating envelope, unique turn workspace, recovery before Workspace |
+| `modules.md` | Kernel authority, runtime/Gate/host ownership, Reatom boundaries, mutex and Git concurrency |
+| `storage.md` | portable/local split, slug and UUIDv7 identities, JSONL, transactions, lease, trust, caches, backups, exclusions |
+| `launch.md` | lease, trust subject, schema validation, transaction recovery, first-project creation |
+| `generation-turn.md` | fenced attempts, confirmed exit, immutable candidate, Gate, CAS, durable `TurnTransaction` |
+| `versions.md` | canonical Current source, lazy first-parent Git history, explicit durable Restore, three commit scopes |
+| `chats.md` | lazy UUIDv7 chat logs, captured target chat, scoped session checkpoint |
+| `interactive-prototype.md` | Reatom-first page model through `PreviewSession`; historical view is read-only |
+| `pins-and-selection.md` | frame-sequenced geometry and append-only pin-state events committed by Kernel |
+| `export.md` | canonical Current sources, bounded render pool/cache, complete-generation publication transaction |
+| `migration.md` | independent format chains, verified external backup, transactional roll-forward |
 
-The seven flows, with diagram type per the conventions (sequence = who-calls-whom,
-state = lifecycle, flowchart = routes/data) and the failure branches each walkthrough
-must cover:
+## 5. Consistency rules
 
-| Flow | Diagram | Failure branches in the walkthrough |
-|------|---------|-------------------------------------|
-| **launch** | flowchart: start → find `.termcraft/` → Home / Workspace / migration offer | agent missing (`r` re-check); second instance (lock with PID); corrupt version file → open at last valid; terminal too small |
-| **generation-turn** | sequence: message + selection + pins → context snapshot → agent task → status stream → ops JSON → validation → atomic apply (absorbs `generation-sequence.mmd`) | retry loop ≤3 → honest error; read rounds ≤3; unseen-head guard; cancel via `Esc`; stream silence 120 s; session resume fails → fresh session with chat excerpt |
-| **versions** | state: head ↔ browsing (read-only), rollback as copy-forward | send from non-head → auto-rollback with system record; switching/rollback locked during a turn |
-| **interactive-prototype** | flowchart: three mutation sources → one variable map → render pass (absorbs `reactive-system.mmd`), plus focus traversal | `goTo:` to a removed page → no-op with notice; sugar vs. custom `visibleWhen` → warning; variable hygiene → lint fed to the agent |
-| **pins-and-selection** | state: pin lifecycle open → sent → resolved (+ reopen, + orphaned when the element disappears) | orphans never deleted, never sent; selection chip included only if the id resolves at send time |
-| **export** | flowchart: `Ctrl+E` → refusal checks → deterministic snapshot render at `minSize` → write, overwrite in place | refused during a turn and at zero pages (status-bar hints) |
-| **migration** | flowchart: read file → step chain N→N+1 → current model; bulk path with backup | file newer than the binary → hard error naming the file; downgrades unsupported; folder under git → warn instead of backup |
+The following phrases are never used as current architecture:
 
-## 5. Template and style
+- private `vN.tsx` versions, `cN` chat ids, or portable `config.toml`;
+- shared/reused writable staging;
+- simultaneous multi-file filesystem atomicity or in-memory-only recovery;
+- UI-authoritative turn locks, UI pin persistence, or direct UI-to-host stdio;
+- direct saved-page imports from Reatom, React, OpenTUI, or `@termcraft/kit`;
+- Git as a migration backup or PID reuse as lock ownership proof;
+- unbounded history/chat/frame/export processing.
 
-Every doc (except `README.md`) follows the plugin conventions exactly: one
-plain-English title paragraph → Mermaid (role-named nodes, ≤ ~20 per diagram, special
-characters quoted, every block closed) → `## Walkthrough` with numbered steps and
-failure branches → `## Source anchors`.
+Architecture changes are audited in four passes: durability/concurrency,
+storage/identity, Kernel/host/runtime ownership, and projections/scale. A change is
+complete only when the architecture summaries, their source anchors, and the
+governing specs agree.
 
-`README.md` carries a status note: these docs describe the v1.0 target architecture
-ahead of the code; anchors point at the spec and move to source files as
-implementation proceeds.
+## 6. Definition of done
 
-## 6. Accompanying changes
-
-- Root `architecture/` folder removed after its three `.mmd` files are absorbed.
-- Parent-spec links in §4, §5.5, §6.3 repointed to the new docs.
-- The maintenance rule installed into the project's `CLAUDE.md` (generate-skill
-  step 5): a change that alters behavior or structure covered by
-  `docs/architecture/` must update the affected docs before finishing.
-
-## 7. Definition of done
-
-- All eleven files exist and follow the template.
-- Every Mermaid diagram render-checked (mermaid preview) — no syntax failures.
-- architecture-audit run reports zero drift: diagrams consistent with walkthroughs,
-  all anchor paths valid.
-- No stale references: repo-wide search finds no links to the removed
-  `architecture/*.mmd` paths.
+- Every listed file exists, follows the repository's Mermaid/walkthrough/source
+  anchor style where applicable, and links only to existing sources.
+- `README.md` gives the current reading order and normative precedence.
+- Repo-wide scans find no current use of the obsolete contracts in §5.
+- Transaction recovery, Safe filesystem checks, command guards, host framing, and
+  scale limits appear in both the detailed design and the relevant architecture
+  summary without competing ownership claims.

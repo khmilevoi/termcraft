@@ -10,20 +10,29 @@ isolated preview. Written for a reader who does not read the source language.
 > v1 adds Git-backed history, explicit Restore, and user-confirmed scoped commits.
 > The approved continuation
 > (`docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md`) governs
-> storage, chat change records, canonical page sources, history, Restore, Git
-> commit controls, and export-source decisions wherever it supersedes the
-> original design spec or a flow document. Other source
-> anchors point at `docs/superpowers/specs/2026-07-13-termcraft-design.md` and the
-> UI reference files under `design/`; they move to real source files as
+> canonical page identity and Current rows, history discovery/browsing, Restore
+> validation, Git commit controls, and export-source selection wherever it supersedes the
+> original design spec or a flow document. Every document also anchors the relevant
+> production-hardening detailed designs, the master design, and any UI reference
+> files under `design/`; anchors move to real source files as
 > implementation proceeds (see the architecture-update skill).
+>
+> The approved production-hardening register
+> (`docs/superpowers/specs/2026-07-16-production-hardening-decisions-design.md`)
+> and its linked detailed designs govern crash recovery, per-turn staging,
+> Kernel command authority, host supervision, storage identity, the
+> `@termcraft/runtime` page API, local projections, and bounded operation.
+> Its production-storage detailed design exclusively owns the portable/local
+> layout, JSONL schemas, session checkpoints, trust/lease identity, migration
+> backups, and Git exclusions.
 
 ## Reading order
 
 1. [overview.md](overview.md) — system context: the designer, the agent CLIs,
    the project folder, and the export consumer.
-2. [modules.md](modules.md) — the eight components, their boundaries, and the
-   runtime loop; the Kernel boundary that becomes the future IPC, and the
-   design-host subprocess where agent-written code runs.
+2. [modules.md](modules.md) — the seven components, their boundaries, and the
+   runtime loop; the transport-neutral Kernel boundary, runtime facade, and
+   supervised design-host subprocess where agent-written code runs.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
 
@@ -34,11 +43,9 @@ One document per user-visible process:
 - [flows/launch.md](flows/launch.md) — from `termcraft` in a directory to the
   Workspace: lock check, project discovery, the workspace-trust gate, first-run
   generation, and the optional v1-only first-run wizard.
-- [flows/generation-turn.md](flows/generation-turn.md) — one chat turn: the
-  staging directory and validation retries; agent/Gate rejection or interruption
-  before apply changes no canonical source, each persisted file is replaced through
-  a temporary file plus rename, and a crash during multi-file apply can leave a partial
-  turn until a separate Turn Transaction design exists.
+- [flows/generation-turn.md](flows/generation-turn.md) — one chat turn: a unique
+  fenced workspace, immutable candidate, Gate retries, compare-and-swap against
+  commit-hook drift, and recoverable roll-forward finalization.
 - [flows/chats.md](flows/chats.md) — several conversations over one project: the
   slash menu, creating and switching chats, per-chat agent sessions, and the v1
   `/commit-page`, `/commit-infra`, and `/commit-all` triggers.
@@ -52,5 +59,5 @@ One document per user-visible process:
   and pin comments: anchoring, lifecycle, unresolved pins.
 - [flows/export.md](flows/export.md) — the export package: deterministic
   multi-size snapshots, resolved layout trees, plus exact design files.
-- [flows/migration.md](flows/migration.md) — upgrading stored data: lazy and
-  bulk migration, backups, the too-new-file error.
+- [flows/migration.md](flows/migration.md) — upgrading stored data: mandatory
+  verified external backup, recoverable migration, and the too-new-file error.

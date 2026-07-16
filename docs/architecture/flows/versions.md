@@ -1,41 +1,118 @@
-termcraft has no private page-version system. The MVP exposes only each page's canonical source and has no history UI; v1 adds optional, read-only Git browsing, explicit Restore, and user-confirmed scoped commits without changing branches or managing repository history automatically.
+termcraft has no private page-version system. The MVP exposes one canonical
+source per page and no history UI; v1 adds optional read-only Git browsing,
+explicit recoverable Restore, and user-confirmed scoped commits without branch
+or automatic-history management.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Current
-    Current --> Current: Current design or Current design · uncommitted
-    Current --> Historical: select a first-parent commit
-    Historical --> Current: leave history, reload exact source from disk
+    Current --> Historical: select first-parent commit
+    Historical --> Current: leave history; reopen exact source from disk
     Historical --> RestoreChecks: choose Restore
     RestoreChecks --> Historical: staged, stale, missing, or Gate failure
-    RestoreChecks --> Current: source and target-chat record succeed
-    RestoreChecks --> RecordPending: source replaced; target-chat record append fails
-    RecordPending --> Current: Retry record uses targetChatId and finds or appends restoreActionId
-    RecordPending --> RecordPending: Retry record target-chat append fails
+    RestoreChecks --> Prepared: persist Restore plan
+    Prepared --> Committing: durable commit-intent
+    Committing --> Current: roll source + target-chat record forward
+    Committing --> RecoveryConflict: unexpected target hash
+    RecoveryConflict --> Current: explicit recovery resolves conflict
     note right of Historical
         Read-only: Send, Tweaks, pin creation,
-        pin reopening, and pin-status changes disabled
+        reopening, and status changes disabled.
     end note
 ```
 
 ## Walkthrough
 
-1. Product boundary: the MVP has no history UI, numbered source files, version hotkeys, history popup, or rollback action. Every page has one canonical `.termcraft/pages/<slug>/page.tsx`. Git is not required for MVP or v1 design, generation, preview, pins, chats, migration, or export; when Git is unavailable or the project is outside a repository, only history and commit controls are unavailable and explain why.
-2. History discovery in v1: opening history for the active page asks the `GitHistory` port for repository/page state and a path-limited walk from the current `HEAD` through its first-parent chain. Only commits whose trees changed that page's `page.tsx` appear. A merge is one mainline entry; commits reachable only through another parent do not appear, other refs are never searched, and directory-rename detection is not attempted. Each row keeps the full object id for commands and displays a bounded short hash, author, committer timestamp, and subject. A shallow repository labels its reachable local entries `partial history`; termcraft never fetches missing history.
-3. Current rows use explicit precedence. An unborn repository shows only **Current design · uncommitted**, with no commit rows. An untracked path with no first-parent ancestry also shows only that row. An untracked or recreated path with first-parent ancestry shows **Current design · uncommitted** plus the reachable historical entries. When tracked content equals the page source at `HEAD`, the `HEAD` row is **Current design** rather than a duplicate; other tracked changes put **Current design · uncommitted** above reachable commits.
-4. Historical preview: selecting a commit reads that commit's page source into a temporary, read-only snapshot outside `.termcraft/` and respawns the design host on it. No checkout occurs; the canonical file, branch, `HEAD`, and index are unchanged. The UI shows `<short-hash> · read-only`, disables Send, Tweaks, pin creation, pin reopening, and pin-status changes, and keeps the current selection or existing current-pin overlay only where its element id resolves. Historical overlays cannot mutate pin lifecycle state. Leaving history kills the historical host and respawns it on the exact Current design source from disk, where those actions are re-enabled.
-5. Historical errors: a missing or corrupt Git object names the commit and path and changes nothing. A historical source that no longer passes the current Gate or host remains selectable as an error state, but Restore is disabled for it. Browsing itself performs no project write.
-6. Restore checks: Restore is explicit and unavailable during an agent turn. Before showing confirmation, the Kernel records the canonical source hash, checks the selected page's index state, and confirms the historical object is readable. A staged page source blocks Restore without replacing or unstaging it. Unstaged changes are allowed only after a warning that names the exact canonical path and says those current page-design changes will be lost. At confirmation, the Kernel captures the current chat as `targetChatId`, stores it in the Restore action plan, and creates a unique `restoreActionId` bound to that `targetChatId`, the page, full commit id, and confirmed pre-Restore source hash.
-7. Restore freshness, apply, and partial failure: under the project-write mutex, the initial Restore revalidates the pre-Restore source hash and index state, verifies the same full selected object id is readable, and passes that exact full-commit snapshot through the current Gate. This freshness check applies only before replacing canonical `page.tsx`; a failed check releases the mutex without a project write. The Project store replaces only that source once for the action, through a temporary file plus rename, and the Kernel then reads and writes the captured target chat file identified by `targetChatId`, appending one Restore system record containing at least `restoreActionId`, page, and full commit id; other chats remain untouched. The containing chat file persists the record's chat identity, so the record does not add a redundant `targetChatId` field. These writes are serialized in that order under the mutex but are not one crash-atomic transaction. If source replacement succeeds but chat append fails, the action enters explicit `record-pending`, retains `targetChatId` in memory, the restored source stays active, and a persistence error says Restore was not fully recorded. Append-only **Retry record** never repeats Gate or source replacement and does not re-run the pre-Restore source-hash freshness check. Under the same mutex it checks exactly the captured target chat for `restoreActionId`; an existing record completes the action, otherwise it appends exactly one record to that chat, making an ambiguous acknowledgement idempotent. Chat creation and switching need not be globally blocked by `record-pending`; changing the UI active chat changes neither the action's target nor its exactly-one semantics. Subsequent page drift does not invalidate the audit record for the already-applied action; a new Restore requires a new confirmation and `restoreActionId`. In v1 `record-pending` exists only in memory: after a process crash or restart the restored source remains on disk, no Retry is available and no automatic audit-record recovery is attempted, the UI refreshes from disk and Git status, and a missing record may require manual or operator diagnosis. The Kernel releases the mutex and refreshes source, host, chat, and Git status. Branch, `HEAD`, index, other pages, pins, other chats, and application files remain untouched. The result is `Current design · uncommitted` unless it happens to equal `HEAD`; Restore creates neither a commit nor a hidden backup.
-8. Commit commands: the v1 Workspace slash menu contains `/commit-page`, `/commit-infra`, and `/commit-all`; there is no persistent commit button, split-button, dropdown arrow, or mouse twin. `/commit-page` includes only `.termcraft/pages/<active-slug>/page.tsx` and commits the latest source from disk even when an older copy was staged. `/commit-infra` includes `project.toml`, `config.toml`, generated `.gitignore`, and future portable project-level schema/metadata files. `/commit-all` includes every non-ignored added, modified, or deleted path under `.termcraft/`, including pages, chats, pins, and export artifacts. Locks, backups, `*.local.*`, ignored paths, and every path outside `.termcraft/` are excluded.
-9. Scope status: each `/commit-*` slash-menu row has its own dot and changed-file count when its scope is dirty. Clean scopes have no dot and are disabled. Row text and accessible labels name each dirty scope so color is not the only signal; a separately committed new page can therefore leave `/commit-infra` or `/commit-all` visibly dirty the next time the menu opens.
-10. Commit confirmation: every command opens the same dialog with an editable message and the exact added, modified, and deleted file preview. The page template is `design(<slug>): update <title>`; infrastructure and whole-project templates are scope-specific and never copy chat or prompt text. An empty message disables Commit. The plan records expected `HEAD`, selected paths, path states, and content hashes; execution revalidates all of them and requires a fresh preview and confirmation if anything changed. Absent hook side effects, a successful current-page commit leaves the active source clean relative to the new `HEAD`, and the adapter's own operations preserve unrelated staged and unstaged state.
-11. Git behavior and refresh: termcraft invokes Git only through the adapter, honors hooks and signing, passes the confirmed message without opening an editor, and never bypasses verification or signing. Hooks remain free to modify the active source or other files; termcraft neither suppresses nor rewrites their effects. A detached `HEAD` allows history and Restore but adds a second warning and confirmation before commit. An active merge, rebase, cherry-pick, or revert disables commit controls. Missing identity, signing, hook, timeout, output-limit, and index-lock failures surface bounded Git output and an appropriate hint or Retry action. Status refreshes after every user-initiated Git operation or commit attempt and after Kernel apply, exposing hook-induced dirty state and every other changed file; inspection commands used by refresh do not recursively trigger another refresh.
-12. Concurrency: while an agent turn runs, ordinary message sending stays disabled but `/` on an otherwise empty composer still opens local command mode. The three `/commit-*` commands remain usable according to scope state; other turn-locked command rows stay dimmed. Scoped commit execution contends through the project-write mutex only with the short final generation apply, not network streaming, validation, or Gate. A commit that wins the mutex before apply records the current on-disk design, and the later apply becomes a new uncommitted change. Restore stays locked for the whole turn; outside agent turns, its ordered source-and-record writes use the same project-write mutex.
-13. Repository limits: termcraft does not initialize repositories, create or switch refs, stash, check out, fetch, pull, push, or correlate commits with prompts or chats. History begins where the immutable page path was introduced. Deleting and later recreating a slug resurrects that page identity and its reachable Git history.
+1. **Product boundary.** The MVP has no numbered sources, version hotkeys,
+   history popup, or rollback. Each page has one canonical
+   `.termcraft/pages/<slug>/page.tsx`. Git remains optional for generation,
+   preview, pins, chats, migration, and export.
+2. **History discovery.** `GitHistory` walks the active page path from current
+   `HEAD` through first parents. Only commits whose trees changed `page.tsx`
+   appear. A merge is one mainline entry; other refs and directory-rename
+   detection are excluded. Commands retain full object ids; UI bounds and escapes
+   displayed hash, author, committer time, and subject. Shallow history is marked
+   partial and never fetched automatically.
+3. **Current-row precedence.** An unborn repository or untracked path without
+   ancestry shows only **Current design · uncommitted**. An untracked/recreated
+   path with ancestry also shows reachable entries. Tracked content equal to the
+   `HEAD` tree makes that row **Current design**; other content places a separate
+   uncommitted row above history.
+4. **Historical preview.** Selecting a commit reads exact source bytes into a
+   temporary read-only snapshot outside `.termcraft/` and opens a supervised
+   historical `PreviewSession`. No checkout or project/Git write occurs. Existing
+   selection and pin overlays render only where ids resolve; no pin mutation,
+   Send, or Tweaks are enabled. Leaving history reopens exact Current design bytes
+   from disk.
+5. **Compatibility errors.** A missing/corrupt Git object names commit and path.
+   A historical source with forbidden imports, unsupported `kitApiVersion`, or a
+   Gate/host failure remains a read-only error row but cannot be restored.
+6. **Restore planning.** Restore is unavailable during a turn. Planning captures
+   canonical source hash, selected full object/blob hash, and index state, and mints
+   only `restorePlanId`. A staged source blocks Restore; an unstaged source requires
+   an exact-path overwrite warning. When the Kernel accepts `restore.confirm`, it
+   captures the then-active UUIDv7 chat as `targetChatId` and mints one UUIDv7
+   `restoreActionId`.
+7. **Freshness and Gate.** The immutable blob passes the current
+   `@termcraft/runtime` Gate and matching host before the write mutex is acquired.
+   Under the project-write mutex, Restore revalidates source hash, index, full
+   object/blob hash, and the hash-bound Gate attestation. Any mismatch releases the
+   mutex without commit intent or project write.
+8. **Durable finalization.** `RestoreTransaction` prepares the source payload and
+   exactly-one target-chat system record. The record contains `recordId`,
+   `restoreActionId`, page slug, and full source commit; its containing chat is the
+   persisted chat identity. After durable commit intent, source replacement and
+   append roll forward idempotently. Replay checks only the captured target chat
+   for `restoreActionId`, never repeats Gate/source replacement, and is unaffected
+   by later active-chat or page changes. Startup completes pending intent before
+   Workspace. Unexpected target hashes enter recovery conflict and are not
+   overwritten.
+9. **Restore result.** Branch, `HEAD`, index, other pages, pins, other chats, and
+   application files remain untouched. The canonical source becomes Current
+   design and is uncommitted unless equal to `HEAD`. Restore creates neither a Git
+   commit nor an overwrite backup; the user's confirmation remains the boundary
+   for intentionally discarded unstaged page bytes.
+10. **Commit commands.** `/commit-page` selects only the active canonical
+    `page.tsx`. `/commit-infra` selects portable `project.toml`, generated
+    `.gitignore`, and future explicitly portable project-level files.
+    `/commit-all` selects every eligible non-ignored portable or derived path under
+    `.termcraft/`, including pages, chats, pin logs, and export. Local workspace,
+    sessions, `transactions.local/`, caches, logs, lock metadata, and backups are
+    hard-excluded. There is no persistent button or mouse twin.
+11. **Status and confirmation.** Each `/commit-*` row owns its dirty indicator,
+    changed-file count, accessible scope text, and clean-scope disabled state.
+    Every command opens the same editable-message/exact-path confirmation. The
+    plan records expected `HEAD`, selected paths/states, and hashes; execution
+    revalidates them and requires a new confirmation when stale.
+12. **Git behavior.** `GitCommitter` uses argument arrays, bounded output/time,
+    honors hooks and signing, passes the confirmed message without an editor, and
+    preserves unrelated staged/unstaged state absent hook side effects. Detached
+    `HEAD` adds explicit warning; active merge/rebase/cherry-pick/revert disables
+    commit. Status always refreshes after attempts because hooks may mutate files.
+13. **Turn concurrency.** While an agent runs, local slash-command mode keeps the
+    three commit commands available by Kernel capability while ordinary Send and
+    other project actions stay locked. Actual commit and final apply serialize
+    through the project-write mutex. Git may commit current on-disk design before
+    apply; the later result becomes uncommitted. If hooks modify any turn
+    precondition, final apply's compare-and-swap fails typed stale/source-changed
+    and never overwrites the hook result.
+14. **Repository limits.** termcraft does not initialize repositories, create or
+    switch refs, stash, fetch, pull, push, or correlate commits with prompts/chats.
+    Deleting and recreating a slug resurrects the same page path identity and
+    reachable history.
 
 ## Source anchors
 
-- `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — governing MVP/v1 split, Current design terminology, first-parent browsing, Restore checks, scoped commits, availability states, and acceptance criteria
-- `docs/architecture/modules.md` — Git adapter boundary, Kernel ownership, historical host snapshots, and project-write mutex coordination
-- `docs/architecture/storage.md` — canonical source path, commit scopes and exclusions, Restore record schema, and optional-Git storage behavior
+- `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` —
+  governing history rows, first-parent semantics, Git behavior, and commit commands
+- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` —
+  recoverable Restore transaction and commit-during-turn preconditions
+- `docs/superpowers/specs/2026-07-16-production-storage-identity-design.md` —
+  UUID records, local exclusions, and portable commit scopes
+- `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` —
+  historical compatibility and current Gate requirements
+- `design/05-version-history.dc.html` — version history popup states
+- `design/09-version-browse.dc.html` — Browse mode presentation
+- `design/25-git-commit-controls.dc.html` — commit controls and scoped commits
+- `design/26-restore.dc.html` — Restore confirmation flow
+- `design/27-git-availability.dc.html` — Git availability and degraded states

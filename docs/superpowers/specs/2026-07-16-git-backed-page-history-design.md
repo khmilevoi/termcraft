@@ -3,6 +3,11 @@
 Date: 2026-07-16
 Status: approved design
 
+Production hardening: [`2026-07-16-production-hardening-decisions-design.md`](2026-07-16-production-hardening-decisions-design.md)
+and its linked detailed designs provide the normative recovery, storage split, and
+cross-file mutation mechanics now integrated below; this document remains the owner
+of Git-history and explicit-commit product semantics.
+
 ## 1. Purpose
 
 Remove termcraft's private page-version system. The MVP stores one canonical
@@ -51,13 +56,25 @@ The relevant project layout becomes:
 ```text
 .termcraft/
   project.toml
-  config.toml
+  workspace.local.toml
+  transactions.local/
+  cache/
+  diagnostics/
+  logs/operational.jsonl
+  lock
   chats/
   pages/
     <slug>/
       page.tsx
       comments.jsonl
 ```
+
+`project.toml` is portable and contains exactly format version, project identity,
+name, creation time, target stack, and ordered page slugs. Active page/chat, preview state, and
+backend/model/effort and scoped session checkpoints live in
+`workspace.local.toml`. Transactions, caches, diagnostics, logs, leases, and
+backups are machine-local
+and hard-excluded from all commit scopes.
 
 `page.tsx` is the only path used to select commits for page history.
 `comments.jsonl` may still be committed to Git, but a commit changing only
@@ -86,13 +103,14 @@ not short hashes or list positions, are used by commands.
 
 ## 4. Component boundary
 
-The Git adapter is termcraft's eighth top-level component. It is the only
-module that invokes the user's installed Git CLI; no other component shells
-out to Git or implements repository operations itself.
+The Git adapter is an internal Project-store adapter behind Kernel ports, not an
+eighth top-level component or workspace package. It is the only implementation
+that invokes the user's installed Git CLI; no other component shells out to Git or
+implements repository operations itself.
 
 The Kernel accesses Git through `GitHistory` and `GitCommitter` ports. One
 adapter drives the user's installed Git CLI for both. UI code, the Project
-store, and the design host never invoke Git directly.
+store's non-Git storage core, and the design host never invoke Git directly.
 
 Conceptually the port provides:
 
@@ -100,7 +118,7 @@ Conceptually the port provides:
 interface GitHistory {
   inspectProject(projectPath: string): Promise<GitProjectState>
   inspectPage(sourcePath: string): Promise<PageGitState>
-  listPageCommits(sourcePath: string): AsyncIterable<PageCommit>
+  listPageCommits(request: PageHistoryRequest): Promise<PageHistoryPage>
   readPageSource(commitId: string, sourcePath: string): Promise<Uint8Array>
   inspectIndex(sourcePath: string): Promise<PageIndexState>
 }
@@ -115,6 +133,10 @@ interface GitCommitter {
   commit(plan: CommitPlan, message: string): Promise<CommitResult>
 }
 ```
+
+`PageHistoryRequest` and `PageHistoryPage` are the bounded cursor/generation types
+defined by the projections and scale design §8; the default page is 50 entries and
+the hard maximum is 200. No Git port exposes an unbounded commit iterable.
 
 The adapter executes argument arrays without shell interpolation, applies a
 bounded timeout, captures bounded stdout and stderr, and converts failures to
@@ -157,9 +179,12 @@ An empty diff produces an empty `changedPages` list. This record says what the
 turn changed; it is not a version index and is never reconciled with later Git
 commits.
 
-Cross-file crash consistency for a turn that changes multiple pages, the
-manifest, chat, and pins is intentionally not solved by page history. It is a
-separate Turn Transaction design item.
+Cross-file crash consistency is owned by the production-hardening transaction
+design rather than page history. Successful apply prepares old/new hashes and
+payloads for canonical pages, portable manifest changes, local active-page effect,
+agent record, and pin events; after durable commit intent it rolls all operations
+forward idempotently. Final apply compare-and-swaps send-time preconditions under
+the project-write mutex so `/commit-*` hook side effects cannot be overwritten.
 
 A broken canonical `page.tsx` is never replaced automatically at launch. The
 Workspace still opens, with the preview region showing the Gate or host error,
@@ -205,70 +230,38 @@ individual feature-branch commits are not separate entries in this view.
 
 Restore is an explicit action and is unavailable during an agent turn.
 
-Before presenting the final confirmation, the Kernel records the current source
-hash and checks the selected page's index state. At confirmation, the Kernel
-captures the current chat as `targetChatId`, stores it in the Restore action
-plan, and creates a unique `restoreActionId` bound to that `targetChatId`, the
-selected page, the full source commit id, and the confirmed pre-Restore source
-hash.
+Planning records the canonical source hash, index state, selected full object and
+blob hash, and mints only `restorePlanId`. A staged source blocks Restore. Unstaged
+changes require a warning naming the exact canonical path and the bytes that
+confirmation allows termcraft to replace. When the Kernel accepts
+`restore.confirm`, it captures the then-active UUIDv7 chat as `targetChatId` and
+mints one UUIDv7 `restoreActionId` bound to that chat, page slug, full source commit
+id, and source hash.
 
-The operation follows these rules:
+The immutable selected blob passes the current `@termcraft/runtime` Gate and matching
+host before the write mutex is acquired. Under the project-write mutex, the initial
+path revalidates source hash, index, full object/blob hash, and the hash-bound Gate
+attestation. Any stale, missing, incompatible, or invalid input releases the mutex
+without commit intent or project write.
 
-1. If the page source has staged changes, Restore is blocked. termcraft neither
-   replaces nor unstages the user's index entry.
-2. If the current source has unstaged changes, the confirmation states that
-   those page-design changes will be lost.
-3. If the source changed after the confirmation was prepared, that confirmation
-   expires and a new one is required.
-4. After confirmation, the Kernel acquires the project-write mutex and, before
-   replacing canonical `page.tsx`, revalidates the confirmed pre-Restore source
-   hash and index state, verifies that the same full commit object can still be
-   read, and runs that exact full-commit snapshot through the current Gate. This
-   original source-hash freshness check applies only on the initial Restore path
-   before source replacement. Any failed validation releases the mutex without
-   a project write. A source incompatible with the current kit remains
-   browsable as an error state but cannot be restored through termcraft.
-5. The Project store replaces the selected canonical `page.tsx` once for this
-   `restoreActionId`, via temporary file plus rename.
-6. The Kernel then reads and writes the captured target chat file identified by
-   the action plan's `targetChatId` and appends one system record containing at
-   least `restoreActionId`, page, and full source commit id, for example
-   `restored main from a1b2c3d`. Other chats remain untouched. The containing
-   chat file is the record's persisted chat identity, so the record does not add
-   a redundant `targetChatId` field. This records the explicit user action; it
-   does not associate a future commit with a prompt.
-7. The page replacement and captured-target-chat append are serialized in that
-   order under the project-write mutex, but they are not one crash-atomic
-   transaction.
-   The Kernel then releases the mutex and performs the mandatory source, host,
-   chat, and Git-status refresh.
-8. `HEAD`, branch, index, other pages, pins, other chats, and application source
-   files remain untouched.
-9. The restored source becomes `Current design · uncommitted` unless it happens
-   to equal `HEAD`.
+`RestoreTransaction` then prepares two idempotent operations: replace exactly the
+selected canonical `page.tsx`, and append exactly one system record to the captured
+target chat. The record has its own `recordId` plus `restoreActionId`, `pageSlug`, and full
+source commit; the containing chat file remains its chat identity. The durable plan
+and payloads are stored under hard-excluded `transactions.local/`.
 
-If replacing `page.tsx` succeeds but appending the captured-target-chat record
-fails, the action enters explicit `record-pending` state, retains `targetChatId`
-in memory, and leaves the restored page as the active current source. termcraft
-surfaces a persistence error and does not report that Restore was fully recorded.
-**Retry record** is append-only: under the same project-write mutex it reads and
-checks exactly the captured target chat file for `restoreActionId` and treats
-the record as complete if it is already present; otherwise it appends exactly
-one record to that file. It never repeats Gate or source replacement and does
-not re-run the pre-Restore source-hash freshness check, making an ambiguous
-append acknowledgement idempotent. Chat creation and switching need not be
-globally blocked by `record-pending`: changing the UI active chat changes
-neither the action's target nor its exactly-one semantics.
+After durable commit intent, the operation is roll-forward-only. Replay checks only
+the captured target chat for `restoreActionId`; it never repeats Gate/source
+replacement or the pre-Restore hash check. Ambiguous append acknowledgement,
+active-chat changes, later page drift, and process restart therefore still produce
+exactly one audit record in the original chat. Startup completes pending intent
+before Workspace. An unexpected target hash enters recovery conflict and is never
+overwritten; a new Restore requires a new confirmation and action id.
 
-Subsequent page drift does not invalidate this factual audit record for the
-already-applied Restore: the record identifies the original `restoreActionId`,
-page, and full source commit. A new Restore always requires a new confirmation
-and `restoreActionId`. In v1, `record-pending` is only an in-memory recovery
-affordance. After a process crash or restart the restored source remains on disk,
-but the pending action plan is gone, so no Retry is available unless a future
-design persists pending actions. termcraft attempts no automatic audit-record
-recovery; the UI refreshes from disk and Git status, and the missing record may
-require manual or operator diagnosis.
+`HEAD`, branch, index, other pages, pins, other chats, and application files remain
+untouched. The result is `Current design · uncommitted` unless equal to `HEAD`.
+termcraft creates no hidden overwrite backup: the exact warning and confirmation
+remain the recovery boundary for intentionally discarded unstaged current bytes.
 
 termcraft creates no hidden backup. The warning and explicit confirmation are
 the recovery boundary for unstaged current changes.
@@ -279,8 +272,8 @@ The Workspace composer slash menu adds three argument-less commands:
 
 - `/commit-page` — commit only
   `.termcraft/pages/<active-slug>/page.tsx`;
-- `/commit-infra` — commit `project.toml`, `config.toml`, the generated
-  `.gitignore`, and future portable project-level schema or metadata files;
+- `/commit-infra` — commit portable `project.toml`, the generated `.gitignore`,
+  and future explicitly portable project-level schema or metadata files;
 - `/commit-all` — commit every non-ignored changed, added, or deleted path under
   `.termcraft/`, including pages, chats, pins, and export artifacts.
 
@@ -294,8 +287,9 @@ according to their own policy; termcraft neither suppresses nor rewrites those
 effects. The mandatory post-attempt status refresh exposes any hook-induced
 dirty state and every other changed file.
 
-Lock files, backups, `*.local.*`, and every path outside `.termcraft/` are
-excluded. A new page may be committed separately from its infrastructure
+Workspace/session files, transaction journals, caches, diagnostics, operations
+logs, lock metadata, backups, ignored paths, and every path outside `.termcraft/`
+are hard-excluded. A new page may be committed separately from its infrastructure
 change; the remaining command-row status makes that incomplete project commit
 visible until the user runs `/commit-infra` or `/commit-all`.
 
@@ -401,32 +395,29 @@ Tests create temporary real repositories and cover:
 - Restore is blocked for a staged source.
 - A source change after confirmation forces reconfirmation.
 - Gate failure leaves the current source untouched.
-- A Restore system-record schema/decoder fixture requires `restoreActionId`,
-  `page`, and full `sourceCommit`.
+- A Restore system-record schema/decoder fixture requires `recordId`,
+  `restoreActionId`, `pageSlug`, and full `sourceCommit`.
 - The fixture rejects a Restore record missing `restoreActionId`.
 - Successful Restore changes only the selected `page.tsx` and appends one
-  restore system record containing `restoreActionId`, page, and full source
+  restore system record containing `recordId`, `restoreActionId`, `pageSlug`, and full source
   commit id to the target chat captured at confirmation; other chats remain
   untouched, and the containing chat file persists the record's chat identity.
-- If the Restore chat append fails after page replacement, the restored page
-  remains active in `record-pending`, the action retains its captured
-  `targetChatId` in memory, the persistence error does not claim a fully
-  recorded Restore, and append-only **Retry record** neither repeats Gate or
-  source replacement nor revalidates the pre-Restore source hash.
-- **Retry record** checks only the captured target chat for `restoreActionId`, so
-  an ambiguous prior append acknowledgement still produces exactly one audit
-  record even if the UI active chat changes.
-- A Kernel contract scenario starts with an ambiguous append acknowledgement in
-  chat A, switches the UI active chat to B, and retries with the same
-  `restoreActionId` and captured `targetChatId=A`. **Retry record** checks and,
-  if needed, appends only chat A, leaving exactly one Restore record in A and
-  none in B, without repeating Gate or source replacement.
+- Fault injection after source replacement and during/after chat append proves
+  durable startup replay retains captured `targetChatId`, never repeats Gate or
+  source replacement, and produces exactly one record for `restoreActionId`.
+- An ambiguous append in chat A followed by active-chat switch to B and process
+  restart recovers only chat A, leaving exactly one Restore record in A and none
+  in B.
+- An unexpected source or target-chat hash during recovery enters conflict and
+  overwrites neither file.
 - `HEAD`, branch, and index are byte-for-byte or object-for-object unchanged by
   browsing and Restore.
 - In the absence of explicit hook side effects, successful and failed scoped
   commits preserve staged and unstaged state outside their scope; hook changes
   are surfaced by the post-command status refresh.
 - A changed `HEAD` or scope after preview forces replanning and reconfirmation.
+- A `/commit-*` hook that changes a turn precondition causes final apply's
+  compare-and-swap to fail without overwriting the hook result.
 - Commit, Kernel apply, and Restore's ordered page-and-chat writes serialize
   through the project-write mutex while the agent turn itself remains
   unblocked.
@@ -466,12 +457,16 @@ v1:
 - browsing never changes repository state;
 - Restore safely replaces only the page's canonical design source after Gate,
   index, freshness, and confirmation checks;
+- Restore source replacement and captured-target-chat audit append recover
+  idempotently across process restart without changing Git state;
 - `/commit-page`, `/commit-infra`, and `/commit-all` explicitly commit their
   respective scopes while preserving unrelated repository state and opening the
   same confirmation dialog;
 - during an agent turn, commit execution contends only with final apply, not
   network streaming, validation, or Gate; outside agent turns, Restore's ordered
   source and record writes use the same project-write mutex;
+- hook-induced `.termcraft/` drift is detected by final apply before commit intent
+  and is never overwritten;
 - termcraft changes Git history only after an explicit, scope-specific user
   confirmation.
 
@@ -487,4 +482,3 @@ v1:
 - arbitrary commit checkout, branch switching, stashing, or index management
   outside the selected commit scope;
 - version comparison and visual diffs;
-- cross-file turn transaction and crash recovery.
