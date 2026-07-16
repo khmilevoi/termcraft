@@ -57,13 +57,15 @@ The relevant project layout becomes:
 comments is not a page version.
 
 The live source on disk is named **Current design** in the UI. When its content
-differs from `HEAD`, it carries the **uncommitted** badge. The term "working
-tree" is deliberately absent from the product UI so it is not confused with a
-Git worktree.
+equals the page source at `HEAD`, the `HEAD` commit is the current row rather
+than a duplicate entry. When the content differs from `HEAD`, or the path is
+untracked, a separate **Current design · uncommitted** row appears above the
+commits. The term "working tree" is deliberately absent from the product UI so
+it is not confused with a Git worktree.
 
 A committed history entry is identified by its full object id internally and
-displays its short hash, author, timestamp, and subject. Full ids, not short
-hashes or list positions, are used by commands.
+displays its short hash, author, committer timestamp, and subject. Full ids,
+not short hashes or list positions, are used by commands.
 
 ## 4. Component boundary
 
@@ -119,8 +121,9 @@ separate Turn Transaction design item.
 
 1. The user opens history for the active page.
 2. The Kernel asks `GitHistory` for the page's state and first-parent commits.
-3. The UI places `Current design` first. If it differs from `HEAD`, the row is
-   marked `uncommitted`.
+3. If the source equals `HEAD`, that commit is the `Current design` row. If it
+   differs or is untracked, a separate `Current design · uncommitted` row comes
+   first, followed by the reachable commits when any exist.
 4. Selecting a commit reads `page.tsx` from that commit into a temporary,
    read-only snapshot outside `.termcraft/`.
 5. The Kernel respawns the preview host on the snapshot. The project file,
