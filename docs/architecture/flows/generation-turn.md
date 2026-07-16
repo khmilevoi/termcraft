@@ -22,18 +22,25 @@ sequenceDiagram
     C->>C: reads and edits staging files directly
     C-->>G: run ends
     K->>V: diff staging vs snapshot → validate
-    loop invalid (max 3 retries)
+    loop while invalid and retries remain (max 3 retries)
         K->>G: errors appended to the conversation
         C->>C: fixes staging files
         C-->>G: run ends
         K->>V: re-validate the diff
     end
-    K->>K: acquire project-write mutex for final apply
-    K->>S: replace changed page.tsx sources, update manifest
-    K->>S: append agent record with changedPages and warnings
-    K->>K: release project-write mutex
-    K-->>UI: page and source change events
-    UI->>UI: respawn preview host, mark sent pins resolved
+    alt valid
+        K->>K: acquire project-write mutex for final apply
+        K->>S: replace changed page.tsx sources, update manifest
+        K->>S: append agent record with changedPages and warnings
+        K->>S: persist sent-pin resolution in comments.jsonl
+        K->>K: release project-write mutex
+        K-->>UI: page, source, and pin-state change events
+        UI->>UI: refresh displayed overlays/state, respawn preview host
+    else invalid after retry budget
+        K->>S: append error record to active chat
+        K->>K: clear staging
+        K-->>UI: emit turn failure; no apply
+    end
 ```
 
 ## Walkthrough
@@ -45,10 +52,10 @@ sequenceDiagram
 5. While the turn runs: the backend normalizes its vendor SDK events into the `AgentEvent` stream — `reasoning` chunks, `tool` steps (op + target), `final`, `usage`, `error`; unmapped vendor events are dropped, and any event resets the 120-second silence watchdog. The UI renders these as an ephemeral block in chat, never persisted: a spinner line, tool steps accumulating beneath it (`✓` done, `▸` current), and one to three faint lines holding only the latest reasoning chunk — a ticker, not a log. Gate retries add a Kernel-emitted `✗ … retry N/3` line. When the turn ends the block collapses into the persisted agent record: the final message rendered in markdown-lite (bold, italic, inline code, bullet lists; everything else flattens to plain text) plus one `✓ <page> updated` line per slug in `changedPages`. Typing the next message and switching page tabs are allowed, but sending stays disabled; Restore, export, the agent · model · effort picker, and chat creation and switching are locked, each refusal hinted in the status bar. The v1 commit controls remain usable throughout the turn: only an actual scoped commit and the short final apply serialize through the project-write mutex, never the agent run or Gate retries. The composer's context-usage indicator updates from `usage` events; a backend that reports nothing hides the indicator.
 6. Page management is file management: a new `pages/<slug>.tsx` staging file adds a page and becomes `.termcraft/pages/<slug>/page.tsx` on apply; deleting one unlists the page and removes its canonical source; reordering or switching the active page is a `pages.json` edit; retitling is editing the page's own `meta.title`. Slugs must match the slug mask, avoid Windows device names, and never rename an existing page identity. In a Git repository, deleting a page does not erase its committed path history, and recreating the slug resurrects the same identity.
 7. The Gate, when the run ends, validates the staging diff: manifest-slice checks (parse, slug mask, permutation, active page exists); per changed page the import allowlist (only the kit, React, and OpenTUI), a TypeScript check against the embedded types, the page contract (`meta` as a static literal plus a default-export component), and a smoke render — a disposable design host mounts the page once at its minimum size, surfacing import errors, render crashes, and duplicate ids visible in that render before anything is applied. Lints come back as warnings, not errors: dropped ids that selection or open pins reference, pointable raw elements without ids, timers or randomness outside the export-flag guard, navigation to unlisted pages.
-8. Failure branch: still invalid after the initial attempt plus 3 retries — an honest error is written to chat as a system record, staging is cleared, and no canonical source is changed by the turn.
+8. Failure branch: still invalid after the initial attempt plus 3 retries — the Kernel appends an honest error to the active chat as a system record, clears staging, emits turn failure, and performs no apply; no canonical source is changed by the turn.
 9. Failure branch: cancellation, whether by `Esc` or 120 seconds of stream silence — the SDK run is aborted, a system record is written to chat, staging is cleared, and the canceled turn changes no canonical source.
 10. Failure branch: session resume fails (a stale session, another machine, or a switched backend) — termcraft silently starts a fresh session seeded with a short excerpt of that chat's recent records. Each chat has its own SDK session (a machine-local chat → session id map); switching chats resumes the target chat's session. Switching agent or model starts a fresh session for the active chat; other chats' stored ids simply fail resume later and take the same fallback.
-11. Apply: after validation, the Kernel acquires the project-write mutex and maps every changed staging page to its one canonical `.termcraft/pages/<slug>/page.tsx`. Each changed canonical source is written through a temporary file plus rename; manifest-slice edits update the project manifest, and evaluated page metadata (title and minimum size) is re-cached there. These per-file writes do not make a multi-page turn, manifest update, chat append, and pin updates one crash-safe transaction; cross-file turn transactions are a separate design item. The agent record stores `changedPages` and the Gate warnings for the next turn's context. An empty diff is valid — a purely conversational turn changes no page source and records `"changedPages":[]`. The UI shell switches the active page only when the agent changed it in `pages.json`; adding a page alone does not switch. Page and source change events refresh Git status and respawn the preview host on the canonical source selected after apply.
+11. Apply: only after validation succeeds, the Kernel acquires the project-write mutex and maps every changed staging page to its one canonical `.termcraft/pages/<slug>/page.tsx`. Each changed canonical source is written through a temporary file plus rename; manifest-slice edits update the project manifest, and evaluated page metadata (title and minimum size) is re-cached there. The Kernel also asks the Project store to append the agent record with `changedPages` and Gate warnings and to persist resolution of the pins sent with that successfully applied message in the page's `comments.jsonl`, all before releasing the mutex. Page, manifest, chat, and pin per-file writes therefore serialize, but they are not one crash-safe transaction: a crash during this multi-file apply can leave a partially applied turn until a separate Turn Transaction design exists. An empty diff is valid — a purely conversational turn changes no page source and records `"changedPages":[]`. After the mutex is released, the UI only refreshes its displayed page, source, and pin overlays/state and respawns the preview host; it does not persist pin status. The UI shell switches the active page only when the agent changed it in `pages.json`; adding a page alone does not switch. Apply completion also refreshes Git status on the canonical source selected after apply.
 
 ## Source anchors
 

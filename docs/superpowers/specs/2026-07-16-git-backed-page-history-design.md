@@ -34,8 +34,9 @@ controls are unavailable.
   user commit may contain several turns and several pages.
 - Pins and other page-local records do not define page versions and are never
   restored with a historical design.
-- Historical browsing is read-only. Sending a message is disabled until the
-  user returns to the current design or explicitly restores a commit.
+- Historical browsing is read-only. Sending a message, creating pins,
+  reopening pins, and changing pin status are disabled until the user returns
+  to **Current design** or explicitly restores a commit.
 - Restore replaces only the selected page's design source in the working
   directory. It does not create a commit or change `HEAD`, the current branch,
   or the Git index.
@@ -62,12 +63,22 @@ The relevant project layout becomes:
 `comments.jsonl` may still be committed to Git, but a commit changing only
 comments is not a page version.
 
-The live source on disk is named **Current design** in the UI. When its content
-equals the page source at `HEAD`, the `HEAD` commit is the current row rather
-than a duplicate entry. When the content differs from `HEAD`, or the path is
-untracked, a separate **Current design · uncommitted** row appears above the
-commits. The term "working tree" is deliberately absent from the product UI so
-it is not confused with a Git worktree.
+The live source on disk is named **Current design** in the UI. Row precedence is
+explicit:
+
+- an unborn repository shows **Current design · uncommitted** and no commit
+  rows;
+- an untracked path with no first-parent ancestry shows only **Current design ·
+  uncommitted**;
+- an untracked or recreated path with first-parent ancestry shows **Current
+  design · uncommitted** followed by the reachable historical entries;
+- when tracked content equals the page source at `HEAD`, that `HEAD` row is
+  **Current design**, not a duplicate historical entry.
+
+Tracked content that differs from `HEAD` likewise gets a separate **Current
+design · uncommitted** row above reachable commits. The term "working tree" is
+deliberately absent from the product UI so it is not confused with a Git
+worktree.
 
 A committed history entry is identified by its full object id internally and
 displays its short hash, author, committer timestamp, and subject. Full ids,
@@ -165,21 +176,26 @@ source selected for export.
 
 1. The user opens history for the active page.
 2. The Kernel asks `GitHistory` for the page's state and first-parent commits.
-3. If the source equals `HEAD`, that commit is the `Current design` row. If it
-   differs or is untracked, a separate `Current design · uncommitted` row comes
-   first, followed by the reachable commits when any exist.
+3. The Kernel applies the row precedence from §3: unborn means only `Current
+   design · uncommitted`; an untracked path without first-parent ancestry means
+   only that row; an untracked or recreated path with ancestry adds its
+   reachable historical entries; and tracked content equal to `HEAD` makes the
+   `HEAD` row `Current design`. Other tracked changes put `Current design ·
+   uncommitted` above reachable commits.
 4. Selecting a commit reads `page.tsx` from that commit into a temporary,
    read-only snapshot outside `.termcraft/`.
 5. The Kernel respawns the preview host on the snapshot. The project file,
    branch, `HEAD`, and index remain unchanged.
-6. The UI displays `<short-hash> · read-only`. Sending agent messages and
-   changing Tweaks are disabled.
+6. The UI displays `<short-hash> · read-only`. Sending agent messages,
+   changing Tweaks, creating pins, reopening pins, and changing pin status are
+   disabled until the user returns to **Current design**.
 7. Leaving history kills the historical host and respawns it on the exact
    current source from disk.
 
 The current selection survives when its element id exists in the historical
-render. Current pins are overlaid only when their element ids resolve; their
-records and statuses never change during browsing.
+render. Existing current pins are overlaid only when their element ids resolve;
+their records and statuses never change during browsing. No pin mutation is
+enabled until the user returns to **Current design**.
 
 A commit that changes multiple page sources independently appears in each
 affected page's history. A merge commit represents one mainline version; its
@@ -258,8 +274,9 @@ Status indicators are derived from Git state:
 - an action with no changes has no dot and is disabled.
 
 Color is not the only status signal: tooltips and accessible labels name the
-dirty scope. Status is refreshed after every successful or failed Git command
-and after Kernel apply.
+dirty scope. Status is refreshed after every user-initiated Git operation or
+commit attempt and after Kernel apply. Inspection commands used by refresh do
+not recursively trigger another refresh.
 
 Commit controls remain available while an agent turn runs. Git commit and the
 short Kernel apply phase share the project-write mutex, so their physical reads
@@ -278,8 +295,10 @@ termcraft's commit controls so they cannot interfere with Git sequencer state.
 |---|---|
 | Git executable unavailable | The application works; history and commit controls explain that Git is unavailable. |
 | Project is not a Git repository | The application works; history and commit controls are unavailable. |
-| Repository has no commits | Only `Current design` is shown; a selected commit scope may create the root commit. |
-| Page source is untracked | Only `Current design · uncommitted` is shown. |
+| Repository has no commits | `Current design · uncommitted` is shown with no commit rows; a selected commit scope may create the root commit. |
+| Untracked page source has no first-parent ancestry | Only `Current design · uncommitted` is shown. |
+| Untracked or recreated page source has first-parent ancestry | `Current design · uncommitted` is followed by reachable historical entries. |
+| Tracked page source equals `HEAD` | The `HEAD` row is `Current design`. |
 | Shallow repository | Reachable local entries are shown with `partial history`; termcraft never fetches automatically. |
 | Detached HEAD | History and Restore work; commit requires an additional warning and confirmation. |
 | Source is staged | Browsing works; Restore is blocked; page commit records the latest source from disk. |
@@ -306,8 +325,15 @@ Tests create temporary real repositories and cover:
 - a feature branch merged into main, proving first-parent behavior;
 - one commit changing several pages;
 - a pin-only commit excluded from page history;
-- untracked, unstaged, and staged page sources;
-- an unborn repository, detached HEAD, and shallow clone;
+- an unborn repository showing `Current design · uncommitted` with no commit
+  rows;
+- an untracked page path with no first-parent ancestry showing only `Current
+  design · uncommitted`;
+- an untracked or recreated page path with first-parent ancestry showing that
+  row plus reachable historical entries;
+- tracked page content equal to `HEAD` making the `HEAD` row `Current design`;
+- other unstaged and staged page-source states;
+- detached HEAD and shallow clone;
 - a historical source missing from an earlier commit;
 - bounded handling of long subjects, author names, stderr, and timeouts;
 - current-page commit with unrelated staged and unstaged changes;
@@ -345,7 +371,8 @@ Tests create temporary real repositories and cover:
 - unavailable, empty, and Git-error presentations;
 - staged-source refusal;
 - overwrite confirmation naming the exact source path;
-- disabled send and Tweaks while browsing a commit;
+- disabled send, Tweaks, pin creation, pin reopening, and pin-status changes
+  while browsing a commit;
 - independent page and dropdown status dots;
 - per-scope file counts, disabled clean scopes, and accessible status labels;
 - commit dialog file list, message validation, detached-HEAD warning, and Git
@@ -364,6 +391,9 @@ v1:
 
 - the user can browse the active page's path-limited, first-parent history from
   the current `HEAD`;
+- history row precedence covers unborn repositories, untracked paths without
+  ancestry, untracked or recreated paths with reachable ancestry, and tracked
+  content equal to `HEAD` exactly as defined in §3;
 - browsing never changes repository state;
 - Restore safely replaces only the page's canonical design source after Gate,
   index, freshness, and confirmation checks;

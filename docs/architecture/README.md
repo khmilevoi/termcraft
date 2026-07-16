@@ -33,10 +33,12 @@ One document per user-visible process:
 
 - [flows/launch.md](flows/launch.md) — from `termcraft` in a directory to the
   Workspace: lock check, project discovery, the workspace-trust gate, first-run
-  wizard, first generation.
+  generation, and the optional v1-only first-run wizard.
 - [flows/generation-turn.md](flows/generation-turn.md) — one chat turn: the
-  staging directory the agent edits in, the validation gate with retries,
-  atomic apply.
+  staging directory and validation retries; agent/Gate rejection or interruption
+  before apply changes no canonical source, each persisted file is replaced through
+  a temporary file plus rename, and a crash during multi-file apply can leave a partial
+  turn until a separate Turn Transaction design exists.
 - [flows/chats.md](flows/chats.md) — several conversations over one project: the
   slash menu, creating and switching chats, per-chat agent sessions.
 - [flows/versions.md](flows/versions.md) — v1 Git-backed page history: read-only

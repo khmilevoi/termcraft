@@ -111,6 +111,10 @@ working directory.
 
 ### 3.2 Workspace
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs status-bar history, Restore and commit controls, and `changedPages`;
+> private-version and `applied`-map wording below is legacy context only.
+
 Layout: chat panel on the left (~35%, showing the active chat — §3.9), live preview
 on the right, status bar at the bottom. The composer's top border carries the
 conversation-level indicators: the model chip (agent · model · effort — click opens
@@ -186,6 +190,10 @@ Selection and pins are mouse-only in v1.0; keyboard element navigation is backlo
 
 ### 3.3 Pages
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs canonical page storage, immutable slug identity, and reachable Git
+> history for removed or recreated pages; numbered-version prose below is legacy.
+
 Project → **Pages** (one design screen each) → per-page version history. Tabs switch
 pages. The agent manages pages itself through the staging directory (§6.2): creating
 `pages/<slug>.tsx` adds a page, deleting it unlists one, editing the manifest slice
@@ -198,6 +206,10 @@ on disk, and recreating the same slug resurrects its history (§6.2). In v1.0 pa
 formally linked by kit navigation calls (§5.5), forming a clickable prototype flow.
 
 ### 3.4 Versions
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> replaces this private version, rollback, and auto-rollback model with optional
+> Git history, explicit Restore, and user-confirmed commit controls.
 
 Every applied agent turn creates exactly one new `vN.tsx` for each page it changed.
 Every version traces to a chat record: an applied turn's agent record carries an
@@ -258,6 +270,10 @@ triple to its SDK options. Switching agent or model starts a fresh agent session
 chat history is unaffected. While a turn runs the picker is locked (§3.2).
 
 ### 3.7 Export
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs export: it always reads each canonical current `page.tsx` from disk,
+> including uncommitted changes, regardless of history browsing.
 
 `Ctrl+E` (or `termcraft export`) writes to `.termcraft/export/`:
 
@@ -399,6 +415,10 @@ clicks as parallel triggers of the same actions.
 
 ### 4.1 Components
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs canonical Project-store ownership, the Git adapter ports, scoped commit
+> controls, and the Kernel apply/commit boundary where the legacy list differs.
+
 TypeScript on Bun; the shell UI is OpenTUI (React bindings). One `bun build
 --compile` binary ships everything: the shell, the design host entry, and the
 embedded `@termcraft/kit` + React + OpenTUI the designs import — the user's project
@@ -510,6 +530,10 @@ consistent by default (the kit and its tokens); every element addressable
 (selection, pins); deterministic to snapshot; safe to execute (the cage of §4.2).
 
 ### 5.1 Page modules
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs canonical page storage: each slug has one
+> `.termcraft/pages/<slug>/page.tsx`; numbered module paths below are legacy.
 
 A page version is one TSX module, `pages/<slug>/vN.tsx` on disk, materialized as
 `pages/<slug>.tsx` in staging (§6.2). The contract:
@@ -728,6 +752,10 @@ long-thinking agent that streams reasoning is never mistaken for a hung one.
 
 ### 6.2 Turn protocol
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs staging from canonical `page.tsx` sources and `changedPages` chat
+> records; head-version and private-version language below is legacy.
+
 Each turn termcraft rebuilds the project's **staging directory** — machine-local
 scratch at a stable path derived from the project's location (OS temp area, never
 inside `.termcraft/`), cleared and repopulated at the start of every turn:
@@ -785,6 +813,10 @@ stored session ids simply fail resume later and take the same fallback.
 
 ### 6.3 The gate: validation and application
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs apply to canonical page sources, `changedPages`, and the separate
+> cross-file Turn Transaction boundary; version-minting prose below is legacy.
+
 The CLI exits → termcraft diffs staging against the turn's snapshot. The diff is the
 proposal: changed/added/deleted page files plus `pages.json` edits. The gate runs:
 
@@ -818,6 +850,10 @@ the full turn from user message to applied version, including the retry loop.
 ## 7. Storage and data versioning
 
 ### 7.1 Layout
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs canonical page storage, comments, `changedPages` chat records, and Git
+> commit scopes; the numbered-source layout and record schemas below are legacy.
 
 ```
 .termcraft/
@@ -910,6 +946,10 @@ version, never an overwrite.
 
 ### 8.1 v1.0
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs v1 Git history, explicit Restore, and user-confirmed scoped commit
+> controls; the private history popup and rollback item below is legacy.
+
 1. Home: prompt input when no project exists; an existing project opens straight
    into the Workspace (§3.1) after the trust check.
 2. `.termcraft` wizard: setup, agent health check, target stack, bulk migrations.
@@ -937,6 +977,10 @@ version, never an overwrite.
     `/export`, `/model`.
 
 ### 8.2 MVP cut
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs the MVP cut: canonical page sources, no history UI or rollback, launch
+> fallback for broken sources, `changedPages`, and canonical-current export.
 
 - Home prompt when no project exists; `.termcraft` created lazily on the first
   prompt, with default config (target stack `rust-ratatui`); an existing project
@@ -985,6 +1029,10 @@ host where platforms allow it. A separate command palette
 is no longer planned — the slash menu (§3.10) is that view over the action table.
 
 ## 9. Error handling
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs Gate/apply failure boundaries and launch fallback for a broken canonical
+> source; atomic version and previous-head recovery claims below are legacy.
 
 - **Agent missing / not logged in** → clear message with install instructions; checked
   in the background at startup and before each send. The Home error state offers `r`
@@ -1044,6 +1092,10 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   prompt → fake agent edits staging → gate → render → export).
 
 ## 11. Success criteria (MVP)
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> governs MVP success for canonical page storage, `changedPages`, broken-source
+> launch fallback, and export from exact canonical current sources.
 
 From an empty directory: `termcraft` → the Home prompt opens → "a system monitor
 dashboard" → Enter creates `.termcraft` (the project) → Codex writes page code →
