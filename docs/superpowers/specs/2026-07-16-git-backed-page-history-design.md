@@ -206,9 +206,8 @@ individual feature-branch commits are not separate entries in this view.
 Restore is an explicit action and is unavailable during an agent turn.
 
 Before presenting the final confirmation, the Kernel records the current source
-hash and checks the selected page's index state. Immediately before writing it
-repeats both checks and verifies that the selected commit object can still be
-read.
+hash and checks the selected page's index state. The confirmed operation remains
+bound to the selected page and full source commit id.
 
 The operation follows these rules:
 
@@ -218,18 +217,33 @@ The operation follows these rules:
    those page-design changes will be lost.
 3. If the source changed after the confirmation was prepared, that confirmation
    expires and a new one is required.
-4. The historical source passes the current Gate before any project file is
-   written. A source incompatible with the current kit remains browsable as an
-   error state but cannot be restored through termcraft.
-5. After confirmation, the Project store writes `page.tsx` via temporary file
-   plus rename.
-6. Only that design source changes. `HEAD`, branch, index, other pages, pins,
-   chats, and application source files remain untouched.
-7. The restored source becomes `Current design · uncommitted` unless it happens
+4. After confirmation, the Kernel acquires the project-write mutex, repeats the
+   source-hash and index checks, verifies that the same full commit object can
+   still be read, and runs the historical source through the current Gate. Any
+   failed validation releases the mutex without a project write. A source
+   incompatible with the current kit remains browsable as an error state but
+   cannot be restored through termcraft.
+5. The Project store replaces the selected canonical `page.tsx` via temporary
+   file plus rename.
+6. The active chat receives one system record naming the page and full source
+   commit, for example `restored main from a1b2c3d`. Other chats remain
+   untouched. This records the explicit user action; it does not associate a
+   future commit with a prompt.
+7. The page replacement and active-chat append are serialized in that order
+   under the project-write mutex, but they are not one crash-atomic transaction.
+   The Kernel then releases the mutex and performs the mandatory source, host,
+   chat, and Git-status refresh.
+8. `HEAD`, branch, index, other pages, pins, other chats, and application source
+   files remain untouched.
+9. The restored source becomes `Current design · uncommitted` unless it happens
    to equal `HEAD`.
-8. The active chat receives a system record naming the page and source commit,
-   for example `restored main from a1b2c3d`. This records the explicit user
-   action; it does not associate a future commit with a prompt.
+
+If replacing `page.tsx` succeeds but appending the active-chat record fails, the
+restored page remains the active current source. termcraft surfaces a persistence
+error and does not report that Restore was fully recorded. A Retry remains bound
+to the same page and full source commit id, repeats freshness validation, and
+must not silently substitute or reapply a different selected source; choosing a
+different source requires a new confirmation.
 
 termcraft creates no hidden backup. The warning and explicit confirmation are
 the recovery boundary for unstaged current changes.
@@ -244,8 +258,12 @@ History adds a split-button:
 
 The primary action commits only
 `.termcraft/pages/<active-slug>/page.tsx`. It commits the exact current design
-from disk. After success that source is clean relative to the new `HEAD`; all
-unrelated staged and unstaged changes preserve their state.
+from disk. Absent hook side effects, after success that source is clean relative
+to the new `HEAD`, and the adapter's own operations preserve all unrelated
+staged and unstaged state. User hooks may instead modify the active source or
+other files according to their own policy; termcraft neither suppresses nor
+rewrites those effects. The mandatory post-attempt status refresh exposes any
+hook-induced dirty state and every other changed file.
 
 The dropdown contains two additional scopes:
 
@@ -353,16 +371,20 @@ Tests create temporary real repositories and cover:
 - Restore is blocked for a staged source.
 - A source change after confirmation forces reconfirmation.
 - Gate failure leaves the current source untouched.
-- Successful Restore changes only the selected `page.tsx` and appends the
-  restore system record.
+- Successful Restore changes only the selected `page.tsx` and appends one
+  restore system record to the active chat; other chats remain untouched.
+- If the Restore chat append fails after page replacement, the restored page
+  remains active, the persistence error does not claim a fully recorded
+  Restore, and Retry remains bound to the same full source commit id.
 - `HEAD`, branch, and index are byte-for-byte or object-for-object unchanged by
   browsing and Restore.
 - In the absence of explicit hook side effects, successful and failed scoped
   commits preserve staged and unstaged state outside their scope; hook changes
   are surfaced by the post-command status refresh.
 - A changed `HEAD` or scope after preview forces replanning and reconfirmation.
-- Commit and Kernel apply serialize through the project-write mutex while the
-  agent turn itself remains unblocked.
+- Commit, Kernel apply, and Restore's ordered page-and-chat writes serialize
+  through the project-write mutex while the agent turn itself remains
+  unblocked.
 
 ### UI tests
 

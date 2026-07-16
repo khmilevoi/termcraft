@@ -318,6 +318,10 @@ error and points at the TUI (§3.1). In-app refusals hint in the status bar.
 
 ### 3.8 Focus and hotkeys
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy version-hotkey and MVP browsing behavior in this section:
+> the MVP has no history UI or version hotkeys, while v1 history is Git-backed.
+
 Hotkeys come in two tiers:
 
 - **Global** — `F2`/`F3`/`F4`, `Ctrl+E`, `Ctrl+P` (preview controls popup: theme
@@ -356,6 +360,11 @@ lands, §3.4).
 
 ### 3.9 Chats
 
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy current-head, rollback, and version-file semantics in
+> this section: chats share each page's one canonical `page.tsx`; explicit
+> Restore replaces that source and records the action only in the active chat.
+
 A project holds one or more **chats** — independent conversation lines over the same
 pages. A chat is only a conversation: switching chats swaps the visible history and
 the agent session (§6.2) and touches nothing else — active page, preview state,
@@ -385,6 +394,11 @@ switches — following the existing popup pattern (§3.6, §3.8; UI reference:
 (§8.3).
 
 ### 3.10 Composer commands
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy composer version-browsing and version-segment behavior in
+> this section: the MVP has no history UI, and v1 uses Git history with
+> historical selections kept read-only until returning to **Current design**.
 
 Typing `/` as the first character of an empty primary input (the Workspace composer
 or the Home prompt) opens the **slash menu**: an autocomplete list anchored to the
@@ -480,6 +494,11 @@ Diagram: [`docs/architecture/modules.md`](../../architecture/modules.md) — mod
 graph with the kernel boundary marked as the future IPC.
 
 ### 4.2 The design host
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy host-per-`(page, version)` behavior in this section: the
+> Kernel spawns the host for the selected source — canonical current source,
+> staging candidate, export source, or temporary read-only historical snapshot.
 
 Design code never runs in the shell process. The kernel spawns the termcraft binary
 as a subprocess (`termcraft _host`) per viewed (page, version); switching page or
@@ -634,6 +653,11 @@ static mode the same code still renders — animations included — but receives
 input.
 
 ### 5.6 Tweaks (v1.0)
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy version-switch terminology in this section: historical
+> selection is read-only, so Tweaks stay disabled until the user returns to
+> **Current design**, where the source-selected host re-enables them.
 
 Declared per page as an export; each tweak is a labeled control the shell renders in
 the Tweaks panel (`F3`):
@@ -1067,6 +1091,11 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
   user's terminal is never left broken.
 
 ## 10. Testing
+
+> **Superseded locally:** The [Git-backed page-history continuation](2026-07-16-git-backed-page-history-design.md)
+> supersedes the legacy create-new-version numbering behavior in this section:
+> successful apply replaces the canonical `page.tsx` in place, so store tests
+> cover canonical-source replacement rather than numbered version files.
 
 - `kit`: component snapshot tests via OpenTUI's headless test renderer (kit fixture →
   `captureCharFrame` → golden), token/theming units.
