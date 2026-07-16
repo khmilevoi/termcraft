@@ -75,6 +75,10 @@ not short hashes or list positions, are used by commands.
 
 ## 4. Component boundary
 
+The Git adapter is termcraft's eighth top-level component. It is the only
+module that invokes the user's installed Git CLI; no other component shells
+out to Git or implements repository operations itself.
+
 The Kernel accesses Git through `GitHistory` and `GitCommitter` ports. One
 adapter drives the user's installed Git CLI for both. UI code, the Project
 store, and the design host never invoke Git directly.
@@ -145,6 +149,17 @@ commits.
 Cross-file crash consistency for a turn that changes multiple pages, the
 manifest, chat, and pins is intentionally not solved by page history. It is a
 separate Turn Transaction design item.
+
+A broken canonical `page.tsx` is never replaced automatically at launch. The
+Workspace still opens, with the preview region showing the Gate or host error,
+and the composer remains available so the user can send a repair turn against
+the broken source. In v1, when usable Git history exists for that page, the UI
+also offers the explicit Git Restore flow in §7.
+
+Export always reads each page's canonical current source from disk, including
+uncommitted changes. It never substitutes the copy at Git `HEAD` merely because
+that copy is committed, and browsing a historical snapshot does not change the
+source selected for export.
 
 ## 6. Browsing flow in v1
 

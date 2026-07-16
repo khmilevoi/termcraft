@@ -5,17 +5,22 @@ where a designer and a local AI agent CLI design other terminal applications
 together — the agent writes real design code, termcraft executes it in an
 isolated preview. Written for a reader who does not read the source language.
 
-> **Status:** these documents describe the v1.0 target architecture ahead of the
-> code. Source anchors point at the design spec
-> (`docs/superpowers/specs/2026-07-13-termcraft-design.md`) and the UI reference
-> files under `design/`; they move to real source files as implementation
-> proceeds (see the architecture-update skill).
+> **Status:** these documents describe both the MVP foundation and the v1 target
+> ahead of the code. The MVP has canonical page sources but no history or Git UI;
+> v1 adds Git-backed history, explicit Restore, and user-confirmed scoped commits.
+> The approved continuation
+> (`docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md`) governs
+> page-source, history, Restore, commit, and export-source decisions wherever the
+> original design spec or a flow document still says otherwise. Other source
+> anchors point at `docs/superpowers/specs/2026-07-13-termcraft-design.md` and the
+> UI reference files under `design/`; they move to real source files as
+> implementation proceeds (see the architecture-update skill).
 
 ## Reading order
 
 1. [overview.md](overview.md) — system context: the designer, the agent CLIs,
    the project folder, and the export consumer.
-2. [modules.md](modules.md) — the seven components, their boundaries, and the
+2. [modules.md](modules.md) — the eight components, their boundaries, and the
    runtime loop; the Kernel boundary that becomes the future IPC, and the
    design-host subprocess where agent-written code runs.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
@@ -33,8 +38,9 @@ One document per user-visible process:
   atomic apply.
 - [flows/chats.md](flows/chats.md) — several conversations over one project: the
   slash menu, creating and switching chats, per-chat agent sessions.
-- [flows/versions.md](flows/versions.md) — append-only page versions: browsing,
-  the history popup, rollback by copy-forward.
+- [flows/versions.md](flows/versions.md) — v1 Git-backed page history: read-only
+  browsing, explicit Restore, and user-confirmed scoped commits. The governing
+  behavior is the continuation specification linked above.
 - [flows/interactive-prototype.md](flows/interactive-prototype.md) — real
   component state inside the design host; what crosses the boundary for
   interactive mode and the Tweaks panel.
