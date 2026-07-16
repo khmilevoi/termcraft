@@ -28,36 +28,44 @@
       <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
     </a>
     <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
-      <a href="./03-workspace-generating.dc.html" style="color:#8f877a;">‹ Workspace generating</a>
+      <a href="./25-git-commit-controls.dc.html" style="color:#8f877a;">‹ Git commit controls</a>
       <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
-      <a href="./05-version-history.dc.html" style="color:#8f877a;">Git history ›</a>
+      <a href="./27-git-availability.dc.html" style="color:#8f877a;">Git availability & errors ›</a>
     </div>
   </div>
 
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
-      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">04 · Tweaks panel (F3)</span>
-      <span style="color:#5b544a;font-size:12px;">ws-tweaks-120 · ws-tweaks-80</span>
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">26 · Explicit Restore</span>
+      <span style="color:#5b544a;font-size:12px;">ws-restore-confirm-120 · ws-restore-applied-120 · ws-restore-record-pending-120</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">A right-side panel of state controls — toggles, selects, text inputs. Flipping <span style="color:#dd7b60;">Error state</span> ON makes the error banner appear in the preview and the search input border turn red.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:76ch;line-height:1.5;">v1 · optional Git. Restore rewrites the canonical <span style="color:#e6a23c;">page.tsx</span> from a selected commit — the confirmation names the full and short hash and the exact path, and warns plainly when uncommitted design changes will be overwritten (there is no hidden backup). A staged page source blocks Restore. On success the workspace returns to <span style="color:#f6c163;">main · Current design · uncommitted</span> and one <span style="color:#8a6d33;">⟲ restored</span> record is captured in the chat — no commit, branch or index change.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
-    <div id="ws-tweaks-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-restore-confirm-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 120×36</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · restore confirm</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-restore-confirm-120</span>
       </div>
-      {{ wsTweaks120 }}
+      {{ confirm }}
     </div>
-    <div id="ws-tweaks-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-restore-applied-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 80×24</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-80</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · restore applied</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-restore-applied-120</span>
       </div>
-      {{ wsTweaks80 }}
+      {{ applied }}
+    </div>
+    <div id="ws-restore-record-pending-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · record pending</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-restore-record-pending-120</span>
+      </div>
+      {{ pending }}
     </div>
   </div>
 </div>
@@ -74,7 +82,11 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { wsTweaks120: e.tweaks(120,36), wsTweaks80: e.tweaks(80,24) };
+    return {
+      confirm: e.wsRestoreConfirm(120,36),
+      applied: e.wsRestoreApplied(120,36),
+      pending: e.wsRestoreRecordPending(120,36)
+    };
   }
 }
 </script>

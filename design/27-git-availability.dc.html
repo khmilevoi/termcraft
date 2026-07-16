@@ -28,36 +28,43 @@
       <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
     </a>
     <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
-      <a href="./03-workspace-generating.dc.html" style="color:#8f877a;">‹ Workspace generating</a>
+      <a href="./26-restore.dc.html" style="color:#8f877a;">‹ Explicit Restore</a>
       <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
-      <a href="./05-version-history.dc.html" style="color:#8f877a;">Git history ›</a>
     </div>
   </div>
 
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
-      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">04 · Tweaks panel (F3)</span>
-      <span style="color:#5b544a;font-size:12px;">ws-tweaks-120 · ws-tweaks-80</span>
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">27 · Git availability & errors</span>
+      <span style="color:#5b544a;font-size:12px;">git-unavailable-80 · ws-git-edge-120 · ws-git-error-120</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">A right-side panel of state controls — toggles, selects, text inputs. Flipping <span style="color:#dd7b60;">Error state</span> ON makes the error banner appear in the preview and the search input border turn red.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:76ch;line-height:1.5;">v1 · optional Git, and always safe without it. When Git is missing or the directory is not a repository, the application stays fully usable — only history and commit controls are absent or disabled with a short explanation. The edge frame composes the sequencer / detached-HEAD / no-commits / shallow states as small labeled insets; the error frame shows bounded, readable failures. termcraft never inits a repo, checks out, switches branches, stashes, fetches, pulls or pushes.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
-    <div id="ws-tweaks-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="git-unavailable-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 120×36</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · git unavailable · 80×24</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">git-unavailable-80</span>
       </div>
-      {{ wsTweaks120 }}
+      {{ unavailable }}
     </div>
-    <div id="ws-tweaks-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-git-edge-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · tweaks · 80×24</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-tweaks-80</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · git edge states</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-git-edge-120</span>
       </div>
-      {{ wsTweaks80 }}
+      {{ edge }}
+    </div>
+    <div id="ws-git-error-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · git errors</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-git-error-120</span>
+      </div>
+      {{ error }}
     </div>
   </div>
 </div>
@@ -74,7 +81,11 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { wsTweaks120: e.tweaks(120,36), wsTweaks80: e.tweaks(80,24) };
+    return {
+      unavailable: e.gitUnavailable(80,24),
+      edge: e.wsGitEdge(120,36),
+      error: e.wsGitError(120,36)
+    };
   }
 }
 </script>

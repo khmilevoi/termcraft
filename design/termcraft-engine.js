@@ -156,17 +156,17 @@ export class Engine {
     const px=div+2;
     this.text(b,px,1,'▸ Main',{fg:P.amber,bold:true});
     this.text(b,px+7,1,'  Settings',{fg:P.dim}); this.text(b,px+17,1,'  Login',{fg:P.dim});
-    this.text(b,w-14,1, gen?'⠹ generating':'main · v4',{fg: gen?P.amber:P.faint,bold:gen});
+    this.text(b,w-14,1, gen?'⠹ generating':'main',{fg: gen?P.amber:P.faint,bold:gen});
     this.hline(b,div+1,2,w-div-2,{fg:P.border}); this.put(b,div,2,'├',{fg:P.border}); this.put(b,w-1,2,'┤',{fg:P.border});
     const dx=div, dy=4, dw=w-div, dh=frameH-5;
     this.drawMonitor(b,dx,dy,dw,dh,{dim:gen});
     this.drawChat(b,1,chatW-2,frameH,gen,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     const mode = gen? {t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true} : {t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
-    const left=[mode,{t:'  main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim}];
+    const left=[mode,{t:'  main ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim}];
     if(gen) left.push({t:' ⚠ turn running — export locked ',fg:P.amberHi,bg:P.line,bold:true});
     const keys = gen? [['esc','cancel'],['F2','full']]
-                    : [['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']];
-    if(w<100){ this.statusBar(b,h-1,[mode,{t:' v4 ',fg:P.dim}], gen?[['esc','cancel']]:[['F3','tweak'],['F4','act']]); }
+                    : [['F2','full'],['F3','tweaks'],['F4','act']];
+    if(w<100){ this.statusBar(b,h-1,[mode,{t:' main ',fg:P.dim}], gen?[['esc','cancel']]:[['F3','tweak'],['F4','act']]); }
     else this.statusBar(b,h-1,left,keys);
     return this.render(b);
   }
@@ -181,15 +181,15 @@ export class Engine {
     y+=2;
     const seq=[
       {role:'❯ you'}, {body:'build a system monitor dashboard with cpu/mem gauges'}, {gap:1},
-      {role:'● codex'}, {status:'✓ created page main · v1',c:P.dim}, {status:'✓ added resources + processes',c:P.dim}, {gap:1},
+      {role:'● codex'}, {status:'✓ created page main',c:P.dim}, {status:'✓ added resources + processes',c:P.dim}, {gap:1},
       {role:'❯ you'}, {body:'add a network throughput sparkline'}, {gap:1}
     ];
     if(gen){ seq.push(
       {role:'● codex'}, {status:'⠹ generating design…',c:P.amber,bold:true},
-      {status:'✓ read main · v3',c:P.green}, {status:'✓ planned layout',c:P.green},
+      {status:'✓ read current design',c:P.green}, {status:'✓ planned layout',c:P.green},
       {status:'▸ writing widgets',c:P.fg}, {status:'  network gauge · sparkline',c:P.faint}); }
     else { seq.push(
-      {role:'● codex'}, {status:'✓ added network sparkline → v4',c:P.dim}, {status:'✓ ↑/↓ throughput labels',c:P.dim}); }
+      {role:'● codex'}, {status:'✓ updated network sparkline',c:P.dim}, {status:'✓ ↑/↓ throughput labels',c:P.dim}); }
     for(const e of seq){ if(y>=composerTop-1) break;
       if(e.gap){ y+=e.gap; continue; }
       if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; continue; }
@@ -232,7 +232,7 @@ export class Engine {
     }
     this.box(b,previewX0,0,previewW,frameH,{fg:P.border});
     this.text(b,previewX0+2,1,'▸ Main',{fg:P.amber,bold:true}); this.text(b,previewX0+9,1,'  Settings',{fg:P.dim});
-    this.text(b,previewX0+previewW-11,1,'main · v4',{fg:P.faint});
+    this.text(b,previewX0+previewW-11,1,'main',{fg:P.faint});
     this.hline(b,previewX0+1,2,previewW-2,{fg:P.border}); this.put(b,previewX0,2,'├',{fg:P.border}); this.put(b,previewX0+previewW-1,2,'┤',{fg:P.border});
     this.drawFormDesign(b,previewX0,4,previewW,frameH-5,true);
     if(wide){ this.put(b,previewX0,0,'┬',{fg:P.border}); this.put(b,previewX0,frameH-1,'┴',{fg:P.border}); }
@@ -249,11 +249,41 @@ export class Engine {
     this.text(b,tx,frameH-3,'⏎ apply   ␣ toggle',{fg:P.faint}); this.text(b,tx,frameH-2,'esc close',{fg:P.faint});
     const mode={t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
     if(w<100) this.statusBar(b,h-1,[mode],[['F3','tweaks',true],['esc','close']]);
-    else this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode],[['F2','full'],['F3','tweaks',true],['F4','act'],['[ ]','vers']]);
+    else this.statusBar(b,h-1,[{t:' main ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},mode],[['F2','full'],['F3','tweaks',true],['F4','act']]);
     return this.render(b);
   }
 
-  // ---- VERSION HISTORY ----
+  // ---- GIT HISTORY (§05) ----
+  // Draw one popup row. r: {current,label,sel} or {hash,author,when,subject,current?,sel?}
+  gitRow(b,x,ly,w,r,compact){ const P=this.pal; const lx=x+2; const sel=!!r.sel;
+    if(sel){ for(let k=1;k<w-1;k++) this.put(b,x+k,ly,' ',{bg:P.sel}); }
+    const bg=sel?P.sel:P.bg;
+    this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg,bold:true});
+    if(r.current && !r.hash){
+      this.put(b,lx+1,ly,'●',{fg:P.amber,bg});
+      this.text(b,lx+3,ly, r.label||'Current design', {fg:P.amberHi,bg,bold:true});
+    } else {
+      this.put(b,lx+1,ly, (r.current||sel)?'●':'○',{fg:(r.current||sel)?P.amber:P.dim,bg});
+      this.text(b,lx+3,ly,this.pad(r.hash,9),{fg:sel?P.selFg:P.amber,bg});
+      let cx=lx+12;
+      if(!compact){ this.text(b,cx,ly,this.pad(r.author,13),{fg:sel?P.selFg:P.dim,bg}); cx+=13; }
+      this.text(b,cx,ly,this.pad(r.when,11),{fg:sel?P.selFg:P.dim,bg}); cx+=11;
+      const subj = r.current ? 'Current design' : r.subject;
+      this.text(b,cx,ly,this.pad(subj, x+w-2-cx),{fg:r.current?P.amberHi:(sel?P.selFg:P.fg),bg,bold:!!r.current}); }
+    return ly+1; }
+
+  gitPopup(b,x,y,w,h,o){ const P=this.pal; const compact=!!o.compact;
+    this.fillRect(b,x-1,y,w+2,h+1,{ch:' ',bg:P.bg});
+    this.box(b,x,y,w,h,{title:o.title||'git history',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=x+2; let ly=y+2;
+    let hdr=this.pad('',3)+this.pad('COMMIT',9); if(!compact) hdr+=this.pad('AUTHOR',13); hdr+=this.pad('WHEN',11)+'SUBJECT';
+    this.text(b,lx,ly,hdr,{fg:P.faint,bold:true,bg:P.bg}); ly++;
+    o.rows.forEach(r=>{ ly=this.gitRow(b,x,ly,w,r,compact); });
+    if(o.caption){ ly++; this.text(b,lx,ly,o.caption,{fg:P.faint,bg:P.bg}); ly++; }
+    if(o.footer){ this.hline(b,x+1,y+h-2,w-2,{fg:P.line}); this.put(b,x,y+h-2,'├',{fg:P.amber}); this.put(b,x+w-1,y+h-2,'┤',{fg:P.amber});
+      let fx=lx; o.footer.forEach(seg=>{ this.text(b,fx,y+h-1,seg[0],{fg:seg[2]?P.faint:P.amber,bold:!seg[2],bg:P.bg}); fx+=seg[0].length+1;
+        this.text(b,fx,y+h-1,seg[1],{fg:P.dim,bg:P.bg}); fx+=seg[1].length+3; }); } }
+
   verHist(w,h){ const P=this.pal;
     const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
     this.box(b,0,0,chatW,frameH,{fg:P.line,titleFg:P.faint,title:'❯ chat · codex',titleBold:false});
@@ -266,32 +296,37 @@ export class Engine {
     this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
-    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ updated network sparkline',{fg:P.line});
     this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
     this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
     { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
-    const pw=72, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
-    this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
-    this.box(b,pxs,pys,pw,ph,{title:'version history',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
-    const lx=pxs+2; let ly=pys+2;
-    this.text(b,lx,ly,this.pad('',3)+this.pad('VERSION',9)+this.pad('WHEN',12)+'PROMPT',{fg:P.faint,bold:true}); ly++;
-    const vers=[['v4','just now','add network throughput sparkline',true],['v3','2m ago','widen the process table',false],['v2','6m ago','add cpu / mem gauges',false],['v1','11m ago','initial system-monitor layout',false]];
-    vers.forEach(v=>{ const sel=v[3]; if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
-      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
-      this.text(b,lx+1,ly, sel?'●':' ',{fg:sel?P.amber:P.dim,bg:sel?P.sel:P.bg});
-      this.text(b,lx+3,ly,this.pad(v[0],7),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
-      this.text(b,lx+10,ly,this.pad(v[1],12),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg});
-      this.text(b,lx+22,ly,this.pad('"'+v[2]+'"',pw-26),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); ly++; });
-    ly++;
-    this.hline(b,pxs+1,ly,pw-2,{fg:P.line}); this.put(b,pxs,ly,'├',{fg:P.amber}); this.put(b,pxs+pw-1,ly,'┤',{fg:P.amber}); ly++;
-    let fx=lx;
-    this.put(b,fx,ly,'[',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' prev ',{fg:P.dim}); fx+=6;
-    this.put(b,fx,ly,']',{fg:P.amber,bold:true}); fx+=1; this.text(b,fx,ly,' next',{fg:P.dim}); fx+=9;
-    this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'rollback to v4',{fg:P.dim}); fx+=18;
-    this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','full'],['F3','tweaks'],['F4','act'],['v','history',true]]);
+    const pw=84, ph=14, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
+    this.gitPopup(b,pxs,pys,pw,ph,{ title:'git history',
+      rows:[
+        {current:true,label:'Current design · uncommitted',sel:true},
+        {hash:'a1b2c3d',author:'dröscher',when:'2h ago',subject:'widen the process table'},
+        {hash:'9f4e0b2',author:'dröscher',when:'5h ago',subject:'add cpu / mem gauges'},
+        {hash:'3c7d1a8',author:'kessler',when:'yesterday',subject:'initial system-monitor layout'} ],
+      caption:'first-parent history of .termcraft/pages/main/page.tsx',
+      footer:[['↑↓','move'],['⏎','preview'],['R','Restore…'],['esc','close']] });
+    this.statusBar(b,h-1,[{t:' main · Current design · uncommitted ',fg:P.amberHi,bold:true},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['esc','close']]);
     return this.render(b);
   }
+
+  // Compact popup-only buffers for the row-precedence variants (§05 insets)
+  gitHistoryInset(kind){ const P=this.pal; const w=64, h=11; const b=this.mk(w,h);
+    const cur={current:true,label:'Current design · uncommitted',sel:true};
+    const c1={hash:'a1b2c3d',when:'2h ago',subject:'widen the process table'};
+    const c2={hash:'9f4e0b2',when:'5h ago',subject:'add cpu / mem gauges'};
+    let rows, caption;
+    if(kind==='unborn'){ rows=[cur]; caption='unborn repository — no commits yet'; }
+    else if(kind==='untracked'){ rows=[cur]; caption='untracked page — no ancestry'; }
+    else if(kind==='recreated'){ rows=[cur,c1,c2]; caption='recreated page · reachable commits below'; }
+    else if(kind==='tracked-eq'){ rows=[{current:true,hash:'a1b2c3d',when:'2h ago',sel:true},c2]; caption='source equals a1b2c3d — that row is Current design'; }
+    else if(kind==='shallow'){ rows=[cur,c1,{hash:'…','when':'','subject':'partial history'}]; caption='shallow clone · partial history · no Fetch'; }
+    else { rows=[cur,c1,c2]; caption='source differs from a1b2c3d'; } // tracked-changes
+    this.gitPopup(b,1,0,w-2,h,{ title:kind==='shallow'?'git history · partial':'git history', compact:true, rows, caption });
+    return this.render(b); }
 
   // ---- AGENT / MODEL / EFFORT PICKER ----
   agentPicker(w,h){ const P=this.pal;
@@ -306,7 +341,7 @@ export class Engine {
     this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
-    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ updated network sparkline',{fg:P.line});
     this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
     this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
     { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
@@ -333,7 +368,7 @@ export class Engine {
     this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'apply',{fg:P.dim}); fx+=8;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.statusBar(b,h-1,[{t:' main · v4 ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','full'],['F3','tweaks'],['F4','act'],['[ ]','vers']]);
+    this.statusBar(b,h-1,[{t:' main ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['F2','full'],['F3','tweaks'],['F4','act']]);
     return this.render(b);
   }
 
@@ -368,23 +403,23 @@ export class Engine {
   wsStatus(b,w,h,o){ o=o||{}; const P=this.pal;
     const left=[];
     if(o.combo!==false){ const combo=o.combo||'codex · gpt5.5 · high'; left.push({t:' '+combo+' ',fg:P.bg,bg:P.amber,bold:true}); }
-    if(o.ver!==false) left.push({t:'  '+(o.ver||'main · v4')+' ',fg:o.verFg||P.dim,bold:!!o.verBold});
+    if(o.ver!==false) left.push({t:'  '+(o.ver||'main')+' ',fg:o.verFg||P.dim,bold:!!o.verBold});
     if(o.size) left.push({t:' '+o.size+' ',fg:o.sizeErr?P.bg:P.dim,bg:o.sizeErr?P.red:P.statusBg,bold:!!o.sizeErr});
     else if(!o.noSize) left.push({t:' '+w+'×'+h+' ',fg:P.dim});
     if(o.hint) left.push({t:' '+o.hint+' ',fg:o.hintFg||P.amberHi,bg:o.hintBg||P.line,bold:true});
     left.push(o.mode||{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true});
     if(o.ctx!==false && (w>=100||o.ctxCaution)){ const cv=o.ctx!==undefined?o.ctx:42; const caution=!!o.ctxCaution||cv>=80; left.push({t:' ctx '+cv+'% ',fg:caution?P.amberHi:P.faint,bold:caution}); }
     this.statusBar(b,h-1,left,this.hintKeys(o.keys)); }
-  hintKeys(keys){ const base=keys||[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']];
+  hintKeys(keys){ const base=keys||[['F2','fullscreen'],['F3','tweaks'],['F4','interact']];
     const short={fullscreen:'full',interact:'act',versions:'vers'};
     const filtered=base.filter(k=>k[0]!=='m'&&k[0]!=='^E'&&k[0]!=='/').map(k=>[k[0],short[k[1]]||k[1],k[2]]);
     return filtered; }
 
   baseSeq(){ const P=this.pal; return [
     {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
-    {role:'● codex'},{status:'✓ created page main · v1',c:P.dim},{status:'✓ resources + processes',c:P.dim},{gap:1},
+    {role:'● codex'},{status:'✓ created page main',c:P.dim},{status:'✓ resources + processes',c:P.dim},{gap:1},
     {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
-    {role:'● codex'},{status:'✓ added sparkline → v4',c:P.dim} ]; }
+    {role:'● codex'},{status:'✓ added network sparkline',c:P.dim} ]; }
 
   chatSeq(b,chatX,chatW,frameH,o){ o=o||{}; const P=this.pal; const tx=chatX+1, maxX=chatX+chatW-2, iw=chatW-3; let y=1;
     if(o.header!==false){ this.text(b,tx,y,'● codex',{fg:o.offline?P.faint:P.green,bold:true});
@@ -431,28 +466,28 @@ export class Engine {
 
   // ---- 07 selection & hover ----
   wsHover(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.box(b,s.dx,s.dy+12,s.dw,4,{title:'network',fg:P.amberHi,titleFg:P.amberHi,titleBold:false,tee:true});
     const lbl='panel "network"'; const lx=s.dx+s.dw-lbl.length-4;
     for(let i=-1;i<=lbl.length;i++) this.put(b,lx+i,s.dy+11,' ',{bg:P.line});
     this.text(b,lx,s.dy+11,lbl,{fg:P.amberHi,bg:P.line});
     this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['m','agent'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['^E','export']]});
     return this.render(b); }
 
   wsSelect(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     const cl=s.dx+2, gy=s.dy+4; this.selCorners(b,cl,gy,s.dw-6,1);
     this.text(b,cl,gy,'CPU',{fg:P.amberHi,bold:true});
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), chip:'gauge "CPU"', placeholder:'make it blue…', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','deselect'],['F3','tweaks'],['F4','interact'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','deselect'],['F3','tweaks'],['F4','interact'],['^E','export']]});
     return this.render(b); }
 
   // ---- 08 pins ----
   wsPinInput(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), placeholder:'right-click the preview to pin…', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     this.dim(b,0,0,w,s.frameH);
@@ -462,60 +497,64 @@ export class Engine {
     this.box(b,pxs,pys,pw,3,{title:'new pin',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     this.text(b,pxs+2,pys+1,'why is this always on top?',{fg:P.fg,bg:P.bg}); this.put(b,pxs+2+26,pys+1,'█',{fg:P.amber,blink:true,bg:P.bg});
     this.text(b,pxs+1,pys+3,'⏎ save · esc cancel',{fg:P.faint,bg:P.bg});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','cancel'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['esc','cancel'],['F3','tweaks'],['^E','export']]});
     return this.render(b); }
 
   wsPins(w,h){ const P=this.pal; const b=this.mk(w,h); const narrow=w<100;
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.badge(b,s.dx+1,s.dy+4,1); this.badge(b,s.dx+1,s.dy+19,2);
     const seq=[];
     if(!narrow) seq.push({role:'❯ you'},{body:'make the gauges pop'},{pins:[{n:1,text:'make this gauge red'}]},{gap:1},
-      {role:'● codex'},{status:'✓ recolored gauge → v4',c:P.dim},{gap:1});
-    seq.push({head:'PINS · main v4'},{pins:[
+      {role:'● codex'},{status:'✓ recolored gauge',c:P.dim},{gap:1});
+    seq.push({head:'PINS · main'},{pins:[
       {n:2,text:'table · why always top?'},
       {resolved:true,text:'network · add labels · reopen'},
-      {orphan:true,text:'header · missing in v3'} ]});
+      {orphan:true,text:'header · missing from current render'} ]});
     this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:narrow?null:'▲ 8 earlier messages', attach:'2 open pins attached · sent next', attachFg:P.amberHi, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:narrow?[['esc','clear'],['^E','export']]:[['esc','clear pins'],['F3','tweaks'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:narrow?[['esc','clear'],['^E','export']]:[['esc','clear pins'],['F3','tweaks'],['^E','export']]});
     return this.render(b); }
 
-  // ---- 09 version browse ----
+  // ---- 09 HISTORICAL COMMIT PREVIEW ----
   wsVerBrowse(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'v2/5 ‹read-only›',rightFg:P.amberHi,rightBold:true});
-    this.drawMonitorV2(b,s.dx,s.dy,s.dw,s.dh);
+    const s=this.paneShell(b,w,h,{right:'a1b2c3d · read-only',rightFg:P.amberHi,rightBold:true});
+    for(let k=1;k<s.dw-1;k++) this.put(b,s.dx+k,s.dy,' ',{bg:P.line});
+    this.text(b,s.dx+2,s.dy,'a1b2c3d · dröscher · 2h ago · "widen the process table"',{fg:P.amberHi,bg:P.line});
+    this.drawMonitorV2(b,s.dx,s.dy+2,s.dw,s.dh-2);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'widen the process table'},{gap:1},
-      {role:'● codex'},{status:'✓ widened table → v3',c:P.dim},{gap:1},
+      {role:'● codex'},{status:'✓ widened the process table',c:P.dim},{gap:1},
       {role:'❯ you'},{body:'add a network sparkline'},{gap:1},
-      {role:'● codex'},{status:'✓ added sparkline → v4',c:P.dim},{gap:1},
-      {system:'⟲ rolled back v3 → head (v5)'} ],
-      attach:'viewing v2 — sending returns to v5', attachFg:P.amberHi, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · v2/5 ‹read-only›',verFg:P.amberHi,verBold:true,mode:{t:' READ-ONLY ',fg:P.amberHi,bg:P.line,bold:true},keys:[['[ ]','browse',true],['⏎','to head'],['esc','exit'],['^E','export']]});
+      {role:'● codex'},{status:'✓ added network sparkline',c:P.dim} ],
+      attach:'viewing a1b2c3d · read-only — Send disabled', attachFg:P.red,
+      composerDisabled:true, placeholder:'leave history to edit the current design', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · a1b2c3d · read-only',verFg:P.amberHi,verBold:true,
+      hint:'Send · Tweaks · pins disabled',hintFg:P.faint,hintBg:P.line,
+      mode:{t:' READ-ONLY ',fg:P.amberHi,bg:P.line,bold:true},keys:[['esc','leave · reload current']]});
     return this.render(b); }
 
   // ---- 10 fullscreen ----
   wsFull(w,h,small){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{noChat:true, right:small?'true size':'main · v4', rightFg:small?P.red:P.faint, rightBold:!!small});
+    const s=this.paneShell(b,w,h,{noChat:true, right:small?'true size':'main', rightFg:small?P.red:P.faint, rightBold:!!small});
     if(small){ for(let k=1;k<s.dw-1;k++) this.put(b,s.dx+k,s.dy,' ',{bg:P.redDim});
       this.text(b,s.dx+2,s.dy,'⚠ minSize 80×24 exceeds preview 78×22 — true size, clipped',{fg:P.red,bg:P.redDim,bold:true});
       this.drawMonitor(b,s.dx,s.dy+2,s.dw,s.dh-2);
     } else this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     const mode={t:' FULLSCREEN ',fg:P.bg,bg:P.amber,bold:true};
     if(small) this.wsStatus(b,w,h,{size:'78×22 < 80×24',sizeErr:true,mode,keys:[['F2','windowed'],['^E','export']]});
-    else this.wsStatus(b,w,h,{mode,keys:[['F2','windowed'],['[ ]','versions'],['^E','export']]});
+    else this.wsStatus(b,w,h,{mode,keys:[['F2','windowed'],['^E','export']]});
     return this.render(b); }
 
   wsSmallSize(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:this.baseSeq(), attach:'⚠ preview 74w < design 80 — F2 for full size', attachFg:P.red, composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,size:'74×30 < 80×24',sizeErr:true,keys:[['F2','fullscreen'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,size:'74×30 < 80×24',sizeErr:true,keys:[['F2','fullscreen'],['^E','export']]});
     return this.render(b); }
 
   // ---- 11 interact ----
   wsInteract(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawFormDesign(b,s.dx,s.dy,s.dw,s.dh,false);
     const ix=s.dx, iy=s.dy+2; this.box(b,ix,iy,s.dw,3,{title:'search',fg:P.amberHi,titleFg:P.amberHi,titleBold:false,tee:true});
     this.selCorners(b,ix+1,iy+1,s.dw-2,1);
@@ -545,27 +584,27 @@ export class Engine {
     return this.render(b); }
 
   wsErrRetry(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     const seq=this.baseSeq().concat([{gap:1},
       {role:'❯ you'},{body:'make it a 3-column layout'},{gap:1},
       {role:'● codex'},{status:'✗ invalid design (schema) · retry 1/3',c:P.red},{status:'✗ retry 2/3',c:P.red},{status:'✗ retry 3/3',c:P.red},{gap:1},
-      {system:'⟲ generation failed after 3 tries — main · v4 is unchanged'} ]);
+      {system:'⟲ generation failed after 3 tries — current design unchanged'} ]);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq, scrollback:'▲ 4 earlier messages', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['^E','export']]});
     return this.render(b); }
 
   wsCancelled(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
-      {role:'● codex'},{status:'✓ added sparkline → v4',c:P.dim},{gap:1},
+      {role:'● codex'},{status:'✓ added network sparkline',c:P.dim},{gap:1},
       {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
       {role:'● codex'},{status:'⠹ generating…',c:P.faint},{gap:1},
-      {system:'⟲ generation cancelled — main · v4 kept'},{gap:1},
-      {system:'✗ pages/main/v3.json needs a newer termcraft',c:P.red} ], scrollback:'▲ 4 earlier messages', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['m','agent'],['[ ]','versions'],['^E','export']]});
+      {system:'⟲ generation cancelled — current design unchanged'},{gap:1},
+      {system:'✗ pages/main/page.tsx needs a newer termcraft (kit 2.1)',c:P.red} ], scrollback:'▲ 4 earlier messages', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['^E','export']]});
     return this.render(b); }
 
   termSmall(w,h){ const P=this.pal; const b=this.mk(w,h); const cyc=Math.floor(h/2);
@@ -585,37 +624,39 @@ export class Engine {
 
   // ---- 13 export ----
   wsExport(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
-    const pw=58, ph=8, px=s.dx+Math.floor((s.dw-pw)/2), py=Math.floor((h-ph)/2)-1;
+    const pw=62, ph=11, px=s.dx+Math.floor((s.dw-pw)/2), py=Math.floor((h-ph)/2)-1;
     this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
     this.box(b,px,py,pw,ph,{title:'export ^E',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     const lx=px+3; let y=py+2;
     this.text(b,lx,y,'✓ exported system-monitor',{fg:P.green,bold:true,bg:P.bg}); y+=2;
     this.text(b,lx,y,'.termcraft/export/design-prompt.md',{fg:P.fg,bg:P.bg}); y++;
-    this.text(b,lx,y,'.termcraft/export/pages/{main,settings,login}.json',{fg:P.dim,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'.termcraft/export/pages/*.tsx',{fg:P.dim,bg:P.bg}); y++;
+    this.text(b,lx,y,'.termcraft/export/snapshots/  layout/',{fg:P.dim,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'reads current page.tsx on disk · incl uncommitted',{fg:P.faint,bg:P.bg}); y+=2;
     this.text(b,lx,y,'⏎ ok',{fg:P.amber,bold:true,bg:P.bg});
     this.wsStatus(b,w,h,{combo:false,ctx:false});
     return this.render(b); }
 
   // ---- 14 first generation ----
   wsFirst(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{tabs:[['main',false,true]], right:'⠹ v1', rightFg:P.amber, rightBold:true});
+    const s=this.paneShell(b,w,h,{tabs:[['main',false,true]], right:'⠹ generating', rightFg:P.amber, rightBold:true});
     this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)-1,'⠹ generating first page…',{fg:P.amber,bold:true});
-    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)+1,'writing main · v1',{fg:P.faint});
+    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)+1,'no current page source yet — creating main/page.tsx',{fg:P.faint});
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'a system monitor with cpu, memory and network'},{gap:1},
       {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true},{status:'✓ planned layout',c:P.green},{status:'▸ writing widgets',c:P.fg},{status:'  resources · processes',c:P.faint} ],
       composerDisabled:true, placeholder:'generating… esc to cancel', composerMeta:{model:'codex · gpt5.5 · high',ctx:8}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · v1',mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:false,mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
     return this.render(b); }
 
   // ---- 15 focus ----
   wsFocus(w,h,which){ const P=this.pal; const b=this.mk(w,h); const cf=which==='composer';
     const s=this.paneShell(b,w,h,{chatBorderFg:cf?P.amber:P.line, chatTitle:cf?'❯ chat · codex':'chat · codex', chatTitleFg:cf?P.amberHi:P.faint,
-      prevBorderFg:cf?P.line:P.amber, right:'main · v4', rightFg:cf?P.faint:P.amberHi, rightBold:!cf});
+      prevBorderFg:cf?P.line:P.amber, right:'main', rightFg:cf?P.faint:P.amberHi, rightBold:!cf});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
-    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[{role:'❯ you'},{body:'add a network sparkline'},{gap:1},{role:'● codex'},{status:'✓ added → v4',c:P.dim}],
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[{role:'❯ you'},{body:'add a network sparkline'},{gap:1},{role:'● codex'},{status:'✓ updated sparkline',c:P.dim}],
       composerDisabled:!cf, placeholder:cf?'Ask for changes…':'tab → focus composer', composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     this.wsStatus(b,w,h,{combo:false,ctx:false,mode:{t:cf?' FOCUS: CHAT ':' FOCUS: PREVIEW ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['tab','focus'],['F3','tweaks'],['esc','unfocus']]});
     return this.render(b); }
@@ -641,8 +682,8 @@ export class Engine {
     const lx=px+3; let y=py+2;
     this.text(b,lx,y,'⚠ opened a project from an older termcraft',{fg:P.amberHi,bold:true}); y+=2;
     this.text(b,lx,y,'will migrate to the current format:',{fg:P.dim}); y++;
-    ['3 pages → v2 schema','12 versions + prompts','tweaks · pins · agent choice'].forEach(t=>{ this.text(b,lx+2,y,'• '+t,{fg:P.fg}); y++; });
-    y++; this.text(b,lx,y,'a backup is written first:',{fg:P.faint}); y++;
+    ['3 pages → current page.tsx','project + config schema','kit 2.1 · tweaks · pins · agent choice'].forEach(t=>{ this.text(b,lx+2,y,'• '+t,{fg:P.fg}); y++; });
+    y++; this.text(b,lx,y,'git history is left untouched — only current sources migrate',{fg:P.faint}); y++;
     this.text(b,lx+2,y,'.termcraft/backup-2026-07-13/',{fg:P.amberHi});
     this.hline(b,px+1,py+ph-3,pw-2,{fg:P.line}); this.put(b,px,py+ph-3,'├',{fg:P.amber}); this.put(b,px+pw-1,py+ph-3,'┤',{fg:P.amber});
     this.text(b,lx,py+ph-2,'⏎ migrate',{fg:P.amber,bold:true}); this.text(b,lx+11,py+ph-2,'· esc later',{fg:P.dim});
@@ -650,7 +691,7 @@ export class Engine {
 
   // ---- 17 preview controls ----
   wsPreviewCtl(w,h){ const P=this.pal; const LP=this.lightPal(); const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4 · light'});
+    const s=this.paneShell(b,w,h,{right:'main · light'});
     for(let yy=3;yy<s.frameH-1;yy++) for(let xx=s.dx+1;xx<w-1;xx++) this.put(b,xx,yy,' ',{bg:LP.bg,fg:LP.fg});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{pal:LP});
     this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
@@ -669,7 +710,7 @@ export class Engine {
 
   // ---- 18 tab management ----
   wsTabs(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{tabs:[['Login',false],['Main',true],['Settings',false],['Report',false],['Stats',false]], tabScroll:true, right:'main · v4'});
+    const s=this.paneShell(b,w,h,{tabs:[['Login',false],['Main',true],['Settings',false],['Report',false],['Stats',false]], tabScroll:true, right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh); this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:42}});
     const mx=s.dx+9, my=2, items=['rename','move left','move right','remove'], mw=16, mh=items.length+2;
     this.fillRect(b,mx,my,mw,mh,{ch:' ',bg:P.bg});
@@ -689,12 +730,12 @@ export class Engine {
       {role:'● codex'},{status:'⠹ generating design…',c:P.faint},{status:'✗ invalid design (schema) · retry 3/3',c:P.red},{gap:1},
       {system:'✗ generation failed — invalid design after 3 retries',c:P.red} ],
       placeholder:'describe the first page…', composerMeta:{model:'codex · gpt5.5 · high',ctx:0}});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:false,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','fullscreen'],['m','agent']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:false,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','fullscreen']]});
     return this.render(b); }
 
   // ---- 21 custom preview size (invalid input) ----
   wsPreviewCtlCustom(w,h){ const P=this.pal; const LP=this.lightPal(); const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4 · light'});
+    const s=this.paneShell(b,w,h,{right:'main · light'});
     for(let yy=3;yy<s.frameH-1;yy++) for(let xx=s.dx+1;xx<w-1;xx++) this.put(b,xx,yy,' ',{bg:LP.bg,fg:LP.fg});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{pal:LP});
     this.drawChat(b,1,s.chatW-2,s.frameH,false,{composerMeta:{model:'codex · gpt5.5 · high',ctx:87,caution:true}});
@@ -716,7 +757,7 @@ export class Engine {
 
   // ---- 22 pin dropped in interactive mode ----
   wsInteractPin(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawFormDesign(b,s.dx,s.dy,s.dw,s.dh,false);
     const ddx=s.dx+s.dw-26, ddy=s.dy+6; const items=[['all statuses',false],['paid',false],['overdue',true],['draft',false],['void',false]]; const ddw=22, ddh=items.length+2;
     this.box(b,ddx,ddy,ddw,ddh,{title:'status ▾',fg:P.amber,titleFg:P.amberHi});
@@ -734,30 +775,49 @@ export class Engine {
     this.wsStatus(b,w,h,{combo:false,ctx:false,noSize:true,mode:{t:' INTERACT ',fg:P.bg,bg:P.amberHi,bold:true},keys:[['esc','cancel'],['rclick','pin',true],['F4','static']]});
     return this.render(b); }
 
-  // ---- 23 slash menu ----
-  wsSlash(w,h,filtered){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+  // ---- 23 slash menu · shared command registry ----
+  commandRegistry(){ return [
+    {cmd:'/new',    desc:'start a new chat'},
+    {cmd:'/chats',  desc:'switch or list chats'},
+    {cmd:'/export', desc:'write the export package'},
+    {cmd:'/model',  desc:'agent · model · effort'},
+    {cmd:'/commit-page',  desc:'current page · 1 file', dot:true},
+    {cmd:'/commit-infra', desc:'infrastructure · clean', clean:true},
+    {cmd:'/commit-all',   desc:'entire project · 7 files', dot:true} ]; }
+
+  // The non-modal autocomplete popup, anchored directly above the composer.
+  slashMenu(b,chatX,chatW,composerTop,typed,o){ o=o||{}; const P=this.pal;
+    const all=this.commandRegistry();
+    const rows=(typed==='/'?all:all.filter(c=>c.cmd.indexOf(typed)===0));
+    const isCommit=c=>c.cmd.indexOf('/commit')===0;
+    rows.forEach(c=>{ c._dis = !!c.clean || (o.turn && !isCommit(c)); });
+    let selIdx=rows.findIndex(c=>!c._dis); if(selIdx<0) selIdx=0;
+    const boxW=chatW-2, boxH=rows.length+2, bx=chatX+1, by=composerTop-boxH;
+    this.fillRect(b,bx,by,boxW,boxH,{ch:' ',bg:P.bg});
+    this.box(b,bx,by,boxW,boxH,{title:typed==='/'?'commands':typed,fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    rows.forEach((c,i)=>{ const yy=by+1+i, sel=(i===selIdx), dis=c._dis;
+      if(sel) for(let k=1;k<boxW-1;k++) this.put(b,bx+k,yy,' ',{bg:P.sel});
+      this.put(b,bx+1,yy,sel?'▸':' ',{fg:dis?P.faint:P.amber,bg:sel?P.sel:P.bg,bold:true});
+      this.put(b,bx+2,yy,c.dot?'●':' ',{fg:dis?P.faint:(sel?P.selFg:P.amber),bg:sel?P.sel:P.bg,bold:!dis});
+      this.text(b,bx+3,yy,this.pad(c.cmd,13),{fg:dis?P.faint:(sel?P.selFg:P.fg),bg:sel?P.sel:P.bg,bold:sel&&!dis});
+      this.text(b,bx+17,yy,c.desc,{fg:dis?P.faint:(sel?P.selFg:P.dim),bg:sel?P.sel:P.bg}); }); }
+
+  wsSlash(w,h,typed,o){ o=o||{}; typed = (typeof typed==='string')?typed:(typed?'/ch':'/');
+    const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
-    const chatW=s.chatW, frameH=s.frameH;
+    const chatW=s.chatW, frameH=s.frameH, flt=(typed!=='/');
+    const ctx=(o.ctx!==undefined)?o.ctx:(flt?87:42);
+    const caution=(o.caution!==undefined)?o.caution:(ctx>=80);
     this.chatSeq(b,0,chatW,frameH,{seq:[
       {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
-      {role:'● codex'},{status:'✓ added network sparkline → v4',c:P.dim} ], composerMeta:{model:'codex · gpt5.5 · high',ctx:filtered?87:42,caution:!!filtered}});
-    const composerTop=frameH-4, maxX=chatW-2;
-    const typed=filtered?'/ch':'/';
+      {role:'● codex'},{status:'✓ updated network sparkline',c:P.dim} ], composerMeta:{model:'codex · gpt5.5 · high',ctx,caution}});
+    const composerTop=frameH-4;
     for(let k=3;k<chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
     this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
     this.text(b,3,composerTop+2,typed,{fg:P.fg,bold:true}); this.put(b,3+typed.length,composerTop+2,'█',{fg:P.amber,blink:true});
-    const cmds=[['/new','start a new chat'],['/chats','switch or list chats'],['/export','write the export package'],['/model','agent · model · effort']];
-    const rows=filtered?[['/chats','switch or list chats']]:cmds;
-    const boxW=chatW-2, boxH=rows.length+2, bx=1, by=composerTop-boxH;
-    this.fillRect(b,bx,by,boxW,boxH,{ch:' ',bg:P.bg});
-    this.box(b,bx,by,boxW,boxH,{title:filtered?'/ch':'commands',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
-    rows.forEach((c,i)=>{ const yy=by+1+i, sel=i===0;
-      if(sel) for(let k=1;k<boxW-1;k++) this.put(b,bx+k,yy,' ',{bg:P.sel});
-      this.put(b,bx+1,yy,sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
-      this.text(b,bx+3,yy,this.pad(c[0],8),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
-      this.text(b,bx+11,yy,c[1],{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); });
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    this.slashMenu(b,0,chatW,composerTop,typed,{});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
     return this.render(b); }
 
   // ---- 24 chats ----
@@ -772,7 +832,7 @@ export class Engine {
     this.box(b,gx,6,gw,7,{fg:P.line,title:'resources',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,14,gw,4,{fg:P.line,title:'network',titleFg:P.line,titleBold:false,tee:true});
     this.box(b,gx,19,gw,frameH-20,{fg:P.line,title:'processes',titleFg:P.line,titleBold:false,tee:true});
-    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ v4 add network sparkline',{fg:P.line});
+    this.text(b,2,2,'● codex',{fg:P.line}); this.text(b,2,4,'✓ updated network sparkline',{fg:P.line});
     this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
     this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
     { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
@@ -799,11 +859,11 @@ export class Engine {
     this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'switch',{fg:P.dim}); fx+=9;
     this.text(b,fx,ly,'/new',{fg:P.amber,bold:true}); fx+=5; this.text(b,fx,ly,'fresh chat',{fg:P.dim}); fx+=13;
     this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
     return this.render(b); }
 
   wsChatFresh(w,h){ const P=this.pal; const b=this.mk(w,h);
-    const s=this.paneShell(b,w,h,{right:'main · v4'});
+    const s=this.paneShell(b,w,h,{right:'main'});
     this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
     const chatW=s.chatW, frameH=s.frameH, maxX=chatW-2;
     this.text(b,1,1,'● codex',{fg:P.green,bold:true}); this.ctext(b,9,1,'ratatui · connected',{fg:P.faint},maxX);
@@ -815,7 +875,195 @@ export class Engine {
     this.text(b,2,composerTop,' codex · gpt5.5 · high ',{fg:P.amberHi,bold:true});
     { const tag=' ctx 3% ', rx=chatW-3-tag.length; this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,'3% ',{fg:P.fg,bold:true,bg:P.bg}); }
     this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true}); this.ctext(b,3,composerTop+2,'Ask for changes…',{fg:P.faint},maxX); this.put(b,3,composerTop+2,'█',{fg:P.amber,blink:true});
-    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact'],['[ ]','versions']]});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // ---- v1 shared helpers (Git composition) ----
+  insetBox(b,x,y,w,h,title,lines,o){ o=o||{}; const P=this.pal; const bg=o.bg||P.bg;
+    this.fillRect(b,x,y,w,h,{ch:' ',bg});
+    this.box(b,x,y,w,h,{title,fg:o.fg||P.amber,titleFg:o.titleFg||P.amberHi,bg});
+    let yy=y+1; (lines||[]).forEach(l=>{ if(yy>=y+h-1) return; const t=typeof l==='string'?l:l.t;
+      this.text(b,x+2,yy,t,{fg:(l&&l.fg)||P.fg,bold:!!(l&&l.bold),bg}); yy++; }); }
+
+  v1Base(b,w,h,o){ o=o||{}; const P=this.pal;
+    const s=this.paneShell(b,w,h,{right:o.right||'main · Current design',rightFg:o.rightFg||P.faint,rightBold:!!o.rightBold});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:!!o.dim});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:o.seq||this.baseSeq(), scrollback:o.scrollback, attach:o.attach, attachFg:o.attachFg,
+      composerDisabled:o.composerDisabled, placeholder:o.placeholder, composerMeta:{model:'codex · gpt5.5 · high',ctx:o.ctx!==undefined?o.ctx:42}});
+    return s; }
+
+  // Bottom status with the clickable source segment. Committing is invoked only
+  // through the composer slash commands (/commit-page · /commit-infra · /commit-all).
+  v1CommitStatus(b,w,h,o){ o=o||{}; const P=this.pal;
+    const mode=o.mode||{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
+    const seg={t:' main · '+(o.seg||'Current design · uncommitted')+' ',fg:P.amberHi,bold:true};
+    this.statusBar(b,h-1,[mode,seg],o.keys||[['F2','full'],['F3','tweaks'],['F4','act']]); }
+
+  // ---- 12 broken canonical source (repair turn) ----
+  wsBrokenSource(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main · Current design · uncommitted',rightFg:P.amberHi,rightBold:true});
+    const midY=s.dy+Math.floor(s.dh/2)-2;
+    this.ctr(b,s.dx,s.dw,midY,'✗ could not render current design',{fg:P.red,bold:true});
+    this.ctr(b,s.dx,s.dw,midY+2,'pages/main/page.tsx — Gate: unknown widget "GpuPanel"',{fg:P.fg});
+    this.ctr(b,s.dx,s.dw,midY+3,'fix it in a repair turn — the composer stays open',{fg:P.faint});
+    this.insetBox(b,s.dx+s.dw-38,s.dy+1,36,4,'restore (v1)',[
+      {t:'usable git history found',fg:P.dim},
+      {t:'⏎ Restore… a working commit',fg:P.amberHi} ]);
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
+      {role:'● codex'},{status:'✓ wrote main/page.tsx',c:P.dim},{gap:1},
+      {system:'✗ current design failed Gate — preview unavailable',c:P.red} ],
+      attach:'describe a fix — composer is enabled', attachFg:P.amberHi, placeholder:'fix the GpuPanel widget…', composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · Current design · uncommitted',verFg:P.amberHi,verBold:true,
+      hint:'preview error — composer enabled',hintFg:P.red,hintBg:P.redDim,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
+  // ---- 25 commit commands (v1) ----
+  // Composer shows /commit typed; the slash menu filters to the three commit commands.
+  wsCommitCommands(w,h){ return this.wsSlash(w,h,'/commit',{ctx:44}); }
+
+  wsCommitConfirm(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.v1Base(b,w,h,{dim:true,ctx:44});
+    this.dim(b,0,0,w,s.frameH);
+    const pw=58, ph=13, px=Math.floor((w-pw)/2), py=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
+    this.box(b,px,py,pw,ph,{title:'commit · current page',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=px+3; let y=py+2;
+    this.text(b,lx,y,'message',{fg:P.dim,bg:P.bg}); y++;
+    this.box(b,lx,y,pw-6,3,{fg:P.amber,bg:P.bg});
+    const msg='design(main): update System monitor'; this.text(b,lx+2,y+1,msg,{fg:P.fg,bg:P.bg}); this.put(b,lx+2+msg.length,y+1,'█',{fg:P.amber,blink:true,bg:P.bg}); y+=4;
+    this.text(b,lx,y,'scope',{fg:P.dim,bg:P.bg}); this.text(b,lx+8,y,'current page',{fg:P.amberHi,bg:P.bg,bold:true}); y++;
+    this.text(b,lx,y,'M .termcraft/pages/main/page.tsx',{fg:P.green,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'⏎ commit',{fg:P.amber,bold:true,bg:P.bg}); this.text(b,lx+9,y,'· esc cancel · empty msg disables',{fg:P.faint,bg:P.bg});
+    this.insetBox(b,px+pw+2,py+1,26,7,'stale plan',[
+      {t:'⚠ HEAD moved since',fg:P.amberHi},
+      {t:'the preview',fg:P.amberHi},
+      {t:'file plan refreshed —',fg:P.dim},
+      {t:'confirm again to',fg:P.dim},
+      {t:'commit',fg:P.dim} ]);
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['⏎','commit'],['esc','cancel']]});
+    return this.render(b); }
+
+  wsCommitTurn(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main · Current design',rightFg:P.faint});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2),'⠹ generating…',{fg:P.amber,bold:true});
+    const chatW=s.chatW, frameH=s.frameH;
+    this.chatSeq(b,0,chatW,frameH,{seq:[
+      {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
+      {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true},{status:'▸ writing widgets',c:P.fg},{gap:1},
+      {system:'⚑ commit now records the applied design; the new apply may land as a fresh uncommitted change'},
+      {system:'Restore is disabled until the turn finishes'} ],
+      attach:'local commands only — /commit-* still run', attachFg:P.amberHi,
+      composerMeta:{model:'codex · gpt5.5 · high',ctx:47}});
+    const composerTop=frameH-4;
+    for(let k=3;k<chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
+    this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
+    this.text(b,3,composerTop+2,'/',{fg:P.fg,bold:true}); this.put(b,4,composerTop+2,'█',{fg:P.amber,blink:true});
+    this.slashMenu(b,0,chatW,composerTop,'/',{turn:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
+    return this.render(b); }
+
+  // ---- 26 explicit Restore (v1) ----
+  wsRestoreConfirm(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.v1Base(b,w,h,{dim:true,ctx:42});
+    this.dim(b,0,0,w,s.frameH);
+    const pw=62, ph=13, px=Math.floor((w-pw)/2), py=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
+    this.box(b,px,py,pw,ph,{title:'restore · main',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    const lx=px+3; let y=py+2;
+    this.text(b,lx,y,'restore .termcraft/pages/main/page.tsx',{fg:P.fg,bg:P.bg}); y++;
+    this.text(b,lx,y,'from a1b2c3d3e9f0c14b7',{fg:P.amberHi,bg:P.bg,bold:true}); this.text(b,lx+21,y,'(a1b2c3d)',{fg:P.dim,bg:P.bg}); y++;
+    this.text(b,lx,y,'dröscher · 2h ago · "widen the process table"',{fg:P.dim,bg:P.bg}); y+=2;
+    for(let k=1;k<pw-1;k++) this.put(b,px+k,y,' ',{bg:P.redDim});
+    this.text(b,lx-1,y,'⚠ overwrites uncommitted design changes — no backup',{fg:P.red,bg:P.redDim,bold:true}); y+=2;
+    this.text(b,lx,y,'⏎ restore',{fg:P.amber,bold:true,bg:P.bg}); this.text(b,lx+10,y,'· esc cancel',{fg:P.faint,bg:P.bg}); y++;
+    this.text(b,lx,y,'disabled during a turn or when the source fails Gate',{fg:P.faint,bg:P.bg});
+    this.insetBox(b,px+pw+2,py+1,25,7,'staged',[
+      {t:'✗ page source is',fg:P.red,bold:true},
+      {t:'staged — termcraft',fg:P.red},
+      {t:'will not unstage it',fg:P.red},
+      {t:'unstage, then',fg:P.faint},
+      {t:'retry Restore',fg:P.faint} ]);
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['⏎','restore'],['esc','cancel']]});
+    return this.render(b); }
+
+  wsRestoreApplied(w,h){ const P=this.pal; const b=this.mk(w,h);
+    this.v1Base(b,w,h,{seq:[
+      {role:'❯ you'},{body:'widen the process table'},{gap:1},
+      {role:'● codex'},{status:'✓ widened the process table',c:P.dim},{gap:1},
+      {system:'⟲ restored main from a1b2c3d'},{gap:1},
+      {system:'no commit created · branch and index unchanged',c:P.faint} ],
+      attach:'restored — now an uncommitted change', attachFg:P.amberHi, ctx:42});
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
+  wsRestoreRecordPending(w,h){ const P=this.pal; const b=this.mk(w,h);
+    this.v1Base(b,w,h,{seq:[
+      {role:'● codex'},{status:'✓ widened the process table',c:P.dim},{gap:1},
+      {system:'⟲ restored main from a1b2c3d'},{gap:1},
+      {system:'✗ couldn\u2019t append the restore record — disk full',c:P.red},
+      {system:'the page is restored and active — only the record failed',c:P.faint},
+      {system:'retry records into chat "system monitor"',c:P.faint} ],
+      attach:'⏎ Retry record · records only, no rewrite', attachFg:P.amberHi, ctx:42});
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['⏎','retry record'],['esc','dismiss']]});
+    return this.render(b); }
+
+  // ---- 27 git availability & errors (v1) ----
+  gitUnavailable(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'build a system monitor'},{gap:1},
+      {role:'● codex'},{status:'✓ created page main',c:P.dim},{gap:1},
+      {system:'git not found — history & commit unavailable',c:P.faint},
+      {system:'design, tweaks, pins and export still work',c:P.faint} ],
+      placeholder:'Ask for changes…', composerMeta:{model:'codex · gpt5.5 · high',ctx:22}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main',hint:'git off',hintFg:P.faint,hintBg:P.line,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
+  wsGitEdge(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.v1Base(b,w,h,{dim:true,ctx:42});
+    this.dim(b,0,0,w,s.frameH);
+    const gx=s.dx+3, gy=s.dy+1, iw=Math.floor((s.dw-9)/2), ih=6;
+    this.insetBox(b,gx,gy,iw,ih,'no commits',[
+      {t:'history shows only',fg:P.dim},
+      {t:'Current design · uncommitted',fg:P.amberHi},
+      {t:'a commit scope may',fg:P.dim},
+      {t:'create the root commit',fg:P.dim} ]);
+    this.insetBox(b,gx+iw+3,gy,iw,ih,'detached HEAD',[
+      {t:'browse + Restore work',fg:P.dim},
+      {t:'commit confirmation adds',fg:P.dim},
+      {t:'a second explicit warning',fg:P.amberHi} ]);
+    this.insetBox(b,gx,gy+ih+1,iw,ih,'sequencer active',[
+      {t:'merge / rebase / revert',fg:P.dim},
+      {t:'commit controls disabled',fg:P.red},
+      {t:'until the op finishes',fg:P.dim} ]);
+    this.insetBox(b,gx+iw+3,gy+ih+1,iw,ih,'shallow clone',[
+      {t:'local rows carry',fg:P.dim},
+      {t:'partial history',fg:P.amberHi},
+      {t:'no Fetch action',fg:P.dim} ]);
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['esc','close']]});
+    return this.render(b); }
+
+  wsGitError(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.v1Base(b,w,h,{dim:true,ctx:42});
+    this.dim(b,0,0,w,s.frameH);
+    const pw=76, ph=16, px=Math.floor((w-pw)/2), py=Math.floor((h-ph)/2)-1;
+    this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
+    this.box(b,px,py,pw,ph,{title:'git error',fg:P.red,titleFg:P.red,bg:P.bg});
+    const lx=px+3; let y=py+2;
+    const rows=[
+      ['identity','✗ no user.name / user.email — set them, then retry'],
+      ['hook / signing','✗ pre-commit hook failed (exit 1) — commit aborted'],
+      ['timeout','✗ git timed out after 10s — nothing was written'],
+      ['corrupt object','✗ object 3c7d1a8 is corrupt — repository unreadable'],
+      ['index lock','✗ index.lock held — another git is running'] ];
+    rows.forEach(r=>{ this.text(b,lx,y,this.pad(r[0],15),{fg:P.faint,bg:P.bg,bold:true}); this.text(b,lx+15,y,r[1],{fg:P.red,bg:P.bg}); y++; });
+    y++;
+    this.text(b,lx,y,'index lock:',{fg:P.dim,bg:P.bg}); this.text(b,lx+12,y,'⏎ Retry',{fg:P.amber,bg:P.bg,bold:true}); y++;
+    this.text(b,lx,y,'after a failed commit, status refreshes — hooks may edit files',{fg:P.faint,bg:P.bg});
+    this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['esc','close']]});
     return this.render(b); }
 
   legendEl(){ const P=this.pal; const React = window.React;

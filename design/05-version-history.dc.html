@@ -36,21 +36,36 @@
 
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
-      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">05 · Version history</span>
-      <span style="color:#5b544a;font-size:12px;">ws-ver-120</span>
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">05 · Git history</span>
+      <span style="color:#5b544a;font-size:12px;">ws-git-history-120</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Stepping through versions with <span style="color:#e6a23c;">[</span> / <span style="color:#e6a23c;">]</span> opens a compact popup over the dimmed workspace: version, time, prompt excerpt, rollback.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">v1 only. Focusing the <span style="color:#e6a23c;">main · Current design</span> segment and pressing Enter opens the repository's first-parent history for the page's canonical <span style="color:#e6a23c;">page.tsx</span> — short hash, author, time, subject. Selecting a commit previews it read-only; <span style="color:#e6a23c;">Restore…</span> is a separate explicit action, never the default. The insets below show how the first row resolves per repository state.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
     <div id="ws-ver-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · version history</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-ver-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · git history</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-git-history-120</span>
       </div>
       {{ verHist120 }}
     </div>
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">First-row precedence</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">how the history list opens per repository state</span>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;">
+    <sc-for list="{{ insets }}" as="it" hint-placeholder-count="5">
+      <div style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="flex:1;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">{{ it.label }}</span>
+        </div>
+        {{ it.el }}
+      </div>
+    </sc-for>
   </div>
 </div>
 </x-dc>
@@ -66,7 +81,14 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { verHist120: e.verHist(120,36) };
+    const insets = [
+      {label:'unborn repository', el:e.gitHistoryInset('unborn')},
+      {label:'untracked page · no ancestry', el:e.gitHistoryInset('untracked')},
+      {label:'recreated page · has ancestry', el:e.gitHistoryInset('recreated')},
+      {label:'source equals current commit', el:e.gitHistoryInset('tracked-eq')},
+      {label:'tracked source with changes', el:e.gitHistoryInset('tracked-changes')}
+    ];
+    return { verHist120: e.verHist(120,36), insets };
   }
 }
 </script>

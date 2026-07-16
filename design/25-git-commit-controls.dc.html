@@ -28,44 +28,44 @@
       <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
     </a>
     <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
-      <a href="./09-version-browse.dc.html" style="color:#8f877a;">‹ Historical commit preview</a>
+      <a href="./24-chats.dc.html" style="color:#8f877a;">‹ Chats</a>
       <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
-      <a href="./11-interactive-mode.dc.html" style="color:#8f877a;">Interactive mode ›</a>
+      <a href="./26-restore.dc.html" style="color:#8f877a;">Explicit Restore ›</a>
     </div>
   </div>
 
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
-      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">10 · Fullscreen preview (F2)</span>
-      <span style="color:#5b544a;font-size:12px;">ws-full-120 · ws-full-small-120 · ws-small-120</span>
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">25 · Git commit commands</span>
+      <span style="color:#5b544a;font-size:12px;">ws-commit-commands-120 · ws-commit-confirm-120 · ws-commit-turn-120</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">F2 hides the chat and lets the preview fill the terminal; tabs and status bar stay. When the design's <span style="color:#dd7b60;">minSize</span> exceeds the available area, the size indicator turns <span style="color:#dd7b60;">error-colored</span> — shown both in fullscreen (<span style="color:#dd7b60;">78×22 &lt; 80×24</span>) and in a normal windowed frame (<span style="color:#dd7b60;">ws-small-120</span>).</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:76ch;line-height:1.5;">v1 · optional Git. Committing is invoked only through composer slash commands — <span style="color:#e6a23c;">/commit-page</span>, <span style="color:#e6a23c;">/commit-infra</span>, <span style="color:#e6a23c;">/commit-all</span>. There is no generic <span style="color:#e6a23c;">/commit</span>; typing it only filters the slash menu to those three. Each dirty command carries its own <span style="color:#e6a23c;">●</span> and changed-file count; a clean scope drops the dot, reads <span style="color:#f6c163;">clean</span>, and is disabled. Status is stated in the row text and count, never color alone. Selecting a command opens the same scoped confirmation. <span style="color:#e6a23c;">/commit-page</span> covers only <span style="color:#e6a23c;">pages/&lt;slug&gt;/page.tsx</span>; on Home the project commands stay hidden.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
-    <div id="ws-full-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-commit-commands-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · fullscreen · 120×36</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-full-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · commit commands</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-commit-commands-120</span>
       </div>
-      {{ wsFull120 }}
+      {{ commands }}
     </div>
-    <div id="ws-full-small-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-commit-confirm-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · fullscreen · too small</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-full-small-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · commit confirm</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-commit-confirm-120</span>
       </div>
-      {{ wsFullSmall120 }}
+      {{ confirm }}
     </div>
-    <div id="ws-small-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div id="ws-commit-turn-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
-        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · preview too small</span>
-        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-small-120</span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · commit during a turn</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-commit-turn-120</span>
       </div>
-      {{ wsSmall120 }}
+      {{ turn }}
     </div>
   </div>
 </div>
@@ -82,7 +82,11 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { wsFull120: e.wsFull(120,36,false), wsFullSmall120: e.wsFull(120,36,true), wsSmall120: e.wsSmallSize(120,36) };
+    return {
+      commands: e.wsCommitCommands(120,36),
+      confirm: e.wsCommitConfirm(120,36),
+      turn: e.wsCommitTurn(120,36)
+    };
   }
 }
 </script>
