@@ -399,31 +399,43 @@ switches — following the existing popup pattern (§3.6, §3.8; UI reference:
 > supersedes the legacy composer version-browsing and version-segment behavior in
 > this section: the MVP has no history UI, and v1 uses Git history with
 > historical selections kept read-only until returning to **Current design**.
+> It also extends the v1 slash menu with `/commit-page`, `/commit-infra`, and
+> `/commit-all`; these are the only commit triggers and open the existing scoped
+> confirmation dialog.
 
 Typing `/` as the first character of an empty primary input (the Workspace composer
 or the Home prompt) opens the **slash menu**: an autocomplete list anchored to the
 input, filtering as you type, each command with a one-line description. Enter runs
 the highlighted command; Esc closes the menu (§3.8). The menu is not a modal popup —
-it never dims the screen — and it is just another view over the §4 action table: a
-command whose availability predicate fails (e.g. anything but sending while a turn
-runs — sending included, §3.2) shows dimmed with the same hint the status bar would give; a command
-meaningless on the current screen is hidden (on Home only `/model` applies, and when
-nothing applies the menu simply does not open). On Enter, composer text that exactly
-names a known command runs it; anything else is sent as a chat message.
+it never dims the screen — and it is just another view over the §4 action table. A
+command whose availability predicate fails shows dimmed with the same hint the
+status bar would give; a command meaningless on the current screen is hidden (on
+Home only `/model` applies, and when nothing applies the menu simply does not
+open). While a turn runs, ordinary message sending remains disabled but `/` on an
+otherwise empty composer still opens local command mode: the v1 `/commit-*`
+commands remain available according to Git scope state while other turn-locked
+commands stay dimmed. On Enter, composer text that exactly names a known command
+runs it; anything else is sent as a chat message when sending is available.
 
-Commands are argument-less; each dispatches the same action-table entry as its
-hotkey or mouse twin:
+Commands are argument-less; each dispatches its action-table entry and any
+hotkey or mouse twin where one exists:
 
 - `/new` — start a new chat and switch to it (§3.9). MVP.
 - `/chats` — open the chat list popup (§3.9). MVP.
 - `/export` — run the export, same as `Ctrl+E` (§3.7). MVP.
 - `/model` — open the agent · model · effort picker (§3.6). v1.0.
+- `/commit-page` — open scoped commit confirmation for the active page's
+  canonical `page.tsx`. v1.0; governed by the continuation.
+- `/commit-infra` — open scoped commit confirmation for portable termcraft
+  infrastructure. v1.0; governed by the continuation.
+- `/commit-all` — open scoped commit confirmation for every eligible changed
+  path under `.termcraft/`. v1.0; governed by the continuation.
 
-The set is deliberately small: slash commands cover conversation- and
-configuration-level actions, while live view controls (fullscreen, mode, version
-browsing) stay on keys — and everything mouse-reachable stays mouse-reachable
-(§3.8): the composer's model chip and the status bar's version segment keep their
-clicks as parallel triggers of the same actions.
+The set is deliberately small: slash commands cover conversation,
+configuration, and explicit scoped commits, while live view controls stay on
+keys. The composer's model chip and the v1 Current-design/history segment keep
+their mouse and keyboard entry points, but commit commands deliberately have no
+persistent button or mouse twin.
 
 ## 4. Architecture
 
@@ -998,7 +1010,7 @@ version, never an overwrite.
 14. Multiple chats per project (§3.9): `/new`, `/chats` with the chat list popup,
     per-chat agent sessions, the composer's context-usage indicator.
 15. Composer slash menu (§3.10) with the full v1.0 command set: `/new`, `/chats`,
-    `/export`, `/model`.
+    `/export`, `/model`, `/commit-page`, `/commit-infra`, `/commit-all`.
 
 ### 8.2 MVP cut
 

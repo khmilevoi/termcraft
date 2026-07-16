@@ -40,9 +40,10 @@ One document per user-visible process:
   a temporary file plus rename, and a crash during multi-file apply can leave a partial
   turn until a separate Turn Transaction design exists.
 - [flows/chats.md](flows/chats.md) — several conversations over one project: the
-  slash menu, creating and switching chats, per-chat agent sessions.
+  slash menu, creating and switching chats, per-chat agent sessions, and the v1
+  `/commit-page`, `/commit-infra`, and `/commit-all` triggers.
 - [flows/versions.md](flows/versions.md) — v1 Git-backed page history: read-only
-  browsing, explicit Restore, and user-confirmed scoped commits. The governing
+  browsing, explicit Restore, and slash-command-triggered scoped commits. The governing
   behavior is the continuation specification linked above.
 - [flows/interactive-prototype.md](flows/interactive-prototype.md) — real
   component state inside the design host; what crosses the boundary for

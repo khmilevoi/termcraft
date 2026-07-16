@@ -275,58 +275,61 @@ the recovery boundary for unstaged current changes.
 
 ## 8. User-initiated commits in v1
 
-History adds a split-button:
+The Workspace composer slash menu adds three argument-less commands:
 
-```text
-[ ● Commit current page ][ ▾ ● ]
-```
-
-The primary action commits only
-`.termcraft/pages/<active-slug>/page.tsx`. It commits the exact current design
-from disk. Absent hook side effects, after success that source is clean relative
-to the new `HEAD`, and the adapter's own operations preserve all unrelated
-staged and unstaged state. User hooks may instead modify the active source or
-other files according to their own policy; termcraft neither suppresses nor
-rewrites those effects. The mandatory post-attempt status refresh exposes any
-hook-induced dirty state and every other changed file.
-
-The dropdown contains two additional scopes:
-
-- **Commit infrastructure** — `project.toml`, `config.toml`, the generated
+- `/commit-page` — commit only
+  `.termcraft/pages/<active-slug>/page.tsx`;
+- `/commit-infra` — commit `project.toml`, `config.toml`, the generated
   `.gitignore`, and future portable project-level schema or metadata files;
-- **Commit entire project** — every non-ignored changed, added, or deleted path
-  under `.termcraft/`, including pages, chats, pins, and export artifacts.
+- `/commit-all` — commit every non-ignored changed, added, or deleted path under
+  `.termcraft/`, including pages, chats, pins, and export artifacts.
+
+There is no persistent commit button, split-button, dropdown arrow, or mouse
+twin. Each command dispatches its scope through the same action-table and Kernel
+commit-planning path. `/commit-page` commits the exact current design from disk.
+Absent hook side effects, after success that source is clean relative to the new
+`HEAD`, and the adapter's own operations preserve all unrelated staged and
+unstaged state. User hooks may instead modify the active source or other files
+according to their own policy; termcraft neither suppresses nor rewrites those
+effects. The mandatory post-attempt status refresh exposes any hook-induced
+dirty state and every other changed file.
 
 Lock files, backups, `*.local.*`, and every path outside `.termcraft/` are
 excluded. A new page may be committed separately from its infrastructure
-change; the remaining dropdown status makes that incomplete project commit
-visible until the user commits the infrastructure or the whole project.
+change; the remaining command-row status makes that incomplete project commit
+visible until the user runs `/commit-infra` or `/commit-all`.
 
-Every action opens a confirmation dialog containing an editable commit-message
-template and the exact added, modified, and deleted paths. The page template is
-`design(<slug>): update <title>`; infrastructure and whole-project scopes use
-scope-specific termcraft templates. No template contains chat or prompt text.
+Every command opens the same confirmation dialog containing an editable
+commit-message template and the exact added, modified, and deleted paths. The
+page template is `design(<slug>): update <title>`; infrastructure and
+whole-project scopes use scope-specific termcraft templates. No template
+contains chat or prompt text.
 
-Status indicators are derived from Git state:
+Status indicators are derived from Git state and rendered on the slash-menu
+command rows:
 
-- a dot on the primary button means the active page source differs from
-  `HEAD`;
-- a dot beside the dropdown arrow means another path under `.termcraft/`
+- `/commit-page` has a dot and changed-file count when the active page source
   differs from `HEAD`;
-- each dropdown action has its own dot and changed-file count;
-- an action with no changes has no dot and is disabled.
+- `/commit-infra` has its own dot and count for eligible infrastructure paths;
+- `/commit-all` has its own dot and count for every eligible changed path under
+  `.termcraft/`;
+- a command whose scope has no changes has no dot and is disabled.
 
 Color is not the only status signal: tooltips and accessible labels name the
 dirty scope. Status is refreshed after every user-initiated Git operation or
 commit attempt and after Kernel apply. Inspection commands used by refresh do
 not recursively trigger another refresh.
 
-Commit controls remain available while an agent turn runs. During that turn,
-Git commit execution contends through the project-write mutex only with the
-short final Kernel apply, not network streaming, validation, or Gate. A commit
-made before apply records the currently applied design; the later turn result
-becomes a new uncommitted change. Outside agent turns, Restore's ordered source
-and captured-target-chat record writes use the same mutex.
+The three commit commands remain available while an agent turn runs. Ordinary
+message sending stays disabled, but typing `/` on the otherwise empty composer
+enters local command mode and opens the slash menu. The `/commit-*` rows remain
+enabled according to their Git scope state; turn-locked commands remain visible
+but dimmed with their refusal reason. During that turn, Git commit execution
+contends through the project-write mutex only with the short final Kernel apply,
+not network streaming, validation, or Gate. A commit made before apply records
+the currently applied design; the later turn result becomes a new uncommitted
+change. Outside agent turns, Restore's ordered source and captured-target-chat
+record writes use the same mutex.
 
 Before confirmation the Kernel records the expected `HEAD` and scope hashes.
 Immediately before committing it revalidates both. A changed plan is shown
@@ -437,8 +440,10 @@ Tests create temporary real repositories and cover:
 - overwrite confirmation naming the exact source path;
 - disabled send, Tweaks, pin creation, pin reopening, and pin-status changes
   while browsing a commit;
-- independent page and dropdown status dots;
-- per-scope file counts, disabled clean scopes, and accessible status labels;
+- independent `/commit-page`, `/commit-infra`, and `/commit-all` status dots;
+- per-command file counts, disabled clean scopes, and accessible status labels;
+- turn-time local command mode with `/commit-*` enabled by scope while message
+  sending and other locked command rows remain disabled;
 - commit dialog file list, message validation, detached-HEAD warning, and Git
   error presentation.
 
@@ -461,8 +466,9 @@ v1:
 - browsing never changes repository state;
 - Restore safely replaces only the page's canonical design source after Gate,
   index, freshness, and confirmation checks;
-- the split-button can explicitly commit the current page, infrastructure, or
-  the entire `.termcraft/` project while preserving unrelated repository state;
+- `/commit-page`, `/commit-infra`, and `/commit-all` explicitly commit their
+  respective scopes while preserving unrelated repository state and opening the
+  same confirmation dialog;
 - during an agent turn, commit execution contends only with final apply, not
   network streaming, validation, or Gate; outside agent turns, Restore's ordered
   source and record writes use the same project-write mutex;
