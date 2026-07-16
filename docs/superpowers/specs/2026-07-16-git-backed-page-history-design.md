@@ -388,6 +388,9 @@ Tests create temporary real repositories and cover:
 - Restore is blocked for a staged source.
 - A source change after confirmation forces reconfirmation.
 - Gate failure leaves the current source untouched.
+- A Restore system-record schema/decoder fixture requires `restoreActionId`,
+  `page`, and full `sourceCommit`.
+- The fixture rejects a Restore record missing `restoreActionId`.
 - Successful Restore changes only the selected `page.tsx` and appends one
   restore system record containing `restoreActionId`, page, and full source
   commit id to the active chat; other chats remain untouched.

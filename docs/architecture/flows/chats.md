@@ -22,7 +22,7 @@ flowchart TD
 5. Switching resumes the target chat's stored SDK session id.
    - *Failure:* resume fails (a stale session, another machine, a switched backend) — a fresh session starts silently, seeded with a short excerpt of that chat's recent records.
 6. Context usage: an indicator on the composer's border renders token usage the backend reports in its event stream; a backend that reports nothing hides the indicator. termcraft never compacts a conversation itself — starting a new chat is the designer's context management.
-7. One turn runs at a time per project regardless of chat. System records for errors, cancellations, and an explicit v1 Restore land in the chat that was active when the event occurred; a Restore record names the page and source commit but does not associate a later Git commit with that chat or prompt.
+7. One turn runs at a time per project regardless of chat. System records for errors, cancellations, and an explicit v1 Restore land in the chat that was active when the event occurred; a Restore record contains the unique `restoreActionId` idempotency key, the page, and the full source commit id, but does not associate a later Git commit with that chat or prompt. Append-only **Retry record** checks the same action id before appending, so an ambiguous append acknowledgement cannot create a duplicate and the action produces exactly one audit record.
    - *Failure:* chat creation and switching are locked while a turn runs; the refused command shows dimmed in the slash menu with the same status-bar hint.
 
 ## Source anchors
