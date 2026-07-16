@@ -6,17 +6,20 @@ Status: approved design
 ## 1. Purpose
 
 Remove termcraft's private page-version system. The MVP stores one canonical
-design source per page and has no version-browsing UI. Version browsing returns
-in v1 as a read-mostly view over commits already created by the user in the
-target project's Git repository.
+design source per page and has no version-browsing or Git UI. In v1, page
+history returns as a read-mostly view over commits, accompanied by explicit,
+user-confirmed controls for creating scoped termcraft commits.
 
 Git remains optional. A project outside a Git repository retains every design,
-generation, preview, pin, chat, and export capability; only page history is
-unavailable.
+generation, preview, pin, chat, and export capability; page history and commit
+controls are unavailable.
 
 ## 2. Decisions
 
-- termcraft never creates commits, branches, tags, refs, stashes, or worktrees.
+- termcraft never creates Git history autonomously. In v1 an explicit,
+  user-confirmed commit control may create a commit on the current `HEAD`.
+- termcraft never creates or switches branches, tags, custom refs, stashes, or
+  worktrees, and never pushes, pulls, or fetches.
 - In the MVP there are no `vN` files, version hotkeys, history popup, rollback,
   or version numbers in chat records.
 - Each page has one canonical source:
@@ -36,6 +39,9 @@ unavailable.
 - Restore replaces only the selected page's design source in the working
   directory. It does not create a commit or change `HEAD`, the current branch,
   or the Git index.
+- v1 exposes three explicit commit scopes: the active page source, portable
+  termcraft infrastructure, and the whole non-ignored `.termcraft/` project.
+  No scope can include files outside `.termcraft/`.
 
 ## 3. Storage and terminology
 
@@ -69,9 +75,9 @@ not short hashes or list positions, are used by commands.
 
 ## 4. Component boundary
 
-The Kernel accesses Git only through a `GitHistory` port. The first adapter
-drives the user's installed Git CLI. UI code, the Project store, and the design
-host never invoke Git directly.
+The Kernel accesses Git through `GitHistory` and `GitCommitter` ports. One
+adapter drives the user's installed Git CLI for both. UI code, the Project
+store, and the design host never invoke Git directly.
 
 Conceptually the port provides:
 
@@ -83,6 +89,16 @@ interface GitHistory {
   readPageSource(commitId: string, sourcePath: string): Promise<Uint8Array>
   inspectIndex(sourcePath: string): Promise<PageIndexState>
 }
+
+type CommitScope =
+  | { kind: "current-page", slug: string }
+  | { kind: "infrastructure" }
+  | { kind: "entire-project" }
+
+interface GitCommitter {
+  planCommit(scope: CommitScope): Promise<CommitPlan>
+  commit(plan: CommitPlan, message: string): Promise<CommitResult>
+}
 ```
 
 The adapter executes argument arrays without shell interpolation, applies a
@@ -90,6 +106,19 @@ bounded timeout, captures bounded stdout and stderr, and converts failures to
 typed errors. Commit subjects and author names are untrusted display strings:
 the adapter bounds their length and the UI renders them as text, never terminal
 markup.
+
+`CommitPlan` contains the expected `HEAD`, the selected paths and their current
+states and content hashes. `commit` revalidates the plan before invoking Git;
+it refuses a stale plan rather than silently committing a different file set.
+The adapter itself preserves staged and unstaged state outside the selected
+scope. User hooks remain free to modify files by their own policy; any such side
+effects are surfaced by the mandatory post-command status refresh. Within the
+selected scope the adapter commits the latest content from disk, even when an
+older copy of that path was already staged.
+
+Commit execution honors the user's hooks and signing configuration. termcraft
+passes the confirmed message without opening an editor and does not use
+`--no-verify` or `--no-gpg-sign`.
 
 The intended history semantics are equivalent to a path-limited, first-parent
 walk from `HEAD`. Historical file contents are read from the selected commit's
@@ -174,26 +203,85 @@ The operation follows these rules:
 termcraft creates no hidden backup. The warning and explicit confirmation are
 the recovery boundary for unstaged current changes.
 
-## 8. Availability and errors
+## 8. User-initiated commits in v1
+
+History adds a split-button:
+
+```text
+[ ● Commit current page ][ ▾ ● ]
+```
+
+The primary action commits only
+`.termcraft/pages/<active-slug>/page.tsx`. It commits the exact current design
+from disk. After success that source is clean relative to the new `HEAD`; all
+unrelated staged and unstaged changes preserve their state.
+
+The dropdown contains two additional scopes:
+
+- **Commit infrastructure** — `project.toml`, `config.toml`, the generated
+  `.gitignore`, and future portable project-level schema or metadata files;
+- **Commit entire project** — every non-ignored changed, added, or deleted path
+  under `.termcraft/`, including pages, chats, pins, and export artifacts.
+
+Lock files, backups, `*.local.*`, and every path outside `.termcraft/` are
+excluded. A new page may be committed separately from its infrastructure
+change; the remaining dropdown status makes that incomplete project commit
+visible until the user commits the infrastructure or the whole project.
+
+Every action opens a confirmation dialog containing an editable commit-message
+template and the exact added, modified, and deleted paths. The page template is
+`design(<slug>): update <title>`; infrastructure and whole-project scopes use
+scope-specific termcraft templates. No template contains chat or prompt text.
+
+Status indicators are derived from Git state:
+
+- a dot on the primary button means the active page source differs from
+  `HEAD`;
+- a dot beside the dropdown arrow means another path under `.termcraft/`
+  differs from `HEAD`;
+- each dropdown action has its own dot and changed-file count;
+- an action with no changes has no dot and is disabled.
+
+Color is not the only status signal: tooltips and accessible labels name the
+dirty scope. Status is refreshed after every successful or failed Git command
+and after Kernel apply.
+
+Commit controls remain available while an agent turn runs. Git commit and the
+short Kernel apply phase share the project-write mutex, so their physical reads
+and writes cannot overlap. A commit made before apply records the currently
+applied design; the later turn result becomes a new uncommitted change.
+
+Before confirmation the Kernel records the expected `HEAD` and scope hashes.
+Immediately before committing it revalidates both. A changed plan is shown
+again and requires a new confirmation. A detached `HEAD` is allowed only after
+an additional warning. An active merge, rebase, cherry-pick, or revert blocks
+termcraft's commit controls so they cannot interfere with Git sequencer state.
+
+## 9. Availability and errors
 
 | Condition | Behavior |
 |---|---|
-| Git executable unavailable | The application works; history explains that Git is unavailable. |
-| Project is not a Git repository | The application works; history is unavailable. |
-| Repository has no commits | Only `Current design` is shown. |
+| Git executable unavailable | The application works; history and commit controls explain that Git is unavailable. |
+| Project is not a Git repository | The application works; history and commit controls are unavailable. |
+| Repository has no commits | Only `Current design` is shown; a selected commit scope may create the root commit. |
 | Page source is untracked | Only `Current design · uncommitted` is shown. |
 | Shallow repository | Reachable local entries are shown with `partial history`; termcraft never fetches automatically. |
-| Detached HEAD | History walks from that HEAD; browsing and Restore remain available. |
-| Source is staged | Browsing works; Restore is blocked. |
+| Detached HEAD | History and Restore work; commit requires an additional warning and confirmation. |
+| Source is staged | Browsing works; Restore is blocked; page commit records the latest source from disk. |
 | Git object is missing or corrupt | The error names the commit and path; no project file changes. |
 | Historical source fails Gate | Preview shows the Gate/host error; Restore is disabled. |
 | Git command times out or exceeds output limits | The operation fails with a bounded error; the current project state remains active. |
+| Git identity is missing | Commit fails with Git's error plus a concise `user.name`/`user.email` setup hint. |
+| Commit message is empty | The dialog's Commit action is disabled. |
+| Merge/rebase/cherry-pick/revert is active | Commit controls are disabled until the sequencer operation ends. |
+| Index lock remains busy | The command waits briefly, then fails with a Retry action. |
+| Hook or signing fails | Git output is shown and status is refreshed because the hook may have changed files. |
 
 History starts at the commit that introduced the immutable page path. Reusing a
 deleted slug means resurrecting the same page identity and its Git history;
 creating an unrelated page under an old slug is unsupported.
 
-## 9. Testing
+## 10. Testing
 
 ### Git adapter integration tests
 
@@ -206,7 +294,14 @@ Tests create temporary real repositories and cover:
 - untracked, unstaged, and staged page sources;
 - an unborn repository, detached HEAD, and shallow clone;
 - a historical source missing from an earlier commit;
-- bounded handling of long subjects, author names, stderr, and timeouts.
+- bounded handling of long subjects, author names, stderr, and timeouts;
+- current-page commit with unrelated staged and unstaged changes;
+- current-page source edited again after `git add`;
+- root commit containing a new untracked page;
+- infrastructure-only and entire-project scopes;
+- ignored local files and application files outside `.termcraft/` excluded;
+- successful and failing hooks, missing identity, and signing failure;
+- detached HEAD and active Git sequencer states.
 
 ### Kernel contract tests
 
@@ -221,6 +316,12 @@ Tests create temporary real repositories and cover:
   restore system record.
 - `HEAD`, branch, and index are byte-for-byte or object-for-object unchanged by
   browsing and Restore.
+- In the absence of explicit hook side effects, successful and failed scoped
+  commits preserve staged and unstaged state outside their scope; hook changes
+  are surfaced by the post-command status refresh.
+- A changed `HEAD` or scope after preview forces replanning and reconfirmation.
+- Commit and Kernel apply serialize through the project-write mutex while the
+  agent turn itself remains unblocked.
 
 ### UI tests
 
@@ -229,9 +330,13 @@ Tests create temporary real repositories and cover:
 - unavailable, empty, and Git-error presentations;
 - staged-source refusal;
 - overwrite confirmation naming the exact source path;
-- disabled send and Tweaks while browsing a commit.
+- disabled send and Tweaks while browsing a commit;
+- independent page and dropdown status dots;
+- per-scope file counts, disabled clean scopes, and accessible status labels;
+- commit dialog file list, message validation, detached-HEAD warning, and Git
+  error presentation.
 
-## 10. Acceptance criteria
+## 11. Acceptance criteria
 
 MVP:
 
@@ -247,15 +352,23 @@ v1:
 - browsing never changes repository state;
 - Restore safely replaces only the page's canonical design source after Gate,
   index, freshness, and confirmation checks;
-- termcraft never creates or changes Git history.
+- the split-button can explicitly commit the current page, infrastructure, or
+  the entire `.termcraft/` project while preserving unrelated repository state;
+- commit controls remain usable during agent turns and serialize only with the
+  final apply phase;
+- termcraft changes Git history only after an explicit, scope-specific user
+  confirmation.
 
-## 11. Out of scope
+## 12. Out of scope
 
-- creating commits or checkpoints;
+- automatic, background, or per-turn commits;
+- committing paths outside `.termcraft/`;
+- push, pull, fetch, remote management, or repository initialization;
 - following directory renames;
 - history across all refs or unmerged branches;
 - automatic fetch of missing or shallow history;
 - commit-to-chat or commit-to-prompt correlation;
-- arbitrary commit checkout, branch switching, stashing, or index mutation;
+- arbitrary commit checkout, branch switching, stashing, or index management
+  outside the selected commit scope;
 - version comparison and visual diffs;
 - cross-file turn transaction and crash recovery.
