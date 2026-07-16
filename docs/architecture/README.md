@@ -10,8 +10,9 @@ isolated preview. Written for a reader who does not read the source language.
 > v1 adds Git-backed history, explicit Restore, and user-confirmed scoped commits.
 > The approved continuation
 > (`docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md`) governs
-> page-source, history, Restore, commit, and export-source decisions wherever the
-> original design spec or a flow document still says otherwise. Other source
+> storage, chat change records, canonical page sources, history, Restore, Git
+> commit controls, and export-source decisions wherever it supersedes the
+> original design spec or a flow document. Other source
 > anchors point at `docs/superpowers/specs/2026-07-13-termcraft-design.md` and the
 > UI reference files under `design/`; they move to real source files as
 > implementation proceeds (see the architecture-update skill).
