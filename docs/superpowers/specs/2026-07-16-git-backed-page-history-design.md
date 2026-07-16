@@ -206,8 +206,9 @@ individual feature-branch commits are not separate entries in this view.
 Restore is an explicit action and is unavailable during an agent turn.
 
 Before presenting the final confirmation, the Kernel records the current source
-hash and checks the selected page's index state. The confirmed operation remains
-bound to the selected page and full source commit id.
+hash and checks the selected page's index state. When the user confirms, the
+Kernel creates a unique `restoreActionId` bound to the selected page, the full
+source commit id, and that confirmed pre-Restore source hash.
 
 The operation follows these rules:
 
@@ -217,18 +218,20 @@ The operation follows these rules:
    those page-design changes will be lost.
 3. If the source changed after the confirmation was prepared, that confirmation
    expires and a new one is required.
-4. After confirmation, the Kernel acquires the project-write mutex, repeats the
-   source-hash and index checks, verifies that the same full commit object can
-   still be read, and runs the historical source through the current Gate. Any
-   failed validation releases the mutex without a project write. A source
-   incompatible with the current kit remains browsable as an error state but
-   cannot be restored through termcraft.
-5. The Project store replaces the selected canonical `page.tsx` via temporary
-   file plus rename.
-6. The active chat receives one system record naming the page and full source
-   commit, for example `restored main from a1b2c3d`. Other chats remain
-   untouched. This records the explicit user action; it does not associate a
-   future commit with a prompt.
+4. After confirmation, the Kernel acquires the project-write mutex and, before
+   replacing canonical `page.tsx`, revalidates the confirmed pre-Restore source
+   hash and index state, verifies that the same full commit object can still be
+   read, and runs that exact full-commit snapshot through the current Gate. This
+   original source-hash freshness check applies only on the initial Restore path
+   before source replacement. Any failed validation releases the mutex without
+   a project write. A source incompatible with the current kit remains
+   browsable as an error state but cannot be restored through termcraft.
+5. The Project store replaces the selected canonical `page.tsx` once for this
+   `restoreActionId`, via temporary file plus rename.
+6. The Kernel then appends one system record to the active chat containing at
+   least `restoreActionId`, page, and full source commit id, for example
+   `restored main from a1b2c3d`. Other chats remain untouched. This records the
+   explicit user action; it does not associate a future commit with a prompt.
 7. The page replacement and active-chat append are serialized in that order
    under the project-write mutex, but they are not one crash-atomic transaction.
    The Kernel then releases the mutex and performs the mandatory source, host,
@@ -239,11 +242,23 @@ The operation follows these rules:
    to equal `HEAD`.
 
 If replacing `page.tsx` succeeds but appending the active-chat record fails, the
-restored page remains the active current source. termcraft surfaces a persistence
-error and does not report that Restore was fully recorded. A Retry remains bound
-to the same page and full source commit id, repeats freshness validation, and
-must not silently substitute or reapply a different selected source; choosing a
-different source requires a new confirmation.
+action enters explicit `record-pending` state and the restored page remains the
+active current source. termcraft surfaces a persistence error and does not
+report that Restore was fully recorded. **Retry record** is append-only: under
+the same project-write mutex it checks the active chat for `restoreActionId` and
+treats the record as complete if it is already present; otherwise it appends
+exactly one record. It never repeats Gate or source replacement and does not
+re-run the pre-Restore source-hash freshness check, making an ambiguous append
+acknowledgement idempotent.
+
+Subsequent page drift does not invalidate this factual audit record for the
+already-applied Restore: the record identifies the original `restoreActionId`,
+page, and full source commit. A new Restore always requires a new confirmation
+and `restoreActionId`. In v1, `record-pending` is only an in-memory recovery
+affordance. After a process crash or restart the restored source remains on disk,
+but termcraft attempts no automatic audit-record recovery; the UI refreshes from
+disk and Git status, and the missing record may require manual or operator
+diagnosis.
 
 termcraft creates no hidden backup. The warning and explicit confirmation are
 the recovery boundary for unstaged current changes.
@@ -296,10 +311,12 @@ dirty scope. Status is refreshed after every user-initiated Git operation or
 commit attempt and after Kernel apply. Inspection commands used by refresh do
 not recursively trigger another refresh.
 
-Commit controls remain available while an agent turn runs. Git commit and the
-short Kernel apply phase share the project-write mutex, so their physical reads
-and writes cannot overlap. A commit made before apply records the currently
-applied design; the later turn result becomes a new uncommitted change.
+Commit controls remain available while an agent turn runs. During that turn,
+Git commit execution contends through the project-write mutex only with the
+short final Kernel apply, not network streaming, validation, or Gate. A commit
+made before apply records the currently applied design; the later turn result
+becomes a new uncommitted change. Outside agent turns, Restore's ordered source
+and active-chat record writes use the same mutex.
 
 Before confirmation the Kernel records the expected `HEAD` and scope hashes.
 Immediately before committing it revalidates both. A changed plan is shown
@@ -372,10 +389,14 @@ Tests create temporary real repositories and cover:
 - A source change after confirmation forces reconfirmation.
 - Gate failure leaves the current source untouched.
 - Successful Restore changes only the selected `page.tsx` and appends one
-  restore system record to the active chat; other chats remain untouched.
+  restore system record containing `restoreActionId`, page, and full source
+  commit id to the active chat; other chats remain untouched.
 - If the Restore chat append fails after page replacement, the restored page
-  remains active, the persistence error does not claim a fully recorded
-  Restore, and Retry remains bound to the same full source commit id.
+  remains active in `record-pending`, the persistence error does not claim a
+  fully recorded Restore, and append-only **Retry record** neither repeats Gate
+  or source replacement nor revalidates the pre-Restore source hash.
+- **Retry record** checks the active chat for `restoreActionId`, so an ambiguous
+  prior append acknowledgement still produces exactly one audit record.
 - `HEAD`, branch, and index are byte-for-byte or object-for-object unchanged by
   browsing and Restore.
 - In the absence of explicit hook side effects, successful and failed scoped
@@ -421,8 +442,9 @@ v1:
   index, freshness, and confirmation checks;
 - the split-button can explicitly commit the current page, infrastructure, or
   the entire `.termcraft/` project while preserving unrelated repository state;
-- commit controls remain usable during agent turns and serialize only with the
-  final apply phase;
+- during an agent turn, commit execution contends only with final apply, not
+  network streaming, validation, or Gate; outside agent turns, Restore's ordered
+  source and record writes use the same project-write mutex;
 - termcraft changes Git history only after an explicit, scope-specific user
   confirmation.
 
