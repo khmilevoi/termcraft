@@ -24,3 +24,7 @@ export {
   encodeClientHello,
   encodeHostHello,
 } from "./model/hello"
+export {
+  decodeControlEnvelope,
+  encodeControlEnvelope,
+} from "./model/control-envelope"
