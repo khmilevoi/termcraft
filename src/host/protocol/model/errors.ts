@@ -13,6 +13,7 @@ export type ProtocolViolationCode =
   | "PROTOCOL_NEGOTIATION_FAILED"
   | "RUNTIME_INTEGRITY_MISMATCH"
   | "KIT_API_MISMATCH"
+  | "SOURCE_HASH_MISMATCH"
 
 /**
  * A host-protocol schema violation. Fatal for the incarnation that produced it:

@@ -52,3 +52,59 @@ export default function P() { return null }`
     expect(scanPageImports(src)).toBeInstanceOf(ProtocolError)
   })
 })
+
+import { registerRuntimeResolver } from "./resolver"
+import { computeSourceHash as hashBytes, loadPage } from "./source-mount"
+
+const fixture = (name: string) => `${import.meta.dir}/../fixtures/${name}`
+
+async function hashOfFile(path: string): Promise<string> {
+  const bytes = await Bun.file(path).bytes()
+  return hashBytes(bytes)
+}
+
+describe("loadPage", () => {
+  test("loads a valid facade page and validates its meta", async () => {
+    registerRuntimeResolver()
+    const path = fixture("probe-page.tsx")
+    const loaded = await loadPage({
+      sourcePath: path,
+      expectedSourceHash: await hashOfFile(path),
+    })
+    expect(loaded).not.toBeInstanceOf(ProtocolError)
+    if (loaded instanceof ProtocolError) throw loaded
+    expect(loaded.meta.kitApiVersion).toBe(1)
+    expect(loaded.meta.title).toBe("Probe page")
+    expect(loaded.meta.minSize).toEqual({ w: 10, h: 2 })
+    expect(typeof loaded.component).toBe("function")
+  })
+
+  test("rejects a source-hash mismatch with SOURCE_HASH_MISMATCH", async () => {
+    const path = fixture("probe-page.tsx")
+    const result = await loadPage({
+      sourcePath: path,
+      expectedSourceHash: "0".repeat(64),
+    })
+    expect(result).toBeInstanceOf(ProtocolError)
+    expect((result as ProtocolError).code).toBe("SOURCE_HASH_MISMATCH")
+    expect((result as ProtocolError).reason).toContain("source hash")
+  })
+
+  test("rejects a page importing a forbidden module before it runs", async () => {
+    const path = fixture("forbidden-react.tsx")
+    const result = await loadPage({
+      sourcePath: path,
+      expectedSourceHash: await hashOfFile(path),
+    })
+    expect(result).toBeInstanceOf(ProtocolError)
+    expect((result as ProtocolError).reason).toContain("react")
+  })
+
+  test("rejects a missing source path", async () => {
+    const result = await loadPage({
+      sourcePath: fixture("does-not-exist.tsx"),
+      expectedSourceHash: "0".repeat(64),
+    })
+    expect(result).toBeInstanceOf(ProtocolError)
+  })
+})
