@@ -20,6 +20,16 @@ const RUNTIME_SPECIFIER = "@termcraft/runtime"
  * for the same path (confirmed: `forbidden-react.tsx` reports BOTH an
  * `import-statement` "react" record for the authored import AND the phantom
  * `require-call` "react" record from the transform), so it is still caught.
+ *
+ * RESIDUAL GAP (defense-in-depth only): an author who writes a literal
+ * `require("react")` / `require("react/jsx-runtime")` reports as `require-call`
+ * for the same path as the phantom and is indistinguishable here — this scan would
+ * let it through. Backstopped twice: the Gate's AST scan (phase 3) is the
+ * AUTHORITATIVE allowlist and separates an author-written require node from a
+ * transform-generated one; and the resolver never registers bare `react`, so in the
+ * compiled binary such a require fails to resolve and the page cannot load (no react
+ * access is gained). Closing it in the host would need an AST scan — deferred to
+ * when the Gate's scanner (phase 3) can be shared.
  */
 const COMPILER_INJECTED_JSX_SPECIFIERS = new Set(["react", "react/jsx-runtime", "react/jsx-dev-runtime"])
 
