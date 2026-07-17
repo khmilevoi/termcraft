@@ -1,10 +1,16 @@
 /** @jsxImportSource @opentui/react */
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 
+import { createHeadlessRenderer, type RenderHandle } from "../../render"
 import {
+  decodeControlEnvelope,
   encodeClientHello,
+  encodeControlEnvelope,
   PROTOCOL_HARD_LIMITS,
+  ProtocolError,
   type ClientHelloV1,
+  type ControlEnvelope,
+  type FrameEnvelope,
   type HostHelloV1,
   type PublicLimits,
   type RuntimeDeclarationBundleV1,
@@ -104,5 +110,133 @@ describe("host session — handshake", () => {
     expect(h.out).toHaveLength(0)
     expect(h.exits).toHaveLength(1)
     expect(h.exits[0]!.code).toBe(1)
+  })
+})
+
+let liveRenderer: RenderHandle | null = null
+afterEach(() => {
+  liveRenderer?.destroy()
+  liveRenderer = null
+})
+
+const FixtureComponent = () => (
+  <box>
+    <text>mounted-ok</text>
+  </box>
+)
+
+function mountEnvelope(over: Partial<ControlEnvelope["body"]> = {}, sessionId = SESSION_ID, nonce = NONCE): Uint8Array {
+  const envelope: ControlEnvelope = {
+    protocolVersion: 1,
+    kind: "mount",
+    sessionId,
+    nonce,
+    messageId: "1",
+    requestId: "1",
+    body: {
+      sourcePath: "/unused/in/fake/loadPage.tsx",
+      expectedSourceHash: "a".repeat(64),
+      mode: "preview",
+      interactionMode: "static",
+      size: { w: 16, h: 3 },
+      theme: "dark-default",
+      capabilities: { colorDepth: 24 },
+      deterministic: true,
+      ...over,
+    },
+  }
+  const framed = encodeControlEnvelope(envelope)
+  if (framed instanceof Error) throw framed
+  return framed.slice(8)
+}
+
+async function handshaken(over: Partial<HostSessionDeps> = {}) {
+  const h = harness({
+    createRenderer: (size) => {
+      return createHeadlessRenderer(size).then((r) => {
+        liveRenderer = r
+        return r
+      })
+    },
+    loadPage: async () => ({
+      meta: { kitApiVersion: 1, title: "Dashboard", minSize: { w: 16, h: 3 }, theme: "dark-default" },
+      component: FixtureComponent,
+      sourceHash: "a".repeat(64),
+    }),
+    ...over,
+  })
+  const session = createHostSession(h.deps)
+  await session.receiveControlPayload(helloPayload(clientHello()))
+  h.out.length = 0 // drop the host.hello
+  return { h, session }
+}
+
+describe("host session — mount", () => {
+  test("mount emits ready then the first frame, both under one identity", async () => {
+    const { h, session } = await handshaken()
+    await session.receiveControlPayload(mountEnvelope())
+
+    expect(h.out).toHaveLength(2)
+    const ready = (h.out[0] as { payload: ControlEnvelope }).payload
+    expect(ready.kind).toBe("ready")
+    expect(ready.responseTo).toBe("1")
+    expect(ready.sessionId).toBe(SESSION_ID)
+    const readyBody = ready.body as unknown as {
+      meta: { title: string }
+      size: { w: number; h: number }
+      interactionMode: string
+      frameIdentity: { frameSeq: string; sourceHash: string }
+    }
+    expect(readyBody.meta.title).toBe("Dashboard")
+    expect(readyBody.size).toEqual({ w: 16, h: 3 })
+    expect(readyBody.interactionMode).toBe("static")
+    expect(readyBody.frameIdentity.frameSeq).toBe("1")
+
+    const frame = (h.out[1] as { payload: FrameEnvelope }).payload
+    expect(frame.kind).toBe("frame")
+    expect(frame.frameSeq).toBe("1")
+    expect(frame.width).toBe(16)
+    expect(frame.sourceHash).toBe("a".repeat(64))
+    expect((frame.rows[0] ?? []).map((r) => r.text).join("")).toContain("mounted-ok")
+  })
+
+  test("preview mount stays alive (no exit)", async () => {
+    const { h, session } = await handshaken()
+    await session.receiveControlPayload(mountEnvelope())
+    expect(h.exits).toHaveLength(0)
+  })
+
+  test("smoke mount emits ready+frame then exits 0 (one-shot)", async () => {
+    const { h, session } = await handshaken()
+    await session.receiveControlPayload(mountEnvelope({ mode: "smoke" }))
+    expect(h.out).toHaveLength(2)
+    expect(h.exits).toHaveLength(1)
+    expect(h.exits[0]!.code).toBe(0)
+  })
+
+  test("a non-preview mount forces effective static even if interactive requested", async () => {
+    const { h, session } = await handshaken()
+    await session.receiveControlPayload(
+      mountEnvelope({ mode: "historical", interactionMode: "interactive" }),
+    )
+    const ready = (h.out[0] as { payload: ControlEnvelope }).payload
+    expect((ready.body as unknown as { interactionMode: string }).interactionMode).toBe("static")
+  })
+
+  test("a loadPage failure emits a typed error and exits", async () => {
+    const { h, session } = await handshaken({
+      loadPage: async () => new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "source hash mismatch" }),
+    })
+    await session.receiveControlPayload(mountEnvelope())
+    const errorMsg = h.out.find((m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error")
+    expect(errorMsg).toBeDefined()
+    expect(h.exits).toHaveLength(1)
+    expect(h.exits[0]!.code).toBe(1)
+  })
+
+  test("an inbound envelope with the wrong nonce is fatal", async () => {
+    const { h, session } = await handshaken()
+    await session.receiveControlPayload(mountEnvelope({}, SESSION_ID, "f".repeat(32)))
+    expect(h.exits).toHaveLength(1)
   })
 })
