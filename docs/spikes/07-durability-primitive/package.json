@@ -1,0 +1,11 @@
+{
+  "name": "spike-07-durability-primitive",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
