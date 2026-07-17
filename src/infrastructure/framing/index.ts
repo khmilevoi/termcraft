@@ -8,3 +8,4 @@ export {
 } from "./model/constants"
 export { FramingError } from "./model/errors"
 export { encodeFrame } from "./model/encode"
+export { FrameDecoder } from "./model/decoder"
