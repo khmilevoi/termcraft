@@ -30,9 +30,10 @@ export function decodeUtf8(bytes: Uint8Array): ProtocolError | string {
 }
 
 /**
- * Structurally parse JSON, then enforce the two §5 rules `JSON.parse` cannot:
- * duplicate object keys and unsafe-integer number tokens. `JSON.parse` already
- * rejects malformed input and the non-finite `NaN`/`Infinity` literals.
+ * Structurally parse JSON, then enforce the §5 rules `JSON.parse` cannot:
+ * duplicate object keys, non-finite results (e.g. `1e999` parses to `Infinity`),
+ * and unsafe-integer number tokens. `JSON.parse` rejects malformed input and the
+ * bare `NaN`/`Infinity` literals, but not a finite-looking token like `1e999`.
  */
 export function parseStrictJson(text: string): ProtocolError | JsonValue {
   const parsed = errore.try({
@@ -175,12 +176,18 @@ function scanNumberEnd(text: string, start: number): number {
 }
 
 function checkNumberToken(token: string): ProtocolError | null {
-  // Only plain integer literals can be an "unsafe integer JSON number"; float or
-  // exponent notation is range-checked per field by later validators.
-  const isIntegerLiteral =
-    !token.includes(".") && !token.includes("e") && !token.includes("E")
-  if (!isIntegerLiteral) return null
-  if (!Number.isSafeInteger(Number(token))) {
+  // §5: reject non-finite numbers and unsafe-integer JSON numbers. JSON.parse
+  // rejects the bare NaN/Infinity literals but still parses "1e999" to Infinity
+  // and "1e20" to an unsafe integer value, so exponent/float tokens must be
+  // inspected too — a nested `body` number is not otherwise range-checked here.
+  const value = Number(token)
+  if (!Number.isFinite(value)) {
+    return new ProtocolError({
+      code: "MALFORMED_PROTOCOL",
+      reason: `non-finite JSON number ${token}`,
+    })
+  }
+  if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
     return new ProtocolError({
       code: "MALFORMED_PROTOCOL",
       reason: `unsafe integer JSON number ${token}`,

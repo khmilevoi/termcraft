@@ -57,6 +57,17 @@ describe("parseStrictJson", () => {
     expect(parseStrictJson("[1,2,90071992547409931]")).toBeInstanceOf(ProtocolError)
   })
 
+  test("rejects a number token that parses to Infinity", () => {
+    const result = parseStrictJson('{"n":1e999}')
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) expect(result.reason).toContain("non-finite")
+  })
+
+  test("rejects an unsafe integer written in exponent form", () => {
+    // 1e20 = 100000000000000000000 is an integer value beyond the safe range.
+    expect(parseStrictJson('{"n":1e20}')).toBeInstanceOf(ProtocolError)
+  })
+
   test("accepts the largest safe integer", () => {
     expect(parseStrictJson('{"n":9007199254740991}')).toEqual({ n: 9007199254740991 })
   })
