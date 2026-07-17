@@ -1,7 +1,15 @@
 // Spike C probe: type-check an external page.tsx from inside a `bun build --compile`
 // binary, with the lib .d.ts chain and @termcraft/runtime's types embedded.
 //
-// Usage: main.ts <file.tsx> [--timed]
+// Usage: main.ts <file.tsx>
+//          [--timed]            in-process timing breakdown on stderr
+//          [--trace-fs]         count the FS callbacks the Go server delegates to JS
+//          [--vfs-libs]         also serve libs over the virtual FS (redundant; measurable)
+//          [--buckets]          label each diagnostic with the API bucket that reported it
+//          [--break-lib <name>] hide one lib from the compiler, to see how a broken
+//                               reference chain actually surfaces
+//          [--retry-sim N]      N Gate retries against one held-open API, mutating the
+//                               file between laps so each lap is a real re-check
 //
 // Departures from the plan's code, forced by the resolved typescript@7.0.2:
 //   * `ts.createProgram` / `ts.JsxEmit` / `getPreEmitDiagnostics` do not exist. TS7 is
@@ -11,8 +19,8 @@
 //   * The lib .d.ts files are NOT in node_modules/typescript/lib. They ship in the
 //     platform package @typescript/typescript-win32-x64/lib, next to tsc.exe.
 //   * There is no `CompilerHost`. The TS7 analogue is the `fs` option: a virtual
-//     filesystem whose callbacks the Go server delegates to. That is what serves the
-//     embedded libs here.
+//     filesystem whose callbacks the Go server delegates to. Its ESSENTIAL job here is
+//     the synthesized tsconfig and the runtime .d.ts — NOT the libs (see virtualFs).
 //   * The Go compiler is a separate 24.5 MB native exe. Bun can embed it, but a
 //     B:/~BUN/root/... path is not spawnable (uv_spawn ENOENT), so it must be
 //     materialized to real disk once and cached.
@@ -26,6 +34,12 @@ import runtimeDtsPath from "./runtime.d.ts" with { type: "file" }
 
 const TS_VERSION = "7.0.2"
 const started = performance.now()
+
+const argv = process.argv
+const has = (f: string) => argv.includes(f)
+
+/** Serve lib .d.ts over the virtual FS. Redundant by construction — see virtualFs. */
+const SERVE_LIBS_OVER_VFS = has("--vfs-libs")
 
 /** Embedded assets live at B:/~BUN/root/... inside a compiled binary. */
 const isEmbedded = (p: string) => p.startsWith("B:/~BUN/") || p.startsWith("/$bunfs/")
@@ -41,14 +55,19 @@ const isEmbedded = (p: string) => p.startsWith("B:/~BUN/") || p.startsWith("/$bu
  *     is missing. That check is a real os.Stat in another process — a JS virtual FS
  *     cannot answer it. So the lib files must sit on disk next to the exe too.
  *
- * Cached by version+size, so only the first run of a given build pays for it.
+ * Cached by version + exe size + presence of the last lib written, so a half-cleaned
+ * temp dir re-extracts instead of reproducing the noembed panic.
  */
 function materializeCompiler(): { exe: string; extracted: boolean } {
   if (!isEmbedded(tscExePath)) return { exe: tscExePath, extracted: false }
   const dir = path.join(os.tmpdir(), `termcraft-tsc-${TS_VERSION}`)
   const exe = path.join(dir, "tsc.exe")
-  const want = fs.statSync(tscExePath).size
-  if (fs.existsSync(exe) && fs.statSync(exe).size === want) return { exe, extracted: false }
+  const libNames = Object.keys(embeddedLibs)
+  const cacheComplete =
+    fs.existsSync(exe) &&
+    fs.statSync(exe).size === fs.statSync(tscExePath).size &&
+    libNames.every((n) => fs.existsSync(path.join(dir, n)))
+  if (cacheComplete) return { exe, extracted: false }
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(exe, fs.readFileSync(tscExePath))
   // The startup sentinel and the lib chain must live next to the exe on real disk.
@@ -61,7 +80,7 @@ function materializeCompiler(): { exe: string; extracted: boolean } {
 const { exe, extracted } = materializeCompiler()
 const extractedAt = performance.now()
 
-const file = path.resolve(process.argv[2]!).replace(/\\/g, "/")
+const file = path.resolve(argv[2]!).replace(/\\/g, "/")
 const dir = path.dirname(file)
 
 // Synthesized, never written to disk — served from the virtual FS below. This is the
@@ -76,7 +95,10 @@ const tsconfig = JSON.stringify({
     target: "esnext",
     module: "esnext",
     moduleResolution: "bundler",
-    lib: ["esnext"], // pin the lib set to the chain we embedded; avoids pulling in DOM
+    // Pins the lib set to the chain we embedded. Without this the default for
+    // target:esnext is lib.esnext.full.d.ts, which drags in lib.dom.d.ts (2.3 MB)
+    // and lib.webworker.d.ts (0.8 MB) — neither embedded, and neither wanted in a TUI.
+    lib: ["esnext"],
     types: [],
     skipLibCheck: true,
   },
@@ -86,67 +108,128 @@ const tsconfig = JSON.stringify({
 /** Read an embedded asset synchronously. Bun's fs shim understands B:/~BUN/root paths. */
 const readEmbedded = (p: string) => fs.readFileSync(p, "utf8")
 
+const fsHits: Record<string, number> = {}
+const bump = (k: string) => {
+  fsHits[k] = (fsHits[k] ?? 0) + 1
+}
+
 /**
  * The virtual filesystem — the TS7 replacement for a custom CompilerHost.
  *
- * The Go server asks for lib files at a path derived from the compiler exe's own
- * directory (e.g. <exeDir>/lib.es5.d.ts). Since we moved the exe to a temp dir that
- * has no lib files next to it, we match on basename and serve embedded content.
+ * What it is ESSENTIAL for: the synthesized tsconfig and the runtime .d.ts. Neither
+ * exists on disk, and neither may ever be written there — that is exactly the spec's
+ * "the project folder never grows a package.json" promise, and the VFS is what keeps it.
+ *
+ * What it is NOT needed for: the lib files. materializeCompiler() has already written
+ * all 88 of them next to the exe on real disk (it must — the Go startup check demands
+ * it), so the Go process finds them by itself. Serving them here as well is redundant;
+ * `--vfs-libs` re-enables it only so the cost can be measured.
+ *
+ * Note the callbacks fire for lib files either way: once an `fs` is registered the Go
+ * server routes its FS access through it, and returning `undefined` merely says "fall
+ * back to the real disk". So the choice is not "RPC vs no RPC" — it is "answer with
+ * 621 KB of content over RPC" vs "answer undefined and let Go read the file".
  *
  * Contract (from dist/api/fs.d.ts):
  *   readFile: string => content | null (does not exist) | undefined (fall back to real FS)
  */
+
+// --break-lib <lib.x.d.ts>: hide one lib from the compiler (null = "does not exist", no
+// real-FS fallback), to see how a broken link in the reference chain actually surfaces.
+const breakArg = argv.indexOf("--break-lib")
+const brokenLib = breakArg !== -1 ? argv[breakArg + 1] : undefined
+
 const virtualFs = {
   readFile(fileName: string): string | null | undefined {
+    bump("readFile")
+    if (brokenLib && path.basename(fileName) === brokenLib) return null
     if (fileName === tsconfigPath) return tsconfig
     if (fileName === runtimeDts) return readEmbedded(runtimeDtsPath)
-    const base = path.basename(fileName)
-    if (embeddedLibs[base]) return readEmbedded(embeddedLibs[base]!)
-    return undefined // the page itself, and anything else, comes from the real disk
+    if (SERVE_LIBS_OVER_VFS) {
+      const base = path.basename(fileName)
+      if (embeddedLibs[base]) {
+        bump("readFile:lib")
+        return readEmbedded(embeddedLibs[base]!)
+      }
+    }
+    return undefined // libs, the page itself, and anything else come from the real disk
   },
   fileExists(fileName: string): boolean | undefined {
+    bump("fileExists")
     if (fileName === tsconfigPath || fileName === runtimeDts) return true
-    if (embeddedLibs[path.basename(fileName)]) return true
     return undefined
   },
   realpath(p: string): string | undefined {
+    bump("realpath")
     if (p === tsconfigPath || p === runtimeDts) return p
-    if (embeddedLibs[path.basename(p)]) return p
     return undefined
   },
 }
 
 const api = new API({ cwd: dir, tsserverPath: exe, fs: virtualFs })
 
-function check(invalidate = false) {
+/**
+ * The replacement for `getPreEmitDiagnostics`. Note `getGlobalDiagnostics()`: the real
+ * getPreEmitDiagnostics includes global diagnostics, so this union must too. Errors like
+ * "Cannot find global type 'Array'" — the missing-lib signature this spike exists to
+ * detect — are non-file-specific and land there and nowhere else. A Gate that omits it
+ * silently passes pages TypeScript proper rejects.
+ */
+function check(changed?: string) {
   const snapshot = api.updateSnapshot({
     openProjects: [tsconfigPath],
-    // A real Gate retry re-checks an *edited* file. Without invalidation the server
-    // returns the cached snapshot and the "re-check" is a meaningless sub-ms cache hit.
-    ...(invalidate ? { fileChanges: { invalidateAll: true as const } } : {}),
+    ...(changed ? { fileChanges: { changed: [changed] } } : {}),
   })
   const project = snapshot.getProject(tsconfigPath) ?? snapshot.getProjects()[0]
   if (!project) return null
-  return [
-    ...project.program.getConfigFileParsingDiagnostics(),
-    ...project.program.getProgramDiagnostics(),
-    ...project.program.getSyntacticDiagnostics(),
-    ...project.program.getSemanticDiagnostics(),
-  ]
+  const p = project.program
+  const buckets = {
+    config: p.getConfigFileParsingDiagnostics(),
+    program: p.getProgramDiagnostics(),
+    syntactic: p.getSyntacticDiagnostics(),
+    semantic: p.getSemanticDiagnostics(),
+    global: p.getGlobalDiagnostics(),
+  }
+  return Object.entries(buckets).flatMap(([bucket, ds]) => ds.map((d) => ({ bucket, d })))
 }
 
-// --repeat N: re-check N times against ONE held-open API, to measure what the Gate
-// would pay per retry if it keeps the compiler process alive instead of respawning.
-const repeatArg = process.argv.indexOf("--repeat")
-if (repeatArg !== -1) {
-  const n = Number(process.argv[repeatArg + 1] ?? 4)
-  const laps: number[] = []
-  for (let i = 0; i < n; i++) {
-    const t0 = performance.now()
-    check(i > 0) // lap 0 is the initial check; later laps invalidate, as a retry would
-    laps.push(+(performance.now() - t0).toFixed(1))
+type Diag = { code: number; text: string; relatedInformation?: readonly { text: string }[] }
+
+const shape = ({ bucket, d }: { bucket: string; d: Diag }) => ({
+  code: d.code,
+  message: d.text,
+  ...(d.relatedInformation?.length ? { related: d.relatedInformation.map((r) => r.text) } : {}),
+  // Which of the five getPreEmitDiagnostics-equivalent buckets reported it. Shown only
+  // under --buckets: it is probe instrumentation, not part of the diagnostic.
+  ...(has("--buckets") ? { bucket } : {}),
+})
+
+// --retry-sim N: what a real Gate retry costs. Unlike a bare re-check, this MUTATES the
+// file between laps and reports the diagnostic count per lap, so the numbers cannot be
+// explained by a content-keyed cache: if the count does not flip, the re-check did not
+// happen.
+const simArg = argv.indexOf("--retry-sim")
+if (simArg !== -1) {
+  const n = Number(argv[simArg + 1] ?? 4)
+  const original = fs.readFileSync(file, "utf8")
+  const goodSrc = original
+  // Must mutate the `title` INSIDE the Panel(...) call — the `meta` object's title is
+  // untyped, so making it a number is legal and the diagnostics would never flip.
+  const badSrc = original.replace(/(Panel\(\{[^}]*?title:\s*)"[^"]*"/, "$1" + "42")
+  if (goodSrc === badSrc) {
+    console.error(JSON.stringify({ error: "retry-sim found no Panel({... title: \"...\"}) to mutate" }))
+    api.close()
+    process.exit(1)
   }
-  console.error(JSON.stringify({ heldOpenApiLapsMs: laps }))
+  const laps: { ms: number; diags: number }[] = []
+  for (let i = 0; i < n; i++) {
+    fs.writeFileSync(file, i % 2 === 1 ? badSrc : goodSrc)
+    const t0 = performance.now()
+    const d = check(file)
+    laps.push({ ms: +(performance.now() - t0).toFixed(1), diags: d?.length ?? -1 })
+  }
+  fs.writeFileSync(file, original)
+  console.error(JSON.stringify({ retrySimLaps: laps }))
   api.close()
   process.exit(0)
 }
@@ -158,19 +241,9 @@ if (!diags) {
   process.exit(1)
 }
 
-console.log(
-  JSON.stringify(
-    diags.map((d) => ({
-      code: d.code,
-      message: d.text,
-      ...(d.relatedInformation?.length ? { related: d.relatedInformation.map((r) => r.text) } : {}),
-    })),
-    null,
-    2,
-  ),
-)
+console.log(JSON.stringify(diags.map(shape), null, 2))
 
-if (process.argv.includes("--timed")) {
+if (has("--timed")) {
   const done = performance.now()
   console.error(
     JSON.stringify({
@@ -178,10 +251,12 @@ if (process.argv.includes("--timed")) {
       compilerExtractMs: +(extractedAt - started).toFixed(1),
       checkMs: +(done - extractedAt).toFixed(1),
       extractedThisRun: extracted,
-      compilerExe: exe,
+      serveLibsOverVfs: SERVE_LIBS_OVER_VFS,
       embeddedLibCount: Object.keys(embeddedLibs).length,
     }),
   )
 }
+
+if (has("--trace-fs")) console.error(JSON.stringify({ fsCallbackHits: fsHits }))
 
 api.close()

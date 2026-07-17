@@ -48,6 +48,10 @@ const diags = [
   ...project.program.getProgramDiagnostics(),
   ...project.program.getSyntacticDiagnostics(),
   ...project.program.getSemanticDiagnostics(),
+  // Required: the real getPreEmitDiagnostics includes global diagnostics. Missing-lib
+  // errors ("Cannot find global type 'Object'") land ONLY here — omitting this bucket
+  // makes a broken lib chain report clean. See FINDINGS.md.
+  ...project.program.getGlobalDiagnostics(),
 ]
 
 console.log(
