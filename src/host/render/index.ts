@@ -1,3 +1,4 @@
 export type { CapturedFrame, RenderHandle, RenderSize } from "./types"
 export { rgbaToColor } from "./model/color"
 export { attributesToMask } from "./model/attributes"
+export { styledRowsFromSpanLines } from "./model/span-rows"
