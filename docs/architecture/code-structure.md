@@ -129,18 +129,30 @@ flowchart LR
    (§4.1) actually requires. The cost is real — every new wiring goes through the
    composition root instead of a direct import.
 
-8. **Two entry points, one binary.** `bun build --compile` ships the shell and the
+8. **When the choice of implementation is domain state, the port exposes the
+   choice.** Not every port binds to one implementation at startup. The agent picker
+   (§3.6) lists the model and effort combinations of every installed backend at once
+   and lets the user switch between turns, and the stored `(agent, model, effort)`
+   triple is domain state the Kernel owns. So `core` consumes a registry — enumerate
+   the available backends, take one by id — rather than a single `AgentBackend`;
+   `main.ts` supplies the registry with the backends the build knows about, and
+   `core` selects from it. The division holds generally: the composition root wires
+   *what exists*, the Kernel decides *what is used*. Item 7 is untouched — `core`
+   still imports no backend, and `AgentBackend` remains a spec-named port while the
+   registry around it is this document's shape.
+
+9. **Two entry points, one binary.** `bun build --compile` ships the shell and the
    design-host entry together (§4.1). `termcraft _host` is a second, much smaller
    composition root: it wires the host-side protocol and the embedded runtime, and
    never constructs `core`, `store`, or `ui`.
 
-9. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
-   Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
-   and nothing else from any module: never `store`, never host stdio.
-   `runtime` is a leaf that imports no termcraft module: it is the saved-page facade
-   (§5), resolved from the binary by design code running inside the host.
+10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
+    Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
+    and nothing else from any module: never `store`, never host stdio. `runtime` is a
+    leaf that imports no termcraft module: it is the saved-page facade (§5), resolved
+    from the binary by design code running inside the host.
 
-10. **Forbidden shapes.** These are review-blocking:
+11. **Forbidden shapes.** These are review-blocking:
 
     | Shape | Why |
     |---|---|
@@ -158,7 +170,8 @@ flowchart LR
   `index.ts`) and the atomic-function rule this document builds on
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven modules,
   strict boundaries, workspace extractability, and the transport-neutral Kernel
-  boundary; §4.2 the design host; §5.8 the saved-page import allowlist
+  boundary; §4.2 the design host; §5.8 the saved-page import allowlist; §6.1 the
+  mechanism-blind `AgentBackend` contract; §3.6 the runtime-selected agent triple
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store
