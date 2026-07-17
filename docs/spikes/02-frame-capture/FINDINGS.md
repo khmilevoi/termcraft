@@ -16,16 +16,20 @@ possible". It was two separate questions, deliberately probed one at a time:
 
 Verdict: YES
 
-A full 80×24 **styled** grid can be reconstructed **losslessly** from
-`captureSpans()`, and the whole path survives `bun build --compile` on Windows —
-verified from a single-file `.exe` running in a directory containing no
-`node_modules` and no `opentui.dll`.
+A full 80×24 **styled** grid can be reconstructed **losslessly** from `captureSpans()`
+**for char + fg + bg + the 8 text attributes** — the tuple §4.2's protocol names — and
+the whole path survives `bun build --compile` on Windows, verified from a single-file
+`.exe` running in a directory containing no `node_modules` and no `opentui.dll`.
+
+The scope of "losslessly" is exact, not hedged: within that tuple nothing is lost;
+**outside it, hyperlink ids are dropped by spans** (third caveat below).
 
 **What the verdict rests on — all four directly observed, none inferred:**
 
 1. **Style** — every one of the 1920 cells of an 80×24 styled frame had its fg, bg
-   and attributes compared against `currentRenderBuffer.buffers`, the renderer's own
-   raw per-cell arrays: **0 mismatches**.
+   and attributes compared against `currentRenderBuffer.buffers`: **0 mismatches**.
+   (That reference is the spans' *pre-image*, so this is a round-trip, not a second
+   witness — see *Lossless*.)
 2. **Attributes** — all 8 round-trip exactly, printed sent-vs-got, including a
    combined bitmask.
 3. **Chars + geometry** — expanded spans reproduce `captureCharFrame()` byte-for-byte;
@@ -36,14 +40,25 @@ verified from a single-file `.exe` running in a directory containing no
 The `/testing` stability question is a **Step 6 concern, not a verdict input**: the
 verdict question is lossless reconstruction plus `--compile` on Windows, and `YES`
 stands on the four observations above regardless of how the `/testing` exposure is
-resolved. This matters, because the mitigation is weaker than a first reading
-suggests (see Step 6).
+resolved.
 
-Two caveats that are real but do not change the verdict, stated up front:
+Three caveats that are real but do not change the verdict, stated up front:
 
 - `captureSpans()` returns **runs, not cells**. Reconstruction to per-cell is a
   mechanical run-expansion, not a direct read, and it requires a wcwidth algorithm
   the host must own. See *Shape* and *Lossless* below.
+- **`captureSpans()` is lossy for hyperlink ids** — the one demonstrated loss.
+  `attributes` is a u32 whose upper bits carry a link id; `getSpanLines()` masks
+  `& 255` and discards it, so with a link present `raw === span` is **false**
+  (proved below). This sits outside the verdict's scope on three independent grounds:
+  the brief defines Step 3's attribute question as "bold, dim, italic, underline,
+  reverse" (`task-2-brief.md:87`); §4.2 asks for "styled cell frames (char + fg + bg +
+  attributes)" (`2026-07-13-termcraft-design.md:509`) — the classic terminal tuple,
+  where attributes are SGR; and the package draws the same line itself
+  (`types.d.ts:21-23`: *"Currently we only use the first 8 bits for standard text
+  attributes"*), with the link id above them. It is also **recoverable** via public
+  `buffers.attributes` + `getLinkId()`. But if the design host ever needs OSC-8 links,
+  spans alone cannot carry them.
 - The capability ships under `@opentui/core/testing` at **0.4.5** — a real
   architectural exposure. See *Step 6*.
 
@@ -377,8 +392,9 @@ than opaque black. An exporter that ignores alpha will paint unset cells black.
 ### The verdict probe — lossless 80×24 (verbatim)
 
 The `||` in each sample row separates the expanded-span style (left) from the
-independent `buffers` oracle (right). `styleMatchesOracle` is the check that makes
-this a *styled*-grid result rather than a chars-only one.
+`buffers` reference (right) — which is the spans' **pre-image**, not an independent
+witness (see *Lossless* above). `styleMatchesOracle` is the check that makes this a
+*styled*-grid result rather than a chars-only one.
 
 ```
 === VERDICT PROBE: lossless 80x24 reconstruction ===
@@ -750,24 +766,45 @@ idle() {
   if (this.isIdleNow()) return Promise.resolve();
   return new Promise((resolve) => { this.idleResolvers.push(resolve); });
 }
-// :7575
+// :7572-7576
 isIdleNow() {
+  if (this._isDestroyed)
+    return true;
   return !this._isRunning && !this.rendering && !this.renderTimeout &&
          !this.updateScheduled && !this.feedIdleRenderScheduled &&
          !this.immediateRerenderRequested;
 }
 ```
 
-`isIdleNow()` tracks `feedIdleRenderScheduled` — the flag set by
-`scheduleRenderAfterFeedIdle()` (`:7458`), which is exactly what
-`scheduleRenderAfterBackpressure()` (`:7507`) delegates to when a `_feed` exists. And
-`loop()` already handles backpressure itself (`:9678`:
-`else if (nativeStatus === "backpressured") { this.scheduleRenderAfterBackpressure(); }`),
-which `intermediateRender()` invokes. So the backpressure path is **handled by the
-renderer and observable through public `idle()`** — a public consumer never needs to
-touch `_feed`.
+Two separate facts, and it matters which carries the weight:
 
-Probed rather than reasoned:
+**1. In Option A's configuration the backpressure question is *moot*, not merely
+handled.** `bufferedOutput: "memory"` means **no feed is ever allocated** —
+`renderer.d.ts:342-343` and `:348`: *"Allocates a `NativeSpanFeed` (for non-process
+stdout unless bufferedOutput is `"memory"`)"*, and the assignment is guarded
+(`chunk-bun-tkm837n2.js:7184-7185`: `this._feed = feed; if (feed) {…}`). With `_feed`
+null, `scheduleRenderAfterBackpressure()` (`:7507`) takes its `scheduleRenderTimer()`
+branch, `feedIdleRenderScheduled` can never go true, and the harness's own
+`_feed?.isBackpressured()` (`testing.bun.js:601`) is itself a **no-op** — note the `?.`.
+Since `createTestRenderer` defaults to `bufferedOutput: "memory"` too, a public rebuild
+in this configuration drops **nothing the harness was doing**.
+
+**2. Where a feed does exist, `idle()` covers it.** `isIdleNow()` tracks
+`feedIdleRenderScheduled` — set by `scheduleRenderAfterFeedIdle()` (`:7458`) and cleared
+only inside `feed.idle().then(...)` — which is what `scheduleRenderAfterBackpressure()`
+delegates to when `_feed` is non-null. `loop()` handles the backpressure status itself
+(`:9678`: `else if (nativeStatus === "backpressured") { this.scheduleRenderAfterBackpressure(); }`),
+and its `finally` calls `resolveIdleIfNeeded()` (`:9693`), so `idle()` cannot resolve
+while a post-backpressure re-render is pending. A public consumer never needs `_feed`.
+
+**Provenance of these two claims: both are read from the source, not measured.** The
+probe below exercises `idle()` in `bufferedOutput: "memory"`, where — per fact 1 — the
+backpressure branch is unreachable by construction. So it demonstrates that `idle()`
+exists, resolves, and gates the frame; it does **not** exercise backpressure, and no
+probe here does. Fact 1 is why that is acceptable rather than a gap: in Option A's
+configuration there is no backpressure path to exercise.
+
+`idle()` probed (memory mode — backpressure branch unreachable, see above):
 
 ```
 === 1. renderer.idle() basics ===
@@ -815,10 +852,22 @@ main `types.d.ts`, and `getSpanLines()` is public on `OptimizedBuffer`. The
   (`STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true`). Every member public:
 
   ```ts
+  // The fake stdout is not scenery — three of its members are load-bearing.
+  const fakeStdout = Object.assign(new Writable({ write: (_c,_e,cb) => cb() }), {
+    isTTY: true,        // CliRenderer branches on it
+    columns: 80,        // ⚠ OVERRIDES config.width — see trap 1
+    rows: 24,           // ⚠ OVERRIDES config.height
+    getColorDepth: () => 24,
+  })
+  const fakeStdin = Object.assign(new Readable({ read() {} }), {
+    isTTY: true,
+    setRawMode: () => fakeStdin,   // ⚠ setupTerminal() calls it — see trap 2
+  })
+
   const renderer = await createCliRenderer({          // :177 — the ctor the package
     stdin: fakeStdin, stdout: fakeStdout,             //   tells production to use
-    width: 80, height: 24,
-    bufferedOutput: "memory",                         // :21 — no real terminal
+    width: 80, height: 24,                            // ⚠ LOSES to stdout.columns/rows
+    bufferedOutput: "memory",                         // :21 — no real terminal, no feed
     screenMode: "main-screen", consoleMode: "disabled",
     externalOutputMode: "passthrough", useMouse: false,
   })
@@ -828,9 +877,25 @@ main `types.d.ts`, and `getSpanLines()` is public on `OptimizedBuffer`. The
   const lines = renderer.currentRenderBuffer.getSpanLines()  // buffer.d.ts:43
   ```
 
-  Costs: fake TTY streams (`isTTY = true` is load-bearing), and the discipline that
-  `intermediateRender()` **must** be followed by `await idle()` — omit it and a
-  registered frame callback silently yields an unpainted frame.
+  **Three sharp edges, all silent:**
+
+  1. **`stdout.columns`/`rows` override `config.width`/`height`.** `createCliRenderer`
+     computes `const width = stdout.columns || config.width || 80` and
+     `const height = stdout.rows || config.height || 24`
+     (`chunk-bun-tkm837n2.js:6890-6891`) — the config is a *fallback*, not the source of
+     truth. The snippet above works only because both agree. §4.2 renders "at the
+     preview's size", so a host that varies size per page **must** set the fake stream's
+     `columns`/`rows` (or keep them in lockstep with `width`/`height`); setting `width`
+     alone silently renders at the stale size. This is the trap most likely to bite.
+  2. **`stdin.setRawMode` must exist.** `createCliRenderer` awaits `setupTerminal()`
+     (`:6893-6894`), which per `renderer.d.ts:355-356` puts stdin in raw mode and calls
+     `stdin.resume()`. A bare `Readable` has no `setRawMode` and throws.
+  3. **`intermediateRender()` must be followed by `await idle()`** — omit it and a
+     registered frame callback silently yields an unpainted frame.
+
+  Nothing here is exotic; all three are one-liners. But all three fail *quietly*, which
+  is the same failure mode as the wcwidth trap, so they belong in the recipe rather than
+  in a reader's debugging session.
 - **Option B — use `/testing` in production and accept the exposure**, pinning hard.
   Cheaper today, and a *declared, typed* surface.
 
@@ -906,33 +971,39 @@ Recorded per the controller's "installed package is the authority" rule.
    `CHAR_FLAG_CONTINUATION = 0xC0000000` (`:10585-10586`). The recorded
    `0xc40200fd & 0xC0000000 === 0xC0000000` **is** that flag; the lead cell's
    `0x900200fd` is not.
-9. **`intermediateRender(): void` is a fire-and-forget call on an `async` function.**
-   It sets `immediateRerenderRequested` then calls `this.loop()` without awaiting
-   (`chunk-bun-tkm837n2.js:9696-9699`), and returns `void` — nothing to await. Callers
-   must use `idle()`. Not stated in the types.
-10. **`attributes` is a u32 with a hyperlink id in the upper bits**, and
+8. **Fake stdin/stdout must impersonate a TTY.** `CliRenderer` branches on `isTTY`, and
+   `setupTerminal()` calls `stdin.setRawMode()` (`renderer.d.ts:355-356`), so a headless
+   rebuild needs `isTTY`, `columns`, `rows`, `getColorDepth()` on stdout and
+   `setRawMode` on stdin despite nothing being displayed. Not stated in the types.
+9. **`stdout.columns`/`rows` silently outrank `config.width`/`height`.**
+   `createCliRenderer` computes `stdout.columns || config.width || 80`
+   (`chunk-bun-tkm837n2.js:6890-6891`). A caller who sets only `width` gets the fake
+   stream's size instead — no error. Relevant to §4.2's per-size rendering.
+10. **`intermediateRender(): void` is a fire-and-forget call on an `async` function.**
+    It sets `immediateRerenderRequested` then calls `this.loop()` without awaiting
+    (`chunk-bun-tkm837n2.js:9696-9699`), and returns `void` — nothing to await. Callers
+    must use `idle()`. Not stated in the types.
+11. **`attributes` is a u32 with a hyperlink id in the upper bits**, and
     `getSpanLines()` masks it off (`& 255`, `:10600`). So `captureSpans()` is lossy for
     hyperlinks. The `.d.ts` documents the helpers (`getBaseAttributes`,
     `attributesWithLink`, `getLinkId`) but nothing connects them to `buffers.attributes`
     or warns that spans drop link ids.
-11. **The raw `CliRenderer` constructor is documented as not production-safe.**
+12. **The raw `CliRenderer` constructor is documented as not production-safe.**
     `renderer.d.ts:358-360`: *"Some late constructor side effects are not rolled back if
     construction throws partway; production callers should use `createCliRenderer`."*
     `createCliRenderer` accepts `stdin`/`stdout` in its config, so it works with fake
     streams and is the right entry point for a headless host.
-8. **Fake stdout must report `isTTY = true`.** `CliRenderer` branches on it, so a
-   headless rebuild needs streams that present as a TTY (`isTTY`, `columns`, `rows`,
-   `getColorDepth()`) despite nothing being displayed. Not stated anywhere in the
-   package's types.
 
 ## Provenance of this document
 
-Revised after review. The verdict (`YES`) is unchanged; three headline supports were
-corrected because they claimed more than their evidence showed:
+Revised across **three rounds of review**. The verdict (`YES`) and its four supporting
+observations never moved. What moved were claims *about* the evidence — each corrected
+when the installed package disagreed with it. Every withdrawn claim is listed here
+rather than quietly deleted, because Task 4 acts on the recommendations, not the verdict:
 
 | Claim (earlier revision) | Status now |
 | --- | --- |
-| "Lossless — proven by reconstruction" (from char/geometry checks only) | **Now measured**: per-cell style vs `buffers` oracle, 1920 cells, 0 mismatches. |
+| "Lossless — proven by reconstruction" (from char/geometry checks only) | **Now measured**: per-cell style vs `buffers`, 1920 cells, 0 mismatches. |
 | "Prefer `.buffers` — per-cell, no wcwidth problem" (from array *lengths*) | **Withdrawn / corrected**: values read; `char` is non-codepoint for wide chars; `fg`/`bg` need `RGBA.fromArray`. |
 | "`/testing`-free path — every member is public" (used private `loop()`) | **Corrected**: `loop`/`_feed` are private; re-probed to public `intermediateRender()`; backpressure gap disclosed. |
 | "Compiled is consistently faster; median 4.07 ms under `bun run`" | **Withdrawn**: `4.07` was untraceable; all four runs now tabulated, no ordering claimed. |
@@ -942,10 +1013,16 @@ corrected because they claimed more than their evidence showed:
 | "`intermediateRender()` is public, **synchronous**, and paints" | **Corrected**: synchronous only while `frameCallbacks` is empty; it calls async `loop()` unawaited. Probed both ways; `await idle()` is now required. |
 | "attributes — **plain bitmask**, matches the span value exactly" | **Corrected**: u32 with a hyperlink id in the upper bits; `getSpanLines` masks `& 255`. With a link, `raw === span` is **false**. Spans are lossy for hyperlinks. |
 | Option A demonstrated on the raw `CliRenderer` ctor while listing `createCliRenderer` uncalled | **Fixed**: probe now uses `createCliRenderer` (the ctor the package tells production to use); it works with fake streams. |
+| Verdict block asserted an unqualified "reconstructed **losslessly**" beside a proved lossy case | **Scoped**: losslessness now stated as char + fg + bg + the 8 text attributes (§4.2's tuple); the hyperlink loss is the third caveat, not a footnote. |
+| "Probed rather than reasoned" over an `idle()` probe that never exercises backpressure | **Corrected**: in `bufferedOutput: "memory"` no feed is allocated, so the backpressure branch is unreachable — the question is *moot* in Option A's config, and the two facts are now sourced separately from the probe. |
+| Option A recipe omitted that `stdout.columns` overrides `config.width`, and that `setupTerminal()` needs `stdin.setRawMode` | **Added**: both named as silent traps in the recipe (`:6890-6891`, `:6893-6894`) and as Discrepancies 8-9. |
 
-Verdict inputs were re-verified each round and never moved. What kept moving were the
-*recommendations* — which is the part Task 4 acts on, so the churn is recorded rather
-than smoothed over.
+**The pattern across rounds, stated plainly:** round 1 asserted "everything is public"
+without checking; round 2 asserted "there is no public equivalent" without checking —
+the same failure with the sign flipped. Round 3's corrections are all of the same
+family: a reference called "independent" that was a pre-image, a probe label claiming
+measurement where the evidence was source-reading. The verdict survived every round
+because it was measured; the claims around it needed the checking.
 
 ## Reproduce
 
