@@ -18,3 +18,9 @@ export {
   validatePublicLimits,
   validateRuntimeDeclarationBundle,
 } from "./model/bundle"
+export {
+  decodeClientHello,
+  decodeHostHello,
+  encodeClientHello,
+  encodeHostHello,
+} from "./model/hello"
