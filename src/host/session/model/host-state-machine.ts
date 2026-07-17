@@ -54,10 +54,14 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
 
     if (phase === "awaiting-mount") {
       if (envelope.kind === "mount") return handleMount(envelope)
-      // Task 8 adds `shutdown` acceptance in this phase (§6: shutdown valid pre-ready).
+      if (envelope.kind === "shutdown") return handleShutdown(envelope)
       return fail(unknownKind(envelope.kind, phase))
     }
-    // phase === "ready" — resize/set-mode/ping/shutdown handled in Task 8.
+    // phase === "ready"
+    if (envelope.kind === "resize") return handleResize(envelope)
+    if (envelope.kind === "set-mode") return handleSetMode(envelope)
+    if (envelope.kind === "ping") return handlePing(envelope)
+    if (envelope.kind === "shutdown") return handleShutdown(envelope)
     return fail(unknownKind(envelope.kind, phase))
   }
 
@@ -251,8 +255,82 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     return { w, h }
   }
 
+  async function handleResize(envelope: ControlEnvelope): Promise<void> {
+    if (renderer === null) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "resize before mount" }))
+    const size = parseSize(envelope.body.size)
+    if (size instanceof ProtocolError) return fail(size)
+    renderer.resize(size)
+    await renderer.render()
+    const captured = renderer.capture()
+    const frameIdentity = sealFrameIdentity()
+    emitFrame(captured, frameIdentity)
+    lastFrameSeq = frameIdentity.frameSeq
+  }
+
+  function handleSetMode(envelope: ControlEnvelope): void {
+    if (envelope.requestId === undefined) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "set-mode must carry a requestId" }))
+    const requested = envelope.body.interactionMode
+    if (requested !== "static" && requested !== "interactive") return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "set-mode.interactionMode must be static|interactive" }))
+    const allowed = mountedMode === "preview" || requested === "static"
+    if (!allowed) {
+      // The only reachable refusal in 2C is a historical mount (smoke/export are
+      // one-shot and exit before `ready`). §3.2 names HISTORICAL_PREVIEW_READ_ONLY
+      // as THE typed read-only refusal for a historical session.
+      sendResponse(envelope.requestId, "set-mode", { ok: false, code: "HISTORICAL_PREVIEW_READ_ONLY", reason: `${mountedMode} mode cannot accept interactive` })
+      return
+    }
+    effectiveMode = requested
+    sendResponse(envelope.requestId, "set-mode", { ok: true, interactionMode: requested })
+  }
+
+  function handlePing(envelope: ControlEnvelope): void {
+    if (envelope.requestId === undefined) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "ping must carry a requestId" }))
+    // Echo the request kind (§7 has no `pong` in the closed family); correlate by responseTo.
+    sendResponse(envelope.requestId, "ping", { ok: true })
+  }
+
+  function handleShutdown(envelope: ControlEnvelope): void {
+    if (envelope.requestId !== undefined) {
+      sendResponse(envelope.requestId, "shutdown-ack", { ok: true })
+    } else {
+      sendControl("shutdown-ack", { ok: true })
+    }
+    phase = "closed"
+    deps.requestExit({ code: 0, reason: "graceful shutdown" })
+  }
+
+  function sendResponse(responseTo: string, kind: string, body: Record<string, unknown>): void {
+    deps.send({
+      type: "control",
+      payload: {
+        protocolVersion: 1,
+        kind,
+        sessionId: identity!.sessionId,
+        nonce: identity!.nonce,
+        messageId: nextMessageId(),
+        responseTo,
+        body: body as ControlEnvelope["body"],
+      },
+    })
+  }
+
+  function sendControl(kind: string, body: Record<string, unknown>): void {
+    deps.send({
+      type: "control",
+      payload: {
+        protocolVersion: 1,
+        kind,
+        sessionId: identity!.sessionId,
+        nonce: identity!.nonce,
+        messageId: nextMessageId(),
+        body: body as ControlEnvelope["body"],
+      },
+    })
+  }
+
   function emitHeartbeat(): void {
-    // Implemented in Task 8.
+    if (identity === null || phase === "closed") return
+    sendControl("heartbeat", { hostTick: deps.now(), lastFrameSeq })
   }
 
   return { receiveControlPayload, emitHeartbeat }

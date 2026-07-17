@@ -240,3 +240,87 @@ describe("host session — mount", () => {
     expect(h.exits).toHaveLength(1)
   })
 })
+
+async function readied(over: Partial<HostSessionDeps> = {}) {
+  const started = await handshaken(over)
+  await started.session.receiveControlPayload(mountEnvelope())
+  started.h.out.length = 0 // drop ready + first frame
+  return started
+}
+
+function controlEnvelope(kind: string, body: ControlEnvelope["body"], requestId?: string): Uint8Array {
+  const envelope: ControlEnvelope = {
+    protocolVersion: 1,
+    kind,
+    sessionId: SESSION_ID,
+    nonce: NONCE,
+    messageId: "9",
+    ...(requestId !== undefined ? { requestId } : {}),
+    body,
+  }
+  const framed = encodeControlEnvelope(envelope)
+  if (framed instanceof Error) throw framed
+  return framed.slice(8)
+}
+
+describe("host session — ready-phase control", () => {
+  test("resize re-renders and emits a new frame with an incremented frameSeq", async () => {
+    const { h, session } = await readied()
+    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 24, h: 4 } }))
+    const frames = h.out.filter((m) => m.type === "frame") as { payload: FrameEnvelope }[]
+    expect(frames).toHaveLength(1)
+    expect(frames[0]!.payload.frameSeq).toBe("2")
+    expect(frames[0]!.payload.width).toBe(24)
+  })
+
+  test("ping gets a correlated ok response echoing kind ping", async () => {
+    const { h, session } = await readied()
+    await session.receiveControlPayload(controlEnvelope("ping", {}, "5"))
+    const control = h.out.filter((m) => m.type === "control") as { payload: ControlEnvelope }[]
+    expect(control).toHaveLength(1)
+    expect(control[0]!.payload.kind).toBe("ping")
+    expect(control[0]!.payload.responseTo).toBe("5")
+    expect((control[0]!.payload.body as { ok: boolean }).ok).toBe(true)
+  })
+
+  test("set-mode to interactive is accepted in preview and echoes the effective mode", async () => {
+    const { h, session } = await readied()
+    await session.receiveControlPayload(controlEnvelope("set-mode", { interactionMode: "interactive" }, "6"))
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    expect(response.kind).toBe("set-mode")
+    expect(response.responseTo).toBe("6")
+    expect((response.body as { ok: boolean; interactionMode: string }).ok).toBe(true)
+    expect((response.body as { interactionMode: string }).interactionMode).toBe("interactive")
+  })
+
+  test("set-mode to interactive is refused for a historical mount", async () => {
+    // A historical mount ONLY — no extra `readied()` preview renderer to leak
+    // (a leaked live OpenTUI renderer is the Spike-D hang condition).
+    const historical = await handshaken()
+    await historical.session.receiveControlPayload(mountEnvelope({ mode: "historical" }))
+    historical.h.out.length = 0
+    await historical.session.receiveControlPayload(controlEnvelope("set-mode", { interactionMode: "interactive" }, "7"))
+    const response = (historical.h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    expect((response.body as { ok: boolean }).ok).toBe(false)
+    expect((response.body as { code: string }).code).toBe("HISTORICAL_PREVIEW_READ_ONLY")
+  })
+
+  test("emitHeartbeat sends a heartbeat carrying the last frameSeq", async () => {
+    const { h, session } = await readied()
+    session.emitHeartbeat()
+    const beat = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    expect(beat.kind).toBe("heartbeat")
+    expect((beat.body as { lastFrameSeq: string }).lastFrameSeq).toBe("1")
+    expect(typeof (beat.body as { hostTick: number }).hostTick).toBe("number")
+  })
+
+  test("shutdown acks then requests exit 0", async () => {
+    const { h, session } = await readied()
+    await session.receiveControlPayload(controlEnvelope("shutdown", {}, "8"))
+    const ack = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    expect(ack.kind).toBe("shutdown-ack")
+    expect(ack.responseTo).toBe("8")
+    expect(h.exits).toHaveLength(1)
+    expect(h.exits[0]!.code).toBe(0)
+  })
+})
