@@ -28,3 +28,10 @@ export {
   decodeControlEnvelope,
   encodeControlEnvelope,
 } from "./model/control-envelope"
+export {
+  FRAME_ATTR_MASK,
+  FRAME_MAX_AXIS,
+  FRAME_MAX_CELLS,
+  decodeFrameEnvelope,
+  encodeFrameEnvelope,
+} from "./model/frame"
