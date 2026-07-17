@@ -3,7 +3,9 @@
 Component- and process-level documentation for termcraft: a terminal application
 where a designer and a local AI agent CLI design other terminal applications
 together — the agent writes real design code, termcraft executes it in an
-isolated preview. Written for a reader who does not read the source language.
+isolated preview. Written for a reader who does not read the source language —
+[code-structure.md](code-structure.md) is the deliberate exception, and the only
+document here that addresses how the source tree itself is laid out.
 
 > **Status:** these documents describe both the MVP foundation and the v1 target
 > ahead of the code. The MVP has canonical page sources but no history or Git UI;
@@ -35,6 +37,10 @@ isolated preview. Written for a reader who does not read the source language.
    supervised design-host subprocess where agent-written code runs.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
+4. [code-structure.md](code-structure.md) — the source-tree convention: entity-first
+   grouping, `entities/` versus consumer-declared ports, the domain-free
+   `infrastructure/` ring, and the composition root that keeps the module graph a
+   DAG. For readers who write code; the rest of this set does not require it.
 
 ## Flows
 
