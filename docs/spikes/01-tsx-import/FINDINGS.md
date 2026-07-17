@@ -372,15 +372,125 @@ happen to type. It is an accident of default transform mode, not an enforced rul
 | production | `with-jsx` | JSX page | OK, `jsx` |
 | production | `with-jsx` | explicit `react/jsx-runtime` | OK — **contradicts spec** |
 
-**Conclusion.** Compiler-owned JSX works, and fallback (a) extends to it cleanly — register
-`react/jsx-dev-runtime` (dev) and/or `react/jsx-runtime` (production) alongside
-`@termcraft/runtime`. The helper module must export `jsx`, `jsxs`, `jsxDEV` and `Fragment`;
-this probe saw `jsxDEV` called in dev and `jsx` in production. But the spec's requirement
-that **explicit `react/jsx-runtime` imports fail is not enforceable at the resolver level**.
-It appears satisfiable in dev only because Bun's dev transform happens to emit a different
-specifier than the one authors type — and `NODE_ENV=production` erases even that. If pages
-must be forbidden from importing the helper directly, that has to be enforced by the
-**checker/linter on the source text** (Spike C's territory), not by module resolution.
+### 7. Multi-child JSX, fragments and keys — the paths a single-child fixture never reaches
+
+The tests above all use a single, childless element. That is not a real page. The transform
+emits `jsx` for one-or-zero children and **`jsxs` for multiple**, so nearly every real page —
+any `<Panel>` with more than one child, any `<>…</>` — takes a path the tests above never ran.
+Fixture `fixture/page-jsx-multi.tsx` forces all of them: multiple children, a fragment, and a
+keyed `.map`. Probe `src/main-jsx-multi.ts` records what each helper actually receives.
+
+```bash
+bun build --compile src/main-jsx-multi.ts --outfile probe-jsx-multi.exe
+./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
+NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
+```
+
+**Dev** (`NODE_ENV` unset), verbatim — `distinctHelpers` and the interesting invocations:
+
+```json
+"helpersCalled": ["jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV"],
+"distinctHelpers": ["jsxDEV"],
+{ "helper": "jsxDEV", "type": "Fragment", "propKeys": ["children"], "childrenKind": "array(2)",
+  "keyPositional": null, "extraArgs": [true, null, { "meta": {…} }] },
+{ "helper": "jsxDEV", "type": "Panel", "propKeys": ["id","title"], "childrenKind": "none",
+  "keyPositional": "a", "extraArgs": [false, null, { "meta": {…} }] },
+{ "helper": "jsxDEV", "type": "Panel", "propKeys": ["id","title","children"],
+  "childrenKind": "array(4)", "keyPositional": null, "extraArgs": [true, null, { "meta": {…} }] }
+"rendered": "Panel#root(multi)"
+```
+
+**Production**, verbatim:
+
+```json
+"helpersCalled": ["jsx","jsx","jsx","jsx","jsxs","jsx","jsx","jsxs"],
+"distinctHelpers": ["jsx","jsxs"],
+{"helper":"jsxs","type":"Fragment","propKeys":["children"],"childrenKind":"array(2)","keyPositional":null,"extraArgs":[]}
+{"helper":"jsx","type":"Panel","propKeys":["id","title"],"childrenKind":"none","keyPositional":"a","extraArgs":[]}
+{"helper":"jsx","type":"Panel","propKeys":["id","title"],"childrenKind":"none","keyPositional":"b","extraArgs":[]}
+{"helper":"jsxs","type":"Panel","propKeys":["id","title","children"],"childrenKind":"array(4)","keyPositional":null,"extraArgs":[]}
+```
+
+**The JSX conclusion does not move — it works — but the helper contract is now pinned:**
+
+- **`jsxs` is production-only.** Dev uses `jsxDEV` for *everything*, single and multi-child
+  alike, distinguishing them via the `isStaticChildren` argument (`false` vs `true` above).
+  `jsxs` was never called in dev no matter the shape of the tree. `jsxsDEV` was registered and
+  **never called in either mode** — it does not exist in this transform's output.
+- **`jsx` and `jsxs` have the *same* signature: `(type, props, key)`.** `jsxs` does *not* take
+  children as a separate array argument. The only difference is that `props.children` is a
+  static array (`array(4)`) rather than a single value. So one implementation can back both —
+  the facade does not need divergent logic, only the `isStaticChildren` hint if it wants it.
+- **`key` is positional, not a prop.** It arrives as the **third argument** and is absent from
+  `propKeys` (`keyPositional: "a"` / `"b"` for the `.map`; `propKeys: ["id","title"]`). A
+  facade with signature `(type, props)` — as the earlier probes used — **silently drops every
+  key**. That is the one place the earlier helper was genuinely wrong.
+- **`Fragment` is never called as a helper.** It arrives as the **`type` argument** to
+  `jsx`/`jsxs`/`jsxDEV` (`"type": "Fragment"`, `childrenKind: "array(2)"`). It must therefore
+  be an exported *value* the facade recognizes as the element type, not a function on the
+  helper surface.
+- **`jsxDEV` takes six arguments:** `(type, props, key, isStaticChildren, source, self)`. The
+  observed `extraArgs` are `[isStaticChildren, null, <module scope>]` — `source` was `null`
+  and `self` was the page's own module namespace (visibly carrying its `meta` export).
+
+So the real `@termcraft/runtime` JSX facade must implement `jsx(type, props, key)`,
+`jsxs(type, props, key)`, `jsxDEV(type, props, key, isStaticChildren, source, self)` and export
+a `Fragment` value. `rendered: "Panel#root(multi)"` in both modes reflects the stand-in
+`Panel` ignoring children by design; the helper log, not the render, is the evidence here.
+
+### 8. `process.env.NODE_ENV` is inlined at build time and LIES to a compiled host
+
+Found while checking the multi-child output, which reported `nodeEnv: "development"` even
+under `NODE_ENV=production` while the transform demonstrably switched to production helpers.
+
+```bash
+bun build --compile src/main-env.ts --outfile probe-env.exe
+./probe-env.exe
+NODE_ENV=production ./probe-env.exe
+NODE_ENV=staging ./probe-env.exe
+```
+
+Verbatim:
+
+```
+=== NODE_ENV unset ===
+{"processEnvDot":"development","processEnvBracket":null,"bunEnvDot":null,"fromOsViaSpread":null}
+=== NODE_ENV=production ===
+{"processEnvDot":"development","processEnvBracket":"production","bunEnvDot":"production","fromOsViaSpread":"production"}
+=== NODE_ENV=staging ===
+{"processEnvDot":"development","processEnvBracket":"staging","bunEnvDot":"staging","fromOsViaSpread":"staging"}
+```
+
+`process.env.NODE_ENV` accessed with **dot notation is inlined by the bundler as the literal
+`"development"`** and reports that forever, regardless of the real environment.
+`process.env["NODE_ENV"]`, `Bun.env.NODE_ENV` and `{...process.env}.NODE_ENV` all report the
+true runtime value.
+
+**This is a live trap, because the runtime JSX transform follows the *true* value.** A host
+that decides which helper subpath to register by reading `process.env.NODE_ENV` will always
+read `"development"`, register only `react/jsx-dev-runtime`, and then — when the binary happens
+to run under `NODE_ENV=production` — every JSX page dies with
+`Cannot find module 'react/jsx-runtime'`, from an env var the host never sees. Read
+`Bun.env.NODE_ENV` (or bracket access) if the value is needed at all; better, **register both
+subpaths unconditionally** and do not branch on the mode.
+
+### JSX conclusion
+
+Compiler-owned JSX works, and fallback (a) extends to it cleanly — this now holds for
+multi-child elements, fragments and keyed lists, not just the single-child case. Register the
+JSX helper alongside `@termcraft/runtime`, exporting `jsx`, `jsxs`, `jsxDEV` and a `Fragment`
+value, with `key` accepted as the third positional argument.
+
+**Register both `react/jsx-dev-runtime` and `react/jsx-runtime`, unconditionally.** Finding 8
+makes conditional registration actively dangerous: the host cannot reliably learn its own
+transform's mode via the obvious route, and guessing wrong breaks every page.
+
+That closes the door on the spec's second half for good. Registering both **guarantees** an
+explicit `react/jsx-runtime` import resolves — and under `NODE_ENV=production` the generated
+and author-written specifiers are the same string anyway, so no resolver could separate them
+even in principle. The spec's requirement that **explicit `react/jsx-runtime` imports fail is
+not enforceable at the resolver level**. If pages must be forbidden from importing the helper
+directly, that has to be enforced by the **checker on source text** (Spike C's territory).
 
 ## Step 7 measurements
 
@@ -555,12 +665,20 @@ with `Cannot find module`. The fix lives entirely in the host: register a `Bun.p
 resolver at startup that serves modules from memory, before importing anything. `Bun.plugin`
 being honored inside a compiled binary was the genuine unknown; it is.
 
-**Register two modules, not one.** A real page is JSX, and the JSX transform generates its own
-helper import that must also resolve into the host. Registering `@termcraft/runtime` alone
+**Register three modules, not one.** A real page is JSX, and the JSX transform generates its
+own helper import that must also resolve into the host. Registering `@termcraft/runtime` alone
 makes a real JSX page fail with `Cannot find module 'react/jsx-dev-runtime'`. Register the JSX
-helper too — `react/jsx-dev-runtime` in dev, `react/jsx-runtime` under
-`NODE_ENV=production` — exporting `jsx`, `jsxs`, `jsxDEV` and `Fragment`. Registering both
-subpaths is the safe default.
+helper too, under **both** subpaths — `react/jsx-dev-runtime` (used in dev) and
+`react/jsx-runtime` (used under `NODE_ENV=production`). Register both *unconditionally*: a
+compiled host reading `process.env.NODE_ENV` gets the build-time literal `"development"`, not
+the real value, while the transform follows the real value — so branching on the mode breaks
+pages from an env var the host cannot see.
+
+The facade must export `jsx(type, props, key)`, `jsxs(type, props, key)` (same signature —
+`jsxs` only means `props.children` is a static array), `jsxDEV(type, props, key,
+isStaticChildren, source, self)`, and a `Fragment` **value** that arrives as the element
+`type`, never as a called helper. `key` is the **third positional argument**, not a prop — a
+facade typed `(type, props)` silently drops every key.
 
 Pick **(a)**, and not merely because it is cheapest. The other three work for a toy page and
 all break the moment a page imports a file next to it, because they fix the bare specifier by
@@ -590,6 +708,12 @@ author would write, so the resolver provably cannot distinguish them; registerin
 JSX requires — necessarily makes explicit imports resolve. In dev mode the separation is real
 but incidental (`react/jsx-dev-runtime` vs `react/jsx-runtime`) and still not a boundary,
 since an author who writes the dev subpath is served happily.
+
+The multi-child round closed this off completely. Because `process.env.NODE_ENV` lies to a
+compiled host (finding 8), the host cannot safely register only the subpath its transform will
+use — it must register **both**, which *guarantees* explicit author imports resolve in every
+mode. What was "not enforceable in production" is now "not enforceable at all, and the safe
+implementation actively enables it".
 
 `:92` ("compiler owns the JSX transform and resolves any generated JSX helper internally")
 **survives** — the host does own it, via the plugin.
