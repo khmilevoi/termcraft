@@ -170,7 +170,8 @@ function expand(frame: CapturedFrame): Cell[][] {
         attributes: span.attributes,
       }
       const chars = [...span.text]
-      const totalCp = chars.reduce((a, c) => a + Bun.stringWidth(c), 0)
+      // NB: accumulates DISPLAY width (not codepoint count) — `日` counts 2.
+      const derivedWidth = chars.reduce((a, c) => a + Bun.stringWidth(c), 0)
       for (const ch of chars) {
         const w = Bun.stringWidth(ch)
         row.push({ char: ch, ...style } as Cell)
@@ -178,9 +179,9 @@ function expand(frame: CapturedFrame): Cell[][] {
       }
       // record any disagreement between the span's declared width and the
       // width we re-derived; a mismatch would mean expansion is not mechanical
-      if (totalCp !== span.width) {
+      if (derivedWidth !== span.width) {
         console.log(
-          `  !! width mismatch: span.width=${span.width} derived=${totalCp} text=${JSON.stringify(span.text)}`,
+          `  !! width mismatch: span.width=${span.width} derived=${derivedWidth} text=${JSON.stringify(span.text)}`,
         )
       }
     }
@@ -234,14 +235,136 @@ function expand(frame: CapturedFrame): Cell[][] {
     console.log("  truth[0]   =", JSON.stringify(truth.split("\n")[0]))
   }
 
-  console.log("LOSSLESS =", allTile && dimsOk && identical)
-  console.log("--- sample styled cells from row 0 (char + fg + bg + attributes) ---")
+  // 4. THE STYLE ORACLE. Checks 1-3 are char/structural only: none of them
+  // compares a single fg/bg/attribute value against anything. The verdict
+  // question is about the *styled* grid, so compare the style of every one of
+  // the 1920 expanded cells against renderer.currentRenderBuffer.buffers —
+  // the renderer's own raw per-cell arrays, an oracle independent of the spans.
+  const buf = renderer.currentRenderBuffer
+  const raw = buf.buffers
+  let styleMismatches = 0
+  const firstMismatches: string[] = []
+  for (let y = 0; y < frame.rows; y++) {
+    for (let x = 0; x < frame.cols; x++) {
+      const i = y * frame.cols + x
+      const cell = grid[y]![x]!
+      // raw fg/bg are 4×Uint16 per cell in the SAME packed encoding as
+      // RGBA.buffer, so decode via RGBA.fromArray before comparing.
+      const rawFg = RGBA.fromArray(raw.fg.slice(i * 4, i * 4 + 4)).toInts()
+      const rawBg = RGBA.fromArray(raw.bg.slice(i * 4, i * 4 + 4)).toInts()
+      const rawAttr = raw.attributes[i]!
+      const fgOk = rawFg.join(",") === cell.fg.join(",")
+      const bgOk = rawBg.join(",") === cell.bg.join(",")
+      const attrOk = rawAttr === cell.attributes
+      if (!fgOk || !bgOk || !attrOk) {
+        styleMismatches++
+        if (firstMismatches.length < 5) {
+          firstMismatches.push(
+            `    [${y}][${x}] span fg=${JSON.stringify(cell.fg)} bg=${JSON.stringify(cell.bg)} attr=${cell.attributes}` +
+              ` vs raw fg=${JSON.stringify(rawFg)} bg=${JSON.stringify(rawBg)} attr=${rawAttr}`,
+          )
+        }
+      }
+    }
+  }
+  const styleOk = styleMismatches === 0
+  console.log(
+    `per-cell style vs buffers oracle: ${frame.cols * frame.rows} cells checked, ${styleMismatches} mismatches -> ${styleOk}`,
+  )
+  for (const m of firstMismatches) console.log(m)
+
+  // LOSSLESS now includes a measured style comparison, not just chars/geometry.
+  console.log("LOSSLESS =", allTile && dimsOk && identical && styleOk)
+  console.log(
+    "  (allTile=%s dimsOk=%s charsIdentical=%s styleMatchesOracle=%s)",
+    allTile,
+    dimsOk,
+    identical,
+    styleOk,
+  )
+
+  console.log("--- sample styled cells from row 0: expanded span vs raw buffers ---")
   for (const i of [0, 3, 6, 10, 14, 20]) {
     const c = grid[0]![i]!
+    const rawFg = RGBA.fromArray(raw.fg.slice(i * 4, i * 4 + 4)).toInts()
+    const rawBg = RGBA.fromArray(raw.bg.slice(i * 4, i * 4 + 4)).toInts()
     console.log(
-      `  cell[0][${String(i).padStart(2)}] = ${JSON.stringify(c.char)} fg=${JSON.stringify(c.fg)} bg=${JSON.stringify(c.bg)} attr=${c.attributes}`,
+      `  cell[0][${String(i).padStart(2)}] = ${JSON.stringify(c.char)} fg=${JSON.stringify(c.fg)} bg=${JSON.stringify(c.bg)} attr=${c.attributes}` +
+        ` || raw fg=${JSON.stringify(rawFg)} bg=${JSON.stringify(rawBg)} attr=${raw.attributes[i]}`,
     )
   }
+  renderer.destroy()
+}
+
+// ------------------------------------------------ .buffers ENCODING
+// The recommendation to prefer `.buffers` for the host protocol must not rest
+// on array LENGTHS (which are arithmetic from the allocation). Read actual
+// values and find out what the encoding really is.
+console.log("")
+console.log("=== .buffers ENCODING: actual values, not lengths ===")
+{
+  const { renderer, renderOnce, captureSpans } = await createTestRenderer({
+    width: 10,
+    height: 2,
+  })
+  renderer.root.add(
+    Text({ content: "A日b", fg: "#FF0000", bg: "#0000FF", attributes: TextAttributes.BOLD }),
+  )
+  await renderOnce()
+  const raw = renderer.currentRenderBuffer.buffers
+  const span0 = captureSpans().lines[0]!.spans[0]!
+  console.log(
+    "array types:",
+    JSON.stringify({
+      char: raw.char.constructor.name,
+      fg: raw.fg.constructor.name,
+      bg: raw.bg.constructor.name,
+      attributes: raw.attributes.constructor.name,
+    }),
+  )
+  console.log(
+    "span0:",
+    JSON.stringify({ text: span0.text, fg: span0.fg.toInts(), bg: span0.bg.toInts(), attr: span0.attributes }),
+  )
+  const decode = (v: number) => {
+    try {
+      return JSON.stringify(String.fromCodePoint(v))
+    } catch (e) {
+      return `<NOT A CODEPOINT: ${(e as Error).message}>`
+    }
+  }
+  console.log('rendering "A日b" (日 is U+65E5, display width 2):')
+  for (let x = 0; x < 5; x++) {
+    console.log(
+      `  cell[0][${x}] char=${String(raw.char[x]).padStart(10)} 0x${raw.char[x]!.toString(16).padStart(8, "0")} ${decode(raw.char[x]!)}` +
+        ` fg=[${raw.fg[x * 4]},${raw.fg[x * 4 + 1]},${raw.fg[x * 4 + 2]},${raw.fg[x * 4 + 3]}] attr=${raw.attributes[x]}`,
+    )
+  }
+  renderer.destroy()
+}
+{
+  // Does colour INTENT/SLOT survive in the flat Uint16Array?
+  const { renderer, renderOnce, captureSpans } = await createTestRenderer({
+    width: 10,
+    height: 2,
+  })
+  renderer.root.add(Text({ content: "X", fg: RGBA.fromIndex(9) }))
+  await renderOnce()
+  const raw = renderer.currentRenderBuffer.buffers
+  const s = captureSpans().lines[0]!.spans[0]!
+  console.log("indexed colour RGBA.fromIndex(9):")
+  console.log(
+    "  span fg  ->",
+    JSON.stringify({ intent: s.fg.intent, slot: s.fg.slot, ints: s.fg.toInts() }),
+    " .buffer raw =",
+    JSON.stringify(Array.from(s.fg.buffer)),
+  )
+  console.log("  raw buffers fg cell0 =", JSON.stringify([raw.fg[0], raw.fg[1], raw.fg[2], raw.fg[3]]))
+  const rebuilt = RGBA.fromArray(raw.fg.slice(0, 4))
+  console.log(
+    "  RGBA.fromArray(raw slice) ->",
+    JSON.stringify({ intent: rebuilt.intent, slot: rebuilt.slot, ints: rebuilt.toInts() }),
+  )
   renderer.destroy()
 }
 
@@ -340,17 +463,20 @@ console.log("=== STEP 5: RESIZE / MOUSE / TIMING ===")
 //   new CliRenderer(stdin, stdout, w, h, { bufferedOutput: "memory" })
 // and captureSpans() is
 //   { cols, rows, cursor: getCursorState(), lines: currentRenderBuffer.getSpanLines() }
-// Every one of those members is on the PUBLIC surface. Rebuild it and compare.
+// BUT the harness's renderOnce() drives the frame via `renderer.loop()` and
+// `renderer._feed`, and BOTH are declared private (renderer.d.ts:559, :331).
+// So the naive rebuild is NOT "public API only". Enumerate the render routes and
+// find out which public one actually paints a styled frame.
 console.log("")
-console.log("=== STEP 6: /testing-free headless path (public API only) ===")
-{
-  const { CliRenderer, Text: T2 } = await import("@opentui/core")
-  const { Writable, Readable } = await import("node:stream")
+console.log("=== STEP 6: /testing-free headless path ===")
 
+// Fake TTY streams. NB: isTTY must be true — CliRenderer branches on it.
+async function makeFakeStreams(cols: number, rows: number) {
+  const { Writable, Readable } = await import("node:stream")
   class FakeStdout extends Writable {
     isTTY = true
-    columns = 80
-    rows = 24
+    columns = cols
+    rows = rows
     _write(_c: any, _e: any, cb: () => void) {
       cb()
     }
@@ -358,10 +484,69 @@ console.log("=== STEP 6: /testing-free headless path (public API only) ===")
       return 24
     }
   }
-  const fakeStdin = new Readable({ read() {} }) as any
-  fakeStdin.isTTY = true
-  fakeStdin.setRawMode = () => fakeStdin
-  const fakeStdout = new FakeStdout() as any
+  const stdin = new Readable({ read() {} }) as any
+  stdin.isTTY = true
+  stdin.setRawMode = () => stdin
+  return { stdin, stdout: new FakeStdout() as any }
+}
+
+// Which render entry points are public, and which actually paint?
+console.log("--- render route survey (does it paint a styled frame?) ---")
+{
+  const { CliRenderer: CR, Text: T3 } = await import("@opentui/core")
+  const routes: Array<[string, string, (r: any) => Promise<void> | void]> = [
+    ["intermediateRender()", "PUBLIC  renderer.d.ts:560", (r) => r.intermediateRender()],
+    ["requestRender() only", "PUBLIC  renderer.d.ts:388", (r) => r.requestRender()],
+    [
+      "requestRender() + await tick",
+      "PUBLIC  renderer.d.ts:388",
+      async (r) => {
+        r.requestRender()
+        await new Promise((res) => setTimeout(res, 60))
+      },
+    ],
+    [
+      "start() + tick + stop()",
+      "PUBLIC  renderer.d.ts:545/552",
+      async (r) => {
+        r.start()
+        await new Promise((res) => setTimeout(res, 80))
+        r.stop()
+      },
+    ],
+    ["loop()", "PRIVATE renderer.d.ts:559", async (r) => await r.loop()],
+  ]
+  for (const [name, vis, drive] of routes) {
+    const { stdin, stdout } = await makeFakeStreams(20, 3)
+    try {
+      const r = new CR(stdin, stdout, 20, 3, {
+        bufferedOutput: "memory",
+        screenMode: "main-screen",
+        consoleMode: "disabled",
+        externalOutputMode: "passthrough",
+        useMouse: false,
+        exitOnCtrlC: false,
+      })
+      r.root.add(T3({ content: "PUB", fg: "#FF0000", attributes: TextAttributes.BOLD }))
+      await drive(r)
+      const s = r.currentRenderBuffer.getSpanLines()[0]?.spans[0]
+      const txt = s ? s.text : "(none)"
+      const painted = txt.trimEnd() === "PUB" || txt.startsWith("PUB")
+      console.log(
+        `  ${name.padEnd(29)} ${vis.padEnd(25)} painted=${String(painted).padEnd(5)} span0=${JSON.stringify(txt)} attr=${s?.attributes}`,
+      )
+      r.destroy()
+    } catch (e) {
+      console.log(`  ${name.padEnd(29)} ${vis.padEnd(25)} THREW: ${(e as Error).message}`)
+    }
+  }
+}
+
+// Rebuild the full path using ONLY public members: intermediateRender().
+console.log("--- full rebuild via PUBLIC intermediateRender() ---")
+{
+  const { CliRenderer, Text: T2 } = await import("@opentui/core")
+  const { stdin: fakeStdin, stdout: fakeStdout } = await makeFakeStreams(80, 24)
 
   try {
     const renderer = new CliRenderer(fakeStdin, fakeStdout, 80, 24, {
@@ -375,7 +560,7 @@ console.log("=== STEP 6: /testing-free headless path (public API only) ===")
     renderer.root.add(
       T2({ content: "PUBLIC", fg: "#FF0000", bg: "#0000FF", attributes: TextAttributes.BOLD }),
     )
-    await renderer.loop()
+    renderer.intermediateRender() // PUBLIC (renderer.d.ts:560) — no private loop()
 
     const buf = renderer.currentRenderBuffer
     const lines = buf.getSpanLines()
@@ -404,20 +589,32 @@ console.log("=== STEP 6: /testing-free headless path (public API only) ===")
     console.log(
       `frame cols=${frame.cols} rows=${frame.rows} lines=${frame.lines.length} tiles=${tiles}`,
     )
+    // lengths are arithmetic from the allocation; VALUES are the observation.
+    const raw = buf.buffers
     console.log(
-      "raw per-cell typed arrays via buf.buffers:",
+      "buf.buffers lengths:",
       JSON.stringify({
-        char: buf.buffers.char.length,
-        fg: buf.buffers.fg.length,
-        bg: buf.buffers.bg.length,
-        attributes: buf.buffers.attributes.length,
+        char: raw.char.length,
+        fg: raw.fg.length,
+        bg: raw.bg.length,
+        attributes: raw.attributes.length,
         expectedCells: 80 * 24,
       }),
     )
-    console.log("STEP6_TESTING_FREE_PATH_WORKS = true")
+    console.log(
+      "buf.buffers VALUES cell[0][0..5]:",
+      JSON.stringify(
+        [0, 1, 2, 3, 4, 5].map((i) => ({
+          char: raw.char[i],
+          fg: RGBA.fromArray(raw.fg.slice(i * 4, i * 4 + 4)).toInts(),
+          attr: raw.attributes[i],
+        })),
+      ),
+    )
+    console.log("STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true")
     renderer.destroy()
   } catch (e) {
-    console.log("STEP6_TESTING_FREE_PATH_WORKS = false")
+    console.log("STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = false")
     console.log("error:", (e as Error).message)
   }
 }
