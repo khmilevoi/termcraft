@@ -2,6 +2,8 @@ export { registerRuntimeResolver } from "./model/resolver"
 export { computeSourceHash, scanPageImports } from "./model/source-mount"
 export { loadPage } from "./model/source-mount"
 export { createHostSession } from "./model/host-state-machine"
+export { parseHostArgs, runHostStdio } from "./model/entry"
+export type { HostStdioIo } from "./model/entry"
 export type {
   ExitRequest,
   HeartbeatBody,
