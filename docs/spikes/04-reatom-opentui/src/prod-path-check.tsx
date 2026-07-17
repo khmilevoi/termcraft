@@ -1,10 +1,11 @@
-// Diagnostic-only, not part of the committed probe: does the PRODUCTION
-// mount path (createCliRenderer + @opentui/react's createRoot, no
-// createTestRenderer/testRender, no IS_REACT_ACT_ENVIRONMENT) suffer the
-// same "setState never commits" problem as the headless test harness? This
+// Diagnostic companion to src/main.tsx: does the PRODUCTION mount path
+// (createCliRenderer + @opentui/react's createRoot, no createTestRenderer/
+// testRender, no IS_REACT_ACT_ENVIRONMENT) suffer the same "setState never
+// commits" problem the headless test harness showed in main.tsx? This
 // isolates whether the act()-environment is the cause, or whether the
-// reconciler binding is broken outright. Not written to FINDINGS.md paths;
-// used only to decide the verdict, then deleted before commit.
+// reconciler binding is broken outright. See FINDINGS.md Step 4+5 point 7
+// for the result and how it changes the verdict. Throwaway evidence code,
+// not product code.
 
 import { atom } from "@reatom/core"
 import { reatomComponent } from "@reatom/react"
