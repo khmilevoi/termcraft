@@ -1,0 +1,19 @@
+{
+  "name": "04-reatom-opentui",
+  "module": "src/main.tsx",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/react": "0.4.5",
+    "@reatom/core": "1001.1.0",
+    "@reatom/react": "1001.0.0",
+    "react": "19.2.7"
+  }
+}
