@@ -5,10 +5,11 @@ flowchart LR
     designer(["Designer at a terminal"])
     coder(["Implementing coding agent"])
     subgraph machine["Designer's machine"]
-        termcraft["termcraft — single compiled binary (shell + supervised host + embedded runtime)"]
+        termcraft["termcraft — one compiled per-platform binary (shell + supervised host + embedded runtime)"]
         codexcli["Codex CLI (local, user's own auth)"]
         claudecli["Claude Code CLI (second backend, later)"]
         gitcli["Git CLI (local, optional)"]
+        tsc["TypeScript compiler + lib files<br/>(extracted once to a per-user directory)"]
         staging["unique fenced turn workspace + immutable candidate"]
         folder[".termcraft/ — project folder"]
     end
@@ -19,6 +20,7 @@ flowchart LR
     termcraft -.-> claudecli
     codexcli -- "edits design code, sandboxed" --> staging
     termcraft -- "diff + validation gate" --> staging
+    termcraft -- "gate type check:<br/>extract once, spawn" --> tsc
     termcraft -- "recoverable project<br/>transactions + safe FS" --> folder
     folder -. "may live inside" .-> repo
     termcraft -- "v1 history · confirmed<br/>scoped commits" --> gitcli
@@ -30,7 +32,7 @@ flowchart LR
 
 1. The designer launches termcraft from within the target project's working directory. termcraft looks for a `.termcraft/` project folder there; that folder sits next to the code it describes. Git is optional: the project retains generation, preview, pins, chat, and export without a repository, while committing `.termcraft/` alongside application code lets design history travel with the codebase.
 2. Design requests are sent to a locally installed agent CLI driven through its vendor's official TypeScript SDK — termcraft holds no API keys of its own and simply uses whatever authentication the CLI already has configured. The Codex CLI is the first supported backend; the Claude Code CLI is planned as a second backend behind the same abstraction, adopted later if its terms permit headless embedding.
-3. The agent writes `@termcraft/runtime` design code in a unique fenced turn workspace, confined there by its backend. After confirmed process exit, `SafeProjectFs` copies allowed regular files into an agent-inaccessible immutable candidate; the Gate validates types, runtime-only imports, page contract, and a smoke render from that candidate. Rejection or interruption before commit intent changes no canonical source.
+3. The agent writes `@termcraft/runtime` design code in a unique fenced turn workspace, confined there by its backend. After confirmed process exit, `SafeProjectFs` copies allowed regular files into an agent-inaccessible immutable candidate; the Gate validates types, runtime-only imports, page contract, and a smoke render from that candidate. Rejection or interruption before commit intent changes no canonical source. One binary ships the shell, the supervised host, and the embedded runtime, so the designer's project folder never grows a `package.json` — but it does not ship the type checker. At the pinned TypeScript major the compiler is a per-platform native executable that cannot be launched from inside the binary, so it and its lib files are extracted once to a per-user directory on first use and spawned as a subprocess; that is also why the build itself is per-platform.
 4. Accepted changes publish through a recoverable `TurnTransaction`: after durable commit intent, startup or the live process idempotently rolls every planned page, manifest, local effect, chat, and pin event forward. Unexpected target drift is never overwritten. Design code executes only inside a `HostSupervisor`-owned subprocess; the UI uses `PreviewSession` and never owns the process. Composite workspace trust is required because the project contains executable code regardless of whether it arrived through Git, a copy, or a sync tool.
 5. Failure branch: if the agent CLI is missing or not logged in, a background health check performed at startup — and repeated before each send — surfaces the problem in the status bar. Attempting to send a message while unhealthy then fails with a clear error and install instructions rather than silently hanging.
 6. In v1 only, termcraft can ask the installed Git CLI for read-only page history and can create a commit after `/commit-page`, `/commit-infra`, or `/commit-all` opens confirmation for an exact `.termcraft/` scope. Restore replaces one canonical page source without moving `HEAD` or changing the index; termcraft never commits automatically. These commands and history are unavailable when Git or a containing repository is unavailable.

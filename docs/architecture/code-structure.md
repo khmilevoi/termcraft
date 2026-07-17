@@ -141,16 +141,28 @@ flowchart LR
    still imports no backend, and `AgentBackend` remains a spec-named port while the
    registry around it is this document's shape.
 
-9. **Two entry points, one binary.** `bun build --compile` ships the shell and the
-   design-host entry together (§4.1). `termcraft _host` is a second, much smaller
-   composition root: it wires the host-side protocol and the embedded runtime, and
-   never constructs `core`, `store`, or `ui`.
+9. **Two entry points, one binary — per platform, and not everything is inside it.**
+   `bun build --compile` ships the shell and the design-host entry together (§4.1).
+   `termcraft _host` is a second, much smaller composition root: it wires the
+   host-side protocol and the embedded runtime, and never constructs `core`,
+   `store`, or `ui`. Two qualifications the packaging story now carries. The
+   TypeScript compiler is not callable from inside the binary at the pinned major —
+   it is a per-platform native executable that `gate` extracts once to a per-user
+   directory and spawns, which makes the build itself per-platform (one build per
+   target, each carrying that platform's compiler package). And `host`'s resolution
+   of the embedded facade is a runtime resolver plugin registered before the dynamic
+   import, serving three specifiers: `@termcraft/runtime` plus the two
+   compiler-generated JSX helper subpaths, which must resolve or a real page fails to
+   load. Item 10's "only import" is about what a page's *author* may write; the
+   helper import is emitted by the transform.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
     and nothing else from any module: never `store`, never host stdio. `runtime` is a
     leaf that imports no termcraft module: it is the saved-page facade (§5), resolved
-    from the binary by design code running inside the host.
+    from the binary by design code running inside the host. It also owns the JSX
+    helper surface the transform emits against — not authored-public, and no page may
+    name it, but a contract the module cannot get wrong all the same.
 
 11. **Forbidden shapes.** These are review-blocking:
 
@@ -177,5 +189,8 @@ flowchart LR
   inside the Project store
 - `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` —
   `HostSupervisor` and `PreviewSession` ownership, and the Gate's smoke-render path
+- `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — §3.1 the
+  three-specifier resolver and the facade-owned JSX helper contract that fix what
+  `runtime/` and `host/` each own
 - [`modules.md`](modules.md) — the same seven components as runtime roles, and the
   Kernel's authority this layout encodes

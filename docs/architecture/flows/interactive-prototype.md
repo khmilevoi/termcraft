@@ -15,7 +15,7 @@ flowchart LR
     tweaks -- "tweak values" --> kitapi
     kitapi -- "navigation events (goTo page)" --> tabs
     code -- "bounded latest frame through supervisor" --> shell
-    respawn["page or preview-source change respawns the host"] -.-> code
+    respawn["page or preview-source change respawns the host<br/>(required: a reused process would serve the stale source)"] -.-> code
 ```
 
 ## Walkthrough
@@ -25,7 +25,7 @@ flowchart LR
 3. Exactly two page behaviors cross the host boundary, both as runtime APIs:
    - **Tweaks** — a page exports its tweak declarations (toggle, select, text); the host reports them to the shell, the Tweaks panel renders them, and flipping a control pushes the value back so the design re-renders with it.
    - **Navigation** — a runtime navigation call in design code emits a page-navigation event through the host protocol; the shell switches tabs, exactly as if the designer had clicked the tab.
-4. Tweak state and all other prototype state is session runtime state: never written into the canonical page source or a historical snapshot. It resets whenever the host respawns for a page switch, historical snapshot selection, return to the exact Current design source from disk, or an apply that replaces the canonical source.
+4. Tweak state and all other prototype state is session runtime state: never written into the canonical page source or a historical snapshot. It resets whenever the host respawns for a page switch, historical snapshot selection, return to the exact Current design source from disk, or an apply that replaces the canonical source. That respawn is not merely how state gets cleaned up — it is the only correct way to change source at all. The runtime's module cache returns the stale module when a path is re-imported, and busting it with a changing query does nothing, so a host kept alive across a source edit would go on rendering the previous design while reporting success. A fresh process is the only cure.
 5. Focus traversal inside the design is the UI framework's own focus system, driven by the forwarded `Tab`/`Shift+Tab` — the shell does not maintain a parallel focus model for design content.
 6. Failure branch: a navigation action to a page removed since generation → no-op with a quiet notice above the composer.
 7. Failure branch: design code that crashes or hangs mid-interaction takes down only the host. `HostSupervisor` applies bounded restart/backoff and opens its circuit after the restart budget; the shell, chat, and stored state are untouched.
