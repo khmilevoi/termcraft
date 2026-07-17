@@ -15,7 +15,8 @@ out to be decisive. But **(a) requires two module registrations, not one**: the 
 *and* the JSX helper the transform generates. See "JSX" below — a first revision of this
 document tested no JSX at all and consequently claimed more than it had measured.
 
-One spec claim does die. See "Which spec claims die" at the end.
+No spec claims die. But resolution provides **no backstop** under the Gate's source-text import
+scan, which matters for Task 4. See "Which spec claims die" at the end.
 
 ## Environment
 
@@ -23,8 +24,16 @@ One spec claim does die. See "Which spec claims die" at the end.
 - `bun 1.3.14` (matches the version the plan recorded on 2026-07-17)
 - This spike installs no dependencies, so it has **no `bun.lock`** (per Constraint 5,
   saying so explicitly). The only version that matters here is `bun` itself.
-- **Each `bun build --compile` binary is 94 MB.** Recorded here because it is a cost input
-  Task 4 needs and it is a fact this spike measured.
+- **Each `bun build --compile` binary is 94 MB**, measured, not recalled:
+
+  ```bash
+  bun build --compile src/main-jsx-multi.ts --outfile probe-jsx-multi.exe
+  ls -l probe-jsx-multi.exe | awk '{printf "BINARY SIZE: %d bytes (%.0f MB)\n", $5, $5/1048576}'
+  # BINARY SIZE: 98480216 bytes (94 MB)
+  ```
+
+  Recorded because it is a cost input Task 4 needs. Note this is a *minimal* probe; the shipped
+  host will be larger.
 
 ## Naive: bare specifier
 
@@ -374,11 +383,16 @@ happen to type. It is an accident of default transform mode, not an enforced rul
 
 ### 7. Multi-child JSX, fragments and keys — the paths a single-child fixture never reaches
 
-The tests above all use a single, childless element. That is not a real page. The transform
-emits `jsx` for one-or-zero children and **`jsxs` for multiple**, so nearly every real page —
-any `<Panel>` with more than one child, any `<>…</>` — takes a path the tests above never ran.
-Fixture `fixture/page-jsx-multi.tsx` forces all of them: multiple children, a fragment, and a
-keyed `.map`. Probe `src/main-jsx-multi.ts` records what each helper actually receives.
+The tests above all use a single, childless element. That is not a real page: nearly every real
+page has an element with more than one child, or a `<>…</>`, or a keyed list. Fixtures
+`fixture/page-jsx-multi.tsx` (multiple children, a fragment, a keyed `.map`) and
+`fixture/page-jsx-keyed-multi.tsx` (keyed elements that *have* children) force those paths.
+Probe `src/main-jsx-multi.ts` records what each helper actually receives.
+
+The obvious hypothesis — that the transform emits `jsx` for one-or-zero children and `jsxs` for
+multiple — turns out to be **true only in production**. In dev there is no `jsxs` call at all.
+Both modes were therefore measured; the results are below and the mode caveat matters
+everywhere `jsxs` is mentioned.
 
 ```bash
 bun build --compile src/main-jsx-multi.ts --outfile probe-jsx-multi.exe
@@ -386,7 +400,9 @@ bun build --compile src/main-jsx-multi.ts --outfile probe-jsx-multi.exe
 NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
 ```
 
-**Dev** (`NODE_ENV` unset), verbatim — `distinctHelpers` and the interesting invocations:
+**Dev** (`NODE_ENV` unset) — **excerpt**, not verbatim: 3 of 8 invocations, reformatted, with
+the repeated `self` argument elided as `{ "meta": {…} }`. The complete unabridged output of all
+8 invocations is in `.superpowers/sdd/task-1-report.md` (round 3).
 
 ```json
 "helpersCalled": ["jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV","jsxDEV"],
@@ -400,7 +416,8 @@ NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
 "rendered": "Panel#root(multi)"
 ```
 
-**Production**, verbatim:
+**Production** — **excerpt**: 4 of 8 invocations (the `helpersCalled` line above them is
+complete). Full output likewise in the round-3 report section.
 
 ```json
 "helpersCalled": ["jsx","jsx","jsx","jsx","jsxs","jsx","jsx","jsxs"],
@@ -410,6 +427,57 @@ NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
 {"helper":"jsx","type":"Panel","propKeys":["id","title"],"childrenKind":"none","keyPositional":"b","extraArgs":[]}
 {"helper":"jsxs","type":"Panel","propKeys":["id","title","children"],"childrenKind":"array(4)","keyPositional":null,"extraArgs":[]}
 ```
+
+### `jsxs` with a key — the one slot that was extrapolated, now observed
+
+In `page-jsx-multi.tsx` every keyed element is childless, so all keys routed through `jsx` and
+no `jsxs` invocation ever carried one. `fixture/page-jsx-keyed-multi.tsx` fixes that: each
+keyed row has two children, forcing `jsxs` **with** a key.
+
+```bash
+./probe-jsx-multi.exe "…\fixture\page-jsx-keyed-multi.tsx"
+NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-keyed-multi.tsx"
+```
+
+Production, verbatim (complete — all 7 invocations):
+
+```
+distinct: ['jsx', 'jsxs']
+{"helper": "jsx", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null, "extraArgs": []}
+{"helper": "jsx", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null, "extraArgs": []}
+{"helper": "jsxs", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": "r1", "extraArgs": []}
+{"helper": "jsx", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null, "extraArgs": []}
+{"helper": "jsx", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null, "extraArgs": []}
+{"helper": "jsxs", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": "r2", "extraArgs": []}
+{"helper": "jsx", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": null, "extraArgs": []}
+rendered: Panel#root(keyed-multi)
+```
+
+Dev, verbatim (complete; `extraArgs[0]` is `isStaticChildren`, remaining args elided as noted):
+
+```
+distinct: ['jsxDEV']
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null} extraArgs[0]=false
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null} extraArgs[0]=false
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": "r1"} extraArgs[0]=true
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null} extraArgs[0]=false
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title"], "childrenKind": "none", "keyPositional": null} extraArgs[0]=false
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": "r2"} extraArgs[0]=true
+{"helper": "jsxDEV", "type": "Panel", "propKeys": ["id", "title", "children"], "childrenKind": "array(2)", "keyPositional": null} extraArgs[0]=false
+rendered: Panel#root(keyed-multi)
+```
+
+**`jsxs(type, props, key)` confirmed by observation**, in both modes: `keyPositional: "r1"` /
+`"r2"` alongside `childrenKind: "array(2)"`. The key slot is no longer extrapolated from
+React's contract.
+
+This run also sharpens the `jsx`/`jsxs` split. The **last** invocation in each listing is the
+root `<Panel id="root">`, which has exactly one JSX child *slot* — the `{rows.map(…)}`
+expression — and so routes to **`jsx`** even though `props.children` is an `array(2)`. So the
+split is by the number of **child slots written in the source**, not by the runtime array-ness
+of `children`. In dev the same distinction shows up as `isStaticChildren`: `true` for literal
+multi-child elements, `false` for the root whose children came from an expression. Another
+reason `jsx` and `jsxs` cannot be told apart by inspecting `props`.
 
 **The JSX conclusion does not move — it works — but the helper contract is now pinned:**
 
@@ -433,10 +501,39 @@ NODE_ENV=production ./probe-jsx-multi.exe "…\fixture\page-jsx-multi.tsx"
   observed `extraArgs` are `[isStaticChildren, null, <module scope>]` — `source` was `null`
   and `self` was the page's own module namespace (visibly carrying its `meta` export).
 
-So the real `@termcraft/runtime` JSX facade must implement `jsx(type, props, key)`,
-`jsxs(type, props, key)`, `jsxDEV(type, props, key, isStaticChildren, source, self)` and export
-a `Fragment` value. `rendered: "Panel#root(multi)"` in both modes reflects the stand-in
-`Panel` ignoring children by design; the helper log, not the render, is the evidence here.
+So **whatever modules the host registers under `react/jsx-runtime` and `react/jsx-dev-runtime`**
+must export `jsx(type, props, key)`, `jsxs(type, props, key)`,
+`jsxDEV(type, props, key, isStaticChildren, source, self)` and a `Fragment` value. This probe
+registered them as standalone modules under those two specifiers, *not* as part of
+`@termcraft/runtime`. Whether they are backed by the runtime package, a private internal
+module, or something else is Task 4's call — the measurement only constrains what must be
+exported under those specifiers, not where it lives.
+
+`rendered: "Panel#root(multi)"` in both modes reflects the stand-in `Panel` ignoring children
+by design; the helper log, not the render, is the evidence here.
+
+### 9. Control: JSX from a directory with no `package.json` ancestor
+
+The JSX fixtures live in `fixture/`, which has a `package.json` above it (see the naive
+control). The claim that JSX works for real pages leans on it working where the spec puts
+pages — a directory with no package tree at all. That control had not been run for JSX.
+
+```bash
+D=$(mktemp -d /c/Users/Khmil/AppData/Local/Temp/tc-jsxnopkg-XXXXXX)
+cp fixture/page-jsx-multi.tsx "$D/page.tsx"
+ls "$D/../package.json"        # ls: cannot access …: No such file or directory
+./probe-jsx-multi.exe "$(cygpath -w "$D/page.tsx")"
+```
+
+Verbatim:
+
+```
+{"ok": true, "distinctHelpers": ["jsxDEV"], "rendered": "Panel#root(multi)"}
+```
+
+A multi-child JSX page renders from a directory with no `package.json` and no `node_modules`
+anywhere above it. Expected — plugin registration is keyed on the specifier, not the importer's
+path — but now measured rather than assumed.
 
 ### 8. `process.env.NODE_ENV` is inlined at build time and LIES to a compiled host
 
@@ -467,12 +564,23 @@ Verbatim:
 true runtime value.
 
 **This is a live trap, because the runtime JSX transform follows the *true* value.** A host
-that decides which helper subpath to register by reading `process.env.NODE_ENV` will always
-read `"development"`, register only `react/jsx-dev-runtime`, and then — when the binary happens
-to run under `NODE_ENV=production` — every JSX page dies with
-`Cannot find module 'react/jsx-runtime'`, from an env var the host never sees. Read
-`Bun.env.NODE_ENV` (or bracket access) if the value is needed at all; better, **register both
-subpaths unconditionally** and do not branch on the mode.
+that decides which helper subpath to register by reading `process.env.NODE_ENV` **via dot
+access** will always read `"development"`, register only `react/jsx-dev-runtime`, and then —
+when the binary happens to run under `NODE_ENV=production` — every JSX page dies with
+`Cannot find module 'react/jsx-runtime'`, from an env var it never sees.
+
+**A working route exists**: `Bun.env.NODE_ENV`, `process.env["NODE_ENV"]` and
+`{...process.env}.NODE_ENV` all returned the true value in all three environments tested. So
+the host *can* detect its mode — just not by the idiomatic dot access. This is a footgun, not
+an impossibility.
+
+Recommendation, offered as pragmatics rather than necessity: **register both subpaths
+unconditionally and do not branch on the mode at all.** It removes a silent, environment-driven
+failure whose blast radius is every page, at the cost of one extra `build.module` line. Note
+also that the NODE_ENV → helper correspondence was only measured for **unset**, **development**
+and **production**; `staging` was exercised against `process.env` (above) but never against the
+transform, so which helper an arbitrary non-standard NODE_ENV selects is unmeasured — a further
+reason not to branch.
 
 ### JSX conclusion
 
@@ -481,16 +589,18 @@ multi-child elements, fragments and keyed lists, not just the single-child case.
 JSX helper alongside `@termcraft/runtime`, exporting `jsx`, `jsxs`, `jsxDEV` and a `Fragment`
 value, with `key` accepted as the third positional argument.
 
-**Register both `react/jsx-dev-runtime` and `react/jsx-runtime`, unconditionally.** Finding 8
-makes conditional registration actively dangerous: the host cannot reliably learn its own
-transform's mode via the obvious route, and guessing wrong breaks every page.
+**Register both `react/jsx-dev-runtime` and `react/jsx-runtime`, unconditionally** — a
+robustness recommendation, not a forced move. The mode *is* detectable (§8: `Bun.env.NODE_ENV`
+works), but only outside the idiomatic dot access, and a wrong guess breaks every page from an
+env var the host never sees. Registering both costs one line and removes the failure mode.
 
-That closes the door on the spec's second half for good. Registering both **guarantees** an
-explicit `react/jsx-runtime` import resolves — and under `NODE_ENV=production` the generated
-and author-written specifiers are the same string anyway, so no resolver could separate them
-even in principle. The spec's requirement that **explicit `react/jsx-runtime` imports fail is
-not enforceable at the resolver level**. If pages must be forbidden from importing the helper
-directly, that has to be enforced by the **checker on source text** (Spike C's territory).
+**Explicit `react/jsx-runtime` imports are not preventable at the resolver level.** Under
+`NODE_ENV=production` the generated and author-written specifiers are the same string (§5), so
+no resolver could separate them even in principle; in dev the separation is incidental and
+porous (§6). This says nothing about whether the *spec* is satisfiable — the spec assigns that
+rule to the Gate's source-text scan (`:83-88`), where the distinction is trivial because the
+author's import is in the file and the generated one is not. What it does mean is that
+resolution provides **no backstop** beneath that scan. See "Which spec claims die".
 
 ## Step 7 measurements
 
@@ -601,14 +711,34 @@ OS spawn overhead outside it). Import cost is ~2% of the total; **spawn dominate
 50x**. Optimising the import would be pointless; the only lever that matters is how often you
 respawn.
 
-Secondary, same-process number for completeness (`main-measure.ts`, 10 distinct files):
-median **0.312 ms**, min 0.16, max 8.969. This is a **warm** figure — that harness imports
-several pages before its loop, so the transpiler and JIT are hot. It measures "no module-cache
-hit for this file", not a cold process. It is not the preview cost.
+Secondary, same-process number for completeness — `main-measure.ts`, 10 distinct files, most
+recent run verbatim:
 
-Caveat: all fixtures are a few lines long. A real design page with a deep component tree will
-transpile more slowly, so ~1 ms is a floor. Given spawn is ~45 ms, a page would have to get
-dramatically larger before import cost mattered.
+```json
+"importTimingsMs": {
+  "all": [14.794, 1.141, 0.46, 0.366, 0.365, 0.372, 0.332, 0.634, 2.965, 0.336],
+  "firstColdMs": 14.794,
+  "medianMs": 0.46,
+  "minMs": 0.332,
+  "maxMs": 14.794
+}
+```
+
+This is a **warm** figure — that harness imports several pages before its loop, so the
+transpiler and JIT are hot. It measures "no module-cache hit for this file", not a cold
+process, and **it is not the preview cost**. It is also noisy: across three runs of the same
+binary the median moved between **0.31 ms and 0.64 ms** and the max between 8.9 ms and 30.3 ms,
+so treat it as an order of magnitude (sub-millisecond), never as a figure to quote. The
+cold-process number that *does* matter is ~1 ms, above.
+
+**Both numbers are floors, and the absolute ones are soft.** All fixtures are a few lines long;
+a real design page with a deep component tree transpiles more slowly. More importantly, the
+~44–52 ms spawn figure came from a 94 MB probe that imports a tiny page and prints a string.
+The real host additionally carries OpenTUI's native Zig core (Spike B's territory) and whatever
+else it initializes, so **the shipped binary will start slower — treat ~45 ms as a floor, not a
+budget.** The *ratio* is the robust part: a slower spawn only widens the ~50x gap, so "spawn
+dominates, stop optimising the import" holds regardless of where the absolute lands. Task 4
+should take the real number from a probe carrying the real runtime.
 
 ### 4. Bonus finding — Bun caches directory listings
 
@@ -669,16 +799,19 @@ being honored inside a compiled binary was the genuine unknown; it is.
 own helper import that must also resolve into the host. Registering `@termcraft/runtime` alone
 makes a real JSX page fail with `Cannot find module 'react/jsx-dev-runtime'`. Register the JSX
 helper too, under **both** subpaths — `react/jsx-dev-runtime` (used in dev) and
-`react/jsx-runtime` (used under `NODE_ENV=production`). Register both *unconditionally*: a
-compiled host reading `process.env.NODE_ENV` gets the build-time literal `"development"`, not
-the real value, while the transform follows the real value — so branching on the mode breaks
-pages from an env var the host cannot see.
+`react/jsx-runtime` (used under `NODE_ENV=production`). Register both *unconditionally*: the
+mode is detectable (`Bun.env.NODE_ENV` works), but the idiomatic `process.env.NODE_ENV` dot
+access returns the build-time literal `"development"` forever while the transform follows the
+real value — so a host that branches on the obvious read breaks every page from an env var it
+never sees. One extra line removes the whole failure mode.
 
-The facade must export `jsx(type, props, key)`, `jsxs(type, props, key)` (same signature —
-`jsxs` only means `props.children` is a static array), `jsxDEV(type, props, key,
-isStaticChildren, source, self)`, and a `Fragment` **value** that arrives as the element
-`type`, never as a called helper. `key` is the **third positional argument**, not a prop — a
-facade typed `(type, props)` silently drops every key.
+Whatever is registered under those two specifiers must export `jsx(type, props, key)`,
+`jsxs(type, props, key)` (same signature — `jsxs` only marks that the source wrote multiple
+child slots), `jsxDEV(type, props, key, isStaticChildren, source, self)`, and a `Fragment`
+**value** that arrives as the element `type`, never as a called helper. `key` is the **third
+positional argument**, not a prop — a facade typed `(type, props)` silently drops every key.
+Whether those modules are backed by `@termcraft/runtime` or something private is an open
+choice; the measurement constrains the exports, not the home.
 
 Pick **(a)**, and not merely because it is cheapest. The other three work for a toy page and
 all break the moment a page imports a file next to it, because they fix the bare specifier by
@@ -696,29 +829,52 @@ that too.
 
 ## Which spec claims die
 
+**None.**
+
 The verdict is `YES-WITH-FALLBACK: a`, so the central premise — "designs are code", a project
 folder with no `package.json`/`node_modules`, pages imported from arbitrary disk locations —
-**survives**, including for real JSX pages.
+**survives**, including for real JSX pages (verified from a directory with no `package.json`
+ancestor; see the JSX §9 control).
 
-**One spec claim dies:** the requirement at
-`docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md:679-680` that explicit
-`react/jsx-runtime` and runtime subpath imports **fail**, as a property of module resolution.
-They do not. Under `NODE_ENV=production` the transform generates the identical specifier an
-author would write, so the resolver provably cannot distinguish them; registering it — which
-JSX requires — necessarily makes explicit imports resolve. In dev mode the separation is real
-but incidental (`react/jsx-dev-runtime` vs `react/jsx-runtime`) and still not a boundary,
-since an author who writes the dev subpath is served happily.
+`:92-94` ("the host's compiler owns the JSX transform and resolves any generated JSX helper
+internally… Compiler-generated helper resolution is not an authored source import, does not
+appear in the saved or exported TSX, and does not widen the Gate allowlist") **survives** — the
+host does own it, via the plugin, exactly as described.
 
-The multi-child round closed this off completely. Because `process.env.NODE_ENV` lies to a
-compiled host (finding 8), the host cannot safely register only the subpath its transform will
-use — it must register **both**, which *guarantees* explicit author imports resolve in every
-mode. What was "not enforceable in production" is now "not enforceable at all, and the safe
-implementation actively enables it".
+An earlier revision of this document claimed that `:679-680` ("Prove compiler-owned JSX support
+works while explicit `react/jsx-runtime` and runtime subpath imports fail") **dies**, on the
+grounds that the resolver cannot distinguish a generated helper import from an author-written
+one. **That conclusion was wrong and has been withdrawn.** The evidence for the premise stands;
+the inference from it did not. The spec never located that enforcement in the resolver:
 
-`:92` ("compiler owns the JSX transform and resolves any generated JSX helper internally")
-**survives** — the host does own it, via the plugin.
+- `:83-88` — the Gate examines "every syntax capable of creating a module edge, including value
+  imports, type-only imports, re-exports, side-effect imports, dynamic imports, CommonJS-style
+  loads, **and JSX runtime directives**. Only static imports from the exact root specifier are
+  accepted." That is a **source-text** scan.
+- `:96-98` — "The host repeats the same import scan before linking a page."
+- `:161-162` — the facade's declaration environment "does not provide ambient declarations for
+  … `react/jsx-runtime`".
+- `:679-680` is a **test-policy line in §11.1**. It names no layer.
 
-`:47`/`:162` (a page must not import `react/jsx-runtime`) survive **only as a rule to be
-enforced elsewhere** — by the checker on source text, which is Spike C's territory. They
-cannot be enforced by resolution. Task 4 should move that requirement out of the runtime
-layer and into the checker, or drop it.
+Enforcement therefore already lives in three places, none of them module resolution. And on
+source text the distinction the resolver provably cannot make is trivial: **the author's import
+is in the file; the generated one is not** — which is precisely what `:92-94` says. The spec
+anticipated this.
+
+### The real finding: resolution offers no second line of defense
+
+What this spike actually establishes is narrower and, for Task 4, more useful:
+
+**The resolver fails open, not closed.** Because the host must register `react/jsx-runtime`
+(see §8's recommendation), a page that somehow reached the runtime with an explicit
+`react/jsx-runtime` import — bypassing the Gate scan, the host's relink rescan, or arriving
+through some path neither covers — would **run normally** rather than failing at load. There is
+no backstop underneath the source-text scan. Under `NODE_ENV=production` there provably cannot
+be one, since the generated and author-written specifiers are the same string (JSX §5); in dev
+the apparent separation is incidental and porous anyway (JSX §6: an author who writes
+`react/jsx-dev-runtime` is served happily).
+
+That is a **defense-in-depth gap**, not a dead spec claim. `:47`/`:162` and `:679-680` are all
+satisfiable as written, by the layers the spec already assigns them to. Task 4 should not move
+that requirement — §3.1 already holds it. Task 4 should instead know that the Gate's source-text
+scan is **load-bearing and unbacked**: if it misses a case, nothing downstream catches it.
