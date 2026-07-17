@@ -44,4 +44,23 @@ describe("headless renderer", () => {
     expect(frame.height).toBe(2)
     expect(lineText(frame, 0)).toContain("once")
   })
+
+  test("resize changes the captured dimensions without re-mounting", async () => {
+    const handle = await createHeadlessRenderer({ w: 10, h: 3 })
+    open = handle
+    handle.mount(
+      <box>
+        <text>resize-me</text>
+      </box>,
+    )
+    await handle.render()
+    expect(handle.capture().width).toBe(10)
+
+    handle.resize({ w: 24, h: 5 })
+    await handle.render()
+    const frame = handle.capture()
+    expect(frame.width).toBe(24)
+    expect(frame.height).toBe(5)
+    expect((frame.rows[0] ?? []).map((r) => r.text).join("")).toContain("resize-me")
+  })
 })

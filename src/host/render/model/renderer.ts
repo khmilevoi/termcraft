@@ -44,6 +44,9 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
         rows: styledRowsFromSpanLines(buffer.getSpanLines()),
       }
     },
+    resize(size) {
+      renderer.resize(size.w, size.h)
+    },
     destroy() {
       root.unmount()
       renderer.destroy()

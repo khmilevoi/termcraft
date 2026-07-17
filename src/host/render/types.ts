@@ -24,6 +24,8 @@ export interface RenderHandle {
   render(): Promise<void>
   /** Capture the current frame as styled rows. */
   capture(): CapturedFrame
+  /** Resize the live renderer, preserving the mounted tree and its atom state. */
+  resize(size: RenderSize): void
   /** Tear down the renderer and release native resources. */
   destroy(): void
 }
