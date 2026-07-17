@@ -3,7 +3,16 @@
 // try/catch is permitted here per the controller's spike exemption.
 
 import { createTestRenderer } from "@opentui/core/testing"
-import { Text, TextAttributes, RGBA, vstyles } from "@opentui/core"
+import {
+  Text,
+  TextAttributes,
+  RGBA,
+  vstyles,
+  getBaseAttributes,
+  attributesWithLink,
+  getLinkId,
+  ATTRIBUTE_BASE_MASK,
+} from "@opentui/core"
 import type { CapturedFrame } from "@opentui/core"
 
 const COMPILED = typeof (Bun as any).embeddedFiles !== "undefined" &&
@@ -235,11 +244,15 @@ function expand(frame: CapturedFrame): Cell[][] {
     console.log("  truth[0]   =", JSON.stringify(truth.split("\n")[0]))
   }
 
-  // 4. THE STYLE ORACLE. Checks 1-3 are char/structural only: none of them
-  // compares a single fg/bg/attribute value against anything. The verdict
-  // question is about the *styled* grid, so compare the style of every one of
-  // the 1920 expanded cells against renderer.currentRenderBuffer.buffers —
-  // the renderer's own raw per-cell arrays, an oracle independent of the spans.
+  // 4. THE STYLE CHECK — a PRE-IMAGE ROUND-TRIP, not an independent witness.
+  // Checks 1-3 are char/structural only: none compares a single fg/bg/attribute
+  // value against anything. This one does. But be precise about what it proves:
+  // getSpanLines() is implemented ON TOP of buffers (chunk-bun-t2myhmwd.js:10583
+  // destructures `this.buffers`) and decodes colour with the SAME
+  // RGBA.fromArray(fg.slice(i*4, i*4+4)) call used below (:10598-10599). So this
+  // compares the RLE against its own pre-image: it catches column misassignment
+  // in the wcwidth expansion — the real risk — but a systematic decoder error
+  // would cancel on both sides and still print 0 mismatches.
   const buf = renderer.currentRenderBuffer
   const raw = buf.buffers
   let styleMismatches = 0
@@ -252,7 +265,10 @@ function expand(frame: CapturedFrame): Cell[][] {
       // RGBA.buffer, so decode via RGBA.fromArray before comparing.
       const rawFg = RGBA.fromArray(raw.fg.slice(i * 4, i * 4 + 4)).toInts()
       const rawBg = RGBA.fromArray(raw.bg.slice(i * 4, i * 4 + 4)).toInts()
-      const rawAttr = raw.attributes[i]!
+      // attributes[i] is a u32: low 8 bits are text attributes, upper bits carry
+      // a hyperlink id. getSpanLines masks `& 255` (:10600); getBaseAttributes()
+      // is the package's public accessor for exactly this.
+      const rawAttr = getBaseAttributes(raw.attributes[i]!)
       const fgOk = rawFg.join(",") === cell.fg.join(",")
       const bgOk = rawBg.join(",") === cell.bg.join(",")
       const attrOk = rawAttr === cell.attributes
@@ -364,6 +380,43 @@ console.log("=== .buffers ENCODING: actual values, not lengths ===")
   console.log(
     "  RGBA.fromArray(raw slice) ->",
     JSON.stringify({ intent: rebuilt.intent, slot: rebuilt.slot, ints: rebuilt.toInts() }),
+  )
+  renderer.destroy()
+}
+{
+  // Are `attributes` really a "plain bitmask"? The upper bits carry a link id
+  // (utils.d.ts: attributesWithLink / getLinkId), and getSpanLines masks & 255.
+  // A frame with no hyperlinks cannot tell you this — so put one in.
+  const { renderer, renderOnce, captureSpans } = await createTestRenderer({
+    width: 12,
+    height: 2,
+  })
+  const packed = attributesWithLink(TextAttributes.BOLD, 7)
+  renderer.root.add(Text({ content: "L", attributes: packed }))
+  await renderOnce()
+  const raw = renderer.currentRenderBuffer.buffers
+  const spanAttr = captureSpans().lines[0]!.spans[0]!.attributes
+  console.log("attributes: is it a plain bitmask? (ATTRIBUTE_BASE_MASK =", ATTRIBUTE_BASE_MASK, ")")
+  console.log(
+    "  attributesWithLink(BOLD=1, linkId=7) =",
+    packed,
+    `0x${packed.toString(16)}  -> getLinkId=${getLinkId(packed)} getBaseAttributes=${getBaseAttributes(packed)}`,
+  )
+  console.log(
+    "  raw buffers attributes[0] =",
+    raw.attributes[0],
+    `0x${raw.attributes[0]!.toString(16)}  -> getBaseAttributes=${getBaseAttributes(raw.attributes[0]!)} getLinkId=${getLinkId(raw.attributes[0]!)}`,
+  )
+  console.log(
+    "  span attributes =",
+    spanAttr,
+    " (getSpanLines masks & 255, so the link id is DROPPED from spans)",
+  )
+  console.log(
+    "  raw === span?",
+    raw.attributes[0] === spanAttr,
+    " getBaseAttributes(raw) === span?",
+    getBaseAttributes(raw.attributes[0]!) === spanAttr,
   )
   renderer.destroy()
 }
@@ -514,6 +567,14 @@ console.log("--- render route survey (does it paint a styled frame?) ---")
         r.stop()
       },
     ],
+    [
+      "intermediateRender()+await idle()",
+      "PUBLIC  renderer.d.ts:560+395",
+      async (r) => {
+        r.intermediateRender()
+        await r.idle()
+      },
+    ],
     ["loop()", "PRIVATE renderer.d.ts:559", async (r) => await r.loop()],
   ]
   for (const [name, vis, drive] of routes) {
@@ -542,14 +603,58 @@ console.log("--- render route survey (does it paint a styled frame?) ---")
   }
 }
 
-// Rebuild the full path using ONLY public members: intermediateRender().
-console.log("--- full rebuild via PUBLIC intermediateRender() ---")
+// Is intermediateRender() actually synchronous, or is that a property of an
+// empty frameCallbacks list? intermediateRender() sets a flag then calls the
+// ASYNC loop() without awaiting it (chunk-bun-tkm837n2.js:9696-9699), and loop()
+// awaits each registered frameCallback. setFrameCallback is public (:540).
+console.log("--- is intermediateRender() synchronous? (frameCallback probe) ---")
 {
-  const { CliRenderer, Text: T2 } = await import("@opentui/core")
+  const { CliRenderer: CR, Text: T4 } = await import("@opentui/core")
+  for (const withCb of [false, true]) {
+    const { stdin, stdout } = await makeFakeStreams(20, 3)
+    const r = new CR(stdin, stdout, 20, 3, {
+      bufferedOutput: "memory",
+      screenMode: "main-screen",
+      consoleMode: "disabled",
+      externalOutputMode: "passthrough",
+      useMouse: false,
+      exitOnCtrlC: false,
+    })
+    r.root.add(T4({ content: "PUB", fg: "#FF0000", attributes: TextAttributes.BOLD }))
+    if (withCb) {
+      r.setFrameCallback(async () => {
+        await new Promise((res) => setTimeout(res, 50))
+      })
+    }
+    r.intermediateRender()
+    const immediate = r.currentRenderBuffer.getSpanLines()[0]?.spans[0]?.text ?? "(none)"
+    await r.idle()
+    const afterIdle = r.currentRenderBuffer.getSpanLines()[0]?.spans[0]?.text ?? "(none)"
+    console.log(
+      `  frameCallback registered=${String(withCb).padEnd(5)} -> painted immediately after intermediateRender()=${String(immediate.startsWith("PUB")).padEnd(5)}` +
+        ` | after await idle()=${afterIdle.startsWith("PUB")}`,
+    )
+    r.destroy()
+  }
+  console.log(
+    "  => intermediateRender() is synchronous ONLY while frameCallbacks is empty; await idle() covers both.",
+  )
+}
+
+// Rebuild the full path using ONLY public members, via the entry point the
+// package tells production to use (renderer.d.ts:358-360 warns the raw ctor does
+// not roll back late side effects if construction throws).
+console.log("--- full rebuild: createCliRenderer + intermediateRender() + await idle() ---")
+{
+  const { createCliRenderer, Text: T2 } = await import("@opentui/core")
   const { stdin: fakeStdin, stdout: fakeStdout } = await makeFakeStreams(80, 24)
 
   try {
-    const renderer = new CliRenderer(fakeStdin, fakeStdout, 80, 24, {
+    const renderer = await createCliRenderer({
+      stdin: fakeStdin,
+      stdout: fakeStdout,
+      width: 80,
+      height: 24,
       bufferedOutput: "memory",
       screenMode: "main-screen",
       consoleMode: "disabled",
@@ -560,7 +665,8 @@ console.log("--- full rebuild via PUBLIC intermediateRender() ---")
     renderer.root.add(
       T2({ content: "PUBLIC", fg: "#FF0000", bg: "#0000FF", attributes: TextAttributes.BOLD }),
     )
-    renderer.intermediateRender() // PUBLIC (renderer.d.ts:560) — no private loop()
+    renderer.intermediateRender() // PUBLIC renderer.d.ts:560
+    await renderer.idle() // PUBLIC renderer.d.ts:395 — covers frameCallbacks AND backpressure
 
     const buf = renderer.currentRenderBuffer
     const lines = buf.getSpanLines()
@@ -572,7 +678,7 @@ console.log("--- full rebuild via PUBLIC intermediateRender() ---")
       lines,
     }
     const s = frame.lines[0]!.spans[0]!
-    console.log("createCliRenderer/CliRenderer headless: OK")
+    console.log("createCliRenderer headless (recommended production ctor): OK")
     console.log(
       "public getSpanLines() span[0] =",
       JSON.stringify({

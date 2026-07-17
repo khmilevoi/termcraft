@@ -118,7 +118,7 @@ in the raw-JSON block below.
 | Per-cell records, or runs per line? | **Runs.** One `CapturedSpan` per maximal run of identically-styled text. |
 | fg/bg RGB, palette indices, or strings? | Neither triples nor strings: **`RGBA` class instances**. Carry 0-255 RGBA ints *and* `intent` (`rgb`/`indexed`/`default`) + `slot`, so a palette index survives as an index rather than being flattened to RGB. |
 | Which attributes survive? | **All eight**, exactly, including combined bitmasks: BOLD 1, DIM 2, ITALIC 4, UNDERLINE 8, BLINK 16, INVERSE 32, HIDDEN 64, STRIKETHROUGH 128. |
-| Lossless 80×24 styled grid? | **Yes** — chars, geometry **and style** each measured against an independent oracle. See below. |
+| Lossless 80×24 styled grid? | **Yes** for char + fg + bg + the 8 text attributes — style measured cell-by-cell against the spans' own pre-image (a round-trip, not a second witness — see below). Hyperlink ids are **dropped** by spans. |
 
 ### Lossless: how it was measured, and the one catch
 
@@ -126,19 +126,12 @@ Spans are a run-length encoding of a styled grid. The probe did not take that on
 faith. It expanded the runs into 1920 per-cell records and checked **four** things
 on an 80×24 frame mixing fg, bg, bold, italic and wide CJK text:
 
-| # | Check | Measures | Result |
-| --- | --- | --- | --- |
-| 1 | every row's spans sum to exactly `cols` | geometry | `true` |
-| 2 | expansion yields exactly 24 rows × 80 cells | geometry | `true` |
-| 3 | `reconstructed chars === captureCharFrame()` | **chars only** | `true` |
-| 4 | every cell's fg/bg/attributes vs `currentRenderBuffer.buffers` | **style** | `0 / 1920 mismatches` |
-
-Check 4 is the one that makes this a *styled*-grid answer. Checks 1-3 are
-char/structural: `captureCharFrame()` is a **chars-only** capture, so no fg, bg or
-attribute value is tested by it at all, and check 3 joins cells into one string,
-discarding column identity. Check 4 supplies the missing half by comparing the
-expanded span style of all 1920 cells against the renderer's own raw per-cell
-arrays — an oracle **independent of the spans**:
+| # | Check | Measures | Reference | Result |
+| --- | --- | --- | --- | --- |
+| 1 | every row's spans sum to exactly `cols` | geometry | self-consistency | `true` |
+| 2 | expansion yields exactly 24 rows × 80 cells | geometry | self-consistency | `true` |
+| 3 | `reconstructed chars === captureCharFrame()` | **chars only** | round-trip (shared source) | `true` |
+| 4 | every cell's fg/bg/attributes vs `currentRenderBuffer.buffers` | **style** | round-trip (pre-image) | `0 / 1920 mismatches` |
 
 ```
 per-cell style vs buffers oracle: 1920 cells checked, 0 mismatches -> true
@@ -146,11 +139,38 @@ LOSSLESS = true
   (allTile=true dimsOk=true charsIdentical=true styleMatchesOracle=true)
 ```
 
-An earlier revision of this document asserted "proven by reconstruction" on the
-strength of checks 1-3 alone, and inferred the styled half from span-level
-round-trips collected in separate, smaller renderers. That was a real gap: the
-verdict question is about the *styled* grid, and style was the one thing not
-measured. Check 4 was added in response and closes it. The verdict did not change.
+Check 4 is the one that makes this a *styled*-grid answer: checks 1-3 are
+char/structural — `captureCharFrame()` is a **chars-only** capture, so no fg, bg or
+attribute value is tested by it at all, and check 3 joins cells into one string,
+discarding column identity.
+
+**Be precise about what checks 3 and 4 are: round-trips, not independent witnesses.**
+Neither reference is a second, separately-derived view of the frame:
+
+- **Check 4.** `getSpanLines()` is implemented *on top of* `buffers` — it destructures
+  `this.buffers` at `chunk-bun-t2myhmwd.js:10583`, and decodes colour with the **same**
+  `RGBA.fromArray(fg.slice(i*4, i*4+4))` call the probe uses (`:10598-10599`). Spans are
+  a pure function of `buffers`, so `buffers` is the spans' **pre-image**.
+- **Check 3.** Both sides trace to one `getRealCharBytes(true)` — `getSpanLines` calls it
+  at `:10587`, `captureCharFrame` at `testing.bun.js:609`.
+
+This makes the checks **correct and worth having**: comparing an RLE against its own
+pre-image *is* a losslessness test, and it catches the real risk — column
+misassignment in the wcwidth expansion, which is where §4.2's protocol would actually
+corrupt a frame. But it cannot catch a **systematic decoder error**: a bug inside
+`RGBA.fromArray` would cancel on both sides and still print 0 mismatches. Nothing here
+independently validates the packed colour encoding itself.
+
+One asymmetry worth noting: the probe masks attributes with `getBaseAttributes()` to
+match the encoder's own `attributes[i] & 255` (`:10600`). Compared raw, a cell carrying
+a hyperlink id would "mismatch" without being wrong — see the attributes discussion
+below.
+
+An earlier revision asserted "proven by reconstruction" on checks 1-3 alone, inferring
+the styled half from span-level round-trips in separate, smaller renderers; a later one
+called check 4 an "independent oracle". Both are corrected here: style **is** now
+measured cell-by-cell, and the reference **is** the spans' pre-image. The verdict did
+not change.
 
 **The catch — wide characters.** `span.width` is display width, not codepoint
 count. `"日本語ab"` is 5 codepoints but `width: 8`. So run-expansion is only
@@ -196,7 +216,36 @@ So `intent`/`slot` **are** representable in the flat array and survive — but o
 consumers decode via `RGBA.fromArray()` rather than reading the integers directly.
 Reading them raw would yield `2559` for a red channel.
 
-**attributes — usable.** Plain bitmask, matches the span value exactly.
+**attributes — usable, but *not* a plain bitmask, and spans are lossy here.**
+`attributes[i]` is a **u32**: the low 8 bits are the text attributes
+(`ATTRIBUTE_BASE_MASK = 255`, `types.d.ts:19`), and the **upper bits carry a hyperlink
+id** (`attributesWithLink(baseAttributes, linkId)` / `getLinkId(attributes)`,
+`utils.d.ts:12-13`). `getBaseAttributes()` (`types.d.ts:24`) is the package's public
+accessor — *"Extract the base 8 bits… Currently we only use the first 8 bits for
+standard text attributes."* — and `getSpanLines()` masks `attributes[i] & 255`
+(`chunk-bun-t2myhmwd.js:10600`).
+
+An earlier revision claimed "plain bitmask, matches the span value exactly". That was
+inferred from a frame whose upper bits happened to be zero — the same mistake retracted
+above for `char`. Rendering text with a link id makes it false:
+
+```
+attributes: is it a plain bitmask? (ATTRIBUTE_BASE_MASK = 255 )
+  attributesWithLink(BOLD=1, linkId=7) = 1793 0x701  -> getLinkId=7 getBaseAttributes=1
+  raw buffers attributes[0] = 1793 0x701  -> getBaseAttributes=1 getLinkId=7
+  span attributes = 1  (getSpanLines masks & 255, so the link id is DROPPED from spans)
+  raw === span? false  getBaseAttributes(raw) === span? true
+```
+
+So: **`raw === span` is false** once a hyperlink is present. `buffers.attributes`
+retains the link id; `captureSpans()`/`getSpanLines()` **discards** it. Two consequences:
+
+1. Always mask with `getBaseAttributes()` (or `& 255`) before comparing raw attributes
+   to span attributes.
+2. **`captureSpans()` is lossy for hyperlinks.** It is lossless for the 8 text
+   attributes — which is what §4.2's "char + fg + bg + attributes" names, so the verdict
+   is unaffected — but if the design host ever needs OSC-8 links, spans cannot carry
+   them and `buffers.attributes` + `getLinkId()` is the only route.
 
 **`char` — NOT plain codepoints, and this is a trap.** ASCII cells hold the
 codepoint (`65` = `"A"`, `98` = `"b"`, `32` = `" "`). Wide characters do not.
@@ -409,19 +458,28 @@ platform: win32 x64
 stdout.isTTY: false
 ```
 
-...followed by every section producing results **identical** to `bun run`,
-including the style oracle and the `/testing`-free public path:
+...followed by every section producing results **identical** to `bun run`, including the
+style check and the `/testing`-free public path.
+
+**The following is an EXCERPT, not one contiguous block** — these lines are selected
+from three different sections of the compiled run (the verdict probe, the `.buffers`
+ENCODING section, and the Step 6 route survey), and the `RangeError` message is
+elided. Each line appears verbatim in its own section above; they are gathered here
+only to show the compiled binary reproduces every headline result:
 
 ```
-=== VERDICT PROBE: lossless 80x24 reconstruction ===
+[excerpt — verdict probe]
 per-cell style vs buffers oracle: 1920 cells checked, 0 mismatches -> true
 LOSSLESS = true
   (allTile=true dimsOk=true charsIdentical=true styleMatchesOracle=true)
-  cell[0][1] char=2416050429 0x900200fd <NOT A CODEPOINT: ...> fg=[255,0,0,255] attr=1
+[excerpt — .buffers ENCODING]
+  cell[0][1] char=2416050429 0x900200fd <NOT A CODEPOINT: …elided…> fg=[255,0,0,255] attr=1
+[excerpt — Step 6 route survey]
   intermediateRender()          PUBLIC  renderer.d.ts:560 painted=true  span0="PUB" attr=1
-  requestRender() only          PUBLIC  renderer.d.ts:388 painted=false span0="਀਀਀਀..." attr=0
+  requestRender() only          PUBLIC  renderer.d.ts:388 painted=false span0="਀਀਀਀…" attr=0
   requestRender() + await tick  PUBLIC  renderer.d.ts:388 painted=true  span0="PUB" attr=1
   start() + tick + stop()       PUBLIC  renderer.d.ts:545/552 painted=true  span0="PUB" attr=1
+  intermediateRender()+await idle() PUBLIC  renderer.d.ts:560+395 painted=true  span0="PUB" attr=1
   loop()                        PRIVATE renderer.d.ts:559 painted=true  span0="PUB" attr=1
 STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true
 === PROBE COMPLETE ===
@@ -478,23 +536,25 @@ min=2.03ms median=2.20ms max=2.98ms
   `mockMouse.click(3, 0)` resolved to the renderable under the cursor and fired
   `onMouseDown` + `onMouseUp`. Banked as a cheap fact; not part of this verdict.
 - **Wall clock, `createTestRenderer` + `renderOnce` + capture @ 80×24:** every
-  recorded run is tabulated below. **No ordering between `bun run` and compiled is
-  claimed** — the numbers move with machine load, and across four recorded runs
-  neither is consistently faster:
+  recorded run is tabulated below, including one superseded run kept for provenance.
+  **No ordering between `bun run` and compiled is claimed** — the numbers move with
+  machine load, and neither is consistently faster:
 
-  | Run | Mode | min | median | max |
-  | --- | --- | --- | --- | --- |
-  | 1 (idle machine) | `bun run` | 1.80 | 2.28 | 3.31 |
-  | 2 (idle machine) | compiled | 2.03 | 2.20 | 2.98 |
-  | 3 (loaded: 2 sibling spikes building) | `bun run` | 3.87 | 4.10 | 6.01 |
-  | 4 (loaded: 2 sibling spikes building) | compiled | 7.14 | 8.28 | 15.40 |
+  | Run | Mode | min | median | max | Notes |
+  | --- | --- | --- | --- | --- | --- |
+  | 0 | `bun run` | 4.88 | 5.49 | 7.46 | **superseded** — pre-Step-6 build, different probe; source of the withdrawn `5.49`. Not comparable to runs 1-4. |
+  | 1 (idle machine) | `bun run` | 1.80 | 2.28 | 3.31 | |
+  | 2 (idle machine) | compiled | 2.03 | 2.20 | 2.98 | |
+  | 3 (loaded: 2 sibling spikes building) | `bun run` | 3.87 | 4.10 | 6.01 | |
+  | 4 (loaded: 2 sibling spikes building) | compiled | 7.14 | 8.28 | 15.40 | |
 
   Runs 1-2 are near-identical; runs 3-4 show `bun run` *ahead* of compiled, the
   reverse of runs 1-2. That spread is load, not a property of `--compile`. An
   earlier revision of this document claimed "compiled is consistently faster" and
   cited a median of `4.07 ms` that appears in **no recorded output**; both are
-  withdrawn. Verbatim blocks for runs 3-4 are in the *Timing (verbatim)* section
-  below.
+  withdrawn. Run 0 measured a different (pre-Step-6) probe build and is listed only so
+  the withdrawn `5.49` has a traceable origin. Verbatim blocks for runs 3-4 are in the
+  *Timing (verbatim)* section below.
 
   **Export is seconds, not minutes** (§3.7 renders a fresh host per page per size).
   Taking the **worst** observed figure (15.40 ms), 100 pages × 5 sizes = 500 renders
@@ -604,16 +664,45 @@ not a better one.
   requestRender() only          PUBLIC  renderer.d.ts:388 painted=false span0="਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀਀" attr=0
   requestRender() + await tick  PUBLIC  renderer.d.ts:388 painted=true  span0="PUB" attr=1
   start() + tick + stop()       PUBLIC  renderer.d.ts:545/552 painted=true  span0="PUB" attr=1
+  intermediateRender()+await idle() PUBLIC  renderer.d.ts:560+395 painted=true  span0="PUB" attr=1
   loop()                        PRIVATE renderer.d.ts:559 painted=true  span0="PUB" attr=1
 ```
 
-**`intermediateRender()` (`renderer.d.ts:560`) is public, synchronous, and paints a
-correctly styled frame** — it is the honest replacement for private `loop()`. Note
-`requestRender()` alone does **not** paint (it only schedules; the buffer still holds
-unrendered `਀` fill), so it needs an awaited tick; `start()/stop()` works but
-runs the real loop.
+**`intermediateRender()` (`renderer.d.ts:560`) is public and paints a correctly styled
+frame** — it is the honest replacement for private `loop()`. Note `requestRender()`
+alone does **not** paint (it only schedules; the buffer still holds unrendered `਀`
+fill), so it needs an awaited tick; `start()/stop()` works but runs the real loop.
 
-With `intermediateRender()`, every member is genuinely public:
+**But "synchronous" is a property of the configuration, not of the API.**
+`intermediateRender()` is:
+
+```js
+// chunk-bun-tkm837n2.js:9696-9699
+intermediateRender() {
+  this.immediateRerenderRequested = true;
+  this.loop();            // async loop() — NOT awaited, and it returns void
+}
+```
+
+`loop()` is `async` and awaits every registered frame callback. So the frame completes
+before `intermediateRender()` returns **only while `frameCallbacks` is empty** — which
+it is in this probe, which is why `painted=true` above is honest. `setFrameCallback` is
+public (`renderer.d.ts:540`), and `intermediateRender(): void` returns nothing to await.
+Register one callback and the same call silently yields an unpainted frame:
+
+```
+--- is intermediateRender() synchronous? (frameCallback probe) ---
+  frameCallback registered=false -> painted immediately after intermediateRender()=true  | after await idle()=true
+  frameCallback registered=true  -> painted immediately after intermediateRender()=false | after await idle()=true
+  => intermediateRender() is synchronous ONLY while frameCallbacks is empty; await idle() covers both.
+```
+
+For a design host this is **silent frame corruption** — the same class of failure as the
+wcwidth trap above: no error, just a wrong frame. **`await renderer.idle()` fixes it**
+and is the reason the recommended recipe is `intermediateRender()` *then* `await idle()`,
+never `intermediateRender()` alone.
+
+With `intermediateRender()` + `idle()`, every member is genuinely public:
 
 | Member | Declared |
 | --- | --- |
@@ -621,20 +710,22 @@ With `intermediateRender()`, every member is genuinely public:
 | `createCliRenderer(config)` | `renderer.d.ts:177` — public |
 | `bufferedOutput: "stdout" \| "memory"` | `renderer.d.ts:21`, `zig.d.ts:75` — public |
 | **`intermediateRender()`** | **`renderer.d.ts:560` — public** |
+| **`idle()`** | **`renderer.d.ts:395` — public** |
 | `renderer.currentRenderBuffer` | `renderer.d.ts:217` — public |
 | `renderer.getCursorState()` | `renderer.d.ts:536` — public |
 | `OptimizedBuffer.getSpanLines()` | `buffer.d.ts:43` — public |
 | `OptimizedBuffer.getRealCharBytes()` | `buffer.d.ts:42` — public |
 | `OptimizedBuffer.buffers` | `buffer.d.ts:22-27` — public |
+| `getBaseAttributes()` / `getLinkId()` | `types.d.ts:24`, `utils.d.ts:13` — public |
 | `CapturedFrame` / `CapturedLine` / `CapturedSpan` | `types.d.ts` — main index, **not** `/testing` |
 | ~~`renderer.loop()`~~ | `renderer.d.ts:559` — **private, no longer used** |
-| ~~`renderer._feed`~~ | `renderer.d.ts:331` — **private, see caveat** |
+| ~~`renderer._feed`~~ | `renderer.d.ts:331` — private, **superseded by public `idle()`** |
 
-Rebuild driven by `intermediateRender()` only, verbatim:
+Rebuild via `createCliRenderer` + `intermediateRender()` + `await idle()`, verbatim:
 
 ```
---- full rebuild via PUBLIC intermediateRender() ---
-createCliRenderer/CliRenderer headless: OK
+--- full rebuild: createCliRenderer + intermediateRender() + await idle() ---
+createCliRenderer headless (recommended production ctor): OK
 public getSpanLines() span[0] = {"text":"PUBLIC","width":6,"attributes":1,"fg":[255,0,0,255],"bg":[0,0,255,255]}
 frame cols=80 rows=24 lines=24 tiles=true
 buf.buffers lengths: {"char":1920,"fg":7680,"bg":7680,"attributes":1920,"expectedCells":1920}
@@ -645,47 +736,123 @@ STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true
 (`char` 80,85,66,76,73,67 = `P,U,B,L,I,C` — ASCII codepoints, consistent with the
 encoding findings above.)
 
-**Two caveats on the rebuild, so Task 4 sizes it honestly:**
+### `renderer.idle()` — the public backpressure primitive
 
-1. **Backpressure handling is dropped.** The harness's `renderOnce` checks
-   `_feed.isBackpressured()` and awaits `_feed.idle()` before rendering. `_feed` is
-   private, so a public rebuild cannot do this. With `bufferedOutput: "memory"` and a
-   discarding stdout it did not bite in any run here, but it is unproven under load
-   and is a real behavioural difference, not a cosmetic one.
+An earlier revision of this document claimed there was **"no public equivalent for the
+`_feed` backpressure check"**. That was an **unverified negation** — the route survey
+enumerated *render* entry points and never looked for idle/backpressure primitives. It
+is false. `CliRenderer.idle(): Promise<void>` is **public** at `renderer.d.ts:395`:
+
+```js
+// chunk-bun-tkm837n2.js:7585-7593
+idle() {
+  if (this._isDestroyed) return Promise.resolve();
+  if (this.isIdleNow()) return Promise.resolve();
+  return new Promise((resolve) => { this.idleResolvers.push(resolve); });
+}
+// :7575
+isIdleNow() {
+  return !this._isRunning && !this.rendering && !this.renderTimeout &&
+         !this.updateScheduled && !this.feedIdleRenderScheduled &&
+         !this.immediateRerenderRequested;
+}
+```
+
+`isIdleNow()` tracks `feedIdleRenderScheduled` — the flag set by
+`scheduleRenderAfterFeedIdle()` (`:7458`), which is exactly what
+`scheduleRenderAfterBackpressure()` (`:7507`) delegates to when a `_feed` exists. And
+`loop()` already handles backpressure itself (`:9678`:
+`else if (nativeStatus === "backpressured") { this.scheduleRenderAfterBackpressure(); }`),
+which `intermediateRender()` invokes. So the backpressure path is **handled by the
+renderer and observable through public `idle()`** — a public consumer never needs to
+touch `_feed`.
+
+Probed rather than reasoned:
+
+```
+=== 1. renderer.idle() basics ===
+typeof renderer.idle: function
+scheduler before: {"isRunning":false,"isRendering":false,"hasScheduledRender":false}
+await idle() on fresh renderer resolved in 0.03ms
+=== 2. intermediateRender() then await idle() ===
+  immediately after intermediateRender(): "PUB"
+  scheduler: {"isRunning":false,"isRendering":false,"hasScheduledRender":true}
+  after await idle() (0.91ms): "PUB"
+```
+
+Note `hasScheduledRender: true` immediately after `intermediateRender()` — the renderer
+still has queued work even in the "synchronous" case; `idle()` is what observes it
+draining. **This removes one of Option A's two stated costs.**
+
+**Remaining caveats on the rebuild, so Task 4 sizes it honestly:**
+
+1. **`intermediateRender()` is not synchronous in general** — only with an empty
+   `frameCallbacks` list. Always follow it with `await renderer.idle()`. (See the
+   frameCallback probe above.)
 2. **The fake stdout's `isTTY = true` is load-bearing.** `CliRenderer` branches on it;
    the streams must present as a TTY (`columns`, `rows`, `getColorDepth()`) even
    though nothing is displayed.
+3. **Use `createCliRenderer`, not the raw constructor.** `renderer.d.ts:358-360` warns:
+   *"Some late constructor side effects are not rolled back if construction throws
+   partway; production callers should use `createCliRenderer`, which wraps
+   `setupTerminal()` in a try/catch that calls `destroy()` on failure."* An earlier
+   revision demonstrated Option A on the raw ctor while listing `createCliRenderer` in
+   its members table without ever calling it. The probe now uses `createCliRenderer`
+   with fake streams, and it works — so this cost is **resolved**, not merely disclosed.
 
-So "~30 lines to own" (the earlier estimate) understates it: it is a small amount of
-code plus an unowned backpressure question. Still modest — but not free.
+So "~30 lines to own" (the earliest estimate) understates it, but by less than the
+previous revision implied: the backpressure question is answered by public `idle()`, and
+the ctor question by `createCliRenderer`. What remains is the frameCallback discipline
+and the fake-TTY streams.
 
 Notably, `CapturedFrame` — the very type `captureSpans()` returns — lives in the
 main `types.d.ts`, and `getSpanLines()` is public on `OptimizedBuffer`. The
 *capture* capability is public; only the *harness* is testing-scoped.
 
-**Recommendation for Task 4.** Two options, both viable; the choice is Task 4's and
-neither is free:
+**Recommendation for Task 4.** Two options, both viable; the choice is Task 4's.
 
-- **Option A — public rebuild.** `CliRenderer` + `bufferedOutput: "memory"` +
-  **`intermediateRender()`** + `currentRenderBuffer.getSpanLines()`. Entirely public,
-  demonstrated working here (`STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true`),
-  compiled and isolated. Costs: fake TTY streams (`isTTY = true` is load-bearing) and
-  the dropped `_feed` backpressure handling — a small amount of code plus one unowned
-  question, not the "~30 lines" an earlier revision claimed.
+- **Option A — public rebuild.** Demonstrated working here, compiled and isolated
+  (`STEP6_TESTING_FREE_PATH_WORKS_PUBLIC_ONLY = true`). Every member public:
+
+  ```ts
+  const renderer = await createCliRenderer({          // :177 — the ctor the package
+    stdin: fakeStdin, stdout: fakeStdout,             //   tells production to use
+    width: 80, height: 24,
+    bufferedOutput: "memory",                         // :21 — no real terminal
+    screenMode: "main-screen", consoleMode: "disabled",
+    externalOutputMode: "passthrough", useMouse: false,
+  })
+  renderer.root.add(/* … */)
+  renderer.intermediateRender()                       // :560
+  await renderer.idle()                               // :395 — REQUIRED, not optional
+  const lines = renderer.currentRenderBuffer.getSpanLines()  // buffer.d.ts:43
+  ```
+
+  Costs: fake TTY streams (`isTTY = true` is load-bearing), and the discipline that
+  `intermediateRender()` **must** be followed by `await idle()` — omit it and a
+  registered frame callback silently yields an unpainted frame.
 - **Option B — use `/testing` in production and accept the exposure**, pinning hard.
-  Cheaper today, and the *declared, typed* surface — which is not nothing next to
-  Option A's dropped backpressure.
+  Cheaper today, and a *declared, typed* surface.
 
-The earlier revision presented Option A as strictly better. It is not: it trades a
-testing-scoped-but-declared API for a public API plus a behavioural gap. Task 4 should
-decide with that trade in view.
+Two earlier revisions got this trade wrong in opposite directions: the first called
+Option A strictly better (while secretly using a private member); the second called it
+worse (on an unverified claim that backpressure had no public equivalent). With
+`idle()` and `createCliRenderer` both verified public and working, **Option A is now
+the better-supported choice** — its remaining costs are a fake-TTY shim and one
+call-ordering rule, against Option B's standing pre-1.0 testing-subpath exposure. But
+it is a genuine engineering choice, not a forced one.
 
 For the **frame data** itself, regardless of option:
 
 - **text** ← `getSpanLines()` / `captureSpans()`. **Do not** use `buffers.char`: its
-  encoding is unspecified and non-codepoint for wide characters.
-- **fg/bg/attributes** ← either spans or `buffers` (decode colours via
-  `RGBA.fromArray`, never by reading the `Uint16` slots directly).
+  encoding is unspecified and non-codepoint for wide characters. (`getSpanLines()` itself
+  refuses to read text from `char[]` — it takes text from `getRealCharBytes(true)` and
+  uses `char[i]` only for the continuation flag `0xC0000000`.)
+- **fg/bg** ← either spans or `buffers`, decoding colours via `RGBA.fromArray`, never by
+  reading the `Uint16` slots directly.
+- **attributes** ← spans for the 8 text attributes; `buffers.attributes` +
+  `getBaseAttributes()`/`getLinkId()` if hyperlink ids are ever needed — spans mask
+  them off.
 - Keep `/testing` in the **test suite** either way — `mockInput`/`mockMouse`/
   `waitForFrame` are genuinely valuable there and a break is cheap.
 - **Pin `@opentui/core` exactly** (no `^`) and gate upgrades on a frame-capture
@@ -727,11 +894,32 @@ Recorded per the controller's "installed package is the authority" rule.
    `renderer.loop()` (`private`, `renderer.d.ts:559`) and `renderer._feed` (`private`,
    `:331`). This is invisible from the `.d.ts` of the `/testing` subpath itself and is
    the reason a "public rebuild" is not a mechanical copy of the harness. The public
-   equivalent is `intermediateRender()` (`:560`); there is no public equivalent for the
-   `_feed` backpressure check.
+   equivalents are `intermediateRender()` (`:560`) for the render and **`idle()`
+   (`:395`) for the backpressure/feed-idle wait** — the renderer handles backpressure
+   internally (`loop()` → `scheduleRenderAfterBackpressure()`) and exposes the settled
+   state through `idle()`, so a public consumer never needs `_feed`.
 7. **`OptimizedBuffer.buffers.char` is not documented as an encoding.** The `.d.ts`
    types it `Uint32Array` with no note that values are non-codepoints for wide
-   characters. Anything building on it is building on reverse-engineering.
+   characters. Anything building on it is building on reverse-engineering — and
+   `getSpanLines()` itself declines to: it reads text from `getRealCharBytes(true)`
+   (`:10587`) and touches `char[i]` only to test the continuation flag
+   `CHAR_FLAG_CONTINUATION = 0xC0000000` (`:10585-10586`). The recorded
+   `0xc40200fd & 0xC0000000 === 0xC0000000` **is** that flag; the lead cell's
+   `0x900200fd` is not.
+9. **`intermediateRender(): void` is a fire-and-forget call on an `async` function.**
+   It sets `immediateRerenderRequested` then calls `this.loop()` without awaiting
+   (`chunk-bun-tkm837n2.js:9696-9699`), and returns `void` — nothing to await. Callers
+   must use `idle()`. Not stated in the types.
+10. **`attributes` is a u32 with a hyperlink id in the upper bits**, and
+    `getSpanLines()` masks it off (`& 255`, `:10600`). So `captureSpans()` is lossy for
+    hyperlinks. The `.d.ts` documents the helpers (`getBaseAttributes`,
+    `attributesWithLink`, `getLinkId`) but nothing connects them to `buffers.attributes`
+    or warns that spans drop link ids.
+11. **The raw `CliRenderer` constructor is documented as not production-safe.**
+    `renderer.d.ts:358-360`: *"Some late constructor side effects are not rolled back if
+    construction throws partway; production callers should use `createCliRenderer`."*
+    `createCliRenderer` accepts `stdin`/`stdout` in its config, so it works with fake
+    streams and is the right entry point for a headless host.
 8. **Fake stdout must report `isTTY = true`.** `CliRenderer` branches on it, so a
    headless rebuild needs streams that present as a TTY (`isTTY`, `columns`, `rows`,
    `getColorDepth()`) despite nothing being displayed. Not stated anywhere in the
@@ -749,6 +937,15 @@ corrected because they claimed more than their evidence showed:
 | "`/testing`-free path — every member is public" (used private `loop()`) | **Corrected**: `loop`/`_feed` are private; re-probed to public `intermediateRender()`; backpressure gap disclosed. |
 | "Compiled is consistently faster; median 4.07 ms under `bun run`" | **Withdrawn**: `4.07` was untraceable; all four runs now tabulated, no ordering claimed. |
 | "Verdict is YES *because* the mitigation exists" | **Corrected**: `/testing` stability is a Step 6 concern, never a verdict input. |
+| "Style measured against an **independent** oracle" | **Corrected**: `buffers` is the spans' **pre-image** (`getSpanLines` destructures it and shares `RGBA.fromArray`). Still a valid losslessness round-trip; not a second witness. |
+| "**No public equivalent** for the `_feed` backpressure check" | **Withdrawn**: `idle()` is public (`renderer.d.ts:395`), tracks `feedIdleRenderScheduled`, and was probed working. Unverified negation. |
+| "`intermediateRender()` is public, **synchronous**, and paints" | **Corrected**: synchronous only while `frameCallbacks` is empty; it calls async `loop()` unawaited. Probed both ways; `await idle()` is now required. |
+| "attributes — **plain bitmask**, matches the span value exactly" | **Corrected**: u32 with a hyperlink id in the upper bits; `getSpanLines` masks `& 255`. With a link, `raw === span` is **false**. Spans are lossy for hyperlinks. |
+| Option A demonstrated on the raw `CliRenderer` ctor while listing `createCliRenderer` uncalled | **Fixed**: probe now uses `createCliRenderer` (the ctor the package tells production to use); it works with fake streams. |
+
+Verdict inputs were re-verified each round and never moved. What kept moving were the
+*recommendations* — which is the part Task 4 acts on, so the churn is recorded rather
+than smoothed over.
 
 ## Reproduce
 
