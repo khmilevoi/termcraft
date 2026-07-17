@@ -454,7 +454,18 @@ No page module is imported before framing, protocol, identity, limits, and
 runtime compatibility have been negotiated.
 
 1. The supervisor spawns the current termcraft executable with the argument
-   array `[_host, --stdio]`, with no shell interpolation.
+   array `[_host, --stdio]`, with no shell interpolation. Round 2 Spike E
+   (`docs/spikes/05-host-respawn/FINDINGS.md`) verified `process.execPath`
+   correctly names the running `.exe`'s real on-disk path inside a
+   `bun build --compile` binary on Windows — not an embedded `B:/~BUN/root/…`
+   namespace path and not an external Bun runtime — so it is the correct value
+   to spawn with; no fallback (`argv[0]`, `Bun.main`, `GetModuleFileNameW`) was
+   needed. `process.execPath` is the *wrong* source under `bun run` (it resolves
+   to the Bun CLI, not the script), so this only applies to the compiled
+   product. The spike also confirmed that framed stdio reliably arrives split
+   across multiple Windows pipe `"data"` events (5 events observed for 3
+   logical frames under load) — the length-prefixed frame reader must buffer
+   partial frames as a normal case, not a defensive edge case.
 2. The supervisor generates `sessionId` and the first incarnation `nonce`, starts
    draining stderr, and sends exactly one `ClientHelloV1`. It sends no source path
    yet.

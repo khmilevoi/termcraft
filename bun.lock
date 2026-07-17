@@ -10,6 +10,7 @@
         "@opentui/core": "0.4.5",
         "@opentui/react": "0.4.5",
         "@reatom/core": "^1001.1.0",
+        "@reatom/react": "^1001.0.0",
         "errore": "^0.14.1",
         "react": "^19.2.7",
         "typescript": "7.0.2",
@@ -83,6 +84,8 @@
     "@opentui/react": ["@opentui/react@0.4.5", "", { "dependencies": { "@opentui/core": "0.4.5", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-n88Vx0cMmAu++/S14WscjvdcT46IDcxve02jMtcfHQ9j6cySRHfILfGEpOB7xxc8RpCwQceEyOjkKkfzPzm6Jg=="],
 
     "@reatom/core": ["@reatom/core@1001.1.0", "", { "dependencies": { "@standard-schema/spec": "^1.0.0" }, "optionalDependencies": { "idb-keyval": "*" } }, "sha512-7+01/9C+gjERI2kuNb+yBF6R33r50Lcv8ZLmR0iPZYOpu61EODGal5ShgfkpH8tIe8X0E7WI7wcvbEVxbRArBw=="],
+
+    "@reatom/react": ["@reatom/react@1001.0.0", "", { "peerDependencies": { "@reatom/core": "^1001.0.0", "react": ">=18.2.0", "react-dom": ">=18.2.0" } }, "sha512-7UmxyJnv9KSmOnf7uHJrtTcG0/RtHjUIOY0is+R1oNeEfEl5dKAcuza6zOobm9ABTbZVvaEgsWkguoAYK8YJtQ=="],
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 
@@ -293,6 +296,8 @@
     "react": ["react@19.2.7", "", {}, "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="],
 
     "react-devtools-core": ["react-devtools-core@7.0.1", "", { "dependencies": { "shell-quote": "^1.6.1", "ws": "^7" } }, "sha512-C3yNvRHaizlpiASzy7b9vbnBGLrhvdhl1CbdU6EnZgxPNbai60szdLtl+VL76UNOt5bOoVTOz5rNWZxgGt+Gsw=="],
+
+    "react-dom": ["react-dom@19.2.7", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.7" } }, "sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ=="],
 
     "react-reconciler": ["react-reconciler@0.33.0", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.0" } }, "sha512-KetWRytFv1epdpJc3J4G75I4WrplZE5jOL7Yq0p34+OVOKF4Se7WrdIdVC45XsSSmUTlht2FM/fM1FZb1mfQeA=="],
 

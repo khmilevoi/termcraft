@@ -129,11 +129,26 @@ subscriber disconnect cannot abandon a critical operation.
 
 ## 6. Reatom v1001 model rules
 
-The implementation uses `@reatom/core@1001`. At design time this repository has no
-`package.json`, installed `@reatom/core`, or `node_modules`, so the installed types
-cannot yet be verified. Implementation must pin v1001 and check the package's own
-`.d.ts` before code is accepted. The binding rules and the vendored v1001 handbook
-govern the design:
+The implementation uses `@reatom/core@1001.1.0` and, for the React binding,
+`@reatom/react@1001.0.0` — both installed and verified against their own `.d.ts`
+(round 1 Task 4; round 2 Spike D, `docs/spikes/04-reatom-opentui/FINDINGS.md`).
+`wrap`, `withAsync`, `withAsyncData`, and `withConnectHook` all exist in
+`@reatom/core@1001.1.0` as documented. `reatomComponent` is exported by
+`@reatom/react`, not `@reatom/core` — the facade (§5.1 of the design doc) must
+re-export it from there. Spike D confirmed `reatomComponent` drives re-renders
+through OpenTUI's own React reconciler, not `react-dom` (never imported, and not
+declared in `@opentui/react`'s own `peerDependencies`), when mounted through the
+production path (`@opentui/react`'s `createRoot` on a `createCliRenderer`
+instance); the `.d.ts`'s own `react-dom` peer entry on `@reatom/react` is
+confirmed spurious for this stack. Spike D also found that Round 1's proven
+headless test harness (`createTestRenderer` via `@opentui/react/test-utils`'s
+`testRender`) runs in React's "act environment" mode, in which Reatom-originated
+writes — always async, scheduled off a microtask, never inside a React event
+handler — sit un-flushed until the test code wraps them in `act()` from `'react'`;
+neither the harness's own `flush()` nor `@opentui/react`'s exported `flushSync`
+substitutes for it. Any automated test against a `reatomComponent`-based screen
+must import and use `act()` itself. The binding rules and the vendored v1001
+handbook govern the design:
 
 - model factories use the `reatom*` prefix;
 - every atom, computed, and action has a stable hierarchical trace name;

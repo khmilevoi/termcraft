@@ -132,7 +132,11 @@ Saved page sources import only `@termcraft/runtime`. Direct imports from
 `@termcraft/kit`, `@reatom/*`, React, React JSX runtime, and `@opentui/*` are
 forbidden. The facade exposes the supported design components, types, selected
 Reatom v1001 primitives, `reatomComponent`, navigation, tweaks, and runtime
-capabilities.
+capabilities. `reatomComponent` is re-exported from `@reatom/react@1001.0.0`
+(`@reatom/core` does not export it); round 2 Spike D
+(`docs/spikes/04-reatom-opentui/FINDINGS.md`) verified it drives re-renders
+through OpenTUI's own React reconciler, not `react-dom`, inside a
+`bun build --compile` binary on Windows.
 
 Page state and behavior live in named Reatom atoms, computeds, and actions. React
 hooks are minimal and primarily retrieve scoped models from context. Critical

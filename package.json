@@ -11,6 +11,7 @@
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
     "@reatom/core": "^1001.1.0",
+    "@reatom/react": "^1001.0.0",
     "errore": "^0.14.1",
     "react": "^19.2.7",
     "typescript": "7.0.2"

@@ -290,6 +290,30 @@ are structural operations: every parent is opened component by component without
 following links; newly created directories are flushed; only empty transaction-
 owned directories are removed.
 
+Round 2 Spike G (`docs/spikes/07-durability-primitive/FINDINGS.md`) verified step
+5's parenthetical on Windows: the write-through equivalent is `CreateFileW` with
+`FILE_FLAG_BACKUP_SEMANTICS` and **`GENERIC_WRITE` alone** (not `GENERIC_READ`,
+which opens the handle successfully but makes the following call fail with
+`ERROR_ACCESS_DENIED`), followed by `FlushFileBuffers` on the directory handle,
+via `bun:ffi` against `kernel32.dll` — no native addon and no fallback to the
+weaker `FILE_FLAG_WRITE_THROUGH` file-level flag were needed. This is not a cheap
+primitive: median 18.9 ms per directory flush (worst 63.4 ms, 20 iterations, 4 KiB
+file), so a ten-artifact transaction (§4.3's apply loop touching `plan.json`,
+`intent.json`, every payload, every applied marker, and `committed.json`) costs on
+the order of 380 ms of flush-dominated I/O — a real, user-visible cost, not a
+rounding error. An unsupported volume (tested against an SMB share) is
+detectable before any mutation is trusted durable: cheaply via `GetDriveTypeW`
+(`DRIVE_REMOTE` vs. `DRIVE_FIXED`) as a pre-flight gate, and confirmed by the real
+flush primitive itself failing with a distinct `GetLastError()`
+(`ERROR_INVALID_FUNCTION`) even though the ordinary create/write/rename file
+steps succeed unremarkably on that same share — the flush step is where
+detection actually happens, so it cannot be skipped as an optimization for
+"probably fine" filesystems. Separately, Windows has no `O_NOFOLLOW` in Bun/Node's
+`fs.constants`; steps 3 and 6's "reopen without following links" is implemented
+as `lstatSync` immediately before an ordinary open, which leaves a narrow TOCTOU
+window between the two calls — weaker than a true atomic `O_NOFOLLOW` open, and
+recorded as a residual risk rather than closed.
+
 The implementation does not claim that step 4 for one file makes any other file
 change simultaneously. The durable intent plus startup gate is what makes the
 multi-file action recoverable.
@@ -624,6 +648,38 @@ and application shutdown use the same sequence:
    for OS confirmation that no owned descendant remains.
 5. Only after confirmation may termcraft snapshot, clear, quarantine, or reuse the
    same turn workspace for a retry.
+
+Round 2 Spike I (`docs/spikes/09-process-tree/FINDINGS.md`) verified the Windows
+mechanism from Bun without a native addon: a Job Object created and configured via
+`bun:ffi` against `kernel32.dll` (`CreateJobObjectW` +
+`SetInformationJobObject`/`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` +
+`AssignProcessToJobObject`), tested against a synthetic tree that ignores
+`SIGTERM` and spawns `detached: true` descendants specifically to defeat a naive
+approach. For the **application-driven cancellation** path (this section's
+sequence: explicit `TerminateJobObject` after graceful cancellation fails),
+confirmation is a genuine OS read — `QueryInformationJobObject` with
+`JobObjectBasicAccountingInformation.ActiveProcesses` — not PID-liveness
+polling, and it went from 3 to 0 in 0-1 ms after the kill in every trial; the
+whole spawn-assign-kill-confirm sequence completed in well under one second,
+comfortably inside the 5-second budgets above. **Open gap for the
+crash-recovery case**, not resolved by this spike: kill-on-close firing because
+the *controller itself* crashed (bare handle close, no `TerminateJobObject`
+call) still kills the tree correctly, but by the time anyone could check, no
+process holds a job handle to read `ActiveProcesses` from — the only fallback
+available is the same PID-liveness polling this design exists to avoid, because
+Windows reuses PIDs. If termcraft needs confirmed cleanup after a controller
+crash (not just after a graceful `cancel()`), it needs a named-job-object reopen
+strategy or a permanently-running supervisor holding an independent handle,
+and that needs its own spike; until then, `backend_unhealthy_unconfirmed_exit`
+is a real possible outcome of the crash-recovery path specifically, not a
+theoretical edge case. Separately: `taskkill /T /F` (a candidate simpler
+fallback) also reached every level of the synthetic tree including both
+`detached: true` descendants in this spike, contrary to the a-priori assumption
+that `detached` breaks the parent-child link `taskkill` walks — Windows'
+`detached` option does not change the OS-recorded parent PID the way POSIX
+`setsid()` does. This is recorded as a finding about the fallback, not a
+reason to prefer it over the Job Object mechanism, which remains the one with a
+genuine read-based confirmation for the case this section's sequence covers.
 
 If exit cannot be confirmed, the backend becomes `unhealthy_unconfirmed_exit`.
 The workspace is quarantined, no candidate is copied, no retry or new turn is

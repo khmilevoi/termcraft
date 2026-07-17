@@ -653,7 +653,11 @@ rejects anything else (§6.3). The source is authoritative for `kitApiVersion`,
 title, minimum size, and theme. Tabs and status derive them from a rebuildable
 machine-local cache keyed by source hash and extractor version; `project.toml`
 does not duplicate them. A UI rename mechanically rewrites `meta.title` (§3.3).
-The default export is a `reatomComponent` page. Page state, derivation, and
+The default export is a `reatomComponent` page. `@termcraft/runtime` re-exports
+`reatomComponent` from `@reatom/react@1001.0.0` (not `@reatom/core`, which does
+not export it); round 2 Spike D (`docs/spikes/04-reatom-opentui/FINDINGS.md`)
+verified it drives re-renders through OpenTUI's own React reconciler, not
+`react-dom`, in a compiled binary on Windows. Page state, derivation, and
 transitions live in named atoms, computeds, and actions; hooks are minimal and
 mainly retrieve scoped models from runtime context. The optional `tweaks` export
 is §5.6. Helper models and components remain in the same file.
@@ -826,6 +830,26 @@ combinations it supports.
 
 Confinement is defense-in-depth, not the load-bearing wall: correctness comes from
 the gate only accepting what landed in staging and validated (§6.3).
+
+Round 2 Spike H (`docs/spikes/08-agent-confinement/FINDINGS.md`) tried to verify
+both confinement claims on Windows 11. **The Claude sentence is confirmed
+accurate**: a deny-everything `canUseTool` callback fired before every one of 6
+tool-use attempts across 5 attack cases — an in-staging write, an absolute path
+outside staging, a `../`-relative escape, a `Bash` call, and a `WebFetch` call —
+and every denial held, cross-checked against the SDK's own independent
+`permission_denials` audit trail and a post-hoc filesystem check, identically in
+both `bun run` and a `bun build --compile` binary. **The Codex sentence is
+unverified, neither confirmed nor refuted**: the write-probe mechanism itself
+(create a scratch dir per `sandboxMode`, run one write-only task, inspect the
+filesystem rather than trust the transcript) ran to completion for all three
+sandbox modes without crashing and reached the OpenAI API, but every turn failed
+before attempting a write because the test account's Codex usage quota was
+exhausted — confirmed independently via the raw CLI, ruling out an SDK or probe
+bug. This must be re-run before shipping the Codex health-check copy in §9 as
+written. Separately, `@openai/codex-sdk` exposes no health/status method at all
+(only `Codex`/`Thread` with a `sandboxMode` option) — the write-probe in a
+scratch dir is confirmed to be the only way to implement `healthCheck()`'s
+"sandbox effective?" for Codex, not one option among several.
 
 **The `AgentEvent` stream** is the turn's only live output — everything the UI
 shows while an agent works derives from it:

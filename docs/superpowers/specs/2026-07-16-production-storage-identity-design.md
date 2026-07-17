@@ -172,6 +172,25 @@ every writable parent with no-follow semantics, and rejects symlinks, junctions,
 or reparse points in a durable writable path. The separate TrustStore,
 BackupStore, and StagingStore own their explicit external roots.
 
+Round 2 Spike F (`docs/spikes/06-win-fs-identity/FINDINGS.md`) verified this on
+Windows: `lstatSync(path).isSymbolicLink()` returns `true` for an NTFS junction
+(both junctions and true symlinks are reparse points that libuv's Windows
+`stat`/`lstat` maps to `S_IFLNK`) — better than expected, but this is an
+implementation detail of libuv's tag mapping, not a documented guarantee for
+every reparse-point kind (cloud-file placeholders, WSL interop links, dedup, and
+app-execution-alias reparse tags were not covered by this spike and are not
+known to be caught by `isSymbolicLink()`). The tag-agnostic backstop for the
+general "reparse points" case is `GetFileAttributesW` via `bun:ffi`, testing the
+result against `FILE_ATTRIBUTE_REPARSE_POINT`; this must be the mechanism for
+the no-follow parent check, not `isSymbolicLink()` alone. Real NTFS symlink
+creation could not be tested in the spike's non-elevated, non-Developer-Mode
+shell — that case is expected, not confirmed, to behave identically to
+junctions. The escape check itself was verified: a naive `join(root, rel)` does
+**not** catch a junction planted inside the root that points outside it; the
+check that works is `realpathSync` on the resolved path compared against
+`realpathSync` of the root (not the raw root string), requiring the result to
+equal or start with the root's resolved path plus a separator.
+
 The supported project filesystem must be local and writable and must provide
 reliable exclusive file locking, atomic same-filesystem replacement, and durable
 file flushes. If the platform adapter identifies a remote filesystem or cannot
@@ -341,6 +360,16 @@ Windows drive letter is uppercase, and have no trailing separator except a root.
 Filesystem identity strings are `unix:<device-u64-decimal>:<inode-u64-decimal>` or
 `windows:<volume-serial-8hex-lower>:<file-id-bytes-lower-hex>`, with no leading
 decimal zeroes. The trust key is lowercase hex SHA-256 of the complete byte string.
+Round 2 Spike F (`docs/spikes/06-win-fs-identity/FINDINGS.md`) verified
+`fs.statSync(dir, { bigint: true })` on Windows gives a `dev` that matches the OS
+volume serial byte-for-byte, formatted as exactly 8 lowercase hex digits as
+written here, and an `ino` stable across `git init`/commit/checkout and an
+editor-style atomic rewrite of a file inside the directory. The `file-id-bytes`
+half is a variable-length field, not a fixed 16 bytes: plain `stat()` on NTFS
+returns at most 8 bytes' worth of file-id bits (the worked example below shows a
+16-byte/ReFS-width value for illustration only); an implementation using only
+`fs.statSync` will produce a shorter hex string, which is a valid encoding of the
+same format, not a deviation from it.
 
 `GitIdentity` is `(canonicalGitCommonDir, gitCommonDirFilesystemIdentity,
 projectPathRelativeToWorktreeRoot)`. It identifies the local repository storage
