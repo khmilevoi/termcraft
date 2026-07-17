@@ -97,6 +97,46 @@ The host repeats the same import scan before linking a page. This catches canoni
 files changed by hand after a Gate run and historical snapshots that predate the
 runtime-only rule.
 
+**The resolver registers three specifiers, and it fails open.** Helper resolution is
+implemented by a runtime resolver plugin registered before the dynamic import, and it
+must serve `@termcraft/runtime`, `react/jsx-runtime`, *and* `react/jsx-dev-runtime`.
+Registering only the first fails a real JSX page outright — the transform's generated
+helper import must resolve too — and registering both helper subpaths unconditionally
+is the robust implementation, because the environment the host thinks it is in is not
+reliably the one the transform obeys.
+
+The consequence must be stated plainly rather than discovered later: **a page carrying
+an explicit `react/jsx-runtime` import would resolve and run if it reached the
+resolver.** The rule that such a page is rejected therefore rests entirely on the
+source scans above — the Gate's, the host's pre-link rescan, and the declaration
+environment — with no second line of defense underneath them. This is a
+defense-in-depth gap, not a broken rule: the rule is satisfiable and enforced, but it
+is enforced in exactly one kind of place. Any change that weakens a source scan
+removes the only thing enforcing it.
+
+**Facade-owned JSX helper contract.** The runtime module implements the helper surface
+the transform emits against. It is not authored-public — no page may name it — but it
+is a contract the facade cannot get wrong:
+
+- `key` is **positional**: the third argument, and absent from `props`. A `(type, props)`
+  helper silently drops every key — invisible with a string stand-in, a correctness bug
+  in a reconciling runtime.
+- `jsx` and `jsxs` share one signature `(type, props, key)`, with children in
+  `props.children` for both. The two cannot be told apart by inspecting `props`, so the
+  facade must not try; `jsxs` signals only that the child list is static.
+- **`jsxs` is production-only.** Development builds emit `jsxDEV` for everything,
+  single- and multi-child alike, and distinguish shape through an `isStaticChildren`
+  argument.
+- `Fragment` is never a helper. It arrives as the `type` argument and must be an
+  exported *value*.
+
+One build-time trap belongs here because it silently defeats the above:
+`process.env.NODE_ENV` read by dot access is inlined into the compiled binary as a
+literal and lies forever, while the transform follows the real environment variable.
+A host that branches on the inlined value registers the development helper and then
+fails under production from a variable it cannot see. Read the environment through
+`Bun.env`, and register both helper subpaths unconditionally regardless.
+
 ### 3.2 Controlled facade surface
 
 Runtime API version 1 exposes these public families from the root facade:
@@ -677,7 +717,14 @@ behavior.
 - Upgrade private dependency fixtures while holding the public version constant and
   prove existing runtime API fixtures still typecheck and render identically.
 - Prove compiler-owned JSX support works while explicit `react/jsx-runtime` and
-  runtime subpath imports fail.
+  runtime subpath imports are **rejected by the source scans** — the Gate's and the
+  host's pre-link rescan. The assertion must be rejection by a named scan, not a load
+  failure: resolution fails open (§3.1), so a test that merely imports such a page and
+  expects an error proves nothing about what ships.
+- Exercise the JSX helper contract of §3.1 against the transform's real output rather
+  than a stand-in: keyed children (`key` is positional and must survive), multi-child
+  and single-child roots, and `Fragment` as a `type` argument. Run it in both
+  development and production builds, because the two emit different helpers.
 
 ### 11.2 Reatom policy tests
 

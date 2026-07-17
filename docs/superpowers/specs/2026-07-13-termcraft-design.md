@@ -433,6 +433,18 @@ core ships inside that binary. The TypeScript compiler does not: at `typescript@
 it is a per-platform native executable that cannot be spawned from a Bun embedded
 path, so it and its lib files are embedded, extracted once to a per-user directory
 on first use, and run as a subprocess — which also makes the build per-platform.
+
+**The TypeScript version is pinned exactly, and the major is load-bearing.**
+`typescript@7` is the native Go port: it exposes no `ts.createProgram` and no
+`CompilerHost`, so TypeScript 5's JavaScript compiler API does not exist there and no
+design that assumes it survives the switch. The Gate is built on
+`typescript/unstable/sync` — a subpath whose name is its own stability warning — and
+the lib chain and platform-package layout are version-specific. `bun.lock` is the
+source of truth for every version; the verified toolchain table lives in the spike
+findings. TypeScript 5 was never probed: it remains the unexplored escape hatch if
+per-platform builds or the extraction step prove intolerable, and re-opening it means
+a real probe rather than an assumption.
+
 The three load-bearing claims here were spike-verified on 2026-07-17 and all three
 hold: dynamic TSX import with embedded-module resolution from the compiled binary
 (Windows included), styled cell-frame capture from the headless renderer, and
@@ -506,6 +518,14 @@ source snapshot. Switching page or source kills the host and spawns a fresh one 
 zero prototype state leaks between sources. The UI receives a typed
 `PreviewSession`; it never owns subprocess handles or stdio.
 
+**Respawn-per-source is a correctness requirement, not an isolation preference.**
+Bun's module cache returns the stale module for a re-imported path, and query
+cache-busting does not cure it — Bun ignores `?v=` as a module key, so a busted
+import hands back the same module object. A directory-listing cache compounds it: a
+file created inside an already-resolved directory stays invisible. A host that
+outlived a source edit would therefore render the previous source while reporting
+success. Nothing short of a fresh process fixes this; respawn does.
+
 The host: re-checks the import allowlist (§5.8), dynamically imports the page module
 (Bun transpiles TSX in-process, including from a compiled binary), mounts it in an
 OpenTUI headless renderer at the preview's size, and speaks a length-prefixed,
@@ -513,14 +533,49 @@ versioned protocol with the supervisor. A handshake binds `sessionId`, nonce,
 `sourceHash`, `kitApiVersion`, negotiated limits, and protocol version; requests
 carry ids and frames carry a monotonic `frameSeq`:
 
-- **host → supervisor**: styled cell frames (char + fg + bg + attributes) on change; a
-  heartbeat; the page's evaluated `meta` and tweak declarations after mount (§5.1,
-  §5.6); page-emitted events (runtime navigation calls, §5.5).
+- **host → supervisor**: styled cell frames (char + fg + bg + the 8 text attributes) on
+  change; a heartbeat; the page's evaluated `meta` and tweak declarations after mount
+  (§5.1, §5.6); page-emitted events (runtime navigation calls, §5.5).
 - **supervisor → host**: resize, theme and capability override (§8.1), forwarded input
   (interactive mode, §3.5), tweak changes (§5.6), and queries — `checkHit(x, y) →
   id`, `rectOf(id) → Rect` (selection and pins, §3.2), `describe(id) →
   component kind + label` (the selection chip, §3.2), and `layoutTree() → the
   resolved node tree` (id, kind, box, text, children — export capture, §3.7).
+
+**What a styled cell frame carries, scoped to what was measured.** A full grid
+reconstructs losslessly from the renderer's span capture for char + fg + bg + the 8
+text attributes — the tuple above, and no more. Hyperlink ids are *not* in that
+tuple: span capture masks attributes to their low 8 bits and drops the link id.
+Nothing in the MVP needs them; if that changes, they are recoverable from the render
+buffer's attributes plus the renderer's link lookup, and this contract widens by
+amendment rather than by accident. Two rules the capture implementation cannot
+violate:
+
+- **Frame text comes from the span API, never from the render buffer's `char` array.**
+  For ASCII the two agree, but a wide character carries no codepoint in `char` — the
+  cell holds a packed marker, and only the *trailing* column carries the continuation
+  flag. Reading either column as a codepoint throws. OpenTUI's own span reader refuses
+  to read text from `char` for exactly this reason.
+- **Cell width is display width, not codepoint count** (`日本語ab` is 5 codepoints and
+  width 8). This is the one place the protocol can silently corrupt a frame while every
+  type still checks.
+
+**The production capture path is OpenTUI's public API, not its `/testing` export.**
+The obvious shortcut — building the host on `@opentui/core/testing`'s test renderer —
+puts a testing-scoped export of a pre-1.0 package under a production requirement. The
+public rebuild loses nothing: the intermediate-render call is public and paints, the
+CLI renderer accepts fake streams, and with memory-buffered output no feed is
+allocated, so the backpressure the harness appears to manage is moot rather than
+dropped. Two traps in that recipe: the CLI renderer resolves its size as
+`stdout.columns || config.width || 80`, so a fake stream's `columns` silently
+*overrides* the preview size it was asked for, and terminal setup puts stdin in raw
+mode, so the stream shim must implement `setRawMode`.
+
+**Preview cost is process spawn, not import.** One preview is one spawn at 44–52 ms,
+of which import and render are about 1 ms — spawn dominates by ~50×. Any
+preview design that optimizes import is optimizing 2% of the budget. Treat 45 ms as a
+*floor*: it was measured on a minimal probe binary without OpenTUI's native core
+aboard, so the robust claim is the ratio, not the absolute number.
 
 Protocol message sizes and queues are bounded. Preview delivery keeps at most the
 latest pending full frame; a newer frame replaces an undelivered older one. Resize,
@@ -878,6 +933,26 @@ proposal: changed/added/deleted page files plus `pages.json` edits. The gate run
 3. **Lints (warnings, not errors)** — dropped ids that selection or open pins
    currently reference, pointable raw elements without ids, timer/randomness use
    outside the export-flag guard, navigation to unlisted pages.
+
+**Three requirements on step 2's TypeScript check, each earned by a measured failure.**
+
+- **The diagnostic set must include global diagnostics, not just per-file and program
+  ones.** The natural union of the latter two omits the bucket where missing-lib errors
+  land: with `lib.es5.d.ts` deliberately broken, all four `Cannot find global type`
+  diagnostics arrived in the global bucket and zero anywhere else. A Gate built on the
+  natural union returns *clean* for a program that has no `Object` type — the exact
+  failure the wall exists to prevent.
+- **Diagnostics must be deduped on `(code, fileName, pos)`.** The union double-reports;
+  at least one code lands in both the program and global buckets.
+- **The Gate must distinguish "the compiler crashed" from "the page is clean."** Both
+  produce an empty diagnostic array. An unguarded `try`/`catch` around the check reads a
+  spawn failure as success, so a crash must be a typed Gate failure and never an apply.
+
+A related limit constrains how this can be tested at all: a broken lib link is
+**silent unless the page happens to use that lib**, so no fixture can prove the lib
+chain is complete. The only evidence that can is a build-time cross-check that every
+lib the compiler asks for is embedded — which is why that check ships with the build
+rather than the test suite.
 
 Errors → automatic retry: the errors are appended to the conversation and the agent
 continues in the same turn workspace only after the prior attempt's process tree is
