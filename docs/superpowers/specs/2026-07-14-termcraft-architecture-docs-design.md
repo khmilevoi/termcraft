@@ -13,6 +13,12 @@ normative specifications; they do not introduce a second product contract. When 
 detailed production-hardening design changes a boundary, the corresponding
 architecture walkthrough changes in the same documentation commit.
 
+`code-structure.md` is the one document that decides rather than summarizes, and it
+is a narrow exception in a different dimension: it owns the source-tree convention,
+which no product specification covers. It holds no product authority — every
+behavioral claim it makes cites a governing spec — and it is also the only document
+in the set addressed to a reader who reads the source language.
+
 ## 2. Governing decisions
 
 - **Scope:** production-grade local, single-user, single-process v1. Daemon,
@@ -58,6 +64,7 @@ docs/architecture/
   overview.md
   modules.md
   storage.md
+  code-structure.md
   flows/
     launch.md
     generation-turn.md
@@ -74,6 +81,7 @@ docs/architecture/
 | `overview.md` | actors, trust gate, local operating envelope, unique turn workspace, recovery before Workspace |
 | `modules.md` | Kernel authority, runtime/Gate/host ownership, Reatom boundaries, mutex and Git concurrency |
 | `storage.md` | portable/local split, slug and UUIDv7 identities, JSONL, transactions, lease, trust, caches, backups, exclusions |
+| `code-structure.md` | entity-first grouping, `entities/` versus consumer-declared ports, domain-free `infrastructure/`, composition root and the module DAG |
 | `launch.md` | lease, trust subject, schema validation, transaction recovery, first-project creation |
 | `generation-turn.md` | fenced attempts, confirmed exit, immutable candidate, Gate, CAS, durable `TurnTransaction` |
 | `versions.md` | canonical Current source, lazy first-parent Git history, explicit durable Restore, three commit scopes |
