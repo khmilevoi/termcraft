@@ -1,258 +1,230 @@
-# termcraft MVP — Session Handoff (2026-07-17)
+# termcraft MVP — Session Handoff (2026-07-17, rev 2 — phase 2A+2B)
 
-Purpose: hand the running MVP implementation to a fresh session with zero loss
-of context. Read this top to bottom, then read the two operative plan docs it
-points at. Everything here is already committed to `main` unless explicitly
-marked otherwise.
+Purpose: hand the running MVP implementation to a fresh session with zero loss of
+context. Read this top to bottom, then read the operative plan docs it points at.
 
-## 0. TL;DR for the next session
+## ⚠️ 0. READ FIRST — branch state
 
-- The MVP is being built in 9 phases. **Phase 0 is done and committed.
-  Phase 1 has its first slice committed and is still open.**
-- Operative sequencing: `docs/superpowers/plans/2026-07-17-termcraft-mvp-roadmap.md`.
-  Its **"Global constraints"** block is binding for every phase and every task —
-  read it before writing any code.
-- Green gates, run after every task: `bun test` and `bun x tsc --noEmit`
-  (both must be clean). Current state: **50 tests, 0 fail, tsc clean.**
-- Load the `/reatom` and `/errore` skills before touching code (CLAUDE.md
-  makes this mandatory for this repo).
-- Next concrete work: **write the phase-2 plan (design host) and build the
-  headless render harness**, then finish the phase-1 component catalog on top
-  of it. See §5.
+**All phase-2 work lives on branch `phase-2-host`, NOT on `main`.** `main` is still
+at `f867f3e` (phase 0 done + phase 1 started). The branch adds 15 commits
+(`68f5b33..c496159`): phase 2A (`host/protocol`), phase 2B (`host/render`), and
+their plan docs.
 
-## 1. What exists now (committed to `main`)
+- To resume: `git checkout phase-2-host`.
+- The branch is a clean linear descendant of `main`, so integrating is a trivial
+  fast-forward `git merge phase-2-host` from `main` whenever you decide to — nothing
+  else has moved on `main`.
+- The SDD progress ledger is `.superpowers/sdd/progress.md` (git-ignored scratch;
+  trust it + `git log` after any compaction).
 
-Commit chain (newest first), all on `main`, all with the Claude co-author trailer:
+## 1. TL;DR for the next session
 
-```
-b109386 feat: add runtime facade page contract — definePage + kit API identity
-f9c31e4 feat: add buffering frame decoder — fragmentation-tolerant, poisoning on violation
-4e7d9ca feat: add host-protocol frame encoder with §5 header layout and limits
-b8861b6 feat: add injectable clock infrastructure
-2f3fa10 feat: add uuidv7 infrastructure over Bun.randomUUIDv7
-e270727 feat: add turn entity — AgentEvent taxonomy and TurnFence
-987dc6e feat: add page entity — branded slug with mask + device-name validation
-5d84b7e plan: MVP roadmap + phase-0 plan, review-hardened
-3f280cb docs: land the MVP backend swap to Claude Code across spec and architecture
-```
+- The MVP is built in 9 phases (roadmap below). **Phase 0 done. Phase 1 started
+  (only `definePage`). Phase 2 is now decomposed into four sub-plans 2A–2D; 2A and
+  2B are DONE on the branch; 2C and 2D are the next work.**
+- Green gates, run after every task: `bun test` and `bun x tsc --noEmit` (both must
+  be clean). **Current state on `phase-2-host`: 133 tests, 0 fail, tsc clean,
+  `bun test` exits without hanging.**
+- Load the `/reatom` and `/errore` skills before touching code (CLAUDE.md mandate).
+- **Next concrete work: write + implement Plan 2C (the `_host` process entry +
+  Bun.plugin resolver + host-side protocol loop), then Plan 2D (HostSupervisor +
+  PreviewSession + frame broker).** After 2C/2D, the phase-1 component catalog is
+  finally unblocked (the render harness exists now). See §5.
 
-Source tree (`src/`) — every file has a colocated `*.test.ts` except pure
-`types.ts`/`index.ts`:
+## 2. What exists now
 
-```
-src/
-  entities/
-    page/     types.ts (PageSlug branded, Size, PageMeta) + model/slug.ts (parsePageSlug, InvalidPageSlugError)
-    turn/     types.ts (AgentEvent, AgentToolOp, TokenUsage, TurnFence)
-  infrastructure/
-    uuid/     model/uuidv7.ts (Bun.randomUUIDv7)
-    clock/    types.ts (Clock) + model/system-clock.ts (systemClock)
-    framing/  types.ts (MessageClass, WireFrame) + model/{constants,errors,encode,decoder}.ts
-  runtime/    types.ts (PageMeta, Size, ThemeId) + model/define-page.ts (definePage, CURRENT_KIT_API_VERSION)
-```
+### On `main` (unchanged this session)
+Phase 0 (entities + infrastructure) and the phase-1 `runtime/` `definePage` slice —
+see the git log. `entities/page`, `entities/turn`, `infrastructure/{uuid,clock,framing}`,
+`runtime/` (`definePage`, `CURRENT_KIT_API_VERSION`, `ThemeId`).
 
-### Phase 0 — DONE (entities + infrastructure)
+### On `phase-2-host` (this session) — phase 2A + 2B
 
-- `entities/page`: `parsePageSlug(raw) => InvalidPageSlugError | PageSlug`.
-  Branded `PageSlug`. Enforces the mask `^[a-z0-9][a-z0-9-]{0,31}$` and rejects
-  Windows device names (`con`,`nul`,`aux`,`prn`,`com1`–`com9`,`lpt1`–`lpt9`).
-  Note: `com0`/`lpt0` are NOT reserved; `console` passes (only `con` is).
-- `entities/turn`: the `AgentEvent` discriminated union (master spec §6.1
-  verbatim: `reasoning | tool | final | usage | error`), `AgentToolOp`,
-  `TokenUsage` (`contextPercent: number | null`), `TurnFence`
-  (`{turnId, attempt, leaseNonce}`).
-- `infrastructure/uuid`: `uuidv7()` over `Bun.randomUUIDv7` (monotonic → ids
-  sort in generation order; storage relies on this).
-- `infrastructure/clock`: injectable `Clock { now(): Date }` + `systemClock`.
-- `infrastructure/framing`: the host-protocol §5 outer-frame codec.
-  `encodeFrame(WireFrame) => FramingError | Uint8Array` and a `FrameDecoder`
-  push-parser: `feed(chunk) => FramingError | WireFrame[]`, buffers arbitrary
-  fragmentation, poisons permanently on any fatal condition.
+**Phase 2A — `src/host/protocol/` — DONE** (host-supervision §5/§5.1–5.3/§7.1). A
+pure, closed-schema JSON codec over the phase-0 byte framing:
+- `model/errors.ts` — `ProtocolError` (tagged, `code`+`reason`+`cause`),
+  `ProtocolViolationCode`.
+- `model/strict-json.ts` — `decodeUtf8` (fatal UTF-8), `parseStrictJson`
+  (`JSON.parse` + a strict scanner that rejects **duplicate keys**, **non-finite
+  numbers** incl. `1e999`→Infinity, and **unsafe-integer tokens** incl. exponent
+  form), `decodeJsonPayload`, `JsonValue`.
+- `model/shape.ts` — shape guards over `JsonValue | undefined` (`asObject`,
+  `asArray`, `asString`, `expectExactKeys`, `isPositiveSafeInteger`,
+  `isSortedUnique*`, `isBoundedAscii`, `isDecimalUint64String`, `isLowercaseHex`).
+- `model/bundle.ts` — `validateRuntimeDeclarationBundle`, `validatePublicLimits`,
+  `PROTOCOL_HARD_LIMITS`.
+- `model/hello.ts` — `encode/decodeClientHello`, `encode/decodeHostHello`.
+- `model/control-envelope.ts` — `encode/decodeControlEnvelope`.
+- `model/frame.ts` — `encode/decodeFrameEnvelope`, `FRAME_MAX_AXIS/CELLS/ATTR_MASK`.
+- `types.ts` — all DTO types; `host/types.ts` — `HostMode`, `InteractionMode`, `Size`;
+  `host/index.ts`.
 
-### Phase 1 — STARTED (first slice committed, phase NOT complete)
+**Phase 2B — `src/host/render/` — DONE** (host-supervision §5.3, Spikes B/D). The
+headless OpenTUI render harness on the **public** API:
+- `model/color.ts` — `rgbaToColor(RGBA): Color` (default/transparent→"default",
+  indexed→`{indexed}`, else→`{rgb:"#rrggbb"}`).
+- `model/attributes.ts` — `attributesToMask(number)`: explicit remap (OpenTUI
+  `INVERSE=32`→protocol bit 16, `STRIKETHROUGH=128`→bit 32, `getBaseAttributes`
+  strips link id) — **NOT** a naïve `& 0x3f`.
+- `model/span-rows.ts` — `styledRowsFromSpanLines(CapturedLine[]): StyledRun[][]`
+  (reuses 2A `StyledRun`/`Color`).
+- `model/streams.ts` — `makeHeadlessStreams(Size)` fake TTY (columns/rows outrank
+  config; `isTTY`/`setRawMode` load-bearing).
+- `model/renderer.ts` — `createHeadlessRenderer(Size): Promise<RenderHandle>` and
+  `renderNodeOnce(node, Size)` using `createCliRenderer` + `@opentui/react`
+  `createRoot` + `intermediateRender()`/`await idle()` + `getSpanLines()`.
+- `types.ts` — `CapturedFrame`, `RenderHandle`, `RenderSize`; `index.ts`.
 
-- `runtime/`: `definePage(meta) => PageMeta` (identity — the Gate reads the AST,
-  it never executes this) + `CURRENT_KIT_API_VERSION = 1`. The runtime `PageMeta`
-  is deliberately a separate type from `entities/page`'s `PageMeta` so the
-  facade leaks no internal module identity into authored pages (runtime-api
-  §3.3). `ThemeId = "dark-default"` (MVP: one theme).
+## 3. Phase-2 plan structure (operative)
 
-## 2. Where I stopped, and why (READ THIS)
+- `docs/superpowers/plans/2026-07-17-mvp-phase-2-host.md` — **master index**: scope,
+  module layout, the four sub-plans, sequencing, cross-slice interface registry,
+  out-of-scope. **Read this to understand how 2A–2D fit.**
+- `2026-07-17-mvp-phase-2a-protocol.md` — Plan 2A (DONE). Its code IS what shipped.
+- `2026-07-17-mvp-phase-2b-render.md` — Plan 2B (DONE). **Embeds the full, verified
+  OpenTUI headless-render recipe** (createCliRenderer config, fake-stream shim, RGBA
+  class API, attribute constants, mount path, traps). The single best OpenTUI
+  reference for 2C/2D and phase 1/7 — read its "OpenTUI recipe" section.
+- Plans 2C and 2D are **not yet written** — write them just-in-time per the master
+  index, following superpowers:writing-plans, then execute via
+  superpowers:subagent-driven-development.
 
-I stopped at a clean, committed boundary **inside phase 1**, after the
-`definePage` slice.
+## 4. Traps and facts learned THIS session (do not rediscover)
 
-**Why here and not further:** the rest of phase 1 — the component catalog
-(`Row`, `Column`, `Panel`, `Tabs`, `Text`, `Button`, `Input`, `List`, `Table`,
-`Gauge`, `Sparkline`, `Separator`, `Spacer`), the Reatom re-exports, the JSX
-helper surface, and the `dark-default` theme tokens — cannot be *verified*
-without a working OpenTUI render loop. The runtime-api spec's own testing
-strategy (§11.1) requires facade contract tests to compile representative pages
-through `@termcraft/runtime` and **render** them. That render harness is built
-in phase 2 (the design host). Writing the catalog blind, with no way to render
-and snapshot it, would be unverifiable code — exactly what to avoid.
+New this session (in addition to §8's carried-forward traps):
 
-So the correct order is: **build the phase-2 headless render harness first,
-then finish the phase-1 catalog against it.** This is a dependency reality, not
-a scope cut. The roadmap already lists Spike D as normative for phase 1 *and*
-phase 2 for this reason.
-
-**Task tracker state at handoff** (in-session TaskList; re-create if the new
-session has no task list): phase 0 completed, phase 1 in_progress, phases 2–8
-pending.
-
-## 3. Findings from the adversarial plan review (all resolved)
-
-A 4-lens review workflow (spec-coverage, code-rules, framing-contract,
-spike-fidelity) with skeptic verifiers ran against the roadmap + phase-0 plan.
-The session hit a usage limit during the verify stage, so a few verifiers
-errored — I verified those claims myself. Confirmed findings and their fixes,
-all already landed in the committed plans/code:
-
-1. **[BLOCKING] Zero-length frames were silently accepted.** Host-supervision
-   §5 (verbatim): *"Lengths of zero, unsupported framing versions, unknown
-   classes, and non-zero flags are fatal framing errors."* Every payload is
-   UTF-8 JSON; empty bytes can't be valid JSON. **Fixed:** `encodeFrame` returns
-   `FramingError` on an empty payload; `FrameDecoder` poisons on `N = 0`
-   (detected from the 4-byte length prefix alone, next to the ceiling check).
-   Tests inverted accordingly. This is done in the shipped code.
-2. **[important] Roadmap framing constraint omitted the four fatal §5
-   conditions + the no-resync rule.** **Fixed** in the roadmap's Global
-   constraints.
-3. **[important] Spike D's second finding was lost.** A Reatom+OpenTUI process
-   does **not** exit on its own after `renderer.destroy()` — a one-shot render
-   child (export session, smoke render, scripted-terminal test child) must call
-   `process.exit()` explicitly or it hangs; harmless for the long-lived
-   interactive kernel. **Fixed:** added to the roadmap's spike-earned rules and
-   the normative-sources table (phases 1/2/8). **The next session MUST honor
-   this when building any one-shot host in phase 2/8.**
-4. **[verified-by-me] Branded `PageSlug` test wouldn't typecheck.** bun's
-   `toBe(expected: T)` is strict (`expect("hello").toBe(3.14)` is a TS error).
-   `expect(parsePageSlug(raw)).toBe(raw)` fails because plain `string` isn't
-   assignable to the branded `PageSlug`. **Fixed:** the expected side is cast,
-   `toBe(raw as PageSlug)`. Confirmed compiling in the committed code.
-5. **[minor] §9 host-crash preview error panel** was unassigned. **Fixed:**
-   added to phase 7's UI inventory in the roadmap.
-6. **[cheap correctness]** The 120 s stream-silence watchdog + non-resettable
-   absolute deadline, and the `termcraft export` CLI entry point, were made
-   explicit in phases 5/6/8.
-
-Refuted (correctly, no change): "export package content not assigned to a
-phase" — the roadmap is explicitly *not* an executable task plan; the master
-spec is normative per phase via the normative-sources table.
-
-## 4. Traps and constraints the next session must not rediscover the hard way
-
-From the spikes (`docs/spikes/2026-07-17-findings.md`,
-`docs/spikes/2026-07-17-round-2-findings.md`) and from real tsc failures hit
-during phase 0. These are all in the roadmap's Global constraints, repeated
-here because they bite:
-
-- **TS is `typescript@7.0.2` — the native Go port.** No `ts.createProgram`, no
-  `CompilerHost`. The Gate (phase 3) is built on `typescript/unstable/sync`.
-  `Uint8Array` is now generic over its buffer (`Uint8Array<ArrayBufferLike>`),
-  so a reassigned byte buffer must be annotated as bare `Uint8Array` or tsc
-  errors `Uint8Array<ArrayBuffer>` vs `<ArrayBufferLike>` (hit in the decoder;
-  fixed by annotating the field). Watch for this everywhere bytes are handled.
-- **Gate diagnostics (phase 3):** union `getGlobalDiagnostics()` (missing-lib
-  errors land ONLY there), dedupe on `(code, fileName, pos)`, and distinguish
-  compiler-crash from clean (empty diag array from a crash must be a typed
-  failure, never an apply).
-- **tsc is extracted to a per-user dir and spawned** (`uv_spawn` can't run an
-  embedded `B:/~BUN/root/…` path); pin `lib: ["esnext"]`; per-platform builds.
-- **Host resolver registers THREE specifiers** (`@termcraft/runtime`,
-  `react/jsx-runtime`, `react/jsx-dev-runtime`) and **fails open** — so the
-  Gate's source-text import scan is the only enforcement of the allowlist.
-- **Respawn-per-source is a correctness requirement** — Bun's module cache is
-  stale and `?v=` busting doesn't work.
-- **Frame text from the span API (`captureSpans`/`getSpanLines`), never
-  `buffers.char`** (wide chars throw); width is display width; build the host
-  on the **public** OpenTUI API, not `@opentui/core/testing`; a fake stdout's
-  `columns` silently overrides the requested size; the stream shim must
-  implement `setRawMode`.
-- **`reatomComponent` is from `@reatom/react@1001.0.0`** (NOT `@reatom/core`).
-  Tests of `reatomComponent` trees under the test renderer MUST wrap Reatom
-  writes in `act()` from `'react'` or frames silently never change (Spike D).
-- **`process.execPath`** is the self-spawn path only inside the compiled binary;
-  under `bun run` it's the Bun CLI — dev mode must branch (Spike E).
-- **`SafeProjectFs` (phase 4):** escape check via `realpathSync` comparison;
-  junction/reparse detection needs the `GetFileAttributesW` +
-  `FILE_ATTRIBUTE_REPARSE_POINT` FFI backstop, not `isSymbolicLink()` alone
-  (Spike F). Real NTFS symlinks were untested (no elevated shell).
-- **Durability flush (phase 4):** `CreateFileW(FILE_FLAG_BACKUP_SEMANTICS,
-  GENERIC_WRITE)` + `FlushFileBuffers` — `GENERIC_WRITE` **alone**
-  (`GENERIC_READ` makes the flush fail `ERROR_ACCESS_DENIED`); ~19 ms per flush,
-  ~380 ms per 10-op transaction — budget for it (Spike G).
-- **Claude confinement (phase 5):** `canUseTool` deny-by-default callback,
-  verified under attack. **Codex is NOT in the MVP** (quota-blocked until
-  2026-07-23; re-verify then) — Claude Code only.
-- **Process-tree cancel (phase 5):** Job Object + `QueryInformationJobObject`
-  confirmation works for graceful `cancel()`; the **crash-recovery
-  confirmation path is an open gap** — MVP treats it as
-  `backend_unhealthy_unconfirmed_exit`. Do not pretend it's solved.
+- **`errore.try` takes an OPTIONS OBJECT `{ try, catch }`, not positional
+  `(fn, onError)`** in the installed `errore@0.14.1` (`tryFn<T,E>(opts)`; the `catch`
+  cb is typed `(e: Error)`). The skill's examples show the positional form — the
+  installed `.d.ts` wins. (Caught before implementation; the adversarial plan review
+  independently flagged it too.)
+- **`createTaggedError` template vars are typed `string | number`** and are passed +
+  read as instance properties; `cause` is an optional ctor arg
+  (`PropsWithCause`). Reserved var names cannot be template vars.
+- **`noUncheckedIndexedAccess` makes `obj.field` on a `{ [k]: JsonValue }` type
+  `JsonValue | undefined`** (dot access too, not just `obj[k]`). All 2A shape guards
+  accept `JsonValue | undefined` for this reason.
+- **Attribute masks: bitwise `(attrs & ~MASK)` is defeated by JS Int32 coercion** —
+  a safe integer ≥ 2³² whose low bits form a valid mask passes it. Use a numeric
+  bound (`attrs > MASK`). (Found by the 2A plan review.)
+- **Strict JSON must reject `1e999` (parses to `Infinity`) and exponent-form unsafe
+  integers (`1e20`)** — `JSON.parse` only rejects the bare `NaN`/`Infinity` literals.
+  (Found by the 2A final whole-branch review.)
+- **OpenTUI headless render works under `bun test` and does NOT hang** if every test
+  destroys its renderer (`afterEach`/`finally`). The Spike-D "process doesn't
+  self-exit" trap did not materialise in the test runner (no `process.exit` needed
+  in tests; the one-shot host entry in 2C still needs it).
+- **`.tsx` files need `/** @jsxImportSource @opentui/react */` as the first line** —
+  the repo has no `@types/react`, so `tsc` can't resolve `JSX.IntrinsicElements`
+  without the per-file pragma. Do NOT add `@types/react` or change tsconfig `jsx`;
+  the pragma keeps OpenTUI's own JSX types. **This will matter for phase 7 (ui)
+  too.**
+- **Production mount path (`createRoot(renderer).render`) needs NO `act()`** — Reatom
+  writes flush after a microtask tick. `act()` from `"react"` is required only under
+  the test renderer (`@opentui/react/test-utils`), which the harness avoids. Phase
+  6/7 model tests that DO use the test renderer still need `act()` (Spike D).
+- **Bun's `node:stream` `Writable` defers the write callback to `process.nextTick`**
+  — a synchronous "callback was called" assertion fails; await it.
 
 ## 5. Concrete next steps (in order)
 
-1. **Write the phase-2 plan** (`docs/superpowers/plans/2026-07-17-mvp-phase-2-host.md`)
-   per the writing-plans skill, normative sources: the whole
-   `2026-07-16-host-supervision-protocol-design.md` + Spikes A/B/D/E. It covers:
-   the `termcraft _host` entry, the `Bun.plugin` resolver for the three
-   specifiers, a headless renderer on the **public** OpenTUI API (fake streams,
-   `bufferedOutput: "memory"`), span-based styled frame capture, protocol v1
-   (handshake binding `sessionId`/nonce/`sourceHash`/`kitApiVersion`/limits;
-   heartbeat; frames with monotonic `frameSeq`; queries `checkHit`/`rectOf`/
-   `describe`/`layoutTree`), `HostSupervisor` (timeouts, restart budget,
-   backoff, circuit breaker, respawn-per-source), `PreviewSession`
-   (latest-frame-wins), and the one-shot export session (`renderOnce` at t=0,
-   **explicit `process.exit()`** per Spike D). The framing codec from phase 0
-   (`src/infrastructure/framing`) is the wire layer — reuse it, don't reinvent.
-2. **Build a minimal headless render harness** as part of phase 2 (or its first
-   task) so a page can be mounted and its frame captured. This is what unblocks
-   phase 1.
-3. **Finish phase 1 on that harness:** the component catalog (each visible
-   component takes a mandatory stable `id` prop, wraps an OpenTUI renderable —
-   the intrinsics are lowercase: `box`, `text`, `input`, `select`, `scrollbox`,
-   `span`, `tab-select`, …), the low-level primitive escape hatch, the Reatom
-   re-exports (`atom`, `computed`, `action`, `wrap`, `withAsync`,
-   `withAsyncData`, `withComputed`, `withAbort`, `withConnectHook`,
-   `reatomComponent`), the JSX helper surface (positional `key`; `jsx`/`jsxs`
-   share `(type, props, key)`; `jsxs` is production-only, dev emits `jsxDEV`;
-   `Fragment` is an exported value), the dormant `usePages().goTo` /
-   `useTweak` / `defineTweaks` APIs, and the `dark-default` theme tokens
-   (`background surface text text-muted text-faint border primary accent
-   selection ok error` — palette in `design/*.dc.html`; warm dark, bg `#0a0908`,
-   surface `#14110d`, primary-gold `#f6c163`; pin exact token→hex against the
-   design frames with the render harness).
+1. **Write + implement Plan 2C** (`2026-07-17-mvp-phase-2c-session.md`) — the
+   `host/session/` slice: `termcraft _host --stdio` entry; the `Bun.plugin` resolver
+   registering **three** specifiers (`@termcraft/runtime`, `react/jsx-runtime`,
+   `react/jsx-dev-runtime`, fails open — Spike A); source-hash recompute + import
+   rescan at mount; the host-side protocol state machine (hello→mount→ready→frames→
+   queries→heartbeat→shutdown) built on 2A's codec + 2B's harness; the one-shot
+   export/smoke path with **explicit `process.exit()`** (Spike D). `process.execPath`
+   self-spawn is correct only in the compiled binary — dev mode must branch (Spike E).
+   Normative: host-supervision §6, §7, §11 + runtime-api §3.1 + Spikes A/E.
+2. **Write + implement Plan 2D** (`2026-07-17-mvp-phase-2d-supervisor.md`) — the
+   `host/supervisor/` slice: `HostSupervisor` (spawn, negotiate, timeouts §9, restart
+   budget/backoff/circuit-breaker §10, bounded queues/backpressure §8, respawn-per-
+   source), the typed `HostSession` handle, `PreviewSession` facade + capacity-1 frame
+   broker (§3.2, §4), one-shot smoke/export sessions. Declare `PreviewSession`/
+   `FrameToken`/`SmokeRenderer`-slice contracts in `host/`'s own `types.ts` (phase 6
+   lifts them into `core/ports/`). Normative: host-supervision §3, §4, §8–§10, §12, §13.
+3. **Finish phase 1** (`runtime/`) on the now-existing render harness — the component
+   catalog (`Row`,`Column`,`Panel`,`Tabs`,`Text`,`Button`,`Input`,`List`,`Table`,
+   `Gauge`,`Sparkline`,`Separator`,`Spacer`) with mandatory `id`, the low-level
+   primitive escape hatch, the Reatom re-exports, the JSX helper surface
+   (`jsx`/`jsxs`/`jsxDEV`, positional `key`, `Fragment` value), dormant
+   navigation/tweaks APIs, and the `dark-default` theme tokens — snapshot-tested via
+   `host/render`. Normative: runtime-api spec (whole), master §5, Spike D. (Handoff
+   rev 1 §5.3 has the token palette detail.)
 4. Then phases 3→8 per the roadmap.
 
-## 6. Operative documents (read in this order)
+## 6. Open items / gaps to close
 
-1. `docs/superpowers/plans/2026-07-17-termcraft-mvp-roadmap.md` — phases,
-   Global constraints, normative-sources table, cross-phase interface registry,
-   out-of-scope list.
-2. `docs/superpowers/plans/2026-07-17-mvp-phase-0-scaffold.md` — the completed
-   phase-0 plan (reference for the TDD cadence and file-shape conventions).
-3. `docs/superpowers/specs/2026-07-13-termcraft-design.md` — master spec.
-4. The six `2026-07-16-*-design.md` detailed specs (host, kernel, storage,
-   durability, runtime-api, projections) — normative per phase.
-5. `docs/spikes/2026-07-17-findings.md` and `-round-2-findings.md` — the
-   spike evidence behind every "trap" in §4.
-6. `CLAUDE.md` (repo) — module folder shape, mandatory `/reatom` + `/errore`.
-7. Memory: `termcraft-pending-design-fixes` carries the standing design
-   decisions and a mirror of this implementation-status note.
+- **Plan 2B has NOT had an independent final whole-branch review** (2A did — it
+  caught the non-finite-JSON bug). Consider a `/code-review`-style pass on
+  `host/render` before or after merging.
+- **The branch is not merged to `main`.** Decide merge timing (trivial ff).
+- **No `process.exit()` path is exercised yet** — it lands with 2C's one-shot host.
+- The `@opentui/core` version is pinned exact (0.4.5); the render harness reaches
+  into `currentRenderBuffer`/`getSpanLines`/`intermediateRender`/`idle` — gate any
+  OpenTUI upgrade on the `host/render` integration tests.
 
-## 7. Working conventions in force
+## 7. Operative documents (read in this order)
 
-- TDD: write the failing test, run it red, implement, run green, then
-  `bun x tsc --noEmit`, then commit. One entity/capability per commit.
-- Module folder shape (CLAUDE.md): code in `model/` (or `ui/`) subfolders,
-  `types.ts` + `index.ts` at the module root; nothing loose at the root.
-- Module DAG (code-structure.md): `core` imports only `entities/` + its own
-  `ports/`; adapters implement ports; `ui` sees only core boundary types +
-  `PreviewSession`; `runtime/` is a leaf (imports NO termcraft module, which is
-  why runtime redefines `PageMeta` rather than importing `entities/page`);
-  `infrastructure/` is domain-free.
-- errore everywhere: namespace import, errors as values, tagged errors,
-  one-line `instanceof Error` early returns, no silent swallows.
-- Commit-message language and all docs/comments in English; chat replies to the
-  user in Russian.
+1. `2026-07-17-mvp-phase-2-host.md` — phase-2 master index (the map for 2C/2D).
+2. `2026-07-17-mvp-phase-2b-render.md` — its embedded OpenTUI recipe is the reference.
+3. `2026-07-17-termcraft-mvp-roadmap.md` — phases, **Global constraints** (binding),
+   normative-sources table, cross-phase interface registry, out-of-scope.
+4. `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` — the whole
+   host contract; §6/§7/§8/§9/§10/§11/§12/§13 are what 2C/2D implement.
+5. `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — §3.1
+   resolver, §7 handshake/identity.
+6. `docs/superpowers/specs/2026-07-13-termcraft-design.md` — master spec.
+7. `docs/spikes/2026-07-17-findings.md` + `-round-2-findings.md` — spike evidence.
+8. `CLAUDE.md` (repo) — module folder shape, mandatory `/reatom` + `/errore`.
+9. Memory: `termcraft-pending-design-fixes` (standing design decisions + status mirror).
+
+## 8. Traps carried forward (from rev 1, still valid for phases 3–8)
+
+- **TS is `typescript@7.0.2` (native Go port).** No `ts.createProgram`; the Gate
+  (phase 3) uses `typescript/unstable/sync`. `Uint8Array` is generic over its buffer
+  — annotate a reassigned byte buffer as bare `Uint8Array`.
+- **Gate diagnostics (phase 3):** union `getGlobalDiagnostics()`, dedupe on
+  `(code, fileName, pos)`, distinguish compiler-crash from clean (Spike C).
+- **tsc is extracted per-user + spawned** (`uv_spawn` can't run an embedded
+  `B:/~BUN/root/…` path); pin `lib: ["esnext"]`; per-platform builds (Spike C).
+- **Host resolver registers THREE specifiers and fails open** — the Gate's
+  source-text import scan is the only allowlist enforcement (Spike A).
+- **Respawn-per-source is a correctness requirement** — Bun's module cache is stale;
+  `?v=` busting fails (Spike A).
+- **`reatomComponent` is from `@reatom/react@1001.0.0`**; test-renderer trees need
+  `act()` from `'react'` (Spike D).
+- **`SafeProjectFs` (phase 4):** `realpathSync` escape check + `GetFileAttributesW` +
+  `FILE_ATTRIBUTE_REPARSE_POINT` FFI backstop (Spike F).
+- **Durability flush (phase 4):** `CreateFileW(FILE_FLAG_BACKUP_SEMANTICS,
+  GENERIC_WRITE)` + `FlushFileBuffers` — `GENERIC_WRITE` alone; ~19 ms/flush,
+  ~380 ms/10-op tx (Spike G).
+- **Claude confinement (phase 5):** `canUseTool` deny-by-default. **Codex is NOT in
+  the MVP** (quota-blocked until 2026-07-23; re-verify then).
+- **Process-tree cancel (phase 5):** Job Object + `QueryInformationJobObject` for
+  graceful cancel; crash-recovery confirmation is an **open gap** →
+  `backend_unhealthy_unconfirmed_exit`.
+
+## 9. Working conventions in force
+
+- **Work is on branch `phase-2-host`** — `git checkout phase-2-host` to resume.
+- TDD: failing test → red → implement → green → `bun x tsc --noEmit` → commit. One
+  capability per commit. Commit trailer: `Co-Authored-By: Claude Opus 4.8
+  <noreply@anthropic.com>` (this session's model; earlier commits used Fable 5).
+- Module folder shape (CLAUDE.md): code in `model/` (or `ui/`), `types.ts` + `index.ts`
+  at module root; nothing loose at the root. `host/` submodules: `protocol/`, `render/`,
+  and (next) `session/`, `supervisor/`.
+- Module DAG (code-structure.md): `host` imports `infrastructure/`, resolves `runtime/`,
+  implements `core`/`gate` ports (declared in `host/`'s own `types.ts` until those
+  modules exist); `host` imports no other module.
+- errore everywhere: namespace import, errors as values, tagged errors, one-line
+  `instanceof Error` early returns, `.catch`/`errore.try({try,catch})` only at
+  boundaries, no silent swallows.
+- Execution pattern that worked this session: write plan → adversarial multi-lens
+  review workflow → implement via a fresh subagent (its context is independent of the
+  controller's) → controller runs the green gates itself → final whole-branch review
+  subagent → apply fixes. The plan docs carry complete code; subagents transcribe +
+  test + commit.
+- Commit-message language + all docs/comments in English; chat replies to the user in
+  Russian.
