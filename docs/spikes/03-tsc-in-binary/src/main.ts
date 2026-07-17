@@ -55,8 +55,10 @@ const isEmbedded = (p: string) => p.startsWith("B:/~BUN/") || p.startsWith("/$bu
  *     is missing. That check is a real os.Stat in another process — a JS virtual FS
  *     cannot answer it. So the lib files must sit on disk next to the exe too.
  *
- * Cached by version + exe size + presence of the last lib written, so a half-cleaned
- * temp dir re-extracts instead of reproducing the noembed panic.
+ * Cached by version + exe size + presence of every one of the 88 libs, so a half-cleaned
+ * temp dir re-extracts instead of reproducing the noembed panic. That completeness check
+ * costs ~91 syscalls per run instead of 3 (see FINDINGS: warm compilerExtractMs went from
+ * ~0.7ms to ~3-8ms because of it) — trivial against a ~170ms check, but not free.
  */
 function materializeCompiler(): { exe: string; extracted: boolean } {
   if (!isEmbedded(tscExePath)) return { exe: tscExePath, extracted: false }
@@ -96,8 +98,11 @@ const tsconfig = JSON.stringify({
     module: "esnext",
     moduleResolution: "bundler",
     // Pins the lib set to the chain we embedded. Without this the default for
-    // target:esnext is lib.esnext.full.d.ts, which drags in lib.dom.d.ts (2.3 MB)
-    // and lib.webworker.d.ts (0.8 MB) — neither embedded, and neither wanted in a TUI.
+    // target:esnext is lib.esnext.full.d.ts, which references six libs: esnext (kept)
+    // plus dom, scripthost, webworker.importscripts, dom.iterable and dom.asynciterable
+    // — 2,361,763 B (~2.25 MiB) that is neither embedded here nor wanted in a TUI, where
+    // `document` should not exist. (Their own refs, es2015 and es2018.asynciterable, are
+    // already in the esnext chain, so nothing further would be pulled in.)
     lib: ["esnext"],
     types: [],
     skipLibCheck: true,
@@ -112,6 +117,16 @@ const fsHits: Record<string, number> = {}
 const bump = (k: string) => {
   fsHits[k] = (fsHits[k] ?? 0) + 1
 }
+
+/**
+ * DISTINCT lib basenames the compiler asked for. This is the cross-check that proves the
+ * embedded chain is complete, so it must count names, not calls: a counter would report
+ * the same 87 whether the compiler asked for 87 different libs or one lib 87 times.
+ * No fixture can prove completeness (a broken link is silent unless the page uses that
+ * lib), which is what makes this the load-bearing evidence.
+ */
+const libsAsked = new Set<string>()
+const LIB_RE = /^lib\..*\.d\.ts$/
 
 /**
  * The virtual filesystem — the TS7 replacement for a custom CompilerHost.
@@ -142,15 +157,16 @@ const brokenLib = breakArg !== -1 ? argv[breakArg + 1] : undefined
 const virtualFs = {
   readFile(fileName: string): string | null | undefined {
     bump("readFile")
-    if (brokenLib && path.basename(fileName) === brokenLib) return null
+    const base = path.basename(fileName)
+    // Recorded before any branching and independently of --vfs-libs, so the cross-check
+    // measures what the compiler ASKED for, not what this probe chose to answer with.
+    if (LIB_RE.test(base)) libsAsked.add(base)
+    if (brokenLib && base === brokenLib) return null
     if (fileName === tsconfigPath) return tsconfig
     if (fileName === runtimeDts) return readEmbedded(runtimeDtsPath)
-    if (SERVE_LIBS_OVER_VFS) {
-      const base = path.basename(fileName)
-      if (embeddedLibs[base]) {
-        bump("readFile:lib")
-        return readEmbedded(embeddedLibs[base]!)
-      }
+    if (SERVE_LIBS_OVER_VFS && embeddedLibs[base]) {
+      bump("readFile:lib")
+      return readEmbedded(embeddedLibs[base]!)
     }
     return undefined // libs, the page itself, and anything else come from the real disk
   },
@@ -257,6 +273,20 @@ if (has("--timed")) {
   )
 }
 
-if (has("--trace-fs")) console.error(JSON.stringify({ fsCallbackHits: fsHits }))
+if (has("--trace-fs")) {
+  const embedded = Object.keys(embeddedLibs)
+  const asked = [...libsAsked].sort()
+  console.error(
+    JSON.stringify({
+      fsCallbackHits: fsHits,
+      // The completeness cross-check: distinct lib names asked for vs embedded.
+      distinctLibsAsked: asked.length,
+      embeddedLibCount: embedded.length,
+      askedButNotEmbedded: asked.filter((n) => !embeddedLibs[n]), // must be empty
+      embeddedButNeverAsked: embedded.filter((n) => !libsAsked.has(n)),
+    }),
+  )
+}
+if (has("--list-libs-asked")) console.error(JSON.stringify([...libsAsked].sort(), null, 2))
 
 api.close()

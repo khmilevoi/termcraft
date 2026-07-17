@@ -86,14 +86,18 @@ marshalled over RPC versus `undefined`:
 
 ```
 $ ./probe.exe pages/foo/good.tsx --trace-fs
-{"fsCallbackHits":{"readFile":90,"fileExists":28}}
+{"fsCallbackHits":{"readFile":90,"fileExists":25},"distinctLibsAsked":87,"embeddedLibCount":88,"askedButNotEmbedded":[],"embeddedButNeverAsked":["lib.d.ts"]}
 
 $ ./probe.exe pages/foo/good.tsx --vfs-libs --trace-fs
-{"fsCallbackHits":{"readFile":90,"fileExists":26,"readFile:lib":87}}
+{"fsCallbackHits":{"readFile":90,"fileExists":27,"readFile:lib":87},"distinctLibsAsked":87,"embeddedLibCount":88,"askedButNotEmbedded":[],"embeddedButNeverAsked":["lib.d.ts"]}
 ```
 
 `readFile` fires 90 times either way; `readFile:lib` shows 87 of those were libs the VFS
-answered with content. The measured cost is within noise:
+answered with content, and it appears *only* in the `--vfs-libs` run. This is the
+mechanism, stated precisely: `dist/api/fs.d.ts` documents `undefined` as "fall back to the
+real filesystem" — so the callback is invoked either way and the fallback happens *after*
+it returns. Dropping the lib branch changes the **return value**, not the **fact of the
+call**. The measured cost is within noise:
 
 ```
 $ for i in 1 2 3; do ./probe.exe pages/foo/good.tsx --timed; done             # default
@@ -122,7 +126,9 @@ options diagnostics). **Missing-lib errors land there and nowhere else** — whi
 say, in exactly the failure mode this spike exists to detect.
 
 Hiding `lib.es5.d.ts` from the compiler (`--break-lib` makes the VFS return `null` =
-"does not exist, do not fall back"), with each diagnostic labelled by its bucket:
+"does not exist, do not fall back"), with each diagnostic labelled by its bucket
+(**reformatted**: the probe prints `JSON.stringify(…, null, 2)`, so each object is
+pretty-printed across six lines; collapsed to one line per diagnostic for reading):
 
 ```
 $ ./probe.exe pages/foo/good.tsx --break-lib lib.es5.d.ts --buckets
@@ -150,12 +156,16 @@ verdict is unaffected because the `libcheck.tsx` control below independently pro
 libs do load.
 
 **Known wrinkle for Task 4:** the union can double-report. A missing file surfaces in two
-buckets at once, so the Gate should dedupe on `(code, fileName, pos)`:
+buckets at once, so the Gate should dedupe on `(code, fileName, pos)`. Filtered to the two
+fields that make the point — the full objects also carry the identical `message` and
+`related`:
 
 ```
-$ ./probe.exe pages/foo/DOES_NOT_EXIST.tsx --buckets
-    "code": 6053,   "bucket": "program"
-    "code": 6053,   "bucket": "global"
+$ ./probe.exe pages/foo/DOES_NOT_EXIST.tsx --buckets | grep -E '"code"|"bucket"'
+    "code": 6053,
+    "bucket": "program"
+    "code": 6053,
+    "bucket": "global"
 ```
 
 ## Resolved version (verbatim from `bun.lock`)
@@ -232,7 +242,9 @@ $ ./probe.exe fixture/bad.tsx
 `node_modules` sitting next to the probe would mask a silent fallback to the real
 compiler installation, which is the "checker that never ran" trap in another guise. So
 the binary was copied to a directory containing nothing but itself and the `.tsx` files,
-and the extraction cache was deleted first:
+and the extraction cache was deleted first. The listing below is the state for this run;
+the control fixtures (`libcheck.tsx`, `missingid.tsx`, `iter.tsx`) were added to the same
+`pages/foo/` for the sections that follow, and no other file ever existed there:
 
 ```
 $ find . -type f | sort
@@ -390,14 +402,26 @@ warm wall-clock min/max   : 128.4 / 177.9
 An earlier, quieter sample of the same build gave 136.5 / 126.8 / 125.1 ms — so ~130 ms
 is achievable and ~170 ms is what contention looks like.
 
+Note `compilerExtractMs` on a **warm** run is 3.5–8 ms here, up from 0.6–0.8 ms in the
+first revision of this probe. That is a regression this spike introduced, not a property
+of the design: hardening the extraction cache to check that all 88 libs are present
+(rather than just the exe) turned a 3-syscall validation into ~91. It is worth ~3–7 ms
+against a ~170 ms check, and it buys immunity from the `noembed` panic a half-cleaned
+temp dir would otherwise cause. Task 4 could get both by stamping a marker file after a
+complete extraction and checking only that.
+
 Startup overhead is **79–254 ms cold** and **72–110 ms warm** — overlapping, as it should
 be. (A previous revision of this document reported cold startup as *lower* than warm,
 which is impossible; that artifact came from subtracting a `--timed` figure from a
 *different process's* wall-clock. Both numbers now come from the same process.)
 
-**Antivirus is partially measured, not merely suspected.** Cold `checkMs` is 114–168 ms
-against a warm ~47–71 ms — a ~2–3× penalty on the first execution of a freshly written
-24.5 MB exe, which is what a Defender first-run scan looks like. It decays immediately.
+**The first execution of a freshly written exe costs ~2–3×, cause not isolated.** Cold
+`checkMs` is 114–168 ms against a warm ~47–71 ms, and the penalty decays after one run.
+A Defender first-run scan would produce exactly this shape — but so would a cold file
+cache and paging in a 24.5 MB image that was written seconds earlier, and this spike did
+not separate them (no run with exclusions configured, no run with the scanner disabled).
+What is measured is the gap; the attribution is a hypothesis. Concern #3 treats it that
+way.
 
 ### What it composes to across a turn
 
@@ -450,20 +474,62 @@ looked plausibly fast. Only the flip assertion caught it.
 those directives transitively over the *installed* platform package and emits one Bun
 file-import per file (`src/libs.generated.ts`).
 
-**Cross-checked against runtime.** Instrumenting the virtual FS showed the Go compiler
-asking for exactly **87** `lib.*.d.ts` files — the same 87 the static walk produced. As
-established above, no fixture can prove the chain complete, so this cross-check is the
-evidence. The 88th is `lib.d.ts`, which the chain does *not* reference; it is the startup
-sentinel the Go binary stats to decide whether it has been misplaced.
+**Cross-checked against runtime.** Since no fixture can prove the chain complete, this
+cross-check is the evidence — so it counts **distinct lib names**, not callback
+invocations. (A call counter would report the same 87 whether the compiler asked for 87
+different libs or one lib 87 times. An earlier revision of this document leaned on a call
+counter while claiming name-level completeness; `src/main.ts` now records a `Set` of
+basenames before any branching, independently of `--vfs-libs`.)
+
+```
+$ ./probe.exe pages/foo/good.tsx --trace-fs
+{"fsCallbackHits":{"readFile":90,"fileExists":25},"distinctLibsAsked":87,"embeddedLibCount":88,"askedButNotEmbedded":[],"embeddedButNeverAsked":["lib.d.ts"]}
+
+$ ./probe.exe pages/foo/good.tsx --vfs-libs --trace-fs
+{"fsCallbackHits":{"readFile":90,"fileExists":27,"readFile:lib":87},"distinctLibsAsked":87,"embeddedLibCount":88,"askedButNotEmbedded":[],"embeddedButNeverAsked":["lib.d.ts"]}
+```
+
+The check is now falsifiable in both directions, and it passes:
+
+- `distinctLibsAsked: 87` — the compiler asked for 87 *different* libs, matching the
+  static walk exactly.
+- `askedButNotEmbedded: []` — **this is the completeness proof.** Nothing the compiler
+  wanted was missing from the embedded set.
+- `embeddedButNeverAsked: ["lib.d.ts"]` — and this independently confirms the sentinel
+  story: `lib.d.ts` is the one embedded file the compiler never *reads*. It only `stat`s
+  it at startup to decide whether it has been misplaced.
+
+The arithmetic closes too: 87 distinct lib reads + the tsconfig + the runtime `.d.ts` +
+the page = the 90 `readFile` calls.
 
 **Why `lib: ["esnext"]` is pinned.** The default lib for `target: esnext` is
-`lib.esnext.full.d.ts`, which pulls in `lib.dom.d.ts` (2.3 MB),
-`lib.webworker.importscripts.d.ts` and `lib.scripthost.d.ts`. Pinning to `["esnext"]`
-keeps the chain at the 87 files above and keeps ~3.1 MB of browser typings out of the
-binary — and out of a TUI's global scope, where `document` should not exist. (`lib.d.ts`
-itself is *not* the esnext default; it is the ES5 one, and it is embedded here purely as
-the startup sentinel. Its own chain — es5/dom/webworker/scripthost — is deliberately not
-followed.)
+`lib.esnext.full.d.ts`, which references six libs: `esnext` (which we keep) plus `dom`,
+`scripthost`, `webworker.importscripts`, `dom.iterable` and `dom.asynciterable`. Pinning
+to `["esnext"]` keeps the chain at the 87 files above and keeps those five out of the
+binary — **2,361,763 B (~2.25 MiB)**:
+
+| excluded by the pin | bytes |
+|---|---|
+| `lib.dom.d.ts` | 2,349,483 |
+| `lib.scripthost.d.ts` | 9,412 |
+| `lib.webworker.importscripts.d.ts` | 1,002 |
+| `lib.dom.iterable.d.ts` | 933 |
+| `lib.dom.asynciterable.d.ts` | 933 |
+| **total** | **2,361,763** |
+
+Their own references (`es2015`, `es2018.asynciterable`) are already in the esnext chain,
+so nothing further would be pulled in. The size is the smaller reason; the real one is
+that `document` should not exist in a TUI's global scope.
+
+(A previous revision of this document put this at "~3.1 MB" and named
+`lib.webworker.d.ts` (787,076 B). That file is **not** in the chain at all — the
+referenced one is `lib.webworker.importscripts.d.ts`, three orders of magnitude smaller —
+and `dom.iterable`/`dom.asynciterable` were missing from the list. The decision is
+unchanged; the number was simply wrong.)
+
+(`lib.d.ts` itself is *not* the esnext default; it is the ES5 one, and it is embedded here
+purely as the startup sentinel. Its own chain — es5/dom/webworker.importscripts/scripthost
+— is deliberately not followed.)
 
 Chain from `lib.esnext.d.ts` (87 files, 621,294 bytes), in dependency order:
 
@@ -651,8 +717,10 @@ const isEmbedded = (p: string) => p.startsWith("B:/~BUN/") || p.startsWith("/$bu
  *     is missing. That check is a real os.Stat in another process — a JS virtual FS
  *     cannot answer it. So the lib files must sit on disk next to the exe too.
  *
- * Cached by version + exe size + presence of the last lib written, so a half-cleaned
- * temp dir re-extracts instead of reproducing the noembed panic.
+ * Cached by version + exe size + presence of every one of the 88 libs, so a half-cleaned
+ * temp dir re-extracts instead of reproducing the noembed panic. That completeness check
+ * costs ~91 syscalls per run instead of 3 (see FINDINGS: warm compilerExtractMs went from
+ * ~0.7ms to ~3-8ms because of it) — trivial against a ~170ms check, but not free.
  */
 function materializeCompiler(): { exe: string; extracted: boolean } {
   if (!isEmbedded(tscExePath)) return { exe: tscExePath, extracted: false }
@@ -692,8 +760,11 @@ const tsconfig = JSON.stringify({
     module: "esnext",
     moduleResolution: "bundler",
     // Pins the lib set to the chain we embedded. Without this the default for
-    // target:esnext is lib.esnext.full.d.ts, which drags in lib.dom.d.ts (2.3 MB)
-    // and lib.webworker.d.ts (0.8 MB) — neither embedded, and neither wanted in a TUI.
+    // target:esnext is lib.esnext.full.d.ts, which references six libs: esnext (kept)
+    // plus dom, scripthost, webworker.importscripts, dom.iterable and dom.asynciterable
+    // — 2,361,763 B (~2.25 MiB) that is neither embedded here nor wanted in a TUI, where
+    // `document` should not exist. (Their own refs, es2015 and es2018.asynciterable, are
+    // already in the esnext chain, so nothing further would be pulled in.)
     lib: ["esnext"],
     types: [],
     skipLibCheck: true,
@@ -708,6 +779,16 @@ const fsHits: Record<string, number> = {}
 const bump = (k: string) => {
   fsHits[k] = (fsHits[k] ?? 0) + 1
 }
+
+/**
+ * DISTINCT lib basenames the compiler asked for. This is the cross-check that proves the
+ * embedded chain is complete, so it must count names, not calls: a counter would report
+ * the same 87 whether the compiler asked for 87 different libs or one lib 87 times.
+ * No fixture can prove completeness (a broken link is silent unless the page uses that
+ * lib), which is what makes this the load-bearing evidence.
+ */
+const libsAsked = new Set<string>()
+const LIB_RE = /^lib\..*\.d\.ts$/
 
 /**
  * The virtual filesystem — the TS7 replacement for a custom CompilerHost.
@@ -738,15 +819,16 @@ const brokenLib = breakArg !== -1 ? argv[breakArg + 1] : undefined
 const virtualFs = {
   readFile(fileName: string): string | null | undefined {
     bump("readFile")
-    if (brokenLib && path.basename(fileName) === brokenLib) return null
+    const base = path.basename(fileName)
+    // Recorded before any branching and independently of --vfs-libs, so the cross-check
+    // measures what the compiler ASKED for, not what this probe chose to answer with.
+    if (LIB_RE.test(base)) libsAsked.add(base)
+    if (brokenLib && base === brokenLib) return null
     if (fileName === tsconfigPath) return tsconfig
     if (fileName === runtimeDts) return readEmbedded(runtimeDtsPath)
-    if (SERVE_LIBS_OVER_VFS) {
-      const base = path.basename(fileName)
-      if (embeddedLibs[base]) {
-        bump("readFile:lib")
-        return readEmbedded(embeddedLibs[base]!)
-      }
+    if (SERVE_LIBS_OVER_VFS && embeddedLibs[base]) {
+      bump("readFile:lib")
+      return readEmbedded(embeddedLibs[base]!)
     }
     return undefined // libs, the page itself, and anything else come from the real disk
   },
@@ -853,7 +935,21 @@ if (has("--timed")) {
   )
 }
 
-if (has("--trace-fs")) console.error(JSON.stringify({ fsCallbackHits: fsHits }))
+if (has("--trace-fs")) {
+  const embedded = Object.keys(embeddedLibs)
+  const asked = [...libsAsked].sort()
+  console.error(
+    JSON.stringify({
+      fsCallbackHits: fsHits,
+      // The completeness cross-check: distinct lib names asked for vs embedded.
+      distinctLibsAsked: asked.length,
+      embeddedLibCount: embedded.length,
+      askedButNotEmbedded: asked.filter((n) => !embeddedLibs[n]), // must be empty
+      embeddedButNeverAsked: embedded.filter((n) => !libsAsked.has(n)),
+    }),
+  )
+}
+if (has("--list-libs-asked")) console.error(JSON.stringify([...libsAsked].sort(), null, 2))
 
 api.close()
 ```
@@ -885,9 +981,12 @@ export const embeddedLibs: Record<string, string> = { "lib.es5.d.ts": lib_es5, /
 3. **The binary writes 24.5 MB to `%TEMP%` on first run.** Consequences worth a decision:
    the temp dir may be cleaned between runs (re-paying ~170 ms), locked-down environments
    may forbid executing from `%TEMP%`, and `probe.exe` is 124 MB on disk because the
-   compiler is embedded *and* then extracted. Antivirus is no longer merely suspected: the
-   cold-vs-warm `checkMs` gap (114–168 ms vs 47–71 ms) is a ~2–3× first-execution penalty
-   consistent with a Defender scan of the freshly written exe. It decays after one run.
+   compiler is embedded *and* then extracted. There is a measured ~2–3× penalty on the
+   first execution (cold `checkMs` 114–168 ms vs warm 47–71 ms) that decays after one run;
+   antivirus is a plausible cause but was **not isolated** — a cold file cache and paging
+   in a freshly written 24.5 MB image predict the same gap. If Task 4 cares, the
+   discriminating experiment is one run with a `%TEMP%` exclusion configured. Quarantine
+   of a freshly written exe remains entirely unmeasured, and is the real tail risk here.
 
 4. **The check runs in a child process, so the Gate must handle it crashing.** The
    `noembed` panic above is exactly what a corrupted or half-extracted cache produces. This
