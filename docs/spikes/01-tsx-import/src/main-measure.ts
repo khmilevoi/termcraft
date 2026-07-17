@@ -64,12 +64,33 @@ try {
   const busted = await import(`${pathToFileURL(mutable).href}?v=${Date.now()}`)
   const bustedRender = busted.default()
 
+  // Fix 3: `cacheBustableViaQuery: false` alone cannot say WHY. Two candidate mechanisms:
+  //   (a) Bun ignores the query as part of the module key -> literally the same module.
+  //   (b) the query makes a NEW module entry, but a source/FS cache serves stale bytes.
+  // Module-object identity separates them decisively.
+  const queryReturnsSameModuleObject = busted === second
+
+  // Control: VERSION-2 bytes at a brand-new path in a brand-new directory. If this renders
+  // VERSION-2, no global content cache is keyed on the bytes/content, killing (b)'s
+  // strongest form and isolating the staleness to the per-path module entry.
+  const freshDir = mkdtempSync(join(tmpdir(), "tc-freshfile-"))
+  const freshPath = join(freshDir, "fresh.tsx")
+  writeFileSync(freshPath, pageSource("VERSION-2"))
+  const fresh = await import(pathToFileURL(freshPath).href)
+  const freshRender = fresh.default()
+
   results.moduleCache = {
     firstRender,
     secondRenderSameSpecifier: secondRender,
     staleOnReimport: secondRender === firstRender,
     bustedRenderWithQuery: bustedRender,
     cacheBustableViaQuery: bustedRender !== firstRender,
+    queryReturnsSameModuleObject,
+    mechanism: queryReturnsSameModuleObject
+      ? "(a) query ignored as module key - same module object returned"
+      : "(b) new module entry but stale bytes served from a source/FS cache",
+    freshFileNewDirRender: freshRender,
+    freshFileSeesNewContent: freshRender !== firstRender,
   }
 } catch (e) {
   results.moduleCache = { error: (e as Error).message }
