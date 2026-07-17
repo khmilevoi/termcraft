@@ -426,14 +426,21 @@ persistent button or mouse twin.
 ### 4.1 Components
 
 TypeScript on Bun; the shell UI is OpenTUI (React bindings). One `bun build
---compile` binary ships everything: the shell, the design host entry, and the
-embedded `@termcraft/runtime`; its Reatom, React, and OpenTUI implementation stays
-private — the user's project folder never grows a `package.json`. Three of this paragraph's claims are
-load-bearing and get spike-verified before implementation planning: dynamic TSX
-import with embedded-module resolution from the compiled binary (Windows included),
-styled cell-frame capture from the headless renderer, and running the TypeScript
-check inside the compiled binary. Strict module boundaries; each module is
-extractable into a workspace package later without rewrites:
+--compile` binary ships the shell, the design host entry, and the embedded
+`@termcraft/runtime`; its Reatom, React, and OpenTUI implementation stays
+private — the user's project folder never grows a `package.json`. OpenTUI's native
+core ships inside that binary. The TypeScript compiler does not: at `typescript@7`
+it is a per-platform native executable that cannot be spawned from a Bun embedded
+path, so it and its lib files are embedded, extracted once to a per-user directory
+on first use, and run as a subprocess — which also makes the build per-platform.
+The three load-bearing claims here were spike-verified on 2026-07-17 and all three
+hold: dynamic TSX import with embedded-module resolution from the compiled binary
+(Windows included), styled cell-frame capture from the headless renderer, and
+running the TypeScript check inside the compiled binary. See
+[`docs/spikes/2026-07-17-findings.md`](../../spikes/2026-07-17-findings.md) for the
+verdicts, the amendments each forces, and the lockfile-verified toolchain. Strict
+module boundaries; each module is extractable into a workspace package later
+without rewrites:
 
 - `runtime` — `@termcraft/runtime`: the only import surface for saved pages —
   selected Reatom v1001 primitives, `reatomComponent`, themed components with
