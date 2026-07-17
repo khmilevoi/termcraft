@@ -1,3 +1,5 @@
 /.superpowers/
 /design-prompts/
 .claude
+node_modules/
+*.exe
