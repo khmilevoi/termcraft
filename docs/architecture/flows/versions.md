@@ -7,7 +7,7 @@ or automatic-history management.
 stateDiagram-v2
     [*] --> Current
     Current --> Historical: select first-parent commit
-    Historical --> Current: leave history; reopen exact source from disk
+    Historical --> Current: leave history, reopen exact source from disk
     Historical --> RestoreChecks: choose Restore
     RestoreChecks --> Historical: staged, stale, missing, or Gate failure
     RestoreChecks --> Prepared: persist Restore plan

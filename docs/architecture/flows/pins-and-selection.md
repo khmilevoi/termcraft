@@ -10,7 +10,7 @@ stateDiagram-v2
     CurrentDesign --> CurrentDesign: successful apply / status change -> Resolved
     CurrentDesign --> CurrentDesign: reopen / status change -> Open
     CurrentDesign --> Historical: select historical commit
-    Historical --> CurrentDesign: return; pin mutations re-enabled
+    Historical --> CurrentDesign: return, pin mutations re-enabled
     note right of Historical
         Existing current pins may render as overlays only.
         No pin creation, reopening, or status-change

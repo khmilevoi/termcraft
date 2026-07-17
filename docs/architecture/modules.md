@@ -1,4 +1,4 @@
-termcraft is one program built from seven components with strict boundaries and two deliberate process seams: the transport-neutral command/result/event boundary between the UI shell and the Kernel, and the design-host subprocess that is the only place agent-written design code ever executes. The Git adapter is an internal Project-store port, not an eighth top-level component. This document names the components, what each owns, and the runtime loop that connects them.
+termcraft is one program built from seven components with strict boundaries and two deliberate process seams: the transport-neutral command/result/event boundary between the UI shell and the Kernel, and the design-host subprocess that is the only place agent-written design code ever executes. The Git adapter is an internal Project-store adapter behind Kernel ports, not an eighth top-level component. This document names the components, what each owns, and the runtime loop that connects them.
 
 ```mermaid
 flowchart LR

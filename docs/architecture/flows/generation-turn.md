@@ -48,7 +48,7 @@ sequenceDiagram
     else invalid after retry budget
         K->>S: terminalization TurnTransaction to captured target chat
         K->>K: retire unique workspace for quarantine/GC
-        K-->>UI: emit turn failure; no apply
+        K-->>UI: emit turn failure, no apply
     end
 ```
 

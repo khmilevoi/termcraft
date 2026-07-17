@@ -33,10 +33,10 @@ flowchart LR
     gate -- "implements core ports" --> core
     host -- "implements core ports" --> core
     host -- "implements SmokeRenderer" --> gate
-    ui -- "Command/Event DTOs only" --> core
+    ui -- "core boundary types only<br/>DTOs + PreviewSession" --> core
     store -- imports --> infra
     host -- imports --> infra
-    runtime -. "embedded · only page import" .-> host
+    host -. "resolves the embedded facade ·<br/>the page's only import" .-> runtime
     main -- "constructs adapters,<br/>injects into core" --> core
     main -.-> adapters
     main -.-> ui
@@ -65,7 +65,7 @@ flowchart LR
      agent/             AgentBackend over the vendors' official TypeScript SDKs
      gate/              validation; declares the SmokeRenderer port it consumes
      host/              HostSupervisor, PreviewSession, design-host protocol
-     ui/                OpenTUI shell; imports Command/Event DTOs only
+     ui/                OpenTUI shell; imports core's boundary types only
      runtime/           @termcraft/runtime — saved-page facade; leaf
      infrastructure/    domain-free technical capabilities
        process/  fs/  framing/  clock/  uuid/
@@ -76,7 +76,9 @@ flowchart LR
    submodule — takes the shape fixed in `CLAUDE.md`: `ui/`, `model/`, `types.ts`,
    `index.ts`, plus `ports/` where the module declares contracts it consumes. A
    submodule appears when an entity has both its own model and its own boundary, not
-   before; a folder holding one file means the split was premature.
+   before; a *submodule* holding one file means the split was premature. The layer
+   folders inside it are a different matter and are not optional: `CLAUDE.md` puts
+   code in `model/` (or `ui/`) even when that folder holds a single file.
 
 3. **`entities/` holds domain types, not domain contracts.** The name is
    deliberately narrower than "domain". In classic DDD the domain layer also holds
@@ -91,9 +93,9 @@ flowchart LR
    `store` implements them. A port lives at the lowest common ancestor of its
    consumers and never higher: one consumer puts it beside that consumer, several
    features inside a module put it in the module's `ports/`. `GitHistory` sits at
-   `core/ports/` because project inspection, page history, Restore, and export
-   source selection all consume it. When a second consumer appears the port moves up
-   one floor; it is never copied.
+   `core/ports/` because project inspection, page history, and Restore all consume
+   it. When a second consumer appears the port moves up one floor; it is never
+   copied.
 
 5. **Two consumers in different modules mean two narrow ports.** `core` drives
    `PreviewSession` for the live preview; `gate` needs a single smoke render of a
@@ -102,6 +104,11 @@ flowchart LR
    is what replaces a shared contracts pile — there is no folder where unrelated
    modules deposit interfaces, and the port placement rule therefore never runs out
    of floors.
+
+   The names in this document divide in two. `GitHistory`, `GitCommitter`,
+   `AgentBackend`, `HostSupervisor`, and `PreviewSession` come from the specs and are
+   fixed. `SmokeRenderer`, `GitCliAdapter`, and `CodexBackend` are this document's
+   illustrations of the rule; the code may name them otherwise.
 
 6. **`infrastructure/` is domain-free, and the test is mechanical.** Does the file
    know what a `Page`, `Turn`, or `Chat` is? If it does, it belongs to a module. If
@@ -127,8 +134,9 @@ flowchart LR
    composition root: it wires the host-side protocol and the embedded runtime, and
    never constructs `core`, `store`, or `ui`.
 
-9. **`ui` and `runtime` are the edge cases.** `ui` imports Command/Event DTO types
-   from `core` and nothing else from any module — never `store`, never host stdio.
+9. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
+   Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
+   and nothing else from any module: never `store`, never host stdio.
    `runtime` is a leaf that imports no termcraft module: it is the saved-page facade
    (§5), resolved from the binary by design code running inside the host.
 
