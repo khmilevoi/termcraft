@@ -107,14 +107,14 @@ flowchart LR
 
    The names in this document divide in two. `GitHistory`, `GitCommitter`,
    `AgentBackend`, `HostSupervisor`, and `PreviewSession` come from the specs and are
-   fixed. `SmokeRenderer`, `GitCliAdapter`, and `CodexBackend` are this document's
+   fixed. `SmokeRenderer`, `GitCliAdapter`, and `ClaudeBackend` are this document's
    illustrations of the rule; the code may name them otherwise.
 
 6. **`infrastructure/` is domain-free, and the test is mechanical.** Does the file
    know what a `Page`, `Turn`, or `Chat` is? If it does, it belongs to a module. If
    it does not, it belongs to `infrastructure/`. Process spawning, file I/O,
    length-prefixed framing, the clock, and UUIDv7 generation pass. `GitCliAdapter`
-   and `CodexBackend` fail — they speak the domain and stay inside `store` and
+   and `ClaudeBackend` fail — they speak the domain and stay inside `store` and
    `agent`. This keeps `infrastructure/` small and boring by construction, and keeps
    the Git adapter an internal Project-store adapter rather than the eighth
    top-level component the specs forbid.

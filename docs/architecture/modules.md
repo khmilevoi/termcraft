@@ -3,7 +3,7 @@ termcraft is one program built from seven components with strict boundaries and 
 ```mermaid
 flowchart LR
     designer(["Designer (terminal)"]) --> uishell
-    cli["Local agent CLI<br/>(Codex; Claude Code later)"]
+    cli["Local agent CLI<br/>(Claude Code, MVP; Codex, v1.0)"]
     gitcli["Installed Git CLI<br/>(optional)"]
     tsc["TypeScript compiler<br/>(extracted from the binary, spawned)"]
 

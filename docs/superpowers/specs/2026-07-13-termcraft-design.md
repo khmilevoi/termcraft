@@ -21,8 +21,9 @@ the same bet Claude Design makes for the web.
 ## 1. Overview
 
 termcraft is a terminal-native analog of Claude Design for TUI applications. The user
-describes an interface in natural language; a locally installed CLI agent (Codex first,
-Claude Code second) writes real design code against the versioned
+describes an interface in natural language; a locally installed CLI agent (Claude
+Code first, Codex second — swapped from the original Codex-first order, see §8.2)
+writes real design code against the versioned
 `@termcraft/runtime` facade — Reatom-first page models plus supported terminal
 components — and termcraft renders it live in the terminal.
 Iteration happens through chat; the mouse is used to select elements, pin comments,
@@ -465,8 +466,9 @@ without rewrites:
   styled frames, answers hit-test and rect queries, receives
   forwarded input and tweak changes (§4.2).
 - `agent` — the `AgentBackend` interface over the vendors' official TypeScript SDKs:
-  `@openai/codex-sdk` (MVP) and `@anthropic-ai/claude-agent-sdk` (v1.0). Health
-  checks, session continuity, per-turn confinement configuration (§6.1).
+  `@anthropic-ai/claude-agent-sdk` (MVP) and `@openai/codex-sdk` (v1.0 — swapped
+  from Codex-as-MVP, see §8.2). Health checks, session continuity, per-turn
+  confinement configuration (§6.1).
 - `store` — portable project state, local workspace state, canonical pages,
   comments, chats, recoverable project transactions, safe filesystem access, and
   migrations (§7); the machine-local trust ledger lives outside the project (§7.1).
@@ -795,9 +797,16 @@ interface AgentBackend {
 }
 ```
 
-Implementations wrap the vendors' official TypeScript SDKs — `@openai/codex-sdk`
-(MVP) and `@anthropic-ai/claude-agent-sdk` (v1.0, terms permitting) — which drive
-the locally installed CLIs and inherit their auth; termcraft holds no API keys.
+Implementations wrap the vendors' official TypeScript SDKs —
+`@anthropic-ai/claude-agent-sdk` (MVP) and `@openai/codex-sdk` (v1.0) — which
+drive the locally installed CLIs and inherit their auth; termcraft holds no API
+keys. **MVP ships Claude Code, not Codex, swapped from the original Codex-first
+order** (decided 2026-07-17, after Round 2 Spike H — see below): Codex's Windows
+sandbox-downgrade claim is unverified, blocked on an account usage-quota
+exhaustion, while the Claude confinement claim is confirmed under real attack.
+Codex moves to v1.0 and is re-verified once the quota resets (2026-07-23 16:36);
+no design or contract changes are needed for the swap since `AgentBackend` is
+mechanism-blind (§8.2).
 
 **The backend contract is mechanism-blind.** A backend's obligation is: stream
 `AgentEvent`s, and by the end of the run have the turn's proposed changes present
@@ -850,6 +859,12 @@ written. Separately, `@openai/codex-sdk` exposes no health/status method at all
 (only `Codex`/`Thread` with a `sandboxMode` option) — the write-probe in a
 scratch dir is confirmed to be the only way to implement `healthCheck()`'s
 "sandbox effective?" for Codex, not one option among several.
+
+**Consequence for scope:** because only the Claude confinement claim could be
+verified, MVP ships Claude Code as its sole backend and Codex moves to v1.0
+(§8.2) — a swap from this document's original Codex-as-MVP plan. This is a
+scope decision forced by the quota block, not a judgment that Codex is inferior;
+re-verify and reconsider once the quota resets (2026-07-23 16:36).
 
 **The `AgentEvent` stream** is the turn's only live output — everything the UI
 shows while an agent works derives from it:
@@ -1096,8 +1111,9 @@ contract, and smoke rendering. Detailed normative storage rules are in
    into the Workspace (§3.1) after the trust check.
 2. `.termcraft` wizard: setup, agent health check, target stack, bulk migrations.
 3. Workspace: chat + live preview via the design host, `F2` fullscreen, status bar.
-4. Agents behind `AgentBackend`: Codex SDK (primary); Claude Code via the Agent SDK
-   second, terms permitting.
+4. Agents behind `AgentBackend`: Codex SDK joins as the second backend, once its
+   Windows sandbox claim is re-verified after the quota reset (§6.1); Claude Code
+   via the Agent SDK ships first, in MVP (§8.2).
 5. Full runtime catalog incl. `Modal`, `Menu`, `Tree`, `Progress`, `Chart`, `Scroll`.
 6. Mouse: hover highlight, click-select with composer chip, right-click pin comments.
 7. Multiple pages with tabs; agent-driven page management through staging; page
@@ -1126,9 +1142,12 @@ contract, and smoke rendering. Detailed normative storage rules are in
   opens straight into the Workspace; background agent presence check (no wizard).
 - Workspace trust check from day one — it guards code execution, which exists from
   the first render (§3.1, §4.2).
-- Workspace: chat + preview + status bar + `F2`. Codex only with its default model; no
-  picker UI, but the (agent, model, effort) triple already lives in
-  `workspace.local.toml` so
+- Workspace: chat + preview + status bar + `F2`. **Claude Code only** with its
+  default model — swapped from the original Codex-only MVP plan (decided
+  2026-07-17, §6.1: Round 2 Spike H confirmed Claude's confinement claim under
+  attack while Codex's Windows sandbox claim is blocked on a quota reset);
+  Codex joins in v1.0 once re-verified. No picker UI in MVP either way, but the
+  (agent, model, effort) triple already lives in `workspace.local.toml` so
   the format needs no migration when the picker lands.
 - Multiple pages with tabs; page management through staging works in full (it is
   just files, §6.2).
@@ -1173,9 +1192,10 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
 - **Agent missing / not logged in** → clear message with install instructions; checked
   in the background at startup and before each send. The Home error state offers `r`
   to re-run the health check without restarting.
-- **Codex sandbox degraded (Windows)** → the health check write-probes the sandbox;
-  a silent `workspace-write` → read-only downgrade is reported as an explicit error
-  with the config fix, instead of turns that mysteriously change nothing (§6.1).
+- **Codex sandbox degraded (Windows)** → v1.0 only (Codex is not in MVP, §8.2):
+  the health check write-probes the sandbox; a silent `workspace-write` →
+  read-only downgrade is reported as an explicit error with the config fix,
+  instead of turns that mysteriously change nothing (§6.1).
 - **Gate-rejected turn** → automatic retry with the errors in context (≤3), then an
   honest error in chat. Canonical sources are untouched; the unique turn workspace
   is discarded or quarantined and never reused.
@@ -1238,8 +1258,8 @@ is no longer planned — the slash menu (§3.10) is that view over the action ta
 ## 11. Success criteria (MVP)
 
 From an empty directory: `termcraft` → the Home prompt opens → "a system monitor
-dashboard" → Enter creates `.termcraft` (the project) → Codex writes page code →
-live render via the design host → right-click pin "make this gauge red" → send →
+dashboard" → Enter creates `.termcraft` (the project) → Claude Code writes page
+code → live render via the design host → right-click pin "make this gauge red" → send →
 the canonical Current design updates recoverably → `Ctrl+E` → the export package —
 `design-prompt.md`, TSX sources,
 multi-size ASCII snapshots, layout trees — that a coding agent can implement from

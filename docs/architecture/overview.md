@@ -6,8 +6,8 @@ flowchart LR
     coder(["Implementing coding agent"])
     subgraph machine["Designer's machine"]
         termcraft["termcraft — one compiled per-platform binary (shell + supervised host + embedded runtime)"]
-        codexcli["Codex CLI (local, user's own auth)"]
-        claudecli["Claude Code CLI (second backend, later)"]
+        claudecli["Claude Code CLI (local, user's own auth)"]
+        codexcli["Codex CLI (second backend, v1.0)"]
         gitcli["Git CLI (local, optional)"]
         tsc["TypeScript compiler + lib files<br/>(extracted once to a per-user directory)"]
         staging["unique fenced turn workspace + immutable candidate"]
@@ -16,9 +16,9 @@ flowchart LR
     repo[("Target project repository (optional)")]
 
     designer -- "prompts · mouse · hotkeys" --> termcraft
-    termcraft -- "turns via official TS SDKs" --> codexcli
-    termcraft -.-> claudecli
-    codexcli -- "edits design code, sandboxed" --> staging
+    termcraft -- "turns via official TS SDKs" --> claudecli
+    termcraft -.-> codexcli
+    claudecli -- "edits design code, sandboxed" --> staging
     termcraft -- "diff + validation gate" --> staging
     termcraft -- "gate type check:<br/>extract once, spawn" --> tsc
     termcraft -- "recoverable project<br/>transactions + safe FS" --> folder
@@ -31,7 +31,7 @@ flowchart LR
 ## Walkthrough
 
 1. The designer launches termcraft from within the target project's working directory. termcraft looks for a `.termcraft/` project folder there; that folder sits next to the code it describes. Git is optional: the project retains generation, preview, pins, chat, and export without a repository, while committing `.termcraft/` alongside application code lets design history travel with the codebase.
-2. Design requests are sent to a locally installed agent CLI driven through its vendor's official TypeScript SDK — termcraft holds no API keys of its own and simply uses whatever authentication the CLI already has configured. The Codex CLI is the first supported backend; the Claude Code CLI is planned as a second backend behind the same abstraction, adopted later if its terms permit headless embedding.
+2. Design requests are sent to a locally installed agent CLI driven through its vendor's official TypeScript SDK — termcraft holds no API keys of its own and simply uses whatever authentication the CLI already has configured. The Claude Code CLI is the MVP backend; the Codex CLI joins as a second backend behind the same abstraction in v1.0. This order was swapped from the original Codex-first plan (2026-07-17): Round 2 Spike H confirmed the Claude Agent SDK's confinement claim under real attack, while Codex's Windows sandbox-downgrade claim remained unverified, blocked on an account usage-quota exhaustion rather than a defect — see `docs/spikes/08-agent-confinement/FINDINGS.md`.
 3. The agent writes `@termcraft/runtime` design code in a unique fenced turn workspace, confined there by its backend. After confirmed process exit, `SafeProjectFs` copies allowed regular files into an agent-inaccessible immutable candidate; the Gate validates types, runtime-only imports, page contract, and a smoke render from that candidate. Rejection or interruption before commit intent changes no canonical source. One binary ships the shell, the supervised host, and the embedded runtime, so the designer's project folder never grows a `package.json` — but it does not ship the type checker. At the pinned TypeScript major the compiler is a per-platform native executable that cannot be launched from inside the binary, so it and its lib files are extracted once to a per-user directory on first use and spawned as a subprocess; that is also why the build itself is per-platform.
 4. Accepted changes publish through a recoverable `TurnTransaction`: after durable commit intent, startup or the live process idempotently rolls every planned page, manifest, local effect, chat, and pin event forward. Unexpected target drift is never overwritten. Design code executes only inside a `HostSupervisor`-owned subprocess; the UI uses `PreviewSession` and never owns the process. Composite workspace trust is required because the project contains executable code regardless of whether it arrived through Git, a copy, or a sync tool.
 5. Failure branch: if the agent CLI is missing or not logged in, a background health check performed at startup — and repeated before each send — surfaces the problem in the status bar. Attempting to send a message while unhealthy then fails with a clear error and install instructions rather than silently hanging.
