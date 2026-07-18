@@ -437,6 +437,26 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     phase = "stopping"
     const activeChild = child
 
+    // Unlike sendRequest, a full table here would still let register() succeed
+    // (it only rejects at its OWN capacity), but the shutdown's ack could never be
+    // told apart from a coincidental slot reuse in a genuinely full table — and a
+    // doomed, uncorrelatable graceful attempt just wastes the 1 s ack deadline
+    // before falling back anyway. Check the SAME pre-send guard sendRequest uses
+    // (§8) BEFORE writing anything, and force immediately if the table is full.
+    if (requestTable.size() >= REQUEST_TABLE_CAPACITY) {
+      console.warn("host-supervisor: request table full at stop(); forcing")
+      await teardown(true)
+      await pumpTask
+      phase = "stopped"
+      return {
+        phase: "stopped",
+        forced: true,
+        exitCode: activeChild.exitCode,
+        signalCode: activeChild.signalCode,
+        reason: "forced: request table full at shutdown",
+      }
+    }
+
     // Graceful: register the shutdown so the pump can route its ack, send it, then
     // await the ack under a dedicated 1 s deadline (§9). The pump remains the sole
     // reader; stop() never pulls inbound.

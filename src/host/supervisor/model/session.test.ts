@@ -20,6 +20,7 @@ import { readInbound } from "./transport"
 import { createHostSession } from "./session"
 import type { HostSessionDeps } from "../types"
 import { livePreviewChild } from "./preview-test-host"
+import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table"
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
@@ -373,5 +374,75 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     await waitUntil(() => fatals.length === 1, "pump fataled on the wrong-nonce frame")
     expect(session.phase).toBe("failed")
     expect(fatals[0] instanceof ProtocolError && fatals[0].code).toBe("MALFORMED_PROTOCOL")
+  })
+})
+
+// --- 2D-2 adversarial review: request-table capacity guard (findings 3 & 4) ---
+
+/**
+ * A test seam: delegate register/resolve/supersede/clear to the REAL request
+ * table (so correlation still works end-to-end) but make `size()` always
+ * report full. This lets a test exercise the pre-send capacity guards
+ * (sendRequest, stop()) without actually filling 64 real slots. The handshake
+ * and mount reach `ready` via nextInbound/awaitReady, not the request table,
+ * so a "full" table still lets start() reach ready.
+ */
+function fullTableDeps(base: HostSessionDeps): HostSessionDeps {
+  return {
+    ...base,
+    createRequestTable: (clock, opts) => {
+      const real = createRequestTable(clock, opts)
+      return { ...real, size: () => REQUEST_TABLE_CAPACITY }
+    },
+  }
+}
+
+/** Decode a single written frame's control envelope `kind`, or null if not decodable. */
+async function decodeWrittenKind(bytes: Uint8Array): Promise<string | null> {
+  const carrier = createScriptedChild()
+  carrier.emit(bytes)
+  carrier.endStdout()
+  for await (const message of readInbound(carrier)) {
+    if (message instanceof Error) return null
+    if (message.messageClass !== "control") return null
+    const parsed = JSON.parse(new TextDecoder().decode(message.payload)) as { kind: string }
+    return parsed.kind
+  }
+  return null
+}
+
+describe("createHostSession request-table capacity guard (2D-2 adversarial review)", () => {
+  test("sendRequest's pre-send guard rejects TOO_MANY_REQUESTS before writing any envelope when the table reports full", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, fullTableDeps(sessionDeps))
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const writtenAtReady = child.written.length
+    const result = await session.ping()
+    expect(result).toBeInstanceOf(SupervisorError)
+    if (result instanceof SupervisorError) expect(result.code).toBe("TOO_MANY_REQUESTS")
+    expect(child.written.length).toBe(writtenAtReady) // no envelope written for the rejected ping
+    await session.stop()
+  })
+
+  test("stop() forces teardown without writing a shutdown envelope when the request table reports full", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, fullTableDeps(sessionDeps))
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const writtenAtReady = child.written.length
+
+    const stop = await session.stop()
+    expect(stop.phase).toBe("stopped")
+    expect(stop.forced).toBe(true)
+    expect(stop.reason).toContain("request table full")
+
+    // No shutdown envelope was written after ready — decode every write since
+    // ready and assert none of them is a "shutdown" control envelope.
+    const writesSinceReady = child.written.slice(writtenAtReady)
+    const kinds = await Promise.all(writesSinceReady.map(decodeWrittenKind))
+    expect(kinds).not.toContain("shutdown")
   })
 })
