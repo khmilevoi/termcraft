@@ -19,6 +19,7 @@ import type { ScriptedChild } from "./scripted-child"
 import { readInbound } from "./transport"
 import { createHostSession } from "./session"
 import type { HostSessionDeps } from "../types"
+import { livePreviewChild } from "./preview-test-host"
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
@@ -258,87 +259,9 @@ describe("createHostSession lifecycle", () => {
 
 // --- 2D-2: post-ready pump + stop-via-request-table ---
 
-/**
- * Extends the responding fake host with post-ready behavior: it answers `ping`
- * with `pong`, `resize`/`set-mode` with a correlated echo, and can emit a data
- * frame / heartbeat on demand. Built on the same onWrite decode loop.
- */
-function livePreviewChild(): ScriptedChild {
-  const child = createScriptedChild()
-  let id: { sessionId: string; nonce: string } | null = null
-  let messageId = 1n
-  const nextId = () => {
-    const value = messageId.toString()
-    messageId += 1n
-    return value
-  }
-  const send = (env: ControlEnvelope) => {
-    const framed = frameControl(env)
-    if (!(framed instanceof ProtocolError)) child.emit(framed)
-  }
-  child.onWrite = (bytes) => void decode(bytes)
-  async function decode(bytes: Uint8Array) {
-    const carrier = createScriptedChild()
-    carrier.emit(bytes)
-    carrier.endStdout()
-    for await (const message of readInbound(carrier)) {
-      if (message instanceof Error) return
-      if (message.messageClass !== "control") return
-      const raw = JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope & { kind: string }
-      if (raw.kind === "client.hello" && id === null) {
-        id = { sessionId: raw.sessionId, nonce: raw.nonce }
-        const hostHello: HostHelloV1 = {
-          framingVersion: 1, kind: "host.hello", sessionId: id.sessionId, nonce: id.nonce,
-          selectedFramingVersion: 1, selectedProtocolVersion: 1, runtimeDeclaration, limits: PROTOCOL_HARD_LIMITS,
-        }
-        const framed = frameHostHello(hostHello)
-        if (!(framed instanceof ProtocolError)) child.emit(framed)
-        return
-      }
-      if (id === null) return
-      if (raw.kind === "mount") {
-        send({ protocolVersion: 1, kind: "ready", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { size: { w: 80, h: 24 }, interactionMode: "static" } })
-        const frame: FrameEnvelope = { protocolVersion: 1, kind: "frame", sessionId: id.sessionId, nonce: id.nonce, sourceHash: spec.sourceHash, frameSeq: "1", width: 80, height: 24, rows: Array.from({ length: 24 }, () => []) }
-        const framed = frameFrame(frame)
-        if (!(framed instanceof ProtocolError)) child.emit(framed)
-        return
-      }
-      if (raw.kind === "ping") {
-        send({ protocolVersion: 1, kind: "pong", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: {} })
-        return
-      }
-      if (raw.kind === "resize") {
-        send({ protocolVersion: 1, kind: "resize", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { size: raw.body.size! } })
-        return
-      }
-      if (raw.kind === "set-mode") {
-        send({ protocolVersion: 1, kind: "set-mode", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { interactionMode: raw.body.interactionMode! } })
-        return
-      }
-      if (raw.kind === "shutdown") {
-        send({ protocolVersion: 1, kind: "shutdown-ack", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { ok: true } })
-        child.simulateExit({ code: 0 })
-        return
-      }
-    }
-  }
-  // Helper: emit a post-ready frame / heartbeat once identity is known.
-  ;(child as ScriptedChild & { emitFrame(seq: string): void; emitHeartbeat(): void }).emitFrame = (seq) => {
-    if (id === null) return
-    const frame: FrameEnvelope = { protocolVersion: 1, kind: "frame", sessionId: id.sessionId, nonce: id.nonce, sourceHash: spec.sourceHash, frameSeq: seq, width: 80, height: 24, rows: Array.from({ length: 24 }, () => []) }
-    const framed = frameFrame(frame)
-    if (!(framed instanceof ProtocolError)) child.emit(framed)
-  }
-  ;(child as ScriptedChild & { emitFrame(seq: string): void; emitHeartbeat(): void }).emitHeartbeat = () => {
-    if (id === null) return
-    send({ protocolVersion: 1, kind: "heartbeat", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), body: {} })
-  }
-  return child
-}
-
 describe("createHostSession post-ready pump (2D-2)", () => {
   test("the firstFrame reaches the broker and post-ready frames stream through it", async () => {
-    const child = livePreviewChild() as ScriptedChild & { emitFrame(seq: string): void }
+    const child = livePreviewChild(spec, runtimeDeclaration) as ScriptedChild & { emitFrame(seq: string): void }
     const { deps: sessionDeps } = deps(child)
     const session = createHostSession(spec, sessionDeps)
     const started = await session.start()
@@ -356,7 +279,7 @@ describe("createHostSession post-ready pump (2D-2)", () => {
   })
 
   test("a correlated ping resolves through the request table", async () => {
-    const child = livePreviewChild()
+    const child = livePreviewChild(spec, runtimeDeclaration)
     const { deps: sessionDeps } = deps(child)
     const session = createHostSession(spec, sessionDeps)
     const started = await session.start()
@@ -369,7 +292,7 @@ describe("createHostSession post-ready pump (2D-2)", () => {
   })
 
   test("a heartbeat feeds the watchdog; 5 s of silence tears down to failed with HEARTBEAT_TIMEOUT", async () => {
-    const child = livePreviewChild() as ScriptedChild & { emitHeartbeat(): void }
+    const child = livePreviewChild(spec, runtimeDeclaration) as ScriptedChild & { emitHeartbeat(): void }
     const clock = createManualClock()
     const fatals: (SupervisorError | ProtocolError)[] = []
     const base = deps(child, clock).deps
@@ -388,7 +311,7 @@ describe("createHostSession post-ready pump (2D-2)", () => {
   })
 
   test("stop() correlates shutdown-ack through the request table (graceful path still works)", async () => {
-    const child = livePreviewChild()
+    const child = livePreviewChild(spec, runtimeDeclaration)
     const { deps: sessionDeps } = deps(child)
     const session = createHostSession(spec, sessionDeps)
     const started = await session.start()
@@ -400,7 +323,7 @@ describe("createHostSession post-ready pump (2D-2)", () => {
   })
 
   test("a post-ready frame with a wrong nonce is a fatal MALFORMED_PROTOCOL, not a silent drop (§10.1/§5.3/§12)", async () => {
-    const child = livePreviewChild()
+    const child = livePreviewChild(spec, runtimeDeclaration)
     const clock = createManualClock()
     const fatals: (SupervisorError | ProtocolError)[] = []
     const base = deps(child, clock).deps

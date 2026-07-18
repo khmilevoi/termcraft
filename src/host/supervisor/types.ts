@@ -5,7 +5,7 @@ import type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
 } from "../protocol"
-import type { HostSessionIdentity, HostSessionSpec, InteractionMode, PreviewFrame, Size } from "../types"
+import type { HostSessionIdentity, HostSessionSpec, InteractionMode, PreviewFrame, PreviewIdentity, Size } from "../types"
 import type { Clock } from "./model/clock"
 import type { SupervisorError } from "./model/errors"
 
@@ -110,6 +110,19 @@ export interface HostSession {
   resize(size: Size): Promise<ControlEnvelope | ProtocolError | SupervisorError>
   setMode(mode: InteractionMode): Promise<ControlEnvelope | ProtocolError | SupervisorError>
   ping(): Promise<ControlEnvelope | ProtocolError | SupervisorError>
+}
+
+/** The UI-facing preview facade subset the 2C child supports today (§3.2). */
+export interface PreviewSession {
+  readonly identity: PreviewIdentity
+  readonly mode: "preview" | "historical"
+  /** The effective interaction mode; changes ONLY on an accepted set-mode response (§7). */
+  readonly interactionMode: InteractionMode
+  readonly frames: AsyncIterable<PreviewFrame>
+  resize(size: Size): void
+  setMode(mode: InteractionMode): void
+  retry(): void
+  close(): Promise<void>
 }
 
 /** Capacity-1 latest-wins preview frame broker (§8, §10.1). */
