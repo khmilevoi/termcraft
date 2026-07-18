@@ -60,6 +60,18 @@ export default function P() { return null }`
     expect(result).toBeInstanceOf(ProtocolError)
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL")
   })
+
+  test("rejects a dynamic import of the runtime — only a static import is allowed (§3.1)", () => {
+    const src = `const rt = () => import("@termcraft/runtime")`
+    const result = scanPageImports(src)
+    expect(result).toBeInstanceOf(ProtocolError)
+    expect((result as ProtocolError).reason).toContain("@termcraft/runtime")
+  })
+
+  test("rejects a require of the runtime — only a static import is allowed (§3.1)", () => {
+    const src = `const rt = require("@termcraft/runtime")`
+    expect(scanPageImports(src)).toBeInstanceOf(ProtocolError)
+  })
 })
 
 import { registerRuntimeResolver } from "./resolver"

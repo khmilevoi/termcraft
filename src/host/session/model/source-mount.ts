@@ -80,7 +80,11 @@ export function scanPageImports(sourceText: string): ProtocolError | void {
   })()
   if (imports instanceof ProtocolError) return imports
   for (const record of imports) {
-    if (record.path === RUNTIME_SPECIFIER) continue
+    // runtime-api §3.1: only a STATIC import of the exact root specifier is
+    // accepted; a dynamic-import or require-call of the runtime is rejected even
+    // though it names the runtime. (A re-export also reports `import-statement`
+    // and is indistinguishable here — that case stays the Gate AST scan's job.)
+    if (record.path === RUNTIME_SPECIFIER && record.kind === "import-statement") continue
     if (record.kind === "require-call" && COMPILER_INJECTED_JSX_SPECIFIERS.has(record.path)) continue
     return new ProtocolError({
       code: "MALFORMED_PROTOCOL",
