@@ -310,6 +310,35 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("HEARTBEAT_TIMEOUT")
   })
 
+  test("a post-ready fatal with no onFatal sink still logs via console.warn, not silently (errore rule 21)", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration) as ScriptedChild & { emitHeartbeat(): void }
+    const clock = createManualClock()
+    const base = deps(child, clock).deps // deliberately NO onFatal
+    const session = createHostSession(spec, base)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const originalWarn = console.warn
+    const warnCalls: unknown[][] = []
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args)
+    }
+    try {
+      await waitUntil(() => clock.pending() >= 1, "heartbeat timer armed")
+      clock.advance(5_000)
+      await waitUntil(() => session.phase === "failed", "post-ready fatal reached failed")
+      // give finalizeFatalTeardown's async teardown a chance to complete and log
+      await waitUntil(
+        () => warnCalls.some((call) => typeof call[0] === "string" && call[0].includes("post-ready fatal outcome")),
+        "console.warn fired with the dropped fatal error",
+      )
+      const matching = warnCalls.find((call) => typeof call[0] === "string" && call[0].includes("post-ready fatal outcome"))
+      expect(matching).toBeDefined()
+      expect(matching?.some((arg) => typeof arg === "string" && arg.includes("HEARTBEAT_TIMEOUT"))).toBe(true)
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
   test("stop() correlates shutdown-ack through the request table (graceful path still works)", async () => {
     const child = livePreviewChild(spec, runtimeDeclaration)
     const { deps: sessionDeps } = deps(child)

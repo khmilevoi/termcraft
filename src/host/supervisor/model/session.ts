@@ -269,7 +269,8 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     // the pump loop. We do NOT await pumpTask here: when this runs from inside the
     // pump the await would deadlock; inbound.return() settles it regardless.
     await teardown(true)
-    deps.onFatal?.(error)
+    if (deps.onFatal) deps.onFatal(error)
+    else console.warn("host-supervisor: post-ready fatal outcome with no onFatal sink:", error.message)
   }
 
   // Await the correlated `ready` (§6.6) AND the initial full frame under ONE total
