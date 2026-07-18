@@ -5,7 +5,6 @@ import type { HostSessionSpec } from "../../types"
 import type { HostSessionDeps } from "../types"
 import { SupervisorError } from "./errors"
 import { createManualClock } from "./clock"
-import { createScriptedChild } from "./scripted-child"
 import type { ScriptedChild } from "./scripted-child"
 import { livePreviewChild } from "./preview-test-host"
 import { createPreviewSession } from "./preview-session"
@@ -54,13 +53,22 @@ describe("createPreviewSession facade (2D-2)", () => {
   })
 
   test("a rejected/mismatched set-mode response preserves the prior interactionMode (§7)", async () => {
-    // A child that answers set-mode with a NON-matching interactionMode.
-    const child = livePreviewChild(spec, runtimeDeclaration, { setModeEcho: "static" })
+    // The ready response always echoes "static" (see preview-test-host), so the
+    // effective mode after ready is "static" regardless of spec. Request the SAME
+    // mode ("static") but have the host echo a NON-matching "interactive" for every
+    // set-mode reply. This makes request === prior mode and echo !== request, so the
+    // §7 match-guard (`if (result.body.interactionMode === next) interactionMode = next`)
+    // is the only thing standing between "static" and "interactive": a regression to
+    // unconditional assignment (`interactionMode = result.body.interactionMode`) would
+    // flip the value to "interactive" and fail the assertion below; the guarded code
+    // leaves it at "static".
+    const child = livePreviewChild(spec, runtimeDeclaration, { setModeEcho: "interactive" })
     const session = createPreviewSession(spec, deps(child))
     await session.frames[Symbol.asyncIterator]().next()
-    session.setMode("interactive")
+    expect(session.interactionMode).toBe("static") // effective mode after ready
+    session.setMode("static") // request the current mode; host echoes non-matching "interactive"
     await new Promise((r) => setTimeout(r, 20))
-    expect(session.interactionMode).toBe("static") // unchanged — response did not match the request
+    expect(session.interactionMode).toBe("static") // unchanged — echo did not match the request
     await session.close()
   })
 

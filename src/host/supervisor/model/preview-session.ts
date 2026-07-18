@@ -1,4 +1,4 @@
-import type { HostSessionSpec, InteractionMode, PreviewFrame, PreviewIdentity, Size } from "../../types"
+import type { HostSessionSpec, InteractionMode, PreviewIdentity, Size } from "../../types"
 import type { HostSessionDeps, PreviewSession } from "../types"
 import { createHostSession } from "./session"
 
