@@ -36,6 +36,11 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
   let frameCounter = 1n
   let lastFrameSeq = "0"
   let effectiveMode: InteractionMode = "static"
+  // The per-field minimum of client and host caps, fixed at handshake (§6). All
+  // requested viewport sizes are bounded by these, so the host never renders a
+  // frame the supervisor's decoder would reject. Host caps are the pre-handshake
+  // default; mount/resize only run after `effectiveLimits` is set to the negotiation.
+  let effectiveLimits: PublicLimits = deps.limits
 
   const nextMessageId = () => {
     const id = messageCounter.toString()
@@ -82,6 +87,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     if (hello instanceof ProtocolError) return failPreHandshake(hello)
 
     identity = { sessionId: hello.sessionId, nonce: hello.nonce }
+    effectiveLimits = negotiateLimits(hello.limits)
     const hostHello: HostHelloV1 = {
       framingVersion: 1,
       kind: "host.hello",
@@ -90,7 +96,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       selectedFramingVersion: 1,
       selectedProtocolVersion: 1,
       runtimeDeclaration: deps.runtimeDeclaration,
-      limits: negotiateLimits(hello.limits),
+      limits: effectiveLimits,
     }
     deps.send({ type: "host-hello", payload: hostHello })
     phase = "awaiting-mount"
@@ -247,11 +253,19 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
   // whereas the bare indexed-access type is not. The first guard rejects undefined.
   function parseSize(value: ControlEnvelope["body"][string] | undefined): ProtocolError | { w: number; h: number } {
     const bad = (reason: string) => new ProtocolError({ code: "MALFORMED_PROTOCOL", reason })
+    const tooLarge = (reason: string) => new ProtocolError({ code: "FRAME_TOO_LARGE", reason })
     if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) return bad("size must be an object")
     const w = (value as { w?: unknown }).w
     const h = (value as { h?: unknown }).h
-    if (typeof w !== "number" || !Number.isSafeInteger(w) || w <= 0 || w > 2048) return bad("size.w must be a positive integer <= 2048")
-    if (typeof h !== "number" || !Number.isSafeInteger(h) || h <= 0 || h > 2048) return bad("size.h must be a positive integer <= 2048")
+    if (typeof w !== "number" || !Number.isSafeInteger(w) || w <= 0) return bad("size.w must be a positive integer")
+    if (typeof h !== "number" || !Number.isSafeInteger(h) || h <= 0) return bad("size.h must be a positive integer")
+    // §5.3: the requested viewport must fit the negotiated frame caps, else the
+    // host would render a frame its own — and the supervisor's — decoder rejects
+    // with FRAME_TOO_LARGE. Check the axes first so w*h can never overflow (each
+    // axis is bounded by its cap, ≤ 2048, before the product is computed).
+    if (w > effectiveLimits.maxFrameWidth) return tooLarge(`size.w ${w} exceeds negotiated maxFrameWidth ${effectiveLimits.maxFrameWidth}`)
+    if (h > effectiveLimits.maxFrameHeight) return tooLarge(`size.h ${h} exceeds negotiated maxFrameHeight ${effectiveLimits.maxFrameHeight}`)
+    if (w * h > effectiveLimits.maxFrameCells) return tooLarge(`frame ${w}×${h} = ${w * h} cells exceeds negotiated maxFrameCells ${effectiveLimits.maxFrameCells}`)
     return { w, h }
   }
 

@@ -239,6 +239,21 @@ describe("host session — mount", () => {
     await session.receiveControlPayload(mountEnvelope({}, SESSION_ID, "f".repeat(32)))
     expect(h.exits).toHaveLength(1)
   })
+
+  test("a mount whose size exceeds the negotiated cell cap is refused with FRAME_TOO_LARGE", async () => {
+    const { h, session } = await handshaken()
+    // 600×600 = 360,000 cells > maxFrameCells (262,144), yet each axis is ≤ 2048.
+    // The host must refuse rather than render and emit a self-rejecting frame (§5.3).
+    await session.receiveControlPayload(mountEnvelope({ size: { w: 600, h: 600 } }))
+    const error = h.out.find(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+    ) as { payload: ControlEnvelope } | undefined
+    expect(error).toBeDefined()
+    expect((error!.payload.body as { code: string }).code).toBe("FRAME_TOO_LARGE")
+    expect(h.out.some((m) => m.type === "frame")).toBe(false)
+    expect(h.exits).toHaveLength(1)
+    expect(h.exits[0]!.code).toBe(1)
+  })
 })
 
 async function readied(over: Partial<HostSessionDeps> = {}) {
@@ -271,6 +286,18 @@ describe("host session — ready-phase control", () => {
     expect(frames).toHaveLength(1)
     expect(frames[0]!.payload.frameSeq).toBe("2")
     expect(frames[0]!.payload.width).toBe(24)
+  })
+
+  test("a resize whose size exceeds the negotiated cell cap is refused with FRAME_TOO_LARGE", async () => {
+    const { h, session } = await readied()
+    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 600, h: 600 } }))
+    const error = h.out.find(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+    ) as { payload: ControlEnvelope } | undefined
+    expect(error).toBeDefined()
+    expect((error!.payload.body as { code: string }).code).toBe("FRAME_TOO_LARGE")
+    expect(h.out.some((m) => m.type === "frame")).toBe(false)
+    expect(h.exits).toHaveLength(1)
   })
 
   test("ping gets a correlated ok response echoing kind ping", async () => {
