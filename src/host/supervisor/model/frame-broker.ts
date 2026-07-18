@@ -65,6 +65,11 @@ export function createFrameBroker(guard: {
           yield frame
           continue
         }
+        // `wake` is ONE shared slot, not per-iterator. A second concurrent consumer
+        // parking here while another is already parked would silently clobber the
+        // first's resolver, hanging it forever (this AsyncIterable is single-consumer
+        // by contract). Fail loudly instead of corrupting the shared slot.
+        if (wake !== null) throw new Error("FrameBroker.frames is single-consumer; a second concurrent reader was detected")
         await new Promise<void>((resolve) => (wake = resolve))
       }
     },

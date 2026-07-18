@@ -88,4 +88,18 @@ describe("createFrameBroker", () => {
     broker.close()
     expect(broker.publish(makeFrame({ frameSeq: "1" }))).toBe("stale")
   })
+
+  test("a second concurrent parked consumer is rejected loudly instead of silently clobbering the first's resolver", async () => {
+    const broker = createFrameBroker(GUARD)
+    const iteratorA = broker.frames[Symbol.asyncIterator]()
+    const iteratorB = broker.frames[Symbol.asyncIterator]()
+    const pA = iteratorA.next() // parks: no pending frame, wake is now A's resolver
+    const pB = iteratorB.next() // parks concurrently: must NOT overwrite A's resolver
+    await expect(pB).rejects.toThrow(/single-consumer/)
+    // The first consumer must still be alive and get woken by a publish.
+    broker.publish(makeFrame({ frameSeq: "1" }))
+    const { value, done } = await pA
+    expect(done).toBe(false)
+    expect(value?.frameSeq).toBe("1")
+  })
 })
