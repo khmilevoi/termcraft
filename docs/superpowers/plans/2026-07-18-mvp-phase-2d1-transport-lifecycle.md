@@ -1802,7 +1802,6 @@ import { buildClientHello, verifyHostHello } from "./handshake"
 import { mintIdentity } from "./identity"
 import { createStderrDrain, readInbound, writeFramed } from "./transport"
 import type { InboundMessage } from "./transport"
-import type { TimerHandle } from "./clock"
 import type {
   ControlEvent,
   HostSession,
@@ -1857,14 +1856,15 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // settled by `inbound.return()` in teardown/stop and never eaten by a later pull.
   async function nextInbound(deadlineAt: number, timeoutError: SupervisorError): Promise<ProtocolError | SupervisorError | InboundMessage> {
     if (inbound === null) return new SupervisorError({ code: "TRANSPORT_ERROR", reason: "no inbound iterator" })
-    let timer: TimerHandle | null = null
-    const timeout = new Promise<SupervisorError>((resolve) => {
-      const remaining = Math.max(0, deadlineAt - deps.clock.now())
-      timer = deps.clock.setTimer(remaining, () => resolve(timeoutError))
-    })
+    // Bind the timer to a `const` from `setTimer` directly (not via a closure
+    // assignment inside the Promise executor, which TS 7 narrows to `never`).
+    let resolveTimeout!: (error: SupervisorError) => void
+    const timeout = new Promise<SupervisorError>((resolve) => { resolveTimeout = resolve })
+    const remaining = Math.max(0, deadlineAt - deps.clock.now())
+    const timer = deps.clock.setTimer(remaining, () => resolveTimeout(timeoutError))
     const next = inbound.next().then((result) => (result.done ? new SupervisorError({ code: "CHILD_EXITED", reason: "stdout closed before the expected message" }) : result.value))
     const winner = await Promise.race([next, timeout])
-    timer?.cancel()
+    timer.cancel()
     return winner
   }
 
@@ -2029,13 +2029,12 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // second kill and a repeat `await exited` are safe/idempotent; OS kill is terminal.
   async function reapChild(target: SpawnedChild, forceKill: boolean): Promise<void> {
     if (forceKill) target.kill()
-    let reapTimer: TimerHandle | null = null
-    const reapDeadline = new Promise<"reap-timeout">((resolve) => {
-      reapTimer = deps.clock.setTimer(REAP_TIMEOUT_MS, () => resolve("reap-timeout"))
-    })
+    let resolveReap!: (value: "reap-timeout") => void
+    const reapDeadline = new Promise<"reap-timeout">((resolve) => { resolveReap = resolve })
+    const reapTimer = deps.clock.setTimer(REAP_TIMEOUT_MS, () => resolveReap("reap-timeout"))
     const exit = target.exited.then(() => "exited" as const)
     const reaped = await Promise.race([exit, reapDeadline])
-    reapTimer?.cancel()
+    reapTimer.cancel()
     if (reaped === "reap-timeout") {
       console.warn("host-supervisor: process did not reap within 1s; re-killing")
       target.kill()
