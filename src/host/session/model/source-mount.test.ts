@@ -51,6 +51,15 @@ export default function P() { return null }`
     const src = `import "@opentui/core"`
     expect(scanPageImports(src)).toBeInstanceOf(ProtocolError)
   })
+
+  test("returns a ProtocolError (never a throw) for unparseable source", () => {
+    // Bun.Transpiler.scanImports throws a BuildMessage on syntactically broken
+    // TSX; scanPageImports must convert that throw into a typed ProtocolError.
+    const broken = `export default function P() { return <text>hi`
+    const result = scanPageImports(broken)
+    expect(result).toBeInstanceOf(ProtocolError)
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL")
+  })
 })
 
 import { registerRuntimeResolver } from "./resolver"
@@ -106,5 +115,19 @@ describe("loadPage", () => {
       expectedSourceHash: "0".repeat(64),
     })
     expect(result).toBeInstanceOf(ProtocolError)
+  })
+
+  test("returns a typed ProtocolError (not a rejection) for a hash-matching but unparseable page", async () => {
+    // A hand-edited canonical file or an old snapshot whose stored bytes are
+    // syntactically broken still passes the hash + UTF-8 gates and reaches the
+    // import scan, which throws. loadPage must surface a typed ProtocolError so
+    // the state machine can emit its best-effort `error` envelope (§5/§12).
+    const path = fixture("broken-syntax.tsx")
+    const result = await loadPage({
+      sourcePath: path,
+      expectedSourceHash: await hashOfFile(path),
+    })
+    expect(result).toBeInstanceOf(ProtocolError)
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL")
   })
 })

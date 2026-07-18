@@ -38,6 +38,12 @@ export function computeSourceHash(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
 }
 
+const malformed = (reason: string, cause?: unknown) =>
+  new ProtocolError({ code: "MALFORMED_PROTOCOL", reason, cause })
+
+const sourceHashMismatch = (reason: string) =>
+  new ProtocolError({ code: "SOURCE_HASH_MISMATCH", reason })
+
 /**
  * Re-scan a page's source for module edges before linking it (runtime-api §3.1,
  * §7.2 — "the host repeats the same import scan"). This is a defense-in-depth
@@ -58,7 +64,21 @@ export function computeSourceHash(bytes: Uint8Array): string {
  */
 export function scanPageImports(sourceText: string): ProtocolError | void {
   const transpiler = new Bun.Transpiler({ loader: "tsx" })
-  const imports = transpiler.scanImports(sourceText)
+  // §5: unparseable source is a protocol violation, not a throw. `scanImports`
+  // throws a Bun `BuildMessage` on syntactically broken TSX (a hash-matching but
+  // corrupt or hand-edited snapshot reaches here). Crucially, `BuildMessage` is
+  // NOT an `instanceof Error`, so `errore.try` would re-throw it (it only converts
+  // Error throws). This is the lowest-level boundary with third-party code that
+  // throws a non-Error, so a raw try/catch inside an IIFE is the correct adapter:
+  // catch ANY throw and convert it to a typed ProtocolError value.
+  const imports = (() => {
+    try {
+      return transpiler.scanImports(sourceText)
+    } catch (cause) {
+      return malformed("page source is not parseable", cause)
+    }
+  })()
+  if (imports instanceof ProtocolError) return imports
   for (const record of imports) {
     if (record.path === RUNTIME_SPECIFIER) continue
     if (record.kind === "require-call" && COMPILER_INJECTED_JSX_SPECIFIERS.has(record.path)) continue
@@ -68,12 +88,6 @@ export function scanPageImports(sourceText: string): ProtocolError | void {
     })
   }
 }
-
-const malformed = (reason: string, cause?: unknown) =>
-  new ProtocolError({ code: "MALFORMED_PROTOCOL", reason, cause })
-
-const sourceHashMismatch = (reason: string) =>
-  new ProtocolError({ code: "SOURCE_HASH_MISMATCH", reason })
 
 /**
  * Load and validate a page module (host-supervision §6.5-6.6, runtime-api §7.2).
