@@ -228,7 +228,7 @@ describe("createHostSession lifecycle", () => {
     const stopPromise = session.stop()
     // Block until the 1s shutdown-ack timer is armed, then trip it. The forced kill
     // resolves `exited` under a microtask, so the 1s reap timer never needs advancing.
-    await waitUntil(() => clock.pending() >= 1, "shutdown-ack timer armed")
+    await waitUntil(() => clock.pending() >= 3, "shutdown-ack timer armed")
     clock.advance(1_000)
     const stop = await stopPromise
     expect(stop.phase).toBe("stopped")
@@ -253,5 +253,173 @@ describe("createHostSession lifecycle", () => {
     expect(stop.forced).toBe(true) // forged-identity ack was rejected, not accepted
     expect(stop.reason).toContain("MALFORMED_PROTOCOL")
     expect(session.phase).toBe("stopped")
+  })
+})
+
+// --- 2D-2: post-ready pump + stop-via-request-table ---
+
+/**
+ * Extends the responding fake host with post-ready behavior: it answers `ping`
+ * with `pong`, `resize`/`set-mode` with a correlated echo, and can emit a data
+ * frame / heartbeat on demand. Built on the same onWrite decode loop.
+ */
+function livePreviewChild(): ScriptedChild {
+  const child = createScriptedChild()
+  let id: { sessionId: string; nonce: string } | null = null
+  let messageId = 1n
+  const nextId = () => {
+    const value = messageId.toString()
+    messageId += 1n
+    return value
+  }
+  const send = (env: ControlEnvelope) => {
+    const framed = frameControl(env)
+    if (!(framed instanceof ProtocolError)) child.emit(framed)
+  }
+  child.onWrite = (bytes) => void decode(bytes)
+  async function decode(bytes: Uint8Array) {
+    const carrier = createScriptedChild()
+    carrier.emit(bytes)
+    carrier.endStdout()
+    for await (const message of readInbound(carrier)) {
+      if (message instanceof Error) return
+      if (message.messageClass !== "control") return
+      const raw = JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope & { kind: string }
+      if (raw.kind === "client.hello" && id === null) {
+        id = { sessionId: raw.sessionId, nonce: raw.nonce }
+        const hostHello: HostHelloV1 = {
+          framingVersion: 1, kind: "host.hello", sessionId: id.sessionId, nonce: id.nonce,
+          selectedFramingVersion: 1, selectedProtocolVersion: 1, runtimeDeclaration, limits: PROTOCOL_HARD_LIMITS,
+        }
+        const framed = frameHostHello(hostHello)
+        if (!(framed instanceof ProtocolError)) child.emit(framed)
+        return
+      }
+      if (id === null) return
+      if (raw.kind === "mount") {
+        send({ protocolVersion: 1, kind: "ready", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { size: { w: 80, h: 24 }, interactionMode: "static" } })
+        const frame: FrameEnvelope = { protocolVersion: 1, kind: "frame", sessionId: id.sessionId, nonce: id.nonce, sourceHash: spec.sourceHash, frameSeq: "1", width: 80, height: 24, rows: Array.from({ length: 24 }, () => []) }
+        const framed = frameFrame(frame)
+        if (!(framed instanceof ProtocolError)) child.emit(framed)
+        return
+      }
+      if (raw.kind === "ping") {
+        send({ protocolVersion: 1, kind: "pong", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: {} })
+        return
+      }
+      if (raw.kind === "resize") {
+        send({ protocolVersion: 1, kind: "resize", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { size: raw.body.size! } })
+        return
+      }
+      if (raw.kind === "set-mode") {
+        send({ protocolVersion: 1, kind: "set-mode", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { interactionMode: raw.body.interactionMode! } })
+        return
+      }
+      if (raw.kind === "shutdown") {
+        send({ protocolVersion: 1, kind: "shutdown-ack", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { ok: true } })
+        child.simulateExit({ code: 0 })
+        return
+      }
+    }
+  }
+  // Helper: emit a post-ready frame / heartbeat once identity is known.
+  ;(child as ScriptedChild & { emitFrame(seq: string): void; emitHeartbeat(): void }).emitFrame = (seq) => {
+    if (id === null) return
+    const frame: FrameEnvelope = { protocolVersion: 1, kind: "frame", sessionId: id.sessionId, nonce: id.nonce, sourceHash: spec.sourceHash, frameSeq: seq, width: 80, height: 24, rows: Array.from({ length: 24 }, () => []) }
+    const framed = frameFrame(frame)
+    if (!(framed instanceof ProtocolError)) child.emit(framed)
+  }
+  ;(child as ScriptedChild & { emitFrame(seq: string): void; emitHeartbeat(): void }).emitHeartbeat = () => {
+    if (id === null) return
+    send({ protocolVersion: 1, kind: "heartbeat", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), body: {} })
+  }
+  return child
+}
+
+describe("createHostSession post-ready pump (2D-2)", () => {
+  test("the firstFrame reaches the broker and post-ready frames stream through it", async () => {
+    const child = livePreviewChild() as ScriptedChild & { emitFrame(seq: string): void }
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+
+    const iterator = session.frames[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    expect(first.value?.frameSeq).toBe("1") // the captured firstFrame published at pump start
+
+    child.emitFrame("2")
+    const second = await iterator.next()
+    expect(second.value?.frameSeq).toBe("2")
+
+    await session.stop()
+  })
+
+  test("a correlated ping resolves through the request table", async () => {
+    const child = livePreviewChild()
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const pong = await session.ping()
+    expect(pong).not.toBeInstanceOf(SupervisorError)
+    if (pong instanceof Error) throw pong
+    expect(pong.kind).toBe("pong")
+    await session.stop()
+  })
+
+  test("a heartbeat feeds the watchdog; 5 s of silence tears down to failed with HEARTBEAT_TIMEOUT", async () => {
+    const child = livePreviewChild() as ScriptedChild & { emitHeartbeat(): void }
+    const clock = createManualClock()
+    const fatals: (SupervisorError | ProtocolError)[] = []
+    const base = deps(child, clock).deps
+    const session = createHostSession(spec, { ...base, onFatal: (e) => fatals.push(e) })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    // Arm the 5 s heartbeat deadline (the pump called watchdog.start() at ready).
+    await waitUntil(() => clock.pending() >= 1, "heartbeat timer armed")
+    clock.advance(5_000)
+    // `phase` flips to "failed" SYNCHRONOUSLY inside failFromReady, but onFatal is
+    // invoked at the END of the async finalizeFatalTeardown — so wait on `fatals`,
+    // NOT on `phase`, or the assertion runs before onFatal fires (deterministic red).
+    await waitUntil(() => fatals.length === 1, "onFatal fired after teardown")
+    expect(session.phase).toBe("failed")
+    expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("HEARTBEAT_TIMEOUT")
+  })
+
+  test("stop() correlates shutdown-ack through the request table (graceful path still works)", async () => {
+    const child = livePreviewChild()
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const stop = await session.stop()
+    expect(stop.phase).toBe("stopped")
+    expect(stop.forced).toBe(false)
+    expect(stop.exitCode).toBe(0)
+  })
+
+  test("a post-ready frame with a wrong nonce is a fatal MALFORMED_PROTOCOL, not a silent drop (§10.1/§5.3/§12)", async () => {
+    const child = livePreviewChild()
+    const clock = createManualClock()
+    const fatals: (SupervisorError | ProtocolError)[] = []
+    const base = deps(child, clock).deps
+    const session = createHostSession(spec, { ...base, onFatal: (e) => fatals.push(e) })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    // The live child (correct identity) emits a frame whose nonce does NOT match this
+    // incarnation. With ONE decoder there is no cross-nonce noise — it is a real §10.1
+    // violation the pump must fatal, not drop. (A backwards frameSeq is symmetric: the
+    // broker returns "stale" on an identity-valid frame → onPumpFatal MALFORMED_PROTOCOL.)
+    const forged: FrameEnvelope = {
+      protocolVersion: 1, kind: "frame", sessionId: session.identity.sessionId, nonce: "f".repeat(32),
+      sourceHash: spec.sourceHash, frameSeq: "2", width: 80, height: 24, rows: Array.from({ length: 24 }, () => []),
+    }
+    const framed = frameFrame(forged)
+    if (framed instanceof ProtocolError) throw framed
+    child.emit(framed)
+    await waitUntil(() => fatals.length === 1, "pump fataled on the wrong-nonce frame")
+    expect(session.phase).toBe("failed")
+    expect(fatals[0] instanceof ProtocolError && fatals[0].code).toBe("MALFORMED_PROTOCOL")
   })
 })

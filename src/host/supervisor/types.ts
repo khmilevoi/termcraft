@@ -5,7 +5,7 @@ import type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
 } from "../protocol"
-import type { HostSessionIdentity, HostSessionSpec, PreviewFrame } from "../types"
+import type { HostSessionIdentity, HostSessionSpec, InteractionMode, PreviewFrame, Size } from "../types"
 import type { Clock } from "./model/clock"
 import type { SupervisorError } from "./model/errors"
 
@@ -84,6 +84,18 @@ export interface HostSessionDeps {
   readonly onControlEvent?: (event: ControlEvent) => void
   /** Reuse a stable sessionId across restart (2D-3); a new nonce is always minted. */
   readonly sessionId?: string
+  /** A fatal post-`ready` outcome (heartbeat timeout, unresponsive, crash, protocol error). 2D-3 consumes it. */
+  readonly onFatal?: (error: SupervisorError | ProtocolError) => void
+  /** Test seams — default to the real constructors. The broker guard needs the minted identity. */
+  readonly createBroker?: (guard: { sessionId: string; nonce: string; sourceHash: string }) => FrameBroker
+  readonly createRequestTable?: (
+    clock: Clock,
+    opts?: { onTimeout?: () => void; capacity?: number; timeoutMs?: number },
+  ) => RequestTable
+  readonly createWatchdog?: (
+    clock: Clock,
+    opts: { onUnhealthy: (error: SupervisorError) => void },
+  ) => HeartbeatWatchdog
 }
 
 /** The typed session handle returned to Kernel code (§3.1). No raw streams/process. */
@@ -92,6 +104,12 @@ export interface HostSession {
   readonly phase: SessionPhase
   start(): Promise<ProtocolError | SupervisorError | ReadyOutcome>
   stop(): Promise<StopOutcome>
+  /** Complete immutable frames from the internal broker (§3.2). Only meaningful after `ready`. */
+  readonly frames: AsyncIterable<PreviewFrame>
+  /** Correlated post-`ready` requests. Resolve on the child's response, a 2 s QUERY_TIMEOUT, or teardown. */
+  resize(size: Size): Promise<ControlEnvelope | ProtocolError | SupervisorError>
+  setMode(mode: InteractionMode): Promise<ControlEnvelope | ProtocolError | SupervisorError>
+  ping(): Promise<ControlEnvelope | ProtocolError | SupervisorError>
 }
 
 /** Capacity-1 latest-wins preview frame broker (§8, §10.1). */
