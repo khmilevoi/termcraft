@@ -6,6 +6,7 @@ export { buildChildEnv, createBunSpawn } from "./model/spawn"
 export { mintIdentity, mintNonce } from "./model/identity"
 export { createHostSession } from "./model/session"
 export { createFrameBroker } from "./model/frame-broker"
+export { REQUEST_TABLE_CAPACITY, createRequestTable } from "./model/request-table"
 export type {
   ChildStdin,
   ControlEvent,
@@ -13,6 +14,7 @@ export type {
   HostSession,
   HostSessionDeps,
   ReadyOutcome,
+  RequestTable,
   SessionPhase,
   SpawnCommand,
   SpawnFn,

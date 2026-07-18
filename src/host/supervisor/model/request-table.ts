@@ -1,0 +1,93 @@
+// ProtocolError is type-only here (it flows through the table as a terminal outcome
+// when the pump settles a request with a MALFORMED_PROTOCOL identity error).
+import type { ControlEnvelope, ProtocolError } from "../../protocol"
+import type { RequestTable } from "../types"
+import type { Clock, TimerHandle } from "./clock"
+import { SupervisorError } from "./errors"
+
+/** Outstanding request table capacity (host-supervision §8). */
+export const REQUEST_TABLE_CAPACITY = 64
+const QUERY_TIMEOUT_MS = 2_000
+
+interface PendingEntry {
+  readonly kind: string
+  readonly settle: (result: ControlEnvelope | ProtocolError | SupervisorError) => void
+  readonly timer: TimerHandle
+}
+
+/**
+ * The outstanding request table (host-supervision §7, §8, §9). Every registered
+ * request has exactly ONE terminal outcome: a matching `resolve`, a local
+ * `supersede` (`SUPERSEDED`), a 2 s `QUERY_TIMEOUT`, or a teardown `clear`. A
+ * response for an unknown/already-settled correlation id is discarded. `onTimeout`
+ * feeds the heartbeat watchdog's unresponsiveness counter (§9).
+ */
+export function createRequestTable(
+  clock: Clock,
+  opts?: { onTimeout?: () => void; capacity?: number; timeoutMs?: number },
+): RequestTable {
+  const capacity = opts?.capacity ?? REQUEST_TABLE_CAPACITY
+  const timeoutMs = opts?.timeoutMs ?? QUERY_TIMEOUT_MS
+  const onTimeout = opts?.onTimeout
+  const entries = new Map<string, PendingEntry>()
+
+  function register(requestId: string, kind: string): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
+    if (entries.size >= capacity) {
+      return Promise.resolve(
+        new SupervisorError({ code: "TOO_MANY_REQUESTS", reason: `request table full (${capacity})` }),
+      )
+    }
+    if (entries.has(requestId)) {
+      return Promise.resolve(
+        new SupervisorError({ code: "TRANSPORT_ERROR", reason: `duplicate requestId ${requestId}` }),
+      )
+    }
+    // Bind the resolver to a const outside the executor (the TS7 `never`-narrowing
+    // trap the 2D-1 session.ts nextInbound already documents).
+    let settle!: (result: ControlEnvelope | ProtocolError | SupervisorError) => void
+    const promise = new Promise<ControlEnvelope | ProtocolError | SupervisorError>((resolve) => {
+      settle = resolve
+    })
+    const timer = clock.setTimer(timeoutMs, () => {
+      entries.delete(requestId)
+      onTimeout?.()
+      settle(new SupervisorError({ code: "QUERY_TIMEOUT", reason: `no response for ${kind} within ${timeoutMs}ms` }))
+    })
+    entries.set(requestId, { kind, settle, timer })
+    return promise
+  }
+
+  function resolve(responseTo: string, envelope: ControlEnvelope): void {
+    const entry = entries.get(responseTo)
+    if (entry === undefined) return // late / unknown response — discarded (§9)
+    entry.timer.cancel()
+    entries.delete(responseTo)
+    entry.settle(envelope)
+  }
+
+  function supersede(requestId: string, reason: string): void {
+    const entry = entries.get(requestId)
+    if (entry === undefined) return
+    entry.timer.cancel()
+    entries.delete(requestId)
+    entry.settle(new SupervisorError({ code: "SUPERSEDED", reason }))
+  }
+
+  function clear(error?: ProtocolError | SupervisorError): void {
+    const terminal =
+      error ?? new SupervisorError({ code: "TRANSPORT_ERROR", reason: "request table cleared on teardown" })
+    for (const entry of entries.values()) {
+      entry.timer.cancel()
+      entry.settle(error === undefined ? terminal : error)
+    }
+    entries.clear()
+  }
+
+  return {
+    register,
+    resolve,
+    supersede,
+    clear,
+    size: () => entries.size,
+  }
+}

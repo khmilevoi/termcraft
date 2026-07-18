@@ -102,3 +102,14 @@ export interface FrameBroker {
   framesCoalesced(): number
   close(): void
 }
+
+/** The outstanding request table (§7, §8, §9). Every request has one terminal outcome. */
+export interface RequestTable {
+  /** Reserve a correlation id; resolves on resolve()/supersede()/timeout/clear. */
+  register(requestId: string, kind: string): Promise<ControlEnvelope | ProtocolError | SupervisorError>
+  resolve(responseTo: string, envelope: ControlEnvelope): void
+  supersede(requestId: string, reason: string): void
+  /** Teardown: settle every outstanding request with `error` (or a default TRANSPORT_ERROR). */
+  clear(error?: ProtocolError | SupervisorError): void
+  size(): number
+}
