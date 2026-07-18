@@ -113,3 +113,11 @@ export interface RequestTable {
   clear(error?: ProtocolError | SupervisorError): void
   size(): number
 }
+
+/** The §9 heartbeat / liveness watchdog. Fires `onUnhealthy` at most once. */
+export interface HeartbeatWatchdog {
+  start(): void
+  feedHeartbeat(): void
+  noteRequestTimeout(): void
+  stop(): void
+}

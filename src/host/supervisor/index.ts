@@ -7,10 +7,12 @@ export { mintIdentity, mintNonce } from "./model/identity"
 export { createHostSession } from "./model/session"
 export { createFrameBroker } from "./model/frame-broker"
 export { REQUEST_TABLE_CAPACITY, createRequestTable } from "./model/request-table"
+export { createHeartbeatWatchdog } from "./model/heartbeat-watchdog"
 export type {
   ChildStdin,
   ControlEvent,
   FrameBroker,
+  HeartbeatWatchdog,
   HostSession,
   HostSessionDeps,
   ReadyOutcome,
