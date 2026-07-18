@@ -5,7 +5,7 @@ import type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
 } from "../protocol"
-import type { HostSessionIdentity, HostSessionSpec } from "../types"
+import type { HostSessionIdentity, HostSessionSpec, PreviewFrame } from "../types"
 import type { Clock } from "./model/clock"
 import type { SupervisorError } from "./model/errors"
 
@@ -92,4 +92,13 @@ export interface HostSession {
   readonly phase: SessionPhase
   start(): Promise<ProtocolError | SupervisorError | ReadyOutcome>
   stop(): Promise<StopOutcome>
+}
+
+/** Capacity-1 latest-wins preview frame broker (§8, §10.1). */
+export interface FrameBroker {
+  /** Atomic capacity-1 replace. Rejects a frame failing the §10.1 identity/seq guard. */
+  publish(frame: FrameEnvelope): "accepted" | "stale"
+  readonly frames: AsyncIterable<PreviewFrame>
+  framesCoalesced(): number
+  close(): void
 }

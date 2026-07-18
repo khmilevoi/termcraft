@@ -5,9 +5,11 @@ export type { Clock, TimerHandle, ManualClock } from "./model/clock"
 export { buildChildEnv, createBunSpawn } from "./model/spawn"
 export { mintIdentity, mintNonce } from "./model/identity"
 export { createHostSession } from "./model/session"
+export { createFrameBroker } from "./model/frame-broker"
 export type {
   ChildStdin,
   ControlEvent,
+  FrameBroker,
   HostSession,
   HostSessionDeps,
   ReadyOutcome,
@@ -17,3 +19,4 @@ export type {
   SpawnedChild,
   StopOutcome,
 } from "./types"
+export type { PreviewFrame, PreviewIdentity } from "../types"

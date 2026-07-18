@@ -3,6 +3,8 @@ export type {
   HostSessionIdentity,
   HostSessionSpec,
   InteractionMode,
+  PreviewFrame,
+  PreviewIdentity,
   Size,
   TerminalCapabilities,
 } from "./types"
