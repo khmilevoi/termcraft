@@ -43,7 +43,7 @@ const spec: HostSessionSpec = {
  * reply, so the supervisor's real drive loop runs end-to-end. Reads the
  * supervisor's minted sessionId/nonce off the client.hello it receives.
  */
-function respondingChild(options?: { skipReady?: boolean; skipHello?: boolean }): ScriptedChild {
+function respondingChild(options?: { skipReady?: boolean; skipHello?: boolean; badAckIdentity?: boolean }): ScriptedChild {
   const child = createScriptedChild()
   let id: { sessionId: string; nonce: string } | null = null
   let messageId = 1n
@@ -119,7 +119,10 @@ function respondingChild(options?: { skipReady?: boolean; skipHello?: boolean })
             protocolVersion: 1,
             kind: "shutdown-ack",
             sessionId: id.sessionId,
-            nonce: id.nonce,
+            // A hostile/stale child can echo the correct responseTo but a WRONG
+            // nonce — §5.2/§10.1 make that a fatal identity mismatch the supervisor
+            // must reject (not accept as a graceful ack).
+            nonce: options?.badAckIdentity ? "f".repeat(32) : id.nonce,
             messageId: nextId(),
             responseTo: env.requestId,
             body: { ok: true },
@@ -231,6 +234,24 @@ describe("createHostSession lifecycle", () => {
     expect(stop.phase).toBe("stopped")
     expect(stop.forced).toBe(true)
     expect(stop.signalCode).toBe("SIGTERM")
+    expect(session.phase).toBe("stopped")
+  })
+
+  test("rejects a shutdown-ack whose identity echo is wrong and forces the stop", async () => {
+    // The child returns a shutdown-ack with the correct responseTo but a WRONG
+    // nonce. §5.2/§10.1: every decoded inbound envelope must echo the incarnation's
+    // sessionId AND nonce — a mismatch is fatal. The supervisor must NOT accept the
+    // forged ack as a graceful shutdown of THIS incarnation; it must force.
+    const child = respondingChild({ badAckIdentity: true })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+
+    const stop = await session.stop()
+    expect(stop.phase).toBe("stopped")
+    expect(stop.forced).toBe(true) // forged-identity ack was rejected, not accepted
+    expect(stop.reason).toContain("MALFORMED_PROTOCOL")
     expect(session.phase).toBe("stopped")
   })
 })

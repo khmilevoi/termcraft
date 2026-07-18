@@ -334,6 +334,12 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       if (message.messageClass === "data") continue // late frame; ignore during stop
       const envelope = decodeControlEnvelope(message.payload)
       if (envelope instanceof ProtocolError) return envelope
+      // §5.2/§10.1: every decoded inbound envelope must echo this incarnation's
+      // sessionId AND nonce — a mismatch is fatal, exactly as awaitReady enforces.
+      // Without this a stale/hostile child could echo the correct responseTo with a
+      // wrong nonce and have its forged ack accepted as a clean graceful shutdown.
+      const identityError = checkEnvelopeIdentity(envelope)
+      if (identityError instanceof ProtocolError) return identityError
       if (envelope.kind === "shutdown-ack" && envelope.responseTo === requestId) return envelope
       // route other post-ready control events to the sink but keep waiting
       deps.onControlEvent?.({ kind: envelope.kind, envelope })
