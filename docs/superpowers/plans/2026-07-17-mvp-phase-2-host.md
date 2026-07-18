@@ -77,7 +77,7 @@ No cross-module import is introduced in phase 2.
 | 2A | `2026-07-17-mvp-phase-2a-protocol.md` | `host/protocol/` — closed wire schemas + validating codec | phase-0 `infrastructure/framing` | §5, §5.1–5.3, §7.1 |
 | 2B | `2026-07-17-mvp-phase-2b-render.md` | `host/render/` — headless renderer + styled-frame capture | phase-1 `runtime/` (partial), OpenTUI public API | §5.3, Spikes B/D |
 | 2C | `2026-07-17-mvp-phase-2c-session.md` | `host/session/` — `_host` entry, resolver, host protocol loop | 2A, 2B, `runtime/` | §6, §7, §11, Spikes A/E |
-| 2D | `2026-07-17-mvp-phase-2d-supervisor.md` | `host/supervisor/` — HostSupervisor, PreviewSession, broker | 2A, 2C | §3, §4, §8, §9, §10, §12, §13 |
+| 2D | `2026-07-18-mvp-phase-2d-supervisor.md` (master index → 2D-1…2D-4 sub-plans, written JIT) | `host/supervisor/` — HostSupervisor, PreviewSession, broker | 2A, 2C | §3, §4, §8, §9, §10, §12, §13 |
 
 2A and 2B are independent and can be built in either order; 2B is the phase-1
 unblocker. 2C consumes both. 2D consumes 2A + 2C. Written and executed in this
