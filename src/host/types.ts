@@ -18,3 +18,30 @@ export interface Size {
 export interface TerminalCapabilities {
   readonly colorDepth: number
 }
+
+/** The specification every host session (all four modes) is created from (§3.1). */
+export interface HostSessionSpec {
+  readonly mode: HostMode
+  readonly interactionMode: InteractionMode
+  readonly pageSlug: string
+  readonly sourcePath: string
+  readonly sourceHash: string
+  readonly kitApiVersion: number
+  readonly size: Size
+  readonly theme: string
+  readonly capabilities: TerminalCapabilities
+}
+
+/**
+ * A logical session's minted identity (§3.1). `sessionId` (UUIDv7) is stable
+ * across automatic restart; `nonce` (32 lowercase hex) identifies one process
+ * incarnation. Supervisor-minted only — never caller-supplied.
+ */
+export interface HostSessionIdentity {
+  readonly mode: HostMode
+  readonly pageSlug: string
+  readonly sourceHash: string
+  readonly kitApiVersion: number
+  readonly sessionId: string
+  readonly nonce: string
+}

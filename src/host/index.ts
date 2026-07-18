@@ -1,1 +1,8 @@
-export type { HostMode, InteractionMode, Size, TerminalCapabilities } from "./types"
+export type {
+  HostMode,
+  HostSessionIdentity,
+  HostSessionSpec,
+  InteractionMode,
+  Size,
+  TerminalCapabilities,
+} from "./types"
