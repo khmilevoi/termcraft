@@ -152,3 +152,25 @@ export interface HeartbeatWatchdog {
   noteRequestTimeout(): void
   stop(): void
 }
+
+/** One restart-policy decision (§10): restart after a backoff, or open the circuit. */
+export type RestartAction =
+  | { readonly action: "restart"; readonly delayMs: number; readonly attempt: number }
+  | { readonly action: "open"; readonly attempts: number; readonly reason: string }
+
+/**
+ * The per-`(pageSlug, sourceHash)` restart budget + base-2 backoff + circuit
+ * breaker (§10). Pure and clock-free — `now` is a parameter. Shared by preview
+ * and historical sessions for one source so opening/closing views cannot evade
+ * crash-loop protection.
+ */
+export interface RestartPolicy {
+  /** Classify + record an incarnation failure; decide restart (backoff) or open. */
+  recordFailure(key: string, error: ProtocolError | SupervisorError, now: number): RestartAction
+  /** True once the circuit is open for this key; latches until `retry`. */
+  isOpen(key: string): boolean
+  /** Manual retry: clears the key's failure history and closes the circuit once. */
+  retry(key: string): void
+  /** Budgeted failures still inside the rolling window at `now`. */
+  failureCount(key: string, now: number): number
+}

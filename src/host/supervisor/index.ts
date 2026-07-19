@@ -9,6 +9,13 @@ export { createPreviewSession } from "./model/preview-session"
 export { createFrameBroker } from "./model/frame-broker"
 export { REQUEST_TABLE_CAPACITY, createRequestTable } from "./model/request-table"
 export { createHeartbeatWatchdog } from "./model/heartbeat-watchdog"
+export {
+  createRestartPolicy,
+  classifyFailure,
+  RESTART_WINDOW_MS,
+  MAX_AUTOMATIC_RESTARTS,
+  BACKOFF_BASE_MS,
+} from "./model/restart-policy"
 export type {
   ChildStdin,
   ControlEvent,
@@ -19,6 +26,8 @@ export type {
   PreviewSession,
   ReadyOutcome,
   RequestTable,
+  RestartAction,
+  RestartPolicy,
   SessionPhase,
   SpawnCommand,
   SpawnFn,
