@@ -1,3 +1,3 @@
 export type { Clock } from "./types"
 export { systemClock } from "./model/system-clock"
-export { isRfc3339Utc } from "./model/rfc3339"
+export { isRfc3339Utc, rfc3339UtcSchema } from "./model/rfc3339"

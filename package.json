@@ -14,7 +14,8 @@
     "@reatom/react": "^1001.0.0",
     "errore": "^0.14.1",
     "react": "^19.2.7",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14"

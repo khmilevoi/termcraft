@@ -1,4 +1,5 @@
 import * as errore from "errore"
+import { z } from "zod"
 
 import type { PageSlug } from "../types"
 
@@ -34,3 +35,13 @@ export function parsePageSlug(raw: string) {
   }
   return raw as PageSlug
 }
+
+/** A Zod schema for {@link parsePageSlug} — decoders elsewhere reuse this rather than reimplementing the mask. */
+export const pageSlugSchema = z.string().transform((raw, ctx) => {
+  const slug = parsePageSlug(raw)
+  if (slug instanceof Error) {
+    ctx.addIssue({ code: "custom", message: slug.message })
+    return z.NEVER
+  }
+  return slug
+})

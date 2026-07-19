@@ -1,4 +1,5 @@
 import * as errore from "errore"
+import { z } from "zod"
 
 import { ProtocolError } from "../../protocol"
 import type { LoadPageArgs, LoadedPage, ValidatedPageMeta } from "../types"
@@ -146,40 +147,27 @@ export async function loadPage(args: LoadPageArgs): Promise<ProtocolError | Load
 
 const THEME_MAX = 64
 const TITLE_MAX = 256
+const AXIS_MAX = 2048
+
+const pageSizeSchema = z.object({
+  w: z.number().int().positive().max(AXIS_MAX),
+  h: z.number().int().positive().max(AXIS_MAX),
+})
+
+const pageMetaSchema = z.object({
+  kitApiVersion: z.number().int().positive(),
+  title: z.string().min(1).max(TITLE_MAX),
+  theme: z.string().min(1).max(THEME_MAX),
+  minSize: pageSizeSchema,
+})
 
 /** Structurally validate the imported `meta` (runtime-api §4 static contract). */
 function validateMeta(value: unknown): ProtocolError | ValidatedPageMeta {
-  if (value === null || typeof value !== "object") {
-    return malformed("page meta must be an object")
+  const result = pageMetaSchema.safeParse(value)
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    const path = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "meta"
+    return malformed(`${path}: ${issue?.message ?? "invalid page meta"}`)
   }
-  const meta = value as Record<string, unknown>
-  const kitApiVersion = meta.kitApiVersion
-  if (typeof kitApiVersion !== "number" || !Number.isSafeInteger(kitApiVersion) || kitApiVersion <= 0) {
-    return malformed("meta.kitApiVersion must be a positive integer")
-  }
-  if (typeof meta.title !== "string" || meta.title.length === 0 || meta.title.length > TITLE_MAX) {
-    return malformed("meta.title must be a bounded non-empty string")
-  }
-  if (typeof meta.theme !== "string" || meta.theme.length === 0 || meta.theme.length > THEME_MAX) {
-    return malformed("meta.theme must be a bounded non-empty string")
-  }
-  const size = validateSize(meta.minSize)
-  if (size instanceof ProtocolError) return size
-  return { kitApiVersion, title: meta.title, minSize: size, theme: meta.theme }
-}
-
-const AXIS_MAX = 2048
-
-function validateSize(value: unknown): ProtocolError | { w: number; h: number } {
-  if (value === null || typeof value !== "object") return malformed("size must be an object")
-  const size = value as Record<string, unknown>
-  const w = size.w
-  const h = size.h
-  if (typeof w !== "number" || !Number.isSafeInteger(w) || w <= 0 || w > AXIS_MAX) {
-    return malformed(`size.w must be a positive integer <= ${AXIS_MAX}`)
-  }
-  if (typeof h !== "number" || !Number.isSafeInteger(h) || h <= 0 || h > AXIS_MAX) {
-    return malformed(`size.h must be a positive integer <= ${AXIS_MAX}`)
-  }
-  return { w, h }
+  return result.data
 }

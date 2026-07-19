@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /**
  * Canonical lowercase UUIDv7. Bun's implementation embeds a millisecond
  * timestamp plus a monotonic sub-millisecond counter, so in-process ids
@@ -19,3 +21,6 @@ const CANONICAL_UUIDV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3
 export function isCanonicalUuidv7(value: string): boolean {
   return CANONICAL_UUIDV7.test(value)
 }
+
+/** A Zod schema for {@link isCanonicalUuidv7} — the shared identity check every decoder reuses. */
+export const canonicalUuidv7Schema = z.string().refine(isCanonicalUuidv7, { error: "must be a canonical UUIDv7" })

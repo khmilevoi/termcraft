@@ -1,121 +1,88 @@
 import * as errore from "errore"
+import { z } from "zod"
 
-import { isRfc3339Utc } from "infrastructure/clock"
-import { isCanonicalUuidv7 } from "infrastructure/uuid"
-import { parsePageSlug } from "entities/page"
-import type { PageSlug } from "entities/page"
+import { rfc3339UtcSchema } from "infrastructure/clock"
+import { canonicalUuidv7Schema } from "infrastructure/uuid"
+import { pageSlugSchema } from "entities/page"
 import type { CommentsHeader, Pin, PinCreatedEvent, PinEvent, PinStatusEvent } from "../types"
 
 /**
  * A schema, identity, or fold violation in a comments header/event (storage-identity
  * §11.2). Decoders and the fold return this as a value — corruption is data, not an
- * exception. Unknown extra fields are IGNORED (forward-compatible).
+ * exception. Unknown extra fields are IGNORED (forward-compatible: every schema below
+ * is a plain `z.object`, which strips unrecognized keys rather than rejecting them).
  */
 export class PinDecodeError extends errore.createTaggedError({
   name: "PinDecodeError",
   message: "pin decode failed [$code]: $reason",
 }) {}
 
-type Obj = Record<string, unknown>
-
 function fail(code: string, reason: string): PinDecodeError {
   return new PinDecodeError({ code, reason })
 }
 
-function asObject(value: unknown): Obj | PinDecodeError {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return fail("SHAPE", "record is not a JSON object")
-  return value as Obj
-}
-
-function reqString(obj: Obj, key: string): string | PinDecodeError {
-  const v = obj[key]
-  if (typeof v !== "string" || v.length === 0) return fail("FIELD", `\`${key}\` must be a non-empty string`)
-  return v
-}
-
-function reqUuid(obj: Obj, key: string): string | PinDecodeError {
-  const v = reqString(obj, key)
-  if (v instanceof Error) return v
-  if (!isCanonicalUuidv7(v)) return fail("IDENTITY", `\`${key}\` is not a canonical UUIDv7`)
-  return v
-}
-
-function reqTs(obj: Obj): string | PinDecodeError {
-  const v = reqString(obj, "ts")
-  if (v instanceof Error) return v
-  if (!isRfc3339Utc(v)) return fail("TIMESTAMP", "`ts` is not a UTC RFC 3339 timestamp")
-  return v
+/** Maps the first Zod issue to a `PinDecodeError` (decoders fail on the first violation, like the hand-rolled checks they replace). */
+function toDecodeError(error: z.ZodError): PinDecodeError {
+  const issue = error.issues[0]
+  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE"
+  return fail(code, issue?.message ?? "invalid input")
 }
 
 /** A fraction in the closed unit interval [0,1] (a pin's normalized anchor coordinate). */
-function reqFraction(obj: Obj, key: string): number | PinDecodeError {
-  const v = obj[key]
-  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) return fail("FIELD", `\`${key}\` must be a finite number in [0,1]`)
-  return v
-}
+const fractionSchema = z.number().min(0).max(1)
 
-/** Text is empty-allowed on a pin, unlike an identity string. */
-function reqText(obj: Obj): string | PinDecodeError {
-  const v = obj["text"]
-  if (typeof v !== "string") return fail("FIELD", "`text` must be a string")
-  return v
-}
+const commentsHeaderSchema = z.object({
+  kind: z.literal("pins"),
+  formatVersion: z.literal(1),
+  projectId: canonicalUuidv7Schema,
+  pageSlug: pageSlugSchema,
+})
 
-function decodeCreated(obj: Obj): PinCreatedEvent | PinDecodeError {
-  const recordId = reqUuid(obj, "recordId")
-  if (recordId instanceof Error) return recordId
-  const pinId = reqUuid(obj, "pinId")
-  if (pinId instanceof Error) return pinId
-  const element = reqString(obj, "element")
-  if (element instanceof Error) return element
-  const fx = reqFraction(obj, "fx")
-  if (fx instanceof Error) return fx
-  const fy = reqFraction(obj, "fy")
-  if (fy instanceof Error) return fy
-  const text = reqText(obj)
-  if (text instanceof Error) return text
-  const ts = reqTs(obj)
-  if (ts instanceof Error) return ts
-  return { kind: "pin:created", recordId, pinId, element, fx, fy, text, ts }
-}
+const pinCreatedEventSchema = z.object({
+  kind: z.literal("pin:created"),
+  recordId: canonicalUuidv7Schema,
+  pinId: canonicalUuidv7Schema,
+  element: z.string().min(1),
+  fx: fractionSchema,
+  fy: fractionSchema,
+  text: z.string(), // empty-allowed on a pin, unlike an identity string
+  ts: rfc3339UtcSchema,
+})
 
-function decodeStatus(obj: Obj): PinStatusEvent | PinDecodeError {
-  const recordId = reqUuid(obj, "recordId")
-  if (recordId instanceof Error) return recordId
-  const pinId = reqUuid(obj, "pinId")
-  if (pinId instanceof Error) return pinId
-  const status = obj["status"]
-  if (status !== "open" && status !== "resolved") return fail("FIELD", "`status` must be open or resolved")
-  const ts = reqTs(obj)
-  if (ts instanceof Error) return ts
-  const hasAction = obj["actionId"] !== undefined
-  const hasTurn = obj["turnId"] !== undefined
-  if (hasAction === hasTurn) return fail("IDENTITY", "exactly one of `actionId`/`turnId` is required")
-  if (hasAction) {
-    const actionId = reqUuid(obj, "actionId")
-    if (actionId instanceof Error) return actionId
-    return { kind: "pin:status", recordId, pinId, status, actionId, ts }
-  }
-  const turnId = reqUuid(obj, "turnId")
-  if (turnId instanceof Error) return turnId
-  return { kind: "pin:status", recordId, pinId, status, turnId, ts }
-}
+const pinStatusEventSchema = z.object({
+  kind: z.literal("pin:status"),
+  recordId: canonicalUuidv7Schema,
+  pinId: canonicalUuidv7Schema,
+  status: z.enum(["open", "resolved"]),
+  actionId: canonicalUuidv7Schema.optional(),
+  turnId: canonicalUuidv7Schema.optional(),
+  ts: rfc3339UtcSchema,
+})
+
+/**
+ * Exactly one of `actionId`/`turnId` is required on a status event (storage-identity
+ * §11.2). Checked on the parsed union, not on an individual member — `discriminatedUnion`
+ * only accepts plain object members, so the cross-field XOR rule lives here instead.
+ */
+const pinEventSchema = z
+  .discriminatedUnion("kind", [pinCreatedEventSchema, pinStatusEventSchema])
+  .superRefine((val, ctx) => {
+    if (val.kind !== "pin:status") return
+    const hasAction = val.actionId !== undefined
+    const hasTurn = val.turnId !== undefined
+    if (hasAction === hasTurn) {
+      ctx.addIssue({ code: "custom", message: "exactly one of `actionId`/`turnId` is required" })
+    }
+  })
 
 /**
  * Decode a comments JSONL header (storage-identity §11.2): `kind = "pins"`,
  * `formatVersion = 1`, canonical `projectId`, and a valid `pageSlug`.
  */
 export function decodeCommentsHeader(value: unknown): CommentsHeader | PinDecodeError {
-  const obj = asObject(value)
-  if (obj instanceof Error) return obj
-  if (obj["kind"] !== "pins") return fail("KIND", "header `kind` must be \"pins\"")
-  if (obj["formatVersion"] !== 1) return fail("VERSION", "header `formatVersion` must be 1")
-  const projectId = reqUuid(obj, "projectId")
-  if (projectId instanceof Error) return projectId
-  if (typeof obj["pageSlug"] !== "string") return fail("FIELD", "`pageSlug` must be a slug string")
-  const pageSlug = parsePageSlug(obj["pageSlug"])
-  if (pageSlug instanceof Error) return fail("IDENTITY", pageSlug.message)
-  return { kind: "pins", formatVersion: 1, projectId, pageSlug: pageSlug as PageSlug }
+  const result = commentsHeaderSchema.safeParse(value)
+  if (!result.success) return toDecodeError(result.error)
+  return result.data
 }
 
 /**
@@ -123,16 +90,9 @@ export function decodeCommentsHeader(value: unknown): CommentsHeader | PinDecode
  * or any invalid field is a `PinDecodeError`; extra fields are ignored.
  */
 export function decodePinEvent(value: unknown): PinEvent | PinDecodeError {
-  const obj = asObject(value)
-  if (obj instanceof Error) return obj
-  switch (obj["kind"]) {
-    case "pin:created":
-      return decodeCreated(obj)
-    case "pin:status":
-      return decodeStatus(obj)
-    default:
-      return fail("KIND", `unknown event kind ${JSON.stringify(obj["kind"])}`)
-  }
+  const result = pinEventSchema.safeParse(value)
+  if (!result.success) return toDecodeError(result.error)
+  return result.data
 }
 
 /**

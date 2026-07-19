@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /**
  * A UTC RFC 3339 timestamp as termcraft writes it (storage-identity §11.1): a
  * date-time with a `T` separator, optional fractional seconds, and a UTC designator
@@ -10,3 +12,6 @@ export function isRfc3339Utc(value: string): boolean {
   if (!RFC3339_UTC.test(value)) return false
   return !Number.isNaN(Date.parse(value))
 }
+
+/** A Zod schema for {@link isRfc3339Utc} — the shared `ts` check every decoder reuses. */
+export const rfc3339UtcSchema = z.string().refine(isRfc3339Utc, { error: "must be a UTC RFC 3339 timestamp" })
