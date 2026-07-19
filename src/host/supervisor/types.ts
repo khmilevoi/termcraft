@@ -230,3 +230,89 @@ export interface RestartPolicy {
   /** Budgeted failures still inside the rolling window at `now`. */
   failureCount(key: string, now: number): number
 }
+
+/**
+ * A capacity-1 latest-wins relay of already-built `PreviewFrame` values that
+ * outlives individual incarnations (§10.1). The supervisor points it at the
+ * current incarnation's guarded `frames`; on restart the old incarnation's broker
+ * closes and the relay is re-pointed at the new incarnation, so a stable UI
+ * consumer keeps ONE `frames` iterator across automatic restarts. No identity
+ * guard — the per-incarnation broker already validated every frame.
+ */
+export interface PreviewRelay {
+  readonly frames: AsyncIterable<PreviewFrame>
+  publish(frame: PreviewFrame): void
+  close(): void
+}
+
+/** The observable lifecycle state of one supervised key (§10). */
+export type SupervisorState = "starting" | "queued" | "ready" | "backoff" | "circuit-open" | "stopped"
+
+/**
+ * A bounded, structured lifecycle diagnostic emitted to the injected sink (§13).
+ * No absolute paths, env values, or source contents — only the source-hash prefix
+ * and nonce-free identity. Phase 6 wires this onto the Kernel event channel.
+ */
+export interface SupervisorEvent {
+  readonly type: "spawning" | "ready" | "backoff" | "circuitOpened" | "stopped"
+  readonly key: string
+  readonly sessionId: string
+  readonly pageSlug: string
+  readonly sourceHashPrefix: string
+  /** restart attempt (spawning/backoff) */
+  readonly attempt?: number
+  /** backoff delay before the next attempt (backoff) */
+  readonly delayMs?: number
+  /** total failed incarnations (circuitOpened) */
+  readonly attempts?: number
+  /** bounded reason (backoff/circuitOpened/stopped) */
+  readonly reason?: string
+}
+
+/**
+ * A stable, crash-loop-safe preview handle (§10, §10.1). Its `identity` (nonce
+ * omitted) and `frames` relay survive automatic restart; `retry` performs the
+ * user-triggered manual retry that clears the key's budget once.
+ */
+export interface PreviewHandle {
+  readonly identity: PreviewIdentity
+  readonly frames: AsyncIterable<PreviewFrame>
+  state(): SupervisorState
+  retry(): void
+  close(): Promise<void>
+}
+
+/** Injected dependencies of the standalone `HostSupervisor` (§13). */
+export interface HostSupervisorDeps {
+  readonly clock: Clock
+  readonly runtimeDeclaration: RuntimeDeclarationBundleV1
+  /** The spawn command for a spec (the execPath-vs-dev branch is phase-8's job, Spike E). */
+  readonly spawnFor: (spec: HostSessionSpec) => SpawnCommand
+  readonly spawn: SpawnFn
+  /** Mint a stable per-key sessionId (UUIDv7); a fresh nonce is minted per incarnation. */
+  readonly mintSessionId: () => string
+  readonly offeredLimits?: PublicLimits
+  /** Bounded lifecycle diagnostics sink (§13). Phase 6 wires it to the Kernel. */
+  readonly onEvent?: (event: SupervisorEvent) => void
+  /** Workspace-trust gate checked before any host starts (§13); phase-4 ledger injects the real one. */
+  readonly checkTrust?: () => SupervisorError | null
+  /** Test seam: the incarnation factory. Defaults to `createHostSession`. */
+  readonly createSession?: (spec: HostSessionSpec, deps: HostSessionDeps) => HostSession
+  /** ≤10 live host processes globally (§13). */
+  readonly maxGlobalHosts?: number
+  /** Kernel-owned bounded start queue depth past the global limit (§13). */
+  readonly startQueueCapacity?: number
+}
+
+/**
+ * The standalone Kernel-side supervisor that owns multiple preview sessions (§2,
+ * §10, §13): per-`(pageSlug, sourceHash)` restart budget + backoff + circuit, the
+ * ≤10 global host limit + 64-deep `HOST_CAPACITY` start queue, and manual retry.
+ * Phase 6 injects it behind the Kernel command/event boundary.
+ */
+export interface HostSupervisor {
+  preview(spec: HostSessionSpec): PreviewHandle | SupervisorError
+  /** Live (non-stopped, non-queued) incarnation count across all keys (§13 ≤10). */
+  liveCount(): number
+  stopAll(): Promise<void>
+}

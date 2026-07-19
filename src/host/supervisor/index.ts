@@ -25,6 +25,8 @@ export {
   STDERR_FLOOD_MAX_BYTES,
 } from "./model/flood-monitor"
 export { createControlMailbox, CONTROL_MAILBOX_CAPACITY } from "./model/control-mailbox"
+export { createPreviewRelay } from "./model/preview-relay"
+export { createHostSupervisor } from "./model/supervisor"
 export type {
   ChildStdin,
   CoalesceOutcome,
@@ -36,6 +38,10 @@ export type {
   HeartbeatWatchdog,
   HostSession,
   HostSessionDeps,
+  HostSupervisor,
+  HostSupervisorDeps,
+  PreviewHandle,
+  PreviewRelay,
   PreviewSession,
   QueuedCommand,
   ReadyOutcome,
@@ -43,6 +49,8 @@ export type {
   RestartAction,
   RestartPolicy,
   SessionPhase,
+  SupervisorEvent,
+  SupervisorState,
   SpawnCommand,
   SpawnFn,
   SpawnedChild,
