@@ -31,3 +31,12 @@ export function themeTokens(id: ThemeId): ThemeTokens {
 
 /** The default theme every MVP page renders against until a theme override lands. */
 export const DEFAULT_THEME_ID: ThemeId = "dark-default"
+
+/**
+ * The active theme's tokens for a component to render against. MVP resolves the
+ * single `dark-default` theme; this is the seam a theme context / preview-override
+ * atom (§6) replaces later, so components never hard-code hues — they call this.
+ */
+export function activeTokens(): ThemeTokens {
+  return themeTokens(DEFAULT_THEME_ID)
+}

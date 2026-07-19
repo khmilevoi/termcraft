@@ -26,3 +26,7 @@ export type { Atom, Action, Computed, AtomLike, Ext, ConnectionCleanup, Connecti
 
 // Theme token registry (§5.4)
 export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens"
+
+// Design-system component catalog (§3.2) — grows task-by-task
+export { Text } from "./ui/text"
+export type { TextProps } from "./ui/text"
