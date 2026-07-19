@@ -1,1 +1,1 @@
-export { uuidv7 } from "./model/uuidv7"
+export { isCanonicalUuidv7, uuidv7 } from "./model/uuidv7"
