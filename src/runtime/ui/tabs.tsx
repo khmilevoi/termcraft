@@ -26,10 +26,11 @@ export interface TabsProps {
 /**
  * Themed tab strip (design-system, runtime-api §3.2). MVP renders a STATIC
  * highlighted label row — an OpenTUI `<box flexDirection="row">` of label `Text`s;
- * the active tab is bold + `accent`, the rest `foregroundMuted`. The mandatory `id`
- * flows to the box for the host's geometry queries and the shell's select/pin, and
- * each label carries its own `${id}-tab-${tab.id}` id. `onSelect` is accepted for the
- * phase-7 interactive path and stays inert here. Colors are semantic token names.
+ * the active tab is prefixed with the design's `▸` (U+25B8) marker and rendered
+ * bold + `accent`, the rest `foregroundMuted`. The mandatory `id` flows to the box
+ * for the host's geometry queries and the shell's select/pin, and each label
+ * carries its own `${id}-tab-${tab.id}` id. `onSelect` is accepted for the phase-7
+ * interactive path and stays inert here. Colors + marker match the design engine.
  */
 export function Tabs(props: TabsProps) {
   return (
@@ -46,7 +47,7 @@ export function Tabs(props: TabsProps) {
               color={active ? "accent" : "foregroundMuted"}
               bold={active}
             >
-              {tab.label}
+              {active ? `▸ ${tab.label}` : tab.label}
             </Text>
           </box>
         )

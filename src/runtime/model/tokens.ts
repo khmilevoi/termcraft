@@ -1,23 +1,32 @@
 import type { ThemeId, ThemeTokens } from "../types"
 
 /**
- * The `dark-default` palette (runtime-api §5.4). MVP ships this theme only;
- * `light-default` arrives in v1.0. Every token is a lowercase `#rrggbb` string,
- * the true-color form OpenTUI accepts and the render layer emits (Spike B). The
- * exact hues are refined against the design system in the phase-7 UI pass; the
- * token NAMES are the stable contract components bind to, not the hues.
+ * The `dark-default` palette (runtime-api §5.4). These are the design system's
+ * REAL hues, taken 1:1 from `design/termcraft-engine.js`'s `pal` object (a warm
+ * amber-on-near-black terminal theme) — not a placeholder. Every token is a
+ * lowercase `#rrggbb` string, the true-color form OpenTUI accepts and the render
+ * layer emits (Spike B). MVP ships this theme only; the design also defines a
+ * `lightPal()` (bg #efe9dc, fg #33302a, amber #a8701a, …) that a `light-default`
+ * theme will carry in v1.0.
  */
 const DARK_DEFAULT: ThemeTokens = {
-  background: "#0d1117",
-  surface: "#161b22",
-  surfaceMuted: "#21262d",
-  foreground: "#e6edf3",
-  foregroundMuted: "#8b949e",
-  border: "#30363d",
-  accent: "#58a6ff",
-  success: "#3fb950",
-  warning: "#d29922",
-  danger: "#f85149",
+  background: "#14110d",
+  surface: "#231d12",
+  foreground: "#d7d0c2",
+  foregroundMuted: "#8f877a",
+  foregroundFaint: "#5b544a",
+  border: "#403a2f",
+  line: "#2c2820",
+  accent: "#e6a23c",
+  accentHi: "#f6c163",
+  accentDim: "#8a6d33",
+  selection: "#392c11",
+  selectionFg: "#f6c163",
+  success: "#8fb96b",
+  warning: "#f6c163",
+  danger: "#dd7b60",
+  dangerDim: "#4d2a20",
+  statusBg: "#231d12",
 }
 
 const THEMES: Record<ThemeId, ThemeTokens> = {

@@ -35,7 +35,7 @@ describe("Button component (design-system §3.2)", () => {
     expect((label?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foreground)
   })
 
-  test("a disabled button colors its label with the muted token", async () => {
+  test("a disabled button colors its label with the faint token", async () => {
     const handle = await createHeadlessRenderer({ w: 12, h: 3 })
     open = handle
     handle.mount(
@@ -45,6 +45,6 @@ describe("Button component (design-system §3.2)", () => {
     )
     await handle.render()
     const label = findRun(handle.capture(), "No")
-    expect((label?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foregroundMuted)
+    expect((label?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foregroundFaint)
   })
 })

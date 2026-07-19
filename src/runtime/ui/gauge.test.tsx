@@ -24,19 +24,19 @@ describe("Gauge component (design-system §3.2)", () => {
     await handle.render()
     const text = lineText(handle.capture(), 0)
     expect(count(text, "█")).toBe(5)
-    expect(count(text, "░")).toBe(5)
+    expect(count(text, "╌")).toBe(5)
   })
 
-  test("the filled span is accent and the empty span is foreground-muted", async () => {
+  test("the filled span is accent and the empty span is the border track", async () => {
     const handle = await createHeadlessRenderer({ w: 12, h: 1 })
     open = handle
     handle.mount(<Gauge id="bar" value={0.5} width={10} />)
     await handle.render()
     const runs = lineRuns(handle.capture(), 0)
     const filled = runs.find((run) => run.text.includes("█"))
-    const empty = runs.find((run) => run.text.includes("░"))
+    const empty = runs.find((run) => run.text.includes("╌"))
     expect((filled?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent)
-    expect((empty?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foregroundMuted)
+    expect((empty?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").border)
   })
 
   test("an out-of-range value clamps: >1 fills fully, <0 fills nothing", async () => {
@@ -46,7 +46,7 @@ describe("Gauge component (design-system §3.2)", () => {
     await over.render()
     const overText = lineText(over.capture(), 0)
     expect(count(overText, "█")).toBe(4)
-    expect(count(overText, "░")).toBe(0)
+    expect(count(overText, "╌")).toBe(0)
     over.destroy()
     open = null
 
@@ -56,7 +56,7 @@ describe("Gauge component (design-system §3.2)", () => {
     await under.render()
     const underText = lineText(under.capture(), 0)
     expect(count(underText, "█")).toBe(0)
-    expect(count(underText, "░")).toBe(4)
+    expect(count(underText, "╌")).toBe(4)
   })
 
   test("the label renders after the bar", async () => {

@@ -33,14 +33,19 @@ describe("List component (design-system §3.2)", () => {
     expect(lineText(frame, 2)).toContain("charlie")
   })
 
-  test("the selected row carries the accent hue and bold attribute", async () => {
+  test("the selected row follows the design recipe: selection bg + selectionFg text + a ▸ marker, bold", async () => {
     const handle = await createHeadlessRenderer({ w: 12, h: 3 })
     open = handle
     handle.mount(<List id="menu" items={ITEMS} selectedId="b" />)
     await handle.render()
-    const selected = lineRuns(handle.capture(), 1).find((run) => run.text.includes("bravo"))
-    expect((selected?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent)
+    const runs = lineRuns(handle.capture(), 1)
+    const selected = runs.find((run) => run.text.includes("bravo"))
+    expect((selected?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").selectionFg)
+    expect((selected?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").selection)
     expect((selected?.attrs ?? 0) & 0b1).toBe(0b1)
+    // the accent ▸ gutter marker precedes the label on the selected row
+    const marker = runs.find((run) => run.text.includes("▸"))
+    expect((marker?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent)
   })
 
   test("unselected rows use the foreground hue and no bold", async () => {

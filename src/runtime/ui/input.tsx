@@ -32,8 +32,8 @@ export function Input(props: InputProps) {
       placeholder={props.placeholder}
       focused={props.focused}
       textColor={tokens.foreground}
-      placeholderColor={tokens.foregroundMuted}
-      backgroundColor={tokens.surface}
+      placeholderColor={tokens.foregroundFaint}
+      backgroundColor={tokens.background}
       onInput={props.onChange}
     />
   )

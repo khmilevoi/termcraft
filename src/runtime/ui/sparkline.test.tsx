@@ -32,13 +32,13 @@ describe("Sparkline component (design-system §3.2)", () => {
     expect(indices[0]).toBeLessThan(indices[3] ?? -1)
   })
 
-  test("renders the glyph string in the token color (default accent)", async () => {
+  test("renders the glyph string in the token color (default success)", async () => {
     const handle = await createHeadlessRenderer({ w: 8, h: 1 })
     open = handle
     handle.mount(<Sparkline id="trend" values={[0, 1, 2, 3]} />)
     await handle.render()
     const run = lineRuns(handle.capture(), 0).find((styled) => [...styled.text].some((char) => GLYPHS.includes(char)))
-    expect((run?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent)
+    expect((run?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").success)
   })
 
   test("an empty series renders empty without throwing", async () => {

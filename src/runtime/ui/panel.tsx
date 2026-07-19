@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ThemeTokens } from "../types"
 import { activeTokens } from "../model/tokens"
 
 /** Props for the `Panel` bordered container. `id` is the mandatory stable id (§3.2). */
@@ -10,14 +11,20 @@ export interface PanelProps {
   readonly children?: unknown
   /** Uniform inner padding inside the border. */
   readonly padding?: number
+  /** A semantic token for the border; defaults to `border`. Design variants: `accent` (active/popup), `accentHi` (hover), `danger` (error), `line` (dimmed). */
+  readonly borderColor?: keyof ThemeTokens
+  /** A semantic token for the title; defaults to `foreground`. Design variants: `accentHi` (popup/active), `foregroundMuted` (welded sub-panel). */
+  readonly titleColor?: keyof ThemeTokens
 }
 
 /**
- * A titled, bordered column container (design-system §3.2). Draws a single-line
- * border in the theme's `border` hue with an optional `title` in the
- * `foreground` hue, then stacks its children vertically inside. Colors are
- * resolved from semantic tokens so a theme swap re-colors every panel without
- * touching sources; the mandatory `id` flows to the element for host geometry.
+ * A titled, bordered column container (design-system §3.2). Default draws a
+ * single-line border in `border` with an optional `title` in `foreground` bold —
+ * the engine's `box()` defaults. `borderColor`/`titleColor` accept semantic tokens
+ * so a caller renders the design's variants (an active/popup panel uses an `accent`
+ * border + `accentHi` title; an error panel a `danger` border; a welded sub-panel a
+ * `foregroundMuted` title). Colors resolve from tokens; the mandatory `id` flows to
+ * the element for host geometry.
  */
 export function Panel(props: PanelProps) {
   const tokens = activeTokens()
@@ -25,9 +32,9 @@ export function Panel(props: PanelProps) {
     <box
       id={props.id}
       border
-      borderColor={tokens.border}
+      borderColor={tokens[props.borderColor ?? "border"]}
       title={props.title}
-      titleColor={tokens.foreground}
+      titleColor={tokens[props.titleColor ?? "foreground"]}
       flexDirection="column"
       padding={props.padding}
     >

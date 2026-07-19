@@ -13,7 +13,9 @@ export interface GaugeProps {
 }
 
 const FILLED_GLYPH = "█"
-const EMPTY_GLYPH = "░"
+// The design's gauge track is a thin dashed rule (╌ U+254C), distinct from ─ and a
+// blank cell — matched from design/termcraft-engine.js's gauge draw method.
+const EMPTY_GLYPH = "╌"
 const DEFAULT_WIDTH = 10
 
 /** Clamp a fraction into 0..1, mapping NaN to 0 so the bar always renders. */
@@ -26,9 +28,10 @@ function clamp01(value: number): number {
 
 /**
  * A horizontal fill bar (design-system §3.2). Rounds `clamp01(value) * width` to
- * a filled-cell count, drawing `█` in `accent` for the filled span and `░` in
- * `foregroundMuted` for the remainder, with an optional trailing label `Text`.
- * Composes a `row` box so the two spans read as one contiguous bar.
+ * a filled-cell count, drawing `█` in `accent` for the filled span and the `╌`
+ * dashed track in `border` for the remainder, with an optional trailing label
+ * `Text` in the design's dim label hue. Composes a `row` box so the two spans read
+ * as one contiguous bar. Colors + glyphs match the design engine's gauge.
  */
 export function Gauge(props: GaugeProps) {
   const width = props.width ?? DEFAULT_WIDTH
@@ -42,12 +45,12 @@ export function Gauge(props: GaugeProps) {
         </Text>
       ) : null}
       {empty > 0 ? (
-        <Text id={`${props.id}-empty`} color="foregroundMuted">
+        <Text id={`${props.id}-empty`} color="border">
           {EMPTY_GLYPH.repeat(empty)}
         </Text>
       ) : null}
       {props.label !== undefined ? (
-        <Text id={`${props.id}-label`} color="foreground">
+        <Text id={`${props.id}-label`} color="foregroundMuted">
           {` ${props.label}`}
         </Text>
       ) : null}

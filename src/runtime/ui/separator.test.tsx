@@ -22,7 +22,7 @@ describe("Separator rule (design-system §3.2)", () => {
     await handle.render()
     const frame = handle.capture()
     const band = lineRuns(frame, 0).find((run) => run.bg !== "default")
-    expect((band?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").border)
+    expect((band?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").line)
     expect(band?.text.length).toBe(10)
     // Only one row thick — the next row carries no themed band.
     expect(lineRuns(frame, 1).find((run) => run.bg !== "default")).toBeUndefined()
@@ -34,7 +34,7 @@ describe("Separator rule (design-system §3.2)", () => {
     handle.mount(<Separator id="sep" direction="vertical" />)
     await handle.render()
     const band = lineRuns(handle.capture(), 0).find((run) => run.bg !== "default")
-    expect((band?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").border)
+    expect((band?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").line)
     expect(band?.text.length).toBe(1)
   })
 })

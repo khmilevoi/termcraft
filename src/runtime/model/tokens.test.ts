@@ -10,14 +10,21 @@ describe("theme token registry (§5.4)", () => {
     const keys: (keyof ThemeTokens)[] = [
       "background",
       "surface",
-      "surfaceMuted",
       "foreground",
       "foregroundMuted",
+      "foregroundFaint",
       "border",
+      "line",
       "accent",
+      "accentHi",
+      "accentDim",
+      "selection",
+      "selectionFg",
       "success",
       "warning",
       "danger",
+      "dangerDim",
+      "statusBg",
     ]
     for (const key of keys) expect(tokens[key]).toMatch(HEX)
   })

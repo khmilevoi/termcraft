@@ -8,6 +8,25 @@ and `/errore` before the first code-related action. Follow both skills
 throughout the entire session. This requirement applies unconditionally to
 all code work in this repository.
 
+## Design is a source of truth — never invent it
+
+The project already has a complete, authoritative design system. All visual
+decisions — colors, palette/token hues, layout, spacing, borders, glyphs,
+component states, status-bar language — MUST be taken from it, never invented or
+approximated with placeholder values.
+
+- The canonical palette lives in [`design/termcraft-engine.js`](design/termcraft-engine.js):
+  the dark theme is the `pal` object; the light theme is `lightPal()`. Use those
+  exact `#rrggbb` values.
+- The per-screen visual source of truth is `design/*.dc.html` (27 screens) plus
+  the engine's draw methods; `design/Termcraft UI.dc.html` is the overview.
+- Before writing or changing any UI/token/component code, read the relevant
+  design source and match it exactly. If the design does not cover a case, ask or
+  flag the gap explicitly — do not guess a color, hue, glyph, or layout.
+- When a design value cannot be reproduced 1:1 in the current runtime (e.g. glyph
+  rules vs. color bands), implement the closest faithful mapping and document the
+  divergence in a code comment; never silently substitute an invented value.
+
 ## Code style
 
 Group code by entity/feature, not by technical layer. Each module is a folder

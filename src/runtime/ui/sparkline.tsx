@@ -7,7 +7,7 @@ export interface SparklineProps {
   readonly id: string
   /** The series to plot; an empty series renders empty. */
   readonly values: readonly number[]
-  /** A semantic theme token name for the glyphs; defaults to `accent`. */
+  /** A semantic theme token name for the glyphs; defaults to `success` (the design's sparkline green). */
   readonly color?: keyof ThemeTokens
 }
 
@@ -30,11 +30,11 @@ function glyphFor(value: number, min: number, max: number): string {
 /**
  * A single-line block-glyph trend (design-system §3.2). Scales each value between
  * the series min and max onto `▁…█` and renders the glyph string as one themed
- * `Text` in `color` (default `accent`). An empty series renders an empty anchor
- * — it never throws.
+ * `Text` in `color` (default `success` — the design renders sparklines in the
+ * live/throughput green). An empty series renders an empty anchor — it never throws.
  */
 export function Sparkline(props: SparklineProps) {
-  const color = props.color ?? "accent"
+  const color = props.color ?? "success"
   const values = props.values
   if (values.length === 0) {
     return (
