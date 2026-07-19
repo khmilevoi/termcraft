@@ -27,6 +27,10 @@ export type { Atom, Action, Computed, AtomLike, Ext, ConnectionCleanup, Connecti
 // Theme token registry (§5.4)
 export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens"
 
+// Runtime capabilities (§6): dormant tweaks + host-scoped mode/export + theme
+export { defineTweaks, isExport, isExportAtom, hostModeAtom, interactionModeAtom, themeCapability } from "./model/capabilities"
+export type { ThemeCapability } from "./model/capabilities"
+
 // Design-system component catalog (§3.2): layout, text, interactive, data widgets.
 // Every component carries a mandatory stable `id` (selection/pins key on it).
 export { Row } from "./ui/row"
