@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { PageSlug } from "../../entities/page"
+import type { PageSlug } from "entities/page"
 import type { GateError, GateWarning, PageDescriptor } from "../types"
 import { isPassing, makeGateResult } from "./gate-result"
 

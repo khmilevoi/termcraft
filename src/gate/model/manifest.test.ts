@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import { parsePageSlug } from "../../entities/page"
-import type { PageSlug } from "../../entities/page"
+import { parsePageSlug } from "entities/page"
+import type { PageSlug } from "entities/page"
 import { checkManifestSlice } from "./manifest"
 
 /** Test helper: a known-good slug, or throw (fixtures must use valid slugs deliberately). */

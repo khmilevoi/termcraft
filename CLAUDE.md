@@ -53,6 +53,43 @@ by the module that consumes them, the domain-free `infrastructure/` ring, and th
 composition root — is fixed in
 [`docs/architecture/code-structure.md`](docs/architecture/code-structure.md).
 
+## Imports
+
+Cross-module imports use absolute paths, aliased at the top-level module
+boundary — never a relative import (`../..` or deeper) that climbs out of the
+current module or `entities/` submodule. The aliases are configured via
+`tsconfig.json`'s `compilerOptions.paths`; Bun resolves that same mapping at
+runtime and inside `bun build --compile`, so no separate bundler config is
+needed:
+
+```
+entities, entities/*         -> src/entities, src/entities/*
+core, core/*                 -> src/core, src/core/*
+store, store/*               -> src/store, src/store/*
+agent, agent/*                -> src/agent, src/agent/*
+gate, gate/*                  -> src/gate, src/gate/*
+host, host/*                  -> src/host, src/host/*
+ui, ui/*                      -> src/ui, src/ui/*
+runtime, runtime/*            -> src/runtime, src/runtime/*
+infrastructure, infrastructure/* -> src/infrastructure, src/infrastructure/*
+```
+
+Each module gets two `paths` entries: the bare name (for `import ... from
+"host"`, resolving that module's own `index.ts`) and the `/*` wildcard (for any
+subpath). The wildcard alone does not cover the bare import — TypeScript
+reports `Cannot find module` for it without the paired non-wildcard entry.
+
+- Relative imports (`./`, `../`) stay allowed only inside one module or one
+  `entities/` submodule — e.g. `pin/model/decode.ts` importing `pin/types.ts`.
+- The moment an import leaves that boundary — a different top-level module, or
+  a different `entities/` submodule (`pin` importing `page`) — use the alias:
+  `import { parsePageSlug } from "entities/page"`, not
+  `import { parsePageSlug } from "../../page"`.
+- Never alias under `@termcraft/*`. That scope is reserved for the real
+  `@termcraft/runtime` saved-page facade specifier
+  (`docs/architecture/code-structure.md` §9); reusing it for internal aliases
+  would collide with a meaningful, resolver-handled import.
+
 ## Architecture docs maintenance
 
 If a change alters behavior or structure covered by `docs/architecture/`, update

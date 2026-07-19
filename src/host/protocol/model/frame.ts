@@ -1,4 +1,4 @@
-import { encodeFrame } from "../../../infrastructure/framing"
+import { encodeFrame } from "infrastructure/framing"
 import type { Color, FrameEnvelope, StyledRun } from "../types"
 import { ProtocolError } from "./errors"
 import {

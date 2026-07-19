@@ -1,4 +1,4 @@
-import type { PageMeta, PageSlug } from "../entities/page"
+import type { PageMeta, PageSlug } from "entities/page"
 
 /**
  * The category of a FATAL gate violation (master §6.3). Each maps to one stage of

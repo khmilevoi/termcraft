@@ -2,7 +2,7 @@
 // of the public supervisor surface (never re-exported from index.ts). Lets the
 // transport/handshake/session suites drive the supervisor with no subprocess
 // (host-supervision §14.4 "scripted fake host"). Framing/encoding reuse 2A.
-import { encodeFrame } from "../../../infrastructure/framing"
+import { encodeFrame } from "infrastructure/framing"
 import {
   encodeControlEnvelope,
   encodeFrameEnvelope,

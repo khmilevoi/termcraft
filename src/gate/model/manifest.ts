@@ -1,7 +1,7 @@
 import * as errore from "errore"
 
-import { parsePageSlug } from "../../entities/page"
-import type { PageSlug } from "../../entities/page"
+import { parsePageSlug } from "entities/page"
+import type { PageSlug } from "entities/page"
 import type { GateError } from "../types"
 
 /**

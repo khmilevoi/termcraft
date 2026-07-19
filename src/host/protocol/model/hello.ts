@@ -1,4 +1,4 @@
-import { encodeFrame } from "../../../infrastructure/framing"
+import { encodeFrame } from "infrastructure/framing"
 import type { HostMode } from "../../types"
 import type {
   ClientHelloV1,

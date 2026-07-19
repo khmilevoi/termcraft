@@ -16,3 +16,15 @@ export function rgbaToColor(color: RGBA): Color {
   const [r, g, b] = color.toInts()
   return { rgb: `#${hexByte(r)}${hexByte(g)}${hexByte(b)}` }
 }
+
+export const isDefaultColor = (color: Color): color is "default" => {
+  return color === "default"
+}
+
+export const extractRgb = (color: Color): `#${string}` | undefined => {
+  return !isDefaultColor(color) && "rgb" in color ? color.rgb : undefined
+}
+
+export const extractIndexed = (color: Color): number | undefined => {
+  return !isDefaultColor(color) && "indexed" in color ? color.indexed : undefined
+}

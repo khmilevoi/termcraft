@@ -1,4 +1,4 @@
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import {
   encodeControlEnvelope,
   encodeFrameEnvelope,

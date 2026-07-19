@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import { ProtocolError } from "./errors"
 import {
   decodeClientHello,

@@ -1,4 +1,4 @@
-import { uuidv7 } from "../../../infrastructure/uuid"
+import { uuidv7 } from "infrastructure/uuid"
 import type { HostSessionSpec, HostSessionIdentity } from "../../types"
 
 const NONCE_BYTES = 16

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import { decodeControlEnvelope, encodeControlEnvelope } from "./control-envelope"
 import { decodeFrameEnvelope, encodeFrameEnvelope } from "./frame"
 import { decodeClientHello, encodeClientHello } from "./hello"

@@ -1,4 +1,4 @@
-import type { PageMeta } from "../../entities/page"
+import type { PageMeta } from "entities/page"
 import { lineColOf, SK, tokenize } from "./lexer"
 import type { Tok } from "./lexer"
 

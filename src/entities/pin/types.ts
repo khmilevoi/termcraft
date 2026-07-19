@@ -1,4 +1,4 @@
-import type { PageSlug } from "../page"
+import type { PageSlug } from "entities/page"
 
 /** First line of every comments JSONL (storage-identity §11.2). */
 export interface CommentsHeader {

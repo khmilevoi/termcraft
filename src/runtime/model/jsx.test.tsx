@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import type { RenderHandle } from "../../host/render/types"
-import type { StyledRun } from "../../host/protocol"
-import { createHeadlessRenderer } from "../../host/render/model/renderer"
+import type { RenderHandle } from "host/render/types"
+import type { StyledRun } from "host/protocol"
+import { createHeadlessRenderer } from "host/render/model/renderer"
 import { Fragment, jsx, jsxDEV, jsxs } from "./jsx"
 
 let open: RenderHandle | null = null

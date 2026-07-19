@@ -10,7 +10,27 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "paths": {
+      "entities": ["./src/entities"],
+      "entities/*": ["./src/entities/*"],
+      "core": ["./src/core"],
+      "core/*": ["./src/core/*"],
+      "store": ["./src/store"],
+      "store/*": ["./src/store/*"],
+      "agent": ["./src/agent"],
+      "agent/*": ["./src/agent/*"],
+      "gate": ["./src/gate"],
+      "gate/*": ["./src/gate/*"],
+      "host": ["./src/host"],
+      "host/*": ["./src/host/*"],
+      "ui": ["./src/ui"],
+      "ui/*": ["./src/ui/*"],
+      "runtime": ["./src/runtime"],
+      "runtime/*": ["./src/runtime/*"],
+      "infrastructure": ["./src/infrastructure"],
+      "infrastructure/*": ["./src/infrastructure/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["docs/spikes", "src/host/session/fixtures"]

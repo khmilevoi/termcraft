@@ -2,7 +2,7 @@ import { plugin } from "bun"
 
 import * as jsxDevRuntime from "@opentui/react/jsx-dev-runtime"
 import * as jsxRuntime from "@opentui/react/jsx-runtime"
-import * as runtime from "../../../runtime"
+import * as runtime from "runtime"
 
 let registered = false
 

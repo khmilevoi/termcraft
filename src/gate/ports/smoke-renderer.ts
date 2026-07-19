@@ -1,4 +1,4 @@
-import type { Size } from "../../entities/page"
+import type { Size } from "entities/page"
 import type { GateError } from "../types"
 
 /**

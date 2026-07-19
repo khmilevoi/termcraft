@@ -1,4 +1,4 @@
-import type { PageSlug } from "../../entities/page"
+import type { PageSlug } from "entities/page"
 import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types"
 import { makeGateResult } from "./gate-result"
 import { checkPageContract } from "./page-contract"

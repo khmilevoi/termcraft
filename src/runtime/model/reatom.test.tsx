@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from "bun:test"
 
-import type { RenderHandle } from "../../host/render/types"
-import { createHeadlessRenderer } from "../../host/render/model/renderer"
+import type { RenderHandle } from "host/render/types"
+import { createHeadlessRenderer } from "host/render/model/renderer"
 import { action, atom, computed, reatomComponent, wrap } from "./reatom"
 
 let open: RenderHandle | null = null

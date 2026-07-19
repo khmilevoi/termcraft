@@ -1,9 +1,9 @@
 import * as errore from "errore"
 
-import { isRfc3339Utc } from "../../../infrastructure/clock"
-import { isCanonicalUuidv7 } from "../../../infrastructure/uuid"
-import { parsePageSlug } from "../../page"
-import type { PageSlug } from "../../page"
+import { isRfc3339Utc } from "infrastructure/clock"
+import { isCanonicalUuidv7 } from "infrastructure/uuid"
+import { parsePageSlug } from "entities/page"
+import type { PageSlug } from "entities/page"
 import type { CommentsHeader, Pin, PinCreatedEvent, PinEvent, PinStatusEvent } from "../types"
 
 /**

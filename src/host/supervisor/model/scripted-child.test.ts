@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import { decodeHostHello, ProtocolError } from "../../protocol"
 import { createScriptedChild, frameHostHello } from "./scripted-child"
 

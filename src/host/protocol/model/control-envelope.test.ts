@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import { decodeControlEnvelope, encodeControlEnvelope } from "./control-envelope"
 import { ProtocolError } from "./errors"
 import type { ControlEnvelope } from "../types"

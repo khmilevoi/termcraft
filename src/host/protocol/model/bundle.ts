@@ -1,7 +1,7 @@
 import {
   CONTROL_PAYLOAD_LIMIT_BYTES,
   DATA_PAYLOAD_LIMIT_BYTES,
-} from "../../../infrastructure/framing"
+} from "infrastructure/framing"
 import type { PublicLimits, RuntimeDeclarationBundleV1 } from "../types"
 import { ProtocolError } from "./errors"
 import {

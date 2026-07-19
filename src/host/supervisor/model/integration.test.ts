@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { CURRENT_KIT_API_VERSION } from "../../../runtime"
+import { CURRENT_KIT_API_VERSION } from "runtime"
 import { PROTOCOL_HARD_LIMITS, ProtocolError } from "../../protocol"
 import type { RuntimeDeclarationBundleV1 } from "../../protocol"
 import type { HostSessionSpec } from "../../types"

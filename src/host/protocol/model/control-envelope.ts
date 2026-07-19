@@ -1,4 +1,4 @@
-import { encodeFrame } from "../../../infrastructure/framing"
+import { encodeFrame } from "infrastructure/framing"
 import type { ControlEnvelope } from "../types"
 import { ProtocolError } from "./errors"
 import {

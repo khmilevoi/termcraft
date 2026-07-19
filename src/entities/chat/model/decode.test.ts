@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { uuidv7 } from "../../../infrastructure/uuid"
+import { uuidv7 } from "infrastructure/uuid"
 import { ChatDecodeError, decodeChatHeader, decodeChatRecord } from "./decode"
 
 const TS = "2026-07-19T12:00:00.000Z"

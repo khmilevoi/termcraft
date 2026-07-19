@@ -1,4 +1,4 @@
-import { FrameDecoder } from "../../../infrastructure/framing"
+import { FrameDecoder } from "infrastructure/framing"
 import { ProtocolError } from "../../protocol"
 import { SupervisorError } from "./errors"
 import type { FloodMonitor, SpawnedChild } from "../types"

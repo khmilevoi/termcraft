@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { uuidv7 } from "../../../infrastructure/uuid"
+import { uuidv7 } from "infrastructure/uuid"
 import { decodeCommentsHeader, decodePinEvent, foldPins, PinDecodeError } from "./decode"
 import type { PinEvent } from "../types"
 

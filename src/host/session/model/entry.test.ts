@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { FrameDecoder, type WireFrame } from "../../../infrastructure/framing"
+import { FrameDecoder, type WireFrame } from "infrastructure/framing"
 import {
   decodeHostHello,
   encodeClientHello,
