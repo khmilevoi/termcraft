@@ -11,6 +11,24 @@ export interface Size {
 }
 
 /**
+ * The themed token palette a page renders against (runtime-api §5.4). Token NAMES
+ * are the stable contract the design-system components bind to; the concrete hues
+ * belong to the resolved `ThemeId`. Every value is a lowercase `#rrggbb` string.
+ */
+export interface ThemeTokens {
+  readonly background: string
+  readonly surface: string
+  readonly surfaceMuted: string
+  readonly foreground: string
+  readonly foregroundMuted: string
+  readonly border: string
+  readonly accent: string
+  readonly success: string
+  readonly warning: string
+  readonly danger: string
+}
+
+/**
  * A page's static metadata (§5.1). Authored through `definePage`; the Gate
  * reads this shape from the call's object literal without executing the page.
  * This type is deliberately independent of termcraft's internal `PageMeta`
