@@ -1,4 +1,5 @@
-import { createScanner, LanguageVariant, ScriptTarget, SyntaxKind } from "typescript/unstable/ast"
+import { lineColOf, SK, tokenize } from "./lexer"
+import type { Tok } from "./lexer"
 
 /** The one legal authored module specifier — the bare runtime root (runtime-api §3.1). */
 const RUNTIME_ROOT = "@termcraft/runtime"
@@ -12,16 +13,6 @@ export interface ImportScanError {
   readonly column: number
 }
 
-interface Tok {
-  readonly kind: number
-  readonly value: string
-  readonly pos: number
-}
-
-// Untyped view of the unstable AST enums — the API ships them but without stable
-// TS types on this pin; the values are the load-bearing thing.
-const SK = SyntaxKind as unknown as Record<string, number>
-
 /** The keywords that begin a LOCAL declaration export (never a re-export). */
 const DECLARATION_STARTS = new Set<number>(
   ["ConstKeyword", "LetKeyword", "VarKeyword", "FunctionKeyword", "ClassKeyword", "AsyncKeyword", "AbstractKeyword", "EnumKeyword", "InterfaceKeyword", "NamespaceKeyword", "ModuleKeyword", "DefaultKeyword"]
@@ -32,49 +23,6 @@ const DECLARATION_STARTS = new Set<number>(
 /** Tokens that end the search for an import specifier / an export `from` clause. */
 function isEdgeBoundary(kind: number): boolean {
   return kind === SK.SemicolonToken || kind === SK.ImportKeyword || kind === SK.ExportKeyword
-}
-
-interface Scanner {
-  setText(text: string): void
-  scan(): number
-  getTokenValue(): string
-  getTokenText(): string
-  getTokenStart(): number
-}
-
-// The unstable/ast `createScanner` type on this pin disagrees with the runtime
-// arg order (the classic `(languageVersion, skipTrivia, languageVariant)` call
-// produces correct tokens here). Cast to a permissive callable and use the
-// runtime-verified argument order.
-const makeScanner = createScanner as unknown as (a: unknown, b: unknown, c: unknown) => Scanner
-
-function tokenize(source: string): Tok[] {
-  const scanner = makeScanner(ScriptTarget.Latest, true, LanguageVariant.Standard)
-  scanner.setText(source)
-  const toks: Tok[] = []
-  // The unstable AST enum's end-of-file member is `EndOfFile` (=1), NOT
-  // `EndOfFileToken`. The `source.length + 1` cap is a hard backstop so a wrong
-  // terminal-token assumption can never spin (the token count is ≤ the char count).
-  const cap = source.length + 1
-  for (let kind = scanner.scan(), guard = 0; kind !== SK.EndOfFile && guard <= cap; kind = scanner.scan(), guard += 1) {
-    const value = kind === SK.StringLiteral ? scanner.getTokenValue() : kind === SK.Identifier ? scanner.getTokenText() : ""
-    toks.push({ kind, value, pos: scanner.getTokenStart() })
-  }
-  return toks
-}
-
-function lineColOf(source: string, pos: number): { line: number; column: number } {
-  let line = 1
-  let column = 1
-  for (let i = 0; i < pos && i < source.length; i += 1) {
-    if (source[i] === "\n") {
-      line += 1
-      column = 1
-    } else {
-      column += 1
-    }
-  }
-  return { line, column }
 }
 
 /** The first StringLiteral value at or after `from`, or null if none before an edge boundary. */

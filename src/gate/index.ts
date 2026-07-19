@@ -7,3 +7,5 @@ export type { GateError, GateErrorKind, GateResult, GateWarning, GateWarningKind
 export { makeGateResult, isPassing } from "./model/gate-result"
 export { scanImportAllowlist } from "./model/import-scan"
 export type { ImportScanError } from "./model/import-scan"
+export { checkPageContract } from "./model/page-contract"
+export type { PageContractError, PageContractResult } from "./model/page-contract"
