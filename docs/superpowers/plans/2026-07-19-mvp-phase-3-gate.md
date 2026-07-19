@@ -34,17 +34,21 @@ the installed package):
   — only `createScanner` (token lexer) + the walk guards.** So the parse entry point
   is the program API, not `ast`.
 - **`typescript/unstable/sync`** — the synchronous PROGRAM API (Spike C): exports
-  `API`, `Program`, `Project`, `Checker`, `Emitter`, `DiagnosticCategory`. The gate
-  creates a `Program`/`Project` over the candidate, gets its source-file AST (walked
-  with the `unstable/ast` guards for the import scan + contract read) AND the type
-  diagnostics (union global, dedupe on `(code, fileName, pos)`, crash-vs-clean).
-  **T0 for the next executor: nail the exact `Program`/`Project` construction +
-  source-file AST access from `unstable/sync` (the `API` class) on a fixture.**
-  Fallback if the Program AST is awkward: the `createScanner` token stream is
-  sufficient for the import-allowlist (scan tokens for `import`/`require`/`import(`
-  + the following string-literal specifier), losing only the author-vs-phantom-require
-  distinction — which the token stream actually PRESERVES (an author `require` is a
-  real token; the phantom is transform-injected and never in the source tokens).
+  `API`, `Program`, `Project`, `Checker`, `Emitter`, `DiagnosticCategory`. **PROBED
+  (this session): the `API` class is LSP-style** — methods `ensureInitialized`,
+  `parseConfigFile`, `updateSnapshot`, `clearSourceFileCache`, `close`, plus a
+  static `fromLSPConnection`. So T4's type check is: construct an `API`, initialize a
+  PROJECT (a tsconfig with `lib: ["esnext"]` pinned per Spike C + the ambient
+  `@termcraft/runtime` .d.ts and the JSX types the page needs to type-check),
+  `updateSnapshot(candidatePath, content)` for the candidate, then pull the semantic
+  diagnostics (union with global, dedupe on `(code, fileName, pos)`, distinguish a
+  compiler crash from a clean pass). **T0 for the next executor: probe the API's
+  init + a diagnostics-retrieval method on a fixture with a deliberate type error;
+  decide whether the in-process JS API works inside a `bun build --compile` binary
+  (the real Spike C question) or whether tsc must still be extracted + spawned.**
+  NOTE: the import-scan (T2) already uses the `createScanner` token stream and does
+  NOT need the Program — the source token stream naturally omits the transform's
+  phantom JSX edges and preserves author requires (done). Only T4 needs the Program.
 - **Spike C** (`docs/spikes/03-tsc-in-binary`): tsc is a per-platform native
   executable extracted once to `%LOCALAPPDATA%/termcraft/tsc-<version>/` + spawned;
   `lib: ["esnext"]` pinned. **OPEN: re-verify the extraction+spawn path on this tree.**
