@@ -31,6 +31,11 @@ export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens"
 export { defineTweaks, isExport, isExportAtom, hostModeAtom, interactionModeAtom, themeCapability } from "./model/capabilities"
 export type { ThemeCapability } from "./model/capabilities"
 
+// JSX helper surface (§3.2) + the low-level rendering escape hatch
+export { jsx, jsxs, jsxDEV, Fragment } from "./model/jsx"
+export { Box } from "./ui/primitive"
+export type { BoxProps } from "./ui/primitive"
+
 // Design-system component catalog (§3.2): layout, text, interactive, data widgets.
 // Every component carries a mandatory stable `id` (selection/pins key on it).
 export { Row } from "./ui/row"
