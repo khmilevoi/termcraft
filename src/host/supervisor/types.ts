@@ -305,6 +305,57 @@ export interface HostSupervisorDeps {
   readonly startQueueCapacity?: number
 }
 
+/** Injected dependencies for a one-shot `smoke`/`export` session (§4, §11.3, §11.4). */
+export interface OneShotDeps {
+  readonly spawn: SpawnFn
+  readonly command: SpawnCommand
+  readonly clock: Clock
+  readonly runtimeDeclaration: RuntimeDeclarationBundleV1
+  readonly offeredLimits?: PublicLimits
+  /** A stable sessionId for diagnostics; a fresh nonce is always minted. */
+  readonly sessionId?: string
+}
+
+/**
+ * The typed result of a one-shot `smoke`/`export` session (§4): the single sealed
+ * stand-in frame (nonce-free), the `ready` metadata envelope, and the child's exit
+ * code. A one-shot NEVER restarts — a failure is itself the result. NOTE: `frame`
+ * is the documented non-conformant MVP stand-in; the conformant correlated
+ * `capture` + layout-tree reply is deferred until the 2A bulk schema lands.
+ */
+export interface OneShotResult {
+  readonly identity: PreviewIdentity
+  readonly frame: PreviewFrame
+  readonly ready: ControlEnvelope
+  readonly negotiatedLimits: PublicLimits
+  readonly exitCode: number | null
+}
+
+/** One export task: a captured source at one requested size (§11.4), ordered by manifest then (w,h). */
+export interface ExportTask {
+  readonly spec: HostSessionSpec
+  /** Project page order (manifest order) — the primary publish-order key (§11.4). */
+  readonly manifestIndex: number
+}
+
+/** One export task's terminal outcome, tagged by its manifest index for in-order assembly. */
+export interface ExportTaskOutcome {
+  readonly manifestIndex: number
+  readonly spec: HostSessionSpec
+  readonly result: ProtocolError | SupervisorError | OneShotResult
+}
+
+/**
+ * The bounded export worker pool (§11.4): `min(4, max(1, floor(cpu/2)))` workers by
+ * default (machine-local override 1–8), a ready queue holding at most twice the
+ * worker count, and results published only in manifest/(w,h) order — never
+ * completion order — so pool scheduling cannot change package bytes. On any task
+ * failure it cancels pending tasks and reports the failure (all-or-nothing).
+ */
+export interface ExportPool {
+  run(tasks: readonly ExportTask[]): Promise<ProtocolError | SupervisorError | ExportTaskOutcome[]>
+}
+
 /**
  * The standalone Kernel-side supervisor that owns multiple preview sessions (§2,
  * §10, §13): per-`(pageSlug, sourceHash)` restart budget + backoff + circuit, the

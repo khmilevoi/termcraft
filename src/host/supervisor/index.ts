@@ -27,12 +27,16 @@ export {
 export { createControlMailbox, CONTROL_MAILBOX_CAPACITY } from "./model/control-mailbox"
 export { createPreviewRelay } from "./model/preview-relay"
 export { createHostSupervisor } from "./model/supervisor"
+export { runOneShotSession } from "./model/one-shot"
 export type {
   ChildStdin,
   CoalesceOutcome,
   ControlEvent,
   ControlMailbox,
   ControlQueue,
+  ExportPool,
+  ExportTask,
+  ExportTaskOutcome,
   FloodMonitor,
   FrameBroker,
   HeartbeatWatchdog,
@@ -40,6 +44,8 @@ export type {
   HostSessionDeps,
   HostSupervisor,
   HostSupervisorDeps,
+  OneShotDeps,
+  OneShotResult,
   PreviewHandle,
   PreviewRelay,
   PreviewSession,
