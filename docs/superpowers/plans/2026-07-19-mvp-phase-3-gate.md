@@ -23,17 +23,28 @@ fixture corpus.
 **Tech Stack (de-risked this session):** TypeScript 7.0.2 exposes the parsing +
 checking surface the gate needs as UNSTABLE subpath exports (confirmed present in
 the installed package):
-- **`typescript/unstable/ast`** — the AST surface for the AUTHORITATIVE import scan
-  + page-contract read: exports `SyntaxKind`, `ScriptKind`, `ScriptTarget`,
-  `createScanner`, `forEachChild`-family, and the full `isImportDeclaration`/
-  `isCallExpression`/`isExportDeclaration`/… type-guard set. This is what lets the
-  gate (unlike the host's `Bun.Transpiler.scanImports`) distinguish an author-written
-  `require("react")` from a transform-generated helper and catch type-only edges +
-  re-exports + dynamic imports precisely (§3.1). **OPEN: confirm the parse entry
-  point** (createSourceFile equivalent) in `typescript/unstable/ast` — probe first.
-- **`typescript/unstable/sync`** — the synchronous program/diagnostics API for the
-  type check (Spike C: union `getGlobalDiagnostics()`, dedupe on
-  `(code, fileName, pos)`, distinguish a compiler crash from a clean pass).
+- **`typescript/unstable/ast`** — the AST WALK surface for the AUTHORITATIVE import
+  scan + page-contract read: exports `SyntaxKind`, `ScriptKind`, `ScriptTarget`,
+  `createScanner` (a token lexer), `forEachChild`-family, and the full
+  `isImportDeclaration`/`isCallExpression`/`isExportDeclaration`/… type-guard set.
+  This is what lets the gate (unlike the host's `Bun.Transpiler.scanImports`)
+  distinguish an author-written `require("react")` from a transform-generated helper
+  and catch type-only edges + re-exports + dynamic imports precisely (§3.1).
+  **PROBED (this session): `unstable/ast` has NO standalone `createSourceFile`/parse
+  — only `createScanner` (token lexer) + the walk guards.** So the parse entry point
+  is the program API, not `ast`.
+- **`typescript/unstable/sync`** — the synchronous PROGRAM API (Spike C): exports
+  `API`, `Program`, `Project`, `Checker`, `Emitter`, `DiagnosticCategory`. The gate
+  creates a `Program`/`Project` over the candidate, gets its source-file AST (walked
+  with the `unstable/ast` guards for the import scan + contract read) AND the type
+  diagnostics (union global, dedupe on `(code, fileName, pos)`, crash-vs-clean).
+  **T0 for the next executor: nail the exact `Program`/`Project` construction +
+  source-file AST access from `unstable/sync` (the `API` class) on a fixture.**
+  Fallback if the Program AST is awkward: the `createScanner` token stream is
+  sufficient for the import-allowlist (scan tokens for `import`/`require`/`import(`
+  + the following string-literal specifier), losing only the author-vs-phantom-require
+  distinction — which the token stream actually PRESERVES (an author `require` is a
+  real token; the phantom is transform-injected and never in the source tokens).
 - **Spike C** (`docs/spikes/03-tsc-in-binary`): tsc is a per-platform native
   executable extracted once to `%LOCALAPPDATA%/termcraft/tsc-<version>/` + spawned;
   `lib: ["esnext"]` pinned. **OPEN: re-verify the extraction+spawn path on this tree.**
