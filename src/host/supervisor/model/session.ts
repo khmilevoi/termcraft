@@ -21,7 +21,9 @@ import type { InteractionMode, PreviewFrame, Size } from "../../types"
 import { createFrameBroker } from "./frame-broker"
 import { createRequestTable, REQUEST_TABLE_CAPACITY } from "./request-table"
 import { createHeartbeatWatchdog } from "./heartbeat-watchdog"
+import { createFloodMonitor } from "./flood-monitor"
 import type {
+  FloodMonitor,
   FrameBroker,
   HeartbeatWatchdog,
   HostSession,
@@ -62,6 +64,10 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     nonce: identity.nonce,
     sourceHash: identity.sourceHash,
   })
+  // §8 rolling-second output flood detection. Metered on RAW inbound payload bytes
+  // (before decode/coalescing), so a 2000-frame/s or >128 MiB/s or >1 MiB/s-stderr
+  // child trips PROTOCOL_FLOOD / STDERR_FLOOD → onPumpFatal → deterministic circuit-open.
+  const floodMonitor: FloodMonitor = (deps.createFloodMonitor ?? createFloodMonitor)(deps.clock)
   let pumpTask: Promise<void> = Promise.resolve()
 
   let child: SpawnedChild | null = null
@@ -116,7 +122,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       return spawned
     }
     child = spawned
-    stderrDrain = createStderrDrain(spawned)
+    stderrDrain = createStderrDrain(spawned, { floodMonitor, onFlood: (error) => onPumpFatal(error) })
     inbound = readInbound(spawned)
 
     // --- negotiate: send client.hello, await host.hello within 3s ---
@@ -196,6 +202,12 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
         return
       }
       if (message.messageClass === "data") {
+        // §8 flood metering on the RAW encoded payload, before decode/coalescing.
+        const flood = floodMonitor.noteFrame(message.payload.byteLength)
+        if (flood instanceof SupervisorError) {
+          onPumpFatal(flood)
+          return
+        }
         const frame = decodeFrameEnvelope(message.payload)
         if (frame instanceof ProtocolError) {
           onPumpFatal(frame)

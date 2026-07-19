@@ -18,7 +18,7 @@ import {
 import type { ScriptedChild } from "./scripted-child"
 import { readInbound } from "./transport"
 import { createHostSession } from "./session"
-import type { HostSessionDeps } from "../types"
+import type { FloodMonitor, HostSessionDeps } from "../types"
 import { livePreviewChild } from "./preview-test-host"
 import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table"
 
@@ -444,5 +444,41 @@ describe("createHostSession request-table capacity guard (2D-2 adversarial revie
     const writesSinceReady = child.written.slice(writtenAtReady)
     const kinds = await Promise.all(writesSinceReady.map(decodeWrittenKind))
     expect(kinds).not.toContain("shutdown")
+  })
+})
+
+describe("createHostSession flood detection (2D-3, §8)", () => {
+  test("a post-ready frame that trips the flood monitor tears down to failed with PROTOCOL_FLOOD", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration) as ScriptedChild & { emitFrame(seq: string): void }
+    const fatals: (SupervisorError | ProtocolError)[] = []
+    const floodMonitor: FloodMonitor = {
+      noteFrame: () => new SupervisorError({ code: "PROTOCOL_FLOOD", reason: "test frame flood" }),
+      noteStderr: () => null,
+    }
+    const base = deps(child).deps
+    const session = createHostSession(spec, { ...base, onFatal: (e) => fatals.push(e), createFloodMonitor: () => floodMonitor })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    child.emitFrame("2") // the first post-ready frame the pump meters → flood
+    await waitUntil(() => fatals.length === 1, "onFatal fired on frame flood")
+    expect(session.phase).toBe("failed")
+    expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("PROTOCOL_FLOOD")
+  })
+
+  test("an stderr burst that trips the flood monitor tears down to failed with STDERR_FLOOD", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const fatals: (SupervisorError | ProtocolError)[] = []
+    const floodMonitor: FloodMonitor = {
+      noteFrame: () => null,
+      noteStderr: () => new SupervisorError({ code: "STDERR_FLOOD", reason: "test stderr flood" }),
+    }
+    const base = deps(child).deps
+    const session = createHostSession(spec, { ...base, onFatal: (e) => fatals.push(e), createFloodMonitor: () => floodMonitor })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    child.emitStderr(new Uint8Array([1, 2, 3])) // the drain meters this chunk → flood
+    await waitUntil(() => fatals.length === 1, "onFatal fired on stderr flood")
+    expect(session.phase).toBe("failed")
+    expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("STDERR_FLOOD")
   })
 })

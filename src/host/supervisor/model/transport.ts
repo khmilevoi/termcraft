@@ -1,7 +1,7 @@
 import { FrameDecoder } from "../../../infrastructure/framing"
 import { ProtocolError } from "../../protocol"
 import { SupervisorError } from "./errors"
-import type { SpawnedChild } from "../types"
+import type { FloodMonitor, SpawnedChild } from "../types"
 
 /** One decoded outer frame from the child's stdout (framing §5). */
 export interface InboundMessage {
@@ -78,9 +78,15 @@ export interface StderrDrain {
 /**
  * Drain stderr concurrently into a bounded 64 KiB tail, dropping oldest bytes and
  * counting discards (§8). A large burst does not block stdout (D3), but draining
- * is required for the tail, memory bound, and the 2D-3 flood limit.
+ * is required for the tail, memory bound, and the 2D-3 flood limit. When a
+ * `floodMonitor` is injected, each chunk is metered: crossing >1 MiB in one rolling
+ * second fires `onFlood(STDERR_FLOOD)` (the session then kills + opens the circuit)
+ * and stops the drain after retaining the bounded tail (§8, §12).
  */
-export function createStderrDrain(child: SpawnedChild): StderrDrain {
+export function createStderrDrain(
+  child: SpawnedChild,
+  opts?: { floodMonitor?: FloodMonitor; onFlood?: (error: SupervisorError) => void },
+): StderrDrain {
   let tail = new Uint8Array(0)
   let discarded = 0
   let stopped = false
@@ -96,6 +102,11 @@ export function createStderrDrain(child: SpawnedChild): StderrDrain {
           tail = joined.slice(joined.length - STDERR_TAIL_LIMIT)
         } else {
           tail = joined
+        }
+        const flood = opts?.floodMonitor?.noteStderr(chunk.length)
+        if (flood instanceof SupervisorError) {
+          opts?.onFlood?.(flood) // schedules the session's async fatal teardown; the tail above is retained
+          break
         }
       }
     } catch (cause) {

@@ -96,6 +96,7 @@ export interface HostSessionDeps {
     clock: Clock,
     opts: { onUnhealthy: (error: SupervisorError) => void },
   ) => HeartbeatWatchdog
+  readonly createFloodMonitor?: (clock: Clock) => FloodMonitor
 }
 
 /** The typed session handle returned to Kernel code (§3.1). No raw streams/process. */
