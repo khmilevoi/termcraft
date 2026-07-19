@@ -320,6 +320,34 @@ describe("createHostSupervisor — global limit + HOST_CAPACITY (§13)", () => {
     await waitUntil(() => h3.state() === "ready", "queued h3 starts after a slot frees")
     await supervisor.stopAll()
   })
+
+  test("a backing-off key keeps its slot: a crash-loop respawn never pushes the live count over the limit (§13)", async () => {
+    const factory = fakeFactory()
+    const { supervisor, clock } = makeSupervisor(factory, { maxGlobalHosts: 2, startQueueCapacity: 1 })
+    const a = supervisor.preview(specFor({ pageSlug: "p1", sourceHash: "1".repeat(64) }))
+    const b = supervisor.preview(specFor({ pageSlug: "p2", sourceHash: "2".repeat(64) }))
+    if (a instanceof Error) throw a
+    if (b instanceof Error) throw b
+    await waitUntil(() => a.state() === "ready" && b.state() === "ready", "a,b ready")
+    const c = supervisor.preview(specFor({ pageSlug: "p3", sourceHash: "3".repeat(64) }))
+    if (c instanceof Error) throw c
+    expect(c.state()).toBe("queued")
+
+    // a crashes: it backs off but KEEPS its slot — c must not steal it and overflow the limit
+    factory.incarnations[0]!.crash(crash())
+    await waitUntil(() => a.state() === "backoff", "a backoff")
+    expect(supervisor.liveCount()).toBeLessThanOrEqual(2)
+    expect(c.state()).toBe("queued") // still queued — a's slot was NOT freed
+    clock.advance(250)
+    await waitUntil(() => a.state() === "ready", "a respawns into its own slot")
+    expect(supervisor.liveCount()).toBeLessThanOrEqual(2) // never 3
+    expect(c.state()).toBe("queued")
+
+    // only when a truly frees its slot (circuit-open path here via close) does c start
+    await a.close()
+    await waitUntil(() => c.state() === "ready", "c starts after a closes")
+    await supervisor.stopAll()
+  })
 })
 
 describe("createHostSupervisor — trust + teardown (§13)", () => {
