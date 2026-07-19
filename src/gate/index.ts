@@ -5,3 +5,5 @@
 // GateResult contract (consumed by core + agent feedback) is public now.
 export type { GateError, GateErrorKind, GateResult, GateWarning, GateWarningKind, PageDescriptor } from "./types"
 export { makeGateResult, isPassing } from "./model/gate-result"
+export { scanImportAllowlist } from "./model/import-scan"
+export type { ImportScanError } from "./model/import-scan"
