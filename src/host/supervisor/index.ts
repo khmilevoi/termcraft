@@ -28,6 +28,7 @@ export { createControlMailbox, CONTROL_MAILBOX_CAPACITY } from "./model/control-
 export { createPreviewRelay } from "./model/preview-relay"
 export { createHostSupervisor } from "./model/supervisor"
 export { runOneShotSession } from "./model/one-shot"
+export { createExportPool, resolveExportWorkerCount } from "./model/export-pool"
 export type {
   ChildStdin,
   CoalesceOutcome,
