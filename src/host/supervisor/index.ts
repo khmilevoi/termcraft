@@ -16,14 +16,28 @@ export {
   MAX_AUTOMATIC_RESTARTS,
   BACKOFF_BASE_MS,
 } from "./model/restart-policy"
+export { createControlQueue, OUTBOUND_QUEUE_CAPACITY, OUTBOUND_LOW_WATER, COALESCIBLE_KINDS } from "./model/control-queue"
+export {
+  createFloodMonitor,
+  FLOOD_WINDOW_MS,
+  PROTOCOL_FLOOD_MAX_FRAMES,
+  PROTOCOL_FLOOD_MAX_BYTES,
+  STDERR_FLOOD_MAX_BYTES,
+} from "./model/flood-monitor"
+export { createControlMailbox, CONTROL_MAILBOX_CAPACITY } from "./model/control-mailbox"
 export type {
   ChildStdin,
+  CoalesceOutcome,
   ControlEvent,
+  ControlMailbox,
+  ControlQueue,
+  FloodMonitor,
   FrameBroker,
   HeartbeatWatchdog,
   HostSession,
   HostSessionDeps,
   PreviewSession,
+  QueuedCommand,
   ReadyOutcome,
   RequestTable,
   RestartAction,

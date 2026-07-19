@@ -153,6 +153,62 @@ export interface HeartbeatWatchdog {
   stop(): void
 }
 
+/** A command queued for the ordered outbound control path (§8). */
+export interface QueuedCommand {
+  readonly kind: string
+  readonly envelope: ControlEnvelope
+}
+
+/** The outcome of a coalescible `coalesce` (§8): a new tail slot, or a replace that supersedes the older value. */
+export interface CoalesceOutcome {
+  readonly status: "added" | "coalesced"
+  readonly superseded: ControlEnvelope | null
+}
+
+/**
+ * The bounded ordered supervisor→host control queue (§8): 256 discrete entries
+ * plus one reserved shutdown slot, low-water 128. Discrete commands keep FIFO
+ * order and never drop; a full queue rejects a new discrete command with
+ * `HOST_BACKPRESSURED`. Coalescible kinds (`resize`/`mousemove`/`hover`) replace
+ * an already-pending same-kind value inside the current barrier segment (a
+ * discrete command starts a new segment), superseding the older value, and cannot
+ * create a new entry while full. `dequeue` gives the reserved shutdown slot
+ * priority; draining below the low-water mark after backpressure fires `onWritable`.
+ */
+export interface ControlQueue {
+  enqueue(command: QueuedCommand): "accepted" | SupervisorError
+  coalesce(command: QueuedCommand): CoalesceOutcome | SupervisorError
+  enqueueShutdown(command: QueuedCommand): "accepted"
+  dequeue(): QueuedCommand | null
+  size(): number
+  hasShutdown(): boolean
+  isBackpressured(): boolean
+  onWritable(cb: () => void): void
+}
+
+/**
+ * Rolling-second output flood detection (§8). `noteFrame`/`noteStderr` return a
+ * fatal `SupervisorError` (`PROTOCOL_FLOOD` / `STDERR_FLOOD`) when the incarnation
+ * exceeds >1000 frame envelopes or >128 MiB frame payload, or >1 MiB stderr, in
+ * one rolling second — the supervisor then kills + opens the circuit.
+ */
+export interface FloodMonitor {
+  noteFrame(byteLength: number): SupervisorError | null
+  noteStderr(byteLength: number): SupervisorError | null
+}
+
+/**
+ * The bounded host→supervisor inbound control mailbox (§8): 256 entries plus one
+ * reserved terminal slot. `offer` past 256 returns `CONTROL_BACKPRESSURE` (the
+ * supervisor then kills the child and uses `offerTerminal` for the failure event).
+ */
+export interface ControlMailbox {
+  offer(event: ControlEvent): "accepted" | SupervisorError
+  offerTerminal(event: ControlEvent): void
+  drain(): ControlEvent | null
+  size(): number
+}
+
 /** One restart-policy decision (§10): restart after a backoff, or open the circuit. */
 export type RestartAction =
   | { readonly action: "restart"; readonly delayMs: number; readonly attempt: number }
