@@ -105,7 +105,7 @@ function createRecordingProcessTree(): {
 
 /**
  * A `ProcessTree` fake whose `adopt`/`activeProcesses` outcomes are
- * individually scriptable, for driving `makeSpawnClaudeCodeProcess`'s four
+ * individually scriptable, for driving `makeSpawnAndAdopt`'s four
  * degraded branches ([11]) one at a time. `noteAdoptionOutcome` calls and
  * `activeProcesses()` call count are both recorded for assertion.
  */

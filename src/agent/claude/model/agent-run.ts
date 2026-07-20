@@ -382,7 +382,7 @@ export function startClaudeRun(task: AgentTask, deps: RunDeps): { run: AgentRun;
    *   - The one other handle that could in principle serve rung 3 —
    *     `child.kill('SIGTERM')` on the tree's root `ChildProcess`, spawned
    *     (and never retained past that point) inside `query-fn.ts`'s
-   *     `makeSpawnClaudeCodeProcess` — would not buy real gracefulness even
+   *     `makeSpawnAndAdopt` — would not buy real gracefulness even
    *     if it were retained and wired through here: Node's own
    *     `child_process` docs state that on Windows "the signal argument...
    *     is largely ignored, except for 'SIGKILL', 'SIGTERM', 'SIGINT', and

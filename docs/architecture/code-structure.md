@@ -4,16 +4,15 @@ where a file goes, which direction its imports may point, and which shapes are
 forbidden. It is the one document in `docs/architecture/` written for a reader who
 *does* read the source language; the others deliberately are not.
 
-Six source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
-`host/`, `gate/`, and `store/` are real source today. Four of those are components
-the design spec names — [`modules.md`](modules.md) counts the same four (runtime
-facade, Gate, HostSupervisor, Project store) — while `entities/` and
-`infrastructure/` are additions this convention makes on top of the seven.
-`core/` (the Kernel), `agent/`,
-`ui/`, and the `main.ts` composition root do not exist yet — this document is still
-their contract, and every section below marks the parts that describe them as not
-yet built. Source anchors move to real paths as each piece lands; see
-`## Source anchors`.
+Seven source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
+`host/`, `gate/`, `store/`, and `agent/` are real source today. Five of those are
+components the design spec names — [`modules.md`](modules.md) counts the same five
+(runtime facade, Gate, HostSupervisor, Project store, Agent gateway) — while
+`entities/` and `infrastructure/` are additions this convention makes on top of the
+seven. `core/` (the Kernel), `ui/`, and the `main.ts` composition root do not exist
+yet — this document is still their contract, and every section below marks the parts
+that describe them as not yet built. Source anchors move to real paths as each piece
+lands; see `## Source anchors`.
 
 ```mermaid
 flowchart LR
@@ -21,7 +20,8 @@ flowchart LR
 
     subgraph adapters["Adapters — implement the ports they are handed"]
         store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
-        agent["agent/<br/>vendor SDK backends<br/>(not yet built)"]
+        agent["agent/<br/>AgentBackend port + shared model/<br/>backend-agnostic tier"]
+        claude["agent/claude/<br/>Claude Code adapter — vendor tier<br/>(a Codex backend would be its sibling)"]
         gate["gate/<br/>validation · declares SmokeRenderer"]
         host["host/<br/>HostSupervisor · design-host protocol"]
     end
@@ -33,17 +33,19 @@ flowchart LR
 
     ui["ui/ · OpenTUI shell<br/>(not yet built)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
-    infra["infrastructure/<br/>durability · fs-guard · framing · clock · uuid<br/>domain-free · process/ not split out yet"]
+    infra["infrastructure/<br/>durability · fs-guard · framing · clock ·<br/>uuid · process (owned Job Object tree)<br/>domain-free"]
 
     core -- imports --> entities
     store -- "implements core ports" --> core
-    agent -- "implements core ports" --> core
+    agent -- "port lifted into core/ports/ in phase 6" --> core
     gate -- "implements core ports" --> core
     host -- "implements core ports" --> core
     host -- "implements SmokeRenderer" --> gate
+    claude -- "implements the AgentBackend port" --> agent
     ui -- "core boundary types only<br/>DTOs + PreviewSession" --> core
     store -- imports --> infra
     host -- imports --> infra
+    claude -- "owns the turn's process tree" --> infra
     host -. "resolves the embedded facade ·<br/>the page's only import" .-> runtime
     main -- "constructs adapters,<br/>injects into core" --> core
     main -.-> adapters
@@ -72,17 +74,35 @@ flowchart LR
        sandbox/  migration/  projections/  model/
        types.ts
        index.ts
-     agent/             AgentBackend over the vendors' official TypeScript SDKs
-                         (not yet built)
+     agent/             AgentBackend over the vendors' official TypeScript SDKs [landed]
+       model/           SHARED tier — backend-agnostic: session scope, staging
+                         path containment, the deny-by-default confinement RULE
+       claude/          VENDOR tier — the Claude Code backend (a future Codex
+                         backend is a sibling folder here, not a fork of model/)
+         model/  types.ts  index.ts
+       types.ts         the mechanism-blind AgentBackend port both tiers face
+       index.ts
      gate/              validation; declares the SmokeRenderer port it consumes [landed]
      host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
      ui/                OpenTUI shell; imports core's boundary types only       (not yet built)
      runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
      infrastructure/    domain-free technical capabilities                     [landed]
-       clock/  durability/  fs-guard/  framing/  uuid/
-       (process/ not split out yet — process spawning still lives inside
-        host's supervisor, see item 6)
+       clock/  durability/  fs-guard/  framing/  process/  uuid/
    ```
+
+   `agent/` splits in two on purpose. `agent/types.ts` is the port — the
+   mechanism-blind contract (start a fenced attempt, cancel it, health-check,
+   report models × efforts, derive a session scope) that names no vendor and
+   imports no vendor SDK, so phase 6 can lift it verbatim into `core/ports/`.
+   `agent/model/` is the shared tier every backend may reuse: the opaque
+   session-scope derivation, the staging path-containment test, and the
+   deny-by-default confinement *rule*, which is parameterized over a table of
+   tool names rather than hard-coding any. `agent/claude/` is the one vendor
+   tier that exists — the Claude Code adapter, which supplies its own tool
+   table, its own SDK option building, and its own run loop. A future Codex
+   backend becomes a sibling of `claude/` supplying its own tables, and reuses
+   `agent/model/` unchanged; it never edits the shared tier to make room for
+   itself.
 
    `store/` groups by concern (`safe-fs`, `lease`, `trust`, `toml`, `jsonl`,
    `transaction`, `sandbox`, `migration`, `projections`) rather than by the
@@ -130,7 +150,11 @@ flowchart LR
    The names in this document divide in two. `GitHistory`, `GitCommitter`,
    `AgentBackend`, `HostSupervisor`, and `PreviewSession` come from the specs and are
    fixed. `SmokeRenderer`, `GitCliAdapter`, and `ClaudeBackend` are this document's
-   illustrations of the rule; the code may name them otherwise.
+   illustrations of the rule; the code may name them otherwise. Two of the five have
+   now landed with their spec names intact — `SmokeRenderer` as a real port in
+   `gate/ports/`, `AgentBackend` as a real interface in `agent/types.ts` — and the
+   Claude adapter is built by a `createClaudeBackend` factory rather than a class of
+   that name, which is exactly the latitude this paragraph reserves.
 
 6. **`infrastructure/` is domain-free, and the test is mechanical.** Does the file
    know what a `Page`, `Turn`, or `Chat` is? If it does, it belongs to a module. If
@@ -144,11 +168,21 @@ flowchart LR
    Landed today: durable disk writes, the reparse-point/filesystem-identity checks,
    wire framing, the clock, and UUIDv7 generation all live under `infrastructure/`
    and pass the test — "fs" split into two submodules (`durability/`, `fs-guard/`)
-   rather than the one `fs/` folder this document sketches. Process spawning does
-   not live there yet: it still sits inside `host`'s supervisor (see Source
-   anchors). It passes the same domain-free test in place — nothing about it names
-   a `Page`, `Turn`, or `Chat` — so this is an unextracted candidate for
-   `infrastructure/process/`, not a violation of the rule.
+   rather than the one `fs/` folder this document sketches.
+
+   `infrastructure/process/` is the newest member and the cleanest illustration of
+   the test. It is one owned process tree — a Windows Job Object created with
+   kill-on-close, addressed over `bun:ffi` — exposing exactly five operations:
+   adopt a spawned process id, read the live owned-process count from the OS,
+   hard-terminate the tree, release the handle, and record/report whether an
+   adoption was ever confirmed. Ask it the mechanical question and the answer is
+   immediate: it does not know what a `Page`, `Turn`, or `Chat` is, and nothing in
+   its vocabulary could be rephrased in domain terms — it owns OS processes and
+   counts them. The agent backend is what knows that a given tree belongs to one
+   turn's attempt; the primitive itself is domain-free and is injected into the
+   backend as a factory. Process spawning for the *design host* remains separate
+   and still sits inside `host`'s supervisor (see Source anchors) — it passes the
+   same test in place, so that is an unextracted candidate, not a violation.
 
 7. **`core` imports no other module.** It imports `entities/` and its own `ports/`,
    nothing else. `main.ts` constructs the adapters and injects them; the arrows in
@@ -171,6 +205,14 @@ flowchart LR
    *what exists*, the Kernel decides *what is used*. Item 7 is untouched — `core`
    still imports no backend, and `AgentBackend` remains a spec-named port while the
    registry around it is this document's shape.
+
+   Landed today: the port itself and one backend behind it. `agent/index.ts`
+   exports the port types plus a single `createProductionClaudeBackend()` that
+   assembles the real wiring (the SDK query, the Job Object tree factory, a real
+   sleep, and the Windows reparse-point backstop). The registry this item
+   describes is not built — with `core` and `main.ts` still absent there is no
+   composition root to hold one and no Kernel to select from it, so today's single
+   production factory stands in for the one-entry case.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
    `bun build --compile` ships the shell and the design-host entry together (§4.1).
@@ -215,7 +257,7 @@ flowchart LR
 
 ## Source anchors
 
-Six modules landed; `core/`, `agent/`, `ui/`, and `main.ts` have not (item 1). The
+Seven modules landed; `core/`, `ui/`, and `main.ts` have not (item 1). The
 anchors below split accordingly: real files for what exists, design-spec sections
 for what is still contract only.
 
@@ -224,16 +266,52 @@ for what is still contract only.
 - `CLAUDE.md` — Code style: the module shape (`ui/`, `model/`, `types.ts`,
   `index.ts`) and the atomic-function rule this document builds on
 - `tsconfig.json` (`compilerOptions.paths`) — the alias map item 2 and `CLAUDE.md`'s
-  Imports section enforce; it already reserves the `core`, `agent`, and `ui` bare +
-  wildcard aliases ahead of those three modules landing
+  Imports section enforce; the `agent` bare + wildcard pair is now live (the Claude
+  tier reaches the shared tier as `agent/model/...`, never relatively), and `core`
+  and `ui` stay reserved ahead of those two modules landing
 - `src/entities/page/index.ts`, `src/entities/page/types.ts`,
   `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
   `index.ts` shape, with no `ui/` because the module has none
 - `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
   chat and pin vocabularies
-- `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`) with
-  zero consumers today; the `agent` backends that would produce it and the `core`
-  that would consume it (item 8) do not exist yet
+- `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
+  Claude backend now produces both, and the `core` that would consume them (item 8)
+  still does not exist
+
+**`agent/` and the shared-vs-vendor split (items 1, 5, 8)**
+
+- `src/agent/types.ts` — the mechanism-blind `AgentBackend` port: `startTurn`,
+  `cancel`, `healthCheck`, `capabilities`, `sessionScope`, plus `AgentTask`,
+  `AgentRun`, `AgentRunOutcome`, `SessionPlan`, and `BackendCapabilities`. Its own
+  header states the phase-6 rule this document's item 8 relies on — the file
+  imports no vendor SDK so it can be lifted verbatim into `core/ports/`
+- `src/agent/index.ts` — the module's public entry: the port types plus
+  `createProductionClaudeBackend`; deliberately vendor-neutral, with all
+  Claude-specific construction re-exported from `agent/claude`
+- `src/agent/model/confinement.ts` — the SHARED deny-by-default rule, parameterized
+  over a `ConfinementTables` record so it holds no vendor tool names itself
+- `src/agent/model/path-containment.ts` — the SHARED staging-containment test
+  (`isInsideStaging`) plus the reparse-point backstop it accepts
+- `src/agent/model/session-scope.ts` — the SHARED opaque `sessionScopeId`
+  derivation for the store checkpoint key; effort is deliberately excluded
+- `src/agent/model/errors.ts` — `AgentHealthProbeError`, the one backend-generic
+  error in the shared tier
+- `src/agent/claude/index.ts` — the VENDOR tier's entry and production wiring
+  (`createProductionClaudeBackendDeps`: real SDK query, Job Object tree factory,
+  real sleep, reparse backstop)
+- `src/agent/claude/model/claude-backend.ts` — `createClaudeBackend`: the factory
+  that satisfies the port; owns the per-run tree lifetime and the sticky
+  unconfirmed-exit health latch
+- `src/agent/claude/model/tool-tables.ts` — `CLAUDE_CONFINEMENT_TABLES`, the vendor
+  half of the split: Claude Code's own tool names fed into the shared rule. A Codex
+  backend supplies its own file here rather than editing `agent/model/`
+- `src/agent/claude/model/query-fn.ts`, `src/agent/claude/model/spawn-adopt.ts` —
+  SDK option building (cwd/writable root, isolated settings, the `canUseTool` veto)
+  and the spawn hook that adopts the CLI into the owned tree
+- `src/agent/claude/model/agent-run.ts`, `src/agent/claude/model/health.ts`,
+  `src/agent/claude/model/normalize.ts`, `src/agent/claude/model/session-plan.ts` —
+  the run loop and exit-confirmation ladder, the health probe, vendor→`AgentEvent`
+  normalization, and the resume/fresh prompt assembly
 
 **`infrastructure/` and the domain-free test (item 6)**
 
@@ -243,8 +321,14 @@ for what is still contract only.
 - `src/infrastructure/durability/index.ts`, `src/infrastructure/fs-guard/index.ts` —
   the two submodules that stand in for the single `fs/` folder this document
   sketches
-- `src/host/supervisor/model/spawn.ts` — process spawning as it exists today: inside
-  `host`, not yet split out to `infrastructure/process/`
+- `src/infrastructure/process/types.ts`, `src/infrastructure/process/index.ts` —
+  the `ProcessTree`/`ProcessTreeFactory` contract and public entry: the newest
+  domain-free member, five process-level operations and no domain vocabulary
+- `src/infrastructure/process/model/job-object.ts` — the `bun:ffi` Windows Job
+  Object implementation (kill-on-close limit flags, `QueryInformationJobObject`
+  accounting reads, `TerminateJobObject`) plus the deterministic test double
+- `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
+  still inside `host` and not routed through `infrastructure/process/`
 
 **Ports and the composition boundary (items 4, 5, 7, 9, 10)**
 
@@ -296,8 +380,9 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary (`core/`, `agent/`, `ui/`, and `main.ts` remain unbuilt); §6.1 the
-  mechanism-blind `AgentBackend` contract; §3.6 the runtime-selected agent triple
+  Kernel boundary (`core/`, `ui/`, and `main.ts` remain unbuilt); §3.6 the
+  runtime-selected agent triple, whose Kernel-owned selection has no code (§6.1's
+  `AgentBackend` contract is now anchored to `src/agent/types.ts` above)
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet
