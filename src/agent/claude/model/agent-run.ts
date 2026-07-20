@@ -1,9 +1,8 @@
 import * as errore from "errore"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import type { AgentEvent } from "entities/turn"
 import type { ProcessTree } from "infrastructure/process"
-import { ProcessTreeError } from "infrastructure/process"
-import type { AgentRun, AgentRunOutcome, AgentTask, FencedEvent } from "agent/types"
+import type { AgentRun, AgentRunOutcome, AgentTask } from "agent/types"
+import { confirmExit, createEventQueue, escalateAndConfirm } from "agent/run"
 import type { ClaudeQueryFn } from "../types"
 import { ClaudeSdkError } from "./errors"
 import { deriveUsage, normalizeMessage } from "./normalize"
@@ -22,17 +21,7 @@ class TurnAbortError extends errore.createTaggedError({
 /** Default §6.5 exit-confirmation budget when the caller does not override it. */
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5000
 
-/**
- * Nominal spacing between `activeProcesses()` polls. This bounds the ATTEMPT
- * COUNT for a given budget, not real elapsed time: `wait` is an injected seam
- * and production is the only caller that actually sleeps here, so timing the
- * budget against a real clock would make deterministic tests either spin
- * needlessly (a no-op `wait` never advances real time) or need to fake global
- * timers. `Math.ceil(budgetMs / POLL_INTERVAL_MS)` attempts is the compromise.
- * Exported so tests can assert `wait` is spaced correctly (finding [8])
- * without duplicating the literal.
- */
-export const POLL_INTERVAL_MS = 100
+export { POLL_INTERVAL_MS } from "agent/run"
 
 export interface RunDeps {
   readonly queryFn: ClaudeQueryFn
@@ -54,175 +43,6 @@ function describeThrown(cause: unknown): string {
 
 function asError(cause: unknown): Error | undefined {
   return cause instanceof Error ? cause : undefined
-}
-
-/**
- * Boundary guard (finding [25]): `processTree` is an injected seam (the real
- * FFI adapter, or a test double) that is typed to never throw from
- * `activeProcesses()` — but an injected implementation misbehaving must not
- * be able to crash the poll loop. Sync boundary, so `errore.try` (not
- * `.catch()`) per errore rule 12.
- */
-function safeActiveProcesses(processTree: ProcessTree): ProcessTreeError | number {
-  return errore.try({
-    try: () => processTree.activeProcesses(),
-    catch: (cause) => new ProcessTreeError({ reason: `activeProcesses() threw: ${describeThrown(cause)}`, cause }),
-  })
-}
-
-/** Same boundary guard as {@link safeActiveProcesses}, for `terminate()`. */
-function safeTerminate(processTree: ProcessTree): ProcessTreeError | null {
-  return errore.try({
-    try: () => processTree.terminate(),
-    catch: (cause) => new ProcessTreeError({ reason: `terminate() threw: ${describeThrown(cause)}`, cause }),
-  })
-}
-
-/**
- * Boundary guard (finding [25]): `wait` is an injected seam (production
- * sleeps, tests script it) whose documented shape is "never rejects". A
- * misbehaving injection must not be able to propagate a rejection up through
- * `pollUntilZero` — that rejection would otherwise escape into whichever
- * caller is awaiting it (`resolveAfterExitConfirm`'s already-latched success
- * path, or `runCancelLadder`'s memoized `cancelPromise`) and leave `outcome`
- * pending forever / make `cancel()` throw. A rejection here is logged and
- * treated as "this attempt's wait is unusable", not propagated — the poll
- * loop simply moves to its next attempt instead of hanging.
- */
-async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
-  await wait(ms).catch((cause) => {
-    console.warn("agent/agent-run: injected wait() rejected during exit confirmation:", describeThrown(cause))
-  })
-}
-
-/**
- * Poll `processTree.activeProcesses()` until it reports zero or `budgetMs` of
- * (nominal) attempts is exhausted. A `ProcessTreeError` is logged and treated
- * as "not confirmed yet" for that attempt — transient FFI failures still get
- * to clear within the remaining budget; a failure that never clears degrades
- * to `false` (never thrown) so a caller can fall back to `unconfirmed-exit`.
- *
- * A `0` read only counts as a confirmed exit once `processTree.ownershipConfirmed()`
- * is also `true` (finding [22]'s downstream half) — otherwise `0` is
- * ambiguous between "the tree drained" and "nothing was ever successfully
- * adopted into it", and the latter must not read as a confirmed exit.
- */
-async function pollUntilZero(
-  processTree: ProcessTree,
-  wait: (ms: number) => Promise<void>,
-  budgetMs: number,
-): Promise<boolean> {
-  const maxAttempts = Math.max(1, Math.ceil(budgetMs / POLL_INTERVAL_MS))
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const count = safeActiveProcesses(processTree)
-    if (count instanceof ProcessTreeError) {
-      console.warn("agent/agent-run: activeProcesses() failed while confirming exit:", count.message)
-    } else if (count === 0) {
-      if (processTree.ownershipConfirmed()) return true
-      console.warn(
-        "agent/agent-run: activeProcesses() reported zero but ownership of this tree was never confirmed; not treating it as a confirmed exit",
-      )
-    }
-    if (attempt < maxAttempts - 1) await safeWait(wait, POLL_INTERVAL_MS)
-  }
-  return false
-}
-
-/** A minimal single-reader async queue bridging the SDK generator to `AgentRun.events`. */
-interface EventQueue {
-  push(event: AgentEvent): void
-  finish(): void
-  readonly iterable: AsyncIterable<FencedEvent>
-}
-
-/**
- * Push/finish never depend on a reader — `driveQuery` below calls them
- * unconditionally, so `outcome` settles even when nobody ever iterates
- * `events` (turn-durability §6.4).
- *
- * Two invariants close finding [27]:
- *  - `[Symbol.asyncIterator]()` hands out the ONE real reader (matching this
- *    function's "single-reader" contract above); a second, concurrent call
- *    would otherwise share the same `waitingReader` slot, clobber the first
- *    reader's pending `next()`, and deadlock it forever with no signal. A
- *    second iterator instead fails loudly on its first `next()`.
- *  - The real reader's iterator implements `return()`, so a consumer that
- *    `break`s out of `for await (const e of run.events)` (the JS spec calls
- *    `return()` on abrupt loop completion) tells the producer nobody is
- *    listening anymore. From then on `push` drops events instead of
- *    retaining them in `buffered` for the rest of the turn — durability only
- *    requires that `push` never BLOCK (see the comment above), not that it
- *    retain output forever once the one reader is provably gone.
- */
-function createEventQueue(fence: AgentTask["fence"]): EventQueue {
-  const buffered: FencedEvent[] = []
-  let waitingReader: ((result: IteratorResult<FencedEvent>) => void) | null = null
-  let done = false
-  let abandoned = false
-  let abandonedDropLogged = false
-  let readerTaken = false
-
-  function push(event: AgentEvent): void {
-    if (abandoned) {
-      if (!abandonedDropLogged) {
-        abandonedDropLogged = true
-        console.warn("agent/agent-run: events consumer is gone (break/return); dropping further events")
-      }
-      return
-    }
-    const item: FencedEvent = { fence, event }
-    if (waitingReader !== null) {
-      const resolve = waitingReader
-      waitingReader = null
-      resolve({ value: item, done: false })
-      return
-    }
-    buffered.push(item)
-  }
-
-  function finish(): void {
-    done = true
-    if (waitingReader !== null) {
-      const resolve = waitingReader
-      waitingReader = null
-      resolve({ value: undefined, done: true })
-    }
-  }
-
-  function next(): Promise<IteratorResult<FencedEvent>> {
-    const buffered0 = buffered.shift()
-    if (buffered0 !== undefined) return Promise.resolve({ value: buffered0, done: false })
-    if (done) return Promise.resolve({ value: undefined, done: true })
-    return new Promise((resolve) => {
-      waitingReader = resolve
-    })
-  }
-
-  function returnReader(): Promise<IteratorResult<FencedEvent>> {
-    abandoned = true
-    buffered.length = 0 // nothing will ever read this again — release it now
-    waitingReader = null
-    return Promise.resolve({ value: undefined, done: true })
-  }
-
-  return {
-    push,
-    finish,
-    iterable: {
-      [Symbol.asyncIterator]() {
-        if (readerTaken) {
-          // A second concurrent reader (finding [27]) — fail loudly instead
-          // of sharing `waitingReader` with the first and deadlocking it.
-          return {
-            next: () =>
-              Promise.reject(new Error("agent/agent-run: AgentRun.events supports only one reader at a time")),
-          }
-        }
-        readerTaken = true
-        return { next, return: returnReader }
-      },
-    },
-  }
 }
 
 /**
@@ -269,24 +89,14 @@ export function startClaudeRun(task: AgentTask, deps: RunDeps): { run: AgentRun;
    * `unconfirmed-exit` instead of the caller's `outcome`.
    */
   async function resolveAfterExitConfirm(outcome: AgentRunOutcome): Promise<void> {
-    const confirmed = await pollUntilZero(deps.processTree, deps.wait, confirmTimeoutMs)
-    if (confirmed) {
+    if (await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs)) {
       resolveOutcome(outcome)
       return
     }
-
     console.warn(
       `agent/agent-run: exit not confirmed after natural ${outcome.kind}, escalating to terminate() before reporting an outcome`,
     )
-    const terminateResult = safeTerminate(deps.processTree)
-    if (terminateResult instanceof ProcessTreeError) {
-      console.warn(
-        "agent/agent-run: processTree.terminate() failed while escalating an unconfirmed natural completion:",
-        terminateResult.message,
-      )
-    }
-
-    const reconfirmed = await pollUntilZero(deps.processTree, deps.wait, confirmTimeoutMs)
+    const reconfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs)
     resolveOutcome(reconfirmed ? outcome : { kind: "unconfirmed-exit" })
   }
 
@@ -416,19 +226,14 @@ export function startClaudeRun(task: AgentTask, deps: RunDeps): { run: AgentRun;
     }
     queue.finish() // cancellation carries no AgentEvent — just end the stream.
 
-    const preTerminateConfirmed = await pollUntilZero(deps.processTree, deps.wait, confirmTimeoutMs) // rung 2
+    const preTerminateConfirmed = await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs) // rung 2
     if (preTerminateConfirmed) {
       resolveOutcome({ kind: "cancelled", exitConfirmed: true })
       return
     }
 
     // rung 4 (hard kill) — rung 3 is the documented gap above.
-    const terminateResult = safeTerminate(deps.processTree)
-    if (terminateResult instanceof ProcessTreeError) {
-      console.warn("agent/agent-run: processTree.terminate() failed during cancel:", terminateResult.message)
-    }
-
-    const postTerminateConfirmed = await pollUntilZero(deps.processTree, deps.wait, confirmTimeoutMs)
+    const postTerminateConfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs)
     resolveOutcome(postTerminateConfirmed ? { kind: "cancelled", exitConfirmed: true } : { kind: "unconfirmed-exit" })
   }
 
