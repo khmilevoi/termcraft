@@ -1,4 +1,5 @@
 import { ProcessTreeError } from "infrastructure/process"
+import { startAgentRun } from "agent/run"
 import { deriveSessionScope } from "agent/model/session-scope"
 import type {
   AgentBackend,
@@ -10,8 +11,8 @@ import type {
   FencedEvent,
   SessionScopeInput,
 } from "agent/types"
+import { createClaudeDriver } from "agent/claude/run"
 import type { ClaudeBackendDeps } from "../types"
-import { startClaudeRun } from "./agent-run"
 import { CLAUDE_BACKEND_ID } from "./backend-id"
 import { claudeCapabilities, probeHealth } from "./health"
 import { buildQueryOptions } from "./query-fn"
@@ -115,14 +116,12 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         hasReparsePoint: deps.hasReparsePoint,
       })
 
-      const { run, cancel } = startClaudeRun(task, {
-        queryFn: deps.queryFn,
+      const driver = createClaudeDriver({ queryFn: deps.queryFn, prompt: buildPrompt(task), options })
+      const { run, cancel } = startAgentRun(task.fence, driver, {
         processTree: tree,
         abortController,
         wait: deps.wait,
         confirmTimeoutMs: deps.confirmTimeoutMs,
-        options,
-        prompt: buildPrompt(task),
       })
       cancels.set(run, cancel)
 
