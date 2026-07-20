@@ -92,6 +92,13 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
 
   return {
     startTurn(task: AgentTask): AgentRun {
+      if (unhealthyUnconfirmedExit) {
+        // finding [30]: the latch exists precisely to lock new turns out
+        // until a restart — a caller reaching `startTurn` without first
+        // observing `healthCheck()` must not get a fresh tree regardless.
+        return degradedRun(task, "backend is unhealthy: a prior run's exit was never confirmed (§6.5)")
+      }
+
       const abortController = new AbortController()
       const tree = deps.processTreeFactory()
       if (tree instanceof ProcessTreeError) {

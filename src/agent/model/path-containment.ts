@@ -51,16 +51,18 @@ export function isInsideStaging(
 }
 
 /**
- * Walks every path segment from `root` down to `target` (inclusive of
- * `target` itself), calling `check` on each. A reparse point can sit on an
- * ancestor directory rather than the leaf, so checking only the resolved leaf
- * (as this function used to) misses a junction like `<staging>/link` once the
- * agent addresses a file underneath it, e.g. `<staging>/link/notes.txt` — that
- * leaf is a plain file even though the path escapes staging on disk.
+ * Walks every path segment from `root` down to `target` (inclusive of BOTH
+ * `root` and `target`), calling `check` on each. A reparse point can sit on
+ * any ancestor directory — including the staging root itself, e.g. the
+ * staging directory being replaced wholesale by a junction — not just the
+ * leaf, so checking only the resolved leaf (as this function used to) misses
+ * a junction like `<staging>/link` once the agent addresses a file underneath
+ * it, e.g. `<staging>/link/notes.txt`, or a junction on `<staging>` itself.
  */
 function hasReparsePointOnChain(root: string, target: string, check: (p: string) => boolean): boolean {
+  if (check(root)) return true
   const rel = path.relative(root, target)
-  if (rel === "") return check(target)
+  if (rel === "") return false // already checked above
   const segments = rel.split(path.sep).filter((segment) => segment.length > 0)
   const chain = segments.reduce<string[]>((acc, segment) => {
     const parent = acc.length > 0 ? (acc[acc.length - 1] ?? root) : root

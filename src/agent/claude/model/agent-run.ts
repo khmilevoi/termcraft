@@ -291,8 +291,8 @@ export function startClaudeRun(task: AgentTask, deps: RunDeps): { run: AgentRun;
   }
 
   async function driveQuery(): Promise<void> {
-    const query = deps.queryFn({ prompt: deps.prompt, options: deps.options })
     try {
+      const query = deps.queryFn({ prompt: deps.prompt, options: deps.options })
       for await (const msg of query) {
         if (terminalKind !== null) return // cancel already won the race (late-event drop)
 

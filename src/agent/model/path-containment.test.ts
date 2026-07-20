@@ -8,7 +8,13 @@ test("Spike H case 1: an in-staging path is inside", () => {
   expect(isInsideStaging(path.join(staging, "pages", "main.tsx"), staging)).toBe(true)
 })
 
-test("Spike H case 2: an absolute path outside staging is rejected", () => {
+// These two literal Windows drive-letter absolute paths are not built via
+// `path.join(staging, ...)`, so on a POSIX host `node:path` does not
+// recognize them as absolute — they'd resolve underneath `staging` instead
+// of outside it, flipping the expected `false` to `true`. Real Windows drive
+// paths are only meaningful on win32, so gate them the same way the source
+// module's own case-folding branch does (`process.platform === "win32"`).
+test.skipIf(process.platform !== "win32")("Spike H case 2: an absolute path outside staging is rejected", () => {
   expect(isInsideStaging("C:\\Users\\Khmil\\ok.txt", staging)).toBe(false)
 })
 
@@ -16,9 +22,15 @@ test("Spike H case 3: a ../ escape is rejected", () => {
   expect(isInsideStaging(path.join(staging, "..", "escape.txt"), staging)).toBe(false)
 })
 
-test("a sibling directory sharing a prefix is rejected (workspace-evil vs workspace)", () => {
-  expect(isInsideStaging("C:\\state\\turns\\019a\\workspace-evil\\x.txt", staging)).toBe(false)
-})
+// Same platform caveat as Spike H case 2 above: a literal Windows absolute
+// path, not one built via `path.join(staging, ...)`, so it only resolves as
+// "outside staging" on a win32 host.
+test.skipIf(process.platform !== "win32")(
+  "a sibling directory sharing a prefix is rejected (workspace-evil vs workspace)",
+  () => {
+    expect(isInsideStaging("C:\\state\\turns\\019a\\workspace-evil\\x.txt", staging)).toBe(false)
+  },
+)
 
 test("the staging root itself is inside", () => {
   expect(isInsideStaging(staging, staging)).toBe(true)
