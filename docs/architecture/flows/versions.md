@@ -66,7 +66,11 @@ stateDiagram-v2
    for `restoreActionId`, never repeats Gate/source replacement, and is unaffected
    by later active-chat or page changes. Startup completes pending intent before
    Workspace. Unexpected target hashes enter recovery conflict and are not
-   overwritten.
+   overwritten. The wrapper (source replace + exactly-one target-chat append,
+   `releaseAfterApplied` on the source operation) and the generic commit-intent /
+   roll-forward / recovery-conflict machinery it runs through are already built and
+   unit-tested, and the same reader-side `system:restore` record shape is already
+   decodable — but nothing calls the wrapper yet, so no live path ever writes one.
 9. **Restore result.** Branch, `HEAD`, index, other pages, pins, other chats, and
    application files remain untouched. The canonical source becomes Current
    design and is uncommitted unless equal to `HEAD`. Restore creates neither a Git
@@ -78,7 +82,10 @@ stateDiagram-v2
     `/commit-all` selects every eligible non-ignored portable or derived path under
     `.termcraft/`, including pages, chats, pin logs, and export. Local workspace,
     sessions, `transactions.local/`, caches, logs, lock metadata, and backups are
-    hard-excluded. There is no persistent button or mouse twin.
+    hard-excluded — the generated `.termcraft/.gitignore` already encodes this exact
+    exclusion list as a courtesy mirror, though it is not itself the authority and no
+    live commit-scope planner or commit command exists yet. There is no persistent
+    button or mouse twin.
 11. **Status and confirmation.** Each `/commit-*` row owns its dirty indicator,
     changed-file count, accessible scope text, and clean-scope disabled state.
     Every command opens the same editable-message/exact-path confirmation. The
@@ -103,6 +110,22 @@ stateDiagram-v2
 
 ## Source anchors
 
+No Git-history reader, Restore orchestration, or `/commit-*` command surface
+exists in code yet (no `core`/Kernel, `agent`, or `ui` module has landed) — steps
+1-3 and 5-7 and 9-14 below remain governed entirely by the design spec and design
+files. Steps 4 and 8 are partial exceptions. Step 4's read-only invariant is
+host-layer reality, not just spec: `HostMode` already carries `"historical"`, a
+historical mount is always forced to the static interaction mode, an interactive
+`set-mode` request against it is refused with the typed
+`HISTORICAL_PREVIEW_READ_ONLY` code, and the `PreviewSession` facade a historical
+mount returns has no `forwardInput`, `setTheme`, `setCapabilities`, or tweaks
+channel to begin with. What is still missing is everything around that host: the
+Git-history reader, the temporary read-only snapshot directory, and the UI that
+would open a historical session. Step 8's durable-finalization mechanics are
+likewise a partial exception: the record shape and the transaction wrapper it
+would use are already built as tested, uncalled infrastructure — see the anchors
+below.
+
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` —
   governing history rows, first-parent semantics, Git behavior, and commit commands
 - `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` —
@@ -116,3 +139,42 @@ stateDiagram-v2
 - `design/25-git-commit-controls.dc.html` — commit controls and scoped commits
 - `design/26-restore.dc.html` — Restore confirmation flow
 - `design/27-git-availability.dc.html` — Git availability and degraded states
+- `src/host/types.ts` — `HostMode` includes `"historical"` alongside
+  `preview`/`smoke`/`export`, the type step 4's session rests on
+- `src/host/session/model/host-state-machine.ts` — a historical mount's
+  `interactionMode` is always forced to `static` regardless of the request, and
+  an interactive `set-mode` against it is refused with the typed
+  `HISTORICAL_PREVIEW_READ_ONLY` code; backs step 4's and the diagram's
+  `Historical` read-only note
+- `src/host/supervisor/types.ts` — `PreviewSession.mode: "preview" | "historical"`
+  on the UI-facing facade type
+- `src/host/supervisor/model/preview-session.ts` — `createPreviewSession` derives
+  `mode` from the spec and, by construction, exposes no `forwardInput`,
+  `setTheme`, `setCapabilities`, or tweaks channel — the concrete shape of step
+  4's "no pin mutation, Send, or Tweaks are enabled"
+- `src/entities/chat/types.ts` — `ChatSystemRestoreRecord`: the target-chat restore
+  audit shape (`recordId`, `restoreActionId`, `pageSlug`, `sourceCommit`) step 8
+  describes; defined for reader completeness only, no writer exists
+- `src/entities/chat/model/decode.ts` — `decodeChatRecord`'s `system:restore`
+  schema, and the shared `turnId`/`actionId` mutual-exclusion rule step 8's sibling
+  terminal-record kinds rely on
+- `src/store/transaction/model/wrappers.ts` — `buildRestoreTransaction`: the
+  built-and-unit-tested `RestoreTransaction` wrapper (source replace +
+  exactly-one target-chat append) step 8 describes; explicitly has no MVP or live
+  caller
+- `src/store/transaction/types.ts` — `TransactionOperation.releaseAfterApplied` and
+  the `record-pending` `TransactionState` member: schema fields reserved for
+  Restore, carried for completeness but unused by every other transaction kind
+- `src/store/transaction/model/engine.ts` — the generic commit-intent /
+  roll-forward machinery and `TransactionRecoveryConflictError` a Restore
+  transaction runs through (backs the diagram's `RecoveryConflict` state), plus the
+  `releaseAfterApplied` exemption from post-apply drift checks
+- `src/store/transaction/model/recovery.ts` — startup transaction classification
+  and resolution that would apply to a pending Restore transaction the same as any
+  other kind, before project state is exposed
+- `src/store/model/factory.ts` — `openProject`'s launch sequence, where recovery
+  completes before the store's sub-facades are returned; backs step 8's "Startup
+  completes pending intent before Workspace"
+- `src/store/toml/model/gitignore.ts` — `PROJECT_GITIGNORE_RULES`: the actual
+  generated `.termcraft/.gitignore` exclusion list backing step 10's hard-excluded
+  paths; a courtesy mirror, not the live Git-commit-scope planner the design names

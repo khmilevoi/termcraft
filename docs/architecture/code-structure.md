@@ -4,28 +4,36 @@ where a file goes, which direction its imports may point, and which shapes are
 forbidden. It is the one document in `docs/architecture/` written for a reader who
 *does* read the source language; the others deliberately are not.
 
-No source exists yet. This is the contract new modules are written against, and its
-source anchors move to real paths as they land.
+Six source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
+`host/`, `gate/`, and `store/` are real source today. Four of those are components
+the design spec names — [`modules.md`](modules.md) counts the same four (runtime
+facade, Gate, HostSupervisor, Project store) — while `entities/` and
+`infrastructure/` are additions this convention makes on top of the seven.
+`core/` (the Kernel), `agent/`,
+`ui/`, and the `main.ts` composition root do not exist yet — this document is still
+their contract, and every section below marks the parts that describe them as not
+yet built. Source anchors move to real paths as each piece lands; see
+`## Source anchors`.
 
 ```mermaid
 flowchart LR
-    main["main.ts · composition root<br/>the only file that imports every module"]
+    main["main.ts · composition root<br/>(not yet built)<br/>the only file that imports every module"]
 
     subgraph adapters["Adapters — implement the ports they are handed"]
-        store["store/<br/>storage core + internal Git adapter"]
-        agent["agent/<br/>vendor SDK backends"]
+        store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
+        agent["agent/<br/>vendor SDK backends<br/>(not yet built)"]
         gate["gate/<br/>validation · declares SmokeRenderer"]
         host["host/<br/>HostSupervisor · design-host protocol"]
     end
 
     subgraph inner["Inner — knows the domain, imports no adapter"]
-        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes"]
+        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes<br/>(not yet built)"]
         entities["entities/<br/>Page · Chat · Turn · Pin<br/>pure types · no ports"]
     end
 
-    ui["ui/ · OpenTUI shell"]
+    ui["ui/ · OpenTUI shell<br/>(not yet built)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
-    infra["infrastructure/<br/>process · fs · framing · clock · uuid<br/>domain-free"]
+    infra["infrastructure/<br/>durability · fs-guard · framing · clock · uuid<br/>domain-free · process/ not split out yet"]
 
     core -- imports --> entities
     store -- "implements core ports" --> core
@@ -51,25 +59,39 @@ flowchart LR
    ```text
    src/
      main.ts            composition root — the only file that imports every module
-     entities/          pure domain types; no ports, no I/O
+                         (not yet built)
+     entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
-     core/              Kernel — the only domain decision-maker
+     core/              Kernel — the only domain decision-maker         (not yet built)
        ports/           contracts core consumes: GitHistory, GitCommitter, AgentBackend…
        turns/  versions/  export/  chats/
        types.ts
        index.ts
-     store/             project state; implements core ports
-       chats/  pages/  pins/  transactions/  git/
+     store/             project state; implements core ports            [landed]
+       safe-fs/  lease/  trust/  toml/  jsonl/  transaction/
+       sandbox/  migration/  projections/  model/
        types.ts
        index.ts
      agent/             AgentBackend over the vendors' official TypeScript SDKs
-     gate/              validation; declares the SmokeRenderer port it consumes
-     host/              HostSupervisor, PreviewSession, design-host protocol
-     ui/                OpenTUI shell; imports core's boundary types only
-     runtime/           @termcraft/runtime — saved-page facade; leaf
-     infrastructure/    domain-free technical capabilities
-       process/  fs/  framing/  clock/  uuid/
+                         (not yet built)
+     gate/              validation; declares the SmokeRenderer port it consumes [landed]
+     host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
+     ui/                OpenTUI shell; imports core's boundary types only       (not yet built)
+     runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
+     infrastructure/    domain-free technical capabilities                     [landed]
+       clock/  durability/  fs-guard/  framing/  uuid/
+       (process/ not split out yet — process spawning still lives inside
+        host's supervisor, see item 6)
    ```
+
+   `store/` groups by concern (`safe-fs`, `lease`, `trust`, `toml`, `jsonl`,
+   `transaction`, `sandbox`, `migration`, `projections`) rather than by the
+   `chats/`/`pages/`/`pins/`/`git/` split this document originally sketched. The
+   `ManifestStore`/`WorkspaceStateStore`/`ChatStore`/`PinStore`/`PageStore` port
+   contracts are assembled from those submodules inside
+   `store`'s own composition root (see Source anchors), not held in their own
+   top-level folders — and no `git/` submodule exists: the Git adapter item 4
+   mentions has no code yet at all.
 
 2. **Feature-first, recursively.** Grouping is by entity or feature at every level;
    a technical layer never names a top-level folder. Each module — and each
@@ -119,6 +141,15 @@ flowchart LR
    the Git adapter an internal Project-store adapter rather than the eighth
    top-level component the specs forbid.
 
+   Landed today: durable disk writes, the reparse-point/filesystem-identity checks,
+   wire framing, the clock, and UUIDv7 generation all live under `infrastructure/`
+   and pass the test — "fs" split into two submodules (`durability/`, `fs-guard/`)
+   rather than the one `fs/` folder this document sketches. Process spawning does
+   not live there yet: it still sits inside `host`'s supervisor (see Source
+   anchors). It passes the same domain-free test in place — nothing about it names
+   a `Page`, `Turn`, or `Chat` — so this is an unextracted candidate for
+   `infrastructure/process/`, not a violation of the rule.
+
 7. **`core` imports no other module.** It imports `entities/` and its own `ports/`,
    nothing else. `main.ts` constructs the adapters and injects them; the arrows in
    [`modules.md`](modules.md) (`kernel --> pstore`, `kernel --> host`, …) are
@@ -156,6 +187,12 @@ flowchart LR
    load. Item 10's "only import" is about what a page's *author* may write; the
    helper import is emitted by the transform.
 
+   Landed today: the compiler extraction and the three-specifier resolver both
+   match this item exactly. The `_host --stdio` argv check and the injectable
+   protocol loop it would drive exist too, but nothing wires them to real process
+   stdio yet — no `bun build --compile` binary and no `main.ts` exist, so `termcraft
+   _host` is not yet a runnable second entry point, only the engine one would drive.
+
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
     and nothing else from any module: never `store`, never host stdio. `runtime` is a
@@ -178,19 +215,98 @@ flowchart LR
 
 ## Source anchors
 
+Six modules landed; `core/`, `agent/`, `ui/`, and `main.ts` have not (item 1). The
+anchors below split accordingly: real files for what exists, design-spec sections
+for what is still contract only.
+
+**Module shape (item 2) and the alias map**
+
 - `CLAUDE.md` — Code style: the module shape (`ui/`, `model/`, `types.ts`,
   `index.ts`) and the atomic-function rule this document builds on
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven modules,
-  strict boundaries, workspace extractability, and the transport-neutral Kernel
-  boundary; §4.2 the design host; §5.8 the saved-page import allowlist; §6.1 the
+- `tsconfig.json` (`compilerOptions.paths`) — the alias map item 2 and `CLAUDE.md`'s
+  Imports section enforce; it already reserves the `core`, `agent`, and `ui` bare +
+  wildcard aliases ahead of those three modules landing
+- `src/entities/page/index.ts`, `src/entities/page/types.ts`,
+  `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
+  `index.ts` shape, with no `ui/` because the module has none
+- `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
+  chat and pin vocabularies
+- `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`) with
+  zero consumers today; the `agent` backends that would produce it and the `core`
+  that would consume it (item 8) do not exist yet
+
+**`infrastructure/` and the domain-free test (item 6)**
+
+- `src/infrastructure/clock/index.ts`, `src/infrastructure/framing/index.ts`,
+  `src/infrastructure/uuid/index.ts` — domain-free primitives that pass the test as
+  this document states it
+- `src/infrastructure/durability/index.ts`, `src/infrastructure/fs-guard/index.ts` —
+  the two submodules that stand in for the single `fs/` folder this document
+  sketches
+- `src/host/supervisor/model/spawn.ts` — process spawning as it exists today: inside
+  `host`, not yet split out to `infrastructure/process/`
+
+**Ports and the composition boundary (items 4, 5, 7, 9, 10)**
+
+- `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
+  uses as its port-placement illustration (item 5): `gate` declares it, and `host`
+  provides the one-shot session an adapter would wrap (`runOneShotSession`) — but
+  no code satisfies the `SmokeRenderer` interface itself, and no composition root
+  wires the two together, because `main.ts` does not exist
+- `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
+  real `HostSupervisor`/restart-aware `PreviewHandle` shapes item 5's naming list
+  fixes as spec-given
+- `src/host/supervisor/model/preview-session.ts` — a second, non-restart-aware
+  `PreviewSession` facade over one `HostSession`; both shapes exist with no `core`
+  yet to choose between them
+- `src/gate/model/import-scan.ts` — the saved-page import allowlist (item 11's last
+  forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal
+- `src/host/session/model/resolver.ts` — the runtime resolver plugin item 9
+  describes; registers three specifiers (`@termcraft/runtime`, `react/jsx-runtime`,
+  `react/jsx-dev-runtime`), not yet the single `@termcraft/runtime/jsx-runtime`
+  subpath the target design names
+- `src/runtime/model/jsx.ts` — the facade-owned JSX helper surface item 10
+  describes; its own comment marks the `jsxImportSource: "@termcraft/runtime"`
+  end-to-end wiring as still pending (phase 3 + phase 8)
+- `src/runtime/index.ts` — the saved-page facade's single public entry point
+- `src/gate/model/tsc-extract.ts` — the per-platform `tsc` extraction item 9
+  describes (`materializeCompiler`: extracted once to a per-user cache, then
+  spawned)
+- `src/host/session/model/entry.ts` — `runHostStdio`/`parseHostArgs`: the injectable
+  engine the `termcraft _host` second composition root (item 9) would drive; not yet
+  wired to real process stdio by any binary entry point
+
+**`store` and the Git adapter (items 1, 4, 6, 11)**
+
+- `src/store/types.ts` — the STORE PORT CONTRACT; its own header comment names it as
+  "the shapes `core/ports/` lifts verbatim in phase 6" and documents five deliberate
+  divergences from the original port sketch
+- `src/store/model/factory.ts` — the composition root inside `store`: assembles
+  `safe-fs`/`lease`/`trust`/`toml`/`jsonl`/`transaction`/`sandbox`/`migration`/
+  `projections` into the `Store` port, including the `ManifestStore`/
+  `WorkspaceStateStore`/`ChatStore`/`PinStore`/`PageStore` facades the store port
+  contract declares
+- `src/store/toml/model/gitignore.ts` — the only Git-adjacent code that exists
+  today, and explicitly not the `GitHistory`/`GitCommitter` adapter: its own comment
+  calls the generated `.gitignore` a "courtesy mirror," not the live commit-scope
+  planner
+
+**Design-spec anchors kept — no code yet, or the spec is the authority for a detail
+the code does not encode**
+
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
+  split, strict boundaries, workspace extractability, and the transport-neutral
+  Kernel boundary (`core/`, `agent/`, `ui/`, and `main.ts` remain unbuilt); §6.1 the
   mechanism-blind `AgentBackend` contract; §3.6 the runtime-selected agent triple
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
-  inside the Project store
-- `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` —
-  `HostSupervisor` and `PreviewSession` ownership, and the Gate's smoke-render path
+  inside the Project store; no code implements either side of this yet
+- `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` — the
+  slice of the protocol surface `host` has not landed: `forwardInput`/`setTweak`/
+  `setTheme`/geometry `query()`, the bounded control-queue/mailbox wiring into the
+  live path, and the conformant `capture` export reply
 - `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — §3.1 the
-  three-specifier resolver and the facade-owned JSX helper contract that fix what
-  `runtime/` and `host/` each own
+  target single-facade JSX specifier (`@termcraft/runtime/jsx-runtime`) the current
+  three-specifier resolver stands in for
 - [`modules.md`](modules.md) — the same seven components as runtime roles, and the
   Kernel's authority this layout encodes

@@ -7,17 +7,29 @@ isolated preview. Written for a reader who does not read the source language —
 [code-structure.md](code-structure.md) is the deliberate exception, and the only
 document here that addresses how the source tree itself is laid out.
 
-> **Status:** these documents describe both the MVP foundation and the v1 target
-> ahead of the code. The MVP has canonical page sources but no history or Git UI;
-> v1 adds Git-backed history, explicit Restore, and user-confirmed scoped commits.
-> The approved continuation
+> **Status:** six source modules have landed — `entities/`, `infrastructure/`,
+> `runtime/`, `host/`, `gate/`, and `store/` — and the documents below anchor those
+> to real source files. Of the seven components the design names, that makes four
+> real: the runtime facade, the Gate, the HostSupervisor and design host, and the
+> Project store. Three have not landed: the Kernel (`core/`), the agent backends
+> (`agent/`), and the UI shell (`ui/`), along with the `main.ts` composition root
+> that would wire them together. So nothing yet composes the landed modules into a
+> running program: behavior that crosses component boundaries — a live generation
+> turn, a preview a designer can see, export assembly, Git history — is still
+> described ahead of the code. That is deliberate. Each document states which half
+> of a claim is built and which is a design target, and anchors the unbuilt half to
+> the governing specification instead of a source file; anchors keep moving to real
+> paths as implementation proceeds (see the architecture-update skill).
+>
+> These documents also describe both the MVP foundation and the v1 target. The MVP
+> has canonical page sources but no history or Git UI; v1 adds Git-backed history,
+> explicit Restore, and user-confirmed scoped commits. The approved continuation
 > (`docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md`) governs
 > canonical page identity and Current rows, history discovery/browsing, Restore
 > validation, Git commit controls, and export-source selection wherever it supersedes the
 > original design spec or a flow document. Every document also anchors the relevant
 > production-hardening detailed designs, the master design, and any UI reference
-> files under `design/`; anchors move to real source files as
-> implementation proceeds (see the architecture-update skill).
+> files under `design/`.
 >
 > The approved production-hardening register
 > (`docs/superpowers/specs/2026-07-16-production-hardening-decisions-design.md`)
@@ -34,13 +46,17 @@ document here that addresses how the source tree itself is laid out.
    the project folder, and the export consumer.
 2. [modules.md](modules.md) — the seven components, their boundaries, and the
    runtime loop; the transport-neutral Kernel boundary, runtime facade, and
-   supervised design-host subprocess where agent-written code runs.
+   supervised design-host subprocess where agent-written code runs. Its per-component
+   table marks which four are real code and which three are still contract only.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
+   The most fully-built area of the system, and the vocabulary the other documents
+   borrow when they name a stored record.
 4. [code-structure.md](code-structure.md) — the source-tree convention: entity-first
    grouping, `entities/` versus consumer-declared ports, the domain-free
    `infrastructure/` ring, and the composition root that keeps the module graph a
-   DAG. For readers who write code; the rest of this set does not require it.
+   DAG. Also the canonical account of which modules exist on disk today. For readers
+   who write code; the rest of this set does not require it.
 
 ## Flows
 
@@ -60,7 +76,8 @@ One document per user-visible process:
   behavior is the continuation specification linked above.
 - [flows/interactive-prototype.md](flows/interactive-prototype.md) — real
   component state inside the design host; what crosses the boundary for
-  interactive mode and the Tweaks panel.
+  interactive mode and the Tweaks panel. The host and its supervision are built;
+  the input, tweak, and navigation channels are not.
 - [flows/pins-and-selection.md](flows/pins-and-selection.md) — mouse selection
   and pin comments: anchoring, lifecycle, unresolved pins.
 - [flows/export.md](flows/export.md) — the export package: deterministic
