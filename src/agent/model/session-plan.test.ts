@@ -39,7 +39,10 @@ test("a fresh prompt prepends the seed transcript before the user message", () =
     ],
   })
   const prompt = buildPrompt(task)
-  expect(prompt).toContain("add a cpu gauge")
-  expect(prompt).toContain("Added the CPU gauge.")
-  expect(prompt.endsWith("make the gauge red")).toBe(true)
+  // Exact string, not toContain: a swapped role ternary (user rendering as
+  // "Assistant:" and vice versa) would still contain every substring above
+  // and still end with the user message, so only pinning the full rendered
+  // text — prefixes and blank-line separators included — catches attribution
+  // inverting on every fresh-with-seed turn.
+  expect(prompt).toBe("User: add a cpu gauge\n\nAssistant: Added the CPU gauge.\n\nmake the gauge red")
 })

@@ -1,14 +1,18 @@
-import type { SDKMessage, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk"
+import type { SDKMessage, SDKResultError, SDKResultMessage, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk"
 import type { AgentEvent, TokenUsage } from "entities/turn"
 import { mapToolUse } from "./tool-op"
 
 /**
  * Compute the 0–100 context-window share, or null when no model reported a
- * usable window (master §6.1). The SDK types both `usage` and `modelUsage` as
- * non-optional, but this normalizer is fed by a vendor stream — a message that
- * omits them is treated as "unreported" rather than allowed to throw.
+ * usable window (master §6.1). Accepts either result subtype: the installed
+ * SDK gives `SDKResultError` the same non-optional `usage`/`modelUsage`
+ * fields as `SDKResultSuccess`, so a turn that errors out still reports how
+ * much context it burned (§6.1, §3.9's context indicator). The SDK types both
+ * fields as non-optional, but this normalizer is fed by a vendor stream — a
+ * message that omits them is treated as "unreported" rather than allowed to
+ * throw.
  */
-export function deriveUsage(result: SDKResultSuccess): TokenUsage | null {
+export function deriveUsage(result: SDKResultMessage): TokenUsage | null {
   const usage = result.usage as { input_tokens?: number; output_tokens?: number } | undefined
   if (usage === undefined) return null
 
@@ -60,13 +64,30 @@ function normalizeSuccess(result: SDKResultSuccess): AgentEvent[] {
 }
 
 /**
+ * An error result yields the error event first, then — when derivable — a
+ * usage event (master §6.1). This is the failure mode where the context
+ * indicator matters most: an attempt that ends `error_max_turns` after
+ * burning most of the context window must still report usage, not just drop
+ * it because the turn didn't succeed. Error stays first so the event-order
+ * contract downstream (kernel/UI) does not shift by result subtype.
+ */
+function normalizeError(result: SDKResultError): AgentEvent[] {
+  const errors = result.errors ?? []
+  const usage = deriveUsage(result)
+  const events: AgentEvent[] = [{ kind: "error", message: errors[0] ?? `result ${result.subtype}` }]
+  if (usage !== null) events.push({ kind: "usage", tokens: usage })
+  return events
+}
+
+/**
  * Normalize one vendor `SDKMessage` into zero or more `AgentEvent`s (master
  * §6.1). Thinking blocks and interim assistant text become `reasoning`;
  * `tool_use` becomes `tool`; a success result becomes `final` + `usage`; an
- * error result becomes `error`. Any message with no mapping yields `[]` — the
- * SDK's message union is large and grows between versions, so being
- * forward-compatible by default is deliberate, not an oversight (entities/turn:
- * "vendor events with no mapping are dropped silently").
+ * error result becomes `error` + `usage` (when derivable). Any message with no
+ * mapping yields `[]` — the SDK's message union is large and grows between
+ * versions, so being forward-compatible by default is deliberate, not an
+ * oversight (entities/turn: "vendor events with no mapping are dropped
+ * silently").
  */
 export function normalizeMessage(msg: SDKMessage): AgentEvent[] {
   if (msg.type === "assistant") {
@@ -81,8 +102,7 @@ export function normalizeMessage(msg: SDKMessage): AgentEvent[] {
 
   if (msg.type === "result") {
     if (msg.subtype === "success") return normalizeSuccess(msg)
-    const errors = msg.errors ?? []
-    return [{ kind: "error", message: errors[0] ?? `result ${msg.subtype}` }]
+    return normalizeError(msg)
   }
 
   return []

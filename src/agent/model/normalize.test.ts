@@ -47,7 +47,7 @@ test("a success result yields final then usage", () => {
   ])
 })
 
-test("an error result yields a single error event carrying the first reported error", () => {
+test("an error result yields the error event first, carrying the first reported error, then usage", () => {
   const msg = {
     type: "result",
     subtype: "error_during_execution",
@@ -58,7 +58,15 @@ test("an error result yields a single error event carrying the first reported er
     errors: ["authentication_failed"],
     permission_denials: [],
   } as unknown as SDKMessage
-  expect(normalizeMessage(msg)).toEqual([{ kind: "error", message: "authentication_failed" }])
+  const events = normalizeMessage(msg)
+  expect(events).toEqual([
+    { kind: "error", message: "authentication_failed" },
+    { kind: "usage", tokens: { inputTokens: 0, outputTokens: 0, contextPercent: null } },
+  ])
+  // Explicit order contract: error must arrive before usage, matching the
+  // success branch's final-then-usage ordering.
+  expect(events[0]?.kind).toBe("error")
+  expect(events[1]?.kind).toBe("usage")
 })
 
 test("an unmapped system init message is dropped silently", () => {
@@ -107,7 +115,30 @@ test("an error result with an empty errors array falls back to naming the subtyp
     errors: [],
     permission_denials: [],
   } as unknown as SDKMessage
-  expect(normalizeMessage(msg)).toEqual([{ kind: "error", message: "result error_max_turns" }])
+  expect(normalizeMessage(msg)).toEqual([
+    { kind: "error", message: "result error_max_turns" },
+    { kind: "usage", tokens: { inputTokens: 0, outputTokens: 0, contextPercent: null } },
+  ])
+})
+
+test("an error result that burned most of the context window still reports usage, error first (master §6.1)", () => {
+  // The exact failure scenario finding [35] describes: an attempt burns 180k
+  // of a 200k window and ends error_max_turns. The context indicator must
+  // not silently under-report just because the attempt failed.
+  const msg = {
+    type: "result",
+    subtype: "error_max_turns",
+    session_id: "s1",
+    uuid: "u9",
+    usage: { input_tokens: 170000, output_tokens: 10000 },
+    modelUsage: { "claude-opus-4-8": { inputTokens: 170000, outputTokens: 10000, contextWindow: 200000 } },
+    errors: [],
+    permission_denials: [],
+  } as unknown as SDKMessage
+  expect(normalizeMessage(msg)).toEqual([
+    { kind: "error", message: "result error_max_turns" },
+    { kind: "usage", tokens: { inputTokens: 170000, outputTokens: 10000, contextPercent: 90 } },
+  ])
 })
 
 test("a result subtype this adapter does not enumerate is still reported as an error, not a crash", () => {

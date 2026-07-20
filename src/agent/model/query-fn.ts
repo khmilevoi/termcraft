@@ -14,9 +14,15 @@ export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
 /** Injected query seam: production wraps the SDK `query`, tests script an async generator. */
 export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => ClaudeQuery
 
-/** Production seam: the real SDK `query`. */
+/**
+ * Production seam: the real SDK `query`. The SDK's `Query` (an
+ * `AsyncGenerator<SDKMessage, void>` with `interrupt()`) satisfies
+ * {@link ClaudeQuery} structurally, so this assigns WITHOUT a cast on purpose —
+ * a cast here would silently absorb any future SDK signature drift instead of
+ * failing the typecheck.
+ */
 export function createRealQueryFn(): ClaudeQueryFn {
-  return (params) => query(params) as unknown as ClaudeQuery
+  return (params) => query(params)
 }
 
 const DISALLOWED = ["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch"]
@@ -51,13 +57,19 @@ function makeSpawnClaudeCodeProcess(processTree: ProcessTree): (options: SpawnOp
 
     if (typeof child.pid !== "number") {
       console.warn("agent/query-fn: spawned CLI process has no pid, cannot adopt it into the owned process tree")
-      return child as unknown as SpawnedProcess
+      // No channel back to the run beyond this log (errore rule 21) unless
+      // ownership is recorded on the tree itself — `startClaudeRun`'s
+      // exit-confirmation poll must not read a tree nothing was ever
+      // adopted into as "confirmed drained" (finding [22]).
+      processTree.noteAdoptionOutcome(false)
+      return child
     }
 
     const adopted = processTree.adopt(child.pid)
     if (adopted instanceof Error) {
       console.warn(`agent/query-fn: adopt(${child.pid}) failed, process tree may not own the CLI:`, adopted.message)
-      return child as unknown as SpawnedProcess
+      processTree.noteAdoptionOutcome(false)
+      return child
     }
 
     // The assign-before-descendant-spawn race is not OS-guaranteed (no
@@ -67,13 +79,17 @@ function makeSpawnClaudeCodeProcess(processTree: ProcessTree): (options: SpawnOp
     const verified = processTree.activeProcesses()
     if (verified instanceof Error) {
       console.warn(`agent/query-fn: activeProcesses() re-read after adopt(${child.pid}) failed:`, verified.message)
+      processTree.noteAdoptionOutcome(false)
     } else if (verified < 1) {
       console.warn(
         `agent/query-fn: activeProcesses() re-read reported ${verified} immediately after adopt(${child.pid})`,
       )
+      processTree.noteAdoptionOutcome(false)
+    } else {
+      processTree.noteAdoptionOutcome(true)
     }
 
-    return child as unknown as SpawnedProcess
+    return child
   }
 }
 

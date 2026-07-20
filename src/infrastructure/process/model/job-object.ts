@@ -43,10 +43,19 @@ export function buildExtendedLimitInfo(): Uint8Array {
  * Deterministic, cross-platform test double. `activeProcesses()` walks the
  * scripted `counts` one step per call, holding at the last entry; `terminate`
  * appends a trailing `0` (confirmed exit) unless `neverZero` is set, for
- * scripting an unconfirmed-exit scenario.
+ * scripting an unconfirmed-exit scenario. `ownershipConfirmed` starts at the
+ * optional `script.ownershipConfirmed` (default `false`, i.e. "never
+ * adopted") and can be flipped to "adopted fine" either up front via that
+ * option or at runtime via `noteAdoptionOutcome(true)` — mirroring the real
+ * tree's sticky-true semantics.
  */
-export function createFakeProcessTree(script: { counts: number[]; neverZero?: boolean }): ProcessTree {
+export function createFakeProcessTree(script: {
+  counts: number[]
+  neverZero?: boolean
+  ownershipConfirmed?: boolean
+}): ProcessTree {
   let i = 0
+  let confirmed = script.ownershipConfirmed ?? false
   const read = () => {
     const value = script.counts[Math.min(i, script.counts.length - 1)] ?? 0
     if (i < script.counts.length - 1) i += 1
@@ -60,6 +69,10 @@ export function createFakeProcessTree(script: { counts: number[]; neverZero?: bo
       return null
     },
     close: () => {},
+    noteAdoptionOutcome: (ok: boolean) => {
+      if (ok) confirmed = true
+    },
+    ownershipConfirmed: () => confirmed,
   }
 }
 
@@ -84,6 +97,24 @@ const KERNEL32_SYMBOLS = {
 
 type Kernel32 = Library<typeof KERNEL32_SYMBOLS>
 
+/** Strips `bun:ffi`'s `__ffi_function_callable` brand off a symbol's call signature. */
+type Unbranded<T> = T extends (...args: infer A) => infer R ? (...args: A) => R : never
+
+/**
+ * The kernel32 calls the helpers below actually make, derived from the real
+ * symbol table minus `bun:ffi`'s unique-symbol brand. `dlopen`'s `symbols`
+ * object satisfies this structurally (production passes it verbatim), and a
+ * test can supply a scripted stub — which is the only deterministic way to
+ * exercise the FFI *failure* branches (`result === 0` in `activeProcesses` /
+ * `terminate`, and `AssignProcessToJobObject` returning 0 in `adopt`).
+ * A real, healthy job handle cannot be made to fail those calls on demand,
+ * which is precisely why finding [9]'s guard survived every mutation until
+ * this seam existed.
+ */
+export type JobObjectSyscalls = {
+  readonly [K in keyof Kernel32["symbols"]]: Unbranded<Kernel32["symbols"][K]>
+}
+
 /** Process-wide cache: kernel32 only needs to be `dlopen`'d once. */
 let cachedKernel32: Kernel32 | null = null
 
@@ -106,9 +137,9 @@ function asError(cause: unknown): Error | undefined {
 }
 
 /** `GetLastError()` for a diagnostic message; never throws past this call. */
-function lastErrorSafe(k32: Kernel32): string {
+function lastErrorSafe(sys: JobObjectSyscalls): string {
   try {
-    return String(k32.symbols.GetLastError())
+    return String(sys.GetLastError())
   } catch {
     return "unknown"
   }
@@ -122,18 +153,18 @@ function openKernel32(): Kernel32 {
 }
 
 /** Releases a handle, logging (never throwing) on failure — errore rule 21: swallowed errors must be logged. */
-function closeHandleQuietly(k32: Kernel32, handle: Pointer): void {
+function closeHandleQuietly(sys: JobObjectSyscalls, handle: Pointer): void {
   try {
-    k32.symbols.CloseHandle(handle)
+    sys.CloseHandle(handle)
   } catch (cause) {
     console.warn("infrastructure/process: CloseHandle failed, handle leaked:", describeFailure(cause))
   }
 }
 
-function adopt(k32: Kernel32, jobHandle: Pointer, pid: number): ProcessTreeError | null {
+function adopt(sys: JobObjectSyscalls, jobHandle: Pointer, pid: number): ProcessTreeError | null {
   const procHandle = (() => {
     try {
-      return k32.symbols.OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, 0, pid)
+      return sys.OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, 0, pid)
     } catch (cause) {
       return new ProcessTreeError({
         reason: `OpenProcess failed for pid ${pid}: ${describeFailure(cause)}`,
@@ -144,13 +175,13 @@ function adopt(k32: Kernel32, jobHandle: Pointer, pid: number): ProcessTreeError
   if (procHandle instanceof ProcessTreeError) return procHandle
   if (procHandle === null) {
     return new ProcessTreeError({
-      reason: `OpenProcess returned a null handle for pid ${pid} (GetLastError=${lastErrorSafe(k32)})`,
+      reason: `OpenProcess returned a null handle for pid ${pid} (GetLastError=${lastErrorSafe(sys)})`,
     })
   }
 
   const assignResult = (() => {
     try {
-      return k32.symbols.AssignProcessToJobObject(jobHandle, procHandle)
+      return sys.AssignProcessToJobObject(jobHandle, procHandle)
     } catch (cause) {
       return new ProcessTreeError({
         reason: `AssignProcessToJobObject failed for pid ${pid}: ${describeFailure(cause)}`,
@@ -162,12 +193,12 @@ function adopt(k32: Kernel32, jobHandle: Pointer, pid: number): ProcessTreeError
   // membership is tracked by the OS against the process, not this handle, so
   // it is released immediately either way rather than held for the tree's
   // lifetime (avoids a handle leak per adopted pid).
-  closeHandleQuietly(k32, procHandle)
+  closeHandleQuietly(sys, procHandle)
 
   if (assignResult instanceof ProcessTreeError) return assignResult
   if (assignResult === 0) {
     return new ProcessTreeError({
-      reason: `AssignProcessToJobObject returned failure for pid ${pid} (GetLastError=${lastErrorSafe(k32)})`,
+      reason: `AssignProcessToJobObject returned failure for pid ${pid} (GetLastError=${lastErrorSafe(sys)})`,
     })
   }
   // Caveat (Spike I): assign races the child spawning its own descendants —
@@ -177,12 +208,12 @@ function adopt(k32: Kernel32, jobHandle: Pointer, pid: number): ProcessTreeError
   return null
 }
 
-function activeProcesses(k32: Kernel32, jobHandle: Pointer): ProcessTreeError | number {
+function activeProcesses(sys: JobObjectSyscalls, jobHandle: Pointer): ProcessTreeError | number {
   const acctBuf = new Uint8Array(BASIC_ACCOUNTING_INFO_SIZE)
   const retLenBuf = new Uint32Array(1)
   const result = (() => {
     try {
-      return k32.symbols.QueryInformationJobObject(
+      return sys.QueryInformationJobObject(
         jobHandle,
         JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
         ptr(acctBuf),
@@ -199,16 +230,16 @@ function activeProcesses(k32: Kernel32, jobHandle: Pointer): ProcessTreeError | 
   if (result instanceof ProcessTreeError) return result
   if (result === 0) {
     return new ProcessTreeError({
-      reason: `QueryInformationJobObject returned failure (GetLastError=${lastErrorSafe(k32)})`,
+      reason: `QueryInformationJobObject returned failure (GetLastError=${lastErrorSafe(sys)})`,
     })
   }
   return new DataView(acctBuf.buffer).getUint32(ACTIVE_PROCESSES_OFFSET, true)
 }
 
-function terminate(k32: Kernel32, jobHandle: Pointer): ProcessTreeError | null {
+function terminate(sys: JobObjectSyscalls, jobHandle: Pointer): ProcessTreeError | null {
   const result = (() => {
     try {
-      return k32.symbols.TerminateJobObject(jobHandle, TERMINATE_EXIT_CODE)
+      return sys.TerminateJobObject(jobHandle, TERMINATE_EXIT_CODE)
     } catch (cause) {
       return new ProcessTreeError({
         reason: `TerminateJobObject failed: ${describeFailure(cause)}`,
@@ -219,21 +250,52 @@ function terminate(k32: Kernel32, jobHandle: Pointer): ProcessTreeError | null {
   if (result instanceof ProcessTreeError) return result
   if (result === 0) {
     return new ProcessTreeError({
-      reason: `TerminateJobObject returned failure (GetLastError=${lastErrorSafe(k32)})`,
+      reason: `TerminateJobObject returned failure (GetLastError=${lastErrorSafe(sys)})`,
     })
   }
   return null
 }
 
-function buildTreeFromHandles(k32: Kernel32, jobHandle: Pointer): ProcessTree {
+/** The tagged error every method returns once `close()` has run (finding [28]). */
+function closedTreeError(): ProcessTreeError {
+  return new ProcessTreeError({ reason: "process tree is closed, its job handle has been released" })
+}
+
+/**
+ * The real tree's behavior over an injectable syscall table. Exported so tests
+ * can drive the FFI *failure* branches (`result === 0`) with a scripted
+ * {@link JobObjectSyscalls} stub — see the type's doc comment. Production
+ * reaches this only through {@link createJobObjectTree}.
+ */
+export function buildTreeFromSyscalls(sys: JobObjectSyscalls, jobHandle: Pointer): ProcessTree {
+  // Closure-owned lifetime state (non-Reatom adapter, per CLAUDE.md): `closed`
+  // makes `close()` idempotent and, critically, INVALIDATING — once true, no
+  // method below issues another FFI call against `jobHandle`. Windows
+  // recycles HANDLE values aggressively, so touching the value again after
+  // release risks silently operating on a since-reused, unrelated kernel
+  // object (finding [28]) rather than failing loudly.
+  let closed = false
+  let ownershipConfirmed = false
+
   return {
-    adopt: (pid: number) => adopt(k32, jobHandle, pid),
-    activeProcesses: () => activeProcesses(k32, jobHandle),
-    terminate: () => terminate(k32, jobHandle),
+    adopt: (pid: number) => (closed ? closedTreeError() : adopt(sys, jobHandle, pid)),
+    activeProcesses: () => (closed ? closedTreeError() : activeProcesses(sys, jobHandle)),
+    terminate: () => (closed ? closedTreeError() : terminate(sys, jobHandle)),
     // Kill-on-close (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) fires for any
     // survivor once this, the last handle to the job, is released — the
-    // crash-safety net described in Spike I FINDINGS.md Step 4a-ii.
-    close: () => closeHandleQuietly(k32, jobHandle),
+    // crash-safety net described in Spike I FINDINGS.md Step 4a-ii. Guarded
+    // by `closed` so a second call (e.g. both the natural-completion and the
+    // cancel-ladder paths closing the same tree) never issues a second
+    // `CloseHandle` on a value the OS may already have reassigned.
+    close: () => {
+      if (closed) return
+      closed = true
+      closeHandleQuietly(sys, jobHandle)
+    },
+    noteAdoptionOutcome: (ok: boolean) => {
+      if (ok) ownershipConfirmed = true
+    },
+    ownershipConfirmed: () => ownershipConfirmed,
   }
 }
 
@@ -260,10 +322,13 @@ export function createJobObjectTree(): ProcessTreeError | ProcessTree {
     }
   })()
   if (k32 instanceof ProcessTreeError) return k32
+  // `symbols` satisfies `JobObjectSyscalls` structurally — every helper below
+  // takes the narrowed table so it can also be driven by a scripted stub.
+  const sys: JobObjectSyscalls = k32.symbols
 
   const jobHandle = (() => {
     try {
-      return k32.symbols.CreateJobObjectW(null, null)
+      return sys.CreateJobObjectW(null, null)
     } catch (cause) {
       return new ProcessTreeError({
         reason: `CreateJobObjectW failed: ${describeFailure(cause)}`,
@@ -273,13 +338,13 @@ export function createJobObjectTree(): ProcessTreeError | ProcessTree {
   })()
   if (jobHandle instanceof ProcessTreeError) return jobHandle
   if (jobHandle === null) {
-    return new ProcessTreeError({ reason: `CreateJobObjectW returned a null handle (GetLastError=${lastErrorSafe(k32)})` })
+    return new ProcessTreeError({ reason: `CreateJobObjectW returned a null handle (GetLastError=${lastErrorSafe(sys)})` })
   }
 
   const limitInfo = buildExtendedLimitInfo()
   const setInfoResult = (() => {
     try {
-      return k32.symbols.SetInformationJobObject(
+      return sys.SetInformationJobObject(
         jobHandle,
         JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
         ptr(limitInfo),
@@ -295,15 +360,15 @@ export function createJobObjectTree(): ProcessTreeError | ProcessTree {
   if (setInfoResult instanceof ProcessTreeError) {
     // The job exists but has no kill-on-close limit and no owner to close it —
     // release it here or the handle leaks for the life of the process.
-    closeHandleQuietly(k32, jobHandle)
+    closeHandleQuietly(sys, jobHandle)
     return setInfoResult
   }
   if (setInfoResult === 0) {
-    closeHandleQuietly(k32, jobHandle)
+    closeHandleQuietly(sys, jobHandle)
     return new ProcessTreeError({
-      reason: `SetInformationJobObject(kill-on-close) returned failure (GetLastError=${lastErrorSafe(k32)})`,
+      reason: `SetInformationJobObject(kill-on-close) returned failure (GetLastError=${lastErrorSafe(sys)})`,
     })
   }
 
-  return buildTreeFromHandles(k32, jobHandle)
+  return buildTreeFromSyscalls(sys, jobHandle)
 }

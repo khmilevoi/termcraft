@@ -35,9 +35,23 @@ test("denies an unknown tool by default", () => {
   expect(r.behavior).toBe("deny")
 })
 
-test("allows a read-only tool with no path (e.g. Grep pattern) only when its path stays in staging", () => {
+test("allows a Grep with an explicit path only when that path stays inside staging", () => {
   const inside = policy("Grep", { pattern: "gauge", path: path.join(staging, "pages") })
   expect(inside.behavior).toBe("allow")
   const outside = policy("Grep", { pattern: "gauge", path: "C:\\Windows" })
   expect(outside.behavior).toBe("deny")
+})
+
+test("[13] denies a file-tool call that carries no resolvable path field at all", () => {
+  const r = policy("Read", {})
+  expect(r.behavior).toBe("deny")
+})
+
+test("[7] blockedPath wins over an innocuous input.file_path — the SDK's own resolved-target signal", () => {
+  const r = policy(
+    "Write",
+    { file_path: path.join(staging, "pages", "main.tsx"), content: "x" },
+    "C:\\Users\\Khmil\\outside.txt",
+  )
+  expect(r.behavior).toBe("deny")
 })

@@ -29,6 +29,45 @@ test("Spike F: a junction/reparse point inside staging is rejected via the backs
   expect(isInsideStaging(target, staging, { hasReparsePoint: () => true })).toBe(false)
 })
 
+test("[6] hasReparsePoint returning false for every segment still allows a clean path", () => {
+  const target = path.join(staging, "pages", "main.tsx")
+  expect(isInsideStaging(target, staging, { hasReparsePoint: () => false })).toBe(true)
+})
+
+test("[12] the reparse backstop is consulted for every ancestor segment, not just the leaf", () => {
+  const seen: string[] = []
+  const link = path.join(staging, "link")
+  const target = path.join(link, "x.txt")
+  const result = isInsideStaging(target, staging, {
+    hasReparsePoint: (p) => {
+      seen.push(p)
+      return false
+    },
+  })
+  expect(result).toBe(true)
+  // A leaf-only check would only ever record `target`; recording the ancestor
+  // segment proves the walk actually inspected it too.
+  expect(seen).toContain(link)
+  expect(seen).toContain(target)
+})
+
+test("[12] a reparse point on an ancestor segment denies the leaf even though the leaf itself is a plain file", () => {
+  const link = path.join(staging, "link")
+  const target = path.join(link, "x.txt")
+  // Only the ancestor "link" is a reparse point — the leaf "x.txt" is not.
+  const result = isInsideStaging(target, staging, { hasReparsePoint: (p) => p === link })
+  expect(result).toBe(false)
+})
+
+test("[33] a relative candidate resolves against the staging root, not this process's cwd", () => {
+  expect(isInsideStaging("pages", staging)).toBe(true)
+  expect(isInsideStaging(path.join("pages", "main.tsx"), staging)).toBe(true)
+})
+
+test("[33] a relative ../ escape is still rejected once resolved against the staging root", () => {
+  expect(isInsideStaging(path.join("..", "evil.txt"), staging)).toBe(false)
+})
+
 test("Windows drive-letter case is not a containment escape", () => {
   // Only rewrites a leading "X:" drive letter (win32 paths); a no-op on POSIX
   // absolute paths, so this stays a meaningful assertion cross-platform too.

@@ -23,10 +23,16 @@ test("scope changes when the backend changes", () => {
   expect(deriveSessionScope("claude", base)).not.toBe(deriveSessionScope("codex", base))
 })
 
-test("a null account yields a unique, non-resumable scope each call", () => {
+test("a null account yields a scope that agrees across calls within this process, but differs from any real-account scope", () => {
+  // storage-identity §6.2: "a fresh scope for each PROCESS" — not per call.
+  // The kernel calls sessionScope twice per turn (checkpoint lookup, then
+  // checkpoint advance); if a null account minted a new value per call those
+  // two calls would disagree and every checkpoint would be written under a
+  // key nothing ever reads again.
   const a = deriveSessionScope("claude", { ...base, account: null })
   const b = deriveSessionScope("claude", { ...base, account: null })
-  expect(a).not.toBe(b)
+  expect(a).toBe(b)
+  expect(a).not.toBe(deriveSessionScope("claude", base))
 })
 
 test("scope changes when the workspace identity changes", () => {

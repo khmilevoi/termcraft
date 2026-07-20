@@ -40,3 +40,17 @@ test("AgentHealthProbeError distinguishes the probe boundary", () => {
   const err = new AgentHealthProbeError({ reason: "no init message" })
   expect(err._tag).toBe("AgentHealthProbeError")
 })
+
+test("code is constrained to AgentErrorCode — a typo'd code does not typecheck", () => {
+  // Compile-time check, verified by `bun x tsc --noEmit` (bun test strips
+  // types, so this assertion only bites there — see CLAUDE.md's mandated
+  // tsc gate). Without the constructor override in errors.ts, `$code`'s
+  // template-variable type is a plain `string | number`, so a typo'd code
+  // like "STREAM_FAILURE" (for STREAM_FAILED) would compile silently and
+  // any `err.code` switch would fall through unnoticed at runtime.
+  const makeWithTypoedCode = () => {
+    // @ts-expect-error — "STREAM_FAILURE" is not a valid AgentErrorCode (typo for STREAM_FAILED)
+    return new ClaudeSdkError({ code: "STREAM_FAILURE", reason: "x" })
+  }
+  expect(typeof makeWithTypoedCode).toBe("function")
+})
