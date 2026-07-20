@@ -33,7 +33,7 @@ export interface ProcessTree {
    * Record whether a spawn's adoption into this tree was confirmed
    * successful — `adopt()` returned `null` AND a subsequent
    * `activeProcesses()` re-read reported at least one owned process.
-   * `makeSpawnClaudeCodeProcess` (agent/model/query-fn.ts) calls this with
+   * `makeSpawnClaudeCodeProcess` (agent/claude/model/query-fn.ts) calls this with
    * `false` on every degraded branch (missing pid, `adopt()` failure,
    * verify-read failure, verify count `< 1`) and with `true` once the
    * membership re-read confirms it, instead of only `console.warn`-ing.

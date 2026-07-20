@@ -1,4 +1,4 @@
-import type { AgentTask, SessionPlan } from "../types"
+import type { AgentTask, SessionPlan } from "agent/types"
 
 /** SDK session options for a plan. `forkSession:false` keeps the resumed session id stable. */
 export function planToSessionOptions(plan: SessionPlan): { resume?: string; forkSession: false } {

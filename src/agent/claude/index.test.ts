@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createProductionClaudeBackend, createProductionClaudeBackendDeps } from "./index"
+import { CLAUDE_BACKEND_ID } from "./model/backend-id"
 import { claudeCapabilities } from "./model/health"
 
 test("the production backend exposes the five port methods and static capabilities", () => {
@@ -12,7 +13,7 @@ test("the production backend exposes the five port methods and static capabiliti
   expect(typeof backend.healthCheck).toBe("function")
   expect(typeof backend.capabilities).toBe("function")
   expect(typeof backend.sessionScope).toBe("function")
-  expect(backend.capabilities().backendId).toBe("claude")
+  expect(backend.capabilities().backendId).toBe(CLAUDE_BACKEND_ID)
 })
 
 test("capabilities() is the real static Claude table, not a stub", () => {

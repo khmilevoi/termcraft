@@ -4,17 +4,31 @@ export type PermissionResultLike =
   | { readonly behavior: "allow" }
   | { readonly behavior: "deny"; readonly message: string }
 
-/** File tools whose primary path argument must stay inside staging. */
-const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS"])
-/** Tools denied outright regardless of arguments (master §6.1). */
-const DENIED_TOOLS = new Set(["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch"])
+/**
+ * The vendor tool vocabulary a confinement policy is parameterized over
+ * (master §6.1 confinement; Spike H). Each backend (Claude Code today, a
+ * future Codex backend later) supplies its OWN tables — the tool names and
+ * path-field names a backend's tool-use protocol uses are backend-specific,
+ * while the deny-by-default RULE below them is not.
+ */
+export interface ConfinementTables {
+  /** File tools whose primary path argument must stay inside staging. */
+  readonly fileTools: ReadonlySet<string>
+  /** Tools denied outright regardless of arguments. */
+  readonly deniedTools: ReadonlySet<string>
+  /** File tools whose path argument is optional, defaulting to the process cwd. */
+  readonly optionalPathTools: ReadonlySet<string>
+  /** Field names, in order, that carry a tool's primary path argument. */
+  readonly pathFields: readonly string[]
+}
 
-/** Field names, in order, that carry a tool's primary path argument. */
-const PATH_FIELDS = ["file_path", "path", "notebook_path", "notebookPath"] as const
-
-function primaryPath(input: Record<string, unknown>, blockedPath?: string): string | null {
+function primaryPath(
+  pathFields: readonly string[],
+  input: Record<string, unknown>,
+  blockedPath?: string,
+): string | null {
   if (typeof blockedPath === "string") return blockedPath
-  for (const field of PATH_FIELDS) {
+  for (const field of pathFields) {
     const v = input[field]
     if (typeof v === "string") return v
   }
@@ -22,18 +36,25 @@ function primaryPath(input: Record<string, unknown>, blockedPath?: string): stri
 }
 
 /**
- * The deny-by-default confinement decision behind the SDK `canUseTool` callback
- * (master §6.1; confirmed by Spike H). Allows file tools only when their path is
- * inside `stagingRoot`; denies Bash + web + unknown tools. Defense-in-depth — the
- * Gate is the load-bearing wall.
+ * The deny-by-default confinement decision behind a backend's tool-permission
+ * callback (master §6.1; confirmed by Spike H for Claude Code's `canUseTool`).
+ * Allows file tools only when their path is inside `stagingRoot`; denies
+ * run/web + unknown tools. Defense-in-depth — the Gate is the load-bearing
+ * wall.
+ *
+ * `tables` is the backend's own tool vocabulary (see {@link ConfinementTables}) —
+ * this function itself knows no vendor tool names, only the RULE: deny by
+ * default, allow a file tool only when its resolved path stays inside
+ * `stagingRoot`.
  *
  * Non-Reatom: this module holds no atoms and owns no Reatom lifetime — it is a
- * pure decision function called synchronously from the SDK's `canUseTool`
- * callback (wired in T11), matching the module's `agent/` non-Reatom adapter
+ * pure decision function called synchronously from a backend's own
+ * tool-permission callback, matching the module's `agent/` non-Reatom adapter
  * status (CLAUDE.md / plan Global Constraints).
  */
 export function makeConfinementPolicy(
   stagingRoot: string,
+  tables: ConfinementTables,
   options?: { hasReparsePoint?: (p: string) => boolean },
 ) {
   return (
@@ -41,13 +62,20 @@ export function makeConfinementPolicy(
     input: Record<string, unknown>,
     blockedPath?: string,
   ): PermissionResultLike => {
-    if (DENIED_TOOLS.has(toolName)) {
+    if (tables.deniedTools.has(toolName)) {
       return { behavior: "deny", message: `${toolName} is not permitted in a design turn` }
     }
-    if (!FILE_TOOLS.has(toolName)) {
+    if (!tables.fileTools.has(toolName)) {
       return { behavior: "deny", message: `Tool ${toolName} is not on the design-turn allowlist` }
     }
-    const target = primaryPath(input, blockedPath)
+    // [13]/[33]: a path-less call resolves to the staging root ITSELF only
+    // for tools whose schema documents `path` as optional-defaulting-to-cwd
+    // (see `tables.optionalPathTools`) — "no path" means "here", and "here" is
+    // staging. Every other file tool still denies outright on a missing path
+    // (finding [13]'s protection, preserved exactly where it matters: a
+    // schema rename on a WRITE tool still denies).
+    const target =
+      primaryPath(tables.pathFields, input, blockedPath) ?? (tables.optionalPathTools.has(toolName) ? stagingRoot : null)
     if (target === null) {
       return { behavior: "deny", message: `${toolName} call has no resolvable path` }
     }

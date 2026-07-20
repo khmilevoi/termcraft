@@ -3,7 +3,7 @@ import path from "node:path"
 import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
 import { createFakeProcessTree, ProcessTreeError } from "infrastructure/process"
-import type { AgentTask } from "../types"
+import type { AgentTask } from "agent/types"
 import { buildQueryOptions } from "./query-fn"
 
 const staging = path.resolve("C:\\ws")

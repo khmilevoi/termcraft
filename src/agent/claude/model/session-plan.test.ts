@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { AgentTask } from "../types"
+import type { AgentTask } from "agent/types"
 import { buildPrompt, planToSessionOptions } from "./session-plan"
 
 const baseTask = (session: AgentTask["session"]): AgentTask => ({

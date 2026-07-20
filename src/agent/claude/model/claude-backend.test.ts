@@ -2,11 +2,12 @@ import { expect, spyOn, test } from "bun:test"
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree, ProcessTreeFactory } from "infrastructure/process"
 import { createFakeProcessTree, ProcessTreeError } from "infrastructure/process"
-import type { AgentRun, AgentTask, FencedEvent } from "../types"
+import { deriveSessionScope } from "agent/model/session-scope"
+import type { AgentRun, AgentTask, FencedEvent } from "agent/types"
+import type { ClaudeQuery, ClaudeQueryFn } from "../types"
+import { CLAUDE_BACKEND_ID } from "./backend-id"
 import { createClaudeBackend } from "./claude-backend"
 import { claudeCapabilities } from "./health"
-import type { ClaudeQuery, ClaudeQueryFn } from "./query-fn"
-import { deriveSessionScope } from "./session-scope"
 
 /** Every async test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
 const GUARD_MS = 2000
@@ -141,7 +142,7 @@ test("sessionScope is a pure, stable derivation matching deriveSessionScope", ()
   const b = backend.sessionScope(input)
   expect(a).toBe(b)
   // Cross-check against the underlying pure function with the real backend id.
-  expect(a).toBe(deriveSessionScope("claude", input))
+  expect(a).toBe(deriveSessionScope(CLAUDE_BACKEND_ID, input))
 })
 
 test("capabilities are the static Claude table", () => {
@@ -235,7 +236,56 @@ test(
     // a credential came from, not WHOSE it is, so `classifyMessage` (health.ts)
     // never reports it as `account` — storage-identity §6.2 requires a stable
     // per-account discriminator, and this SDK field is not one.
-    expect(info).toEqual({ backendId: "claude", health: { status: "ready" }, account: null })
+    expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null })
+  },
+  GUARD_MS,
+)
+
+// --- finding [26] half b: healthCheck() sources an owned tree for probeHealth, and it gets closed ---
+
+test(
+  "healthCheck() sources a fresh tree from processTreeFactory and it is closed once the probe settles",
+  async () => {
+    const { tree, closeCalls } = trackTree(createFakeProcessTree({ counts: [0], ownershipConfirmed: true }))
+    let factoryCalls = 0
+    const backend = createClaudeBackend({
+      queryFn: () => query([initMessage]),
+      processTreeFactory: () => {
+        factoryCalls += 1
+        return tree
+      },
+      wait: async () => {},
+    })
+    expect(factoryCalls).toBe(0) // not called until healthCheck() actually runs
+    const info = await backend.healthCheck()
+    expect(factoryCalls).toBe(1)
+    expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null })
+    // health.ts's probeHealth closes the tree it was handed on every path —
+    // this proves claude-backend.ts's healthCheck() actually reaches that
+    // code, not just that health.ts's own unit tests do.
+    expect(closeCalls()).toBe(1)
+  },
+  GUARD_MS,
+)
+
+test(
+  "healthCheck() still probes (rather than reporting a false verdict) when processTreeFactory fails",
+  async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const backend = createClaudeBackend({
+        queryFn: () => query([initMessage]),
+        processTreeFactory: () => new ProcessTreeError({ reason: "no Job Object support" }),
+        wait: async () => {},
+      })
+      const info = await backend.healthCheck()
+      // No tree was available to adopt into, but the probe still ran and
+      // classified a real verdict instead of assuming "not-installed".
+      expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null })
+      expect(warnSpy).toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
   },
   GUARD_MS,
 )
@@ -400,12 +450,12 @@ test(
       const probeCallsAfterStartTurn = probeCalls // one call, from the run's own driveQuery
 
       const info = await backend.healthCheck()
-      expect(info).toEqual({ backendId: "claude", health: { status: "unhealthy-unconfirmed-exit" }, account: null })
+      expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "unhealthy-unconfirmed-exit" }, account: null })
       expect(probeCalls).toBe(probeCallsAfterStartTurn) // healthCheck() did not spawn another CLI
 
       // The latch is sticky across repeated calls, not a one-shot report.
       const info2 = await backend.healthCheck()
-      expect(info2).toEqual({ backendId: "claude", health: { status: "unhealthy-unconfirmed-exit" }, account: null })
+      expect(info2).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "unhealthy-unconfirmed-exit" }, account: null })
       expect(probeCalls).toBe(probeCallsAfterStartTurn)
     } finally {
       warnSpy.mockRestore()
@@ -433,7 +483,7 @@ test(
         wait: async () => {},
       })
       expect(await freshBackend.healthCheck()).toEqual({
-        backendId: "claude",
+        backendId: CLAUDE_BACKEND_ID,
         health: { status: "ready" },
         account: null,
       })

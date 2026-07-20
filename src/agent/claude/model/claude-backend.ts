@@ -1,5 +1,5 @@
-import type { ProcessTreeFactory } from "infrastructure/process"
 import { ProcessTreeError } from "infrastructure/process"
+import { deriveSessionScope } from "agent/model/session-scope"
 import type {
   AgentBackend,
   AgentInfo,
@@ -9,30 +9,13 @@ import type {
   BackendCapabilities,
   FencedEvent,
   SessionScopeInput,
-} from "../types"
+} from "agent/types"
+import type { ClaudeBackendDeps } from "../types"
 import { startClaudeRun } from "./agent-run"
+import { CLAUDE_BACKEND_ID } from "./backend-id"
 import { claudeCapabilities, probeHealth } from "./health"
-import type { ClaudeQueryFn } from "./query-fn"
 import { buildQueryOptions } from "./query-fn"
 import { buildPrompt } from "./session-plan"
-import { deriveSessionScope } from "./session-scope"
-
-const BACKEND_ID = "claude"
-
-/** Deps for {@link createClaudeBackend}. */
-export interface ClaudeBackendDeps {
-  readonly queryFn: ClaudeQueryFn
-  /** Constructs a fresh, independently owned process tree per `startTurn` call (§6.5). */
-  readonly processTreeFactory: ProcessTreeFactory
-  /** Injectable delay for the §6.5 exit-confirmation polls; production = `(ms) => Bun.sleep(ms)`. */
-  readonly wait: (ms: number) => Promise<void>
-  /** Override for the CLI path in a compiled binary (Spike H compiled-binary parity). */
-  readonly pathToClaudeCodeExecutable?: string
-  /** Reparse-point backstop injected on Windows (Spike F). */
-  readonly hasReparsePoint?: (p: string) => boolean
-  /** Override for the §6.5 exit-confirmation budget; `startClaudeRun` supplies its own default when omitted. */
-  readonly confirmTimeoutMs?: number
-}
 
 /** An `AsyncIterable` that yields `event` exactly once, then completes. */
 function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {
@@ -176,12 +159,39 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         // regardless is exactly the false-admission bug this latch exists to
         // prevent (see the latch doc comment above for how it clears).
         return Promise.resolve({
-          backendId: BACKEND_ID,
+          backendId: CLAUDE_BACKEND_ID,
           health: { status: "unhealthy-unconfirmed-exit" },
           account: null,
         })
       }
-      return probeHealth(deps.queryFn, { abortController: new AbortController() })
+      // finding [26] half b: give the probe the same process ownership a
+      // turn gets — source a fresh, independently owned tree from the same
+      // factory `startTurn` uses and hand it to `probeHealth`, which wires
+      // `spawnClaudeCodeProcess` (health.ts's `buildProbeOptions`) so the
+      // probe CLI is adopted, and closes the tree itself once the probe
+      // settles (health.ts's `probeHealth`) — arming kill-on-close for a
+      // probe CLI that ignores the abort, on every one of its outcomes.
+      const tree = deps.processTreeFactory()
+      if (tree instanceof ProcessTreeError) {
+        // Decision: run the probe anyway rather than reporting a false
+        // "not-installed". No owned tree exists to adopt into on this
+        // platform/environment, but that says nothing about whether the CLI
+        // itself is installed/logged in — and `startTurn`'s own
+        // `ProcessTreeError` branch already refuses to run a REAL turn
+        // unconfined for this same factory failure, so no paid turn can
+        // start on the strength of a wrong "ready" here regardless. Logged
+        // (errore rule 21) since the fallback silently narrows the fix's
+        // adoption guarantee for this one call. `processTree: null` makes
+        // `buildProbeOptions` omit `spawnClaudeCodeProcess`, so the SDK
+        // spawns/owns the probe CLI internally exactly as it did before this
+        // fix — a deliberate, narrower fallback, not the original bug.
+        console.warn(
+          "agent/claude-backend: processTreeFactory failed for healthCheck(), probing without adoption:",
+          tree.message,
+        )
+        return probeHealth(deps.queryFn, { abortController: new AbortController(), processTree: null })
+      }
+      return probeHealth(deps.queryFn, { abortController: new AbortController(), processTree: tree })
     },
 
     capabilities(): BackendCapabilities {
@@ -189,7 +199,7 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
     },
 
     sessionScope(input: SessionScopeInput): string {
-      return deriveSessionScope(BACKEND_ID, input)
+      return deriveSessionScope(CLAUDE_BACKEND_ID, input)
     },
   }
 }

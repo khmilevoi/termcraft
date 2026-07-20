@@ -1,17 +1,19 @@
 import * as errore from "errore"
 import os from "node:os"
 import type { CanUseTool, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { AgentInfo, BackendCapabilities } from "../types"
-import { makeConfinementPolicy } from "./confinement"
-import { AgentHealthProbeError } from "./errors"
-import type { ClaudeQueryFn } from "./query-fn"
-
-const BACKEND_ID = "claude"
+import type { ProcessTree } from "infrastructure/process"
+import { makeConfinementPolicy } from "agent/model/confinement"
+import { AgentHealthProbeError } from "agent/model/errors"
+import type { AgentInfo, BackendCapabilities } from "agent/types"
+import type { ClaudeQueryFn } from "../types"
+import { CLAUDE_BACKEND_ID } from "./backend-id"
+import { makeSpawnAndAdopt } from "./spawn-adopt"
+import { CLAUDE_CONFINEMENT_TABLES } from "./tool-tables"
 
 /** MVP model catalog (master §9 picker). Effort set mirrors the SDK `EffortLevel`. */
 export function claudeCapabilities(): BackendCapabilities {
   return {
-    backendId: BACKEND_ID,
+    backendId: CLAUDE_BACKEND_ID,
     models: [
       { model: "claude-opus-4-8", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { model: "claude-sonnet-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -56,6 +58,16 @@ class ProbeDeadlineAbortError extends errore.createTaggedError({
 /** Deps for {@link probeHealth}. */
 export interface ProbeHealthDeps {
   readonly abortController: AbortController
+  /**
+   * The owned process tree the probe CLI is adopted into (mirrors a real
+   * turn's `QueryOptionDeps.processTree`, query-fn.ts), or `null` when the
+   * caller's `ProcessTreeFactory` could not produce one for this
+   * platform/environment (`claude-backend.ts`'s `healthCheck()` decision:
+   * documented at its call site). Required — not optional — so a caller can
+   * never forget to wire it and silently reproduce finding [26]'s unowned
+   * probe child; `null` is the one deliberate, explicit opt-out.
+   */
+  readonly processTree: ProcessTree | null
   /**
    * Injectable delay for the probe deadline below — mirrors `RunDeps.wait` in
    * agent-run.ts. Defaults to a real, `unref`'d timer (never blocks process
@@ -110,9 +122,17 @@ function defaultWait(ms: number): Promise<void> {
  * to what should stay a read-only probe. This is still strictly more
  * isolated than any real turn, which always grants access to real
  * user-authored files.
+ *
+ * finding [26] half b: `spawnClaudeCodeProcess` is wired only when
+ * `deps.processTree` is non-`null` — when the caller's `ProcessTreeFactory`
+ * could not produce a tree at all, there is nothing to adopt into, and the
+ * SDK falls back to spawning the CLI internally exactly as it did before
+ * this fix (an explicit, narrower fallback, not the original bug of always
+ * skipping adoption). See `claude-backend.ts`'s `healthCheck()` for why that
+ * fallback still runs the probe instead of reporting a false verdict.
  */
 function buildProbeOptions(deps: ProbeHealthDeps): Options {
-  const policy = makeConfinementPolicy(PROBE_CWD)
+  const policy = makeConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES)
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     const decision = policy(toolName, input, options.blockedPath)
     return decision.behavior === "allow" ? { behavior: "allow" } : { behavior: "deny", message: decision.message }
@@ -124,6 +144,7 @@ function buildProbeOptions(deps: ProbeHealthDeps): Options {
     permissionMode: "default",
     abortController: deps.abortController,
     canUseTool,
+    ...(deps.processTree !== null ? { spawnClaudeCodeProcess: makeSpawnAndAdopt(deps.processTree, "agent/health") } : {}),
   }
 }
 
@@ -143,13 +164,13 @@ function classifyMessage(msg: SDKMessage): AgentInfo | null {
     // installed SDK's `SDKSystemMessage` has no field that is one, so `null`
     // — which safely disables cross-process resume for this backend
     // (types.ts `AgentInfo.account` doc) — is the honest value, not a guess.
-    return { backendId: BACKEND_ID, health: { status: "ready" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null }
   }
   if (msg.type === "auth_status") {
-    return { backendId: BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
   }
   if (msg.type === "assistant" && msg.error === "authentication_failed") {
-    return { backendId: BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
   }
   return null
 }
@@ -249,6 +270,20 @@ export async function probeHealth(queryFn: ClaudeQueryFn, deps: ProbeHealthDeps)
     (e) => new AgentHealthProbeError({ reason: describeThrown(e), cause: e }),
   )
 
+  // finding [26] half b: close the adopted tree HERE, unconditionally, before
+  // any branch below returns — this one call site sits after every path this
+  // function can take (a classified verdict, the deadline timeout, or a
+  // stream error all resolve `result` above first), so it is not possible to
+  // add a new early return above without also going through this close.
+  // `close()` arms Windows kill-on-close for a probe CLI that ignored the
+  // abort fired in `readUntilClassified`/`withProbeDeadline` — an
+  // adopted-but-never-closed tree reproduces the exact leak turn-durability
+  // §6.5 already closed for real turns (`claude-backend.ts` closes its tree
+  // on every `AgentRunOutcome`); this is the probe's equivalent. `close()` is
+  // documented idempotent and a no-op when `processTree` is `null`
+  // (`buildProbeOptions`'s unadopted fallback), so this is always safe.
+  deps.processTree?.close()
+
   if (errore.isAbortError(result)) {
     // Either the read's own IteratorClose raced with something unrelated to
     // our post-verdict abort, or the probe deadline elapsed with no
@@ -257,7 +292,7 @@ export async function probeHealth(queryFn: ClaudeQueryFn, deps: ProbeHealthDeps)
     // start against a broken backend); fall through to the same safe default
     // as any other inconclusive probe.
     console.warn("agent/health: probe aborted without a confirmed verdict:", result.message)
-    return { backendId: BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
   }
 
   if (result instanceof Error) {
@@ -273,7 +308,7 @@ export async function probeHealth(queryFn: ClaudeQueryFn, deps: ProbeHealthDeps)
     console.warn("agent/health: probe stream failed:", result.message)
     const notInstalled = /ENOENT|not found|spawn/i.test(result.message)
     return {
-      backendId: BACKEND_ID,
+      backendId: CLAUDE_BACKEND_ID,
       health: { status: notInstalled ? "not-installed" : "not-logged-in" },
       account: null,
     }
@@ -287,5 +322,5 @@ export async function probeHealth(queryFn: ClaudeQueryFn, deps: ProbeHealthDeps)
   // confirmed a working session either, so we must NOT report "ready" — a
   // false-ready would let a real, paid turn start against a broken backend.
   // Classify the unconfirmed case the same as an explicit auth failure.
-  return { backendId: BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+  return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
 }

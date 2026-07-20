@@ -3,9 +3,9 @@ import * as errore from "errore"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
 import { createFakeProcessTree, ProcessTreeError } from "infrastructure/process"
-import type { AgentTask, FencedEvent } from "../types"
+import type { AgentTask, FencedEvent } from "agent/types"
+import type { ClaudeQuery } from "../types"
 import { POLL_INTERVAL_MS, startClaudeRun } from "./agent-run"
-import type { ClaudeQuery } from "./query-fn"
 
 /** Every test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
 const GUARD_MS = 2000
