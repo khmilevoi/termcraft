@@ -621,44 +621,63 @@ function writePayloads(deps: TransactionFsDeps, transactionId: string, plan: Tra
  * resumes exactly where the interruption left off.
  */
 export async function runTransaction(deps: TransactionFsDeps, input: RunTransactionInput) {
-  const permitCheck1 = assertActivePermit(input.mutex, input.permit)
-  if (permitCheck1 instanceof Error) return permitCheck1
+  const { transactionId } = input.plan
 
-  const payloadsValid = validatePlanPayloads(input.plan, input.payloads)
-  if (payloadsValid instanceof Error) return payloadsValid
+  // One `.do` per pre-intent step. The chain re-checks the write permit immediately before
+  // each one (§4.5), so a step added later cannot forget its ownership check. A domain
+  // failure travels through as a value and the `instanceof Error` guard skips the rest —
+  // the chain's own `error` channel carries permit staleness alone.
+  const prepared = await input.mutex
+    .chain(input.permit)
+    .do(() => {
+      const payloadsValid = validatePlanPayloads(input.plan, input.payloads)
+      if (payloadsValid instanceof Error) return payloadsValid
+      return writePayloads(deps, transactionId, input.plan, input.payloads) ?? null
+    })
+    .do((prior) => {
+      if (prior instanceof Error) return prior
 
-  const wrotePayloads = writePayloads(deps, input.plan.transactionId, input.plan, input.payloads)
-  if (wrotePayloads instanceof Error) return wrotePayloads
+      const wrotePlan = installJsonIfAbsent(deps, planPath(transactionId), input.plan)
+      if (wrotePlan instanceof Error) return wrotePlan
+      deps.onBoundary?.("plan-installed")
 
-  const permitCheck2 = assertActivePermit(input.mutex, input.permit)
-  if (permitCheck2 instanceof Error) return permitCheck2
+      // Confirm the durable plan re-decodes to a structurally valid plan, and derive the
+      // hash over the SAME canonical bytes every later marker names (§4.3 step 3).
+      const reread = deps.safeFs.readFile(planPath(transactionId))
+      if (reread instanceof Error) return reread
+      const redecoded = decodePlan(reread)
+      if (redecoded instanceof Error) return redecoded
 
-  const wrotePlan = installJsonIfAbsent(deps, planPath(input.plan.transactionId), input.plan)
-  if (wrotePlan instanceof Error) return wrotePlan
-  deps.onBoundary?.("plan-installed")
+      return { plan: redecoded, planHash: computePlanHash(redecoded) }
+    })
+    .do(async (prior) => {
+      if (prior instanceof Error) return prior
 
-  // Confirm the durable plan re-decodes to a structurally valid plan, and derive the hash
-  // over the SAME canonical bytes every later marker names (turn-durability §4.3 step 3).
-  const reread = deps.safeFs.readFile(planPath(input.plan.transactionId))
-  if (reread instanceof Error) return reread
-  const redecoded = decodePlan(reread)
-  if (redecoded instanceof Error) return redecoded
-  const planHash = computePlanHash(redecoded)
+      const preconditionResult = await (input.precondition?.() ?? null)
+      if (preconditionResult instanceof Error) return preconditionResult
+      deps.onBoundary?.("precondition-checked")
 
-  const permitCheck3 = assertActivePermit(input.mutex, input.permit)
-  if (permitCheck3 instanceof Error) return permitCheck3
+      return prior
+    })
+    .do((prior) => {
+      if (prior instanceof Error) return prior
 
-  const preconditionResult = await (input.precondition?.() ?? null)
-  if (preconditionResult instanceof Error) return preconditionResult
-  deps.onBoundary?.("precondition-checked")
+      const intent: TransactionIntent = { planHash: prior.planHash }
+      const wroteIntent = installJsonIfAbsent(deps, intentPath(transactionId), intent)
+      if (wroteIntent instanceof Error) return wroteIntent
+      deps.onBoundary?.("intent-installed") // the point of no rollback — no target has changed yet
 
-  const permitCheck4 = assertActivePermit(input.mutex, input.permit)
-  if (permitCheck4 instanceof Error) return permitCheck4
+      return prior
+    })
 
-  const intent: TransactionIntent = { planHash }
-  const wroteIntent = installJsonIfAbsent(deps, intentPath(input.plan.transactionId), intent)
-  if (wroteIntent instanceof Error) return wroteIntent
-  deps.onBoundary?.("intent-installed") // the point of no rollback — no target has changed yet
+  if (prepared.error !== null) return prepared.error
+  if (prepared.result instanceof Error) return prepared.result
 
-  return rollForwardTransaction(deps, { mutex: input.mutex, permit: input.permit, plan: redecoded, planHash, payloads: input.payloads })
+  return rollForwardTransaction(deps, {
+    mutex: input.mutex,
+    permit: input.permit,
+    plan: prepared.result.plan,
+    planHash: prepared.result.planHash,
+    payloads: input.payloads,
+  })
 }

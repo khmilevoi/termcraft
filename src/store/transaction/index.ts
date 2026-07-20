@@ -28,7 +28,7 @@ export { TRANSACTION_JOURNAL_FORMAT_VERSION, JournalCorruptError, JournalTooNewE
 // namespace before any transaction directory is even listed (blocker finding #1).
 export { JOURNAL_FORMAT_PATH, ensureJournalFormat, readJournalFormat } from "./model/journal-format"
 
-export type { WriteMutex, WriteMutexDeps } from "./model/write-mutex"
+export type { WriteMutex, WriteMutexChain, WriteMutexChainResult, WriteMutexDeps } from "./model/write-mutex"
 export { WritePermitInvalidError, assertActivePermit, createWriteMutex, defaultWriteMutexDeps, mintWritePermitId } from "./model/write-mutex"
 
 export type { RollForwardInput, RunTransactionInput, TransactionFsDeps } from "./model/engine"

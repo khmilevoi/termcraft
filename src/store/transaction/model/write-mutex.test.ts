@@ -96,3 +96,95 @@ describe("createWriteMutex", () => {
     expect(Buffer.from(permit.permitId, "base64url").byteLength).toBe(16)
   })
 })
+
+describe("store/transaction write-mutex chain", () => {
+  test("runs every step in order, threading each result into the next", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1"]))
+    const permit = await mutex.acquire()
+    const order: string[] = []
+
+    const outcome = await mutex
+      .chain(permit)
+      .do(() => {
+        order.push("first")
+        return 1
+      })
+      .do(async (previous) => {
+        order.push("second")
+        return previous + 1
+      })
+
+    expect(order).toEqual(["first", "second"])
+    expect(outcome.error).toBeNull()
+    expect(outcome.result).toBe(2)
+  })
+
+  test("a permit released mid-chain stops the NEXT step and reports the permit error", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1", "p2"]))
+    const permit = await mutex.acquire()
+    const ran: string[] = []
+
+    const outcome = await mutex
+      .chain(permit)
+      .do(() => {
+        ran.push("first")
+        mutex.release(permit) // a concurrent finalizer takes the mutex away
+      })
+      .do(() => {
+        ran.push("second")
+      })
+
+    // The step that started under a valid permit still completed; the next one never ran.
+    expect(ran).toEqual(["first"])
+    expect(outcome.error).toBeInstanceOf(WritePermitInvalidError)
+    expect(outcome.error?.permitId).toBe("p1")
+    expect(outcome.result).toBeNull()
+  })
+
+  test("once a step reports a stale permit, no remaining step executes", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1"]))
+    const permit = await mutex.acquire()
+    mutex.release(permit)
+    const ran: string[] = []
+
+    const outcome = await mutex
+      .chain(permit)
+      .do(() => void ran.push("first"))
+      .do(() => void ran.push("second"))
+      .do(() => void ran.push("third"))
+
+    expect(ran).toEqual([])
+    expect(outcome.error).toBeInstanceOf(WritePermitInvalidError)
+  })
+
+  test("a chain started with an already-stale permit refuses before any step", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1", "p2"]))
+    const stale = await mutex.acquire()
+    mutex.release(stale)
+    await mutex.acquire() // a newer holder owns the mutex now
+
+    let ran = false
+    const outcome = await mutex.chain(stale).do(() => {
+      ran = true
+    })
+
+    expect(ran).toBe(false)
+    expect(outcome.error).toBeInstanceOf(WritePermitInvalidError)
+    expect(outcome.error?.permitId).toBe("p1")
+  })
+
+  test("a domain error travels as a value, not through the permit channel", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1"]))
+    const permit = await mutex.acquire()
+    const domainFailure = new Error("source_changed")
+
+    const outcome = await mutex
+      .chain(permit)
+      .do((): Error | number => domainFailure)
+      .do((previous) => (previous instanceof Error ? previous : previous + 1))
+
+    // The permit was never stale, so `error` stays null and the domain failure is the result.
+    expect(outcome.error).toBeNull()
+    expect(outcome.result).toBe(domainFailure)
+  })
+})
