@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import { activeTokens } from "../model/tokens";
 import { Text } from "./text";
 

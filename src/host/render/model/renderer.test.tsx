@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { RenderHandle } from "../types";

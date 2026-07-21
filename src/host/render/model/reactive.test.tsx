@@ -1,5 +1,5 @@
-/** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from "bun:test";
+
 import { atom } from "@reatom/core";
 import { reatomComponent } from "@reatom/react";
 

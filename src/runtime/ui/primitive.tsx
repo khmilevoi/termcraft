@@ -1,6 +1,5 @@
-/** @jsxImportSource @opentui/react */
-import type { ThemeTokens } from "../types";
 import { activeTokens } from "../model/tokens";
+import type { ThemeTokens } from "../types";
 
 const ALIGN = {
   start: "flex-start",

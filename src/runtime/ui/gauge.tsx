@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import { Text } from "./text";
 
 /** Props for the themed `Gauge` component. `id` is the mandatory stable id (§3.2). */

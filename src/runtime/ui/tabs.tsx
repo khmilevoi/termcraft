@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import { Text } from "./text";
 
 /** One tab: a stable `id` and its display `label`. */

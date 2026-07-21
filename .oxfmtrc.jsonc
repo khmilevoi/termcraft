@@ -38,16 +38,4 @@
     ],
   },
   "ignorePatterns": ["design", "design-prompts", "docs", "src/host/session/fixtures"],
-  "overrides": [
-    {
-      // Every .tsx file in this project opens with a `/** @jsxImportSource ... */`
-      // pragma that must stay the file's first line. Import-sorting can hoist a
-      // later import above it, silently breaking JSX resolution, so import
-      // reordering is disabled for .tsx; formatting still applies.
-      "files": ["**/*.tsx"],
-      "options": {
-        "sortImports": false,
-      },
-    },
-  ],
 }

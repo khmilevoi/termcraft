@@ -1,6 +1,5 @@
-/** @jsxImportSource @opentui/react */
-import type { ThemeTokens } from "../types";
 import { activeTokens } from "../model/tokens";
+import type { ThemeTokens } from "../types";
 
 /** Props for the `Separator` rule. `id` is the mandatory stable id (§3.2). */
 export interface SeparatorProps {

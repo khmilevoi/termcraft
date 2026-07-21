@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import type { ThemeTokens } from "../types";
 import { Text } from "./text";
 

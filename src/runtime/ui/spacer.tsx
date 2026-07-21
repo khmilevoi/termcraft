@@ -1,5 +1,3 @@
-/** @jsxImportSource @opentui/react */
-
 /** Props for the `Spacer`. `id` is the mandatory stable id (§3.2). */
 export interface SpacerProps {
   /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */

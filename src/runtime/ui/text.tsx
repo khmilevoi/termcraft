@@ -1,7 +1,7 @@
-/** @jsxImportSource @opentui/react */
 import { TextAttributes } from "@opentui/core";
-import type { ThemeTokens } from "../types";
+
 import { activeTokens } from "../model/tokens";
+import type { ThemeTokens } from "../types";
 
 /** Props for the themed `Text` component. `id` is the mandatory stable id (§3.2). */
 export interface TextProps {

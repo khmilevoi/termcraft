@@ -1,10 +1,11 @@
-/** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { RenderHandle } from "host/render/types";
+
 import type { StyledRun } from "host/protocol";
 import { createHeadlessRenderer } from "host/render/model/renderer";
-import { Text } from "./text";
+import type { RenderHandle } from "host/render/types";
+
 import { Row } from "./row";
+import { Text } from "./text";
 
 let open: RenderHandle | null = null;
 afterEach(() => {

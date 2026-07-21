@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/react */
 import { activeTokens } from "../model/tokens";
 
 /** Props for the themed `Input` component. `id` is the mandatory stable id (§3.2). */

@@ -1,7 +1,5 @@
-/** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { type RenderHandle, createHeadlessRenderer } from "../../render";
 import {
   type ClientHelloV1,
   type ControlEnvelope,
@@ -15,6 +13,7 @@ import {
   encodeClientHello,
   encodeControlEnvelope,
 } from "../../protocol";
+import { type RenderHandle, createHeadlessRenderer } from "../../render";
 import type { HostSessionDeps, OutboundMessage } from "../types";
 import { createHostSession } from "./host-state-machine";
 
