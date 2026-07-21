@@ -3,11 +3,11 @@ import type { ProcessTreeFactory } from "infrastructure/process"
 
 /**
  * The minimal SDK surface the run loop consumes (injection seam, mirrors
- * host's SpawnedChild). Shared across query-fn.ts (production wiring),
- * agent-run.ts (the run loop), health.ts (the probe), and claude-backend.ts
- * (deps plumbing) — the module's own public vocabulary, so it lives here
- * rather than being re-exported piecemeal from wherever it happened to be
- * defined first.
+ * host's SpawnedChild). Shared across query/model/query-fn.ts (production
+ * wiring), run/model/drive-stream.ts (the run loop), backend/model/probe.ts
+ * (the probe), and backend/model/backend.ts (deps plumbing) — the module's
+ * own public vocabulary, so it lives here rather than being re-exported
+ * piecemeal from wherever it happened to be defined first.
  */
 export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
   interrupt(): Promise<unknown>
@@ -16,7 +16,7 @@ export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
 /** Injected query seam: production wraps the SDK `query`, tests script an async generator. */
 export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => ClaudeQuery
 
-/** Deps for `createClaudeBackend` (./model/claude-backend.ts). */
+/** Deps for `createClaudeBackend` (./backend/model/backend.ts). */
 export interface ClaudeBackendDeps {
   readonly queryFn: ClaudeQueryFn
   /** Constructs a fresh, independently owned process tree per `startTurn` call (§6.5). */
@@ -27,6 +27,6 @@ export interface ClaudeBackendDeps {
   readonly pathToClaudeCodeExecutable?: string
   /** Reparse-point backstop injected on Windows (Spike F). */
   readonly hasReparsePoint?: (p: string) => boolean
-  /** Override for the §6.5 exit-confirmation budget; `startClaudeRun` supplies its own default when omitted. */
+  /** Override for the §6.5 exit-confirmation budget; `startAgentRun` supplies its own default when omitted. */
   readonly confirmTimeoutMs?: number
 }

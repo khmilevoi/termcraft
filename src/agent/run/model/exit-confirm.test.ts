@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test"
 import { ProcessTreeError } from "infrastructure/process"
 import { confirmExit, escalateAndConfirm, POLL_INTERVAL_MS } from "./exit-confirm"
 
-// --- redistributed from agent-run.test.ts: confirmExit's own polling rules -
+// --- confirmExit's own polling rules ----------------------------------------
 
 describe("confirmExit", () => {
   test("spaces non-final polling attempts with the injected wait at POLL_INTERVAL_MS until the tree drains", async () => {
@@ -54,7 +54,7 @@ describe("confirmExit", () => {
         adopt: () => null,
         activeProcesses: () => 0, // reports zero on every read...
         terminate: () => null,
-        ownershipConfirmed: () => false, // ...but nothing was ever adopted (finding [22])
+        ownershipConfirmed: () => false, // ...but nothing was ever adopted
         close: () => {},
         noteAdoptionOutcome: () => {},
       }

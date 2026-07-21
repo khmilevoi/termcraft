@@ -83,10 +83,9 @@ describe("runHealthProbe classification", () => {
   })
 })
 
-// --- redistributed from claude/model/health.test.ts (pre-split): the shared
-// classification/close/deadline outcomes exercised there via Claude-shaped
-// fakes are generic to any backend, so they are re-asserted here directly
-// against a fake HealthProbeReader with no SDK vocabulary involved. ---
+// --- The shared classification/close/deadline outcomes are generic to any
+// backend, so they are asserted here directly against a fake
+// HealthProbeReader with no SDK vocabulary involved. ---
 
 describe("runHealthProbe: process tree close on the remaining paths", () => {
   test("closes the process tree once when a vendor verdict passes through", async () => {

@@ -16,7 +16,7 @@ import { createRealQueryFn } from "./query"
 import type { ClaudeBackendDeps } from "./types"
 
 /**
- * finding [34]: `hasReparsePoint` narrows `isReparsePoint`'s
+ * `hasReparsePoint` narrows `isReparsePoint`'s
  * `boolean | FileAttributesError | FsGuardUnavailableError` down to the
  * plain `boolean` the confinement chain wants — path-containment.ts's
  * `isInsideStaging` only ever asks "is this a reparse point?", not "did the
@@ -35,10 +35,9 @@ function hasReparsePoint(candidatePath: string): boolean {
  * Production wiring: real SDK query + real Job Object tree + real sleep +
  * the Spike F reparse backstop. Exported (not inlined into
  * `createProductionClaudeBackend`) so a test can assert the backstop is
- * actually present on the deps the shipped binary constructs, rather than
- * only on the standalone `hasReparsePoint` helper — finding [34] was
- * specifically that the wiring site silently omitted it while an unrelated
- * unit test kept reporting the primitive itself as covered.
+ * actually present on the deps the shipped binary constructs — a passing
+ * unit test for the standalone `hasReparsePoint` helper proves nothing about
+ * whether the production wiring site actually wires it in.
  */
 export function createProductionClaudeBackendDeps(): ClaudeBackendDeps {
   return {

@@ -55,9 +55,9 @@ export function isInsideStaging(
  * `root` and `target`), calling `check` on each. A reparse point can sit on
  * any ancestor directory — including the staging root itself, e.g. the
  * staging directory being replaced wholesale by a junction — not just the
- * leaf, so checking only the resolved leaf (as this function used to) misses
- * a junction like `<staging>/link` once the agent addresses a file underneath
- * it, e.g. `<staging>/link/notes.txt`, or a junction on `<staging>` itself.
+ * leaf: checking only the resolved leaf would miss a junction like
+ * `<staging>/link` once the agent addresses a file underneath it, e.g.
+ * `<staging>/link/notes.txt`, or a junction on `<staging>` itself.
  */
 function hasReparsePointOnChain(root: string, target: string, check: (p: string) => boolean): boolean {
   if (check(root)) return true

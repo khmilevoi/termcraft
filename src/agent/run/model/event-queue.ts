@@ -9,11 +9,11 @@ export interface EventQueue {
 }
 
 /**
- * Push/finish never depend on a reader — `driveQuery` below calls them
+ * Push/finish never depend on a reader — a run's driver calls them
  * unconditionally, so `outcome` settles even when nobody ever iterates
  * `events` (turn-durability §6.4).
  *
- * Two invariants close finding [27]:
+ * Two invariants hold:
  *  - `[Symbol.asyncIterator]()` hands out the ONE real reader (matching this
  *    function's "single-reader" contract above); a second, concurrent call
  *    would otherwise share the same `waitingReader` slot, clobber the first
@@ -39,7 +39,7 @@ export function createEventQueue(fence: TurnFence): EventQueue {
     if (abandoned) {
       if (!abandonedDropLogged) {
         abandonedDropLogged = true
-        console.warn("agent/agent-run: events consumer is gone (break/return); dropping further events")
+        console.warn("agent/run: events consumer is gone (break/return); dropping further events")
       }
       return
     }
@@ -84,11 +84,10 @@ export function createEventQueue(fence: TurnFence): EventQueue {
     iterable: {
       [Symbol.asyncIterator]() {
         if (readerTaken) {
-          // A second concurrent reader (finding [27]) — fail loudly instead
-          // of sharing `waitingReader` with the first and deadlocking it.
+          // A second concurrent reader fails loudly instead of sharing
+          // `waitingReader` with the first and deadlocking it.
           return {
-            next: () =>
-              Promise.reject(new Error("agent/agent-run: AgentRun.events supports only one reader at a time")),
+            next: () => Promise.reject(new Error("agent/run: AgentRun.events supports only one reader at a time")),
           }
         }
         readerTaken = true

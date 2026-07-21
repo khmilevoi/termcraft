@@ -9,7 +9,7 @@ import type { RunDeps, RunSink } from "../types"
 /** Every test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
 const GUARD_MS = 2000
 
-/** Matches the fence shape used by the old `agent-run.test.ts` (now redistributed here). */
+/** Canonical fence value shared by this file's tests. */
 const fence: TurnFence = { turnId: "t1", attempt: 0, leaseNonce: "n0" }
 
 function drainedTree(): ProcessTree {
@@ -137,7 +137,7 @@ describe("startAgentRun sink contract", () => {
   })
 })
 
-// --- redistributed from agent-run.test.ts: fence stamping ------------------
+// --- fence stamping ----------------------------------------------------------
 
 test(
   "every emitted event is stamped with the fence the run was started with",
@@ -159,7 +159,7 @@ test(
   GUARD_MS,
 )
 
-// --- redistributed from agent-run.test.ts: cancel ladder rungs -------------
+// --- cancel ladder rungs -----------------------------------------------------
 
 test(
   "cancel confirms exit and resolves cancelled",
@@ -294,7 +294,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [5]: cancel() must actually abort the AbortController ---------
+// --- cancel() must actually abort the AbortController -----------------------
 
 test(
   "cancel() aborts the run's AbortController with a tagged reason errore.isAbortError detects",
@@ -318,7 +318,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [24]/[29]: natural completion must confirm exit, not assume it ---
+// --- natural completion must confirm exit, not assume it --------------------
 
 test(
   "a natural completion whose tree never drains escalates to terminate() and reports unconfirmed-exit instead of completed",
@@ -369,7 +369,7 @@ test(
         },
         close: () => {},
         noteAdoptionOutcome: () => {},
-        ownershipConfirmed: () => false, // ...but nothing was ever adopted (finding [22])
+        ownershipConfirmed: () => false, // ...but nothing was ever adopted
       }
       const { run } = startAgentRun(
         fence,
@@ -388,7 +388,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [25]: outcome must always settle, even if `wait` misbehaves ---
+// --- outcome must always settle, even if `wait` misbehaves ------------------
 
 test(
   "a rejecting injected wait() during natural completion still lets outcome settle instead of hanging forever",
@@ -442,7 +442,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [27]: the run keeps driving to completion after its reader abandons ---
+// --- the run keeps driving to completion after its reader abandons ----------
 
 test(
   "returning from run.events' iterator (a for-await break) is supported, and the driver still runs outcome to completion",

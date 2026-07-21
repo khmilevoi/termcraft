@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test"
 import { ProbeDeadlineAbortError, withProbeDeadline } from "./deadline"
 
-// --- redistributed from claude/model/health.test.ts (pre-split): the deadline
-// mechanism itself (the abort fired when the deadline wins the race) is
-// generic to any backend, so it is unit-tested here directly against
-// `withProbeDeadline`, with no Claude-shaped fake involved. ---
+// --- The deadline mechanism itself (the abort fired when the deadline wins
+// the race) is generic to any backend, so it is unit-tested here directly
+// against `withProbeDeadline`, with no Claude-shaped fake involved. ---
 
 test("returns the pending value when it settles before the deadline", async () => {
   const winner = await withProbeDeadline(Promise.resolve("verdict"), {

@@ -9,22 +9,22 @@ import { ProcessTreeError } from "infrastructure/process"
  * budget against a real clock would make deterministic tests either spin
  * needlessly (a no-op `wait` never advances real time) or need to fake global
  * timers. `Math.ceil(budgetMs / POLL_INTERVAL_MS)` attempts is the compromise.
- * Exported so tests can assert `wait` is spaced correctly (finding [8])
- * without duplicating the literal.
+ * Exported so tests can assert `wait` is spaced correctly without
+ * duplicating the literal.
  */
 export const POLL_INTERVAL_MS = 100
 
-/** Renders a thrown SDK-stream value into a stable message even when it is not an `Error` instance. */
+/** Renders a thrown value into a stable message even when it is not an `Error` instance. */
 function describeThrown(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
 /**
- * Boundary guard (finding [25]): `processTree` is an injected seam (the real
- * FFI adapter, or a test double) that is typed to never throw from
- * `activeProcesses()` — but an injected implementation misbehaving must not
- * be able to crash the poll loop. Sync boundary, so `errore.try` (not
- * `.catch()`) per errore rule 12.
+ * Boundary guard: `processTree` is an injected seam (the real FFI adapter,
+ * or a test double) that is typed to never throw from `activeProcesses()` —
+ * but an injected implementation misbehaving must not be able to crash the
+ * poll loop. Sync boundary, so `errore.try` (not `.catch()`) per errore
+ * rule 12.
  */
 function safeActiveProcesses(processTree: ProcessTree): ProcessTreeError | number {
   return errore.try({
@@ -42,15 +42,15 @@ function safeTerminate(processTree: ProcessTree): ProcessTreeError | null {
 }
 
 /**
- * Boundary guard (finding [25]): `wait` is an injected seam (production
- * sleeps, tests script it) whose documented shape is "never rejects". A
- * misbehaving injection must not be able to propagate a rejection up through
- * `pollUntilZero` — that rejection would otherwise escape into whichever
- * caller is awaiting it (`resolveAfterExitConfirm`'s already-latched success
- * path, or `runCancelLadder`'s memoized `cancelPromise`) and leave `outcome`
- * pending forever / make `cancel()` throw. A rejection here is logged and
- * treated as "this attempt's wait is unusable", not propagated — the poll
- * loop simply moves to its next attempt instead of hanging.
+ * Boundary guard: `wait` is an injected seam (production sleeps, tests
+ * script it) whose documented shape is "never rejects". A misbehaving
+ * injection must not be able to propagate a rejection up through
+ * `confirmExit` — that rejection would otherwise escape into whichever
+ * caller is awaiting it (the natural-completion path's already-latched
+ * success, or `runCancelLadder`'s memoized `cancelPromise`) and leave
+ * `outcome` pending forever / make `cancel()` throw. A rejection here is
+ * logged and treated as "this attempt's wait is unusable", not propagated —
+ * the poll loop simply moves to its next attempt instead of hanging.
  */
 async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
   await wait(ms).catch((cause) => {
@@ -66,9 +66,9 @@ async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promis
  * to `false` (never thrown) so a caller can fall back to `unconfirmed-exit`.
  *
  * A `0` read only counts as a confirmed exit once `processTree.ownershipConfirmed()`
- * is also `true` (finding [22]'s downstream half) — otherwise `0` is
- * ambiguous between "the tree drained" and "nothing was ever successfully
- * adopted into it", and the latter must not read as a confirmed exit.
+ * is also `true` — otherwise `0` is ambiguous between "the tree drained" and
+ * "nothing was ever successfully adopted into it", and the latter must not
+ * read as a confirmed exit.
  */
 export async function confirmExit(
   processTree: ProcessTree,

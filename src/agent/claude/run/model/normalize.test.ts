@@ -122,9 +122,9 @@ test("an error result with an empty errors array falls back to naming the subtyp
 })
 
 test("an error result that burned most of the context window still reports usage, error first (master §6.1)", () => {
-  // The exact failure scenario finding [35] describes: an attempt burns 180k
-  // of a 200k window and ends error_max_turns. The context indicator must
-  // not silently under-report just because the attempt failed.
+  // An attempt burns 180k of a 200k window and ends error_max_turns. The
+  // context indicator must not silently under-report just because the
+  // attempt failed.
   const msg = {
     type: "result",
     subtype: "error_max_turns",

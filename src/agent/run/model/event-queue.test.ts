@@ -52,7 +52,7 @@ describe("createEventQueue", () => {
     expect(second.done).toBe(true)
   })
 
-  // --- redistributed from agent-run.test.ts: iterator.return()/abandon -----
+  // --- iterator.return()/abandon ----------------------------------------
 
   test(
     "returning the iterator (a for-await break) is supported, and further pushes after it are dropped and logged",
@@ -79,7 +79,7 @@ describe("createEventQueue", () => {
     },
   )
 
-  // --- redistributed from agent-run.test.ts: second-iterator rejection -----
+  // --- second-iterator rejection ------------------------------------------
 
   test("a second concurrent iteration fails loudly instead of silently deadlocking the first", async () => {
     const queue = createEventQueue(fence)

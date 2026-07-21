@@ -17,9 +17,9 @@ import { claudeCapabilities } from "./capabilities"
 import { probeClaudeHealth } from "./probe"
 
 /**
- * Assemble the mechanism-blind `ClaudeBackend` (master §6.1) from the
- * pure/injected pieces built in T9–T13: `startClaudeRun` drives one fenced
- * attempt, `probeHealth`/`claudeCapabilities` answer health/capability
+ * Assemble the mechanism-blind `ClaudeBackend` (master §6.1) from pure,
+ * injected pieces: `startAgentRun` + `createClaudeDriver` drive one fenced
+ * attempt, `probeClaudeHealth`/`claudeCapabilities` answer health/capability
  * queries, and `deriveSessionScope` derives the opaque checkpoint key.
  * `createDegradedRun`/`createUnconfirmedExitLatch` (agent/run) are the
  * backend-agnostic §6.5 policy pieces this factory wires in.

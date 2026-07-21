@@ -10,10 +10,10 @@ export class ProbeDeadlineAbortError extends errore.createTaggedError({
 
 /** Probe read budget (master §9). No spec value is given; generous enough for
  * a cold CLI start + auth handshake, bounded so a silent CLI cannot hang
- * `healthCheck()` forever. Overridable via {@link ProbeHealthDeps.deadlineMs}. */
+ * `healthCheck()` forever. Overridable via {@link HealthProbeDeps.deadlineMs}. */
 export const DEFAULT_PROBE_DEADLINE_MS = 20_000
 
-/** Real default for {@link ProbeHealthDeps.wait}: `unref`'d so an abandoned
+/** Real default for {@link HealthProbeDeps.wait}: `unref`'d so an abandoned
  * deadline (the read finished first) never keeps the process alive. */
 export function defaultWait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -27,15 +27,15 @@ function describeThrown(cause: unknown): string {
 }
 
 /**
- * Bound `readUntilClassified` so a CLI that connects and then emits nothing
- * cannot hang `probeHealth` — and therefore `AgentBackend.healthCheck()` —
+ * Bound the probe read so a CLI that connects and then emits nothing cannot
+ * hang `runHealthProbe` — and therefore `AgentBackend.healthCheck()` —
  * forever. Uses the injected `wait` seam (mirrors `RunDeps.wait` in
- * agent-run.ts) rather than a bare timer so the deadline is a testable
- * value, not a real clock. On a timeout, aborts the controller so the
- * still-pending read eventually stops, and attaches a log-only handler to
- * that now-abandoned promise so a late settle (success or failure) never
- * surfaces as an unhandled rejection — the timeout has already committed to
- * its own verdict by then.
+ * agent/run) rather than a bare timer so the deadline is a testable value,
+ * not a real clock. On a timeout, aborts the controller so the still-pending
+ * read eventually stops, and attaches a log-only handler to that
+ * now-abandoned promise so a late settle (success or failure) never surfaces
+ * as an unhandled rejection — the timeout has already committed to its own
+ * verdict by then.
  */
 export async function withProbeDeadline<T>(
   pending: Promise<T>,
@@ -51,8 +51,9 @@ export async function withProbeDeadline<T>(
   deps.abortController.abort(winner)
   pending.catch((e) => {
     // Deliberately swallowed (rule: log what you don't propagate) — the
-    // deadline already produced probeHealth's verdict; a late rejection from
-    // the abandoned read is expected once we abort it above, not a new failure.
+    // deadline already produced runHealthProbe's verdict; a late rejection
+    // from the abandoned read is expected once we abort it above, not a new
+    // failure.
     console.warn("agent/health: probe read failed after the deadline already fired:", describeThrown(e))
   })
   return winner

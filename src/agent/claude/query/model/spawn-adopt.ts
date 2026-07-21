@@ -37,7 +37,7 @@ export function createSpawnAndAdopt(
       // Recording the failure on the tree is the only channel back to the
       // caller (errore rule 21 covers the log; the flag covers correctness):
       // an exit-confirmation poll must never read a tree nothing was ever
-      // adopted into as "confirmed drained" (review finding [22]).
+      // adopted into as "confirmed drained".
       processTree.noteAdoptionOutcome(false)
       return child
     }

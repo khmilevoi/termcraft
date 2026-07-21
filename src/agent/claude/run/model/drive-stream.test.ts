@@ -134,7 +134,7 @@ describe("createClaudeDriver", () => {
     expect(emitted).toEqual([])
   })
 
-  // --- redistributed from agent-run.test.ts: SDK message mapping -----------
+  // --- SDK message mapping ---------------------------------------------------
 
   test(
     "an assistant message maps to reasoning+tool via the real tool-op mapping, then a success result claims a completed outcome with derived usage",
@@ -149,15 +149,15 @@ describe("createClaudeDriver", () => {
 
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"])
       expect(completions).toHaveLength(1)
-      // DEVIATION from the plan's literal test body (carried over from
-      // agent-run.test.ts): the plan scripted a success result with
-      // usage:{input_tokens:10,output_tokens:2}, modelUsage:{} (so
-      // deriveUsage returns a non-null TokenUsage — confirmed against
-      // normalize.ts/normalize.test.ts) yet asserted `usage: null` on the
-      // outcome while asserting a `usage` event WAS emitted from that same
-      // message — a genuine contradiction. Decision (per task instructions):
-      // outcome.usage carries the SAME derived TokenUsage the usage event
-      // carries; it is null only when deriveUsage genuinely returns null.
+      // DEVIATION from the plan's literal test body: the plan scripted a
+      // success result with usage:{input_tokens:10,output_tokens:2},
+      // modelUsage:{} (so deriveUsage returns a non-null TokenUsage —
+      // confirmed against normalize.ts/normalize.test.ts) yet asserted
+      // `usage: null` on the outcome while asserting a `usage` event WAS
+      // emitted from that same message — a genuine contradiction. Decision
+      // (per task instructions): outcome.usage carries the SAME derived
+      // TokenUsage the usage event carries; it is null only when deriveUsage
+      // genuinely returns null.
       expect(completions[0]?.outcome).toEqual({
         kind: "completed",
         finalText: "done",
@@ -180,12 +180,11 @@ describe("createClaudeDriver", () => {
         options: {} as never,
       })
       await driver(sink)
-      // DEVIATION from the plan's literal test body (carried over from
-      // agent-run.test.ts): the plan asserted `["final"]`, silently assuming
-      // this fixture's `usage` derives to null. It does not (same fixture as
-      // the test above) — normalizeMessage emits final+usage together for one
-      // "result" message. Corrected to match the actual normalizeMessage
-      // output.
+      // DEVIATION from the plan's literal test body: the plan asserted
+      // `["final"]`, silently assuming this fixture's `usage` derives to
+      // null. It does not (same fixture as the test above) — normalizeMessage
+      // emits final+usage together for one "result" message. Corrected to
+      // match the actual normalizeMessage output.
       expect(completions).toHaveLength(1)
       expect(completions[0]?.finalEvents.map((e) => e.kind)).toEqual(["final", "usage"])
       // The `late` duplicate message is never reached: the driver `return`s

@@ -142,10 +142,41 @@ export function startAgentRun(
    * the caller's decision, made from this function's outcome. The budget is
    * therefore 10s (2 rungs of <=5s), not the spec's 15s.
    *
-   * NOTE FOR TASK 7: the full rung-3 divergence analysis currently lives on
-   * `runCancelLadder` in `agent/claude/model/agent-run.ts`. Move it here
-   * verbatim — CLAUDE.md requires a documented divergence to stay in a code
-   * comment, and this is now its only home.
+   * DIVERGENCE, ASSESSED AND REJECTED AS UNIMPLEMENTABLE: §6.5 names a
+   * standalone rung 3 — a genuinely graceful, tree-wide termination attempt
+   * distinct from both the SDK abort (rung 1) and the hard job-object kill
+   * (rung 4). No such DIFFERENT primitive exists to add on Windows, so per
+   * CLAUDE.md's rule (closest faithful mapping + a documented divergence,
+   * never a silently invented value) this documents the gap instead of
+   * adding an inert rung:
+   *   - A Windows Job Object exposes exactly one termination primitive,
+   *     `TerminateJobObject` (infrastructure/process/model/job-object.ts) —
+   *     Microsoft's own docs for it say a job member cannot postpone or
+   *     handle the termination. There is no softer/graceful sibling call.
+   *   - The one other handle that could in principle serve rung 3 —
+   *     `child.kill('SIGTERM')` on the tree's root `ChildProcess`, spawned
+   *     (and never retained past that point) inside `spawn-adopt.ts`'s
+   *     `createSpawnAndAdopt` — would not buy real gracefulness even
+   *     if it were retained and wired through here: Node's own
+   *     `child_process` docs state that on Windows "the signal argument...
+   *     is largely ignored, except for 'SIGKILL', 'SIGTERM', 'SIGINT', and
+   *     'SIGQUIT', and the process is always killed forcefully" (the same
+   *     unconditional termination as `TerminateProcess`). Retaining that
+   *     handle to send `SIGTERM` from here would rename rung 4, not add a
+   *     new rung.
+   *   - The graceful window §6.5's rung 3 is actually reaching for already
+   *     exists one level up, inside the SDK itself, and already runs as part
+   *     of rung 1: the installed `@anthropic-ai/claude-agent-sdk` (0.3.212)
+   *     closes its process transport on `abortController.abort()` — the same
+   *     `AbortController` this file passes in as `Options.abortController`
+   *     and aborts on the line below — by first calling `processStdin.end()`
+   *     (EOF, the CLI's own graceful-shutdown signal) and only THEN, after a
+   *     fixed ~2000ms grace window, considering any escalation at all
+   *     (verified by reading the bundled `sdk.mjs`: `ProcessTransport.close()`,
+   *     wait constant `wbe = 2000`). That stdin-EOF-plus-~2s sequence fires
+   *     before this file's own rung 2 poll or rung 4 kill ever runs — the
+   *     spec's rung 3 is functionally already folded into rung 1, not
+   *     missing.
    */
   async function runCancelLadder(): Promise<void> {
     deps.abortController.abort(new TurnAbortError({})) // rung 1

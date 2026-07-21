@@ -22,7 +22,7 @@ import { CLAUDE_BACKEND_ID } from "./backend-id"
  * exited (its own close already settled, unaffected by our controller)
  * removes that race entirely. Extends `errore.AbortError` so a downstream
  * `errore.isAbortError` check still detects it if it ever ends up wrapped in
- * another error's `.cause` chain — mirrors `TurnAbortError` in agent-run.ts.
+ * another error's `.cause` chain — mirrors `TurnAbortError` in run/model/engine.ts.
  */
 class ProbeClassifiedAbortError extends errore.createTaggedError({
   name: "ProbeClassifiedAbortError",
@@ -44,10 +44,10 @@ const PROBE_CWD = os.tmpdir()
 
 /**
  * Build SDK options for the probe's minimal "ping" query, isolated AT LEAST
- * as strictly as a real turn's `buildQueryOptions` (query-fn.ts): settings
- * isolated (`settingSources: []`), cwd pinned to a scratch dir instead of
+ * as strictly as a real turn's `buildQueryOptions` (claude/query/model/query-options.ts):
+ * settings isolated (`settingSources: []`), cwd pinned to a scratch dir instead of
  * termcraft's own cwd, and `canUseTool` wired to the same deny-by-default
- * confinement policy (confinement.ts) scoped to that scratch dir — so the
+ * confinement policy (confinement/model/policy.ts) scoped to that scratch dir — so the
  * probe can allow nothing a real project could ever have planted to be
  * allowed. The probe issues no tool calls itself; this is defense-in-depth
  * against a hostile or malfunctioning CLI, exactly how a turn treats its own
@@ -61,12 +61,12 @@ const PROBE_CWD = os.tmpdir()
  * isolated than any real turn, which always grants access to real
  * user-authored files.
  *
- * finding [26] half b: `spawnClaudeCodeProcess` is wired only when
- * `deps.processTree` is non-`null` — when the caller's `ProcessTreeFactory`
- * could not produce a tree at all, there is nothing to adopt into, and the
- * SDK falls back to spawning the CLI internally exactly as it did before
- * this fix (an explicit, narrower fallback, not the original bug of always
- * skipping adoption). See `claude-backend.ts`'s `healthCheck()` for why that
+ * The probe gets the same process ownership a turn does: `spawnClaudeCodeProcess`
+ * is wired only when `deps.processTree` is non-`null` — when the caller's
+ * `ProcessTreeFactory` could not produce a tree at all, there is nothing to
+ * adopt into, and the SDK falls back to spawning the CLI internally (an
+ * explicit, narrower fallback: adoption is skipped only when no tree exists,
+ * not unconditionally). See `backend.ts`'s `healthCheck()` for why that
  * fallback still runs the probe instead of reporting a false verdict.
  */
 function buildProbeOptions(deps: HealthProbeDeps): Options {
@@ -132,8 +132,8 @@ function describeThrown(cause: unknown): string {
  * failure. Boundary: `stream` is an injected/vendor async generator we do
  * not control — a raw `try/catch` here (not `errore.try`, which is for sync
  * boundaries) is the errore-sanctioned way to convert an external throw into
- * a value at the lowest call-stack level, mirroring `driveQuery` in
- * agent-run.ts.
+ * a value at the lowest call-stack level, mirroring `createClaudeDriver` in
+ * claude/run/model/drive-stream.ts.
  */
 async function readUntilClassified(queryFn: ClaudeQueryFn, deps: HealthProbeDeps): Promise<AgentInfo | null> {
   const stream = queryFn({ prompt: "ping", options: buildProbeOptions(deps) })

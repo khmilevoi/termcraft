@@ -47,12 +47,11 @@ export function createConfinementPolicy(
     if (!tables.fileTools.has(toolName)) {
       return { behavior: "deny", message: `Tool ${toolName} is not on the design-turn allowlist` }
     }
-    // [13]/[33]: a path-less call resolves to the staging root ITSELF only
-    // for tools whose schema documents `path` as optional-defaulting-to-cwd
-    // (see `tables.optionalPathTools`) — "no path" means "here", and "here" is
-    // staging. Every other file tool still denies outright on a missing path
-    // (finding [13]'s protection, preserved exactly where it matters: a
-    // schema rename on a WRITE tool still denies).
+    // A path-less call resolves to the staging root ITSELF only for tools
+    // whose schema documents `path` as optional-defaulting-to-cwd (see
+    // `tables.optionalPathTools`) — "no path" means "here", and "here" is
+    // staging. Every other file tool still denies outright on a missing
+    // path: a schema rename on a WRITE tool still denies.
     const target =
       primaryPath(tables.pathFields, input, blockedPath) ?? (tables.optionalPathTools.has(toolName) ? stagingRoot : null)
     if (target === null) {

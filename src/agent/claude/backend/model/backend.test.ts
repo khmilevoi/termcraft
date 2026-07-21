@@ -32,7 +32,7 @@ function query(messages: SDKMessage[]): ClaudeQuery {
   }
 }
 
-/** A stream that throws before yielding anything — drives `driveQuery`'s catch/`backend-error` path. */
+/** A stream that throws before yielding anything — drives `createClaudeDriver`'s catch/`backend-error` path. */
 function throwingQuery(reason: string): ClaudeQuery {
   return {
     async *[Symbol.asyncIterator]() {
@@ -170,10 +170,10 @@ test(
         wait: async () => {},
       })
       const run = backend.startTurn(task)
-      // finding: a deleted assertion covering `task.fence` passthrough was not
-      // a duplicate of degraded-run.test.ts's own shape assertion — that test
-      // only proves createDegradedRun's OWN local fence round-trips, not that
-      // startTurn actually threads `task.fence` through into it.
+      // This assertion is not a duplicate of degraded-run.test.ts's own shape
+      // assertion — that test only proves createDegradedRun's OWN local fence
+      // round-trips, not that startTurn actually threads `task.fence` through
+      // into it.
       expect(run.fence).toBe(task.fence)
       const events: FencedEvent[] = []
       for await (const ev of run.events) events.push(ev)
@@ -260,7 +260,7 @@ test(
     })
     const info = await backend.healthCheck()
     // `apiKeySource` (`'user'|'project'|'org'|'temporary'|'oauth'`) names WHERE
-    // a credential came from, not WHOSE it is, so `classifyMessage` (health.ts)
+    // a credential came from, not WHOSE it is, so `classifyMessage` (probe.ts)
     // never reports it as `account` — storage-identity §6.2 requires a stable
     // per-account discriminator, and this SDK field is not one.
     expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null })
@@ -268,7 +268,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [26] half b: healthCheck() sources an owned tree for probeHealth, and it gets closed ---
+// --- healthCheck() sources an owned tree for probeClaudeHealth, and it gets closed ---
 
 test(
   "healthCheck() sources a fresh tree from processTreeFactory and it is closed once the probe settles",
@@ -287,9 +287,9 @@ test(
     const info = await backend.healthCheck()
     expect(factoryCalls).toBe(1)
     expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null })
-    // health.ts's probeHealth closes the tree it was handed on every path —
-    // this proves claude-backend.ts's healthCheck() actually reaches that
-    // code, not just that health.ts's own unit tests do.
+    // health/model/probe.ts's runHealthProbe closes the tree it was handed on
+    // every path — this proves backend.ts's healthCheck() actually reaches
+    // that code, not just that runHealthProbe's own unit tests do.
     expect(closeCalls()).toBe(1)
   },
   GUARD_MS,
@@ -354,7 +354,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [1]/[21]: ProcessTree.close() must fire on every terminal path ---
+// --- ProcessTree.close() must fire on every terminal path -------------------
 
 test(
   "close() is called once the outcome settles as completed, and not before",
@@ -446,8 +446,8 @@ test(
     })
     const run = backend.startTurn(task)
     // The run already reached a natural outcome by the time cancel() is
-    // awaited; cancel()'s loser branch (agent-run.ts) just waits on the same
-    // outcome instead of re-running the ladder.
+    // awaited; cancel()'s loser branch (run/model/engine.ts) just waits on the
+    // same outcome instead of re-running the ladder.
     await run.outcome
     await backend.cancel(run)
     expect(closeCalls()).toBe(1)
@@ -455,7 +455,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [30]: unhealthy-unconfirmed-exit latch ---
+// --- unhealthy-unconfirmed-exit latch ---------------------------------------
 
 test(
   "healthCheck() latches unhealthy-unconfirmed-exit after a run resolves unconfirmed-exit, and stops probing",
@@ -474,7 +474,7 @@ test(
       })
       const run = backend.startTurn(task)
       expect(await run.outcome).toEqual({ kind: "unconfirmed-exit" })
-      const probeCallsAfterStartTurn = probeCalls // one call, from the run's own driveQuery
+      const probeCallsAfterStartTurn = probeCalls // one call, from the run's own createClaudeDriver
 
       const info = await backend.healthCheck()
       expect(info).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "unhealthy-unconfirmed-exit" }, account: null })
@@ -556,7 +556,7 @@ test(
   GUARD_MS,
 )
 
-// --- finding [17]: pathToClaudeCodeExecutable / confirmTimeoutMs pass-through ---
+// --- pathToClaudeCodeExecutable / confirmTimeoutMs pass-through -------------
 
 test(
   "pathToClaudeCodeExecutable reaches the query options when set",
@@ -619,7 +619,7 @@ test(
       const run = backend.startTurn(task)
       await backend.cancel(run)
       expect(await run.outcome).toEqual({ kind: "unconfirmed-exit" })
-      // Two pollUntilZero calls in the cancel ladder (rung 2 pre-terminate,
+      // Two confirmExit calls in the cancel ladder (rung 2 pre-terminate,
       // rung 4 post-terminate), each with 3 attempts -> 2 `wait` calls each.
       expect(waitCalls).toBe(4)
     } finally {

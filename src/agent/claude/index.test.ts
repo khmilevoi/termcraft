@@ -20,8 +20,8 @@ test("capabilities() is the real static Claude table, not a stub", () => {
   expect(backend.capabilities()).toEqual(claudeCapabilities())
 })
 
-// finding [34]: the production factory must actually wire the Spike F
-// reparse-point backstop, not just leave `hasReparsePoint` undefined.
+// The production factory must actually wire the Spike F reparse-point
+// backstop, not just leave `hasReparsePoint` undefined.
 const onWindows = process.platform === "win32"
 
 describe.skipIf(!onWindows)("createProductionClaudeBackendDeps (Windows)", () => {

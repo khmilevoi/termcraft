@@ -12,7 +12,7 @@ function fakeTree(): ProcessTree {
   return createFakeProcessTree({ counts: [0], ownershipConfirmed: true })
 }
 
-/** Wrap a `ProcessTree` so `close()` calls can be counted (mirrors claude-backend.test.ts's `trackTree`). */
+/** Wrap a `ProcessTree` so `close()` calls can be counted (mirrors backend.test.ts's `trackTree`). */
 function trackClose(tree: ProcessTree): { tree: ProcessTree; closeCalls: () => number } {
   let close = 0
   return {
@@ -33,9 +33,9 @@ function trackClose(tree: ProcessTree): { tree: ProcessTree; closeCalls: () => n
 
 /**
  * A `ProcessTree` fake that records every `adopt(pid)` call and every
- * `noteAdoptionOutcome` call — mirrors `query-fn.test.ts`'s
+ * `noteAdoptionOutcome` call — mirrors `query-options.test.ts`'s
  * `createRecordingProcessTree`, used here to prove the probe CLI is actually
- * adopted (finding [26] half b), not merely offered a tree it never uses.
+ * adopted, not merely offered a tree it never uses.
  */
 function createRecordingProcessTree(): { tree: ProcessTree; adoptedPids: number[]; adoptionOutcomes: boolean[] } {
   const adoptedPids: number[] = []
@@ -74,7 +74,7 @@ function fake(messages: SDKMessage[], throwOnIterate?: Error): ClaudeQuery {
  * `IteratorClose` cleanup rejecting (e.g. because the controller was already
  * aborted). `fake()` above is a plain async-generator method, and a plain
  * generator's `.return()` can never reject, so it cannot exercise the
- * [2]/[23] abort-races-IteratorClose defect at all.
+ * abort-races-IteratorClose hazard at all.
  */
 function fakeRejectingClose(messages: SDKMessage[]): ClaudeQuery {
   let index = 0
@@ -268,7 +268,7 @@ test("probe options isolate the CLI at least as strictly as a real turn: scratch
   expect(allowInScopeRead?.behavior).toBe("allow")
 })
 
-// --- finding [26] half b: the probe adopts its process tree and closes it on every path ---
+// --- the probe adopts its process tree and closes it on every path ---------
 
 const spawnedChildren: SpawnedProcess[] = []
 afterEach(() => {
@@ -343,7 +343,7 @@ test("a null processTree (ProcessTreeFactory failure) is a safe no-op close, and
   expect(info.health.status).toBe("ready")
   const opts = captured as unknown as Options
   // No tree to adopt into -> the SDK falls back to spawning the CLI itself,
-  // exactly as it did before this fix — narrower than the general case, not
-  // a silent regression of it.
+  // an explicit, narrower fallback rather than a silent regression of the
+  // general case.
   expect(opts.spawnClaudeCodeProcess).toBeUndefined()
 })
