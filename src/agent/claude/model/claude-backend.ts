@@ -11,10 +11,11 @@ import type {
   FencedEvent,
   SessionScopeInput,
 } from "agent/types"
+import { probeClaudeHealth } from "agent/claude/backend"
 import { createClaudeDriver } from "agent/claude/run"
 import type { ClaudeBackendDeps } from "../types"
 import { CLAUDE_BACKEND_ID } from "./backend-id"
-import { claudeCapabilities, probeHealth } from "./health"
+import { claudeCapabilities } from "./health"
 import { buildQueryOptions } from "./query-fn"
 
 /** An `AsyncIterable` that yields `event` exactly once, then completes. */
@@ -194,9 +195,9 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
           "agent/claude-backend: processTreeFactory failed for healthCheck(), probing without adoption:",
           tree.message,
         )
-        return probeHealth(deps.queryFn, { abortController: new AbortController(), processTree: null })
+        return probeClaudeHealth(deps.queryFn, { abortController: new AbortController(), processTree: null })
       }
-      return probeHealth(deps.queryFn, { abortController: new AbortController(), processTree: tree })
+      return probeClaudeHealth(deps.queryFn, { abortController: new AbortController(), processTree: tree })
     },
 
     capabilities(): BackendCapabilities {
