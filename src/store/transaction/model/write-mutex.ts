@@ -1,7 +1,8 @@
-import crypto from "node:crypto"
-import * as errore from "errore"
+import crypto from "node:crypto";
 
-import type { ProjectWritePermit } from "../types"
+import * as errore from "errore";
+
+import type { ProjectWritePermit } from "../types";
 
 /**
  * A mutating call's permit is no longer the write mutex's active permit — either `release`
@@ -21,7 +22,7 @@ export class WritePermitInvalidError extends errore.createTaggedError({
  */
 export type WriteMutexChainResult<TResult> =
   | { readonly error: null; readonly result: TResult }
-  | { readonly error: WritePermitInvalidError; readonly result: null }
+  | { readonly error: WritePermitInvalidError; readonly result: null };
 
 /**
  * A sequential chain of permit-protected write steps. Each callback receives the preceding
@@ -35,40 +36,44 @@ export type WriteMutexChainResult<TResult> =
  * half-applied step would be worse than finishing it; the next step catches the staleness.
  */
 export interface WriteMutexChain<TPrevious> extends PromiseLike<WriteMutexChainResult<TPrevious>> {
-  do<TResult>(callback: (previous: TPrevious) => TResult | PromiseLike<TResult>): WriteMutexChain<TResult>
+  do<TResult>(
+    callback: (previous: TPrevious) => TResult | PromiseLike<TResult>,
+  ): WriteMutexChain<TResult>;
 }
 
 export interface WriteMutex {
   /** FIFO fair: resolves in the exact order callers invoke `acquire` (turn-durability §4.5). */
-  acquire(): Promise<ProjectWritePermit>
+  acquire(): Promise<ProjectWritePermit>;
   /** Idempotent: releasing an already-stale permit is a no-op and never drops a later holder's lock. */
-  release(permit: ProjectWritePermit): void
-  isActive(permit: ProjectWritePermit): boolean
+  release(permit: ProjectWritePermit): void;
+  isActive(permit: ProjectWritePermit): boolean;
   /** Starts a sequential chain of permit-protected write steps. */
-  chain(permit: ProjectWritePermit): WriteMutexChain<void>
+  chain(permit: ProjectWritePermit): WriteMutexChain<void>;
 }
 
 export interface WriteMutexDeps {
-  readonly mintPermitId: () => string
+  readonly mintPermitId: () => string;
 }
 
 /** 128-bit CSPRNG, base64url — mirrors `store/lease`'s `leaseNonce`: a random id, not a UUIDv7 (the roadmap's identity registry does not list `permitId`). */
 export function mintWritePermitId(): string {
-  const bytes = new Uint8Array(16)
-  crypto.webcrypto.getRandomValues(bytes)
-  return Buffer.from(bytes).toString("base64url")
+  const bytes = new Uint8Array(16);
+  crypto.webcrypto.getRandomValues(bytes);
+  return Buffer.from(bytes).toString("base64url");
 }
 
 export function defaultWriteMutexDeps(): WriteMutexDeps {
-  return { mintPermitId: mintWritePermitId }
+  return { mintPermitId: mintWritePermitId };
 }
 
 function makePermitInvalidError(permit: ProjectWritePermit): WritePermitInvalidError {
-  return new WritePermitInvalidError({ permitId: permit.permitId })
+  return new WritePermitInvalidError({ permitId: permit.permitId });
 }
 
-function makeInvalidChainResult<TResult>(permit: ProjectWritePermit): WriteMutexChainResult<TResult> {
-  return { error: makePermitInvalidError(permit), result: null }
+function makeInvalidChainResult<TResult>(
+  permit: ProjectWritePermit,
+): WriteMutexChainResult<TResult> {
+  return { error: makePermitInvalidError(permit), result: null };
 }
 
 function makeWriteMutexChain<TPrevious>(
@@ -77,25 +82,29 @@ function makeWriteMutexChain<TPrevious>(
   statePromise: Promise<WriteMutexChainResult<TPrevious>>,
 ): WriteMutexChain<TPrevious> {
   return {
-    do<TResult>(callback: (previous: TPrevious) => TResult | PromiseLike<TResult>): WriteMutexChain<TResult> {
-      const nextStatePromise = statePromise.then(async (previousState): Promise<WriteMutexChainResult<TResult>> => {
-        // An earlier step already found the permit stale: preserve that error and run none
-        // of the remaining callbacks.
-        if (previousState.error !== null) return { error: previousState.error, result: null }
+    do<TResult>(
+      callback: (previous: TPrevious) => TResult | PromiseLike<TResult>,
+    ): WriteMutexChain<TResult> {
+      const nextStatePromise = statePromise.then(
+        async (previousState): Promise<WriteMutexChainResult<TResult>> => {
+          // An earlier step already found the permit stale: preserve that error and run none
+          // of the remaining callbacks.
+          if (previousState.error !== null) return { error: previousState.error, result: null };
 
-        // Re-check immediately before executing this individual step.
-        if (!isActive(permit)) return makeInvalidChainResult<TResult>(permit)
+          // Re-check immediately before executing this individual step.
+          if (!isActive(permit)) return makeInvalidChainResult<TResult>(permit);
 
-        return { error: null, result: await callback(previousState.result) }
-      })
+          return { error: null, result: await callback(previousState.result) };
+        },
+      );
 
-      return makeWriteMutexChain(permit, isActive, nextStatePromise)
+      return makeWriteMutexChain(permit, isActive, nextStatePromise);
     },
 
     then(onFulfilled, onRejected) {
-      return statePromise.then(onFulfilled, onRejected)
+      return statePromise.then(onFulfilled, onRejected);
     },
-  }
+  };
 }
 
 /**
@@ -110,37 +119,37 @@ function makeWriteMutexChain<TPrevious>(
  * cross-process guarantee is the OS-held `ProjectLease` (`store/lease`).
  */
 export function createWriteMutex(deps: WriteMutexDeps = defaultWriteMutexDeps()): WriteMutex {
-  let activePermitId: string | null = null
-  const waiters: Array<() => void> = []
+  let activePermitId: string | null = null;
+  const waiters: Array<() => void> = [];
 
   function grant(resolve: (permit: ProjectWritePermit) => void): void {
-    const permitId = deps.mintPermitId()
-    activePermitId = permitId
-    resolve({ permitId })
+    const permitId = deps.mintPermitId();
+    activePermitId = permitId;
+    resolve({ permitId });
   }
 
   function isActive(permit: ProjectWritePermit): boolean {
-    return activePermitId !== null && activePermitId === permit.permitId
+    return activePermitId !== null && activePermitId === permit.permitId;
   }
 
   return {
     acquire() {
       return new Promise<ProjectWritePermit>((resolve) => {
-        const attempt = (): void => grant(resolve)
+        const attempt = (): void => grant(resolve);
         if (activePermitId === null && waiters.length === 0) {
-          attempt()
-          return
+          attempt();
+          return;
         }
-        waiters.push(attempt)
-      })
+        waiters.push(attempt);
+      });
     },
 
     release(permit) {
       // A stale or repeatedly released permit must not release the mutex for a newer holder.
-      if (!isActive(permit)) return
-      activePermitId = null
-      const nextWaiter = waiters.shift()
-      if (nextWaiter !== undefined) nextWaiter()
+      if (!isActive(permit)) return;
+      activePermitId = null;
+      const nextWaiter = waiters.shift();
+      if (nextWaiter !== undefined) nextWaiter();
     },
 
     isActive,
@@ -148,13 +157,16 @@ export function createWriteMutex(deps: WriteMutexDeps = defaultWriteMutexDeps())
     chain(permit) {
       const initialState: WriteMutexChainResult<void> = isActive(permit)
         ? { error: null, result: undefined }
-        : makeInvalidChainResult<void>(permit)
-      return makeWriteMutexChain(permit, isActive, Promise.resolve(initialState))
+        : makeInvalidChainResult<void>(permit);
+      return makeWriteMutexChain(permit, isActive, Promise.resolve(initialState));
     },
-  }
+  };
 }
 
 /** A standalone permit check, for a single guarded step where a chain would add no structure. */
-export function assertActivePermit(mutex: WriteMutex, permit: ProjectWritePermit): WritePermitInvalidError | null {
-  return mutex.isActive(permit) ? null : makePermitInvalidError(permit)
+export function assertActivePermit(
+  mutex: WriteMutex,
+  permit: ProjectWritePermit,
+): WritePermitInvalidError | null {
+  return mutex.isActive(permit) ? null : makePermitInvalidError(permit);
 }

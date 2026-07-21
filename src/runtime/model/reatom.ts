@@ -13,20 +13,20 @@ export {
   withComputed,
   withAbort,
   withConnectHook,
-} from "@reatom/core"
-export { reatomComponent } from "@reatom/react"
+} from "@reatom/core";
+export { reatomComponent } from "@reatom/react";
 
 // Public facade types needed to type page models (§3.2). `AtomLike`/`Ext` are
 // Reatom's own public model types; re-exporting them under the facade keeps page
 // models typeable without an authored `@reatom/*` import.
-export type { Atom, Action, Computed, AtomLike, Ext } from "@reatom/core"
+export type { Atom, Action, Computed, AtomLike, Ext } from "@reatom/core";
 
 /** A connection-scoped cleanup returned from `withConnectHook` (§3.2). */
-export type ConnectionCleanup = () => void
+export type ConnectionCleanup = () => void;
 
 /**
  * The narrowed facade return contract for a `withConnectHook` callback (§3.2): only
  * no cleanup or exactly one cleanup function, synchronously or asynchronously. It
  * deliberately does not expose Reatom's private subscription object types.
  */
-export type ConnectionHookResult = void | ConnectionCleanup | Promise<void | ConnectionCleanup>
+export type ConnectionHookResult = void | ConnectionCleanup | Promise<void | ConnectionCleanup>;

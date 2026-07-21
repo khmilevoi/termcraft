@@ -1,9 +1,10 @@
-import type { PageSlug } from "entities/page"
-import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types"
-import { makeGateResult } from "./gate-result"
-import { checkPageContract } from "./page-contract"
-import { scanImportAllowlist } from "./import-scan"
-import { lintDeterminism } from "./lints"
+import type { PageSlug } from "entities/page";
+
+import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
+import { makeGateResult } from "./gate-result";
+import { scanImportAllowlist } from "./import-scan";
+import { lintDeterminism } from "./lints";
+import { checkPageContract } from "./page-contract";
 
 /**
  * The gate's injected validation stages that need more than the page source
@@ -14,16 +15,22 @@ import { lintDeterminism } from "./lints"
  * SmokeRenderer). Each may be sync or async and returns fatal `GateError`s.
  */
 export interface GatePorts {
-  readonly typeCheck?: (source: string, fileName: string) => GateError[] | Promise<GateError[]>
-  readonly checkManifest?: (descriptor: PageDescriptor, source: string) => GateError[] | Promise<GateError[]>
-  readonly smokeRender?: (descriptor: PageDescriptor, source: string) => GateError[] | Promise<GateError[]>
+  readonly typeCheck?: (source: string, fileName: string) => GateError[] | Promise<GateError[]>;
+  readonly checkManifest?: (
+    descriptor: PageDescriptor,
+    source: string,
+  ) => GateError[] | Promise<GateError[]>;
+  readonly smokeRender?: (
+    descriptor: PageDescriptor,
+    source: string,
+  ) => GateError[] | Promise<GateError[]>;
 }
 
 /** One candidate page to validate: its source, its slug, and its scratch file name. */
 export interface GateInput {
-  readonly source: string
-  readonly slug: PageSlug
-  readonly fileName?: string
+  readonly source: string;
+  readonly slug: PageSlug;
+  readonly fileName?: string;
 }
 
 /**
@@ -36,32 +43,49 @@ export interface GateInput {
  * there are zero fatal errors; warnings never reject.
  */
 export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<GateResult> {
-  const errors: GateError[] = []
-  const warnings: GateWarning[] = []
-  const fileName = input.fileName ?? `${input.slug}.tsx`
+  const errors: GateError[] = [];
+  const warnings: GateWarning[] = [];
+  const fileName = input.fileName ?? `${input.slug}.tsx`;
 
   for (const e of scanImportAllowlist(input.source)) {
-    errors.push({ kind: "import", code: e.code, message: e.message, file: fileName, line: e.line, column: e.column })
+    errors.push({
+      kind: "import",
+      code: e.code,
+      message: e.message,
+      file: fileName,
+      line: e.line,
+      column: e.column,
+    });
   }
-  const contract = checkPageContract(input.source)
+  const contract = checkPageContract(input.source);
   for (const e of contract.errors) {
-    errors.push({ kind: "contract", code: e.code, message: e.message, file: fileName, line: e.line, column: e.column })
+    errors.push({
+      kind: "contract",
+      code: e.code,
+      message: e.message,
+      file: fileName,
+      line: e.line,
+      column: e.column,
+    });
   }
-  warnings.push(...lintDeterminism(input.source))
+  warnings.push(...lintDeterminism(input.source));
 
   if (ports.typeCheck !== undefined) {
-    errors.push(...(await ports.typeCheck(input.source, fileName)))
+    errors.push(...(await ports.typeCheck(input.source, fileName)));
   }
 
-  const descriptor: PageDescriptor | null = contract.meta === null ? null : { slug: input.slug, meta: contract.meta }
+  const descriptor: PageDescriptor | null =
+    contract.meta === null ? null : { slug: input.slug, meta: contract.meta };
 
   // Only mount/render/consult the manifest when the candidate is otherwise safe:
   // a forbidden import, a broken contract, or a type error means the source cannot
   // be imported or rendered, so skip the heavier stages.
   if (errors.length === 0 && descriptor !== null) {
-    if (ports.checkManifest !== undefined) errors.push(...(await ports.checkManifest(descriptor, input.source)))
-    if (ports.smokeRender !== undefined) errors.push(...(await ports.smokeRender(descriptor, input.source)))
+    if (ports.checkManifest !== undefined)
+      errors.push(...(await ports.checkManifest(descriptor, input.source)));
+    if (ports.smokeRender !== undefined)
+      errors.push(...(await ports.smokeRender(descriptor, input.source)));
   }
 
-  return makeGateResult(errors, warnings, descriptor)
+  return makeGateResult(errors, warnings, descriptor);
 }

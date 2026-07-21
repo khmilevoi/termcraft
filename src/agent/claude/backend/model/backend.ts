@@ -1,6 +1,8 @@
-import { ProcessTreeError } from "infrastructure/process"
-import { createDegradedRun, createUnconfirmedExitLatch, startAgentRun } from "agent/run"
-import { buildPrompt, deriveSessionScope } from "agent/session"
+import { buildQueryOptions } from "agent/claude/query";
+import { createClaudeDriver } from "agent/claude/run";
+import type { ClaudeBackendDeps } from "agent/claude/types";
+import { createDegradedRun, createUnconfirmedExitLatch, startAgentRun } from "agent/run";
+import { buildPrompt, deriveSessionScope } from "agent/session";
 import type {
   AgentBackend,
   AgentInfo,
@@ -8,13 +10,12 @@ import type {
   AgentTask,
   BackendCapabilities,
   SessionScopeInput,
-} from "agent/types"
-import { buildQueryOptions } from "agent/claude/query"
-import { createClaudeDriver } from "agent/claude/run"
-import type { ClaudeBackendDeps } from "agent/claude/types"
-import { CLAUDE_BACKEND_ID } from "./backend-id"
-import { claudeCapabilities } from "./capabilities"
-import { probeClaudeHealth } from "./probe"
+} from "agent/types";
+import { ProcessTreeError } from "infrastructure/process";
+
+import { CLAUDE_BACKEND_ID } from "./backend-id";
+import { claudeCapabilities } from "./capabilities";
+import { probeClaudeHealth } from "./probe";
 
 /**
  * Assemble the mechanism-blind `ClaudeBackend` (master §6.1) from pure,
@@ -30,8 +31,8 @@ import { probeClaudeHealth } from "./probe"
  * Constraints); the backend instance itself is the only lifetime owner here.
  */
 export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
-  const cancels = new WeakMap<AgentRun, () => Promise<void>>()
-  const unhealthy = createUnconfirmedExitLatch(CLAUDE_BACKEND_ID)
+  const cancels = new WeakMap<AgentRun, () => Promise<void>>();
+  const unhealthy = createUnconfirmedExitLatch(CLAUDE_BACKEND_ID);
 
   return {
     startTurn(task: AgentTask): AgentRun {
@@ -39,14 +40,17 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         return createDegradedRun(
           task.fence,
           "backend is unhealthy: a prior run's exit was never confirmed (§6.5)",
-        )
+        );
       }
 
-      const abortController = new AbortController()
-      const tree = deps.processTreeFactory()
+      const abortController = new AbortController();
+      const tree = deps.processTreeFactory();
       if (tree instanceof ProcessTreeError) {
-        console.warn("agent/claude-backend: processTreeFactory failed, run degraded:", tree.message)
-        return createDegradedRun(task.fence, tree.message)
+        console.warn(
+          "agent/claude-backend: processTreeFactory failed, run degraded:",
+          tree.message,
+        );
+        return createDegradedRun(task.fence, tree.message);
       }
 
       const options = buildQueryOptions(task, {
@@ -54,14 +58,19 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         processTree: tree,
         pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
         hasReparsePoint: deps.hasReparsePoint,
-      })
+      });
 
       const { run, cancel } = startAgentRun(
         task.fence,
         createClaudeDriver({ queryFn: deps.queryFn, prompt: buildPrompt(task), options }),
-        { processTree: tree, abortController, wait: deps.wait, confirmTimeoutMs: deps.confirmTimeoutMs },
-      )
-      cancels.set(run, cancel)
+        {
+          processTree: tree,
+          abortController,
+          wait: deps.wait,
+          confirmTimeoutMs: deps.confirmTimeoutMs,
+        },
+      );
+      cancels.set(run, cancel);
 
       // `startTurn` mints `tree`, so `startTurn` owns releasing it. Close on
       // EVERY terminal kind including `unconfirmed-exit`: that kind names our
@@ -70,17 +79,17 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
       // rejects, and it only settles AFTER exit confirmation has finished
       // reading `activeProcesses()`, so this cannot race that read.
       void run.outcome.then((outcome) => {
-        tree.close()
-        unhealthy.noteOutcome(outcome)
-      })
+        tree.close();
+        unhealthy.noteOutcome(outcome);
+      });
 
-      return run
+      return run;
     },
 
     async cancel(run: AgentRun): Promise<void> {
-      const runCancel = cancels.get(run)
-      if (runCancel === undefined) return // not a run this backend created (or already degraded) -> safe no-op
-      await runCancel()
+      const runCancel = cancels.get(run);
+      if (runCancel === undefined) return; // not a run this backend created (or already degraded) -> safe no-op
+      await runCancel();
     },
 
     healthCheck(): Promise<AgentInfo> {
@@ -92,9 +101,9 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
           backendId: CLAUDE_BACKEND_ID,
           health: { status: "unhealthy-unconfirmed-exit" },
           account: null,
-        })
+        });
       }
-      const tree = deps.processTreeFactory()
+      const tree = deps.processTreeFactory();
       if (tree instanceof ProcessTreeError) {
         // Probe anyway rather than reporting a false "not-installed": no owned
         // tree exists here, but that says nothing about whether the CLI is
@@ -103,18 +112,24 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         console.warn(
           "agent/claude-backend: processTreeFactory failed for healthCheck(), probing without adoption:",
           tree.message,
-        )
-        return probeClaudeHealth(deps.queryFn, { abortController: new AbortController(), processTree: null })
+        );
+        return probeClaudeHealth(deps.queryFn, {
+          abortController: new AbortController(),
+          processTree: null,
+        });
       }
-      return probeClaudeHealth(deps.queryFn, { abortController: new AbortController(), processTree: tree })
+      return probeClaudeHealth(deps.queryFn, {
+        abortController: new AbortController(),
+        processTree: tree,
+      });
     },
 
     capabilities(): BackendCapabilities {
-      return claudeCapabilities()
+      return claudeCapabilities();
     },
 
     sessionScope(input: SessionScopeInput): string {
-      return deriveSessionScope(CLAUDE_BACKEND_ID, input)
+      return deriveSessionScope(CLAUDE_BACKEND_ID, input);
     },
-  }
+  };
 }

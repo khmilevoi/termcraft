@@ -1,19 +1,18 @@
-/** @jsxImportSource @opentui/react */
-import type { ThemeTokens } from "../types"
-import { Text } from "./text"
+import type { ThemeTokens } from "../types";
+import { Text } from "./text";
 
 /** Props for the themed `Sparkline` component. `id` is the mandatory stable id (§3.2). */
 export interface SparklineProps {
-  readonly id: string
+  readonly id: string;
   /** The series to plot; an empty series renders empty. */
-  readonly values: readonly number[]
+  readonly values: readonly number[];
   /** A semantic theme token name for the glyphs; defaults to `success` (the design's sparkline green). */
-  readonly color?: keyof ThemeTokens
+  readonly color?: keyof ThemeTokens;
 }
 
 /** The eight block glyphs, ascending from lowest (`▁`) to highest (`█`). */
-const GLYPHS = "▁▂▃▄▅▆▇█"
-const MIN_GLYPH = "▁"
+const GLYPHS = "▁▂▃▄▅▆▇█";
+const MIN_GLYPH = "▁";
 
 /**
  * Map one value to a block glyph, scaling it across `[min, max]`. An all-equal
@@ -21,10 +20,10 @@ const MIN_GLYPH = "▁"
  * zero.
  */
 function glyphFor(value: number, min: number, max: number): string {
-  const span = max - min
-  const ratio = span === 0 ? 0.5 : (value - min) / span
-  const index = Math.round(ratio * (GLYPHS.length - 1))
-  return GLYPHS[index] ?? MIN_GLYPH
+  const span = max - min;
+  const ratio = span === 0 ? 0.5 : (value - min) / span;
+  const index = Math.round(ratio * (GLYPHS.length - 1));
+  return GLYPHS[index] ?? MIN_GLYPH;
 }
 
 /**
@@ -34,21 +33,21 @@ function glyphFor(value: number, min: number, max: number): string {
  * live/throughput green). An empty series renders an empty anchor — it never throws.
  */
 export function Sparkline(props: SparklineProps) {
-  const color = props.color ?? "success"
-  const values = props.values
+  const color = props.color ?? "success";
+  const values = props.values;
   if (values.length === 0) {
     return (
       <Text id={props.id} color={color}>
         {""}
       </Text>
-    )
+    );
   }
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const line = values.map((value) => glyphFor(value, min, max)).join("")
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const line = values.map((value) => glyphFor(value, min, max)).join("");
   return (
     <Text id={props.id} color={color}>
       {line}
     </Text>
-  )
+  );
 }

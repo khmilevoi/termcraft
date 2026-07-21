@@ -1,11 +1,11 @@
-import crypto from "node:crypto"
+import crypto from "node:crypto";
 
-import type { Sha256Hex } from "../types"
+import type { Sha256Hex } from "../types";
 
 /** The two inputs that determine one project's machine-local sandbox parent. */
 export interface ProjectKeyInput {
-  readonly canonicalProjectRoot: string
-  readonly projectId: string
+  readonly canonicalProjectRoot: string;
+  readonly projectId: string;
 }
 
 /**
@@ -27,8 +27,11 @@ export interface ProjectKeyInput {
  * spellings of the same path never split the sandbox parent.
  */
 export function computeProjectKey(input: ProjectKeyInput): Sha256Hex {
-  const root = Buffer.from(input.canonicalProjectRoot, "utf8")
-  const separator = Buffer.from([0x00])
-  const projectId = Buffer.from(input.projectId, "utf8")
-  return crypto.createHash("sha256").update(Buffer.concat([root, separator, projectId])).digest("hex")
+  const root = Buffer.from(input.canonicalProjectRoot, "utf8");
+  const separator = Buffer.from([0x00]);
+  const projectId = Buffer.from(input.projectId, "utf8");
+  return crypto
+    .createHash("sha256")
+    .update(Buffer.concat([root, separator, projectId]))
+    .digest("hex");
 }

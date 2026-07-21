@@ -1,5 +1,6 @@
-import type { BackendCapabilities } from "agent/types"
-import { CLAUDE_BACKEND_ID } from "./backend-id"
+import type { BackendCapabilities } from "agent/types";
+
+import { CLAUDE_BACKEND_ID } from "./backend-id";
 
 /** MVP model catalog (master §9 picker). Effort set mirrors the SDK `EffortLevel`. */
 export function claudeCapabilities(): BackendCapabilities {
@@ -16,5 +17,5 @@ export function claudeCapabilities(): BackendCapabilities {
     // the workspace changes — is a one-line change here if rebinding is ever
     // found to leak state across turn workspaces.
     sessionWorkspaceBinding: "rebindable",
-  }
+  };
 }

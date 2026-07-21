@@ -1,6 +1,7 @@
-import * as errore from "errore"
-import type { ProcessTree } from "infrastructure/process"
-import { ProcessTreeError } from "infrastructure/process"
+import * as errore from "errore";
+
+import type { ProcessTree } from "infrastructure/process";
+import { ProcessTreeError } from "infrastructure/process";
 
 /**
  * Nominal spacing between `activeProcesses()` polls. This bounds the ATTEMPT
@@ -12,11 +13,11 @@ import { ProcessTreeError } from "infrastructure/process"
  * Exported so tests can assert `wait` is spaced correctly without
  * duplicating the literal.
  */
-export const POLL_INTERVAL_MS = 100
+export const POLL_INTERVAL_MS = 100;
 
 /** Renders a thrown value into a stable message even when it is not an `Error` instance. */
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**
@@ -29,16 +30,18 @@ function describeThrown(cause: unknown): string {
 function safeActiveProcesses(processTree: ProcessTree): ProcessTreeError | number {
   return errore.try({
     try: () => processTree.activeProcesses(),
-    catch: (cause) => new ProcessTreeError({ reason: `activeProcesses() threw: ${describeThrown(cause)}`, cause }),
-  })
+    catch: (cause) =>
+      new ProcessTreeError({ reason: `activeProcesses() threw: ${describeThrown(cause)}`, cause }),
+  });
 }
 
 /** Same boundary guard as {@link safeActiveProcesses}, for `terminate()`. */
 function safeTerminate(processTree: ProcessTree): ProcessTreeError | null {
   return errore.try({
     try: () => processTree.terminate(),
-    catch: (cause) => new ProcessTreeError({ reason: `terminate() threw: ${describeThrown(cause)}`, cause }),
-  })
+    catch: (cause) =>
+      new ProcessTreeError({ reason: `terminate() threw: ${describeThrown(cause)}`, cause }),
+  });
 }
 
 /**
@@ -54,8 +57,11 @@ function safeTerminate(processTree: ProcessTree): ProcessTreeError | null {
  */
 async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
   await wait(ms).catch((cause) => {
-    console.warn("agent/run: injected wait() rejected during exit confirmation:", describeThrown(cause))
-  })
+    console.warn(
+      "agent/run: injected wait() rejected during exit confirmation:",
+      describeThrown(cause),
+    );
+  });
 }
 
 /**
@@ -75,20 +81,20 @@ export async function confirmExit(
   wait: (ms: number) => Promise<void>,
   budgetMs: number,
 ): Promise<boolean> {
-  const maxAttempts = Math.max(1, Math.ceil(budgetMs / POLL_INTERVAL_MS))
+  const maxAttempts = Math.max(1, Math.ceil(budgetMs / POLL_INTERVAL_MS));
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const count = safeActiveProcesses(processTree)
+    const count = safeActiveProcesses(processTree);
     if (count instanceof ProcessTreeError) {
-      console.warn("agent/run: activeProcesses() failed while confirming exit:", count.message)
+      console.warn("agent/run: activeProcesses() failed while confirming exit:", count.message);
     } else if (count === 0) {
-      if (processTree.ownershipConfirmed()) return true
+      if (processTree.ownershipConfirmed()) return true;
       console.warn(
         "agent/run: activeProcesses() reported zero but ownership of this tree was never confirmed; not treating it as a confirmed exit",
-      )
+      );
     }
-    if (attempt < maxAttempts - 1) await safeWait(wait, POLL_INTERVAL_MS)
+    if (attempt < maxAttempts - 1) await safeWait(wait, POLL_INTERVAL_MS);
   }
-  return false
+  return false;
 }
 
 /**
@@ -102,9 +108,12 @@ export async function escalateAndConfirm(
   wait: (ms: number) => Promise<void>,
   budgetMs: number,
 ): Promise<boolean> {
-  const terminateResult = safeTerminate(processTree)
+  const terminateResult = safeTerminate(processTree);
   if (terminateResult instanceof ProcessTreeError) {
-    console.warn("agent/run: processTree.terminate() failed while escalating:", terminateResult.message)
+    console.warn(
+      "agent/run: processTree.terminate() failed while escalating:",
+      terminateResult.message,
+    );
   }
-  return confirmExit(processTree, wait, budgetMs)
+  return confirmExit(processTree, wait, budgetMs);
 }

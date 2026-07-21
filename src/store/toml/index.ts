@@ -24,8 +24,8 @@ export type {
   SessionCheckpoint,
   TargetStack,
   WorkspaceLocalState,
-} from "./types"
-export { COLOR_CAPABILITIES, PREVIEW_SIZE_PRESETS, TARGET_STACKS } from "./types"
+} from "./types";
+export { COLOR_CAPABILITIES, PREVIEW_SIZE_PRESETS, TARGET_STACKS } from "./types";
 
 export {
   ManifestCorruptError,
@@ -38,9 +38,9 @@ export {
   parseToml,
   readFormatVersion,
   tomlLine,
-} from "./model/project-toml"
+} from "./model/project-toml";
 
-export type { WorkspaceStateLoad } from "./model/workspace-toml"
+export type { WorkspaceStateLoad } from "./model/workspace-toml";
 export {
   WORKSPACE_STATE_FILENAME,
   WORKSPACE_STATE_FORMAT_VERSION,
@@ -50,6 +50,10 @@ export {
   defaultWorkspaceLocalState,
   encodeWorkspaceLocalState,
   loadWorkspaceLocalState,
-} from "./model/workspace-toml"
+} from "./model/workspace-toml";
 
-export { PROJECT_GITIGNORE_FILENAME, PROJECT_GITIGNORE_RULES, renderProjectGitignore } from "./model/gitignore"
+export {
+  PROJECT_GITIGNORE_FILENAME,
+  PROJECT_GITIGNORE_RULES,
+  renderProjectGitignore,
+} from "./model/gitignore";

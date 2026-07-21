@@ -16,19 +16,19 @@ export type {
   ReadSetFileSnapshot,
   Sha256Hex,
   StagedFile,
+  StagedTurnReadSet,
   StagingFsDeps,
   StagingPageSource,
   StagingRuntimeDoc,
   StagingStore,
   StagingStoreDeps,
-  TurnReadSet,
   TurnWorkspace,
-} from "./types"
+} from "./types";
 
-export type { ProjectKeyInput } from "./model/project-key"
-export { computeProjectKey } from "./model/project-key"
+export type { ProjectKeyInput } from "./model/project-key";
+export { computeProjectKey } from "./model/project-key";
 
-export type { StagingError } from "./model/staging-store"
+export type { StagingError } from "./model/staging-store";
 export {
   InvalidIdentityError,
   TurnJsonWriteError,
@@ -40,4 +40,4 @@ export {
   turnJsonPath,
   turnWorkspaceDir,
   turnsParentDir,
-} from "./model/staging-store"
+} from "./model/staging-store";

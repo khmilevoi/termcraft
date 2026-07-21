@@ -1,5 +1,5 @@
-import type { AgentEvent, TokenUsage, TurnFence } from "entities/turn"
-import type { ProcessTree } from "infrastructure/process"
+import type { AgentEvent, TokenUsage, TurnFence } from "entities/turn";
+import type { ProcessTree } from "infrastructure/process";
 
 /**
  * The terminal outcome a vendor stream can produce on its own. `cancelled` and
@@ -7,12 +7,12 @@ import type { ProcessTree } from "infrastructure/process"
  */
 export type NaturalOutcome =
   | {
-      readonly kind: "completed"
-      readonly finalText: string
-      readonly usage: TokenUsage | null
-      readonly sessionId: string
+      readonly kind: "completed";
+      readonly finalText: string;
+      readonly usage: TokenUsage | null;
+      readonly sessionId: string;
     }
-  | { readonly kind: "backend-error"; readonly message: string; readonly sessionId: string | null }
+  | { readonly kind: "backend-error"; readonly message: string; readonly sessionId: string | null };
 
 /** The engine-owned surface one run's driver writes to. */
 export interface RunSink {
@@ -22,12 +22,12 @@ export interface RunSink {
    * The driver must stop reading and return; nothing it does after this is
    * observable (turn-durability §6.4's late-event drop).
    */
-  isTerminal(): boolean
+  isTerminal(): boolean;
   /**
    * Emit one normalized event. Never blocks and never depends on a reader, so
    * `outcome` settles even when nobody iterates `AgentRun.events`.
    */
-  emit(event: AgentEvent): void
+  emit(event: AgentEvent): void;
   /**
    * Claim the natural terminal outcome together with this run's last events.
    * The engine latches, emits `finalEvents`, closes the stream, and only then
@@ -35,7 +35,7 @@ export interface RunSink {
    * separately is what makes that ordering structural instead of a convention.
    * If the latch is already taken, both the outcome and the events are dropped.
    */
-  complete(outcome: NaturalOutcome, finalEvents?: readonly AgentEvent[]): void
+  complete(outcome: NaturalOutcome, finalEvents?: readonly AgentEvent[]): void;
 }
 
 /**
@@ -43,7 +43,7 @@ export interface RunSink {
  * is expected to convert its boundary throws into `complete({kind:"backend-error"})`;
  * the engine's own catch is a backstop, not the primary path.
  */
-export type RunDriver = (sink: RunSink) => Promise<void>
+export type RunDriver = (sink: RunSink) => Promise<void>;
 
 /** Deps for {@link startAgentRun}. Carries no vendor type — by design. */
 export interface RunDeps {
@@ -55,7 +55,7 @@ export interface RunDeps {
    * into a different tree leaves this one permanently empty, so every run
    * ends `unconfirmed-exit` even on a perfectly clean completion.
    */
-  readonly processTree: ProcessTree
+  readonly processTree: ProcessTree;
   /**
    * The `AbortController` the driver's own vendor call MUST be wired to
    * observe — e.g. passed as that vendor SDK's own `Options.abortController`,
@@ -70,10 +70,10 @@ export interface RunDeps {
    * degrades straight to rung 4's hard `terminate()`, losing the entire
    * graceful window.
    */
-  readonly abortController: AbortController
+  readonly abortController: AbortController;
   /** Injectable delay for the §6.5 waits; production = `(ms) => Bun.sleep(ms)`. */
-  readonly wait: (ms: number) => Promise<void>
-  readonly confirmTimeoutMs?: number
+  readonly wait: (ms: number) => Promise<void>;
+  readonly confirmTimeoutMs?: number;
 }
 
-export type { TurnFence }
+export type { TurnFence };

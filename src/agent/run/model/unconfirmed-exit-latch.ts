@@ -1,8 +1,8 @@
-import type { AgentRunOutcome } from "agent/types"
+import type { AgentRunOutcome } from "agent/types";
 
 export interface UnconfirmedExitLatch {
-  isLatched(): boolean
-  noteOutcome(outcome: AgentRunOutcome): void
+  isLatched(): boolean;
+  noteOutcome(outcome: AgentRunOutcome): void;
 }
 
 /**
@@ -20,15 +20,15 @@ export interface UnconfirmedExitLatch {
  * backend and with it a fresh, unset latch.
  */
 export function createUnconfirmedExitLatch(backendId: string): UnconfirmedExitLatch {
-  let latched = false
+  let latched = false;
   return {
     isLatched: () => latched,
     noteOutcome: (outcome) => {
-      if (outcome.kind !== "unconfirmed-exit") return
+      if (outcome.kind !== "unconfirmed-exit") return;
       console.warn(
         `agent/run: ${backendId} run exited unconfirmed; latching this backend unhealthy until it is restarted (§6.5)`,
-      )
-      latched = true
+      );
+      latched = true;
     },
-  }
+  };
 }

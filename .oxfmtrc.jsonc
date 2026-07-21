@@ -1,0 +1,41 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "sortImports": {
+    "partitionByComment": true,
+    "customGroups": [
+      {
+        "groupName": "project-aliases",
+        "elementNamePattern": [
+          "entities",
+          "entities/**",
+          "core",
+          "core/**",
+          "store",
+          "store/**",
+          "agent",
+          "agent/**",
+          "gate",
+          "gate/**",
+          "host",
+          "host/**",
+          "ui",
+          "ui/**",
+          "runtime",
+          "runtime/**",
+          "infrastructure",
+          "infrastructure/**",
+        ],
+      },
+    ],
+    "groups": [
+      "builtin",
+      "external",
+      "project-aliases",
+      ["internal", "subpath"],
+      ["parent", "sibling", "index"],
+      "style",
+      "unknown",
+    ],
+  },
+  "ignorePatterns": ["design", "design-prompts", "docs", "src/host/session/fixtures"],
+}

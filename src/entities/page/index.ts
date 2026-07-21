@@ -1,2 +1,2 @@
-export type { PageMeta, PageSlug, Size } from "./types"
-export { InvalidPageSlugError, pageSlugSchema, parsePageSlug } from "./model/slug"
+export type { PageMeta, PageSlug, Size } from "./types";
+export { InvalidPageSlugError, pageSlugSchema, parsePageSlug } from "./model/slug";

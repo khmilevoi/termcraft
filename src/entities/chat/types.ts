@@ -1,18 +1,18 @@
-import type { PageSlug } from "entities/page"
+import type { PageSlug } from "entities/page";
 
 /** First line of every chat JSONL (storage-identity §11.2). */
 export interface ChatHeader {
-  readonly kind: "chat"
-  readonly formatVersion: 1
-  readonly projectId: string
-  readonly chatId: string
-  readonly createdAt: string // UTC RFC 3339
+  readonly kind: "chat";
+  readonly formatVersion: 1;
+  readonly projectId: string;
+  readonly chatId: string;
+  readonly createdAt: string; // UTC RFC 3339
 }
 
 /** A resolved element selection sent with a user message (turn-durability §6.1). */
 export interface ChatSelection {
-  readonly pageSlug: PageSlug
-  readonly element: string
+  readonly pageSlug: PageSlug;
+  readonly element: string;
 }
 
 /**
@@ -21,30 +21,30 @@ export interface ChatSelection {
  * Decoupled from gate's `GateWarning` because `entities/` imports no adapter.
  */
 export interface ChatWarningSnapshot {
-  readonly kind: string
-  readonly message: string
+  readonly kind: string;
+  readonly message: string;
 }
 
 /** The initiating record of a turn (storage-identity §11.2; turn-durability §6.1). */
 export interface ChatUserRecord {
-  readonly kind: "user"
-  readonly recordId: string
-  readonly turnId: string
-  readonly text: string
-  readonly selection?: ChatSelection
-  readonly pins?: readonly string[] // included pinId references
-  readonly ts: string
+  readonly kind: "user";
+  readonly recordId: string;
+  readonly turnId: string;
+  readonly text: string;
+  readonly selection?: ChatSelection;
+  readonly pins?: readonly string[]; // included pinId references
+  readonly ts: string;
 }
 
 /** The successful terminal record of a turn (storage-identity §11.2; turn-durability §6.1/§7.4). */
 export interface ChatAgentRecord {
-  readonly kind: "agent"
-  readonly recordId: string
-  readonly turnId: string
-  readonly text: string
-  readonly changedPages: readonly PageSlug[]
-  readonly warnings: readonly ChatWarningSnapshot[]
-  readonly ts: string
+  readonly kind: "agent";
+  readonly recordId: string;
+  readonly turnId: string;
+  readonly text: string;
+  readonly changedPages: readonly PageSlug[];
+  readonly warnings: readonly ChatWarningSnapshot[];
+  readonly ts: string;
 }
 
 /**
@@ -53,24 +53,24 @@ export interface ChatAgentRecord {
  * failure carries `turnId`; a standalone action failure carries `actionId`.
  */
 export interface ChatSystemErrorRecord {
-  readonly kind: "system:error"
-  readonly recordId: string
-  readonly turnId?: string
-  readonly actionId?: string
-  readonly outcome: "error" | "stale" | "interrupted"
-  readonly reason?: string // e.g. "process_restart_before_intent"
-  readonly text: string
-  readonly ts: string
+  readonly kind: "system:error";
+  readonly recordId: string;
+  readonly turnId?: string;
+  readonly actionId?: string;
+  readonly outcome: "error" | "stale" | "interrupted";
+  readonly reason?: string; // e.g. "process_restart_before_intent"
+  readonly text: string;
+  readonly ts: string;
 }
 
 /** Terminal cancellation record (storage-identity §11.2; turn-durability §6.1). */
 export interface ChatSystemCancelledRecord {
-  readonly kind: "system:cancelled"
-  readonly recordId: string
-  readonly turnId?: string // exactly one of turnId/actionId (decoder-enforced)
-  readonly actionId?: string
-  readonly text: string
-  readonly ts: string
+  readonly kind: "system:cancelled";
+  readonly recordId: string;
+  readonly turnId?: string; // exactly one of turnId/actionId (decoder-enforced)
+  readonly actionId?: string;
+  readonly text: string;
+  readonly ts: string;
 }
 
 /**
@@ -80,12 +80,12 @@ export interface ChatSystemCancelledRecord {
  * chat. The decoder recognizes and validates it; no writer exists.
  */
 export interface ChatSystemRestoreRecord {
-  readonly kind: "system:restore"
-  readonly recordId: string
-  readonly restoreActionId: string
-  readonly pageSlug: PageSlug
-  readonly sourceCommit: string // full Git object id
-  readonly ts: string
+  readonly kind: "system:restore";
+  readonly recordId: string;
+  readonly restoreActionId: string;
+  readonly pageSlug: PageSlug;
+  readonly sourceCommit: string; // full Git object id
+  readonly ts: string;
 }
 
 /** Any record line after a chat header (storage-identity §11.2). */
@@ -94,4 +94,4 @@ export type ChatRecord =
   | ChatAgentRecord
   | ChatSystemErrorRecord
   | ChatSystemCancelledRecord
-  | ChatSystemRestoreRecord
+  | ChatSystemRestoreRecord;

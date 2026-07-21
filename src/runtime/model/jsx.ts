@@ -9,5 +9,5 @@
 // registering that specifier — is the phase-3 (Gate) + phase-8 (bundle) job; the
 // 2C host resolver currently registers `react/jsx-runtime` directly. This module
 // is the facade-side surface those steps point at.
-export { Fragment, jsx, jsxs } from "@opentui/react/jsx-runtime"
-export { jsxDEV } from "@opentui/react/jsx-dev-runtime"
+export { Fragment, jsx, jsxs } from "@opentui/react/jsx-runtime";
+export { jsxDEV } from "@opentui/react/jsx-dev-runtime";

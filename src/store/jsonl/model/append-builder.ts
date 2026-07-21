@@ -1,11 +1,23 @@
-import crypto from "node:crypto"
-import * as errore from "errore"
+import crypto from "node:crypto";
 
-import type { ChatDecodeError, ChatRecord } from "entities/chat"
-import type { PinDecodeError, PinEvent } from "entities/pin"
-import { uuidv7 } from "infrastructure/uuid"
-import type { AppendBuilderDeps, JsonlRecordIdentity, PreparedAppendPayload, Sha256Hex } from "../types"
-import { type JsonlLineError, encodeChatRecordLine, encodePinEventLine, sha256Hex } from "./line-codec"
+import * as errore from "errore";
+
+import type { ChatDecodeError, ChatRecord } from "entities/chat";
+import type { PinDecodeError, PinEvent } from "entities/pin";
+import { uuidv7 } from "infrastructure/uuid";
+
+import type {
+  AppendBuilderDeps,
+  JsonlRecordIdentity,
+  PreparedAppendPayload,
+  Sha256Hex,
+} from "../types";
+import {
+  type JsonlLineError,
+  encodeChatRecordLine,
+  encodePinEventLine,
+  sha256Hex,
+} from "./line-codec";
 
 /**
  * A prepared append could not be built. Preparation happens BEFORE any target changes
@@ -16,30 +28,30 @@ export class PreparedAppendError extends errore.createTaggedError({
   message: "prepared append rejected: $reason",
 }) {}
 
-const SHA256_HEX = /^[0-9a-f]{64}$/
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** The validated prefix a prepared append is built against — the reader's own output. */
 export interface AppendBase {
-  readonly length: number
-  readonly prefixSha256: Sha256Hex
+  readonly length: number;
+  readonly prefixSha256: Sha256Hex;
 }
 
 /** The real binding for the injected UUIDv7 seam. */
 export function defaultAppendBuilderDeps(): AppendBuilderDeps {
-  return { newPayloadId: uuidv7 }
+  return { newPayloadId: uuidv7 };
 }
 
 export interface BuildPreparedAppendInput<R extends JsonlRecordIdentity, E extends Error> {
-  readonly before: AppendBase
-  readonly records: readonly R[]
+  readonly before: AppendBase;
+  readonly records: readonly R[];
   /**
    * Serialize one record as a physical line, delegating schema validation to `entities/`.
    * `E` is that entity's decode error, so the builder's own return type names every way the
    * preparation can fail.
    */
-  readonly encodeLine: (record: R) => JsonlLineError | E | Uint8Array
-  readonly domainIdentity?: string
-  readonly deps: AppendBuilderDeps
+  readonly encodeLine: (record: R) => JsonlLineError | E | Uint8Array;
+  readonly domainIdentity?: string;
+  readonly deps: AppendBuilderDeps;
 }
 
 /**
@@ -57,35 +69,41 @@ export function buildPreparedAppend<R extends JsonlRecordIdentity, E extends Err
   input: BuildPreparedAppendInput<R, E>,
 ): PreparedAppendError | JsonlLineError | E | PreparedAppendPayload {
   if (!Number.isSafeInteger(input.before.length) || input.before.length < 0) {
-    return new PreparedAppendError({ reason: `before length ${input.before.length} is not a non-negative integer` })
+    return new PreparedAppendError({
+      reason: `before length ${input.before.length} is not a non-negative integer`,
+    });
   }
   if (!SHA256_HEX.test(input.before.prefixSha256)) {
-    return new PreparedAppendError({ reason: "before prefix hash is not a lowercase-hex SHA-256" })
+    return new PreparedAppendError({ reason: "before prefix hash is not a lowercase-hex SHA-256" });
   }
   if (input.records.length === 0) {
-    return new PreparedAppendError({ reason: "an append operation must append at least one record" })
+    return new PreparedAppendError({
+      reason: "an append operation must append at least one record",
+    });
   }
 
-  const recordIds: string[] = []
-  const lines: Uint8Array[] = []
-  let appendedLength = 0
+  const recordIds: string[] = [];
+  const lines: Uint8Array[] = [];
+  let appendedLength = 0;
 
   for (const record of input.records) {
     if (recordIds.includes(record.recordId)) {
-      return new PreparedAppendError({ reason: `duplicate recordId ${record.recordId} in one prepared append` })
+      return new PreparedAppendError({
+        reason: `duplicate recordId ${record.recordId} in one prepared append`,
+      });
     }
-    const line = input.encodeLine(record)
-    if (line instanceof Error) return line
-    recordIds.push(record.recordId)
-    lines.push(line)
-    appendedLength += line.byteLength
+    const line = input.encodeLine(record);
+    if (line instanceof Error) return line;
+    recordIds.push(record.recordId);
+    lines.push(line);
+    appendedLength += line.byteLength;
   }
 
-  const bytes = new Uint8Array(appendedLength)
-  let at = 0
+  const bytes = new Uint8Array(appendedLength);
+  let at = 0;
   for (const line of lines) {
-    bytes.set(line, at)
-    at += line.byteLength
+    bytes.set(line, at);
+    at += line.byteLength;
   }
 
   return {
@@ -99,27 +117,27 @@ export function buildPreparedAppend<R extends JsonlRecordIdentity, E extends Err
       recordIds,
       ...(input.domainIdentity === undefined ? {} : { domainIdentity: input.domainIdentity }),
     },
-  }
+  };
 }
 
 /** Prepare a chat append (storage-identity §11.2 chat schemas). */
 export function buildChatAppend(input: {
-  before: AppendBase
-  records: readonly ChatRecord[]
-  domainIdentity?: string
-  deps: AppendBuilderDeps
+  before: AppendBase;
+  records: readonly ChatRecord[];
+  domainIdentity?: string;
+  deps: AppendBuilderDeps;
 }): PreparedAppendError | JsonlLineError | ChatDecodeError | PreparedAppendPayload {
-  return buildPreparedAppend({ ...input, encodeLine: encodeChatRecordLine })
+  return buildPreparedAppend({ ...input, encodeLine: encodeChatRecordLine });
 }
 
 /** Prepare a comments append (storage-identity §11.2 pin events). */
 export function buildPinAppend(input: {
-  before: AppendBase
-  events: readonly PinEvent[]
-  domainIdentity?: string
-  deps: AppendBuilderDeps
+  before: AppendBase;
+  events: readonly PinEvent[];
+  domainIdentity?: string;
+  deps: AppendBuilderDeps;
 }): PreparedAppendError | JsonlLineError | PinDecodeError | PreparedAppendPayload {
-  return buildPreparedAppend({ ...input, records: input.events, encodeLine: encodePinEventLine })
+  return buildPreparedAppend({ ...input, records: input.events, encodeLine: encodePinEventLine });
 }
 
 /**
@@ -128,22 +146,24 @@ export function buildPinAppend(input: {
  * costs no more memory than a chunk — a 64 MiB chat is never materialized.
  */
 export function computeAfterImage(input: {
-  chunks: Iterable<Uint8Array>
-  beforeLength: number
-  append: Uint8Array
+  chunks: Iterable<Uint8Array>;
+  beforeLength: number;
+  append: Uint8Array;
 }): PreparedAppendError | { size: number; sha256: Sha256Hex } {
-  const hash = crypto.createHash("sha256")
-  let consumed = 0
+  const hash = crypto.createHash("sha256");
+  let consumed = 0;
   for (const chunk of input.chunks) {
-    if (consumed >= input.beforeLength) break
-    const take = Math.min(chunk.byteLength, input.beforeLength - consumed)
-    hash.update(chunk.subarray(0, take))
-    consumed += take
+    if (consumed >= input.beforeLength) break;
+    const take = Math.min(chunk.byteLength, input.beforeLength - consumed);
+    hash.update(chunk.subarray(0, take));
+    consumed += take;
   }
   if (consumed < input.beforeLength) {
-    return new PreparedAppendError({ reason: `the source holds ${consumed} bytes but the append is bound to ${input.beforeLength}` })
+    return new PreparedAppendError({
+      reason: `the source holds ${consumed} bytes but the append is bound to ${input.beforeLength}`,
+    });
   }
 
-  hash.update(input.append)
-  return { size: input.beforeLength + input.append.byteLength, sha256: hash.digest("hex") }
+  hash.update(input.append);
+  return { size: input.beforeLength + input.append.byteLength, sha256: hash.digest("hex") };
 }

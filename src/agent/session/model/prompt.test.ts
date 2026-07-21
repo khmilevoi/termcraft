@@ -1,6 +1,8 @@
-import { expect, test } from "bun:test"
-import type { AgentTask } from "agent/types"
-import { buildPrompt } from "./prompt"
+import { expect, test } from "bun:test";
+
+import type { AgentTask } from "agent/types";
+
+import { buildPrompt } from "./prompt";
 
 const baseTask = (session: AgentTask["session"]): AgentTask => ({
   fence: { turnId: "t", attempt: 0, leaseNonce: "n" },
@@ -10,14 +12,14 @@ const baseTask = (session: AgentTask["session"]): AgentTask => ({
   model: "claude-opus-4-8",
   effort: "high",
   session,
-})
+});
 
 test("a resume prompt uses the delta when present, else the user message", () => {
-  const withDelta = baseTask({ kind: "resume", sessionId: "s", promptDelta: "gate errors: X" })
-  expect(buildPrompt(withDelta)).toBe("gate errors: X")
-  const noDelta = baseTask({ kind: "resume", sessionId: "s", promptDelta: null })
-  expect(buildPrompt(noDelta)).toBe("make the gauge red")
-})
+  const withDelta = baseTask({ kind: "resume", sessionId: "s", promptDelta: "gate errors: X" });
+  expect(buildPrompt(withDelta)).toBe("gate errors: X");
+  const noDelta = baseTask({ kind: "resume", sessionId: "s", promptDelta: null });
+  expect(buildPrompt(noDelta)).toBe("make the gauge red");
+});
 
 test("a fresh prompt prepends the seed transcript before the user message", () => {
   const task = baseTask({
@@ -26,12 +28,14 @@ test("a fresh prompt prepends the seed transcript before the user message", () =
       { role: "user", text: "add a cpu gauge" },
       { role: "agent", text: "Added the CPU gauge." },
     ],
-  })
-  const prompt = buildPrompt(task)
+  });
+  const prompt = buildPrompt(task);
   // Exact string, not toContain: a swapped role ternary (user rendering as
   // "Assistant:" and vice versa) would still contain every substring above
   // and still end with the user message, so only pinning the full rendered
   // text — prefixes and blank-line separators included — catches attribution
   // inverting on every fresh-with-seed turn.
-  expect(prompt).toBe("User: add a cpu gauge\n\nAssistant: Added the CPU gauge.\n\nmake the gauge red")
-})
+  expect(prompt).toBe(
+    "User: add a cpu gauge\n\nAssistant: Added the CPU gauge.\n\nmake the gauge red",
+  );
+});

@@ -1,11 +1,11 @@
-import type { PageMeta, PageSlug } from "entities/page"
+import type { PageMeta, PageSlug } from "entities/page";
 
 /**
  * The category of a FATAL gate violation (master §6.3). Each maps to one stage of
  * the gate pipeline; any fatal error rejects the candidate and leaves the canonical
  * source untouched.
  */
-export type GateErrorKind = "import" | "contract" | "type" | "manifest" | "smoke"
+export type GateErrorKind = "import" | "contract" | "type" | "manifest" | "smoke";
 
 /**
  * One fatal gate violation. `code` is a stable diagnostic identifier (e.g.
@@ -14,12 +14,12 @@ export type GateErrorKind = "import" | "contract" | "type" | "manifest" | "smoke
  * populated where the stage knows it (an AST position, a tsc diagnostic).
  */
 export interface GateError {
-  readonly kind: GateErrorKind
-  readonly code: string
-  readonly message: string
-  readonly file?: string
-  readonly line?: number
-  readonly column?: number
+  readonly kind: GateErrorKind;
+  readonly code: string;
+  readonly message: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly column?: number;
 }
 
 /**
@@ -33,14 +33,14 @@ export type GateWarningKind =
   | "unpointed-element"
   | "unguarded-timer"
   | "unguarded-randomness"
-  | "unlisted-navigation"
+  | "unlisted-navigation";
 
 /** One non-fatal gate warning. */
 export interface GateWarning {
-  readonly kind: GateWarningKind
-  readonly message: string
-  readonly line?: number
-  readonly column?: number
+  readonly kind: GateWarningKind;
+  readonly message: string;
+  readonly line?: number;
+  readonly column?: number;
 }
 
 /**
@@ -49,8 +49,8 @@ export interface GateWarning {
  * compatibility UI consume this rather than re-parsing the source.
  */
 export interface PageDescriptor {
-  readonly slug: PageSlug
-  readonly meta: PageMeta
+  readonly slug: PageSlug;
+  readonly meta: PageMeta;
 }
 
 /**
@@ -60,8 +60,8 @@ export interface PageDescriptor {
  * passed, else `null`.
  */
 export interface GateResult {
-  readonly ok: boolean
-  readonly errors: readonly GateError[]
-  readonly warnings: readonly GateWarning[]
-  readonly descriptor: PageDescriptor | null
+  readonly ok: boolean;
+  readonly errors: readonly GateError[];
+  readonly warnings: readonly GateWarning[];
+  readonly descriptor: PageDescriptor | null;
 }

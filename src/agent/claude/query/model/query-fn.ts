@@ -1,5 +1,6 @@
-import { query } from "@anthropic-ai/claude-agent-sdk"
-import type { ClaudeQueryFn } from "agent/claude/types"
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+import type { ClaudeQueryFn } from "agent/claude/types";
 
 /**
  * Production seam: the real SDK `query`. The SDK's `Query` satisfies
@@ -8,5 +9,5 @@ import type { ClaudeQueryFn } from "agent/claude/types"
  * the typecheck.
  */
 export function createRealQueryFn(): ClaudeQueryFn {
-  return (params) => query(params)
+  return (params) => query(params);
 }

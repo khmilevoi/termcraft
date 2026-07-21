@@ -1,10 +1,10 @@
-import type { PreparedAppend } from "store/jsonl"
+import type { PreparedAppend } from "store/jsonl";
 
 /** A lowercase-hex SHA-256 digest. Declared locally, mirroring every other module's own alias. */
-export type Sha256Hex = string
+export type Sha256Hex = string;
 
 /** An OS-absolute path handed in by the composition root — never a managed relative path. */
-export type AbsPath = string
+export type AbsPath = string;
 
 /**
  * A target file's exact realized state (turn-durability §3.3 invariant 2): either it does
@@ -12,9 +12,11 @@ export type AbsPath = string
  * comparison the engine makes — "does the target still match its planned old image?" — is
  * this equality, never a timestamp or a partial read.
  */
-export type FileImage = { readonly state: "absent" } | { readonly state: "file"; readonly sha256: Sha256Hex; readonly size: number }
+export type FileImage =
+  | { readonly state: "absent" }
+  | { readonly state: "file"; readonly sha256: Sha256Hex; readonly size: number };
 
-export type TransactionOperationMode = "replace" | "delete" | "append-jsonl"
+export type TransactionOperationMode = "replace" | "delete" | "append-jsonl";
 
 /**
  * One planned filesystem change (turn-durability §3.3). `append` reuses `store/jsonl`'s
@@ -28,68 +30,73 @@ export type TransactionOperationMode = "replace" | "delete" | "append-jsonl"
  * without changing this contract.
  */
 export interface TransactionOperation {
-  readonly index: number
+  readonly index: number;
   /** Normalized path relative to `.termcraft` (turn-durability §3.3), validated by `store/safe-fs`. */
-  readonly target: string
-  readonly mode: TransactionOperationMode
-  readonly oldImage: FileImage
-  readonly newImage: FileImage
+  readonly target: string;
+  readonly mode: TransactionOperationMode;
+  readonly oldImage: FileImage;
+  readonly newImage: FileImage;
   /** Complete new file for `replace`; omitted for `delete` and `append-jsonl`. */
-  readonly payloadId?: string
+  readonly payloadId?: string;
   /** Present only for `append-jsonl` — the exactly-once append descriptor (§4.4). */
-  readonly append?: PreparedAppend
+  readonly append?: PreparedAppend;
   /** Restore source operation only (§9, out of MVP scope; carried for schema completeness). */
-  readonly releaseAfterApplied?: boolean
+  readonly releaseAfterApplied?: boolean;
 }
 
-export type TransactionKind = "turn" | "restore" | "export-publish" | "migration" | "project-mutation"
+export type TransactionKind =
+  | "turn"
+  | "restore"
+  | "export-publish"
+  | "migration"
+  | "project-mutation";
 
 /**
  * `plan.json`'s canonical contract (turn-durability §3.3). `domain` is schema-validated by
  * `kind` in the owning wrapper (T15) — this module only carries it opaquely.
  */
 export interface TransactionPlan {
-  readonly journalVersion: 1
-  readonly transactionId: string
-  readonly kind: TransactionKind
-  readonly domain: Readonly<Record<string, unknown>>
-  readonly operations: readonly TransactionOperation[]
-  readonly createdAt: string
+  readonly journalVersion: 1;
+  readonly transactionId: string;
+  readonly kind: TransactionKind;
+  readonly domain: Readonly<Record<string, unknown>>;
+  readonly operations: readonly TransactionOperation[];
+  readonly createdAt: string;
 }
 
 // ---- write-mutex (turn-durability §4.5) ----------------------------------------
 
 /** An opaque, randomly-minted permit. `release` invalidates it for every later `isActive` check. */
 export interface ProjectWritePermit {
-  readonly permitId: string
+  readonly permitId: string;
 }
 
 // ---- durable markers (turn-durability §3.1, §4.3) ------------------------------
 
 export interface TransactionIntent {
-  readonly planHash: Sha256Hex
+  readonly planHash: Sha256Hex;
 }
 
 /** One operation's realized outcome, shared by its applied marker and the committed marker's roster. */
 export interface OperationRealized {
-  readonly index: number
-  readonly realizedImage: FileImage
+  readonly index: number;
+  readonly realizedImage: FileImage;
 }
 
 export interface AppliedMarker extends OperationRealized {
-  readonly planHash: Sha256Hex
+  readonly planHash: Sha256Hex;
 }
 
 export interface CommittedMarker {
-  readonly transactionId: string
-  readonly planHash: Sha256Hex
-  readonly operations: readonly OperationRealized[]
+  readonly transactionId: string;
+  readonly planHash: Sha256Hex;
+  readonly operations: readonly OperationRealized[];
 }
 
 export interface ConflictMarker {
-  readonly transactionId: string
-  readonly operationIndex: number
-  readonly reason: string
+  readonly transactionId: string;
+  readonly operationIndex: number;
+  readonly reason: string;
 }
 
 // ---- durable state machine (turn-durability §4.1) ------------------------------
@@ -99,7 +106,14 @@ export interface ConflictMarker {
  * is Restore-only (§9) — out of MVP scope, no writer in this module — kept here only so the
  * type names the complete state machine the spec fixes.
  */
-export type TransactionState = "building" | "prepared" | "intended" | "applying" | "record-pending" | "committed" | "conflict"
+export type TransactionState =
+  | "building"
+  | "prepared"
+  | "intended"
+  | "applying"
+  | "record-pending"
+  | "committed"
+  | "conflict";
 
 // ---- crash-injection boundaries (turn-durability §14.1; the T14 fault-injection substrate) --
 
@@ -122,4 +136,4 @@ export type TransactionBoundary =
   | "intent-installed"
   | "operation-target-applied"
   | "operation-marker-installed"
-  | "committed-installed"
+  | "committed-installed";

@@ -29,9 +29,9 @@ export type {
   PreparedAppendPayload,
   Sha256Hex,
   TailClassification,
-} from "./types"
+} from "./types";
 
-export type { JsonlLineError, JsonlLineValue } from "./model/line-codec"
+export type { JsonlLineError, JsonlLineValue } from "./model/line-codec";
 export {
   JSONL_MAX_PHYSICAL_LINE_BYTES,
   JSONL_MAX_SERIALIZED_OBJECT_BYTES,
@@ -49,15 +49,27 @@ export {
   encodeJsonlLine,
   encodePinEventLine,
   sha256Hex,
-} from "./model/line-codec"
+} from "./model/line-codec";
 
-export type { JsonlCodec, ReadJsonlInput } from "./model/reader"
-export { JsonlMidFileCorruptionError, readChatJsonl, readJsonlDocument, readPinsJsonl } from "./model/reader"
+export type { JsonlCodec, ReadJsonlInput } from "./model/reader";
+export {
+  JsonlMidFileCorruptionError,
+  readChatJsonl,
+  readJsonlDocument,
+  readPinsJsonl,
+} from "./model/reader";
 
-export type { AppendBase, BuildPreparedAppendInput } from "./model/append-builder"
-export { PreparedAppendError, buildChatAppend, buildPinAppend, buildPreparedAppend, computeAfterImage, defaultAppendBuilderDeps } from "./model/append-builder"
+export type { AppendBase, BuildPreparedAppendInput } from "./model/append-builder";
+export {
+  PreparedAppendError,
+  buildChatAppend,
+  buildPinAppend,
+  buildPreparedAppend,
+  computeAfterImage,
+  defaultAppendBuilderDeps,
+} from "./model/append-builder";
 
-export type { BuildChatIndexInput, ChatIndexError, UpdateChatIndexInput } from "./model/chat-index"
+export type { BuildChatIndexInput, ChatIndexError, UpdateChatIndexInput } from "./model/chat-index";
 export {
   CHAT_INDEX_DEFAULT_LOAD_LIMIT,
   CHAT_INDEX_MAX_LOAD_BYTES,
@@ -71,12 +83,22 @@ export {
   loadChatIndexBefore,
   loadChatIndexTail,
   updateChatIndex,
-} from "./model/chat-index"
+} from "./model/chat-index";
 
-export type { ChatIndexCacheFsDeps, ChatIndexStateStore } from "./model/chat-index-store"
-export { ChatIndexStoreIoError, createNodeChatIndexPageStore, createNodeChatIndexStateStore, nodeChatIndexCacheFsDeps } from "./model/chat-index-store"
+export type { ChatIndexCacheFsDeps, ChatIndexStateStore } from "./model/chat-index-store";
+export {
+  ChatIndexStoreIoError,
+  createNodeChatIndexPageStore,
+  createNodeChatIndexStateStore,
+  nodeChatIndexCacheFsDeps,
+} from "./model/chat-index-store";
 
-export type { SessionPrefixHash, SessionResumeDecision, SessionResumeMismatchReason, SessionSeed } from "./model/checkpoint"
+export type {
+  SessionPrefixHash,
+  SessionResumeDecision,
+  SessionResumeMismatchReason,
+  SessionSeed,
+} from "./model/checkpoint";
 export {
   SESSION_SEED_MAX_RECORDS,
   SESSION_SEED_MAX_TEXT_BYTES,
@@ -85,4 +107,4 @@ export {
   computeSessionPrefixHash,
   evaluateSessionResume,
   selectSeedRecords,
-} from "./model/checkpoint"
+} from "./model/checkpoint";

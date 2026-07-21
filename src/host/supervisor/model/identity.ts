@@ -1,14 +1,15 @@
-import { uuidv7 } from "infrastructure/uuid"
-import type { HostSessionSpec, HostSessionIdentity } from "../../types"
+import { uuidv7 } from "infrastructure/uuid";
 
-const NONCE_BYTES = 16
+import type { HostSessionIdentity, HostSessionSpec } from "../../types";
+
+const NONCE_BYTES = 16;
 
 /** 128 random bits as 32 lowercase hex characters — one process incarnation (§3.1). */
 export function mintNonce(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(NONCE_BYTES))
-  let hex = ""
-  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0")
-  return hex
+  const bytes = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
 }
 
 /**
@@ -24,5 +25,5 @@ export function mintIdentity(spec: HostSessionSpec, sessionId?: string): HostSes
     kitApiVersion: spec.kitApiVersion,
     sessionId: sessionId ?? uuidv7(),
     nonce: mintNonce(),
-  }
+  };
 }

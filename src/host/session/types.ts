@@ -6,68 +6,68 @@ import type {
   ProtocolError,
   PublicLimits,
   RuntimeDeclarationBundleV1,
-} from "../protocol"
-import type { HostMode, InteractionMode, Size, TerminalCapabilities } from "../types"
-import type { RenderHandle } from "../render"
+} from "../protocol";
+import type { RenderHandle } from "../render";
+import type { HostMode, InteractionMode, Size, TerminalCapabilities } from "../types";
 
 /** A page's static metadata after structural validation of the imported module. */
 export interface ValidatedPageMeta {
-  readonly kitApiVersion: number
-  readonly title: string
-  readonly minSize: Size
-  readonly theme: string
+  readonly kitApiVersion: number;
+  readonly title: string;
+  readonly minSize: Size;
+  readonly theme: string;
 }
 
 /** A page module loaded and validated by `loadPage`, ready to mount. */
 export interface LoadedPage {
-  readonly meta: ValidatedPageMeta
+  readonly meta: ValidatedPageMeta;
   /** The page's default export — a component `createElement` mounts as the root. */
-  readonly component: unknown
+  readonly component: unknown;
   /** The recomputed lowercase-hex source hash (equals the expected hash). */
-  readonly sourceHash: string
+  readonly sourceHash: string;
 }
 
 export interface LoadPageArgs {
-  readonly sourcePath: string
-  readonly expectedSourceHash: string
+  readonly sourcePath: string;
+  readonly expectedSourceHash: string;
 }
 
 /** The `mount` request body (host-supervision §6.5). */
 export interface MountRequestBody {
-  readonly sourcePath: string
-  readonly expectedSourceHash: string
-  readonly mode: HostMode
-  readonly interactionMode: InteractionMode
-  readonly size: Size
-  readonly theme: string
-  readonly capabilities: TerminalCapabilities
-  readonly deterministic: boolean
+  readonly sourcePath: string;
+  readonly expectedSourceHash: string;
+  readonly mode: HostMode;
+  readonly interactionMode: InteractionMode;
+  readonly size: Size;
+  readonly theme: string;
+  readonly capabilities: TerminalCapabilities;
+  readonly deterministic: boolean;
 }
 
 /** The accepted `ready` response body (host-supervision §6.6). */
 export interface ReadyBody {
-  readonly meta: ValidatedPageMeta
-  readonly size: Size
-  readonly interactionMode: InteractionMode
-  readonly frameIdentity: FrameIdentity
+  readonly meta: ValidatedPageMeta;
+  readonly size: Size;
+  readonly interactionMode: InteractionMode;
+  readonly frameIdentity: FrameIdentity;
   /** Tweak declarations — empty in MVP (set-tweak is a later phase). */
-  readonly tweaks: readonly never[]
+  readonly tweaks: readonly never[];
 }
 
 /** The `set-mode` request body (host-supervision §7). */
 export interface SetModeRequestBody {
-  readonly interactionMode: InteractionMode
+  readonly interactionMode: InteractionMode;
 }
 
 /** A correlated response body: either an accepted echo or a typed refusal. */
 export type ResponseBody =
   | { readonly ok: true; readonly [key: string]: unknown }
-  | { readonly ok: false; readonly code: string; readonly reason: string }
+  | { readonly ok: false; readonly code: string; readonly reason: string };
 
 /** The `heartbeat` body (host-supervision §9). */
 export interface HeartbeatBody {
-  readonly hostTick: number
-  readonly lastFrameSeq: string
+  readonly hostTick: number;
+  readonly lastFrameSeq: string;
 }
 
 /**
@@ -78,33 +78,33 @@ export interface HeartbeatBody {
 export type OutboundMessage =
   | { readonly type: "host-hello"; readonly payload: HostHelloV1 }
   | { readonly type: "control"; readonly payload: ControlEnvelope }
-  | { readonly type: "frame"; readonly payload: FrameEnvelope }
+  | { readonly type: "frame"; readonly payload: FrameEnvelope };
 
 /** A request for the process to exit after flushing stdout (Spike D). */
 export interface ExitRequest {
-  readonly code: number
-  readonly reason: string
+  readonly code: number;
+  readonly reason: string;
 }
 
 /** Injected dependencies of a host session (all boundaries are injectable). */
 export interface HostSessionDeps {
-  readonly runtimeDeclaration: RuntimeDeclarationBundleV1
-  readonly limits: PublicLimits
-  readonly loadPage: (args: LoadPageArgs) => Promise<ProtocolError | LoadedPage>
-  readonly createRenderer: (size: Size) => Promise<RenderHandle>
+  readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
+  readonly limits: PublicLimits;
+  readonly loadPage: (args: LoadPageArgs) => Promise<ProtocolError | LoadedPage>;
+  readonly createRenderer: (size: Size) => Promise<RenderHandle>;
   /** Monotonic milliseconds (host-supervision §9 — all durations are monotonic). */
-  readonly now: () => number
-  readonly send: (message: OutboundMessage) => void
-  readonly requestExit: (request: ExitRequest) => void
+  readonly now: () => number;
+  readonly send: (message: OutboundMessage) => void;
+  readonly requestExit: (request: ExitRequest) => void;
 }
 
 /** The host-side protocol driver. */
 export interface HostSession {
   /** Feed one decoded control-class payload (fragmentation handled upstream). */
-  receiveControlPayload(payload: Uint8Array): Promise<void>
+  receiveControlPayload(payload: Uint8Array): Promise<void>;
   /** Emit one heartbeat now (called by the entry's 1s timer). */
-  emitHeartbeat(): void
+  emitHeartbeat(): void;
 }
 
 // Re-export the imported types needed by consumers of this module.
-export type { ControlEnvelope, FrameEnvelope, FrameIdentity, HostHelloV1 }
+export type { ControlEnvelope, FrameEnvelope, FrameIdentity, HostHelloV1 };

@@ -1,15 +1,17 @@
-import * as errore from "errore"
-import type { AgentInfo } from "agent/types"
-import type { HealthProbeDeps, HealthProbeReader } from "../types"
-import { withProbeDeadline } from "./deadline"
-import { AgentHealthProbeError } from "./errors"
+import * as errore from "errore";
+
+import type { AgentInfo } from "agent/types";
+
+import type { HealthProbeDeps, HealthProbeReader } from "../types";
+import { withProbeDeadline } from "./deadline";
+import { AgentHealthProbeError } from "./errors";
 
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function inconclusive(backendId: string): AgentInfo {
-  return { backendId, health: { status: "not-logged-in" }, account: null }
+  return { backendId, health: { status: "not-logged-in" }, account: null };
 }
 
 /**
@@ -39,21 +41,25 @@ export async function runHealthProbe(
   // value, keeping the single `close()` call below reachable on every path.
   const result = await withProbeDeadline(Promise.resolve().then(read), deps).catch(
     (e) => new AgentHealthProbeError({ reason: describeThrown(e), cause: e }),
-  )
+  );
 
-  deps.processTree?.close()
+  deps.processTree?.close();
 
   if (errore.isAbortError(result)) {
-    console.warn("agent/health: probe aborted without a confirmed verdict:", result.message)
-    return inconclusive(backendId)
+    console.warn("agent/health: probe aborted without a confirmed verdict:", result.message);
+    return inconclusive(backendId);
   }
 
   if (result instanceof Error) {
     // Swallowed (the probe never throws) — logged so a broken CLI/spawn path
     // stays visible, per errore's "log what you don't propagate".
-    console.warn("agent/health: probe stream failed:", result.message)
-    const notInstalled = /ENOENT|not found|spawn/i.test(result.message)
-    return { backendId, health: { status: notInstalled ? "not-installed" : "not-logged-in" }, account: null }
+    console.warn("agent/health: probe stream failed:", result.message);
+    const notInstalled = /ENOENT|not found|spawn/i.test(result.message);
+    return {
+      backendId,
+      health: { status: notInstalled ? "not-installed" : "not-logged-in" },
+      account: null,
+    };
   }
 
   if (result !== null) {
@@ -63,14 +69,14 @@ export async function runHealthProbe(
     if (result.backendId !== backendId) {
       console.warn(
         `agent/health: probe verdict backendId mismatch (expected "${backendId}", got "${result.backendId}"); substituting the expected id`,
-      )
-      return { ...result, backendId }
+      );
+      return { ...result, backendId };
     }
-    return result
+    return result;
   }
 
   // The stream closed cleanly without ever classifying. The CLI ran without
   // throwing, so this is not "not-installed"; nothing confirmed a working
   // session either, so it must not be "ready".
-  return inconclusive(backendId)
+  return inconclusive(backendId);
 }

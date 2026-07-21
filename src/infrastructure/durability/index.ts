@@ -4,16 +4,16 @@
 // and the pre-flight volume gate. The ProjectStore transaction engine
 // (storage-identity §10, turn-durability §4) composes these into recoverable
 // multi-file operations; this ring knows nothing about pages, chats, or journals.
-export type { DurabilityError } from "./types"
+export type { DurabilityError } from "./types";
 export {
   DirectoryFlushError,
   DurabilityUnavailableError,
   DurableWriteError,
   UnsupportedVolumeError,
-} from "./model/errors"
-export { flushDir } from "./model/flush-dir"
-export { durableFileWrite } from "./model/durable-write"
-export { assertDurableVolume, getDriveType, isDurableDriveType } from "./model/volume"
+} from "./model/errors";
+export { flushDir } from "./model/flush-dir";
+export { durableFileWrite } from "./model/durable-write";
+export { assertDurableVolume, getDriveType, isDurableDriveType } from "./model/volume";
 export {
   DRIVE_CDROM,
   DRIVE_FIXED,
@@ -23,4 +23,4 @@ export {
   DRIVE_REMOVABLE,
   DRIVE_UNKNOWN,
   driveTypeName,
-} from "./model/kernel32"
+} from "./model/kernel32";

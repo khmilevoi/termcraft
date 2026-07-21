@@ -15,13 +15,15 @@
 // interface" shape as `store/safe-fs`'s `nodeSafeFsDeps` or `store/trust`'s `nodeTrustFsDeps` —
 // and `store/jsonl` is not itself a dependency `store/projections` was ever wired to take
 // (plan Wave E: T18 depends on T4/T6 only).
-import fs from "node:fs"
-import path from "node:path"
-import * as errore from "errore"
-import { z } from "zod"
+import fs from "node:fs";
+import path from "node:path";
 
-import type { DurabilityError } from "infrastructure/durability"
-import type { ChatIndexPage, ChatIndexPageStore, ChatIndexState } from "../types"
+import * as errore from "errore";
+import { z } from "zod";
+
+import type { DurabilityError } from "infrastructure/durability";
+
+import type { ChatIndexPage, ChatIndexPageStore, ChatIndexState } from "../types";
 
 // ---- errors -----------------------------------------------------------------------
 
@@ -39,13 +41,13 @@ const pageDirectoryEntrySchema = z.object({
   firstOffsetStart: z.number().int().nonnegative(),
   lastOffsetEnd: z.number().int().nonnegative(),
   checksum: z.string(),
-})
+});
 
 const tailClassificationSchema = z.union([
   z.object({ kind: z.literal("clean") }),
   z.object({ kind: z.literal("transaction-proven-append-interruption"), append: z.unknown() }),
   z.object({ kind: z.literal("unproven-corrupt-suffix"), report: z.unknown() }),
-])
+]);
 
 const chatIndexStateSchema = z.object({
   chatId: z.string(),
@@ -58,7 +60,7 @@ const chatIndexStateSchema = z.object({
   finalWindowSha256: z.string(),
   tail: tailClassificationSchema,
   pages: z.array(pageDirectoryEntrySchema),
-})
+});
 
 const chatIndexEntrySchema = z.object({
   recordId: z.string(),
@@ -67,61 +69,77 @@ const chatIndexEntrySchema = z.object({
   changedPages: z.array(z.string()),
   offsetStart: z.number().int().nonnegative(),
   offsetEnd: z.number().int().nonnegative(),
-})
+});
 
 const chatIndexPageSchema = z.object({
   pageIndex: z.number().int().nonnegative(),
   entries: z.array(chatIndexEntrySchema),
   checksum: z.string(),
-})
+});
 
 // ---- production filesystem wiring --------------------------------------------------
 
 /** `ENOENT` is the ordinary "not present yet" case, not a fault. */
 function isMissingFile(cause: unknown): boolean {
-  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ENOENT"
+  return (
+    typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 export interface ChatIndexCacheFsDeps {
-  readonly readFile: (absPath: string) => Uint8Array | null | ChatIndexStoreIoError
-  readonly durableWrite: (absPath: string, bytes: Uint8Array) => DurabilityError | undefined
-  readonly ensureDir: (absDir: string) => ChatIndexStoreIoError | undefined
+  readonly readFile: (absPath: string) => Uint8Array | null | ChatIndexStoreIoError;
+  readonly durableWrite: (absPath: string, bytes: Uint8Array) => DurabilityError | undefined;
+  readonly ensureDir: (absDir: string) => ChatIndexStoreIoError | undefined;
 }
 
 /** The real Node bindings. `infrastructure/durability`'s `durableFileWrite` is the injected `durableWrite` — the only write path, matching every other local-cache store in this codebase. */
-export function nodeChatIndexCacheFsDeps(durableWrite: (absPath: string, bytes: Uint8Array) => DurabilityError | undefined): ChatIndexCacheFsDeps {
+export function nodeChatIndexCacheFsDeps(
+  durableWrite: (absPath: string, bytes: Uint8Array) => DurabilityError | undefined,
+): ChatIndexCacheFsDeps {
   return {
     readFile(absPath) {
       const bytes = errore.try({
         try: () => new Uint8Array(fs.readFileSync(absPath)),
-        catch: (cause) => new ChatIndexStoreIoError({ operation: "read", path: absPath, detail: String(cause), cause }),
-      })
-      if (bytes instanceof Error) return isMissingFile(bytes.cause) ? null : bytes
-      return bytes
+        catch: (cause) =>
+          new ChatIndexStoreIoError({
+            operation: "read",
+            path: absPath,
+            detail: String(cause),
+            cause,
+          }),
+      });
+      if (bytes instanceof Error) return isMissingFile(bytes.cause) ? null : bytes;
+      return bytes;
     },
     durableWrite,
     ensureDir(absDir) {
       return errore.try({
         try: () => {
-          fs.mkdirSync(absDir, { recursive: true })
-          return undefined
+          fs.mkdirSync(absDir, { recursive: true });
+          return undefined;
         },
-        catch: (cause) => new ChatIndexStoreIoError({ operation: "mkdir", path: absDir, detail: String(cause), cause }),
-      })
+        catch: (cause) =>
+          new ChatIndexStoreIoError({
+            operation: "mkdir",
+            path: absDir,
+            detail: String(cause),
+            cause,
+          }),
+      });
     },
-  }
+  };
 }
 
 // ---- paths --------------------------------------------------------------------------
 
 function chatCacheDir(root: string, chatId: string): string {
-  return path.join(root, chatId)
+  return path.join(root, chatId);
 }
 function stateJsonPath(root: string, chatId: string): string {
-  return path.join(chatCacheDir(root, chatId), "state.json")
+  return path.join(chatCacheDir(root, chatId), "state.json");
 }
 function pageJsonPath(root: string, chatId: string, pageIndex: number): string {
-  return path.join(chatCacheDir(root, chatId), `page-${pageIndex}.json`)
+  return path.join(chatCacheDir(root, chatId), `page-${pageIndex}.json`);
 }
 
 // ---- the persisted page store (`ChatIndexPageStore`) ---------------------------------
@@ -133,87 +151,113 @@ function pageJsonPath(root: string, chatId: string, pageIndex: number): string {
  * `chat-index.ts`'s `readVerifiedPage` is the integrity check that matters; this store adds
  * corruption tolerance underneath it).
  */
-export function createNodeChatIndexPageStore(root: string, fs: ChatIndexCacheFsDeps): ChatIndexPageStore {
+export function createNodeChatIndexPageStore(
+  root: string,
+  fs: ChatIndexCacheFsDeps,
+): ChatIndexPageStore {
   return {
     async writePage(chatId, page) {
-      const created = fs.ensureDir(chatCacheDir(root, chatId))
-      if (created instanceof Error) return created
-      const target = pageJsonPath(root, chatId, page.pageIndex)
-      const wrote = fs.durableWrite(target, new TextEncoder().encode(JSON.stringify(page)))
-      if (wrote instanceof Error) return new ChatIndexStoreIoError({ operation: "write", path: target, detail: wrote.message, cause: wrote })
-      return undefined
+      const created = fs.ensureDir(chatCacheDir(root, chatId));
+      if (created instanceof Error) return created;
+      const target = pageJsonPath(root, chatId, page.pageIndex);
+      const wrote = fs.durableWrite(target, new TextEncoder().encode(JSON.stringify(page)));
+      if (wrote instanceof Error)
+        return new ChatIndexStoreIoError({
+          operation: "write",
+          path: target,
+          detail: wrote.message,
+          cause: wrote,
+        });
+      return undefined;
     },
 
     async readPage(chatId, pageIndex) {
-      const target = pageJsonPath(root, chatId, pageIndex)
-      const bytes = fs.readFile(target)
-      if (bytes instanceof Error) return bytes
-      if (bytes === null) return null
+      const target = pageJsonPath(root, chatId, pageIndex);
+      const bytes = fs.readFile(target);
+      if (bytes instanceof Error) return bytes;
+      if (bytes === null) return null;
 
       const parsed = errore.try({
         try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
         catch: (cause) => new Error("not valid JSON", { cause }),
-      })
+      });
       if (parsed instanceof Error) {
-        console.warn("chat-index cache: page ignored (miss):", target, parsed.message)
-        return null
+        console.warn("chat-index cache: page ignored (miss):", target, parsed.message);
+        return null;
       }
-      const decoded = chatIndexPageSchema.safeParse(parsed)
+      const decoded = chatIndexPageSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn("chat-index cache: page ignored (miss):", target, "does not match the page schema")
-        return null
+        console.warn(
+          "chat-index cache: page ignored (miss):",
+          target,
+          "does not match the page schema",
+        );
+        return null;
       }
       // `changedPages` is branded `PageSlug[]` in `ChatIndexPage` (`entities/page`) — this
       // cache re-persists exactly what `chat-index.ts` already wrote and verifies it via the
       // entry's own checksum on every read, so re-asserting the brand here (rather than
       // importing `entities/page`'s parser into this domain-free cache reader) is safe.
-      return decoded.data as unknown as ChatIndexPage
+      return decoded.data as unknown as ChatIndexPage;
     },
-  }
+  };
 }
 
 // ---- the persisted index state (the chatId -> ChatIndexState side of §7.1) ----------
 
 export interface ChatIndexStateStore {
   /** `null` for both "never built" and "unreadable" — either way `ChatStore.open` falls back to a full rebuild, never a hard failure. */
-  read(chatId: string): Promise<ChatIndexState | null>
-  write(chatId: string, state: ChatIndexState): Promise<ChatIndexStoreIoError | undefined>
+  read(chatId: string): Promise<ChatIndexState | null>;
+  write(chatId: string, state: ChatIndexState): Promise<ChatIndexStoreIoError | undefined>;
 }
 
-export function createNodeChatIndexStateStore(root: string, fs: ChatIndexCacheFsDeps): ChatIndexStateStore {
+export function createNodeChatIndexStateStore(
+  root: string,
+  fs: ChatIndexCacheFsDeps,
+): ChatIndexStateStore {
   return {
     async read(chatId) {
-      const target = stateJsonPath(root, chatId)
-      const bytes = fs.readFile(target)
+      const target = stateJsonPath(root, chatId);
+      const bytes = fs.readFile(target);
       if (bytes instanceof Error) {
-        console.warn("chat-index cache: state ignored (miss):", target, bytes.message)
-        return null
+        console.warn("chat-index cache: state ignored (miss):", target, bytes.message);
+        return null;
       }
-      if (bytes === null) return null
+      if (bytes === null) return null;
 
       const parsed = errore.try({
         try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
         catch: (cause) => new Error("not valid JSON", { cause }),
-      })
+      });
       if (parsed instanceof Error) {
-        console.warn("chat-index cache: state ignored (miss):", target, parsed.message)
-        return null
+        console.warn("chat-index cache: state ignored (miss):", target, parsed.message);
+        return null;
       }
-      const decoded = chatIndexStateSchema.safeParse(parsed)
+      const decoded = chatIndexStateSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn("chat-index cache: state ignored (miss):", target, "does not match the state schema")
-        return null
+        console.warn(
+          "chat-index cache: state ignored (miss):",
+          target,
+          "does not match the state schema",
+        );
+        return null;
       }
-      return decoded.data as ChatIndexState
+      return decoded.data as ChatIndexState;
     },
 
     async write(chatId, state) {
-      const created = fs.ensureDir(chatCacheDir(root, chatId))
-      if (created instanceof Error) return created
-      const target = stateJsonPath(root, chatId)
-      const wrote = fs.durableWrite(target, new TextEncoder().encode(JSON.stringify(state)))
-      if (wrote instanceof Error) return new ChatIndexStoreIoError({ operation: "write", path: target, detail: wrote.message, cause: wrote })
-      return undefined
+      const created = fs.ensureDir(chatCacheDir(root, chatId));
+      if (created instanceof Error) return created;
+      const target = stateJsonPath(root, chatId);
+      const wrote = fs.durableWrite(target, new TextEncoder().encode(JSON.stringify(state)));
+      if (wrote instanceof Error)
+        return new ChatIndexStoreIoError({
+          operation: "write",
+          path: target,
+          detail: wrote.message,
+          cause: wrote,
+        });
+      return undefined;
     },
-  }
+  };
 }

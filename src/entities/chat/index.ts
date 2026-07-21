@@ -12,5 +12,5 @@ export type {
   ChatSystemRestoreRecord,
   ChatUserRecord,
   ChatWarningSnapshot,
-} from "./types"
-export { ChatDecodeError, decodeChatHeader, decodeChatRecord } from "./model/decode"
+} from "./types";
+export { ChatDecodeError, decodeChatHeader, decodeChatRecord } from "./model/decode";

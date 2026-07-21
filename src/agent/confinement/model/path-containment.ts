@@ -1,4 +1,4 @@
-import path from "node:path"
+import path from "node:path";
 
 /**
  * True only when `candidate` resolves to a location inside `stagingRoot`
@@ -37,17 +37,18 @@ export function isInsideStaging(
   stagingRoot: string,
   options?: { hasReparsePoint?: (p: string) => boolean },
 ): boolean {
-  const root = path.resolve(stagingRoot)
-  const target = path.resolve(root, candidate)
-  const isWin = process.platform === "win32"
-  const rootCompare = isWin ? root.toLowerCase() : root
-  const targetCompare = isWin ? target.toLowerCase() : target
+  const root = path.resolve(stagingRoot);
+  const target = path.resolve(root, candidate);
+  const isWin = process.platform === "win32";
+  const rootCompare = isWin ? root.toLowerCase() : root;
+  const targetCompare = isWin ? target.toLowerCase() : target;
   if (targetCompare !== rootCompare) {
-    const withSep = rootCompare.endsWith(path.sep) ? rootCompare : rootCompare + path.sep
-    if (!targetCompare.startsWith(withSep)) return false
+    const withSep = rootCompare.endsWith(path.sep) ? rootCompare : rootCompare + path.sep;
+    if (!targetCompare.startsWith(withSep)) return false;
   }
-  if (options?.hasReparsePoint && hasReparsePointOnChain(root, target, options.hasReparsePoint)) return false
-  return true
+  if (options?.hasReparsePoint && hasReparsePointOnChain(root, target, options.hasReparsePoint))
+    return false;
+  return true;
 }
 
 /**
@@ -59,15 +60,19 @@ export function isInsideStaging(
  * `<staging>/link` once the agent addresses a file underneath it, e.g.
  * `<staging>/link/notes.txt`, or a junction on `<staging>` itself.
  */
-function hasReparsePointOnChain(root: string, target: string, check: (p: string) => boolean): boolean {
-  if (check(root)) return true
-  const rel = path.relative(root, target)
-  if (rel === "") return false // already checked above
-  const segments = rel.split(path.sep).filter((segment) => segment.length > 0)
+function hasReparsePointOnChain(
+  root: string,
+  target: string,
+  check: (p: string) => boolean,
+): boolean {
+  if (check(root)) return true;
+  const rel = path.relative(root, target);
+  if (rel === "") return false; // already checked above
+  const segments = rel.split(path.sep).filter((segment) => segment.length > 0);
   const chain = segments.reduce<string[]>((acc, segment) => {
-    const parent = acc.length > 0 ? (acc[acc.length - 1] ?? root) : root
-    acc.push(path.join(parent, segment))
-    return acc
-  }, [])
-  return chain.some((segment) => check(segment) === true)
+    const parent = acc.length > 0 ? (acc[acc.length - 1] ?? root) : root;
+    acc.push(path.join(parent, segment));
+    return acc;
+  }, []);
+  return chain.some((segment) => check(segment) === true);
 }

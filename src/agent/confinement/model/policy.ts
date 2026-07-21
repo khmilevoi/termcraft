@@ -1,17 +1,17 @@
-import type { ConfinementTables, PermissionResultLike } from "../types"
-import { isInsideStaging } from "./path-containment"
+import type { ConfinementTables, PermissionResultLike } from "../types";
+import { isInsideStaging } from "./path-containment";
 
 function primaryPath(
   pathFields: readonly string[],
   input: Record<string, unknown>,
   blockedPath?: string,
 ): string | null {
-  if (typeof blockedPath === "string") return blockedPath
+  if (typeof blockedPath === "string") return blockedPath;
   for (const field of pathFields) {
-    const v = input[field]
-    if (typeof v === "string") return v
+    const v = input[field];
+    if (typeof v === "string") return v;
   }
-  return null
+  return null;
 }
 
 /**
@@ -42,10 +42,10 @@ export function createConfinementPolicy(
     blockedPath?: string,
   ): PermissionResultLike => {
     if (tables.deniedTools.has(toolName)) {
-      return { behavior: "deny", message: `${toolName} is not permitted in a design turn` }
+      return { behavior: "deny", message: `${toolName} is not permitted in a design turn` };
     }
     if (!tables.fileTools.has(toolName)) {
-      return { behavior: "deny", message: `Tool ${toolName} is not on the design-turn allowlist` }
+      return { behavior: "deny", message: `Tool ${toolName} is not on the design-turn allowlist` };
     }
     // A path-less call resolves to the staging root ITSELF only for tools
     // whose schema documents `path` as optional-defaulting-to-cwd (see
@@ -53,13 +53,14 @@ export function createConfinementPolicy(
     // staging. Every other file tool still denies outright on a missing
     // path: a schema rename on a WRITE tool still denies.
     const target =
-      primaryPath(tables.pathFields, input, blockedPath) ?? (tables.optionalPathTools.has(toolName) ? stagingRoot : null)
+      primaryPath(tables.pathFields, input, blockedPath) ??
+      (tables.optionalPathTools.has(toolName) ? stagingRoot : null);
     if (target === null) {
-      return { behavior: "deny", message: `${toolName} call has no resolvable path` }
+      return { behavior: "deny", message: `${toolName} call has no resolvable path` };
     }
     if (!isInsideStaging(target, stagingRoot, options)) {
-      return { behavior: "deny", message: `${toolName} target is outside the turn workspace` }
+      return { behavior: "deny", message: `${toolName} target is outside the turn workspace` };
     }
-    return { behavior: "allow" }
-  }
+    return { behavior: "allow" };
+  };
 }

@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "import/first": "error",
+    "import/newline-after-import": "error",
+    "import/no-duplicates": "error",
+    "import/no-cycle": "error",
+    "sort-imports": [
+      "error",
+      {
+        "ignoreDeclarationSort": true
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "design",
+    "design-prompts",
+    "docs/spikes",
+    "src/host/session/fixtures"
+  ]
+}

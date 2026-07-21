@@ -21,17 +21,17 @@ export type {
   RenderEntry,
   RenderPinPredicate,
   Sha256Hex,
-} from "./types"
+} from "./types";
 
-export type { PageMetaCache, PageMetaCacheDeps } from "./model/page-meta-cache"
+export type { PageMetaCache, PageMetaCacheDeps } from "./model/page-meta-cache";
 export {
   PAGE_META_CACHE_GENERATION,
   PageMetaCacheIoError,
   createPageMetaCache,
   nodePageMetaCacheFsDeps,
-} from "./model/page-meta-cache"
+} from "./model/page-meta-cache";
 
-export type { DiagnosticsStore, DiagnosticsStoreDeps } from "./model/diagnostics-store"
+export type { DiagnosticsStore, DiagnosticsStoreDeps } from "./model/diagnostics-store";
 export {
   DIAGNOSTICS_DEFAULT_QUOTA_BYTES,
   DIAGNOSTICS_MAX_QUOTA_BYTES,
@@ -40,9 +40,9 @@ export {
   DiagnosticsStoreIoError,
   createDiagnosticsStore,
   nodeDiagnosticsStoreFsDeps,
-} from "./model/diagnostics-store"
+} from "./model/diagnostics-store";
 
-export type { RenderCache, RenderCacheDeps } from "./model/render-cache"
+export type { RenderCache, RenderCacheDeps } from "./model/render-cache";
 export {
   RENDER_CACHE_DEFAULT_QUOTA_BYTES,
   RENDER_CACHE_GENERATION,
@@ -52,4 +52,4 @@ export {
   canonicalizeExportRenderKey,
   createRenderCache,
   nodeRenderCacheFsDeps,
-} from "./model/render-cache"
+} from "./model/render-cache";

@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /**
  * A framing violation. Fatal for the stream that produced it: after a lost

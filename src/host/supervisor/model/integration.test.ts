@@ -1,24 +1,26 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { CURRENT_KIT_API_VERSION } from "runtime"
-import { PROTOCOL_HARD_LIMITS, ProtocolError } from "../../protocol"
-import type { RuntimeDeclarationBundleV1 } from "../../protocol"
-import type { HostSessionSpec } from "../../types"
-import { createSystemClock } from "./clock"
-import { createBunSpawn } from "./spawn"
-import { createHostSession } from "./session"
-import type { HostSession } from "../types"
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { CURRENT_KIT_API_VERSION } from "runtime";
+
+import { PROTOCOL_HARD_LIMITS, ProtocolError } from "../../protocol";
+import type { RuntimeDeclarationBundleV1 } from "../../protocol";
+import type { HostSessionSpec } from "../../types";
+import type { HostSession } from "../types";
+import { createSystemClock } from "./clock";
+import { createHostSession } from "./session";
+import { createBunSpawn } from "./spawn";
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
   currentKitApiVersion: CURRENT_KIT_API_VERSION,
   supportedKitApiVersions: [CURRENT_KIT_API_VERSION],
   publicCapabilityIds: [],
-}
-const wrapper = `${import.meta.dir}/../../../../docs/spikes/04-supervisor-derisk/host-wrapper.ts`
-const sessions: HostSession[] = []
+};
+const wrapper = `${import.meta.dir}/../../../../docs/spikes/04-supervisor-derisk/host-wrapper.ts`;
+const sessions: HostSession[] = [];
 afterEach(async () => {
-  for (const session of sessions.splice(0)) await session.stop()
-})
+  for (const session of sessions.splice(0)) await session.stop();
+});
 
 describe("real-spawn handshake + graceful stop (integration)", () => {
   test("negotiates host.hello against the genuine 2C child, fails mount with a typed SOURCE_HASH_MISMATCH, then stops cleanly", async () => {
@@ -39,15 +41,15 @@ describe("real-spawn handshake + graceful stop (integration)", () => {
       size: { w: 80, h: 24 },
       theme: "dark-default",
       capabilities: { colorDepth: 24 },
-    }
+    };
     const session = createHostSession(spec, {
       spawn: createBunSpawn(),
       command: { cmd: [process.execPath, wrapper, "_host", "--stdio"] },
       clock: createSystemClock(),
       runtimeDeclaration,
       offeredLimits: PROTOCOL_HARD_LIMITS,
-    })
-    sessions.push(session)
+    });
+    sessions.push(session);
 
     // Await the real round-trip. start() resolves to the mount-stage
     // SOURCE_HASH_MISMATCH, which is UNREACHABLE without a completed handshake. A
@@ -55,13 +57,14 @@ describe("real-spawn handshake + graceful stop (integration)", () => {
     // HANDSHAKE_TIMEOUT / a negotiation ProtocolError — none of which is
     // SOURCE_HASH_MISMATCH — so this assertion actually distinguishes success from
     // failure (unlike a bare phase check, where every failure path lands on "failed").
-    const outcome = await session.start()
-    expect(outcome).toBeInstanceOf(ProtocolError)
-    if (!(outcome instanceof ProtocolError)) throw new Error(`expected a ProtocolError, got ${String(outcome)}`)
-    expect(outcome.code).toBe("SOURCE_HASH_MISMATCH")
-    expect(session.phase).toBe("failed")
+    const outcome = await session.start();
+    expect(outcome).toBeInstanceOf(ProtocolError);
+    if (!(outcome instanceof ProtocolError))
+      throw new Error(`expected a ProtocolError, got ${String(outcome)}`);
+    expect(outcome.code).toBe("SOURCE_HASH_MISMATCH");
+    expect(session.phase).toBe("failed");
 
-    const stop = await session.stop()
-    expect(stop.phase).toBe("stopped")
-  }, 15_000)
-})
+    const stop = await session.stop();
+    expect(stop.phase).toBe("stopped");
+  }, 15_000);
+});

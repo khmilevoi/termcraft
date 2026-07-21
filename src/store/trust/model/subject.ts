@@ -1,16 +1,16 @@
-import crypto from "node:crypto"
+import crypto from "node:crypto";
 
-import type { Sha256Hex, TrustSubjectInput } from "../types"
+import type { Sha256Hex, TrustSubjectInput } from "../types";
 
 /**
  * The literal ASCII domain-separation prefix of the encoding (storage-identity §8). It is
  * followed by exactly one NUL byte, then the length-prefixed fields.
  */
-export const TRUST_SUBJECT_V1_PREFIX = "termcraft-trust-subject-v1"
+export const TRUST_SUBJECT_V1_PREFIX = "termcraft-trust-subject-v1";
 
 /** The two literal Git-presence tags; they are encoded as ordinary length-prefixed fields. */
-const GIT_ABSENT = "absent"
-const GIT_PRESENT = "present"
+const GIT_ABSENT = "absent";
+const GIT_PRESENT = "present";
 
 /**
  * One field: `u32be(NFC-UTF8 byte length) || NFC-UTF8 bytes` (storage-identity §8). No
@@ -18,10 +18,10 @@ const GIT_PRESENT = "present"
  * which is why `absent` can never be forged by supplying empty Git strings.
  */
 function encodeField(value: string): Buffer {
-  const bytes = Buffer.from(value.normalize("NFC"), "utf8")
-  const length = Buffer.alloc(4)
-  length.writeUInt32BE(bytes.byteLength)
-  return Buffer.concat([length, bytes])
+  const bytes = Buffer.from(value.normalize("NFC"), "utf8");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(bytes.byteLength);
+  return Buffer.concat([length, bytes]);
 }
 
 /**
@@ -34,15 +34,19 @@ function encodeField(value: string): Buffer {
  * UUID"; a caller that hands in upper-case text must not land on a different trust key.
  */
 function subjectFields(input: TrustSubjectInput): string[] {
-  const head = [input.canonicalProjectPath, input.projectFilesystemIdentity, input.projectId.toLowerCase()]
-  if (input.git === null) return [...head, GIT_ABSENT]
+  const head = [
+    input.canonicalProjectPath,
+    input.projectFilesystemIdentity,
+    input.projectId.toLowerCase(),
+  ];
+  if (input.git === null) return [...head, GIT_ABSENT];
   return [
     ...head,
     GIT_PRESENT,
     input.git.canonicalGitCommonDir,
     input.git.gitCommonDirFilesystemIdentity,
     input.git.projectPathRelativeToWorktreeRoot,
-  ]
+  ];
 }
 
 /**
@@ -51,29 +55,29 @@ function subjectFields(input: TrustSubjectInput): string[] {
  * `TrustSubjectInput` fields can influence the resulting trust key.
  */
 export function encodeTrustSubjectV1(input: TrustSubjectInput): Uint8Array {
-  const prefix = Buffer.concat([Buffer.from(TRUST_SUBJECT_V1_PREFIX, "utf8"), Buffer.from([0x00])])
-  return Buffer.concat([prefix, ...subjectFields(input).map(encodeField)])
+  const prefix = Buffer.concat([Buffer.from(TRUST_SUBJECT_V1_PREFIX, "utf8"), Buffer.from([0x00])]);
+  return Buffer.concat([prefix, ...subjectFields(input).map(encodeField)]);
 }
 
 /** The trust key: lowercase-hex SHA-256 of the complete encoded byte string (§8). */
 export function trustSubjectKey(input: TrustSubjectInput): Sha256Hex {
-  return crypto.createHash("sha256").update(encodeTrustSubjectV1(input)).digest("hex")
+  return crypto.createHash("sha256").update(encodeTrustSubjectV1(input)).digest("hex");
 }
 
 // ---- canonical path forms (storage-identity §8) --------------------------------
 
 /** `\\?\C:\x` and `\\?\UNC\server\share` are Win32 extended-length forms of ordinary paths. */
 function stripExtendedLengthPrefix(forwardSlashed: string): string {
-  if (forwardSlashed.startsWith("//?/UNC/")) return `//${forwardSlashed.slice("//?/UNC/".length)}`
-  if (forwardSlashed.startsWith("//?/")) return forwardSlashed.slice("//?/".length)
-  return forwardSlashed
+  if (forwardSlashed.startsWith("//?/UNC/")) return `//${forwardSlashed.slice("//?/UNC/".length)}`;
+  if (forwardSlashed.startsWith("//?/")) return forwardSlashed.slice("//?/".length);
+  return forwardSlashed;
 }
 
 /** `^[a-z]:` → uppercase; §8 preserves filesystem-resolved case everywhere else. */
 function upperDriveLetter(value: string): string {
-  const drive = value.match(/^([a-zA-Z]):/)
-  if (drive === null) return value
-  return `${(drive[1] as string).toUpperCase()}:${value.slice(2)}`
+  const drive = value.match(/^([a-zA-Z]):/);
+  if (drive === null) return value;
+  return `${(drive[1] as string).toUpperCase()}:${value.slice(2)}`;
 }
 
 /**
@@ -81,10 +85,10 @@ function upperDriveLetter(value: string): string {
  * the drive root, so it normalizes to `C:/` rather than losing its root separator.
  */
 function stripTrailingSeparator(value: string): string {
-  if (/^[A-Z]:\/*$/.test(value)) return `${value.slice(0, 2)}/`
-  const stripped = value.replace(/\/+$/, "")
-  if (stripped === "") return "/"
-  return stripped
+  if (/^[A-Z]:\/*$/.test(value)) return `${value.slice(0, 2)}/`;
+  const stripped = value.replace(/\/+$/, "");
+  if (stripped === "") return "/";
+  return stripped;
 }
 
 /**
@@ -97,8 +101,8 @@ function stripTrailingSeparator(value: string): string {
  * aliases for one filesystem object collapse to one subject.
  */
 export function canonicalizeTrustPath(rawPath: string): string {
-  const forwardSlashed = rawPath.replace(/\\/g, "/").normalize("NFC")
-  return stripTrailingSeparator(upperDriveLetter(stripExtendedLengthPrefix(forwardSlashed)))
+  const forwardSlashed = rawPath.replace(/\\/g, "/").normalize("NFC");
+  return stripTrailingSeparator(upperDriveLetter(stripExtendedLengthPrefix(forwardSlashed)));
 }
 
 /**
@@ -111,8 +115,8 @@ export function canonicalizeTrustPath(rawPath: string): string {
  * field. Both spellings must therefore agree on one key rather than splitting the subject.
  */
 export function canonicalizeRepoRelativePath(rawPath: string): string {
-  const forwardSlashed = rawPath.replace(/\\/g, "/").normalize("NFC")
-  const unanchored = forwardSlashed.replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "")
-  if (unanchored === ".") return ""
-  return unanchored
+  const forwardSlashed = rawPath.replace(/\\/g, "/").normalize("NFC");
+  const unanchored = forwardSlashed.replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "");
+  if (unanchored === ".") return "";
+  return unanchored;
 }

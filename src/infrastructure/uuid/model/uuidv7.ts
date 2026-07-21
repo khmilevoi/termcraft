@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from "zod";
 
 /**
  * Canonical lowercase UUIDv7. Bun's implementation embeds a millisecond
@@ -6,7 +6,7 @@ import { z } from "zod"
  * sort in generation order — storage relies on that for record ordering.
  */
 export function uuidv7(): string {
-  return Bun.randomUUIDv7()
+  return Bun.randomUUIDv7();
 }
 
 /**
@@ -15,12 +15,14 @@ export function uuidv7(): string {
  * termcraft identity is validated with this on read (storage-identity §3.1); it is a
  * uniform format check, not a brand — ids are minted, not parsed.
  */
-const CANONICAL_UUIDV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const CANONICAL_UUIDV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /** True iff `value` is a canonical lowercase UUIDv7 (RFC 9562). */
 export function isCanonicalUuidv7(value: string): boolean {
-  return CANONICAL_UUIDV7.test(value)
+  return CANONICAL_UUIDV7.test(value);
 }
 
 /** A Zod schema for {@link isCanonicalUuidv7} — the shared identity check every decoder reuses. */
-export const canonicalUuidv7Schema = z.string().refine(isCanonicalUuidv7, { error: "must be a canonical UUIDv7" })
+export const canonicalUuidv7Schema = z
+  .string()
+  .refine(isCanonicalUuidv7, { error: "must be a canonical UUIDv7" });

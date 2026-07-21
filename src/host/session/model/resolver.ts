@@ -1,10 +1,10 @@
-import { plugin } from "bun"
+import * as jsxDevRuntime from "@opentui/react/jsx-dev-runtime";
+import * as jsxRuntime from "@opentui/react/jsx-runtime";
+import { plugin } from "bun";
 
-import * as jsxDevRuntime from "@opentui/react/jsx-dev-runtime"
-import * as jsxRuntime from "@opentui/react/jsx-runtime"
-import * as runtime from "runtime"
+import * as runtime from "runtime";
 
-let registered = false
+let registered = false;
 
 /**
  * Register the `Bun.plugin` runtime resolver (Spike A / runtime-api §3.1). It
@@ -28,23 +28,23 @@ let registered = false
  * is a no-op, because `Bun.plugin` has process-global effect.
  */
 export function registerRuntimeResolver(): void {
-  if (registered) return
-  registered = true
+  if (registered) return;
+  registered = true;
   plugin({
     name: "termcraft-runtime-resolver",
     setup(build) {
       build.module("@termcraft/runtime", () => ({
         exports: runtime as Record<string, unknown>,
         loader: "object",
-      }))
+      }));
       build.module("react/jsx-runtime", () => ({
         exports: jsxRuntime as Record<string, unknown>,
         loader: "object",
-      }))
+      }));
       build.module("react/jsx-dev-runtime", () => ({
         exports: jsxDevRuntime as Record<string, unknown>,
         loader: "object",
-      }))
+      }));
     },
-  })
+  });
 }
