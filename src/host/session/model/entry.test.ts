@@ -50,8 +50,7 @@ describe("runHostStdio (in-memory transport)", () => {
   test("negotiates a host.hello from a client.hello fed as framed bytes", async () => {
     const output: Uint8Array[] = []
     const exits: number[] = []
-    let resolveExit: () => void
-    const exited = new Promise<void>((r) => { resolveExit = r })
+    const { promise: exited, resolve: resolveExit } = Promise.withResolvers<void>()
 
     async function* input() {
       yield clientHelloFrame()

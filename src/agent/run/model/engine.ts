@@ -66,10 +66,7 @@ export function startAgentRun(
     return true
   }
 
-  let resolveOutcome: (outcome: AgentRunOutcome) => void = () => {}
-  const outcomePromise = new Promise<AgentRunOutcome>((resolve) => {
-    resolveOutcome = resolve
-  })
+  const { promise: outcomePromise, resolve: resolveOutcome } = Promise.withResolvers<AgentRunOutcome>()
 
   /**
    * Resolves the instant a natural outcome is claimed (i.e. exactly when
@@ -81,10 +78,7 @@ export function startAgentRun(
    * hold `outcome` — and therefore `cancel()` and the backend's `tree.close()`
    * wiring — hostage forever.
    */
-  let resolveClaimedSignal: () => void = () => {}
-  const claimedSignal = new Promise<void>((resolve) => {
-    resolveClaimedSignal = resolve
-  })
+  const { promise: claimedSignal, resolve: resolveClaimedSignal } = Promise.withResolvers<void>()
 
   /**
    * turn-durability §6.4/§6.5: a natural completion must CONFIRM the whole

@@ -42,12 +42,11 @@ export function createRequestTable(
         new SupervisorError({ code: "TRANSPORT_ERROR", reason: `duplicate requestId ${requestId}` }),
       )
     }
-    // Bind the resolver to a const outside the executor (the TS7 `never`-narrowing
-    // trap the 2D-1 session.ts nextInbound already documents).
-    let settle!: (result: ControlEnvelope | ProtocolError | SupervisorError) => void
-    const promise = new Promise<ControlEnvelope | ProtocolError | SupervisorError>((resolve) => {
-      settle = resolve
-    })
+    // `Promise.withResolvers` hands back the resolver directly, so there is no
+    // definite-assignment dance and no TS7 `never`-narrowing trap to work around.
+    const { promise, resolve: settle } = Promise.withResolvers<
+      ControlEnvelope | ProtocolError | SupervisorError
+    >()
     const timer = clock.setTimer(timeoutMs, () => {
       entries.delete(requestId)
       onTimeout?.()

@@ -49,8 +49,7 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
 
   let liveRenderer: { destroy(): void } | null = null
   let exited = false
-  let resolveDone: () => void = () => {}
-  const done = new Promise<void>((resolve) => { resolveDone = resolve })
+  const { promise: done, resolve: resolveDone } = Promise.withResolvers<void>()
 
   const performExit = (request: ExitRequest) => {
     if (exited) return

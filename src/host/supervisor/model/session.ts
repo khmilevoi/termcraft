@@ -98,10 +98,9 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // settled by `inbound.return()` in teardown/stop and never eaten by a later pull.
   async function nextInbound(deadlineAt: number, timeoutError: SupervisorError): Promise<ProtocolError | SupervisorError | InboundMessage> {
     if (inbound === null) return new SupervisorError({ code: "TRANSPORT_ERROR", reason: "no inbound iterator" })
-    // Bind the timer to a `const` from `setTimer` directly (not via a closure
-    // assignment inside the Promise executor, which TS 7 narrows to `never`).
-    let resolveTimeout!: (error: SupervisorError) => void
-    const timeout = new Promise<SupervisorError>((resolve) => { resolveTimeout = resolve })
+    // `Promise.withResolvers` returns the resolver directly, so there is no closure
+    // assignment inside the executor for TS 7 to narrow to `never`.
+    const { promise: timeout, resolve: resolveTimeout } = Promise.withResolvers<SupervisorError>()
     const remaining = Math.max(0, deadlineAt - deps.clock.now())
     const timer = deps.clock.setTimer(remaining, () => resolveTimeout(timeoutError))
     const next = inbound.next().then((result) => (result.done ? new SupervisorError({ code: "CHILD_EXITED", reason: "stdout closed before the expected message" }) : result.value))
@@ -412,8 +411,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // second kill and a repeat `await exited` are safe/idempotent; OS kill is terminal.
   async function reapChild(target: SpawnedChild, forceKill: boolean): Promise<void> {
     if (forceKill) target.kill()
-    let resolveReap!: (value: "reap-timeout") => void
-    const reapDeadline = new Promise<"reap-timeout">((resolve) => { resolveReap = resolve })
+    const { promise: reapDeadline, resolve: resolveReap } = Promise.withResolvers<"reap-timeout">()
     const reapTimer = deps.clock.setTimer(REAP_TIMEOUT_MS, () => resolveReap("reap-timeout"))
     const exit = target.exited.then(() => "exited" as const)
     const reaped = await Promise.race([exit, reapDeadline])

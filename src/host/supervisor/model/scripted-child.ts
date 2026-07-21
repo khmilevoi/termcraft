@@ -87,9 +87,8 @@ export function createScriptedChild(onWrite?: (bytes: Uint8Array) => void): Scri
   const written: Uint8Array[] = []
   let exitCode: number | null = null
   let signalCode: string | null = null
-  let resolveExited: (code: number) => void = () => {}
   let settled = false
-  const exited = new Promise<number>((resolve) => (resolveExited = resolve))
+  const { promise: exited, resolve: resolveExited } = Promise.withResolvers<number>()
 
   const settle = (code: number, signal: string | null) => {
     if (settled) return

@@ -55,15 +55,6 @@ function makeAccepted(commandId: UUIDv7, operationId: string): AcceptedCommandV1
   }
 }
 
-/** A promise plus its externally-callable resolver, for controlling concurrency timing. */
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((res) => {
-    resolve = res
-  })
-  return { promise, resolve }
-}
-
 describe("uuidv7TimestampMs", () => {
   test("extracts 0 from an id whose first 48 bits are all zero", () => {
     expect(uuidv7TimestampMs("00000000-0000-7000-8000-000000000000")).toBe(0)
@@ -98,7 +89,7 @@ describe("createDedupeLedger — §8.5 exactly-once handling", () => {
     const commandId = makeCommandId(BASE_MS - 1_000)
     const envelope = makeEnvelope()
     const expected = makeAccepted(commandId, "op-2")
-    const { promise: execPromise, resolve } = deferred<CommandResultV1>()
+    const { promise: execPromise, resolve } = Promise.withResolvers<CommandResultV1>()
     const execute = mock(() => execPromise)
 
     // Both calls issued before `execute` settles — the second must find the first's

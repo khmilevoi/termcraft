@@ -52,8 +52,7 @@ export async function runOneShotSession(
   // await. Then stop the stderr drain and return the inbound iterator so nothing leaks.
   async function teardown(kill: boolean): Promise<void> {
     if (kill) child.kill()
-    let resolveReap!: (value: "reap-timeout") => void
-    const reapDeadline = new Promise<"reap-timeout">((resolve) => { resolveReap = resolve })
+    const { promise: reapDeadline, resolve: resolveReap } = Promise.withResolvers<"reap-timeout">()
     const reapTimer = deps.clock.setTimer(REAP_TIMEOUT_MS, () => resolveReap("reap-timeout"))
     const reaped = await Promise.race([child.exited.then(() => "exited" as const), reapDeadline])
     reapTimer.cancel()
@@ -74,8 +73,7 @@ export async function runOneShotSession(
   // A single pull against an ABSOLUTE deadline (mirrors session.ts nextInbound): the
   // remaining time is `deadlineAt - now`, so a multi-message await keeps ONE bound.
   async function nextInbound(deadlineAt: number, timeoutError: SupervisorError): Promise<ProtocolError | SupervisorError | InboundMessage> {
-    let resolveTimeout!: (error: SupervisorError) => void
-    const timeout = new Promise<SupervisorError>((resolve) => { resolveTimeout = resolve })
+    const { promise: timeout, resolve: resolveTimeout } = Promise.withResolvers<SupervisorError>()
     const remaining = Math.max(0, deadlineAt - deps.clock.now())
     const timer = deps.clock.setTimer(remaining, () => resolveTimeout(timeoutError))
     const next = inbound.next().then((result) => (result.done ? new SupervisorError({ code: "CHILD_EXITED", reason: "stdout closed before the expected message" }) : result.value))
