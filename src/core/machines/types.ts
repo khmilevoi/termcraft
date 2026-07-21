@@ -12,4 +12,4 @@ export type {
   Transition,
   TransitionOutcome,
   TransitionTable,
-} from "./model/state-machine"
+} from "./model/state-machine";

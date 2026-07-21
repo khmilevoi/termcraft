@@ -1,18 +1,18 @@
 /** @jsxImportSource @opentui/react */
-import { activeTokens } from "../model/tokens"
+import { activeTokens } from "../model/tokens";
 
 /** Props for the themed `Input` component. `id` is the mandatory stable id (§3.2). */
 export interface InputProps {
   /** Stable id the host selects/pins on (§3.2). Mandatory on every catalog component. */
-  readonly id: string
+  readonly id: string;
   /** The current text value. */
-  readonly value?: string
+  readonly value?: string;
   /** Placeholder shown when the value is empty. */
-  readonly placeholder?: string
+  readonly placeholder?: string;
   /** Whether the input holds keyboard focus (drives the intrinsic's focused styling). */
-  readonly focused?: boolean
+  readonly focused?: boolean;
   /** Invoked with the new value on every edit; mapped to the intrinsic's `onInput`. */
-  readonly onChange?: (value: string) => void
+  readonly onChange?: (value: string) => void;
 }
 
 /**
@@ -24,7 +24,7 @@ export interface InputProps {
  * in the static headless render the handler is inert. Colors are semantic token names.
  */
 export function Input(props: InputProps) {
-  const tokens = activeTokens()
+  const tokens = activeTokens();
   return (
     <input
       id={props.id}
@@ -36,5 +36,5 @@ export function Input(props: InputProps) {
       backgroundColor={tokens.background}
       onInput={props.onChange}
     />
-  )
+  );
 }

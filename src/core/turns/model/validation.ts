@@ -1,10 +1,23 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import { MAX_TURN_ATTEMPT, canRetryAfterGate, type StateMachine, type TurnAction, type TurnAttempt, type TurnState } from "core/machines"
-import type { GateErrorV1, GatePageDescriptorV1, GateRunner, GateWarningV1, ManifestSliceV1 } from "core/ports"
-import type { PublishableEventV1 } from "core/mailbox"
-import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol"
-import type { PageSlug } from "entities/page"
+import {
+  MAX_TURN_ATTEMPT,
+  type StateMachine,
+  type TurnAction,
+  type TurnAttempt,
+  type TurnState,
+  canRetryAfterGate,
+} from "core/machines";
+import type { PublishableEventV1 } from "core/mailbox";
+import type {
+  GateErrorV1,
+  GatePageDescriptorV1,
+  GateRunner,
+  GateWarningV1,
+  ManifestSliceV1,
+} from "core/ports";
+import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
 /**
  * Gate validation over one frozen candidate — the `validating` sub-phase's own work
@@ -27,36 +40,49 @@ import type { PageSlug } from "entities/page"
  */
 
 export interface TurnValidationDeps {
-  readonly machine: StateMachine<TurnState, TurnAction>
-  readonly gateRunner: GateRunner
-  readonly publish: (event: PublishableEventV1<"turn.gateRejected">) => void
+  readonly machine: StateMachine<TurnState, TurnAction>;
+  readonly gateRunner: GateRunner;
+  readonly publish: (event: PublishableEventV1<"turn.gateRejected">) => void;
 }
 
 export interface TurnValidationPageInputV1 {
-  readonly pageSlug: PageSlug
-  readonly source: string
-  readonly fileName?: string
+  readonly pageSlug: PageSlug;
+  readonly source: string;
+  readonly fileName?: string;
 }
 
 export interface RunTurnValidationInputV1 {
-  readonly turnId: UUIDv7
-  readonly attempt: TurnAttempt
-  readonly manifestText: string
-  readonly pages: readonly TurnValidationPageInputV1[]
+  readonly turnId: UUIDv7;
+  readonly attempt: TurnAttempt;
+  readonly manifestText: string;
+  readonly pages: readonly TurnValidationPageInputV1[];
 }
 
-type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"]
+type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
 
 export type TurnValidationResultV1 =
-  | { readonly kind: "passed"; readonly slice: ManifestSliceV1; readonly descriptors: readonly GatePageDescriptorV1[]; readonly warnings: readonly GateWarningV1[] }
-  | { readonly kind: "retry"; readonly nextAttempt: TurnAttempt; readonly diagnostics: TurnGateDiagnosticsV1 }
-  | { readonly kind: "exhausted"; readonly failure: FailureDtoV1; readonly diagnostics: TurnGateDiagnosticsV1 }
+  | {
+      readonly kind: "passed";
+      readonly slice: ManifestSliceV1;
+      readonly descriptors: readonly GatePageDescriptorV1[];
+      readonly warnings: readonly GateWarningV1[];
+    }
+  | {
+      readonly kind: "retry";
+      readonly nextAttempt: TurnAttempt;
+      readonly diagnostics: TurnGateDiagnosticsV1;
+    }
+  | {
+      readonly kind: "exhausted";
+      readonly failure: FailureDtoV1;
+      readonly diagnostics: TurnGateDiagnosticsV1;
+    };
 
 /** §7.2: "Attempts are integers 1 through 4"; `canRetryAfterGate` already excludes `MAX_TURN_ATTEMPT` from calling this. */
 function nextAttemptAfter(attempt: TurnAttempt): TurnAttempt {
-  if (attempt === 1) return 2
-  if (attempt === 2) return 3
-  return 4 // attempt === 3 (MAX_TURN_ATTEMPT - 1)
+  if (attempt === 1) return 2;
+  if (attempt === 2) return 3;
+  return 4; // attempt === 3 (MAX_TURN_ATTEMPT - 1)
 }
 
 /**
@@ -69,10 +95,22 @@ function nextAttemptAfter(attempt: TurnAttempt): TurnAttempt {
  * to either side.
  */
 function toGateErrorDto(error: GateErrorV1): TurnGateDiagnosticsV1["errors"][number] {
-  return { kind: error.kind, code: error.code, message: error.message, file: error.file ?? null, line: error.line ?? null, column: error.column ?? null }
+  return {
+    kind: error.kind,
+    code: error.code,
+    message: error.message,
+    file: error.file ?? null,
+    line: error.line ?? null,
+    column: error.column ?? null,
+  };
 }
 function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnings"][number] {
-  return { kind: warning.kind, message: warning.message, line: warning.line ?? null, column: warning.column ?? null }
+  return {
+    kind: warning.kind,
+    message: warning.message,
+    line: warning.line ?? null,
+    column: warning.column ?? null,
+  };
 }
 
 function gateRetryExhaustedFailure(): FailureDtoV1 {
@@ -81,45 +119,64 @@ function gateRetryExhaustedFailure(): FailureDtoV1 {
     retryable: false,
     safeMessage: `Gate rejected the candidate after exhausting the ${MAX_TURN_ATTEMPT}-attempt budget.`,
     details: {},
-  }
+  };
 }
 
-export async function runTurnValidation(deps: TurnValidationDeps, input: RunTurnValidationInputV1): Promise<TurnValidationResultV1> {
-  const presentSlugs = input.pages.map((page) => page.pageSlug)
-  const sliceResult = await wrap(deps.gateRunner.runManifestSlice({ manifestText: input.manifestText, presentSlugs }))
+export async function runTurnValidation(
+  deps: TurnValidationDeps,
+  input: RunTurnValidationInputV1,
+): Promise<TurnValidationResultV1> {
+  const presentSlugs = input.pages.map((page) => page.pageSlug);
+  const sliceResult = await wrap(
+    deps.gateRunner.runManifestSlice({ manifestText: input.manifestText, presentSlugs }),
+  );
 
-  const errors: GateErrorV1[] = [...sliceResult.errors]
-  const warnings: GateWarningV1[] = []
-  const descriptors: GatePageDescriptorV1[] = []
+  const errors: GateErrorV1[] = [...sliceResult.errors];
+  const warnings: GateWarningV1[] = [];
+  const descriptors: GatePageDescriptorV1[] = [];
 
   for (const page of input.pages) {
     const pageResult = await wrap(
-      deps.gateRunner.runPage({ source: page.source, slug: page.pageSlug, ...(page.fileName !== undefined ? { fileName: page.fileName } : {}) }),
-    )
-    errors.push(...pageResult.errors)
-    warnings.push(...pageResult.warnings)
-    if (pageResult.descriptor !== null) descriptors.push(pageResult.descriptor)
+      deps.gateRunner.runPage({
+        source: page.source,
+        slug: page.pageSlug,
+        ...(page.fileName !== undefined ? { fileName: page.fileName } : {}),
+      }),
+    );
+    errors.push(...pageResult.errors);
+    warnings.push(...pageResult.warnings);
+    if (pageResult.descriptor !== null) descriptors.push(pageResult.descriptor);
   }
 
   if (errors.length === 0) {
-    const slice = sliceResult.slice ?? { pages: presentSlugs, active: null }
-    return { kind: "passed", slice, descriptors, warnings }
+    const slice = sliceResult.slice ?? { pages: presentSlugs, active: null };
+    return { kind: "passed", slice, descriptors, warnings };
   }
 
-  const diagnostics: TurnGateDiagnosticsV1 = { errors: errors.map(toGateErrorDto), warnings: warnings.map(toGateWarningDto) }
+  const diagnostics: TurnGateDiagnosticsV1 = {
+    errors: errors.map(toGateErrorDto),
+    warnings: warnings.map(toGateWarningDto),
+  };
   deps.publish({
     kind: "turn.gateRejected",
-    payload: { turnId: input.turnId, attempt: input.attempt, retryNumber: input.attempt - 1, diagnostics },
+    payload: {
+      turnId: input.turnId,
+      attempt: input.attempt,
+      retryNumber: input.attempt - 1,
+      diagnostics,
+    },
     correlation: { turnId: input.turnId },
-  })
+  });
 
   if (canRetryAfterGate(input.attempt)) {
-    const retried = deps.machine.apply("retryAfterGate")
+    const retried = deps.machine.apply("retryAfterGate");
     if (retried.kind === "illegal") {
-      console.warn(`core/turns/validation: retryAfterGate illegal (${retried.code}) for turn ${input.turnId}`)
+      console.warn(
+        `core/turns/validation: retryAfterGate illegal (${retried.code}) for turn ${input.turnId}`,
+      );
     }
-    return { kind: "retry", nextAttempt: nextAttemptAfter(input.attempt), diagnostics }
+    return { kind: "retry", nextAttempt: nextAttemptAfter(input.attempt), diagnostics };
   }
 
-  return { kind: "exhausted", failure: gateRetryExhaustedFailure(), diagnostics }
+  return { kind: "exhausted", failure: gateRetryExhaustedFailure(), diagnostics };
 }

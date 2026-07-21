@@ -1,6 +1,6 @@
-import type { CommandEnvelopeV1, CommandKindV1, UnavailableReason, UUIDv7 } from "core/protocol"
+import type { CommandEnvelopeV1, CommandKindV1, UUIDv7, UnavailableReason } from "core/protocol";
 
-import type { PublishableEventV1 } from "./model/event-bus"
+import type { PublishableEventV1 } from "./model/event-bus";
 
 /**
  * The mailbox module's own seam vocabulary (kernel-command-contract §12.1, §12.2) — the
@@ -24,14 +24,14 @@ import type { PublishableEventV1 } from "./model/event-bus"
  * `CapabilityTargetByKindV1[kind]` (§10.1) — 6C's 43-row table. Opaque here: dispatch
  * only ever threads it from `TargetExtractor` to `GuardRegistry`, never inspects it.
  */
-export type GuardTarget = unknown
+export type GuardTarget = unknown;
 
 /**
  * `currentKernelState` (§10.2: "Each command family owns a pure guard over exactly
  * `(currentKernelState, CapabilityTargetByKindV1[K])`") — the seven state machines'
  * combined read surface. Opaque here for the same reason as {@link GuardTarget}.
  */
-export type KernelStateSnapshot = unknown
+export type KernelStateSnapshot = unknown;
 
 /**
  * §10.1's `CapabilityState`, mirrored here rather than imported: `core/protocol` has no
@@ -42,7 +42,7 @@ export type KernelStateSnapshot = unknown
  */
 export type GuardDecision =
   | Readonly<{ available: true }>
-  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>
+  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>;
 
 /**
  * §10.1: "The extractor first validates `CommandPayloadByKindV1`, then normalizes the
@@ -51,7 +51,7 @@ export type GuardDecision =
  * schema-valid payload for `kind`, typed `unknown` only because the precise per-kind
  * return shape (`CapabilityTargetByKindV1[K]`) is 6C's, not this module's.
  */
-export type TargetExtractor = (kind: CommandKindV1, payload: unknown) => GuardTarget
+export type TargetExtractor = (kind: CommandKindV1, payload: unknown) => GuardTarget;
 
 /**
  * §10.2: "Each command family owns a pure guard over exactly `(currentKernelState,
@@ -59,7 +59,11 @@ export type TargetExtractor = (kind: CommandKindV1, payload: unknown) => GuardTa
  * its own injected `readKernelState` — never cached across commands, so a guard always
  * sees the state as of the moment its command is being evaluated.
  */
-export type GuardRegistry = (kind: CommandKindV1, target: GuardTarget, state: KernelStateSnapshot) => GuardDecision
+export type GuardRegistry = (
+  kind: CommandKindV1,
+  target: GuardTarget,
+  state: KernelStateSnapshot,
+) => GuardDecision;
 
 // --- §12.1 steps 4-5: named model action(s), injected into dispatch.ts -------------
 
@@ -73,9 +77,9 @@ export type GuardRegistry = (kind: CommandKindV1, target: GuardTarget, state: Ke
  * that is not otherwise propagated.
  */
 export interface HandlerOutcome {
-  readonly disposition: "completed" | "started" | "no-op"
-  readonly events: readonly PublishableEventV1[]
-  readonly operationId?: UUIDv7
+  readonly disposition: "completed" | "started" | "no-op";
+  readonly events: readonly PublishableEventV1[];
+  readonly operationId?: UUIDv7;
 }
 
 /**
@@ -86,7 +90,7 @@ export interface HandlerOutcome {
  * plus the revision advance plus publication land in one frame (§6: "The mailbox
  * invokes transition actions synchronously within one Reatom transaction frame").
  */
-export type HandlerRegistry = (envelope: CommandEnvelopeV1) => HandlerOutcome
+export type HandlerRegistry = (envelope: CommandEnvelopeV1) => HandlerOutcome;
 
 // --- §12.2 step 3: backend attempt-lease fencing, injected into signal-ingress.ts ---
 
@@ -97,9 +101,9 @@ export type HandlerRegistry = (envelope: CommandEnvelopeV1) => HandlerOutcome
  * row) — it is never a DTO field; only this fencing comparison ever sees it.
  */
 export interface TurnBackendLeaseV1 {
-  readonly turnId: UUIDv7
-  readonly attempt: number
-  readonly leaseNonce: string
+  readonly turnId: UUIDv7;
+  readonly attempt: number;
+  readonly leaseNonce: string;
 }
 
 /**
@@ -111,5 +115,5 @@ export interface TurnBackendLeaseV1 {
  * does, signal-ingress must stay testable without wiring the whole state machine in.
  */
 export interface TurnFenceProbe {
-  readonly currentLease: () => TurnBackendLeaseV1 | null
+  readonly currentLease: () => TurnBackendLeaseV1 | null;
 }

@@ -1,6 +1,6 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
-import { ProtocolError } from "./errors"
+import { ProtocolError } from "./errors";
 
 /** A structurally-valid JSON value produced by the strict decoder. */
 export type JsonValue =
@@ -9,9 +9,9 @@ export type JsonValue =
   | number
   | string
   | JsonValue[]
-  | { [key: string]: JsonValue }
+  | { [key: string]: JsonValue };
 
-const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 /** §5: invalid UTF-8 is a protocol violation. A non-streaming decode resets each call. */
 export function decodeUtf8(bytes: Uint8Array): ProtocolError | string {
@@ -26,7 +26,7 @@ export function decodeUtf8(bytes: Uint8Array): ProtocolError | string {
         reason: "payload is not valid UTF-8",
         cause,
       }),
-  })
+  });
 }
 
 /**
@@ -44,20 +44,20 @@ export function parseStrictJson(text: string): ProtocolError | JsonValue {
         reason: "payload is not valid JSON",
         cause,
       }),
-  })
-  if (parsed instanceof ProtocolError) return parsed
+  });
+  if (parsed instanceof ProtocolError) return parsed;
 
-  const violation = scanStrictJson(text)
-  if (violation instanceof ProtocolError) return violation
+  const violation = scanStrictJson(text);
+  if (violation instanceof ProtocolError) return violation;
 
-  return parsed
+  return parsed;
 }
 
 /** Convenience: UTF-8 decode then strict JSON parse. */
 export function decodeJsonPayload(bytes: Uint8Array): ProtocolError | JsonValue {
-  const text = decodeUtf8(bytes)
-  if (text instanceof ProtocolError) return text
-  return parseStrictJson(text)
+  const text = decodeUtf8(bytes);
+  if (text instanceof ProtocolError) return text;
+  return parseStrictJson(text);
 }
 
 // The scanner assumes `text` is already valid JSON (JSON.parse accepted it), so
@@ -65,114 +65,114 @@ export function decodeJsonPayload(bytes: Uint8Array): ProtocolError | JsonValue 
 // flags duplicate keys and unsafe-integer number tokens. `JSON.parse` decodes
 // key string tokens so escaped and literal spellings of the same key collide.
 function scanStrictJson(text: string): ProtocolError | null {
-  const objectKeys: Set<string>[] = []
-  const contexts: ("object" | "array")[] = []
-  let expectingKey = false
-  let pos = 0
-  const length = text.length
+  const objectKeys: Set<string>[] = [];
+  const contexts: ("object" | "array")[] = [];
+  let expectingKey = false;
+  let pos = 0;
+  const length = text.length;
 
   while (pos < length) {
-    const ch = text.charAt(pos)
+    const ch = text.charAt(pos);
     if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
-      pos += 1
-      continue
+      pos += 1;
+      continue;
     }
     if (ch === "{") {
-      contexts.push("object")
-      objectKeys.push(new Set())
-      expectingKey = true
-      pos += 1
-      continue
+      contexts.push("object");
+      objectKeys.push(new Set());
+      expectingKey = true;
+      pos += 1;
+      continue;
     }
     if (ch === "}") {
-      contexts.pop()
-      objectKeys.pop()
-      expectingKey = false
-      pos += 1
-      continue
+      contexts.pop();
+      objectKeys.pop();
+      expectingKey = false;
+      pos += 1;
+      continue;
     }
     if (ch === "[") {
-      contexts.push("array")
-      expectingKey = false
-      pos += 1
-      continue
+      contexts.push("array");
+      expectingKey = false;
+      pos += 1;
+      continue;
     }
     if (ch === "]") {
-      contexts.pop()
-      pos += 1
-      continue
+      contexts.pop();
+      pos += 1;
+      continue;
     }
     if (ch === ":") {
-      expectingKey = false
-      pos += 1
-      continue
+      expectingKey = false;
+      pos += 1;
+      continue;
     }
     if (ch === ",") {
-      expectingKey = contexts[contexts.length - 1] === "object"
-      pos += 1
-      continue
+      expectingKey = contexts[contexts.length - 1] === "object";
+      pos += 1;
+      continue;
     }
     if (ch === '"') {
-      const end = scanStringEnd(text, pos)
+      const end = scanStringEnd(text, pos);
       if (expectingKey && contexts[contexts.length - 1] === "object") {
-        const key = JSON.parse(text.slice(pos, end)) as string
-        const keys = objectKeys[objectKeys.length - 1]
+        const key = JSON.parse(text.slice(pos, end)) as string;
+        const keys = objectKeys[objectKeys.length - 1];
         if (keys) {
           if (keys.has(key)) {
             return new ProtocolError({
               code: "MALFORMED_PROTOCOL",
               reason: `duplicate object key ${JSON.stringify(key)}`,
-            })
+            });
           }
-          keys.add(key)
+          keys.add(key);
         }
-        expectingKey = false
+        expectingKey = false;
       }
-      pos = end
-      continue
+      pos = end;
+      continue;
     }
     if (ch === "-" || (ch >= "0" && ch <= "9")) {
-      const end = scanNumberEnd(text, pos)
-      const violation = checkNumberToken(text.slice(pos, end))
-      if (violation instanceof ProtocolError) return violation
-      pos = end
-      continue
+      const end = scanNumberEnd(text, pos);
+      const violation = checkNumberToken(text.slice(pos, end));
+      if (violation instanceof ProtocolError) return violation;
+      pos = end;
+      continue;
     }
     // true / false / null — advance one letter at a time; structure is already valid.
-    pos += 1
+    pos += 1;
   }
-  return null
+  return null;
 }
 
 function scanStringEnd(text: string, start: number): number {
-  let pos = start + 1
+  let pos = start + 1;
   while (pos < text.length) {
-    const ch = text.charAt(pos)
+    const ch = text.charAt(pos);
     if (ch === "\\") {
-      pos += 2
-      continue
+      pos += 2;
+      continue;
     }
-    if (ch === '"') return pos + 1
-    pos += 1
+    if (ch === '"') return pos + 1;
+    pos += 1;
   }
-  return pos
+  return pos;
 }
 
 function scanNumberEnd(text: string, start: number): number {
-  let pos = start
+  let pos = start;
   while (pos < text.length) {
-    const ch = text.charAt(pos)
+    const ch = text.charAt(pos);
     const isNumberChar =
       (ch >= "0" && ch <= "9") ||
       ch === "-" ||
       ch === "+" ||
       ch === "." ||
       ch === "e" ||
-      ch === "E"
-    if (!isNumberChar) break
-    pos += 1
+      ch === "E";
+    if (!isNumberChar) break;
+    pos += 1;
   }
-  return pos
+  return pos;
 }
 
 function checkNumberToken(token: string): ProtocolError | null {
@@ -180,18 +180,18 @@ function checkNumberToken(token: string): ProtocolError | null {
   // rejects the bare NaN/Infinity literals but still parses "1e999" to Infinity
   // and "1e20" to an unsafe integer value, so exponent/float tokens must be
   // inspected too — a nested `body` number is not otherwise range-checked here.
-  const value = Number(token)
+  const value = Number(token);
   if (!Number.isFinite(value)) {
     return new ProtocolError({
       code: "MALFORMED_PROTOCOL",
       reason: `non-finite JSON number ${token}`,
-    })
+    });
   }
   if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
     return new ProtocolError({
       code: "MALFORMED_PROTOCOL",
       reason: `unsafe integer JSON number ${token}`,
-    })
+    });
   }
-  return null
+  return null;
 }

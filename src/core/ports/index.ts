@@ -31,8 +31,8 @@ export type {
   SessionPlan,
   SessionScopeInput,
   SessionWorkspaceBinding,
-} from "./agent-backend"
-export type { AgentRegistry } from "./agent-registry"
+} from "./agent-backend";
+export type { AgentRegistry } from "./agent-registry";
 
 // ---- project lifecycle -----------------------------------------------------------------
 export type {
@@ -48,12 +48,19 @@ export type {
   TargetStackV1,
   WorkspaceStateReadV1,
   WorkspaceStateV1,
-} from "./project-store"
+} from "./project-store";
 
 // ---- chats, pages, pins -----------------------------------------------------------------
-export type { ChatHandleV1, ChatHeaderV1, ChatLoadResultV1, ChatMutations, ChatPageCursorV1, ChatReader } from "./chat-store"
-export type { PageMutations, PageReader, PageSourceV1 } from "./page-store"
-export type { PinMutations, PinReader } from "./pin-store"
+export type {
+  ChatHandleV1,
+  ChatHeaderV1,
+  ChatLoadResultV1,
+  ChatMutations,
+  ChatPageCursorV1,
+  ChatReader,
+} from "./chat-store";
+export type { PageMutations, PageReader, PageSourceV1 } from "./page-store";
+export type { PinMutations, PinReader } from "./pin-store";
 
 // ---- turn transactions + the project-write mutex ----------------------------------------
 export type {
@@ -68,8 +75,8 @@ export type {
   TurnTerminalizeInputV1,
   TurnTerminalRecordV1,
   TurnTransactionService,
-} from "./turn-transactions"
-export type { ProjectWriteCoordinator, ProjectWritePermit } from "./project-write"
+} from "./turn-transactions";
+export type { ProjectWriteCoordinator, ProjectWritePermit } from "./project-write";
 
 // ---- staging, trust, projections, session checkpoint, recovery --------------------------
 export type {
@@ -83,8 +90,8 @@ export type {
   StagingRuntimeDocV1,
   StagingService,
   TurnWorkspaceV1,
-} from "./staging"
-export type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "./trust"
+} from "./staging";
+export type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "./trust";
 export type {
   DiagnosticsCache,
   DiagnosticsEntryV1,
@@ -95,9 +102,14 @@ export type {
   PageMetaKeyV1,
   RenderCache,
   RenderEntryV1,
-} from "./projections"
-export type { ResumeVerdictV1, SessionCheckpointService } from "./session-checkpoint"
-export type { OrphanTurnOutcomeV1, RecoveryOutcomeV1, RecoveryService, TransactionClassificationV1 } from "./recovery"
+} from "./projections";
+export type { ResumeVerdictV1, SessionCheckpointService } from "./session-checkpoint";
+export type {
+  OrphanTurnOutcomeV1,
+  RecoveryOutcomeV1,
+  RecoveryService,
+  TransactionClassificationV1,
+} from "./recovery";
 
 // ---- gate ---------------------------------------------------------------------------------
 export type {
@@ -110,7 +122,7 @@ export type {
   GateWarningV1,
   ManifestSliceResultV1,
   ManifestSliceV1,
-} from "./gate-runner"
+} from "./gate-runner";
 
 // ---- preview, host supervisor, export render -----------------------------------------------
 export type {
@@ -122,9 +134,20 @@ export type {
   PreviewSession,
   StyledRunV1,
   TerminalCapabilitiesV1,
-} from "./preview-session"
-export type { HostModeV1, HostSessionSpecV1, HostSupervisorPort, SupervisorEventV1 } from "./host-supervisor"
-export type { ExportRenderPoolBoundsV1, ExportRenderPort, ExportRenderResultV1, ExportRenderTaskV1, RuntimeDeclarationBundleV1 } from "./export-render"
+} from "./preview-session";
+export type {
+  HostModeV1,
+  HostSessionSpecV1,
+  HostSupervisorPort,
+  SupervisorEventV1,
+} from "./host-supervisor";
+export type {
+  ExportRenderPoolBoundsV1,
+  ExportRenderPort,
+  ExportRenderResultV1,
+  ExportRenderTaskV1,
+  RuntimeDeclarationBundleV1,
+} from "./export-render";
 
 // ---- Git (declared only — no MVP implementation) -------------------------------------------
 export type {
@@ -137,8 +160,14 @@ export type {
   PageHistoryRequestV1,
   PageIndexStateV1,
   PageTrackingStateV1,
-} from "./git-history"
-export type { CommitPathImageV1, CommitPlanV1, CommitResultV1, CommitScopeV1, GitCommitter } from "./git-committer"
+} from "./git-history";
+export type {
+  CommitPathImageV1,
+  CommitPlanV1,
+  CommitResultV1,
+  CommitScopeV1,
+  GitCommitter,
+} from "./git-committer";
 
 /**
  * A zero-cost, compile-time-only conformance check: `Impl` must be assignable to `Port`, or
@@ -157,4 +186,4 @@ export type { CommitPathImageV1, CommitPlanV1, CommitResultV1, CommitScopeV1, Gi
  * This is a pure type — it has no runtime component and nothing to unit-test; `bun test`
  * cannot observe a type-level assignability failure, only `bun x tsc --noEmit` can.
  */
-export type AssertConforms<Port, Impl extends Port> = Impl
+export type AssertConforms<Port, Impl extends Port> = Impl;

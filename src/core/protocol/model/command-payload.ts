@@ -1,10 +1,10 @@
-import { z } from "zod"
+import { z } from "zod";
 
-import { pageSlugSchema } from "entities/page"
+import { pageSlugSchema } from "entities/page";
 
-import { type CommandKindV1 } from "./command-kind"
-import { frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto"
-import { uuidv7Schema } from "./ids"
+import { type CommandKindV1 } from "./command-kind";
+import { uuidv7Schema } from "./ids";
+import { frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto";
 
 /**
  * The closed v1 command-payload registry (kernel-command-contract §8.2): one Zod schema
@@ -42,7 +42,7 @@ import { uuidv7Schema } from "./ids"
  */
 
 /** `trust` (§8.2 `project.setTrust`), reused for `project.create`'s creation defaults. */
-const trustSchema = z.enum(["trusted", "untrusted-read-only"])
+const trustSchema = z.enum(["trusted", "untrusted-read-only"]);
 
 /**
  * `project.create`'s "validated creation defaults" is prose-only (§8.2). A fresh project
@@ -54,7 +54,7 @@ const trustSchema = z.enum(["trusted", "untrusted-read-only"])
 const projectCreationDefaultsV1Schema = z.strictObject({
   trust: trustSchema,
   workspaceIdentity: z.string().min(1),
-})
+});
 
 /**
  * `project.create`: "canonical root, validated creation defaults, initial text" (§8.2).
@@ -66,12 +66,12 @@ const projectCreatePayloadSchema = z.strictObject({
   root: z.string().min(1),
   creationDefaults: projectCreationDefaultsV1Schema,
   text: z.string().min(1),
-})
+});
 
 /** `project.open`: "canonical root" (§8.2). */
 const projectOpenPayloadSchema = z.strictObject({
   root: z.string().min(1),
-})
+});
 
 /**
  * `project.retryOpen`'s closed recovery discriminated union, transcribed verbatim from
@@ -86,34 +86,34 @@ const projectRetryOpenPayloadSchema = z.strictObject({
     z.strictObject({ kind: z.literal("export"), operationId: uuidv7Schema }),
     z.strictObject({ kind: z.literal("migration"), migrationActionId: uuidv7Schema }),
   ]),
-})
+});
 
 /** `project.close`: "empty" (§8.2) — the exact empty object. */
-const projectClosePayloadSchema = z.strictObject({})
+const projectClosePayloadSchema = z.strictObject({});
 
 /** `project.setTrust`: `{ trust, workspaceIdentity }`, transcribed verbatim (§8.2). */
 const projectSetTrustPayloadSchema = z.strictObject({
   trust: trustSchema,
   workspaceIdentity: z.string().min(1),
-})
+});
 
 /** `turn.start`: "message text" (§8.2). `text` is the spec's own name for this concept. */
 const turnStartPayloadSchema = z.strictObject({
   text: z.string().min(1),
-})
+});
 
 /** `turn.cancel`: "`turnId`" (§8.2, fixed name). */
 const turnCancelPayloadSchema = z.strictObject({
   turnId: uuidv7Schema,
-})
+});
 
 /** `chat.create`: "empty" (§8.2). */
-const chatCreatePayloadSchema = z.strictObject({})
+const chatCreatePayloadSchema = z.strictObject({});
 
 /** `chat.switch`: "`chatId`" (§8.2, fixed name). */
 const chatSwitchPayloadSchema = z.strictObject({
   chatId: uuidv7Schema,
-})
+});
 
 /**
  * `model.select`: "backend, model, effort" (§8.2). §10.1 confirms all three as plain
@@ -124,7 +124,7 @@ const modelSelectPayloadSchema = z.strictObject({
   backend: z.string().min(1),
   model: z.string().min(1),
   effort: z.string().min(1),
-})
+});
 
 /**
  * `page.renameTitle`: "page slug, validated new title" (§8.2). `pageSlug` matches §10.1's
@@ -133,22 +133,22 @@ const modelSelectPayloadSchema = z.strictObject({
 const pageRenameTitlePayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
   title: z.string().min(1),
-})
+});
 
 /** `page.removePlan`: `{ pageSlug }`, transcribed verbatim (§8.2). */
 const pageRemovePlanPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
-})
+});
 
 /** `page.removeConfirm`: `{ pageRemovePlanId }`, transcribed verbatim (§8.2). */
 const pageRemoveConfirmPayloadSchema = z.strictObject({
   pageRemovePlanId: uuidv7Schema,
-})
+});
 
 /** `page.removeDiscardPlan`: `{ pageRemovePlanId }` (§8.2, same shape as `removeConfirm`). */
 const pageRemoveDiscardPlanPayloadSchema = z.strictObject({
   pageRemovePlanId: uuidv7Schema,
-})
+});
 
 /**
  * `page.reorder`: "exact permutation of listed slugs" (§8.2). `pageSlugs` is chosen here —
@@ -158,17 +158,17 @@ const pageRemoveDiscardPlanPayloadSchema = z.strictObject({
  */
 const pageReorderPayloadSchema = z.strictObject({
   pageSlugs: z.array(pageSlugSchema).readonly(),
-})
+});
 
 /** `history.open`: "active page slug" (§8.2). `pageSlug` matches §10.1's capability target. */
 const historyOpenPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
-})
+});
 
 /** `preview.selectPage`: "page slug" (§8.2). */
 const previewSelectPagePayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
-})
+});
 
 /**
  * `preview.selectHistorical`: "page slug, full commit id" (§8.2). Both names confirmed by
@@ -179,12 +179,12 @@ const previewSelectPagePayloadSchema = z.strictObject({
 const previewSelectHistoricalPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
   sourceCommit: z.string().min(1),
-})
+});
 
 /** `preview.selectCurrent`: "page slug" (§8.2). */
 const previewSelectCurrentPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
-})
+});
 
 /**
  * `preview.resize`: "`previewSessionId`, width and height" (§8.2). Spelled out as two
@@ -194,7 +194,7 @@ const previewResizePayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
   width: z.number().int().positive(),
   height: z.number().int().positive(),
-})
+});
 
 /**
  * Terminal color/geometry capabilities announced at `preview.setThemeCapabilities` (§8.2).
@@ -204,7 +204,7 @@ const previewResizePayloadSchema = z.strictObject({
  */
 const terminalCapabilitiesV1Schema = z.strictObject({
   colorDepth: z.number().int().positive(),
-})
+});
 
 /**
  * `preview.setThemeCapabilities`: "`previewSessionId`, theme id, terminal capabilities"
@@ -215,13 +215,13 @@ const previewSetThemeCapabilitiesPayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
   themeId: z.string().min(1),
   terminalCapabilities: terminalCapabilitiesV1Schema,
-})
+});
 
 /** `preview.setMode`: "`previewSessionId`, static or interactive" (§8.2); `mode` matches §10.1. */
 const previewSetModePayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
   mode: z.enum(["static", "interactive"]),
-})
+});
 
 /**
  * `preview.forwardInput`'s "typed key/click/mouse input" (§8.2) has no closed shape fixed
@@ -243,7 +243,7 @@ const previewInputV1Schema = z.discriminatedUnion("kind", [
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
   }),
-])
+]);
 
 /**
  * `preview.forwardInput`: "`previewSessionId`, typed key/click/mouse input" (§8.2).
@@ -253,7 +253,7 @@ const previewInputV1Schema = z.discriminatedUnion("kind", [
 const previewForwardInputPayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
   input: previewInputV1Schema,
-})
+});
 
 /**
  * `preview.setTweak`'s "typed value" (§8.2) has no closed catalog anywhere in the spec —
@@ -266,7 +266,7 @@ const tweakValueV1Schema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("string"), value: z.string() }),
   z.strictObject({ kind: z.literal("number"), value: z.number() }),
   z.strictObject({ kind: z.literal("boolean"), value: z.boolean() }),
-])
+]);
 
 /**
  * `preview.setTweak`: "`previewSessionId`, tweak id and typed value" (§8.2). `tweakId`
@@ -276,7 +276,7 @@ const previewSetTweakPayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
   tweakId: z.string().min(1),
   value: tweakValueV1Schema,
-})
+});
 
 /**
  * `preview.queryGeometry`'s closed hit/rect/describe/layout/pin-anchor query union (§8.2).
@@ -301,7 +301,7 @@ const geometryQueryV1Schema = z.discriminatedUnion("kind", [
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
   }),
-])
+]);
 
 /**
  * `preview.queryGeometry`: `{ frameToken, query }`, transcribed verbatim (§8.2). Reuses
@@ -310,17 +310,17 @@ const geometryQueryV1Schema = z.discriminatedUnion("kind", [
 const previewQueryGeometryPayloadSchema = z.strictObject({
   frameToken: frameTokenV1Schema,
   query: geometryQueryV1Schema,
-})
+});
 
 /** `preview.retry`: "`previewSessionId`" (§8.2). */
 const previewRetryPayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
-})
+});
 
 /** `preview.close`: "`previewSessionId`" (§8.2). */
 const previewClosePayloadSchema = z.strictObject({
   previewSessionId: uuidv7Schema,
-})
+});
 
 /**
  * `selection.set`: "page slug, element id" (§8.2); both names confirmed by §10.1's
@@ -329,10 +329,10 @@ const previewClosePayloadSchema = z.strictObject({
 const selectionSetPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
   elementId: z.string().min(1),
-})
+});
 
 /** `selection.clear`: "empty" (§8.2). */
-const selectionClearPayloadSchema = z.strictObject({})
+const selectionClearPayloadSchema = z.strictObject({});
 
 /**
  * `pin.create`: `{ geometryToken, text }`, transcribed verbatim (§8.2) — "No page,
@@ -343,7 +343,7 @@ const selectionClearPayloadSchema = z.strictObject({})
 const pinCreatePayloadSchema = z.strictObject({
   geometryToken: geometryTokenV1Schema,
   text: z.string(),
-})
+});
 
 /**
  * `pin.setStatus`: "stable `pinId`, `open` or `resolved`" (§8.2); `status` matches §10.1's
@@ -352,7 +352,7 @@ const pinCreatePayloadSchema = z.strictObject({
 const pinSetStatusPayloadSchema = z.strictObject({
   pinId: uuidv7Schema,
   status: z.enum(["open", "resolved"]),
-})
+});
 
 /**
  * `restore.plan`: "page slug, full commit id" (§8.2); both names confirmed by §10.1's
@@ -361,7 +361,7 @@ const pinSetStatusPayloadSchema = z.strictObject({
 const restorePlanPayloadSchema = z.strictObject({
   pageSlug: pageSlugSchema,
   sourceCommit: z.string().min(1),
-})
+});
 
 /**
  * `restore.confirm`: "`restorePlanId`, overwrite acknowledgement" (§8.2). Unlike
@@ -374,17 +374,17 @@ const restorePlanPayloadSchema = z.strictObject({
 const restoreConfirmPayloadSchema = z.strictObject({
   restorePlanId: uuidv7Schema,
   overwriteAcknowledged: z.boolean(),
-})
+});
 
 /** `restore.discardPlan`: "`restorePlanId`" (§8.2). */
 const restoreDiscardPlanPayloadSchema = z.strictObject({
   restorePlanId: uuidv7Schema,
-})
+});
 
 /** `restore.retryRecord`: "`restoreActionId`" (§8.2). */
 const restoreRetryRecordPayloadSchema = z.strictObject({
   restoreActionId: uuidv7Schema,
-})
+});
 
 /**
  * `commit.plan`: "typed commit scope" (§8.2); §10.1's capability target fixes the closed
@@ -392,7 +392,7 @@ const restoreRetryRecordPayloadSchema = z.strictObject({
  */
 const commitPlanPayloadSchema = z.strictObject({
   scope: z.enum(["current-page", "infrastructure", "whole-project"]),
-})
+});
 
 /**
  * `commit.confirm`: "`commitPlanId`, message, required warning acknowledgement" (§8.2).
@@ -404,15 +404,15 @@ const commitConfirmPayloadSchema = z.strictObject({
   commitPlanId: uuidv7Schema,
   message: z.string().min(1),
   warningAcknowledged: z.boolean(),
-})
+});
 
 /** `commit.discardPlan`: "`commitPlanId`" (§8.2). */
 const commitDiscardPlanPayloadSchema = z.strictObject({
   commitPlanId: uuidv7Schema,
-})
+});
 
 /** `export.start`: "empty" (§8.2). */
-const exportStartPayloadSchema = z.strictObject({})
+const exportStartPayloadSchema = z.strictObject({});
 
 /**
  * `migration.plan`'s "typed selected file-kind scope" has no closed catalog anywhere in
@@ -422,7 +422,7 @@ const exportStartPayloadSchema = z.strictObject({})
  */
 const fileKindScopeV1Schema = z.strictObject({
   fileKinds: z.array(z.string().min(1)).min(1).readonly(),
-})
+});
 
 /**
  * `migration.plan`: "empty or typed selected file-kind scope" (§8.2) — the one row that
@@ -433,7 +433,7 @@ const fileKindScopeV1Schema = z.strictObject({
 const migrationPlanPayloadSchema = z.union([
   z.strictObject({}),
   z.strictObject({ scope: fileKindScopeV1Schema }),
-])
+]);
 
 /**
  * `migration.confirm`: `{ migrationPlanId, acknowledged: true }`, transcribed verbatim
@@ -443,17 +443,17 @@ const migrationPlanPayloadSchema = z.union([
 const migrationConfirmPayloadSchema = z.strictObject({
   migrationPlanId: uuidv7Schema,
   acknowledged: z.literal(true),
-})
+});
 
 /** `migration.discardPlan`: `{ migrationPlanId }`, transcribed verbatim (§8.2). */
 const migrationDiscardPlanPayloadSchema = z.strictObject({
   migrationPlanId: uuidv7Schema,
-})
+});
 
 /** `migration.retryRecovery`: `{ migrationActionId }`, transcribed verbatim (§8.2). */
 const migrationRetryRecoveryPayloadSchema = z.strictObject({
   migrationActionId: uuidv7Schema,
-})
+});
 
 /**
  * The closed `CommandPayloadByKindV1` schema map (§8.2). `satisfies` (not a type
@@ -505,19 +505,19 @@ export const commandPayloadSchemas = {
   "migration.confirm": migrationConfirmPayloadSchema,
   "migration.discardPlan": migrationDiscardPlanPayloadSchema,
   "migration.retryRecovery": migrationRetryRecoveryPayloadSchema,
-} satisfies Readonly<Record<CommandKindV1, z.ZodType>>
+} satisfies Readonly<Record<CommandKindV1, z.ZodType>>;
 
 /**
  * The type-level twin of {@link commandPayloadSchemas}, derived through `z.infer` so the
  * runtime map and the compile-time map cannot drift apart.
  */
 export type CommandPayloadByKindV1 = {
-  readonly [K in CommandKindV1]: z.infer<(typeof commandPayloadSchemas)[K]>
-}
+  readonly [K in CommandKindV1]: z.infer<(typeof commandPayloadSchemas)[K]>;
+};
 
 /** Fetches the payload schema for one command kind — the single indexing point callers use. */
 export function commandPayloadSchemaFor<K extends CommandKindV1>(
   kind: K,
 ): (typeof commandPayloadSchemas)[K] {
-  return commandPayloadSchemas[kind]
+  return commandPayloadSchemas[kind];
 }

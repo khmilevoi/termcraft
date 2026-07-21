@@ -1,7 +1,7 @@
-import type { AgentRegistry, ProjectStore } from "core/ports"
-import type { FailureDtoV1 } from "core/protocol"
+import type { AgentRegistry, ProjectStore } from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
 
-import type { ModelSelectionRejectionV1, ModelSelectionV1 } from "../types"
+import type { ModelSelectionRejectionV1, ModelSelectionV1 } from "../types";
 
 /**
  * `model.select` (kernel-command-contract §8.2): "Validate backend capability and store
@@ -22,39 +22,39 @@ export function validateModelSelection(
   registry: AgentRegistry,
   selection: ModelSelectionV1,
 ): ModelSelectionRejectionV1 | ModelSelectionV1 {
-  const backend = registry.list().find((candidate) => candidate.backendId === selection.backend)
-  if (backend === undefined) return { code: "CAPABILITY_UNAVAILABLE" }
+  const backend = registry.list().find((candidate) => candidate.backendId === selection.backend);
+  if (backend === undefined) return { code: "CAPABILITY_UNAVAILABLE" };
 
-  const model = backend.models.find((candidate) => candidate.model === selection.model)
-  if (model === undefined) return { code: "CAPABILITY_UNAVAILABLE" }
+  const model = backend.models.find((candidate) => candidate.model === selection.model);
+  if (model === undefined) return { code: "CAPABILITY_UNAVAILABLE" };
 
   if (!model.efforts.includes(selection.effort as (typeof model.efforts)[number])) {
-    return { code: "CAPABILITY_UNAVAILABLE" }
+    return { code: "CAPABILITY_UNAVAILABLE" };
   }
 
-  return selection
+  return selection;
 }
 
 export interface SelectModelDeps {
-  readonly registry: AgentRegistry
-  readonly projectStore: ProjectStore
+  readonly registry: AgentRegistry;
+  readonly projectStore: ProjectStore;
 }
 
-export type SelectModelResultV1 = { readonly kind: "selected" }
+export type SelectModelResultV1 = { readonly kind: "selected" };
 
 export async function selectModel(
   deps: SelectModelDeps,
   selection: ModelSelectionV1,
 ): Promise<FailureDtoV1 | ModelSelectionRejectionV1 | SelectModelResultV1> {
-  const validated = validateModelSelection(deps.registry, selection)
-  if ("code" in validated) return validated
+  const validated = validateModelSelection(deps.registry, selection);
+  if ("code" in validated) return validated;
 
   const written = await deps.projectStore.writeWorkspaceState({
     backend: validated.backend,
     model: validated.model,
     effort: validated.effort,
-  })
-  if (written !== undefined) return written
+  });
+  if (written !== undefined) return written;
 
-  return { kind: "selected" }
+  return { kind: "selected" };
 }

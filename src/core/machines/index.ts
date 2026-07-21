@@ -7,25 +7,25 @@
  * `index.ts`).
  */
 
-export { createStateMachine } from "./model/state-machine"
+export { createStateMachine } from "./model/state-machine";
 export type {
   StateMachine,
   StateMachineConfig,
   Transition,
   TransitionOutcome,
   TransitionTable,
-} from "./types"
+} from "./types";
 
 // --- §7.1 Project model --------------------------------------------------------------
-export type { ProjectAction, ProjectState } from "./model/project-machine"
+export type { ProjectAction, ProjectState } from "./model/project-machine";
 export {
   PROJECT_ACTION_FULL_NAME,
   PROJECT_TRANSITION_TABLE,
   reatomProjectStateMachine,
-} from "./model/project-machine"
+} from "./model/project-machine";
 
 // --- §7.2 Turn model -------------------------------------------------------------------
-export type { TurnAction, TurnAttempt, TurnState, TurnTerminalOutcome } from "./model/turn-machine"
+export type { TurnAction, TurnAttempt, TurnState, TurnTerminalOutcome } from "./model/turn-machine";
 export {
   MAX_TURN_ATTEMPT,
   MIN_TURN_ATTEMPT,
@@ -35,24 +35,24 @@ export {
   canRetryAfterGate,
   isTurnAttempt,
   reatomTurnStateMachine,
-} from "./model/turn-machine"
+} from "./model/turn-machine";
 
 // --- §7.3 Restore model ------------------------------------------------------------------
-export type { RestoreAction, RestoreState } from "./model/restore-machine"
-export { RESTORE_TRANSITION_TABLE, reatomRestoreStateMachine } from "./model/restore-machine"
+export type { RestoreAction, RestoreState } from "./model/restore-machine";
+export { RESTORE_TRANSITION_TABLE, reatomRestoreStateMachine } from "./model/restore-machine";
 
 // --- §7.4 Commit model -------------------------------------------------------------------
-export type { CommitAction, CommitState } from "./model/commit-machine"
-export { COMMIT_TRANSITION_TABLE, reatomCommitStateMachine } from "./model/commit-machine"
+export type { CommitAction, CommitState } from "./model/commit-machine";
+export { COMMIT_TRANSITION_TABLE, reatomCommitStateMachine } from "./model/commit-machine";
 
 // --- §7.5 Export model -------------------------------------------------------------------
-export type { ExportAction, ExportState } from "./model/export-machine"
-export { EXPORT_TRANSITION_TABLE, reatomExportStateMachine } from "./model/export-machine"
+export type { ExportAction, ExportState } from "./model/export-machine";
+export { EXPORT_TRANSITION_TABLE, reatomExportStateMachine } from "./model/export-machine";
 
 // --- §7.6 Preview model ------------------------------------------------------------------
-export type { PreviewAction, PreviewState } from "./model/preview-machine"
-export { PREVIEW_TRANSITION_TABLE, reatomPreviewStateMachine } from "./model/preview-machine"
+export type { PreviewAction, PreviewState } from "./model/preview-machine";
+export { PREVIEW_TRANSITION_TABLE, reatomPreviewStateMachine } from "./model/preview-machine";
 
 // --- §7.7 Migration model ----------------------------------------------------------------
-export type { MigrationAction, MigrationState } from "./model/migration-machine"
-export { MIGRATION_TRANSITION_TABLE, reatomMigrationStateMachine } from "./model/migration-machine"
+export type { MigrationAction, MigrationState } from "./model/migration-machine";
+export { MIGRATION_TRANSITION_TABLE, reatomMigrationStateMachine } from "./model/migration-machine";

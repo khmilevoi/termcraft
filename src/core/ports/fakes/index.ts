@@ -24,35 +24,47 @@
 // build the moment a fake and its port drift apart, before any orchestration code is ever
 // wired to it.
 
-export type { AgentRegistryCall, FakeAgentRegistry } from "./agent-registry"
-export { createFakeAgentRegistry } from "./agent-registry"
+export type { AgentRegistryCall, FakeAgentRegistry } from "./agent-registry";
+export { createFakeAgentRegistry } from "./agent-registry";
 
-export type { AgentBackendCall, FakeAgentBackend } from "./agent-backend"
-export { createFakeAgentBackend } from "./agent-backend"
+export type { AgentBackendCall, FakeAgentBackend } from "./agent-backend";
+export { createFakeAgentBackend } from "./agent-backend";
 
-export type { ProjectStoreCall, ProjectStoreFailableMethod, FakeProjectStore } from "./project-store"
-export { createFakeProjectStore } from "./project-store"
+export type {
+  ProjectStoreCall,
+  ProjectStoreFailableMethod,
+  FakeProjectStore,
+} from "./project-store";
+export { createFakeProjectStore } from "./project-store";
 
-export type { ChatStoreCall, ChatStoreFailableMethod, FakeChatStore } from "./chat-store"
-export { createFakeChatStore } from "./chat-store"
+export type { ChatStoreCall, ChatStoreFailableMethod, FakeChatStore } from "./chat-store";
+export { createFakeChatStore } from "./chat-store";
 
-export type { PageStoreCall, PageStoreFailableMethod, FakePageStore } from "./page-store"
-export { createFakePageStore } from "./page-store"
+export type { PageStoreCall, PageStoreFailableMethod, FakePageStore } from "./page-store";
+export { createFakePageStore } from "./page-store";
 
-export type { PinStoreCall, PinStoreFailableMethod, FakePinStore } from "./pin-store"
-export { createFakePinStore } from "./pin-store"
+export type { PinStoreCall, PinStoreFailableMethod, FakePinStore } from "./pin-store";
+export { createFakePinStore } from "./pin-store";
 
-export type { TurnTransactionCall, TurnTransactionFailableMethod, FakeTurnTransactionService } from "./turn-transactions"
-export { createFakeTurnTransactionService } from "./turn-transactions"
+export type {
+  TurnTransactionCall,
+  TurnTransactionFailableMethod,
+  FakeTurnTransactionService,
+} from "./turn-transactions";
+export { createFakeTurnTransactionService } from "./turn-transactions";
 
-export type { FakeCallSequence, FakeProjectWriteCoordinator, ProjectWriteCoordinatorCall } from "./project-write"
-export { createFakeProjectWriteCoordinator } from "./project-write"
+export type {
+  FakeCallSequence,
+  FakeProjectWriteCoordinator,
+  ProjectWriteCoordinatorCall,
+} from "./project-write";
+export { createFakeProjectWriteCoordinator } from "./project-write";
 
-export type { StagingCall, StagingFailableMethod, FakeStagingService } from "./staging"
-export { createFakeStagingService } from "./staging"
+export type { StagingCall, StagingFailableMethod, FakeStagingService } from "./staging";
+export { createFakeStagingService } from "./staging";
 
-export type { TrustGateCall, TrustGateFailableMethod, FakeTrustGate } from "./trust"
-export { createFakeTrustGate } from "./trust"
+export type { TrustGateCall, TrustGateFailableMethod, FakeTrustGate } from "./trust";
+export { createFakeTrustGate } from "./trust";
 
 export type {
   DiagnosticsCacheCall,
@@ -61,29 +73,53 @@ export type {
   FakeRenderCache,
   PageMetaCacheCall,
   RenderCacheCall,
-} from "./projections"
-export { createFakeDiagnosticsCache, createFakePageMetaCache, createFakeRenderCache } from "./projections"
+} from "./projections";
+export {
+  createFakeDiagnosticsCache,
+  createFakePageMetaCache,
+  createFakeRenderCache,
+} from "./projections";
 
-export type { SessionCheckpointCall, SessionCheckpointFailableMethod, FakeSessionCheckpointService } from "./session-checkpoint"
-export { createFakeSessionCheckpointService } from "./session-checkpoint"
+export type {
+  SessionCheckpointCall,
+  SessionCheckpointFailableMethod,
+  FakeSessionCheckpointService,
+} from "./session-checkpoint";
+export { createFakeSessionCheckpointService } from "./session-checkpoint";
 
-export type { RecoveryCall, RecoveryFailableMethod, FakeRecoveryService } from "./recovery"
-export { createFakeRecoveryService } from "./recovery"
+export type { RecoveryCall, RecoveryFailableMethod, FakeRecoveryService } from "./recovery";
+export { createFakeRecoveryService } from "./recovery";
 
-export type { GateRunnerCall, FakeGateRunner } from "./gate-runner"
-export { createFakeGateRunner } from "./gate-runner"
+export type { GateRunnerCall, FakeGateRunner } from "./gate-runner";
+export { createFakeGateRunner } from "./gate-runner";
 
-export type { PreviewSessionCall, PreviewSessionFailableMethod, FakePreviewSession } from "./preview-session"
-export { createFakePreviewSession } from "./preview-session"
+export type {
+  PreviewSessionCall,
+  PreviewSessionFailableMethod,
+  FakePreviewSession,
+} from "./preview-session";
+export { createFakePreviewSession } from "./preview-session";
 
-export type { HostSupervisorCall, HostSupervisorFailableMethod, FakeHostSupervisorPort } from "./host-supervisor"
-export { createFakeHostSupervisorPort } from "./host-supervisor"
+export type {
+  HostSupervisorCall,
+  HostSupervisorFailableMethod,
+  FakeHostSupervisorPort,
+} from "./host-supervisor";
+export { createFakeHostSupervisorPort } from "./host-supervisor";
 
-export type { ExportRenderCall, ExportRenderFailableMethod, FakeExportRenderPort } from "./export-render"
-export { createFakeExportRenderPort } from "./export-render"
+export type {
+  ExportRenderCall,
+  ExportRenderFailableMethod,
+  FakeExportRenderPort,
+} from "./export-render";
+export { createFakeExportRenderPort } from "./export-render";
 
-export type { GitHistoryCall, GitHistoryFailableMethod, FakeGitHistory } from "./git-history"
-export { createFakeGitHistory } from "./git-history"
+export type { GitHistoryCall, GitHistoryFailableMethod, FakeGitHistory } from "./git-history";
+export { createFakeGitHistory } from "./git-history";
 
-export type { GitCommitterCall, GitCommitterFailableMethod, FakeGitCommitter } from "./git-committer"
-export { createFakeGitCommitter } from "./git-committer"
+export type {
+  GitCommitterCall,
+  GitCommitterFailableMethod,
+  FakeGitCommitter,
+} from "./git-committer";
+export { createFakeGitCommitter } from "./git-committer";

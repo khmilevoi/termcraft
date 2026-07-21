@@ -1,17 +1,18 @@
-import { describe, expect, test } from "bun:test"
-import { context } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
+
+import { context } from "@reatom/core";
 
 import {
   MAX_TURN_ATTEMPT,
   MIN_TURN_ATTEMPT,
   TURN_ACTION_FULL_NAME,
   TURN_TERMINAL_OUTCOMES,
+  type TurnAction,
+  type TurnState,
   canRetryAfterGate,
   isTurnAttempt,
   reatomTurnStateMachine,
-  type TurnAction,
-  type TurnState,
-} from "./turn-machine"
+} from "./turn-machine";
 
 /**
  * kernel-command-contract §7.2 (lines 230-270), §13.1.
@@ -37,7 +38,7 @@ const TURN_STATES: readonly TurnState[] = [
   "terminalizing",
   "terminal",
   "backend-unhealthy",
-]
+];
 
 const TURN_ACTIONS: readonly TurnAction[] = [
   "beginAdmission",
@@ -55,13 +56,13 @@ const TURN_ACTIONS: readonly TurnAction[] = [
   "finishTerminalization",
   "confirmBackendHealthy",
   "requestCancel",
-]
+];
 
 interface ExpectedEdge {
-  readonly from: TurnState
-  readonly action: TurnAction
-  readonly to: TurnState
-  readonly noOp?: boolean
+  readonly from: TurnState;
+  readonly action: TurnAction;
+  readonly to: TurnState;
+  readonly noOp?: boolean;
 }
 
 // One entry per §7.2 table row, multi-source rows expanded to one edge per source, PLUS
@@ -96,28 +97,28 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "validating", action: "requestCancel", to: "terminalizing" },
   { from: "finalizing", action: "requestCancel", to: "terminalizing" },
   { from: "terminalizing", action: "requestCancel", to: "terminalizing", noOp: true },
-]
+];
 
 // "turn.start is rejected with TURN_ALREADY_ACTIVE in every non-idle state" (§7.2) — the
 // table-wide fallback: beginAdmission (the only idle-entry action) is illegal everywhere
 // except idle, and that illegality reads exactly as TURN_ALREADY_ACTIVE.
-const ILLEGAL_CODE = "TURN_ALREADY_ACTIVE"
+const ILLEGAL_CODE = "TURN_ALREADY_ACTIVE";
 
 function findExpected(from: TurnState, action: TurnAction): ExpectedEdge | undefined {
-  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action)
+  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action);
 }
 
 /** Drives a fresh machine straight to `phase` via a known-legal edge path. */
 function machineAt(phase: TurnState) {
-  const m = reatomTurnStateMachine()
-  if (phase === "idle") return m
-  const toWorkspaceReady: readonly TurnAction[] = ["beginAdmission", "finishAdmission"]
-  const toRunning: readonly TurnAction[] = [...toWorkspaceReady, "beginAttempt"]
-  const toStopping: readonly TurnAction[] = [...toRunning, "beginStopping"]
-  const toSnapshotting: readonly TurnAction[] = [...toStopping, "beginSnapshot"]
-  const toValidating: readonly TurnAction[] = [...toSnapshotting, "candidateCaptured"]
-  const toFinalizing: readonly TurnAction[] = [...toValidating, "beginFinalization"]
-  const toTerminalizing: readonly TurnAction[] = [...toStopping, "beginTerminalization"]
+  const m = reatomTurnStateMachine();
+  if (phase === "idle") return m;
+  const toWorkspaceReady: readonly TurnAction[] = ["beginAdmission", "finishAdmission"];
+  const toRunning: readonly TurnAction[] = [...toWorkspaceReady, "beginAttempt"];
+  const toStopping: readonly TurnAction[] = [...toRunning, "beginStopping"];
+  const toSnapshotting: readonly TurnAction[] = [...toStopping, "beginSnapshot"];
+  const toValidating: readonly TurnAction[] = [...toSnapshotting, "candidateCaptured"];
+  const toFinalizing: readonly TurnAction[] = [...toValidating, "beginFinalization"];
+  const toTerminalizing: readonly TurnAction[] = [...toStopping, "beginTerminalization"];
   const path: Record<Exclude<TurnState, "idle">, readonly TurnAction[]> = {
     admitting: ["beginAdmission"],
     "workspace-ready": toWorkspaceReady,
@@ -130,62 +131,62 @@ function machineAt(phase: TurnState) {
     terminalizing: toTerminalizing,
     terminal: [...toTerminalizing, "finishTerminalization"],
     "backend-unhealthy": [...toStopping, "markBackendUnhealthy"],
-  }
-  for (const action of path[phase]) m.apply(action)
-  return m
+  };
+  for (const action of path[phase]) m.apply(action);
+  return m;
 }
 
 describe("reatomTurnStateMachine", () => {
   test("starts idle", () => {
     context.start(() => {
-      expect(reatomTurnStateMachine().phase()).toBe("idle")
-    })
-  })
+      expect(reatomTurnStateMachine().phase()).toBe("idle");
+    });
+  });
 
   test("the phase atom carries the §6 trace root", () => {
     context.start(() => {
-      expect(reatomTurnStateMachine().phaseAtom.name).toBe("kernel.turn.state")
-    })
-  })
+      expect(reatomTurnStateMachine().phaseAtom.name).toBe("kernel.turn.state");
+    });
+  });
 
   test("the hand-counted §7.2 edge total is 25", () => {
-    expect(EXPECTED_EDGES.length).toBe(25)
-  })
+    expect(EXPECTED_EDGES.length).toBe(25);
+  });
 
   test("every (state, action) pair matches the §7.2 table exactly", () => {
     context.start(() => {
       for (const from of TURN_STATES) {
         for (const action of TURN_ACTIONS) {
-          const expected = findExpected(from, action)
-          const m = machineAt(from)
-          const outcome = m.apply(action)
+          const expected = findExpected(from, action);
+          const m = machineAt(from);
+          const outcome = m.apply(action);
 
           if (expected === undefined) {
-            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action })
-            expect(m.phase()).toBe(from)
-            continue
+            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action });
+            expect(m.phase()).toBe(from);
+            continue;
           }
 
           if (expected.noOp === true) {
-            expect(outcome).toEqual({ kind: "no-op", phase: from })
+            expect(outcome).toEqual({ kind: "no-op", phase: from });
           } else {
-            expect(outcome).toEqual({ kind: "changed", from, to: expected.to })
+            expect(outcome).toEqual({ kind: "changed", from, to: expected.to });
           }
-          expect(m.phase()).toBe(expected.to)
+          expect(m.phase()).toBe(expected.to);
         }
       }
-    })
-  })
+    });
+  });
 
   test("two machines built by the factory are independent", () => {
     context.start(() => {
-      const a = reatomTurnStateMachine()
-      const b = reatomTurnStateMachine()
-      a.apply("beginAdmission")
-      expect(a.phase()).toBe("admitting")
-      expect(b.phase()).toBe("idle")
-    })
-  })
+      const a = reatomTurnStateMachine();
+      const b = reatomTurnStateMachine();
+      a.apply("beginAdmission");
+      expect(a.phase()).toBe("admitting");
+      expect(b.phase()).toBe("idle");
+    });
+  });
 
   test("TURN_ACTION_FULL_NAME names every action with its kernel.turn.<verb> form", () => {
     const expectedFullNames: Readonly<Record<TurnAction, string>> = {
@@ -204,25 +205,25 @@ describe("reatomTurnStateMachine", () => {
       finishTerminalization: "kernel.turn.finishTerminalization",
       confirmBackendHealthy: "kernel.turn.confirmBackendHealthy",
       requestCancel: "kernel.turn.requestCancel",
-    }
+    };
     for (const action of TURN_ACTIONS) {
-      expect(TURN_ACTION_FULL_NAME[action]).toBe(expectedFullNames[action])
+      expect(TURN_ACTION_FULL_NAME[action]).toBe(expectedFullNames[action]);
     }
-  })
+  });
 
   test("retryAfterGate from validating is phase-legal regardless of attempt; the attempt<4 gate is the caller's, via canRetryAfterGate", () => {
     // §7.2: "kernel.turn.retryAfterGate is legal only while attempt < 4." The discrete
     // phase table cannot see `attempt` at all — the table only proves the edge exists;
     // gating on attempt number is the guard layer's job using the helper below.
     context.start(() => {
-      const m = machineAt("validating")
+      const m = machineAt("validating");
       expect(m.apply("retryAfterGate")).toEqual({
         kind: "changed",
         from: "validating",
         to: "workspace-ready",
-      })
-    })
-  })
+      });
+    });
+  });
 
   test("requestCancel from finalizing is phase-legal; the pre/post-intent CANCEL_TOO_LATE split is the caller's, not the table's", () => {
     // §7.2: "In `finalizing` after durable intent it is rejected with `CANCEL_TOO_LATE`;
@@ -230,46 +231,46 @@ describe("reatomTurnStateMachine", () => {
     // pre-/post-intent within `finalizing`, so it treats the edge as legal; the guard
     // layer must additionally check durable-intent status before honoring a real cancel.
     context.start(() => {
-      const m = machineAt("finalizing")
+      const m = machineAt("finalizing");
       expect(m.apply("requestCancel")).toEqual({
         kind: "changed",
         from: "finalizing",
         to: "terminalizing",
-      })
-    })
-  })
-})
+      });
+    });
+  });
+});
 
-describe("turn attempt bookkeeping (§7.2: \"Attempts are integers 1 through 4\")", () => {
+describe('turn attempt bookkeeping (§7.2: "Attempts are integers 1 through 4")', () => {
   test("MIN_TURN_ATTEMPT and MAX_TURN_ATTEMPT are 1 and 4", () => {
-    expect(MIN_TURN_ATTEMPT).toBe(1)
-    expect(MAX_TURN_ATTEMPT).toBe(4)
-  })
+    expect(MIN_TURN_ATTEMPT).toBe(1);
+    expect(MAX_TURN_ATTEMPT).toBe(4);
+  });
 
   test("isTurnAttempt accepts exactly the integers 1..4", () => {
-    expect(isTurnAttempt(1)).toBe(true)
-    expect(isTurnAttempt(2)).toBe(true)
-    expect(isTurnAttempt(3)).toBe(true)
-    expect(isTurnAttempt(4)).toBe(true)
-  })
+    expect(isTurnAttempt(1)).toBe(true);
+    expect(isTurnAttempt(2)).toBe(true);
+    expect(isTurnAttempt(3)).toBe(true);
+    expect(isTurnAttempt(4)).toBe(true);
+  });
 
   test("isTurnAttempt rejects 0, 5, negative, and non-integer values", () => {
-    expect(isTurnAttempt(0)).toBe(false)
-    expect(isTurnAttempt(5)).toBe(false)
-    expect(isTurnAttempt(-1)).toBe(false)
-    expect(isTurnAttempt(1.5)).toBe(false)
-  })
+    expect(isTurnAttempt(0)).toBe(false);
+    expect(isTurnAttempt(5)).toBe(false);
+    expect(isTurnAttempt(-1)).toBe(false);
+    expect(isTurnAttempt(1.5)).toBe(false);
+  });
 
   test("canRetryAfterGate is true only while attempt < 4", () => {
-    expect(canRetryAfterGate(1)).toBe(true)
-    expect(canRetryAfterGate(2)).toBe(true)
-    expect(canRetryAfterGate(3)).toBe(true)
-    expect(canRetryAfterGate(4)).toBe(false)
-  })
-})
+    expect(canRetryAfterGate(1)).toBe(true);
+    expect(canRetryAfterGate(2)).toBe(true);
+    expect(canRetryAfterGate(3)).toBe(true);
+    expect(canRetryAfterGate(4)).toBe(false);
+  });
+});
 
-describe("turn terminal outcome (§7.2: \"`terminal` carries `failed | cancelled | stale | interrupted`\")", () => {
+describe('turn terminal outcome (§7.2: "`terminal` carries `failed | cancelled | stale | interrupted`")', () => {
   test("TURN_TERMINAL_OUTCOMES lists exactly the four spec outcomes in spec order", () => {
-    expect(TURN_TERMINAL_OUTCOMES).toEqual(["failed", "cancelled", "stale", "interrupted"])
-  })
-})
+    expect(TURN_TERMINAL_OUTCOMES).toEqual(["failed", "cancelled", "stale", "interrupted"]);
+  });
+});

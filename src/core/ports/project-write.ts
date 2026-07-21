@@ -17,7 +17,7 @@
 
 /** An opaque, randomly-minted permit (turn-durability §4.5). `release` invalidates it for every later `isActive` check — a stale async continuation cannot write after release. */
 export interface ProjectWritePermit {
-  readonly permitId: string
+  readonly permitId: string;
 }
 
 /**
@@ -30,9 +30,9 @@ export interface ProjectWritePermit {
  */
 export interface ProjectWriteCoordinator {
   /** Resolves in exact call order (FIFO). */
-  acquire(): Promise<ProjectWritePermit>
+  acquire(): Promise<ProjectWritePermit>;
   /** Idempotent: releasing an already-stale permit is a no-op and never drops a later holder's lock. */
-  release(permit: ProjectWritePermit): void
+  release(permit: ProjectWritePermit): void;
   /** `false` once `release` has run for this permit, or a later `acquire` has since won the mutex. */
-  isActive(permit: ProjectWritePermit): boolean
+  isActive(permit: ProjectWritePermit): boolean;
 }

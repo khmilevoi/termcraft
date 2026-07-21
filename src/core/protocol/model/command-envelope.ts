@@ -1,11 +1,11 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { canonicalHash, type CanonicalHashError } from "./canonical-hash"
-import { commandKindV1Schema, isCommandKindV1, type CommandKindV1 } from "./command-kind"
-import { commandPayloadSchemas, type CommandPayloadByKindV1 } from "./command-payload"
-import { uuidv7Schema, type Sha256Hex, type UUIDv7 } from "./ids"
-import { uint64StringSchema, type UInt64String } from "./uint64"
+import { type CanonicalHashError, canonicalHash } from "./canonical-hash";
+import { type CommandKindV1, commandKindV1Schema, isCommandKindV1 } from "./command-kind";
+import { type CommandPayloadByKindV1, commandPayloadSchemas } from "./command-payload";
+import { type Sha256Hex, type UUIDv7, uuidv7Schema } from "./ids";
+import { type UInt64String, uint64StringSchema } from "./uint64";
 
 /**
  * The command envelope (kernel-command-contract §8.1):
@@ -21,12 +21,12 @@ import { uint64StringSchema, type UInt64String } from "./uint64"
  * ```
  */
 export type CommandEnvelopeV1<K extends CommandKindV1 = CommandKindV1> = {
-  readonly protocolVersion: 1
-  readonly commandId: UUIDv7
-  readonly expectedRevision: UInt64String
-  readonly kind: K
-  readonly payload: CommandPayloadByKindV1[K]
-}
+  readonly protocolVersion: 1;
+  readonly commandId: UUIDv7;
+  readonly expectedRevision: UInt64String;
+  readonly kind: K;
+  readonly payload: CommandPayloadByKindV1[K];
+};
 
 /**
  * A decode failure, carrying the §11.1 code the mailbox must return.
@@ -52,17 +52,17 @@ const envelopeFrameSchema = z.strictObject({
   expectedRevision: uint64StringSchema,
   kind: commandKindV1Schema,
   payload: z.unknown(),
-})
+});
 
 function invalid(reason: string): CommandDecodeError {
-  return new CommandDecodeError({ code: "INVALID_ENVELOPE", reason })
+  return new CommandDecodeError({ code: "INVALID_ENVELOPE", reason });
 }
 
 function firstIssue(error: z.ZodError): string {
-  const issue = error.issues[0]
-  if (issue === undefined) return "invalid envelope"
-  const path = issue.path.length > 0 ? issue.path.join(".") : "<root>"
-  return `${path}: ${issue.message}`
+  const issue = error.issues[0];
+  if (issue === undefined) return "invalid envelope";
+  const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+  return `${path}: ${issue.message}`;
 }
 
 /**
@@ -75,7 +75,7 @@ function firstIssue(error: z.ZodError): string {
  */
 export function decodeCommandEnvelope(raw: unknown): CommandDecodeError | CommandEnvelopeV1 {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return invalid("envelope must be a JSON object")
+    return invalid("envelope must be a JSON object");
   }
 
   // Version is read straight off the raw object, BEFORE the frame schema runs. Reading it
@@ -83,31 +83,31 @@ export function decodeCommandEnvelope(raw: unknown): CommandDecodeError | Comman
   // `z.literal(1)`, so a v2 envelope fails that parse and returns INVALID_ENVELOPE, leaving
   // the version branch below permanently dead. That is the exact confusion §11.1 separates
   // the two codes to avoid — a v2 caller would be told its envelope was malformed.
-  const version = (raw as Record<string, unknown>).protocolVersion
+  const version = (raw as Record<string, unknown>).protocolVersion;
   if (version !== 1) {
     return new CommandDecodeError({
       code: "UNSUPPORTED_PROTOCOL",
       reason: `protocolVersion ${String(version)} is not supported`,
-    })
+    });
   }
 
-  const frame = envelopeFrameSchema.safeParse(raw)
-  if (!frame.success) return invalid(firstIssue(frame.error))
+  const frame = envelopeFrameSchema.safeParse(raw);
+  if (!frame.success) return invalid(firstIssue(frame.error));
 
-  const kind = frame.data.kind
-  if (!isCommandKindV1(kind)) return invalid(`unknown command kind "${String(kind)}"`)
+  const kind = frame.data.kind;
+  if (!isCommandKindV1(kind)) return invalid(`unknown command kind "${String(kind)}"`);
 
-  const payloadSchema = commandPayloadSchemas[kind]
+  const payloadSchema = commandPayloadSchemas[kind];
   if (payloadSchema === undefined) {
     // Unreachable while the payload map stays exhaustive over the kind union — the map's
     // own `satisfies` check enforces that at compile time. Kept as a value-level guard so
     // a kind that somehow reached here fails loudly instead of dispatching with an
     // unvalidated payload.
-    return invalid(`no payload schema for kind "${kind}"`)
+    return invalid(`no payload schema for kind "${kind}"`);
   }
 
-  const payload = payloadSchema.safeParse(frame.data.payload)
-  if (!payload.success) return invalid(`payload for ${kind} — ${firstIssue(payload.error)}`)
+  const payload = payloadSchema.safeParse(frame.data.payload);
+  if (!payload.success) return invalid(`payload for ${kind} — ${firstIssue(payload.error)}`);
 
   return {
     protocolVersion: 1,
@@ -115,7 +115,7 @@ export function decodeCommandEnvelope(raw: unknown): CommandDecodeError | Comman
     expectedRevision: frame.data.expectedRevision,
     kind,
     payload: payload.data,
-  } as CommandEnvelopeV1
+  } as CommandEnvelopeV1;
 }
 
 /**
@@ -129,5 +129,5 @@ export function decodeCommandEnvelope(raw: unknown): CommandDecodeError | Comman
  * different submissions look identical.
  */
 export function envelopeFingerprint(raw: unknown): CanonicalHashError | Sha256Hex {
-  return canonicalHash(raw)
+  return canonicalHash(raw);
 }

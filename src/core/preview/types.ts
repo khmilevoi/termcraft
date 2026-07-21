@@ -10,4 +10,4 @@
  * `core/pins/types.ts`'s own precedent: a shape stays local until a SECOND file needs the
  * identical shape for its own sake, not merely as a dependency of another file's factory.
  */
-export {}
+export {};

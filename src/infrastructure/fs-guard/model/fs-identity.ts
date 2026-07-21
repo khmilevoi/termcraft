@@ -1,7 +1,8 @@
-import fs from "node:fs"
-import * as errore from "errore"
+import fs from "node:fs";
 
-import { FsIdentityError } from "./errors"
+import * as errore from "errore";
+
+import { FsIdentityError } from "./errors";
 
 /**
  * The canonical filesystem-identity string of a directory or file (storage-identity
@@ -18,13 +19,13 @@ export function formatFsIdentity(absPath: string): string | FsIdentityError {
   const stat = errore.try({
     try: () => fs.statSync(absPath, { bigint: true }),
     catch: (cause) => new FsIdentityError({ path: absPath, cause }),
-  })
-  if (stat instanceof Error) return stat
+  });
+  if (stat instanceof Error) return stat;
 
   if (process.platform === "win32") {
-    const serial = stat.dev.toString(16).padStart(8, "0")
-    const fileId = stat.ino.toString(16)
-    return `windows:${serial}:${fileId}`
+    const serial = stat.dev.toString(16).padStart(8, "0");
+    const fileId = stat.ino.toString(16);
+    return `windows:${serial}:${fileId}`;
   }
-  return `unix:${stat.dev.toString(10)}:${stat.ino.toString(10)}`
+  return `unix:${stat.dev.toString(10)}:${stat.ino.toString(10)}`;
 }

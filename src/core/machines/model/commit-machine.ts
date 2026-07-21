@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Commit model (kernel-command-contract §7.4).
@@ -14,7 +14,12 @@ import { createStateMachine, type StateMachine, type TransitionTable } from "./s
  * mutex revalidation are out of scope here; this file is only the `CommitState` graph.
  */
 
-export type CommitState = "idle" | "planning" | "awaiting-confirmation" | "executing" | "refreshing"
+export type CommitState =
+  | "idle"
+  | "planning"
+  | "awaiting-confirmation"
+  | "executing"
+  | "refreshing";
 
 export type CommitAction =
   | "kernel.commit.beginPlan"
@@ -23,7 +28,7 @@ export type CommitAction =
   | "kernel.commit.confirm"
   | "kernel.commit.discardPlan"
   | "kernel.commit.beginRefresh"
-  | "kernel.commit.finishRefresh"
+  | "kernel.commit.finishRefresh";
 
 /** §7.4's table, transcribed row for row; every row has exactly one source. */
 export const COMMIT_TRANSITION_TABLE: TransitionTable<CommitState, CommitAction> = {
@@ -34,7 +39,7 @@ export const COMMIT_TRANSITION_TABLE: TransitionTable<CommitState, CommitAction>
   "kernel.commit.discardPlan": [{ from: "awaiting-confirmation", to: "idle" }],
   "kernel.commit.beginRefresh": [{ from: "executing", to: "refreshing" }],
   "kernel.commit.finishRefresh": [{ from: "refreshing", to: "idle" }],
-}
+};
 
 /**
  * Builds one Kernel's Commit model. §11.1: `OPERATION_BUSY` is "The relevant
@@ -47,5 +52,5 @@ export function reatomCommitStateMachine(): StateMachine<CommitState, CommitActi
     initial: "idle",
     table: COMMIT_TRANSITION_TABLE,
     illegalCode: "OPERATION_BUSY",
-  })
+  });
 }

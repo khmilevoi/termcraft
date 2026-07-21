@@ -28,7 +28,7 @@ export type {
   TargetExtractor,
   TurnBackendLeaseV1,
   TurnFenceProbe,
-} from "./types"
+} from "./types";
 
 export {
   DEDUPE_CAPACITY,
@@ -36,10 +36,10 @@ export {
   DedupeRejectionError,
   createDedupeLedger,
   uuidv7TimestampMs,
-} from "./model/dedupe-ledger"
-export type { DedupeLedger, DedupeLedgerDeps, DedupeRejectionCode } from "./model/dedupe-ledger"
+} from "./model/dedupe-ledger";
+export type { DedupeLedger, DedupeLedgerDeps, DedupeRejectionCode } from "./model/dedupe-ledger";
 
-export { checkRevisionGuard } from "./model/revision-guard"
+export { checkRevisionGuard } from "./model/revision-guard";
 export type {
   ActiveTurnCancelState,
   RevisionGuardCommand,
@@ -47,19 +47,19 @@ export type {
   RevisionGuardRejectionCode,
   TurnCancelPhase,
   TurnCancelProbe,
-} from "./model/revision-guard"
+} from "./model/revision-guard";
 
-export { EventBusPayloadError, EventBusSubscriberError, createEventBus } from "./model/event-bus"
+export { EventBusPayloadError, EventBusSubscriberError, createEventBus } from "./model/event-bus";
 export type {
   EventBus,
   EventBusDeps,
   EventCorrelationV1,
   EventEnvelopeV1,
   PublishableEventV1,
-} from "./model/event-bus"
+} from "./model/event-bus";
 
-export { createDispatch } from "./model/dispatch"
-export type { Dispatch, DispatchDeps } from "./model/dispatch"
+export { createDispatch } from "./model/dispatch";
+export type { Dispatch, DispatchDeps } from "./model/dispatch";
 
-export { createSignalIngress } from "./model/signal-ingress"
-export type { SignalIngress, SignalIngressDeps, StaleBackendSignal } from "./model/signal-ingress"
+export { createSignalIngress } from "./model/signal-ingress";
+export type { SignalIngress, SignalIngressDeps, StaleBackendSignal } from "./model/signal-ingress";

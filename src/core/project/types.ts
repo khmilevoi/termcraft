@@ -1,4 +1,4 @@
-import type { FailureDtoV1 } from "core/protocol"
+import type { FailureDtoV1 } from "core/protocol";
 
 /**
  * `core/project`'s shared vocabulary — the shapes more than one of `model/trust.ts`,
@@ -16,7 +16,7 @@ import type { FailureDtoV1 } from "core/protocol"
  * already types it there) — by the time `open-sequence.ts` reaches `finishOpen`, trust is
  * always one of these two values, never unresolved.
  */
-export type TrustDecisionV1 = "trusted" | "untrusted-read-only"
+export type TrustDecisionV1 = "trusted" | "untrusted-read-only";
 
 /**
  * The one domain KCC §12.7 permits `kernel.project.beginRecovery` to route an intended
@@ -24,7 +24,7 @@ export type TrustDecisionV1 = "trusted" | "untrusted-read-only"
  * `kernel.export.beginRecovery`, or `kernel.migration.beginRecovery` from that domain's
  * `idle` state."
  */
-export type IntendedRecoveryDomainV1 = "restore" | "export" | "migration"
+export type IntendedRecoveryDomainV1 = "restore" | "export" | "migration";
 
 /**
  * TD §7.7's three chat_corrupt causes this module's classifier can distinguish from
@@ -36,12 +36,20 @@ export type IntendedRecoveryDomainV1 = "restore" | "export" | "migration"
  * the one fact §7.7's own per-chat store scan structurally cannot see on its own, and
  * this task's explicitly-named "the MULTI-CHAT decision is the caller's").
  */
-export type OrphanTurnCorruptReasonV1 = "terminal-without-user" | "duplicate-in-chat" | "cross-chat-turn-id"
+export type OrphanTurnCorruptReasonV1 =
+  | "terminal-without-user"
+  | "duplicate-in-chat"
+  | "cross-chat-turn-id";
 
 /** One `(chatId, turnId)` pair's TD §7.7 disposition after `classifyOrphanTurns` runs. */
 export type OrphanTurnDecisionV1 =
   | { readonly kind: "resolved"; readonly chatId: string; readonly turnId: string }
-  | { readonly kind: "chat-corrupt"; readonly chatId: string; readonly turnId: string; readonly reason: OrphanTurnCorruptReasonV1 }
+  | {
+      readonly kind: "chat-corrupt";
+      readonly chatId: string;
+      readonly turnId: string;
+      readonly reason: OrphanTurnCorruptReasonV1;
+    };
 
 /** Every step TD §12's ordered startup sequence can stop at (`open-sequence.ts`). */
 export type OpenSequenceStepV1 =
@@ -53,10 +61,10 @@ export type OpenSequenceStepV1 =
   | "schema-validation"
   | "orphan-turn-scan"
   | "content-validation"
-  | "trust"
+  | "trust";
 
 /** A typed reason `open-sequence.ts` could not finish a step — always a real `FailureDtoV1`, never a fabricated code (see that file's header for the one exception it documents). */
 export interface OpenSequenceBlockedV1 {
-  readonly step: OpenSequenceStepV1
-  readonly failure: FailureDtoV1
+  readonly step: OpenSequenceStepV1;
+  readonly failure: FailureDtoV1;
 }

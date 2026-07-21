@@ -1,15 +1,15 @@
 /** @jsxImportSource @opentui/react */
-import type { ThemeTokens } from "../types"
-import { activeTokens } from "../model/tokens"
+import type { ThemeTokens } from "../types";
+import { activeTokens } from "../model/tokens";
 
 /** Props for the `Separator` rule. `id` is the mandatory stable id (§3.2). */
 export interface SeparatorProps {
   /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
-  readonly id: string
+  readonly id: string;
   /** Orientation of the rule; defaults to `horizontal`. */
-  readonly direction?: "horizontal" | "vertical"
+  readonly direction?: "horizontal" | "vertical";
   /** A semantic token for the rule; defaults to `line` (the design's subtle-divider hue). */
-  readonly color?: keyof ThemeTokens
+  readonly color?: keyof ThemeTokens;
 }
 
 /**
@@ -23,11 +23,11 @@ export interface SeparatorProps {
  * this renders a color band — a known divergence pending the phase-7 UI pass.)
  */
 export function Separator(props: SeparatorProps) {
-  const tokens = activeTokens()
-  const direction = props.direction ?? "horizontal"
-  const fill = tokens[props.color ?? "line"]
+  const tokens = activeTokens();
+  const direction = props.direction ?? "horizontal";
+  const fill = tokens[props.color ?? "line"];
   if (direction === "vertical") {
-    return <box id={props.id} width={1} backgroundColor={fill} />
+    return <box id={props.id} width={1} backgroundColor={fill} />;
   }
-  return <box id={props.id} height={1} backgroundColor={fill} />
+  return <box id={props.id} height={1} backgroundColor={fill} />;
 }

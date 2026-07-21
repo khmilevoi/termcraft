@@ -1,6 +1,12 @@
-import type { SDKMessage, SDKResultError, SDKResultMessage, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk"
-import type { AgentEvent, TokenUsage } from "entities/turn"
-import { mapToolUse } from "agent/claude/tools"
+import type {
+  SDKMessage,
+  SDKResultError,
+  SDKResultMessage,
+  SDKResultSuccess,
+} from "@anthropic-ai/claude-agent-sdk";
+
+import { mapToolUse } from "agent/claude/tools";
+import type { AgentEvent, TokenUsage } from "entities/turn";
 
 /**
  * Compute the 0–100 context-window share, or null when no model reported a
@@ -13,19 +19,19 @@ import { mapToolUse } from "agent/claude/tools"
  * throw.
  */
 export function deriveUsage(result: SDKResultMessage): TokenUsage | null {
-  const usage = result.usage as { input_tokens?: number; output_tokens?: number } | undefined
-  if (usage === undefined) return null
+  const usage = result.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+  if (usage === undefined) return null;
 
-  const inputTokens = usage.input_tokens ?? 0
-  const outputTokens = usage.output_tokens ?? 0
+  const inputTokens = usage.input_tokens ?? 0;
+  const outputTokens = usage.output_tokens ?? 0;
   const contextPercent = (() => {
-    const models = Object.values(result.modelUsage ?? {})
-    const window = models[0]?.contextWindow
-    if (typeof window !== "number" || window <= 0) return null
-    return Math.round(((inputTokens + outputTokens) / window) * 100)
-  })()
+    const models = Object.values(result.modelUsage ?? {});
+    const window = models[0]?.contextWindow;
+    if (typeof window !== "number" || window <= 0) return null;
+    return Math.round(((inputTokens + outputTokens) / window) * 100);
+  })();
 
-  return { inputTokens, outputTokens, contextPercent }
+  return { inputTokens, outputTokens, contextPercent };
 }
 
 /**
@@ -33,7 +39,7 @@ export function deriveUsage(result: SDKResultMessage): TokenUsage | null {
  * than imported: the SDK re-exports the Beta message types structurally but not
  * `BetaContentBlock` by name.
  */
-type ContentBlock = Extract<SDKMessage, { type: "assistant" }>["message"]["content"][number]
+type ContentBlock = Extract<SDKMessage, { type: "assistant" }>["message"]["content"][number];
 
 /**
  * Map one assistant content block to an event, or null when the block carries
@@ -43,24 +49,24 @@ type ContentBlock = Extract<SDKMessage, { type: "assistant" }>["message"]["conte
  */
 function normalizeBlock(block: ContentBlock): AgentEvent | null {
   if (block.type === "thinking" && typeof block.thinking === "string") {
-    return { kind: "reasoning", text: block.thinking }
+    return { kind: "reasoning", text: block.thinking };
   }
   if (block.type === "text" && typeof block.text === "string") {
-    return { kind: "reasoning", text: block.text }
+    return { kind: "reasoning", text: block.text };
   }
   if (block.type === "tool_use" && typeof block.name === "string") {
-    const { op, target } = mapToolUse(block.name, (block.input ?? {}) as Record<string, unknown>)
-    return { kind: "tool", op, target }
+    const { op, target } = mapToolUse(block.name, (block.input ?? {}) as Record<string, unknown>);
+    return { kind: "tool", op, target };
   }
-  return null
+  return null;
 }
 
 /** A success result yields the final text plus, when derivable, a usage event. */
 function normalizeSuccess(result: SDKResultSuccess): AgentEvent[] {
-  const usage = deriveUsage(result)
-  const events: AgentEvent[] = [{ kind: "final", text: result.result }]
-  if (usage !== null) events.push({ kind: "usage", tokens: usage })
-  return events
+  const usage = deriveUsage(result);
+  const events: AgentEvent[] = [{ kind: "final", text: result.result }];
+  if (usage !== null) events.push({ kind: "usage", tokens: usage });
+  return events;
 }
 
 /**
@@ -72,11 +78,13 @@ function normalizeSuccess(result: SDKResultSuccess): AgentEvent[] {
  * contract downstream (kernel/UI) does not shift by result subtype.
  */
 function normalizeError(result: SDKResultError): AgentEvent[] {
-  const errors = result.errors ?? []
-  const usage = deriveUsage(result)
-  const events: AgentEvent[] = [{ kind: "error", message: errors[0] ?? `result ${result.subtype}` }]
-  if (usage !== null) events.push({ kind: "usage", tokens: usage })
-  return events
+  const errors = result.errors ?? [];
+  const usage = deriveUsage(result);
+  const events: AgentEvent[] = [
+    { kind: "error", message: errors[0] ?? `result ${result.subtype}` },
+  ];
+  if (usage !== null) events.push({ kind: "usage", tokens: usage });
+  return events;
 }
 
 /**
@@ -91,19 +99,19 @@ function normalizeError(result: SDKResultError): AgentEvent[] {
  */
 export function normalizeMessage(msg: SDKMessage): AgentEvent[] {
   if (msg.type === "assistant") {
-    const blocks = msg.message?.content ?? []
-    const events: AgentEvent[] = []
+    const blocks = msg.message?.content ?? [];
+    const events: AgentEvent[] = [];
     for (const block of blocks) {
-      const event = normalizeBlock(block)
-      if (event !== null) events.push(event)
+      const event = normalizeBlock(block);
+      if (event !== null) events.push(event);
     }
-    return events
+    return events;
   }
 
   if (msg.type === "result") {
-    if (msg.subtype === "success") return normalizeSuccess(msg)
-    return normalizeError(msg)
+    if (msg.subtype === "success") return normalizeSuccess(msg);
+    return normalizeError(msg);
   }
 
-  return []
+  return [];
 }

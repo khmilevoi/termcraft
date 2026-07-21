@@ -1,10 +1,10 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 import {
-  commandPayloadSchemas,
   type CommandKindV1,
   type CommandPayloadByKindV1,
-} from "core/protocol"
+  commandPayloadSchemas,
+} from "core/protocol";
 
 /**
  * `CapabilityTargetByKindV1` — the exact, deliberately-narrow value each command's guard
@@ -33,81 +33,81 @@ export class CapabilityTargetExtractionError extends errore.createTaggedError({
 }) {}
 
 /** `CapabilityId` is exactly `CommandKindV1` (§2.12). */
-export type CapabilityId = CommandKindV1
+export type CapabilityId = CommandKindV1;
 
 /**
  * Compile-time proof of that identity. §2.12 states it as a fact about the protocol, so a
  * drift between the two must fail `tsc`, not a runtime assertion someone can skip.
  */
-type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-const _capabilityIdIsCommandKind: MutuallyAssignable<CapabilityId, CommandKindV1> = true
-void _capabilityIdIsCommandKind
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _capabilityIdIsCommandKind: MutuallyAssignable<CapabilityId, CommandKindV1> = true;
+void _capabilityIdIsCommandKind;
 
 /** The closed recovery discriminator §10.1 copies verbatim for `project.retryOpen`. */
-export type RecoveryTargetV1 = CommandPayloadByKindV1["project.retryOpen"]["recovery"]
+export type RecoveryTargetV1 = CommandPayloadByKindV1["project.retryOpen"]["recovery"];
 
 /** The closed geometry query discriminator, reduced to its kind (§10.1). */
-export type GeometryQueryKindV1 = "hit" | "rect" | "describe" | "layout" | "pin-anchor"
+export type GeometryQueryKindV1 = "hit" | "rect" | "describe" | "layout" | "pin-anchor";
 
 /**
  * The §10.1 table, transcribed row by row. `null` is a REQUIRED VALUE here, not an omitted
  * target — §10.1: "`null` is a required value, not an omitted target."
  */
 export interface CapabilityTargetByKindV1 {
-  "project.create": null
-  "project.open": null
-  "project.retryOpen": { readonly recovery: RecoveryTargetV1 }
-  "project.close": null
-  "project.setTrust": { readonly workspaceIdentity: string }
-  "turn.start": null
-  "turn.cancel": { readonly turnId: string }
-  "chat.create": null
-  "chat.switch": { readonly chatId: string }
-  "model.select": { readonly backend: string; readonly model: string; readonly effort: string }
-  "page.renameTitle": { readonly pageSlug: string }
-  "page.removePlan": { readonly pageSlug: string }
-  "page.removeConfirm": { readonly pageRemovePlanId: string }
-  "page.removeDiscardPlan": { readonly pageRemovePlanId: string }
-  "page.reorder": null
-  "history.open": { readonly pageSlug: string }
-  "preview.selectPage": { readonly pageSlug: string }
-  "preview.selectHistorical": { readonly pageSlug: string; readonly sourceCommit: string }
-  "preview.selectCurrent": { readonly pageSlug: string }
-  "preview.resize": { readonly previewSessionId: string }
-  "preview.setThemeCapabilities": { readonly previewSessionId: string; readonly themeId: string }
-  "preview.setMode": { readonly previewSessionId: string; readonly mode: "static" | "interactive" }
-  "preview.forwardInput": { readonly previewSessionId: string }
-  "preview.setTweak": { readonly previewSessionId: string; readonly tweakId: string }
+  "project.create": null;
+  "project.open": null;
+  "project.retryOpen": { readonly recovery: RecoveryTargetV1 };
+  "project.close": null;
+  "project.setTrust": { readonly workspaceIdentity: string };
+  "turn.start": null;
+  "turn.cancel": { readonly turnId: string };
+  "chat.create": null;
+  "chat.switch": { readonly chatId: string };
+  "model.select": { readonly backend: string; readonly model: string; readonly effort: string };
+  "page.renameTitle": { readonly pageSlug: string };
+  "page.removePlan": { readonly pageSlug: string };
+  "page.removeConfirm": { readonly pageRemovePlanId: string };
+  "page.removeDiscardPlan": { readonly pageRemovePlanId: string };
+  "page.reorder": null;
+  "history.open": { readonly pageSlug: string };
+  "preview.selectPage": { readonly pageSlug: string };
+  "preview.selectHistorical": { readonly pageSlug: string; readonly sourceCommit: string };
+  "preview.selectCurrent": { readonly pageSlug: string };
+  "preview.resize": { readonly previewSessionId: string };
+  "preview.setThemeCapabilities": { readonly previewSessionId: string; readonly themeId: string };
+  "preview.setMode": { readonly previewSessionId: string; readonly mode: "static" | "interactive" };
+  "preview.forwardInput": { readonly previewSessionId: string };
+  "preview.setTweak": { readonly previewSessionId: string; readonly tweakId: string };
   "preview.queryGeometry": {
-    readonly frameTokenId: string
-    readonly queryKind: GeometryQueryKindV1
-  }
-  "preview.retry": { readonly previewSessionId: string }
-  "preview.close": { readonly previewSessionId: string }
-  "selection.set": { readonly pageSlug: string; readonly elementId: string }
-  "selection.clear": null
-  "pin.create": { readonly geometryTokenId: string }
-  "pin.setStatus": { readonly pinId: string; readonly status: "open" | "resolved" }
-  "restore.plan": { readonly pageSlug: string; readonly sourceCommit: string }
-  "restore.confirm": { readonly restorePlanId: string }
-  "restore.discardPlan": { readonly restorePlanId: string }
-  "restore.retryRecord": { readonly restoreActionId: string }
-  "commit.plan": { readonly scope: "current-page" | "infrastructure" | "whole-project" }
-  "commit.confirm": { readonly commitPlanId: string }
-  "commit.discardPlan": { readonly commitPlanId: string }
-  "export.start": null
-  "migration.plan": null
-  "migration.confirm": { readonly migrationPlanId: string }
-  "migration.discardPlan": { readonly migrationPlanId: string }
-  "migration.retryRecovery": { readonly migrationActionId: string }
+    readonly frameTokenId: string;
+    readonly queryKind: GeometryQueryKindV1;
+  };
+  "preview.retry": { readonly previewSessionId: string };
+  "preview.close": { readonly previewSessionId: string };
+  "selection.set": { readonly pageSlug: string; readonly elementId: string };
+  "selection.clear": null;
+  "pin.create": { readonly geometryTokenId: string };
+  "pin.setStatus": { readonly pinId: string; readonly status: "open" | "resolved" };
+  "restore.plan": { readonly pageSlug: string; readonly sourceCommit: string };
+  "restore.confirm": { readonly restorePlanId: string };
+  "restore.discardPlan": { readonly restorePlanId: string };
+  "restore.retryRecord": { readonly restoreActionId: string };
+  "commit.plan": { readonly scope: "current-page" | "infrastructure" | "whole-project" };
+  "commit.confirm": { readonly commitPlanId: string };
+  "commit.discardPlan": { readonly commitPlanId: string };
+  "export.start": null;
+  "migration.plan": null;
+  "migration.confirm": { readonly migrationPlanId: string };
+  "migration.discardPlan": { readonly migrationPlanId: string };
+  "migration.retryRecovery": { readonly migrationActionId: string };
 }
 
 /** One kind's extractor: validate the payload, then normalize only the listed fields. */
 export type CapabilityTargetExtractor<K extends CommandKindV1> = (
   payload: unknown,
-) => CapabilityTargetExtractionError | CapabilityTargetByKindV1[K]
+) => CapabilityTargetExtractionError | CapabilityTargetByKindV1[K];
 
-type ExtractorMap = { [K in CommandKindV1]: CapabilityTargetExtractor<K> }
+type ExtractorMap = { [K in CommandKindV1]: CapabilityTargetExtractor<K> };
 
 /**
  * Validates `payload` against its kind's closed schema, then hands the parsed value to
@@ -119,22 +119,22 @@ function extractor<K extends CommandKindV1>(
   normalize: (payload: CommandPayloadByKindV1[K]) => CapabilityTargetByKindV1[K],
 ): CapabilityTargetExtractor<K> {
   return (payload: unknown) => {
-    const parsed = commandPayloadSchemas[kind].safeParse(payload)
+    const parsed = commandPayloadSchemas[kind].safeParse(payload);
     if (!parsed.success) {
-      const issue = parsed.error.issues[0]
-      const path = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "<root>"
+      const issue = parsed.error.issues[0];
+      const path = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "<root>";
       return new CapabilityTargetExtractionError({
         kind,
         reason: `${path}: ${issue?.message ?? "invalid payload"}`,
-      })
+      });
     }
-    return normalize(parsed.data as CommandPayloadByKindV1[K])
-  }
+    return normalize(parsed.data as CommandPayloadByKindV1[K]);
+  };
 }
 
 /** An extractor for one of §10.1's nine literal-`null` rows. */
 function nullTarget<K extends CommandKindV1>(kind: K): CapabilityTargetExtractor<K> {
-  return extractor(kind, () => null as CapabilityTargetByKindV1[K])
+  return extractor(kind, () => null as CapabilityTargetByKindV1[K]);
 }
 
 /**
@@ -254,13 +254,13 @@ export const capabilityTargetExtractors = {
   "migration.retryRecovery": extractor("migration.retryRecovery", (p) => ({
     migrationActionId: p.migrationActionId,
   })),
-} as const satisfies ExtractorMap
+} as const satisfies ExtractorMap;
 
 /** Extracts one kind's capability target, validating the payload first (§10.1). */
 export function extractCapabilityTarget<K extends CommandKindV1>(
   kind: K,
   payload: unknown,
 ): CapabilityTargetExtractionError | CapabilityTargetByKindV1[K] {
-  const extract = capabilityTargetExtractors[kind] as CapabilityTargetExtractor<K>
-  return extract(payload)
+  const extract = capabilityTargetExtractors[kind] as CapabilityTargetExtractor<K>;
+  return extract(payload);
 }

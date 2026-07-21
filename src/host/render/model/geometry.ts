@@ -1,6 +1,6 @@
-import type { CliRenderer, Renderable } from "@opentui/core"
+import type { CliRenderer, Renderable } from "@opentui/core";
 
-import type { DescribedElement, LayoutNode, Rect } from "../types"
+import type { DescribedElement, LayoutNode, Rect } from "../types";
 
 /**
  * Real (not simulated) geometry primitives over OpenTUI's own mounted renderable tree —
@@ -30,42 +30,47 @@ import type { DescribedElement, LayoutNode, Rect } from "../types"
  * `layoutTree`'s nodes omit `text` for the same reason.
  */
 function containsPoint(renderable: Renderable, x: number, y: number): boolean {
-  if (!renderable.visible) return false
-  const left = renderable.screenX
-  const top = renderable.screenY
-  return x >= left && x < left + renderable.width && y >= top && y < top + renderable.height
+  if (!renderable.visible) return false;
+  const left = renderable.screenX;
+  const top = renderable.screenY;
+  return x >= left && x < left + renderable.width && y >= top && y < top + renderable.height;
 }
 
 /** Deepest, topmost (last-child-wins) match containing the point — deterministic, no native call. */
 function hitTestNode(renderable: Renderable, x: number, y: number): Renderable | null {
-  const children = renderable.getChildren()
+  const children = renderable.getChildren();
   for (let i = children.length - 1; i >= 0; i -= 1) {
-    const child = children[i]
-    if (child === undefined) continue
-    const hit = hitTestNode(child, x, y)
-    if (hit !== null) return hit
+    const child = children[i];
+    if (child === undefined) continue;
+    const hit = hitTestNode(child, x, y);
+    if (hit !== null) return hit;
   }
-  return containsPoint(renderable, x, y) ? renderable : null
+  return containsPoint(renderable, x, y) ? renderable : null;
 }
 
 export function hitTestRenderer(renderer: CliRenderer, x: number, y: number): string | null {
-  return hitTestNode(renderer.root, x, y)?.id ?? null
+  return hitTestNode(renderer.root, x, y)?.id ?? null;
 }
 
 function rectOfRenderable(renderable: Renderable): Rect {
-  return { x: renderable.screenX, y: renderable.screenY, width: renderable.width, height: renderable.height }
+  return {
+    x: renderable.screenX,
+    y: renderable.screenY,
+    width: renderable.width,
+    height: renderable.height,
+  };
 }
 
 export function rectOfElement(renderer: CliRenderer, id: string): Rect | null {
-  const found = renderer.root.findDescendantById(id)
-  if (found === undefined) return null
-  return rectOfRenderable(found)
+  const found = renderer.root.findDescendantById(id);
+  if (found === undefined) return null;
+  return rectOfRenderable(found);
 }
 
 export function describeElement(renderer: CliRenderer, id: string): DescribedElement | null {
-  const found = renderer.root.findDescendantById(id)
-  if (found === undefined) return null
-  return { id: found.id, kind: found.constructor.name }
+  const found = renderer.root.findDescendantById(id);
+  if (found === undefined) return null;
+  return { id: found.id, kind: found.constructor.name };
 }
 
 function layoutNodeOf(renderable: Renderable): LayoutNode {
@@ -74,9 +79,9 @@ function layoutNodeOf(renderable: Renderable): LayoutNode {
     kind: renderable.constructor.name,
     box: rectOfRenderable(renderable),
     children: renderable.getChildren().map(layoutNodeOf),
-  }
+  };
 }
 
 export function layoutTreeOf(renderer: CliRenderer): LayoutNode {
-  return layoutNodeOf(renderer.root)
+  return layoutNodeOf(renderer.root);
 }

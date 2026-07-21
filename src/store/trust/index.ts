@@ -23,7 +23,7 @@ export type {
   TrustStoreDeps,
   TrustSubject,
   TrustSubjectInput,
-} from "./types"
+} from "./types";
 
 export {
   TRUST_SUBJECT_V1_PREFIX,
@@ -31,7 +31,7 @@ export {
   canonicalizeTrustPath,
   encodeTrustSubjectV1,
   trustSubjectKey,
-} from "./model/subject"
+} from "./model/subject";
 
 export {
   TrustLedgerError,
@@ -40,4 +40,4 @@ export {
   nodeTrustFsDeps,
   trustGrantPath,
   trustLedgerDir,
-} from "./model/trust-store"
+} from "./model/trust-store";

@@ -1,7 +1,7 @@
-export { ProtocolError } from "./model/errors"
-export type { ProtocolViolationCode } from "./model/errors"
-export { decodeJsonPayload, decodeUtf8, parseStrictJson } from "./model/strict-json"
-export type { JsonValue } from "./model/strict-json"
+export { ProtocolError } from "./model/errors";
+export type { ProtocolViolationCode } from "./model/errors";
+export { decodeJsonPayload, decodeUtf8, parseStrictJson } from "./model/strict-json";
+export type { JsonValue } from "./model/strict-json";
 export type {
   ClientHelloV1,
   Color,
@@ -12,26 +12,23 @@ export type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
   StyledRun,
-} from "./types"
+} from "./types";
 export {
   PROTOCOL_HARD_LIMITS,
   validatePublicLimits,
   validateRuntimeDeclarationBundle,
-} from "./model/bundle"
+} from "./model/bundle";
 export {
   decodeClientHello,
   decodeHostHello,
   encodeClientHello,
   encodeHostHello,
-} from "./model/hello"
-export {
-  decodeControlEnvelope,
-  encodeControlEnvelope,
-} from "./model/control-envelope"
+} from "./model/hello";
+export { decodeControlEnvelope, encodeControlEnvelope } from "./model/control-envelope";
 export {
   FRAME_ATTR_MASK,
   FRAME_MAX_AXIS,
   FRAME_MAX_CELLS,
   decodeFrameEnvelope,
   encodeFrameEnvelope,
-} from "./model/frame"
+} from "./model/frame";

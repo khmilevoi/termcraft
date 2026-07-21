@@ -1,17 +1,17 @@
-import { action, atom, type Atom } from "@reatom/core"
-import * as errore from "errore"
+import { type Atom, action, atom } from "@reatom/core";
+import * as errore from "errore";
 
 import {
-  canonicalHash,
-  encodeUint64String,
   type CanonicalHashError,
   type PageRemovePlanV1,
   type Sha256Hex,
   type UInt64String,
   type UUIDv7,
-} from "core/protocol"
-import type { PageSlug } from "entities/page"
-import { uuidv7 } from "infrastructure/uuid"
+  canonicalHash,
+  encodeUint64String,
+} from "core/protocol";
+import type { PageSlug } from "entities/page";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * `PageRemovePlanV1` minting and its invalidation rules (kernel-command-contract §7.1,
@@ -48,8 +48,10 @@ export class PageRemovePlanMintError extends errore.createTaggedError({
 }) {}
 
 /** The canonical `pageOrderHash` (§7.1) — array order is meaning, matching `canonicalHash`'s own rule for `page.reorder` permutations. */
-export function computePageOrderHash(orderedPageSlugs: readonly PageSlug[]): CanonicalHashError | Sha256Hex {
-  return canonicalHash(orderedPageSlugs)
+export function computePageOrderHash(
+  orderedPageSlugs: readonly PageSlug[],
+): CanonicalHashError | Sha256Hex {
+  return canonicalHash(orderedPageSlugs);
 }
 
 /**
@@ -64,24 +66,24 @@ export function computeFallbackPageSlug(
   removedPageSlug: PageSlug,
   activePageSlug: PageSlug | null,
 ): PageSlug | null {
-  if (activePageSlug !== removedPageSlug) return null
+  if (activePageSlug !== removedPageSlug) return null;
 
-  const index = orderedPageSlugs.indexOf(removedPageSlug)
-  if (index === -1) return null
+  const index = orderedPageSlugs.indexOf(removedPageSlug);
+  if (index === -1) return null;
 
-  const remaining = orderedPageSlugs.filter((slug) => slug !== removedPageSlug)
-  if (remaining.length === 0) return null
+  const remaining = orderedPageSlugs.filter((slug) => slug !== removedPageSlug);
+  if (remaining.length === 0) return null;
 
-  if (index < orderedPageSlugs.length - 1) return orderedPageSlugs[index + 1] ?? null
-  return orderedPageSlugs[index - 1] ?? null
+  if (index < orderedPageSlugs.length - 1) return orderedPageSlugs[index + 1] ?? null;
+  return orderedPageSlugs[index - 1] ?? null;
 }
 
 export interface MintPageRemovePlanInputV1 {
-  readonly pageSlug: PageSlug
-  readonly sourceHash: Sha256Hex
+  readonly pageSlug: PageSlug;
+  readonly sourceHash: Sha256Hex;
   /** The manifest's own ordering authority at mint time (storage-identity §5.1). */
-  readonly orderedPageSlugs: readonly PageSlug[]
-  readonly activePageSlug: PageSlug | null
+  readonly orderedPageSlugs: readonly PageSlug[];
+  readonly activePageSlug: PageSlug | null;
 }
 
 /** Pure construction: given already-gathered fresh facts and a revision, builds the immutable plan. */
@@ -93,13 +95,17 @@ export function buildPageRemovePlan(
     return new PageRemovePlanMintError({
       pageSlug: input.pageSlug,
       reason: "page is not listed in orderedPageSlugs",
-    })
+    });
   }
 
-  const pageOrderHash = computePageOrderHash(input.orderedPageSlugs)
-  if (pageOrderHash instanceof Error) return pageOrderHash
+  const pageOrderHash = computePageOrderHash(input.orderedPageSlugs);
+  if (pageOrderHash instanceof Error) return pageOrderHash;
 
-  const fallbackPageSlug = computeFallbackPageSlug(input.orderedPageSlugs, input.pageSlug, input.activePageSlug)
+  const fallbackPageSlug = computeFallbackPageSlug(
+    input.orderedPageSlugs,
+    input.pageSlug,
+    input.activePageSlug,
+  );
 
   return {
     pageRemovePlanId: uuidv7(),
@@ -110,15 +116,15 @@ export function buildPageRemovePlan(
     activePageSlug: input.activePageSlug,
     fallbackPageSlug,
     planRevision,
-  }
+  };
 }
 
 /** Everything `confirmPageRemove` must re-read fresh, under the project-write mutex, before it may write (§12.6 item 2). */
 export interface FreshPageRemoveFactsV1 {
-  readonly sourceHash: Sha256Hex
-  readonly orderedPageSlugs: readonly PageSlug[]
-  readonly activePageSlug: PageSlug | null
-  readonly planRevision: UInt64String
+  readonly sourceHash: Sha256Hex;
+  readonly orderedPageSlugs: readonly PageSlug[];
+  readonly activePageSlug: PageSlug | null;
+  readonly planRevision: UInt64String;
 }
 
 /** §12.6's exact enumerated comparison set: "source hash, exact ordered slug list/page-order hash, active-page/fallback facts, and plan revision" — six independent fields. */
@@ -128,11 +134,11 @@ export type PlanDriftFieldV1 =
   | "pageOrderHash"
   | "activePageSlug"
   | "fallbackPageSlug"
-  | "planRevision"
+  | "planRevision";
 
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false
-  return a.every((value, index) => value === b[index])
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
 }
 
 /**
@@ -146,34 +152,36 @@ export function detectPageRemovePlanDrift(
   plan: PageRemovePlanV1,
   fresh: FreshPageRemoveFactsV1,
 ): CanonicalHashError | readonly PlanDriftFieldV1[] {
-  const freshPageOrderHash = computePageOrderHash(fresh.orderedPageSlugs)
-  if (freshPageOrderHash instanceof Error) return freshPageOrderHash
+  const freshPageOrderHash = computePageOrderHash(fresh.orderedPageSlugs);
+  if (freshPageOrderHash instanceof Error) return freshPageOrderHash;
 
   const freshFallbackPageSlug = computeFallbackPageSlug(
     fresh.orderedPageSlugs,
     plan.pageSlug as PageSlug,
     fresh.activePageSlug,
-  )
+  );
 
-  const drift: PlanDriftFieldV1[] = []
-  if (plan.sourceHash !== fresh.sourceHash) drift.push("sourceHash")
-  if (!arraysEqual(plan.orderedPageSlugs, fresh.orderedPageSlugs)) drift.push("orderedPageSlugs")
-  if (plan.pageOrderHash !== freshPageOrderHash) drift.push("pageOrderHash")
-  if (plan.activePageSlug !== fresh.activePageSlug) drift.push("activePageSlug")
-  if (plan.fallbackPageSlug !== freshFallbackPageSlug) drift.push("fallbackPageSlug")
-  if (plan.planRevision !== fresh.planRevision) drift.push("planRevision")
-  return drift
+  const drift: PlanDriftFieldV1[] = [];
+  if (plan.sourceHash !== fresh.sourceHash) drift.push("sourceHash");
+  if (!arraysEqual(plan.orderedPageSlugs, fresh.orderedPageSlugs)) drift.push("orderedPageSlugs");
+  if (plan.pageOrderHash !== freshPageOrderHash) drift.push("pageOrderHash");
+  if (plan.activePageSlug !== fresh.activePageSlug) drift.push("activePageSlug");
+  if (plan.fallbackPageSlug !== freshFallbackPageSlug) drift.push("fallbackPageSlug");
+  if (plan.planRevision !== fresh.planRevision) drift.push("planRevision");
+  return drift;
 }
 
 export interface PageRemovePlanLedger {
-  readonly currentAtom: Atom<PageRemovePlanV1 | null>
-  current(): PageRemovePlanV1 | null
+  readonly currentAtom: Atom<PageRemovePlanV1 | null>;
+  current(): PageRemovePlanV1 | null;
   /** Mints a fresh plan, replacing whatever was active ("at most one", §7.1). */
-  mint(input: MintPageRemovePlanInputV1): CanonicalHashError | PageRemovePlanMintError | PageRemovePlanV1
+  mint(
+    input: MintPageRemovePlanInputV1,
+  ): CanonicalHashError | PageRemovePlanMintError | PageRemovePlanV1;
   /** Unconditionally clears the active plan — the effect every §7.1 invalidation trigger shares. */
-  invalidate(): void
+  invalidate(): void;
   /** Clears the active plan only if `planId` still names it (§7.1: "Clears only the matching active plan"). */
-  discard(planId: UUIDv7): "discarded" | "not-found"
+  discard(planId: UUIDv7): "discarded" | "not-found";
 }
 
 /**
@@ -182,31 +190,33 @@ export interface PageRemovePlanLedger {
  * kernels, or two tests, must never share one plan slot.
  */
 export function createPageRemovePlanLedger(): PageRemovePlanLedger {
-  const currentAtom = atom<PageRemovePlanV1 | null>(null, "kernel.project.pageRemovePlan")
-  const revisionAtom = atom(0n, "kernel.project.pageRemovePlanRevision")
+  const currentAtom = atom<PageRemovePlanV1 | null>(null, "kernel.project.pageRemovePlan");
+  const revisionAtom = atom(0n, "kernel.project.pageRemovePlanRevision");
 
   const mint = action(
-    (input: MintPageRemovePlanInputV1): CanonicalHashError | PageRemovePlanMintError | PageRemovePlanV1 => {
-      const nextRevision = revisionAtom() + 1n
-      const plan = buildPageRemovePlan(input, encodeUint64String(nextRevision))
-      if (plan instanceof Error) return plan
-      revisionAtom.set(nextRevision)
-      currentAtom.set(plan)
-      return plan
+    (
+      input: MintPageRemovePlanInputV1,
+    ): CanonicalHashError | PageRemovePlanMintError | PageRemovePlanV1 => {
+      const nextRevision = revisionAtom() + 1n;
+      const plan = buildPageRemovePlan(input, encodeUint64String(nextRevision));
+      if (plan instanceof Error) return plan;
+      revisionAtom.set(nextRevision);
+      currentAtom.set(plan);
+      return plan;
     },
     "kernel.project.pageRemovePlan.mint",
-  )
+  );
 
   const invalidate = action(() => {
-    currentAtom.set(null)
-  }, "kernel.project.pageRemovePlan.invalidate")
+    currentAtom.set(null);
+  }, "kernel.project.pageRemovePlan.invalidate");
 
   const discard = action((planId: UUIDv7): "discarded" | "not-found" => {
-    const plan = currentAtom()
-    if (plan === null || plan.pageRemovePlanId !== planId) return "not-found"
-    currentAtom.set(null)
-    return "discarded"
-  }, "kernel.project.pageRemovePlan.discard")
+    const plan = currentAtom();
+    if (plan === null || plan.pageRemovePlanId !== planId) return "not-found";
+    currentAtom.set(null);
+    return "discarded";
+  }, "kernel.project.pageRemovePlan.discard");
 
   return {
     currentAtom,
@@ -214,5 +224,5 @@ export function createPageRemovePlanLedger(): PageRemovePlanLedger {
     mint,
     invalidate,
     discard,
-  }
+  };
 }

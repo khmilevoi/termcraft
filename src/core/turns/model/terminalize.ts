@@ -1,9 +1,9 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { StateMachine, TurnAction, TurnState, TurnTerminalOutcome } from "core/machines"
-import type { TurnCommitV1, TurnTerminalRecordV1, TurnTransactionService } from "core/ports"
-import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol"
-import { uuidv7 } from "infrastructure/uuid"
+import type { StateMachine, TurnAction, TurnState, TurnTerminalOutcome } from "core/machines";
+import type { TurnCommitV1, TurnTerminalRecordV1, TurnTransactionService } from "core/ports";
+import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * `kernel.turn.finishTerminalization` / `settle` — `terminalizing -> terminal -> idle`
@@ -39,24 +39,24 @@ import { uuidv7 } from "infrastructure/uuid"
  */
 
 export interface TerminalizeTurnDeps {
-  readonly machine: StateMachine<TurnState, TurnAction>
-  readonly turnTransactions: TurnTransactionService
+  readonly machine: StateMachine<TurnState, TurnAction>;
+  readonly turnTransactions: TurnTransactionService;
 }
 
 export interface TerminalizeTurnInputV1 {
-  readonly turnId: string
-  readonly targetChatId: string
-  readonly outcome: TurnTerminalOutcome
-  readonly text: string
+  readonly turnId: string;
+  readonly targetChatId: string;
+  readonly outcome: TurnTerminalOutcome;
+  readonly text: string;
   /** Only meaningful for a `system:error` record (e.g. `"process_restart_before_intent"`). */
-  readonly reason?: string
-  readonly createdAt: string
+  readonly reason?: string;
+  readonly createdAt: string;
 }
 
 export type TerminalizeTurnResultV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
   | { readonly kind: "recorded"; readonly commit: TurnCommitV1 }
-  | { readonly kind: "unrecorded"; readonly failure: FailureDtoV1 }
+  | { readonly kind: "unrecorded"; readonly failure: FailureDtoV1 };
 
 /**
  * §7.2 verbatim: "`failed` persists as a `system:error` record with typed outcome
@@ -65,16 +65,23 @@ export type TerminalizeTurnResultV1 =
  * `actionId` always absent — this is a TURN terminalization, never a standalone action.
  */
 function buildTerminalRecord(input: TerminalizeTurnInputV1): TurnTerminalRecordV1 {
-  const recordId = uuidv7()
+  const recordId = uuidv7();
 
   if (input.outcome === "cancelled") {
-    return { kind: "system:cancelled", recordId, turnId: input.turnId, text: input.text, ts: input.createdAt }
+    return {
+      kind: "system:cancelled",
+      recordId,
+      turnId: input.turnId,
+      text: input.text,
+      ts: input.createdAt,
+    };
   }
 
   // "failed" is the one outcome whose record-level name DIFFERS from the outcome name
   // (§7.2: "typed outcome `error`", not "failed") — "stale"/"interrupted" pass through
   // under their own name.
-  const outcome: "error" | "stale" | "interrupted" = input.outcome === "failed" ? "error" : input.outcome
+  const outcome: "error" | "stale" | "interrupted" =
+    input.outcome === "failed" ? "error" : input.outcome;
   return {
     kind: "system:error",
     recordId,
@@ -83,14 +90,17 @@ function buildTerminalRecord(input: TerminalizeTurnInputV1): TurnTerminalRecordV
     reason: input.reason,
     text: input.text,
     ts: input.createdAt,
-  }
+  };
 }
 
-export async function terminalizeTurn(deps: TerminalizeTurnDeps, input: TerminalizeTurnInputV1): Promise<TerminalizeTurnResultV1> {
-  const finished = deps.machine.apply("finishTerminalization")
-  if (finished.kind === "illegal") return { kind: "illegal", code: finished.code }
+export async function terminalizeTurn(
+  deps: TerminalizeTurnDeps,
+  input: TerminalizeTurnInputV1,
+): Promise<TerminalizeTurnResultV1> {
+  const finished = deps.machine.apply("finishTerminalization");
+  if (finished.kind === "illegal") return { kind: "illegal", code: finished.code };
 
-  const record = buildTerminalRecord(input)
+  const record = buildTerminalRecord(input);
   const result = await wrap(
     deps.turnTransactions.terminalize({
       turnId: input.turnId,
@@ -98,12 +108,12 @@ export async function terminalizeTurn(deps: TerminalizeTurnDeps, input: Terminal
       record,
       createdAt: input.createdAt,
     }),
-  )
+  );
 
   // Unconditional: §7.2 allows this edge on EITHER a recorded outcome or a typed
   // unrecorded condition — see this file's header.
-  deps.machine.apply("settle")
+  deps.machine.apply("settle");
 
-  if ("code" in result) return { kind: "unrecorded", failure: result }
-  return { kind: "recorded", commit: result }
+  if ("code" in result) return { kind: "unrecorded", failure: result };
+  return { kind: "recorded", commit: result };
 }

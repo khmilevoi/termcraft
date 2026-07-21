@@ -22,5 +22,5 @@ export type {
   SeedRecord,
   SessionScopeInput,
   FencedEvent,
-} from "./types"
-export { createProductionClaudeBackend } from "./claude"
+} from "./types";
+export { createProductionClaudeBackend } from "./claude";

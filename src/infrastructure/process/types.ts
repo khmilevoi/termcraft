@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /** A Job Object / process-group primitive failure (Spike I). Domain-free. */
 export class ProcessTreeError extends errore.createTaggedError({
@@ -22,13 +22,13 @@ export class ProcessTreeError extends errore.createTaggedError({
  */
 export interface ProcessTree {
   /** Assign a spawned process (and its future descendants) into the job. */
-  adopt(pid: number): ProcessTreeError | null
+  adopt(pid: number): ProcessTreeError | null;
   /** Live owned-descendant count from the OS, or a tagged error if the handle is gone. */
-  activeProcesses(): ProcessTreeError | number
+  activeProcesses(): ProcessTreeError | number;
   /** Hard-kill the whole tree (`TerminateJobObject`). */
-  terminate(): ProcessTreeError | null
+  terminate(): ProcessTreeError | null;
   /** Release the job handle. Safe to call more than once. */
-  close(): void
+  close(): void;
   /**
    * Record whether a spawn's adoption into this tree was confirmed
    * successful — `adopt()` returned `null` AND a subsequent
@@ -42,7 +42,7 @@ export interface ProcessTree {
    * a stale failure on a re-adopt attempt must not erase an earlier
    * confirmed success).
    */
-  noteAdoptionOutcome(confirmed: boolean): void
+  noteAdoptionOutcome(confirmed: boolean): void;
   /**
    * Whether `noteAdoptionOutcome(true)` has ever been recorded for this
    * tree. Callers polling `activeProcesses()` toward a confirmed exit MUST
@@ -50,8 +50,8 @@ export interface ProcessTree {
    * exit — otherwise `0` is ambiguous between "the tree drained" and
    * "nothing was ever successfully adopted into it".
    */
-  ownershipConfirmed(): boolean
+  ownershipConfirmed(): boolean;
 }
 
 /** Constructs a fresh owned tree, or a typed failure on an unsupported platform. */
-export type ProcessTreeFactory = () => ProcessTreeError | ProcessTree
+export type ProcessTreeFactory = () => ProcessTreeError | ProcessTree;

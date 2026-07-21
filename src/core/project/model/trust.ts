@@ -1,7 +1,7 @@
-import type { FailureDtoV1 } from "core/protocol"
-import type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "core/ports"
+import type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
 
-import type { TrustDecisionV1 } from "../types"
+import type { TrustDecisionV1 } from "../types";
 
 /**
  * Trust subject build, the grant decision, and untrusted-read-only enforcement (KCC §7.1
@@ -26,30 +26,32 @@ import type { TrustDecisionV1 } from "../types"
  */
 
 export interface TrustResolutionDeps {
-  readonly trustGate: TrustGate
-  readonly root: string
-  readonly projectId: string
+  readonly trustGate: TrustGate;
+  readonly root: string;
+  readonly projectId: string;
   /** `null` when the project's worktree carries no Git repository (storage-identity §8). */
-  readonly git: GitIdentityV1 | null
+  readonly git: GitIdentityV1 | null;
 }
 
 /** The built subject plus whether a PRIOR session already durably granted it. */
 export interface TrustStatusV1 {
-  readonly subject: TrustSubjectV1
-  readonly granted: boolean
+  readonly subject: TrustSubjectV1;
+  readonly granted: boolean;
 }
 
 /** Builds the trust subject for `deps.root`/`deps.projectId`/`deps.git` and checks the durable ledger — no grant/refuse decision yet, just the current fact. */
-export async function buildTrustStatus(deps: TrustResolutionDeps): Promise<FailureDtoV1 | TrustStatusV1> {
-  const subject = await deps.trustGate.buildSubject(deps.root, deps.projectId, deps.git)
+export async function buildTrustStatus(
+  deps: TrustResolutionDeps,
+): Promise<FailureDtoV1 | TrustStatusV1> {
+  const subject = await deps.trustGate.buildSubject(deps.root, deps.projectId, deps.git);
   // `TrustSubjectV1` carries no `code` field, so this structural check — the ring's own
   // idiom for a `FailureDtoV1 | T` union where `T` is a plain DTO, not an `Error`
   // instance (see `core/ports/fakes/page-store.test.ts`'s identical `"code" in result`) —
   // cannot collide with a genuine subject.
-  if ("code" in subject) return subject
+  if ("code" in subject) return subject;
 
-  const granted = await deps.trustGate.isGranted(subject)
-  return { subject, granted }
+  const granted = await deps.trustGate.isGranted(subject);
+  return { subject, granted };
 }
 
 /**
@@ -59,16 +61,18 @@ export async function buildTrustStatus(deps: TrustResolutionDeps): Promise<Failu
  * durably granted without ever asking — `resolveTrustDecision` below is for `project.open`
  * only, where the content predates this Kernel process.
  */
-export async function grantImplicitTrust(deps: TrustResolutionDeps): Promise<FailureDtoV1 | TrustSubjectV1> {
-  const subject = await deps.trustGate.buildSubject(deps.root, deps.projectId, deps.git)
-  if ("code" in subject) return subject
+export async function grantImplicitTrust(
+  deps: TrustResolutionDeps,
+): Promise<FailureDtoV1 | TrustSubjectV1> {
+  const subject = await deps.trustGate.buildSubject(deps.root, deps.projectId, deps.git);
+  if ("code" in subject) return subject;
 
   // `TrustGate.grant`'s success is `undefined` (§8.5-style "the write itself carries no
   // payload"), so the failure check here is presence, not shape.
-  const granted = await deps.trustGate.grant(subject)
-  if (granted !== undefined) return granted
+  const granted = await deps.trustGate.grant(subject);
+  if (granted !== undefined) return granted;
 
-  return subject
+  return subject;
 }
 
 /**
@@ -85,10 +89,10 @@ export async function resolveTrustDecision(
   subject: TrustSubjectV1,
   decision: "grant" | "refuse",
 ): Promise<FailureDtoV1 | TrustDecisionV1> {
-  if (decision === "refuse") return "untrusted-read-only"
+  if (decision === "refuse") return "untrusted-read-only";
 
-  const granted = await trustGate.grant(subject)
-  if (granted !== undefined) return granted
+  const granted = await trustGate.grant(subject);
+  if (granted !== undefined) return granted;
 
-  return "trusted"
+  return "trusted";
 }

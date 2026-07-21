@@ -1,9 +1,11 @@
-import * as errore from "errore"
-import type { AgentRun, AgentRunOutcome } from "agent/types"
-import type { TurnFence } from "entities/turn"
-import type { NaturalOutcome, RunDeps, RunDriver, RunSink } from "../types"
-import { createEventQueue } from "./event-queue"
-import { confirmExit, escalateAndConfirm } from "./exit-confirm"
+import * as errore from "errore";
+
+import type { AgentRun, AgentRunOutcome } from "agent/types";
+import type { TurnFence } from "entities/turn";
+
+import type { NaturalOutcome, RunDeps, RunDriver, RunSink } from "../types";
+import { createEventQueue } from "./event-queue";
+import { confirmExit, escalateAndConfirm } from "./exit-confirm";
 
 /**
  * Cancellation reason handed to `abortController.abort()` (§6.5 rung 1).
@@ -24,16 +26,16 @@ class RunDriverError extends errore.createTaggedError({
 }) {}
 
 /** Default §6.5 exit-confirmation budget when the caller does not override it. */
-const DEFAULT_CONFIRM_TIMEOUT_MS = 5000
+const DEFAULT_CONFIRM_TIMEOUT_MS = 5000;
 
 /** How long the engine waits for a driver to return after it has already
  *  claimed an outcome. A driver returns immediately in the normal case; this
  *  bounds the pathological one where the vendor stream's own close never
  *  settles, so `outcome` cannot be held hostage by it. */
-const DRIVER_RETURN_GRACE_MS = 2000
+const DRIVER_RETURN_GRACE_MS = 2000;
 
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**
@@ -55,18 +57,19 @@ export function startAgentRun(
   driver: RunDriver,
   deps: RunDeps,
 ): { run: AgentRun; cancel: () => Promise<void> } {
-  const confirmTimeoutMs = deps.confirmTimeoutMs ?? DEFAULT_CONFIRM_TIMEOUT_MS
-  const queue = createEventQueue(fence)
+  const confirmTimeoutMs = deps.confirmTimeoutMs ?? DEFAULT_CONFIRM_TIMEOUT_MS;
+  const queue = createEventQueue(fence);
 
-  let terminalKind: "natural" | "cancelled" | null = null
+  let terminalKind: "natural" | "cancelled" | null = null;
   /** Compare-and-swap the termination latch; returns true only for the winner. */
   function latch(kind: "natural" | "cancelled"): boolean {
-    if (terminalKind !== null) return false
-    terminalKind = kind
-    return true
+    if (terminalKind !== null) return false;
+    terminalKind = kind;
+    return true;
   }
 
-  const { promise: outcomePromise, resolve: resolveOutcome } = Promise.withResolvers<AgentRunOutcome>()
+  const { promise: outcomePromise, resolve: resolveOutcome } =
+    Promise.withResolvers<AgentRunOutcome>();
 
   /**
    * Resolves the instant a natural outcome is claimed (i.e. exactly when
@@ -78,7 +81,7 @@ export function startAgentRun(
    * hold `outcome` — and therefore `cancel()` and the backend's `tree.close()`
    * wiring — hostage forever.
    */
-  const { promise: claimedSignal, resolve: resolveClaimedSignal } = Promise.withResolvers<void>()
+  const { promise: claimedSignal, resolve: resolveClaimedSignal } = Promise.withResolvers<void>();
 
   /**
    * turn-durability §6.4/§6.5: a natural completion must CONFIRM the whole
@@ -88,32 +91,32 @@ export function startAgentRun(
    */
   async function resolveWithExitConfirm(outcome: AgentRunOutcome): Promise<void> {
     if (await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs)) {
-      resolveOutcome(outcome)
-      return
+      resolveOutcome(outcome);
+      return;
     }
     console.warn(
       `agent/run: exit not confirmed after natural ${outcome.kind}, escalating to terminate() before reporting an outcome`,
-    )
-    const reconfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs)
-    resolveOutcome(reconfirmed ? outcome : { kind: "unconfirmed-exit" })
+    );
+    const reconfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs);
+    resolveOutcome(reconfirmed ? outcome : { kind: "unconfirmed-exit" });
   }
 
-  let claimed: NaturalOutcome | null = null
+  let claimed: NaturalOutcome | null = null;
 
   const sink: RunSink = {
     isTerminal: () => terminalKind !== null,
     emit: (event) => {
-      if (terminalKind !== null) return // late-event drop (§6.4)
-      queue.push(event)
+      if (terminalKind !== null) return; // late-event drop (§6.4)
+      queue.push(event);
     },
     complete: (outcome, finalEvents) => {
-      if (!latch("natural")) return // cancel already won (late-event drop, §6.4)
-      for (const event of finalEvents ?? []) queue.push(event)
-      queue.finish()
-      claimed = outcome
-      resolveClaimedSignal()
+      if (!latch("natural")) return; // cancel already won (late-event drop, §6.4)
+      for (const event of finalEvents ?? []) queue.push(event);
+      queue.finish();
+      claimed = outcome;
+      resolveClaimedSignal();
     },
-  }
+  };
 
   /**
    * Drive the vendor driver to completion, without letting a driver that has
@@ -126,15 +129,15 @@ export function startAgentRun(
   async function runDriver(): Promise<void> {
     const driverPromise = driver(sink).catch((cause) => {
       // Backstop only: a driver is expected to convert its own boundary throws.
-      console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause))
+      console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause));
       if (latch("natural")) {
-        const driverError = new RunDriverError({ reason: describeThrown(cause), cause })
-        queue.push({ kind: "error", message: driverError.message })
-        queue.finish()
-        claimed = { kind: "backend-error", message: driverError.message, sessionId: null }
-        resolveClaimedSignal()
+        const driverError = new RunDriverError({ reason: describeThrown(cause), cause });
+        queue.push({ kind: "error", message: driverError.message });
+        queue.finish();
+        claimed = { kind: "backend-error", message: driverError.message, sessionId: null };
+        resolveClaimedSignal();
       }
-    })
+    });
 
     // Wait for whichever comes first: the driver actually returning, or —
     // once it has claimed an outcome via `complete()` — the bounded grace
@@ -151,27 +154,27 @@ export function startAgentRun(
           console.warn(
             "agent/run: injected wait() rejected during the driver-return grace period:",
             describeThrown(cause),
-          )
+          );
         }),
       ),
-    ])
+    ]);
 
     if (claimed === null && latch("natural")) {
       // The driver returned without claiming an outcome and without cancel
       // winning — report it as a failure so `outcome` still settles.
-      const message = "agent run ended without a terminal outcome"
-      queue.push({ kind: "error", message })
-      queue.finish()
-      claimed = { kind: "backend-error", message, sessionId: null }
+      const message = "agent run ended without a terminal outcome";
+      queue.push({ kind: "error", message });
+      queue.finish();
+      claimed = { kind: "backend-error", message, sessionId: null };
     }
 
-    if (claimed !== null) await resolveWithExitConfirm(claimed)
+    if (claimed !== null) await resolveWithExitConfirm(claimed);
   }
 
   // Fire-and-forget: `outcome` must settle even if `events` is never read.
-  void runDriver()
+  void runDriver();
 
-  let cancelPromise: Promise<void> | null = null
+  let cancelPromise: Promise<void> | null = null;
 
   /**
    * turn-durability §6.5's cancel ladder is five rungs: (1) stop non-terminal
@@ -225,32 +228,34 @@ export function startAgentRun(
    *     missing.
    */
   async function runCancelLadder(): Promise<void> {
-    deps.abortController.abort(new TurnAbortError({})) // rung 1
+    deps.abortController.abort(new TurnAbortError({})); // rung 1
 
     if (!latch("cancelled")) {
       // A natural outcome already won, or a previous cancel() already ran —
       // never fight the winner, just wait for whatever it resolved.
-      await outcomePromise
-      return
+      await outcomePromise;
+      return;
     }
-    queue.finish() // cancellation carries no AgentEvent — just end the stream.
+    queue.finish(); // cancellation carries no AgentEvent — just end the stream.
 
     if (await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs)) {
       // rung 2
-      resolveOutcome({ kind: "cancelled", exitConfirmed: true })
-      return
+      resolveOutcome({ kind: "cancelled", exitConfirmed: true });
+      return;
     }
 
     // rung 4 (hard kill) — rung 3 is the documented gap above.
-    const confirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs)
-    resolveOutcome(confirmed ? { kind: "cancelled", exitConfirmed: true } : { kind: "unconfirmed-exit" })
+    const confirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs);
+    resolveOutcome(
+      confirmed ? { kind: "cancelled", exitConfirmed: true } : { kind: "unconfirmed-exit" },
+    );
   }
 
   function cancel(): Promise<void> {
-    if (cancelPromise === null) cancelPromise = runCancelLadder()
-    return cancelPromise
+    if (cancelPromise === null) cancelPromise = runCancelLadder();
+    return cancelPromise;
   }
 
-  const run: AgentRun = { fence, events: queue.iterable, outcome: outcomePromise }
-  return { run, cancel }
+  const run: AgentRun = { fence, events: queue.iterable, outcome: outcomePromise };
+  return { run, cancel };
 }

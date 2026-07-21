@@ -1,23 +1,21 @@
-import { z } from "zod"
+import { z } from "zod";
 
-import { rfc3339UtcSchema } from "infrastructure/clock"
-import { pageSlugSchema } from "entities/page"
-import type { AgentToolOp } from "entities/turn"
+import { pageSlugSchema } from "entities/page";
+import type { AgentToolOp } from "entities/turn";
+import { rfc3339UtcSchema } from "infrastructure/clock";
 
-import { commandKindV1Schema, type CommandKindV1 } from "./command-kind"
-import type { EventKindV1 } from "./event-kind"
-import { failureDtoV1Schema, type FailureDtoV1 } from "./failure"
-import { unavailableReasonV1Schema, type UnavailableReason } from "./unavailable-reason"
-import { hostNonceSchema, sha256HexSchema, uuidv7Schema, type HostNonce, type Sha256Hex, type UUIDv7 } from "./ids"
+import { type CommandKindV1, commandKindV1Schema } from "./command-kind";
+import type { EventKindV1 } from "./event-kind";
+import { type FailureDtoV1, failureDtoV1Schema } from "./failure";
 import {
-  diagnosticDtoV1Schema,
-  frameIdentityV1Schema,
-  frameTokenV1Schema,
-  geometryTokenV1Schema,
-  pageDescriptorChangeV1Schema,
-  pageDescriptorV1Schema,
-  pageRemovePlanV1Schema,
-  pinDtoV1Schema,
+  type HostNonce,
+  type Sha256Hex,
+  type UUIDv7,
+  hostNonceSchema,
+  sha256HexSchema,
+  uuidv7Schema,
+} from "./ids";
+import {
   type DiagnosticDtoV1,
   type FrameIdentityV1,
   type FrameTokenV1,
@@ -26,8 +24,17 @@ import {
   type PageDescriptorV1,
   type PageRemovePlanV1,
   type PinDtoV1,
-} from "./shared-dto"
-import { uint64StringSchema, type UInt64String } from "./uint64"
+  diagnosticDtoV1Schema,
+  frameIdentityV1Schema,
+  frameTokenV1Schema,
+  geometryTokenV1Schema,
+  pageDescriptorChangeV1Schema,
+  pageDescriptorV1Schema,
+  pageRemovePlanV1Schema,
+  pinDtoV1Schema,
+} from "./shared-dto";
+import { type UInt64String, uint64StringSchema } from "./uint64";
+import { type UnavailableReason, unavailableReasonV1Schema } from "./unavailable-reason";
 
 /**
  * The 43 closed `EventPayloadByKindV1` payload schemas (kernel-command-contract §9,
@@ -80,11 +87,11 @@ import { uint64StringSchema, type UInt64String } from "./uint64"
 // Small shared building blocks
 // ---------------------------------------------------------------------------
 
-const nonNegativeIntSchema = z.number().int().nonnegative()
-const positiveIntSchema = z.number().int().positive()
+const nonNegativeIntSchema = z.number().int().nonnegative();
+const positiveIntSchema = z.number().int().positive();
 
 /** Attempts are integers 1 through 4 (§7.2, KCC:241: "Attempts are integers 1 through 4"). */
-const turnAttemptV1Schema = z.number().int().min(1).max(4)
+const turnAttemptV1Schema = z.number().int().min(1).max(4);
 
 /**
  * A full Git object id, per KCC's own concrete typing of `sourceCommit` (see file
@@ -95,8 +102,8 @@ const turnAttemptV1Schema = z.number().int().min(1).max(4)
  * --object-format=sha256`). Both lengths are accepted because the spec does not fix
  * which object format a termcraft-managed repository uses.
  */
-const FULL_GIT_OBJECT_ID = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/
-const fullGitObjectIdSchema = z.string().regex(FULL_GIT_OBJECT_ID)
+const FULL_GIT_OBJECT_ID = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+const fullGitObjectIdSchema = z.string().regex(FULL_GIT_OBJECT_ID);
 
 // ---------------------------------------------------------------------------
 // kernel.snapshot / kernel.stateChanged / kernel.capabilitiesChanged
@@ -115,10 +122,10 @@ const KERNEL_MODEL_IDS_V1 = [
   "kernel.export.state",
   "kernel.preview.state",
   "kernel.migration.state",
-] as const
+] as const;
 
-export type KernelModelIdV1 = (typeof KERNEL_MODEL_IDS_V1)[number]
-const kernelModelIdV1Schema = z.enum(KERNEL_MODEL_IDS_V1)
+export type KernelModelIdV1 = (typeof KERNEL_MODEL_IDS_V1)[number];
+const kernelModelIdV1Schema = z.enum(KERNEL_MODEL_IDS_V1);
 
 /**
  * TODO(6C): `action`, `previousTag`, `nextTag`, and `metadata` become closed unions
@@ -128,11 +135,11 @@ const kernelModelIdV1Schema = z.enum(KERNEL_MODEL_IDS_V1)
  * `action`/`previousTag`/`nextTag` as plain free-text in the final DTO.
  */
 export interface KernelStateChangedPayloadV1 {
-  readonly modelId: KernelModelIdV1
-  readonly action: string
-  readonly previousTag: string
-  readonly nextTag: string
-  readonly metadata: Readonly<Record<string, unknown>>
+  readonly modelId: KernelModelIdV1;
+  readonly action: string;
+  readonly previousTag: string;
+  readonly nextTag: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export const kernelStateChangedPayloadV1Schema = z.strictObject({
@@ -141,7 +148,7 @@ export const kernelStateChangedPayloadV1Schema = z.strictObject({
   previousTag: z.string().min(1),
   nextTag: z.string().min(1),
   metadata: z.record(z.string(), z.unknown()),
-})
+});
 
 /**
  * TODO(6C): `CapabilityState` (§10.1, KCC:852-857) is
@@ -153,7 +160,7 @@ export const kernelStateChangedPayloadV1Schema = z.strictObject({
  */
 export type CapabilityStateV1Placeholder =
   | Readonly<{ available: true }>
-  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>
+  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>;
 
 const capabilityStateV1PlaceholderSchema = z.discriminatedUnion("available", [
   z.strictObject({ available: z.literal(true) }),
@@ -165,7 +172,7 @@ const capabilityStateV1PlaceholderSchema = z.discriminatedUnion("available", [
     // would drop the code discrimination the UI branches on.
     reasons: z.tuple([unavailableReasonV1Schema], unavailableReasonV1Schema).readonly(),
   }),
-])
+]);
 
 /**
  * TODO(6C): `CapabilityEntry<K>`'s `target` field is `CapabilityTargetByKindV1[K]` —
@@ -176,16 +183,16 @@ const capabilityStateV1PlaceholderSchema = z.discriminatedUnion("available", [
  * `available`/`reasons` discriminant of `state` are fixed.
  */
 export interface CapabilityEntryV1Placeholder {
-  readonly id: CommandKindV1
-  readonly target: unknown
-  readonly state: CapabilityStateV1Placeholder
+  readonly id: CommandKindV1;
+  readonly target: unknown;
+  readonly state: CapabilityStateV1Placeholder;
 }
 
 const capabilityEntryV1PlaceholderSchema = z.strictObject({
   id: commandKindV1Schema,
   target: z.unknown(),
   state: capabilityStateV1PlaceholderSchema,
-})
+});
 
 /**
  * TODO: the closed Git status projection — "repository identity, `HEAD`, sequencer
@@ -196,10 +203,10 @@ const capabilityEntryV1PlaceholderSchema = z.strictObject({
  * one placeholder to replace later, not three drifting ones.
  */
 export interface GitStatusProjectionV1Placeholder {
-  readonly repositoryId: string
-  readonly head: string | null
-  readonly sequencerState: string
-  readonly scopes: Readonly<Record<string, unknown>>
+  readonly repositoryId: string;
+  readonly head: string | null;
+  readonly sequencerState: string;
+  readonly scopes: Readonly<Record<string, unknown>>;
 }
 
 const gitStatusProjectionV1PlaceholderSchema = z.strictObject({
@@ -207,7 +214,7 @@ const gitStatusProjectionV1PlaceholderSchema = z.strictObject({
   head: z.string().nullable(),
   sequencerState: z.string().min(1),
   scopes: z.record(z.string(), z.unknown()),
-})
+});
 
 /**
  * TODO(6C): "all seven tagged model DTOs" (§9 row for `kernel.snapshot`, KCC:793).
@@ -216,13 +223,13 @@ const gitStatusProjectionV1PlaceholderSchema = z.strictObject({
  * the seven `reatom*StateMachine` factories land.
  */
 export interface KernelModelsSnapshotV1Placeholder {
-  readonly project: unknown
-  readonly turn: unknown
-  readonly restore: unknown
-  readonly commit: unknown
-  readonly export: unknown
-  readonly preview: unknown
-  readonly migration: unknown
+  readonly project: unknown;
+  readonly turn: unknown;
+  readonly restore: unknown;
+  readonly commit: unknown;
+  readonly export: unknown;
+  readonly preview: unknown;
+  readonly migration: unknown;
 }
 
 const kernelModelsSnapshotV1PlaceholderSchema = z.strictObject({
@@ -233,7 +240,7 @@ const kernelModelsSnapshotV1PlaceholderSchema = z.strictObject({
   export: z.unknown(),
   preview: z.unknown(),
   migration: z.unknown(),
-})
+});
 
 /**
  * `kernel.snapshot`'s payload (§9 row, KCC:793): "`models` ..., `projectId`,
@@ -249,15 +256,15 @@ const kernelModelsSnapshotV1PlaceholderSchema = z.strictObject({
  * drift by accident.
  */
 export interface KernelSnapshotPayloadV1 {
-  readonly models: KernelModelsSnapshotV1Placeholder
-  readonly projectId: UUIDv7 | null
-  readonly activePageSlug: string | null
-  readonly activeChatId: UUIDv7 | null
-  readonly trust: "trusted" | "untrusted-read-only" | null
-  readonly capabilities: readonly CapabilityEntryV1Placeholder[]
-  readonly pageDescriptors: readonly PageDescriptorV1[]
-  readonly gitStatus: GitStatusProjectionV1Placeholder
-  readonly eventSeq: UInt64String
+  readonly models: KernelModelsSnapshotV1Placeholder;
+  readonly projectId: UUIDv7 | null;
+  readonly activePageSlug: string | null;
+  readonly activeChatId: UUIDv7 | null;
+  readonly trust: "trusted" | "untrusted-read-only" | null;
+  readonly capabilities: readonly CapabilityEntryV1Placeholder[];
+  readonly pageDescriptors: readonly PageDescriptorV1[];
+  readonly gitStatus: GitStatusProjectionV1Placeholder;
+  readonly eventSeq: UInt64String;
 }
 
 export const kernelSnapshotPayloadV1Schema = z.strictObject({
@@ -270,7 +277,7 @@ export const kernelSnapshotPayloadV1Schema = z.strictObject({
   pageDescriptors: z.array(pageDescriptorV1Schema).readonly(),
   gitStatus: gitStatusProjectionV1PlaceholderSchema,
   eventSeq: uint64StringSchema,
-})
+});
 
 /**
  * `kernel.capabilitiesChanged`'s payload (§9 row, KCC:795): "Complete replacement
@@ -278,24 +285,22 @@ export const kernelSnapshotPayloadV1Schema = z.strictObject({
  * for targets no longer published."
  */
 export interface KernelCapabilitiesChangedPayloadV1 {
-  readonly changed: readonly CapabilityEntryV1Placeholder[]
-  readonly removed: readonly Readonly<{ id: CommandKindV1; target: unknown }>[]
+  readonly changed: readonly CapabilityEntryV1Placeholder[];
+  readonly removed: readonly Readonly<{ id: CommandKindV1; target: unknown }>[];
 }
 
 export const kernelCapabilitiesChangedPayloadV1Schema = z.strictObject({
   changed: z.array(capabilityEntryV1PlaceholderSchema).readonly(),
-  removed: z
-    .array(z.strictObject({ id: commandKindV1Schema, target: z.unknown() }))
-    .readonly(),
-})
+  removed: z.array(z.strictObject({ id: commandKindV1Schema, target: z.unknown() })).readonly(),
+});
 
 // ---------------------------------------------------------------------------
 // page.removePlanReady / page.descriptorsChanged
 // ---------------------------------------------------------------------------
 
 /** `page.removePlanReady`'s payload (§9 row, KCC:796): "Complete `PageRemovePlanV1`." */
-export type PageRemovePlanReadyPayloadV1 = PageRemovePlanV1
-export const pageRemovePlanReadyPayloadV1Schema = pageRemovePlanV1Schema
+export type PageRemovePlanReadyPayloadV1 = PageRemovePlanV1;
+export const pageRemovePlanReadyPayloadV1Schema = pageRemovePlanV1Schema;
 
 /** The closed 8-member reason union `page.descriptorsChanged` carries, verbatim (KCC:797). */
 const PAGE_DESCRIPTORS_CHANGED_REASONS_V1 = [
@@ -307,9 +312,9 @@ const PAGE_DESCRIPTORS_CHANGED_REASONS_V1 = [
   "remove-page",
   "reorder-pages",
   "external-refresh",
-] as const
+] as const;
 
-export type PageDescriptorsChangedReasonV1 = (typeof PAGE_DESCRIPTORS_CHANGED_REASONS_V1)[number]
+export type PageDescriptorsChangedReasonV1 = (typeof PAGE_DESCRIPTORS_CHANGED_REASONS_V1)[number];
 
 /**
  * `page.descriptorsChanged`'s payload, given verbatim (§9 row, KCC:797): "The
@@ -317,10 +322,10 @@ export type PageDescriptorsChangedReasonV1 = (typeof PAGE_DESCRIPTORS_CHANGED_RE
  * change carries its exact before/after source-hash binding."
  */
 export interface PageDescriptorsChangedPayloadV1 {
-  readonly reason: PageDescriptorsChangedReasonV1
-  readonly descriptors: readonly PageDescriptorV1[]
-  readonly changes: readonly PageDescriptorChangeV1[]
-  readonly activePageSlug: string | null
+  readonly reason: PageDescriptorsChangedReasonV1;
+  readonly descriptors: readonly PageDescriptorV1[];
+  readonly changes: readonly PageDescriptorChangeV1[];
+  readonly activePageSlug: string | null;
 }
 
 export const pageDescriptorsChangedPayloadV1Schema = z.strictObject({
@@ -328,7 +333,7 @@ export const pageDescriptorsChangedPayloadV1Schema = z.strictObject({
   descriptors: z.array(pageDescriptorV1Schema).readonly(),
   changes: z.array(pageDescriptorChangeV1Schema).readonly(),
   activePageSlug: pageSlugSchema.nullable(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // turn.started / turn.attemptStarted / turn.progress / turn.gateRejected /
@@ -337,16 +342,16 @@ export const pageDescriptorsChangedPayloadV1Schema = z.strictObject({
 
 /** `turn.started`'s payload (§9 row, KCC:798): "`turnId`, captured `chatId`, and absolute deadline." */
 export interface TurnStartedPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly chatId: UUIDv7
-  readonly deadline: string
+  readonly turnId: UUIDv7;
+  readonly chatId: UUIDv7;
+  readonly deadline: string;
 }
 
 export const turnStartedPayloadV1Schema = z.strictObject({
   turnId: uuidv7Schema,
   chatId: uuidv7Schema,
   deadline: rfc3339UtcSchema,
-})
+});
 
 /**
  * `turn.attemptStarted`'s payload (§9 row, KCC:799): "`turnId`, `attempt`, and
@@ -354,16 +359,16 @@ export const turnStartedPayloadV1Schema = z.strictObject({
  * absent; the strict schema rejects it if a caller tries to add it back.
  */
 export interface TurnAttemptStartedPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly attempt: number
-  readonly deadline: string
+  readonly turnId: UUIDv7;
+  readonly attempt: number;
+  readonly deadline: string;
 }
 
 export const turnAttemptStartedPayloadV1Schema = z.strictObject({
   turnId: uuidv7Schema,
   attempt: turnAttemptV1Schema,
   deadline: rfc3339UtcSchema,
-})
+});
 
 /**
  * The normalized backend-neutral progress content `turn.progress` carries. This
@@ -375,7 +380,13 @@ export const turnAttemptStartedPayloadV1Schema = z.strictObject({
  * `entities/` types carry no Zod schema of their own and Kernel protocol DTOs are
  * strict (§8.2) where `entities/` decoders are forward-compatible.
  */
-const AGENT_TOOL_OPS_V1 = ["read", "edit", "run", "search", "other"] as const satisfies readonly AgentToolOp[]
+const AGENT_TOOL_OPS_V1 = [
+  "read",
+  "edit",
+  "run",
+  "search",
+  "other",
+] as const satisfies readonly AgentToolOp[];
 
 const turnProgressContentV1Schema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("reasoning"), text: z.string() }),
@@ -390,20 +401,20 @@ const turnProgressContentV1Schema = z.discriminatedUnion("kind", [
     }),
   }),
   z.strictObject({ kind: z.literal("error"), message: z.string() }),
-])
+]);
 
 /** `turn.progress`'s payload (§9 row, KCC:800): "`turnId`, `attempt`, normalized progress kind, and bounded backend-neutral content after full internal lease validation." */
 export interface TurnProgressPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly attempt: number
-  readonly content: z.infer<typeof turnProgressContentV1Schema>
+  readonly turnId: UUIDv7;
+  readonly attempt: number;
+  readonly content: z.infer<typeof turnProgressContentV1Schema>;
 }
 
 export const turnProgressPayloadV1Schema = z.strictObject({
   turnId: uuidv7Schema,
   attempt: turnAttemptV1Schema,
   content: turnProgressContentV1Schema,
-})
+});
 
 /**
  * Gate's FATAL error/WARNING kinds, transcribed verbatim from the real, landed
@@ -417,14 +428,14 @@ export const turnProgressPayloadV1Schema = z.strictObject({
  * them to `.nullable()` instead — the location is always present-or-explicitly-absent
  * on this DTO, never merely omitted.
  */
-const GATE_ERROR_KINDS_V1 = ["import", "contract", "type", "manifest", "smoke"] as const
+const GATE_ERROR_KINDS_V1 = ["import", "contract", "type", "manifest", "smoke"] as const;
 const GATE_WARNING_KINDS_V1 = [
   "dropped-id",
   "unpointed-element",
   "unguarded-timer",
   "unguarded-randomness",
   "unlisted-navigation",
-] as const
+] as const;
 
 const turnGateErrorV1Schema = z.strictObject({
   kind: z.enum(GATE_ERROR_KINDS_V1),
@@ -433,25 +444,25 @@ const turnGateErrorV1Schema = z.strictObject({
   file: z.string().min(1).nullable(),
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
-})
+});
 
 const turnGateWarningV1Schema = z.strictObject({
   kind: z.enum(GATE_WARNING_KINDS_V1),
   message: z.string(),
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
-})
+});
 
 /** "bounded closed Gate diagnostics" (§9 row for `turn.gateRejected`, KCC:801). */
 export interface TurnGateDiagnosticsV1 {
-  readonly errors: readonly z.infer<typeof turnGateErrorV1Schema>[]
-  readonly warnings: readonly z.infer<typeof turnGateWarningV1Schema>[]
+  readonly errors: readonly z.infer<typeof turnGateErrorV1Schema>[];
+  readonly warnings: readonly z.infer<typeof turnGateWarningV1Schema>[];
 }
 
 const turnGateDiagnosticsV1Schema = z.strictObject({
   errors: z.array(turnGateErrorV1Schema).readonly(),
   warnings: z.array(turnGateWarningV1Schema).readonly(),
-})
+});
 
 /**
  * `turn.gateRejected`'s payload (§9 row, KCC:801): "`turnId`, `attempt`, retry
@@ -462,10 +473,10 @@ const turnGateDiagnosticsV1Schema = z.strictObject({
  * attempt 4 has no further retry).
  */
 export interface TurnGateRejectedPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly attempt: number
-  readonly retryNumber: number
-  readonly diagnostics: TurnGateDiagnosticsV1
+  readonly turnId: UUIDv7;
+  readonly attempt: number;
+  readonly retryNumber: number;
+  readonly diagnostics: TurnGateDiagnosticsV1;
 }
 
 export const turnGateRejectedPayloadV1Schema = z.strictObject({
@@ -473,20 +484,20 @@ export const turnGateRejectedPayloadV1Schema = z.strictObject({
   attempt: turnAttemptV1Schema,
   retryNumber: z.number().int().min(0).max(3),
   diagnostics: turnGateDiagnosticsV1Schema,
-})
+});
 
 /** `turn.applyStarted`'s payload (§9 row, KCC:802): "`turnId`, candidate hash, and affected page slugs." */
 export interface TurnApplyStartedPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly candidateHash: Sha256Hex
-  readonly affectedPageSlugs: readonly string[]
+  readonly turnId: UUIDv7;
+  readonly candidateHash: Sha256Hex;
+  readonly affectedPageSlugs: readonly string[];
 }
 
 export const turnApplyStartedPayloadV1Schema = z.strictObject({
   turnId: uuidv7Schema,
   candidateHash: sha256HexSchema,
   affectedPageSlugs: z.array(pageSlugSchema).readonly(),
-})
+});
 
 /**
  * The `turn.completed`/`turn.failed`/`turn.cancelled` outcome. §7.2 fixes the
@@ -496,19 +507,19 @@ export const turnApplyStartedPayloadV1Schema = z.strictObject({
  * pages, chat result, pin changes, and resulting hashes"), which needs a code of its
  * own because all three event kinds share this one payload type (§9 map, KCC:726-728).
  */
-const TURN_OUTCOME_CODES_V1 = ["completed", "failed", "cancelled", "stale", "interrupted"] as const
-export type TurnOutcomeCodeV1 = (typeof TURN_OUTCOME_CODES_V1)[number]
+const TURN_OUTCOME_CODES_V1 = ["completed", "failed", "cancelled", "stale", "interrupted"] as const;
+export type TurnOutcomeCodeV1 = (typeof TURN_OUTCOME_CODES_V1)[number];
 
 /** One bounded warning carried on a terminal turn event, matching the code/safeMessage shape already fixed for `DiagnosticDtoV1`/`PageDescriptorV1`'s error. */
 export interface TurnWarningV1 {
-  readonly code: string
-  readonly safeMessage: string
+  readonly code: string;
+  readonly safeMessage: string;
 }
 
 const turnWarningV1Schema = z.strictObject({
   code: z.string().min(1),
   safeMessage: z.string(),
-})
+});
 
 /**
  * `turn.completed`, `turn.failed`, `turn.cancelled`'s shared payload (§9 row,
@@ -519,11 +530,11 @@ const turnWarningV1Schema = z.strictObject({
  * parallel arrays whose index-correlation is easy to break.
  */
 export interface TurnTerminalPayloadV1 {
-  readonly turnId: UUIDv7
-  readonly outcome: TurnOutcomeCodeV1
-  readonly changedPages: readonly Readonly<{ pageSlug: string; sourceHash: Sha256Hex }>[]
-  readonly warnings: readonly TurnWarningV1[]
-  readonly failure: FailureDtoV1 | null
+  readonly turnId: UUIDv7;
+  readonly outcome: TurnOutcomeCodeV1;
+  readonly changedPages: readonly Readonly<{ pageSlug: string; sourceHash: Sha256Hex }>[];
+  readonly warnings: readonly TurnWarningV1[];
+  readonly failure: FailureDtoV1 | null;
 }
 
 export const turnTerminalPayloadV1Schema = z.strictObject({
@@ -534,7 +545,7 @@ export const turnTerminalPayloadV1Schema = z.strictObject({
     .readonly(),
   warnings: z.array(turnWarningV1Schema).readonly(),
   failure: failureDtoV1Schema.nullable(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // restore.planReady / restore.started / restore.recordPending /
@@ -556,15 +567,15 @@ export const turnTerminalPayloadV1Schema = z.strictObject({
  * not one Git produces (contrast `sourceCommitId`/`blobHash` above).
  */
 export interface RestorePlanReadyPayloadV1 {
-  readonly restorePlanId: UUIDv7
-  readonly pageSlug: string
-  readonly sourceCommitId: string
-  readonly blobHash: string
-  readonly preRestoreSourceHash: Sha256Hex
-  readonly indexState: "clean" | "unstaged"
-  readonly gateAttestationHash: Sha256Hex
-  readonly planRevision: UInt64String
-  readonly willOverwrite: boolean
+  readonly restorePlanId: UUIDv7;
+  readonly pageSlug: string;
+  readonly sourceCommitId: string;
+  readonly blobHash: string;
+  readonly preRestoreSourceHash: Sha256Hex;
+  readonly indexState: "clean" | "unstaged";
+  readonly gateAttestationHash: Sha256Hex;
+  readonly planRevision: UInt64String;
+  readonly willOverwrite: boolean;
 }
 
 export const restorePlanReadyPayloadV1Schema = z.strictObject({
@@ -577,15 +588,15 @@ export const restorePlanReadyPayloadV1Schema = z.strictObject({
   gateAttestationHash: sha256HexSchema,
   planRevision: uint64StringSchema,
   willOverwrite: z.boolean(),
-})
+});
 
 /** `restore.started`'s payload (§9 row, KCC:805): "`restorePlanId`, `restoreActionId`, page slug, full source commit id, and safe target-chat display identity." */
 export interface RestoreStartedPayloadV1 {
-  readonly restorePlanId: UUIDv7
-  readonly restoreActionId: UUIDv7
-  readonly pageSlug: string
-  readonly sourceCommitId: string
-  readonly safeTargetChatDisplay: string
+  readonly restorePlanId: UUIDv7;
+  readonly restoreActionId: UUIDv7;
+  readonly pageSlug: string;
+  readonly sourceCommitId: string;
+  readonly safeTargetChatDisplay: string;
 }
 
 export const restoreStartedPayloadV1Schema = z.strictObject({
@@ -594,14 +605,14 @@ export const restoreStartedPayloadV1Schema = z.strictObject({
   pageSlug: pageSlugSchema,
   sourceCommitId: fullGitObjectIdSchema,
   safeTargetChatDisplay: z.string(),
-})
+});
 
 /** `restore.recordPending`'s payload (§9 row, KCC:806): "`restoreActionId`, page slug, full source commit id, and safe target-chat display identity." */
 export interface RestoreRecordPendingPayloadV1 {
-  readonly restoreActionId: UUIDv7
-  readonly pageSlug: string
-  readonly sourceCommitId: string
-  readonly safeTargetChatDisplay: string
+  readonly restoreActionId: UUIDv7;
+  readonly pageSlug: string;
+  readonly sourceCommitId: string;
+  readonly safeTargetChatDisplay: string;
 }
 
 export const restoreRecordPendingPayloadV1Schema = z.strictObject({
@@ -609,7 +620,7 @@ export const restoreRecordPendingPayloadV1Schema = z.strictObject({
   pageSlug: pageSlugSchema,
   sourceCommitId: fullGitObjectIdSchema,
   safeTargetChatDisplay: z.string(),
-})
+});
 
 /**
  * `restore.completed`/`restore.failed`'s shared payload (§9 row, KCC:807):
@@ -619,12 +630,12 @@ export const restoreRecordPendingPayloadV1Schema = z.strictObject({
  * `executing`, `record-pending`, `recovering` (KCC:289-291).
  */
 export interface RestoreTerminalPayloadV1 {
-  readonly restorePlanId: UUIDv7
-  readonly restoreActionId: UUIDv7 | null
-  readonly pageSlug: string
-  readonly sourceCommitId: string
-  readonly phase: "executing" | "record-pending" | "recovering"
-  readonly failure: FailureDtoV1 | null
+  readonly restorePlanId: UUIDv7;
+  readonly restoreActionId: UUIDv7 | null;
+  readonly pageSlug: string;
+  readonly sourceCommitId: string;
+  readonly phase: "executing" | "record-pending" | "recovering";
+  readonly failure: FailureDtoV1 | null;
 }
 
 export const restoreTerminalPayloadV1Schema = z.strictObject({
@@ -634,24 +645,24 @@ export const restoreTerminalPayloadV1Schema = z.strictObject({
   sourceCommitId: fullGitObjectIdSchema,
   phase: z.enum(["executing", "record-pending", "recovering"]),
   failure: failureDtoV1Schema.nullable(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // commit.planReady / commit.started / commit.completed|failed
 // ---------------------------------------------------------------------------
 
 /** The closed commit scope, given verbatim in §10.1's `commit.plan` target row (KCC:897). */
-const COMMIT_SCOPES_V1 = ["current-page", "infrastructure", "whole-project"] as const
-export type CommitScopeV1 = (typeof COMMIT_SCOPES_V1)[number]
+const COMMIT_SCOPES_V1 = ["current-page", "infrastructure", "whole-project"] as const;
+export type CommitScopeV1 = (typeof COMMIT_SCOPES_V1)[number];
 
-const commitScopeV1Schema = z.enum(COMMIT_SCOPES_V1)
+const commitScopeV1Schema = z.enum(COMMIT_SCOPES_V1);
 
 /** One path entry in a commit plan's preview, per §7.4 (KCC:312: "exact added/modified/deleted paths, states, content hashes"). `contentHash` is null for a `deleted` path. */
 const commitPathPreviewV1Schema = z.strictObject({
   path: z.string().min(1),
   state: z.enum(["added", "modified", "deleted"]),
   contentHash: fullGitObjectIdSchema.nullable(),
-})
+});
 
 /**
  * `commit.planReady`'s payload (§9 row, KCC:808): "`commitPlanId`, scope, expected
@@ -659,12 +670,12 @@ const commitPathPreviewV1Schema = z.strictObject({
  * warning flag."
  */
 export interface CommitPlanReadyPayloadV1 {
-  readonly commitPlanId: UUIDv7
-  readonly scope: CommitScopeV1
-  readonly expectedHead: string
-  readonly paths: readonly z.infer<typeof commitPathPreviewV1Schema>[]
-  readonly messageTemplate: string
-  readonly detachedHeadWarning: boolean
+  readonly commitPlanId: UUIDv7;
+  readonly scope: CommitScopeV1;
+  readonly expectedHead: string;
+  readonly paths: readonly z.infer<typeof commitPathPreviewV1Schema>[];
+  readonly messageTemplate: string;
+  readonly detachedHeadWarning: boolean;
 }
 
 export const commitPlanReadyPayloadV1Schema = z.strictObject({
@@ -674,14 +685,14 @@ export const commitPlanReadyPayloadV1Schema = z.strictObject({
   paths: z.array(commitPathPreviewV1Schema).readonly(),
   messageTemplate: z.string(),
   detachedHeadWarning: z.boolean(),
-})
+});
 
 /** `commit.started`'s payload (§9 row, KCC:809): "`commitPlanId`, execution `operationId`, scope, and exact selected paths." */
 export interface CommitStartedPayloadV1 {
-  readonly commitPlanId: UUIDv7
-  readonly operationId: UUIDv7
-  readonly scope: CommitScopeV1
-  readonly selectedPaths: readonly string[]
+  readonly commitPlanId: UUIDv7;
+  readonly operationId: UUIDv7;
+  readonly scope: CommitScopeV1;
+  readonly selectedPaths: readonly string[];
 }
 
 export const commitStartedPayloadV1Schema = z.strictObject({
@@ -689,7 +700,7 @@ export const commitStartedPayloadV1Schema = z.strictObject({
   operationId: uuidv7Schema,
   scope: commitScopeV1Schema,
   selectedPaths: z.array(z.string().min(1)).readonly(),
-})
+});
 
 /**
  * `commit.completed`/`commit.failed`'s shared payload (§9 row, KCC:810):
@@ -698,11 +709,11 @@ export const commitStartedPayloadV1Schema = z.strictObject({
  * for "resulting Git status" — see that type's own TODO.
  */
 export interface CommitTerminalPayloadV1 {
-  readonly commitPlanId: UUIDv7
-  readonly operationId: UUIDv7
-  readonly scope: CommitScopeV1
-  readonly gitStatus: GitStatusProjectionV1Placeholder
-  readonly failure: FailureDtoV1 | null
+  readonly commitPlanId: UUIDv7;
+  readonly operationId: UUIDv7;
+  readonly scope: CommitScopeV1;
+  readonly gitStatus: GitStatusProjectionV1Placeholder;
+  readonly failure: FailureDtoV1 | null;
 }
 
 export const commitTerminalPayloadV1Schema = z.strictObject({
@@ -711,23 +722,23 @@ export const commitTerminalPayloadV1Schema = z.strictObject({
   scope: commitScopeV1Schema,
   gitStatus: gitStatusProjectionV1PlaceholderSchema,
   failure: failureDtoV1Schema.nullable(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // export.started / export.progress / export.completed|failed
 // ---------------------------------------------------------------------------
 
 /** The in-flight `ExportState` phases progress/terminal events can name (§7.5: `kernel.export.beginRendering` -> `rendering`, `kernel.export.beginPublication` -> `publishing`). */
-const EXPORT_PHASES_V1 = ["rendering", "publishing"] as const
-export type ExportPhaseV1 = (typeof EXPORT_PHASES_V1)[number]
+const EXPORT_PHASES_V1 = ["rendering", "publishing"] as const;
+export type ExportPhaseV1 = (typeof EXPORT_PHASES_V1)[number];
 
 /** `export.started`'s payload (§9 row, KCC:811): "export `operationId`, immutable source-snapshot digest, page count, render-job count, and destination identity." */
 export interface ExportStartedPayloadV1 {
-  readonly operationId: UUIDv7
-  readonly sourceSnapshotDigest: Sha256Hex
-  readonly pageCount: number
-  readonly renderJobCount: number
-  readonly destination: string
+  readonly operationId: UUIDv7;
+  readonly sourceSnapshotDigest: Sha256Hex;
+  readonly pageCount: number;
+  readonly renderJobCount: number;
+  readonly destination: string;
 }
 
 export const exportStartedPayloadV1Schema = z.strictObject({
@@ -736,16 +747,16 @@ export const exportStartedPayloadV1Schema = z.strictObject({
   pageCount: nonNegativeIntSchema,
   renderJobCount: nonNegativeIntSchema,
   destination: z.string().min(1),
-})
+});
 
 /** `export.progress`'s payload (§9 row, KCC:812): "export `operationId`, phase, completed jobs, total jobs, nullable page slug, and nullable size." */
 export interface ExportProgressPayloadV1 {
-  readonly operationId: UUIDv7
-  readonly phase: ExportPhaseV1
-  readonly completedJobs: number
-  readonly totalJobs: number
-  readonly pageSlug: string | null
-  readonly sizeBytes: number | null
+  readonly operationId: UUIDv7;
+  readonly phase: ExportPhaseV1;
+  readonly completedJobs: number;
+  readonly totalJobs: number;
+  readonly pageSlug: string | null;
+  readonly sizeBytes: number | null;
 }
 
 export const exportProgressPayloadV1Schema = z.strictObject({
@@ -755,15 +766,15 @@ export const exportProgressPayloadV1Schema = z.strictObject({
   totalJobs: nonNegativeIntSchema,
   pageSlug: pageSlugSchema.nullable(),
   sizeBytes: nonNegativeIntSchema.nullable(),
-})
+});
 
 /** `export.completed`/`export.failed`'s shared payload (§9 row, KCC:813): "export `operationId`, phase, destination identity, nullable generation id, and nullable closed failure DTO." */
 export interface ExportTerminalPayloadV1 {
-  readonly operationId: UUIDv7
-  readonly phase: ExportPhaseV1
-  readonly destination: string
-  readonly generationId: UUIDv7 | null
-  readonly failure: FailureDtoV1 | null
+  readonly operationId: UUIDv7;
+  readonly phase: ExportPhaseV1;
+  readonly destination: string;
+  readonly generationId: UUIDv7 | null;
+  readonly failure: FailureDtoV1 | null;
 }
 
 export const exportTerminalPayloadV1Schema = z.strictObject({
@@ -772,7 +783,7 @@ export const exportTerminalPayloadV1Schema = z.strictObject({
   destination: z.string().min(1),
   generationId: uuidv7Schema.nullable(),
   failure: failureDtoV1Schema.nullable(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // migration.planReady / migration.started / migration.progress /
@@ -789,12 +800,12 @@ export const exportTerminalPayloadV1Schema = z.strictObject({
  * by design), so it stays a bounded free-form identifier.
  */
 export interface MigrationRewriteEntryV1 {
-  readonly relativePath: string
-  readonly fileKind: string
-  readonly beforeHash: string
-  readonly fromVersion: number
-  readonly toVersion: number
-  readonly sizeBytes: number
+  readonly relativePath: string;
+  readonly fileKind: string;
+  readonly beforeHash: string;
+  readonly fromVersion: number;
+  readonly toVersion: number;
+  readonly sizeBytes: number;
 }
 
 const migrationRewriteEntryV1Schema = z.strictObject({
@@ -804,7 +815,7 @@ const migrationRewriteEntryV1Schema = z.strictObject({
   fromVersion: positiveIntSchema,
   toVersion: positiveIntSchema,
   sizeBytes: nonNegativeIntSchema,
-})
+});
 
 /**
  * `migration.planReady`'s payload (§9 row, KCC:814): "`migrationPlanId`, exact
@@ -812,12 +823,12 @@ const migrationRewriteEntryV1Schema = z.strictObject({
  * bytes, and plan revision."
  */
 export interface MigrationPlanReadyPayloadV1 {
-  readonly migrationPlanId: UUIDv7
-  readonly selectedFileKinds: readonly string[]
-  readonly rewriteEntries: readonly MigrationRewriteEntryV1[]
-  readonly backupBytes: number
-  readonly requiredFreeBytes: number
-  readonly planRevision: UInt64String
+  readonly migrationPlanId: UUIDv7;
+  readonly selectedFileKinds: readonly string[];
+  readonly rewriteEntries: readonly MigrationRewriteEntryV1[];
+  readonly backupBytes: number;
+  readonly requiredFreeBytes: number;
+  readonly planRevision: UInt64String;
 }
 
 export const migrationPlanReadyPayloadV1Schema = z.strictObject({
@@ -827,14 +838,14 @@ export const migrationPlanReadyPayloadV1Schema = z.strictObject({
   backupBytes: nonNegativeIntSchema,
   requiredFreeBytes: nonNegativeIntSchema,
   planRevision: uint64StringSchema,
-})
+});
 
 /** `migration.started`'s payload (§9 row, KCC:815): "`migrationPlanId`, `migrationActionId`, selected scope, and phase `backing-up`." */
 export interface MigrationStartedPayloadV1 {
-  readonly migrationPlanId: UUIDv7
-  readonly migrationActionId: UUIDv7
-  readonly selectedFileKinds: readonly string[]
-  readonly phase: "backing-up"
+  readonly migrationPlanId: UUIDv7;
+  readonly migrationActionId: UUIDv7;
+  readonly selectedFileKinds: readonly string[];
+  readonly phase: "backing-up";
 }
 
 export const migrationStartedPayloadV1Schema = z.strictObject({
@@ -842,20 +853,20 @@ export const migrationStartedPayloadV1Schema = z.strictObject({
   migrationActionId: uuidv7Schema,
   selectedFileKinds: z.array(z.string().min(1)).readonly(),
   phase: z.literal("backing-up"),
-})
+});
 
 /** The closed migration phase union, given verbatim (§9 row for `migration.progress`, KCC:816). */
-const MIGRATION_PHASES_V1 = ["backing-up", "transforming", "publishing", "recovering"] as const
-export type MigrationPhaseV1 = (typeof MIGRATION_PHASES_V1)[number]
+const MIGRATION_PHASES_V1 = ["backing-up", "transforming", "publishing", "recovering"] as const;
+export type MigrationPhaseV1 = (typeof MIGRATION_PHASES_V1)[number];
 
 /** `migration.progress`'s payload (§9 row, KCC:816): "`migrationPlanId`, `migrationActionId`, phase ..., completed items, total items, and nullable relative path." */
 export interface MigrationProgressPayloadV1 {
-  readonly migrationPlanId: UUIDv7
-  readonly migrationActionId: UUIDv7
-  readonly phase: MigrationPhaseV1
-  readonly completedItems: number
-  readonly totalItems: number
-  readonly relativePath: string | null
+  readonly migrationPlanId: UUIDv7;
+  readonly migrationActionId: UUIDv7;
+  readonly phase: MigrationPhaseV1;
+  readonly completedItems: number;
+  readonly totalItems: number;
+  readonly relativePath: string | null;
 }
 
 export const migrationProgressPayloadV1Schema = z.strictObject({
@@ -865,7 +876,7 @@ export const migrationProgressPayloadV1Schema = z.strictObject({
   completedItems: nonNegativeIntSchema,
   totalItems: nonNegativeIntSchema,
   relativePath: z.string().min(1).nullable(),
-})
+});
 
 /**
  * `migration.completed`'s payload (§9 row, KCC:817): "`migrationPlanId`,
@@ -874,12 +885,12 @@ export const migrationProgressPayloadV1Schema = z.strictObject({
  * consistent with `MigrationRewriteEntryV1`'s integer `toVersion`.
  */
 export interface MigrationTerminalPayloadV1 {
-  readonly migrationPlanId: UUIDv7
-  readonly migrationActionId: UUIDv7
-  readonly transactionId: UUIDv7
-  readonly migratedFileCount: number
-  readonly resultingVersions: Readonly<Record<string, number>>
-  readonly recovered: boolean
+  readonly migrationPlanId: UUIDv7;
+  readonly migrationActionId: UUIDv7;
+  readonly transactionId: UUIDv7;
+  readonly migratedFileCount: number;
+  readonly resultingVersions: Readonly<Record<string, number>>;
+  readonly recovered: boolean;
 }
 
 export const migrationTerminalPayloadV1Schema = z.strictObject({
@@ -889,7 +900,7 @@ export const migrationTerminalPayloadV1Schema = z.strictObject({
   migratedFileCount: nonNegativeIntSchema,
   resultingVersions: z.record(z.string().min(1), positiveIntSchema),
   recovered: z.boolean(),
-})
+});
 
 /**
  * `migration.failed`'s payload, given VERBATIM as a discriminated union (§9 row,
@@ -904,7 +915,7 @@ const migrationFailedPlanningVariantV1Schema = z.strictObject({
   transactionId: z.null(),
   phase: z.literal("planning"),
   failure: failureDtoV1Schema,
-})
+});
 
 const migrationFailedPostPlanVariantV1Schema = z.strictObject({
   migrationPlanId: uuidv7Schema,
@@ -912,28 +923,28 @@ const migrationFailedPostPlanVariantV1Schema = z.strictObject({
   transactionId: uuidv7Schema.nullable(),
   phase: z.enum(MIGRATION_PHASES_V1),
   failure: failureDtoV1Schema,
-})
+});
 
 export type MigrationFailedPayloadV1 =
   | Readonly<{
-      migrationPlanId: null
-      migrationActionId: null
-      transactionId: null
-      phase: "planning"
-      failure: FailureDtoV1
+      migrationPlanId: null;
+      migrationActionId: null;
+      transactionId: null;
+      phase: "planning";
+      failure: FailureDtoV1;
     }>
   | Readonly<{
-      migrationPlanId: UUIDv7
-      migrationActionId: UUIDv7
-      transactionId: UUIDv7 | null
-      phase: MigrationPhaseV1
-      failure: FailureDtoV1
-    }>
+      migrationPlanId: UUIDv7;
+      migrationActionId: UUIDv7;
+      transactionId: UUIDv7 | null;
+      phase: MigrationPhaseV1;
+      failure: FailureDtoV1;
+    }>;
 
 export const migrationFailedPayloadV1Schema = z.discriminatedUnion("phase", [
   migrationFailedPlanningVariantV1Schema,
   migrationFailedPostPlanVariantV1Schema,
-])
+]);
 
 // ---------------------------------------------------------------------------
 // preview.sourceChanged / preview.sessionReady / preview.geometryResult /
@@ -941,14 +952,14 @@ export const migrationFailedPayloadV1Schema = z.discriminatedUnion("phase", [
 // ---------------------------------------------------------------------------
 
 /** `preview.setMode`'s closed interaction-mode union, given verbatim in §10.1 (KCC:888). */
-const INTERACTION_MODES_V1 = ["static", "interactive"] as const
-export type InteractionModeV1 = (typeof INTERACTION_MODES_V1)[number]
+const INTERACTION_MODES_V1 = ["static", "interactive"] as const;
+export type InteractionModeV1 = (typeof INTERACTION_MODES_V1)[number];
 
 /** A preview source selector: canonical Current design, or a full historical commit (§9 row, KCC:819: "`current` or full historical commit id"). */
 const previewSourceSelectorV1Schema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("current") }),
   z.strictObject({ kind: z.literal("historical"), sourceCommit: fullGitObjectIdSchema }),
-])
+]);
 
 /**
  * `preview.sourceChanged`'s payload (§9 row, KCC:819): "`previewSessionId`, page
@@ -957,11 +968,11 @@ const previewSourceSelectorV1Schema = z.discriminatedUnion("kind", [
  * supervision-protocol design, not this document, so it is not enumerated here.
  */
 export interface PreviewSourceChangedPayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly pageSlug: string
-  readonly source: z.infer<typeof previewSourceSelectorV1Schema>
-  readonly sourceHash: Sha256Hex
-  readonly hostMode: string
+  readonly previewSessionId: UUIDv7;
+  readonly pageSlug: string;
+  readonly source: z.infer<typeof previewSourceSelectorV1Schema>;
+  readonly sourceHash: Sha256Hex;
+  readonly hostMode: string;
 }
 
 export const previewSourceChangedPayloadV1Schema = z.strictObject({
@@ -970,19 +981,19 @@ export const previewSourceChangedPayloadV1Schema = z.strictObject({
   source: previewSourceSelectorV1Schema,
   sourceHash: sha256HexSchema,
   hostMode: z.string().min(1),
-})
+});
 
 /** `preview.sessionReady`'s payload (§9 row, KCC:820): "`previewSessionId`, current nonce, page slug, source hash, host mode, interaction mode, size, theme, and initial frame sequence." */
 export interface PreviewSessionReadyPayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly nonce: HostNonce
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly hostMode: string
-  readonly interactionMode: InteractionModeV1
-  readonly size: Readonly<{ w: number; h: number }>
-  readonly theme: string
-  readonly initialFrameSeq: UInt64String
+  readonly previewSessionId: UUIDv7;
+  readonly nonce: HostNonce;
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly hostMode: string;
+  readonly interactionMode: InteractionModeV1;
+  readonly size: Readonly<{ w: number; h: number }>;
+  readonly theme: string;
+  readonly initialFrameSeq: UInt64String;
 }
 
 export const previewSessionReadyPayloadV1Schema = z.strictObject({
@@ -995,18 +1006,18 @@ export const previewSessionReadyPayloadV1Schema = z.strictObject({
   size: z.strictObject({ w: positiveIntSchema, h: positiveIntSchema }),
   theme: z.string().min(1),
   initialFrameSeq: uint64StringSchema,
-})
+});
 
 /** The closed geometry-query-kind union, given verbatim in §10.1 (KCC:890). */
-const PREVIEW_QUERY_KINDS_V1 = ["hit", "rect", "describe", "layout", "pin-anchor"] as const
-export type PreviewQueryKindV1 = (typeof PREVIEW_QUERY_KINDS_V1)[number]
+const PREVIEW_QUERY_KINDS_V1 = ["hit", "rect", "describe", "layout", "pin-anchor"] as const;
+export type PreviewQueryKindV1 = (typeof PREVIEW_QUERY_KINDS_V1)[number];
 
 /**
  * TODO: "closed geometry result" (§9 row for `preview.geometryResult`, KCC:821) is
  * defined by the host-supervision-protocol design, not this document. Structural
  * placeholder only.
  */
-const previewGeometryResultV1PlaceholderSchema = z.record(z.string(), z.unknown())
+const previewGeometryResultV1PlaceholderSchema = z.record(z.string(), z.unknown());
 
 /**
  * `preview.geometryResult`'s payload (§9 row, KCC:821): "`previewSessionId`,
@@ -1017,12 +1028,12 @@ const previewGeometryResultV1PlaceholderSchema = z.record(z.string(), z.unknown(
  * simply nullable for every `queryKind`.
  */
 export interface PreviewGeometryResultPayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly frameTokenId: FrameTokenV1
-  readonly frameIdentity: FrameIdentityV1
-  readonly queryKind: PreviewQueryKindV1
-  readonly result: Readonly<Record<string, unknown>>
-  readonly geometryToken: GeometryTokenV1 | null
+  readonly previewSessionId: UUIDv7;
+  readonly frameTokenId: FrameTokenV1;
+  readonly frameIdentity: FrameIdentityV1;
+  readonly queryKind: PreviewQueryKindV1;
+  readonly result: Readonly<Record<string, unknown>>;
+  readonly geometryToken: GeometryTokenV1 | null;
 }
 
 export const previewGeometryResultPayloadV1Schema = z.strictObject({
@@ -1032,15 +1043,15 @@ export const previewGeometryResultPayloadV1Schema = z.strictObject({
   queryKind: z.enum(PREVIEW_QUERY_KINDS_V1),
   result: previewGeometryResultV1PlaceholderSchema,
   geometryToken: geometryTokenV1Schema.nullable(),
-})
+});
 
 /** `preview.backpressured`/`preview.writable`'s shared payload (§9 row, KCC:822): "`previewSessionId`, current nonce, ordered-queue size, capacity, and low-water mark." */
 export interface PreviewBackpressurePayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly nonce: HostNonce
-  readonly queueSize: number
-  readonly capacity: number
-  readonly lowWaterMark: number
+  readonly previewSessionId: UUIDv7;
+  readonly nonce: HostNonce;
+  readonly queueSize: number;
+  readonly capacity: number;
+  readonly lowWaterMark: number;
 }
 
 export const previewBackpressurePayloadV1Schema = z.strictObject({
@@ -1049,7 +1060,7 @@ export const previewBackpressurePayloadV1Schema = z.strictObject({
   queueSize: nonNegativeIntSchema,
   capacity: positiveIntSchema,
   lowWaterMark: nonNegativeIntSchema,
-})
+});
 
 /**
  * `preview.failed`'s payload (§9 row, KCC:823): "`previewSessionId`, current
@@ -1057,12 +1068,12 @@ export const previewBackpressurePayloadV1Schema = z.strictObject({
  * is the `PreviewState` set `sessionFailed` can fire from (§7.6, KCC:365).
  */
 export interface PreviewFailurePayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly nonce: HostNonce
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly phase: "starting" | "switching" | "live"
-  readonly failure: FailureDtoV1
+  readonly previewSessionId: UUIDv7;
+  readonly nonce: HostNonce;
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly phase: "starting" | "switching" | "live";
+  readonly failure: FailureDtoV1;
 }
 
 export const previewFailurePayloadV1Schema = z.strictObject({
@@ -1072,7 +1083,7 @@ export const previewFailurePayloadV1Schema = z.strictObject({
   sourceHash: sha256HexSchema,
   phase: z.enum(["starting", "switching", "live"]),
   failure: failureDtoV1Schema,
-})
+});
 
 /**
  * `preview.circuitOpened`'s payload (§9 row, KCC:824): "`previewSessionId`, page
@@ -1081,12 +1092,12 @@ export const previewFailurePayloadV1Schema = z.strictObject({
  * `kernel.capabilitiesChanged` — see that type's comment.
  */
 export interface PreviewCircuitOpenedPayloadV1 {
-  readonly previewSessionId: UUIDv7
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly attempts: number
-  readonly finalFailure: FailureDtoV1
-  readonly retryCapability: CapabilityStateV1Placeholder
+  readonly previewSessionId: UUIDv7;
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly attempts: number;
+  readonly finalFailure: FailureDtoV1;
+  readonly retryCapability: CapabilityStateV1Placeholder;
 }
 
 export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
@@ -1096,7 +1107,7 @@ export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
   attempts: positiveIntSchema,
   finalFailure: failureDtoV1Schema,
   retryCapability: capabilityStateV1PlaceholderSchema,
-})
+});
 
 // ---------------------------------------------------------------------------
 // chat.changed / selection.changed / pins.changed / git.statusChanged /
@@ -1110,14 +1121,14 @@ export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
  * source in this slice's scope fixes one.
  */
 export interface ChatSummaryV1 {
-  readonly chatId: UUIDv7
-  readonly createdAt: string
+  readonly chatId: UUIDv7;
+  readonly createdAt: string;
 }
 
 const chatSummaryV1Schema = z.strictObject({
   chatId: uuidv7Schema,
   createdAt: rfc3339UtcSchema,
-})
+});
 
 /**
  * `chat.changed`'s payload (§9 row, KCC:825): "complete active chat identity plus
@@ -1129,10 +1140,10 @@ const chatSummaryV1Schema = z.strictObject({
  * observe the narrower pre-`ready` window where it does not yet.
  */
 export interface ChatChangedPayloadV1 {
-  readonly activeChatId: UUIDv7
-  readonly added: readonly ChatSummaryV1[]
-  readonly updated: readonly ChatSummaryV1[]
-  readonly removedChatIds: readonly UUIDv7[]
+  readonly activeChatId: UUIDv7;
+  readonly added: readonly ChatSummaryV1[];
+  readonly updated: readonly ChatSummaryV1[];
+  readonly removedChatIds: readonly UUIDv7[];
 }
 
 export const chatChangedPayloadV1Schema = z.strictObject({
@@ -1140,24 +1151,24 @@ export const chatChangedPayloadV1Schema = z.strictObject({
   added: z.array(chatSummaryV1Schema).readonly(),
   updated: z.array(chatSummaryV1Schema).readonly(),
   removedChatIds: z.array(uuidv7Schema).readonly(),
-})
+});
 
 /** The selection DTO `selection.changed` carries when a selection exists (§9 row, KCC:826). */
 export interface SelectionDtoV1 {
-  readonly pageSlug: string
-  readonly elementId: string
-  readonly sourceHash: Sha256Hex
+  readonly pageSlug: string;
+  readonly elementId: string;
+  readonly sourceHash: Sha256Hex;
 }
 
 const selectionDtoV1Schema = z.strictObject({
   pageSlug: pageSlugSchema,
   elementId: z.string().min(1),
   sourceHash: sha256HexSchema,
-})
+});
 
 /** `selection.changed`'s payload (§9 row, KCC:826): "nullable selection DTO containing page slug, element id, and source hash." The payload itself is the nullable DTO, not a wrapper around it. */
-export type SelectionChangedPayloadV1 = SelectionDtoV1 | null
-export const selectionChangedPayloadV1Schema = selectionDtoV1Schema.nullable()
+export type SelectionChangedPayloadV1 = SelectionDtoV1 | null;
+export const selectionChangedPayloadV1Schema = selectionDtoV1Schema.nullable();
 
 /**
  * `pins.changed`'s payload (§9 row, KCC:827): "page slug, `affectedPins:
@@ -1167,10 +1178,10 @@ export const selectionChangedPayloadV1Schema = selectionDtoV1Schema.nullable()
  * and `pins.changed` is published once per Kernel operation that touched pins.
  */
 export interface PinsChangedPayloadV1 {
-  readonly pageSlug: string
-  readonly affectedPins: readonly PinDtoV1[]
-  readonly affectedRecordIds: readonly UUIDv7[]
-  readonly causeId: UUIDv7
+  readonly pageSlug: string;
+  readonly affectedPins: readonly PinDtoV1[];
+  readonly affectedRecordIds: readonly UUIDv7[];
+  readonly causeId: UUIDv7;
 }
 
 export const pinsChangedPayloadV1Schema = z.strictObject({
@@ -1178,24 +1189,24 @@ export const pinsChangedPayloadV1Schema = z.strictObject({
   affectedPins: z.array(pinDtoV1Schema).readonly(),
   affectedRecordIds: z.array(uuidv7Schema).readonly(),
   causeId: uuidv7Schema,
-})
+});
 
 /** `git.statusChanged`'s payload (§9 row, KCC:828) is exactly the shared Git status projection — see `GitStatusProjectionV1Placeholder`'s own TODO. */
-export type GitStatusChangedPayloadV1 = GitStatusProjectionV1Placeholder
-export const gitStatusChangedPayloadV1Schema = gitStatusProjectionV1PlaceholderSchema
+export type GitStatusChangedPayloadV1 = GitStatusProjectionV1Placeholder;
+export const gitStatusChangedPayloadV1Schema = gitStatusProjectionV1PlaceholderSchema;
 
 /** `diagnostics.changed`'s payload, given verbatim (§9 row, KCC:829). */
 export interface DiagnosticsChangedPayloadV1 {
-  readonly generation: UInt64String
-  readonly upserts: readonly DiagnosticDtoV1[]
-  readonly removedDiagnosticIds: readonly UUIDv7[]
+  readonly generation: UInt64String;
+  readonly upserts: readonly DiagnosticDtoV1[];
+  readonly removedDiagnosticIds: readonly UUIDv7[];
 }
 
 export const diagnosticsChangedPayloadV1Schema = z.strictObject({
   generation: uint64StringSchema,
   upserts: z.array(diagnosticDtoV1Schema).readonly(),
   removedDiagnosticIds: z.array(uuidv7Schema).readonly(),
-})
+});
 
 // ---------------------------------------------------------------------------
 // The closed EventPayloadByKindV1 map (§9, KCC:715-759)
@@ -1203,50 +1214,50 @@ export const diagnosticsChangedPayloadV1Schema = z.strictObject({
 
 /** The exact type map §9 declares (KCC:715-759), transcribed with this file's type names. */
 export type EventPayloadByKindV1 = Readonly<{
-  "kernel.snapshot": KernelSnapshotPayloadV1
-  "kernel.stateChanged": KernelStateChangedPayloadV1
-  "kernel.capabilitiesChanged": KernelCapabilitiesChangedPayloadV1
-  "page.removePlanReady": PageRemovePlanReadyPayloadV1
-  "page.descriptorsChanged": PageDescriptorsChangedPayloadV1
-  "turn.started": TurnStartedPayloadV1
-  "turn.attemptStarted": TurnAttemptStartedPayloadV1
-  "turn.progress": TurnProgressPayloadV1
-  "turn.gateRejected": TurnGateRejectedPayloadV1
-  "turn.applyStarted": TurnApplyStartedPayloadV1
-  "turn.completed": TurnTerminalPayloadV1
-  "turn.failed": TurnTerminalPayloadV1
-  "turn.cancelled": TurnTerminalPayloadV1
-  "restore.planReady": RestorePlanReadyPayloadV1
-  "restore.started": RestoreStartedPayloadV1
-  "restore.recordPending": RestoreRecordPendingPayloadV1
-  "restore.completed": RestoreTerminalPayloadV1
-  "restore.failed": RestoreTerminalPayloadV1
-  "commit.planReady": CommitPlanReadyPayloadV1
-  "commit.started": CommitStartedPayloadV1
-  "commit.completed": CommitTerminalPayloadV1
-  "commit.failed": CommitTerminalPayloadV1
-  "export.started": ExportStartedPayloadV1
-  "export.progress": ExportProgressPayloadV1
-  "export.completed": ExportTerminalPayloadV1
-  "export.failed": ExportTerminalPayloadV1
-  "migration.planReady": MigrationPlanReadyPayloadV1
-  "migration.started": MigrationStartedPayloadV1
-  "migration.progress": MigrationProgressPayloadV1
-  "migration.completed": MigrationTerminalPayloadV1
-  "migration.failed": MigrationFailedPayloadV1
-  "preview.sourceChanged": PreviewSourceChangedPayloadV1
-  "preview.sessionReady": PreviewSessionReadyPayloadV1
-  "preview.geometryResult": PreviewGeometryResultPayloadV1
-  "preview.backpressured": PreviewBackpressurePayloadV1
-  "preview.writable": PreviewBackpressurePayloadV1
-  "preview.failed": PreviewFailurePayloadV1
-  "preview.circuitOpened": PreviewCircuitOpenedPayloadV1
-  "chat.changed": ChatChangedPayloadV1
-  "selection.changed": SelectionChangedPayloadV1
-  "pins.changed": PinsChangedPayloadV1
-  "git.statusChanged": GitStatusChangedPayloadV1
-  "diagnostics.changed": DiagnosticsChangedPayloadV1
-}>
+  "kernel.snapshot": KernelSnapshotPayloadV1;
+  "kernel.stateChanged": KernelStateChangedPayloadV1;
+  "kernel.capabilitiesChanged": KernelCapabilitiesChangedPayloadV1;
+  "page.removePlanReady": PageRemovePlanReadyPayloadV1;
+  "page.descriptorsChanged": PageDescriptorsChangedPayloadV1;
+  "turn.started": TurnStartedPayloadV1;
+  "turn.attemptStarted": TurnAttemptStartedPayloadV1;
+  "turn.progress": TurnProgressPayloadV1;
+  "turn.gateRejected": TurnGateRejectedPayloadV1;
+  "turn.applyStarted": TurnApplyStartedPayloadV1;
+  "turn.completed": TurnTerminalPayloadV1;
+  "turn.failed": TurnTerminalPayloadV1;
+  "turn.cancelled": TurnTerminalPayloadV1;
+  "restore.planReady": RestorePlanReadyPayloadV1;
+  "restore.started": RestoreStartedPayloadV1;
+  "restore.recordPending": RestoreRecordPendingPayloadV1;
+  "restore.completed": RestoreTerminalPayloadV1;
+  "restore.failed": RestoreTerminalPayloadV1;
+  "commit.planReady": CommitPlanReadyPayloadV1;
+  "commit.started": CommitStartedPayloadV1;
+  "commit.completed": CommitTerminalPayloadV1;
+  "commit.failed": CommitTerminalPayloadV1;
+  "export.started": ExportStartedPayloadV1;
+  "export.progress": ExportProgressPayloadV1;
+  "export.completed": ExportTerminalPayloadV1;
+  "export.failed": ExportTerminalPayloadV1;
+  "migration.planReady": MigrationPlanReadyPayloadV1;
+  "migration.started": MigrationStartedPayloadV1;
+  "migration.progress": MigrationProgressPayloadV1;
+  "migration.completed": MigrationTerminalPayloadV1;
+  "migration.failed": MigrationFailedPayloadV1;
+  "preview.sourceChanged": PreviewSourceChangedPayloadV1;
+  "preview.sessionReady": PreviewSessionReadyPayloadV1;
+  "preview.geometryResult": PreviewGeometryResultPayloadV1;
+  "preview.backpressured": PreviewBackpressurePayloadV1;
+  "preview.writable": PreviewBackpressurePayloadV1;
+  "preview.failed": PreviewFailurePayloadV1;
+  "preview.circuitOpened": PreviewCircuitOpenedPayloadV1;
+  "chat.changed": ChatChangedPayloadV1;
+  "selection.changed": SelectionChangedPayloadV1;
+  "pins.changed": PinsChangedPayloadV1;
+  "git.statusChanged": GitStatusChangedPayloadV1;
+  "diagnostics.changed": DiagnosticsChangedPayloadV1;
+}>;
 
 /**
  * Binds the declared type map to `EventKindV1`. Without this, the map above is just a
@@ -1258,13 +1269,14 @@ export type EventPayloadByKindV1 = Readonly<{
  * if a key is missing, `Record<EventKindV1, unknown>` is not satisfied and tsc fails; if
  * a key is misspelled, it is simultaneously missing and excess.
  */
-type _EventPayloadMapIsExhaustive = EventPayloadByKindV1 extends Record<EventKindV1, unknown>
-  ? Record<EventKindV1, unknown> extends Record<keyof EventPayloadByKindV1, unknown>
-    ? true
-    : ["event payload type map has a key that is not an EventKindV1"]
-  : ["event payload type map is missing an EventKindV1"]
-const _eventPayloadMapExhaustive: _EventPayloadMapIsExhaustive = true
-void _eventPayloadMapExhaustive
+type _EventPayloadMapIsExhaustive =
+  EventPayloadByKindV1 extends Record<EventKindV1, unknown>
+    ? Record<EventKindV1, unknown> extends Record<keyof EventPayloadByKindV1, unknown>
+      ? true
+      : ["event payload type map has a key that is not an EventKindV1"]
+    : ["event payload type map is missing an EventKindV1"];
+const _eventPayloadMapExhaustive: _EventPayloadMapIsExhaustive = true;
+void _eventPayloadMapExhaustive;
 
 /**
  * The runtime counterpart of `EventPayloadByKindV1`, keyed in `EVENT_KINDS_V1`'s
@@ -1317,4 +1329,4 @@ export const eventPayloadV1SchemaByKind = {
   "pins.changed": pinsChangedPayloadV1Schema,
   "git.statusChanged": gitStatusChangedPayloadV1Schema,
   "diagnostics.changed": diagnosticsChangedPayloadV1Schema,
-} as const satisfies Record<EventKindV1, z.ZodType>
+} as const satisfies Record<EventKindV1, z.ZodType>;

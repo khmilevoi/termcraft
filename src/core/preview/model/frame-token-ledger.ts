@@ -1,7 +1,7 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
-import type { FrameIdentityV1, FrameTokenV1 } from "core/protocol"
-import { uuidv7 } from "infrastructure/uuid"
+import type { FrameIdentityV1, FrameTokenV1 } from "core/protocol";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * `FrameTokenLedger` (kernel-command-contract §8.1, §12.6 item 4, §13.3).
@@ -43,69 +43,69 @@ export class FrameAckError extends errore.createTaggedError({
 
 export type FrameTokenVerification =
   | { readonly ok: true; readonly identity: FrameIdentityV1 }
-  | { readonly ok: false; readonly code: "FRAME_TOKEN_INVALID" | "FRAME_TOKEN_STALE" }
+  | { readonly ok: false; readonly code: "FRAME_TOKEN_INVALID" | "FRAME_TOKEN_STALE" };
 
 export interface FrameTokenLedger {
   /** Mints a fresh opaque token for one frame-stream item, replacing any prior un-acknowledged pending mint. */
-  readonly mint: (identity: FrameIdentityV1) => FrameTokenV1
+  readonly mint: (identity: FrameIdentityV1) => FrameTokenV1;
   /** The UI's typed display acknowledgement. Succeeds only for the exact live pending mint. */
-  readonly acknowledge: (frameToken: FrameTokenV1) => FrameAckError | FrameIdentityV1
+  readonly acknowledge: (frameToken: FrameTokenV1) => FrameAckError | FrameIdentityV1;
   /** What `preview.queryGeometry` calls before any host request (§12.6 item 5). */
-  readonly verifyCurrent: (frameToken: FrameTokenV1) => FrameTokenVerification
+  readonly verifyCurrent: (frameToken: FrameTokenV1) => FrameTokenVerification;
   /** Session/source switch, host nonce change, or close (§8.1) — demotes the current token to stale. */
-  readonly invalidateCurrent: () => void
+  readonly invalidateCurrent: () => void;
   /** The currently acknowledged frame identity, or `null` before any acknowledgement / after invalidation. */
-  readonly currentIdentity: () => FrameIdentityV1 | null
+  readonly currentIdentity: () => FrameIdentityV1 | null;
 }
 
 interface TokenEntry {
-  readonly token: FrameTokenV1
-  readonly identity: FrameIdentityV1
+  readonly token: FrameTokenV1;
+  readonly identity: FrameIdentityV1;
 }
 
 /** Builds one live session's frame-token ledger. A factory, not module state: two sessions must never share one. */
 export function createFrameTokenLedger(): FrameTokenLedger {
-  let pending: TokenEntry | null = null
-  let current: TokenEntry | null = null
-  let previous: TokenEntry | null = null
+  let pending: TokenEntry | null = null;
+  let current: TokenEntry | null = null;
+  let previous: TokenEntry | null = null;
 
   function mint(identity: FrameIdentityV1): FrameTokenV1 {
-    const token = uuidv7()
-    pending = { token, identity }
-    return token
+    const token = uuidv7();
+    pending = { token, identity };
+    return token;
   }
 
   function acknowledge(frameToken: FrameTokenV1): FrameAckError | FrameIdentityV1 {
     if (pending === null || pending.token !== frameToken) {
       return new FrameAckError({
         reason: `frame token "${frameToken}" is not the live pending minted frame`,
-      })
+      });
     }
-    if (current !== null) previous = current
-    current = pending
-    pending = null
-    return current.identity
+    if (current !== null) previous = current;
+    current = pending;
+    pending = null;
+    return current.identity;
   }
 
   function verifyCurrent(frameToken: FrameTokenV1): FrameTokenVerification {
     if (current !== null && current.token === frameToken) {
-      return { ok: true, identity: current.identity }
+      return { ok: true, identity: current.identity };
     }
     if (previous !== null && previous.token === frameToken) {
-      return { ok: false, code: "FRAME_TOKEN_STALE" }
+      return { ok: false, code: "FRAME_TOKEN_STALE" };
     }
-    return { ok: false, code: "FRAME_TOKEN_INVALID" }
+    return { ok: false, code: "FRAME_TOKEN_INVALID" };
   }
 
   function invalidateCurrent(): void {
-    if (current !== null) previous = current
-    current = null
-    pending = null
+    if (current !== null) previous = current;
+    current = null;
+    pending = null;
   }
 
   function currentIdentity(): FrameIdentityV1 | null {
-    return current === null ? null : current.identity
+    return current === null ? null : current.identity;
   }
 
-  return { mint, acknowledge, verifyCurrent, invalidateCurrent, currentIdentity }
+  return { mint, acknowledge, verifyCurrent, invalidateCurrent, currentIdentity };
 }

@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Restore model (kernel-command-contract §7.3).
@@ -22,7 +22,7 @@ export type RestoreState =
   | "executing"
   | "record-pending"
   | "recovering"
-  | "blocked"
+  | "blocked";
 
 export type RestoreAction =
   | "kernel.restore.beginPlan"
@@ -36,7 +36,7 @@ export type RestoreAction =
   | "kernel.restore.beginRecovery"
   | "kernel.restore.retryRecord"
   | "kernel.restore.blockRecovery"
-  | "kernel.restore.retryRecovery"
+  | "kernel.restore.retryRecovery";
 
 /** §7.3's table, transcribed row for row; a multi-source row becomes one edge per source. */
 export const RESTORE_TRANSITION_TABLE: TransitionTable<RestoreState, RestoreAction> = {
@@ -63,7 +63,7 @@ export const RESTORE_TRANSITION_TABLE: TransitionTable<RestoreState, RestoreActi
   "kernel.restore.retryRecord": [{ from: "record-pending", to: "recovering" }],
   "kernel.restore.blockRecovery": [{ from: "recovering", to: "blocked" }],
   "kernel.restore.retryRecovery": [{ from: "blocked", to: "recovering" }],
-}
+};
 
 /**
  * Builds one Kernel's Restore model. §11.1: `OPERATION_BUSY` is "The relevant
@@ -76,5 +76,5 @@ export function reatomRestoreStateMachine(): StateMachine<RestoreState, RestoreA
     initial: "idle",
     table: RESTORE_TRANSITION_TABLE,
     illegalCode: "OPERATION_BUSY",
-  })
+  });
 }

@@ -1,4 +1,4 @@
-import type { FailureDtoV1, Sha256Hex } from "core/protocol"
+import type { FailureDtoV1, Sha256Hex } from "core/protocol";
 
 /**
  * `TrustGate`: the machine-local trust ledger (storage-identity §8) narrowed from
@@ -20,25 +20,29 @@ import type { FailureDtoV1, Sha256Hex } from "core/protocol"
  * revoke a trust grant.
  */
 export interface GitIdentityV1 {
-  readonly canonicalGitCommonDir: string
-  readonly gitCommonDirFilesystemIdentity: string
-  readonly projectPathRelativeToWorktreeRoot: string
+  readonly canonicalGitCommonDir: string;
+  readonly gitCommonDirFilesystemIdentity: string;
+  readonly projectPathRelativeToWorktreeRoot: string;
 }
 
 /** A built trust subject: its digested inputs plus the derived trust key (storage-identity §8). */
 export interface TrustSubjectV1 {
-  readonly canonicalProjectPath: string
-  readonly projectFilesystemIdentity: string
-  readonly projectId: string
-  readonly git: GitIdentityV1 | null
+  readonly canonicalProjectPath: string;
+  readonly projectFilesystemIdentity: string;
+  readonly projectId: string;
+  readonly git: GitIdentityV1 | null;
   /** Lowercase-hex SHA-256 of the complete `TrustSubjectV1` byte encoding — the grant key. */
-  readonly key: Sha256Hex
+  readonly key: Sha256Hex;
 }
 
 export interface TrustGate {
-  buildSubject(root: string, projectId: string, git: GitIdentityV1 | null): Promise<FailureDtoV1 | TrustSubjectV1>
+  buildSubject(
+    root: string,
+    projectId: string,
+    git: GitIdentityV1 | null,
+  ): Promise<FailureDtoV1 | TrustSubjectV1>;
   /** `false` on a missing, unreadable, corrupt, or tampered grant — never fails open. */
-  isGranted(subject: TrustSubjectV1): Promise<boolean>
+  isGranted(subject: TrustSubjectV1): Promise<boolean>;
   /** Records the grant durably; `undefined` on success. */
-  grant(subject: TrustSubjectV1): Promise<FailureDtoV1 | undefined>
+  grant(subject: TrustSubjectV1): Promise<FailureDtoV1 | undefined>;
 }

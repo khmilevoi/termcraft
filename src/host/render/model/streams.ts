@@ -1,6 +1,6 @@
-import { Readable, Writable } from "node:stream"
+import { Readable, Writable } from "node:stream";
 
-import type { Size } from "../../types"
+import type { Size } from "../../types";
 
 /**
  * Fake TTY streams for a headless renderer. `columns`/`rows` are set to the
@@ -17,13 +17,15 @@ export function makeHeadlessStreams(size: Size) {
       rows: size.h,
       getColorDepth: () => 24,
     },
-  )
-  const stdin: Readable & { isTTY: true; setRawMode: (raw: boolean) => unknown } =
-    Object.assign(new Readable({ read() {} }), {
+  );
+  const stdin: Readable & { isTTY: true; setRawMode: (raw: boolean) => unknown } = Object.assign(
+    new Readable({ read() {} }),
+    {
       isTTY: true as const,
       setRawMode(_raw: boolean) {
-        return stdin
+        return stdin;
       },
-    })
-  return { stdin, stdout }
+    },
+  );
+  return { stdin, stdout };
 }

@@ -1,21 +1,21 @@
 /** @jsxImportSource @opentui/react */
-import { activeTokens } from "../model/tokens"
-import { Text } from "./text"
+import { activeTokens } from "../model/tokens";
+import { Text } from "./text";
 
 /** Props for the themed `Button` component. `id` is the mandatory stable id (§3.2). */
 export interface ButtonProps {
   /** Stable id the host selects/pins on and the shell dispatches presses through (§3.2). */
-  readonly id: string
+  readonly id: string;
   /** The button label. */
-  readonly children?: string | number
+  readonly children?: string | number;
   /**
    * Invoked when the button is pressed. Accepted here and wired to the box's
    * `onMouseDown` for the interactive path (the shell dispatches it in accepted
    * interactive mode — phase 7); in the static headless render it stays inert.
    */
-  readonly onPress?: () => void
+  readonly onPress?: () => void;
   /** A disabled button renders muted and never fires `onPress`. */
-  readonly disabled?: boolean
+  readonly disabled?: boolean;
 }
 
 /**
@@ -27,10 +27,10 @@ export interface ButtonProps {
  * no handler. Colors are semantic token names, never raw hues.
  */
 export function Button(props: ButtonProps) {
-  const tokens = activeTokens()
-  const disabled = props.disabled === true
-  const onPress = props.onPress
-  const handlePress = disabled || onPress === undefined ? undefined : () => onPress()
+  const tokens = activeTokens();
+  const disabled = props.disabled === true;
+  const onPress = props.onPress;
+  const handlePress = disabled || onPress === undefined ? undefined : () => onPress();
   return (
     <box
       id={props.id}
@@ -43,5 +43,5 @@ export function Button(props: ButtonProps) {
         {props.children}
       </Text>
     </box>
-  )
+  );
 }

@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from "zod";
 
 /**
  * The authoritative v1 intent registry (kernel-command-contract §8.1/§8.2). This union
@@ -56,22 +56,22 @@ export const COMMAND_KINDS_V1 = [
   "migration.confirm",
   "migration.discardPlan",
   "migration.retryRecovery",
-] as const
+] as const;
 
-export type CommandKindV1 = (typeof COMMAND_KINDS_V1)[number]
+export type CommandKindV1 = (typeof COMMAND_KINDS_V1)[number];
 
 /** The exact member count §8.1 fixes. A drifted union fails the closure test, not a review. */
-export const COMMAND_KIND_COUNT = 43
+export const COMMAND_KIND_COUNT = 43;
 
-const COMMAND_KIND_SET: ReadonlySet<string> = new Set(COMMAND_KINDS_V1)
+const COMMAND_KIND_SET: ReadonlySet<string> = new Set(COMMAND_KINDS_V1);
 
 /** True when `raw` names a v1 command kind. */
 export function isCommandKindV1(raw: string): raw is CommandKindV1 {
-  return COMMAND_KIND_SET.has(raw)
+  return COMMAND_KIND_SET.has(raw);
 }
 
 /** Zod schema over the closed union. */
-export const commandKindV1Schema = z.enum(COMMAND_KINDS_V1)
+export const commandKindV1Schema = z.enum(COMMAND_KINDS_V1);
 
 /**
  * The command family a kind belongs to. Families own one pure guard each (§10.2:
@@ -93,15 +93,15 @@ export const COMMAND_FAMILIES_V1 = [
   "commit",
   "export",
   "migration",
-] as const
+] as const;
 
-export type CommandFamilyV1 = (typeof COMMAND_FAMILIES_V1)[number]
+export type CommandFamilyV1 = (typeof COMMAND_FAMILIES_V1)[number];
 
 /**
  * Extracts the family from a kind. Every kind is `family.verb`, so the prefix IS the
  * family — no lookup table can drift out of sync with the union this way.
  */
 export function commandFamilyOf(kind: CommandKindV1): CommandFamilyV1 {
-  const dot = kind.indexOf(".")
-  return kind.slice(0, dot) as CommandFamilyV1
+  const dot = kind.indexOf(".");
+  return kind.slice(0, dot) as CommandFamilyV1;
 }

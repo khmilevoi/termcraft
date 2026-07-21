@@ -1,20 +1,27 @@
-import fs from "node:fs"
-import path from "node:path"
-import * as errore from "errore"
-import { z } from "zod"
+import fs from "node:fs";
+import path from "node:path";
 
-import type { DurabilityError } from "infrastructure/durability"
-import { isCanonicalUuidv7 } from "infrastructure/uuid"
-import { FsAccessError, isNotFound } from "store/safe-fs"
-import type { SafeFsError, SafeProjectFs, StorageLimitExceededError } from "store/safe-fs"
+import * as errore from "errore";
+import { z } from "zod";
 
-import type { CommittedMarker, ConflictMarker, ProjectWritePermit, Sha256Hex, TransactionPlan } from "../types"
+import type { DurabilityError } from "infrastructure/durability";
+import { isCanonicalUuidv7 } from "infrastructure/uuid";
+import { FsAccessError, isNotFound } from "store/safe-fs";
+import type { SafeFsError, SafeProjectFs, StorageLimitExceededError } from "store/safe-fs";
+
+import type {
+  CommittedMarker,
+  ConflictMarker,
+  ProjectWritePermit,
+  Sha256Hex,
+  TransactionPlan,
+} from "../types";
 import {
   TRANSACTIONS_LOCAL_DIR,
+  type TransactionFsDeps,
   TransactionIoError,
   TransactionIoPendingError,
   TransactionRecoveryConflictError,
-  type TransactionFsDeps,
   conflictPath,
   loadTransactionPayloads,
   nodeTransactionFsDeps,
@@ -23,9 +30,14 @@ import {
   readPlan,
   rollForwardTransaction,
   transactionDir,
-} from "./engine"
-import { JournalCorruptError, JournalTooNewError, computePlanHash, validatePlanPayloads } from "./plan"
-import { WritePermitInvalidError, assertActivePermit, type WriteMutex } from "./write-mutex"
+} from "./engine";
+import {
+  JournalCorruptError,
+  JournalTooNewError,
+  computePlanHash,
+  validatePlanPayloads,
+} from "./plan";
+import { type WriteMutex, WritePermitInvalidError, assertActivePermit } from "./write-mutex";
 
 // This module implements the startup recovery scan (turn-durability §4.6; storage-identity
 // §10.2): after `ProjectLease` is held and before project state is exposed, scan
@@ -59,7 +71,7 @@ import { WritePermitInvalidError, assertActivePermit, type WriteMutex } from "./
  */
 export interface RecoveryFsDeps extends TransactionFsDeps {
   /** Recursively remove an already-`SafeProjectFs`-resolved transaction directory. */
-  readonly removeTransactionDir: (absDir: string) => TransactionIoError | undefined
+  readonly removeTransactionDir: (absDir: string) => TransactionIoError | undefined;
 }
 
 /** The real Node/Bun binding, composing `./engine`'s already-landed `nodeTransactionFsDeps` verbatim. */
@@ -69,14 +81,14 @@ export function nodeRecoveryFsDeps(safeFs: SafeProjectFs): RecoveryFsDeps {
     removeTransactionDir: (absDir) => {
       const removed = errore.try({
         try: () => {
-          fs.rmSync(absDir, { recursive: true })
-          return undefined
+          fs.rmSync(absDir, { recursive: true });
+          return undefined;
         },
         catch: (cause) => new TransactionIoError({ operation: "rm", path: absDir, cause }),
-      })
-      return removed instanceof Error ? removed : undefined
+      });
+      return removed instanceof Error ? removed : undefined;
     },
-  }
+  };
 }
 
 // ---- listing (stable lexical UUID order) -----------------------------------------
@@ -89,25 +101,27 @@ export function nodeRecoveryFsDeps(safeFs: SafeProjectFs): RecoveryFsDeps {
  * failing the whole scan, but the skip is logged — never a silent swallow (errore rule).
  */
 export function listTransactionIds(deps: TransactionFsDeps): SafeFsError | readonly string[] {
-  const names = deps.safeFs.list(TRANSACTIONS_LOCAL_DIR)
+  const names = deps.safeFs.list(TRANSACTIONS_LOCAL_DIR);
   if (names instanceof Error) {
-    if (names instanceof FsAccessError && isNotFound(names)) return []
-    return names
+    if (names instanceof FsAccessError && isNotFound(names)) return [];
+    return names;
   }
 
-  const ids: string[] = []
+  const ids: string[] = [];
   for (const name of names) {
     if (isCanonicalUuidv7(name)) {
-      ids.push(name)
-      continue
+      ids.push(name);
+      continue;
     }
     // `format.json` (`./journal-format.ts`, §3.1) is a KNOWN, expected sibling of every
     // transaction directory, not an anomaly — skip it quietly rather than warning on every
     // ordinary launch.
-    if (name === "format.json") continue
-    console.warn(`store/transaction recovery: skipping non-UUID entry under ${TRANSACTIONS_LOCAL_DIR}/: ${name}`)
+    if (name === "format.json") continue;
+    console.warn(
+      `store/transaction recovery: skipping non-UUID entry under ${TRANSACTIONS_LOCAL_DIR}/: ${name}`,
+    );
   }
-  return ids.sort()
+  return ids.sort();
 }
 
 // ---- conflict.json (not exported by `./engine`) -----------------------------------
@@ -116,53 +130,94 @@ const conflictMarkerSchema = z.object({
   transactionId: z.string(),
   operationIndex: z.number().int().nonnegative(),
   reason: z.string(),
-})
+});
 
 /** Read `conflict.json` back, or `null` when this transaction never reached a recovery conflict. */
-function readConflictMarker(deps: TransactionFsDeps, transactionId: string): SafeFsError | JournalCorruptError | ConflictMarker | null {
-  const bytes = deps.safeFs.readFile(conflictPath(transactionId))
+function readConflictMarker(
+  deps: TransactionFsDeps,
+  transactionId: string,
+): SafeFsError | JournalCorruptError | ConflictMarker | null {
+  const bytes = deps.safeFs.readFile(conflictPath(transactionId));
   if (bytes instanceof Error) {
-    if (bytes instanceof FsAccessError && isNotFound(bytes)) return null
-    return bytes
+    if (bytes instanceof FsAccessError && isNotFound(bytes)) return null;
+    return bytes;
   }
   // Boxed inside the `try` on purpose: a bare `unknown | Error` union collapses to `unknown`
   // and destroys the `instanceof Error` narrowing below (errore boundary rule).
   const parsed = errore.try({
-    try: (): { value: unknown } => ({ value: JSON.parse(new TextDecoder().decode(bytes)) as unknown }),
-    catch: (cause) => new JournalCorruptError({ code: "CONFLICT_PARSE", reason: `${conflictPath(transactionId)} is not valid JSON`, cause }),
-  })
-  if (parsed instanceof Error) return parsed
-  const result = conflictMarkerSchema.safeParse(parsed.value)
-  if (!result.success) return new JournalCorruptError({ code: "CONFLICT_SHAPE", reason: `${conflictPath(transactionId)} has an invalid shape` })
+    try: (): { value: unknown } => ({
+      value: JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    }),
+    catch: (cause) =>
+      new JournalCorruptError({
+        code: "CONFLICT_PARSE",
+        reason: `${conflictPath(transactionId)} is not valid JSON`,
+        cause,
+      }),
+  });
+  if (parsed instanceof Error) return parsed;
+  const result = conflictMarkerSchema.safeParse(parsed.value);
+  if (!result.success)
+    return new JournalCorruptError({
+      code: "CONFLICT_SHAPE",
+      reason: `${conflictPath(transactionId)} has an invalid shape`,
+    });
   if (result.data.transactionId !== transactionId) {
-    return new JournalCorruptError({ code: "CONFLICT_IDENTITY", reason: `conflict.json under ${transactionId}/ names a different transactionId` })
+    return new JournalCorruptError({
+      code: "CONFLICT_IDENTITY",
+      reason: `conflict.json under ${transactionId}/ names a different transactionId`,
+    });
   }
-  return result.data
+  return result.data;
 }
 
 /** Read every payload a plan's operations reference and verify each against its declared hash/length (§4.6 "missing payload, or payload hash mismatch") and every operation's namespace size limit (§5.3 "fails before intent"). */
-function loadValidatedPayloads(deps: TransactionFsDeps, plan: TransactionPlan): JournalCorruptError | StorageLimitExceededError | SafeFsError | Map<string, Uint8Array> {
-  const loaded = loadTransactionPayloads(deps, plan)
+function loadValidatedPayloads(
+  deps: TransactionFsDeps,
+  plan: TransactionPlan,
+): JournalCorruptError | StorageLimitExceededError | SafeFsError | Map<string, Uint8Array> {
+  const loaded = loadTransactionPayloads(deps, plan);
   if (loaded instanceof Error) {
     if (loaded instanceof FsAccessError && isNotFound(loaded)) {
-      return new JournalCorruptError({ code: "PAYLOAD_MISSING", reason: `${plan.transactionId} references a payload that is not on disk` })
+      return new JournalCorruptError({
+        code: "PAYLOAD_MISSING",
+        reason: `${plan.transactionId} references a payload that is not on disk`,
+      });
     }
-    return loaded
+    return loaded;
   }
-  const valid = validatePlanPayloads(plan, loaded)
-  if (valid instanceof Error) return valid
-  return loaded
+  const valid = validatePlanPayloads(plan, loaded);
+  if (valid instanceof Error) return valid;
+  return loaded;
 }
 
 // ---- classification (turn-durability §4.6; storage-identity §10.2) ----------------
 
 export type TransactionClassification =
   | { readonly kind: "discard"; readonly transactionId: string }
-  | { readonly kind: "roll-forward"; readonly transactionId: string; readonly plan: TransactionPlan; readonly planHash: Sha256Hex; readonly payloads: ReadonlyMap<string, Uint8Array> }
-  | { readonly kind: "complete"; readonly transactionId: string; readonly committed: CommittedMarker }
-  | { readonly kind: "conflict"; readonly transactionId: string; readonly conflict: ConflictMarker }
+  | {
+      readonly kind: "roll-forward";
+      readonly transactionId: string;
+      readonly plan: TransactionPlan;
+      readonly planHash: Sha256Hex;
+      readonly payloads: ReadonlyMap<string, Uint8Array>;
+    }
+  | {
+      readonly kind: "complete";
+      readonly transactionId: string;
+      readonly committed: CommittedMarker;
+    }
+  | {
+      readonly kind: "conflict";
+      readonly transactionId: string;
+      readonly conflict: ConflictMarker;
+    };
 
-export type ClassifyError = SafeFsError | JournalCorruptError | JournalTooNewError | StorageLimitExceededError
+export type ClassifyError =
+  | SafeFsError
+  | JournalCorruptError
+  | JournalTooNewError
+  | StorageLimitExceededError;
 
 /**
  * Classify one `transactions.local/{transactionId}/` directory into exactly one of the four
@@ -179,40 +234,55 @@ export type ClassifyError = SafeFsError | JournalCorruptError | JournalTooNewErr
  * valid `intent.json` rolls forward. Otherwise a valid plan and payloads with neither marker
  * discards the prepared-but-uncommitted journal.
  */
-export function classifyTransaction(deps: TransactionFsDeps, transactionId: string): ClassifyError | TransactionClassification {
-  const plan = readPlan(deps, transactionId)
-  if (plan instanceof Error) return plan // JournalCorruptError | JournalTooNewError | SafeFsError
+export function classifyTransaction(
+  deps: TransactionFsDeps,
+  transactionId: string,
+): ClassifyError | TransactionClassification {
+  const plan = readPlan(deps, transactionId);
+  if (plan instanceof Error) return plan; // JournalCorruptError | JournalTooNewError | SafeFsError
 
-  const planHash = plan === null ? null : computePlanHash(plan)
+  const planHash = plan === null ? null : computePlanHash(plan);
 
-  const committed = readCommitted(deps, transactionId)
-  if (committed instanceof Error) return committed
+  const committed = readCommitted(deps, transactionId);
+  if (committed instanceof Error) return committed;
   if (committed !== null) {
     if (plan === null || planHash === null) {
-      return new JournalCorruptError({ code: "COMMITTED_WITHOUT_PLAN", reason: `${transactionId} has committed.json but no plan.json` })
+      return new JournalCorruptError({
+        code: "COMMITTED_WITHOUT_PLAN",
+        reason: `${transactionId} has committed.json but no plan.json`,
+      });
     }
     if (committed.planHash !== planHash) {
-      return new JournalCorruptError({ code: "COMMITTED_PLAN_HASH", reason: `${transactionId}'s committed.json names a plan hash that does not match its plan.json` })
+      return new JournalCorruptError({
+        code: "COMMITTED_PLAN_HASH",
+        reason: `${transactionId}'s committed.json names a plan hash that does not match its plan.json`,
+      });
     }
-    return { kind: "complete", transactionId, committed }
+    return { kind: "complete", transactionId, committed };
   }
 
-  const conflict = readConflictMarker(deps, transactionId)
-  if (conflict instanceof Error) return conflict
-  if (conflict !== null) return { kind: "conflict", transactionId, conflict }
+  const conflict = readConflictMarker(deps, transactionId);
+  if (conflict instanceof Error) return conflict;
+  if (conflict !== null) return { kind: "conflict", transactionId, conflict };
 
-  const intent = readIntent(deps, transactionId)
-  if (intent instanceof Error) return intent
+  const intent = readIntent(deps, transactionId);
+  if (intent instanceof Error) return intent;
   if (intent !== null) {
     if (plan === null || planHash === null) {
-      return new JournalCorruptError({ code: "INTENT_WITHOUT_PLAN", reason: `${transactionId} has intent.json but no plan.json` })
+      return new JournalCorruptError({
+        code: "INTENT_WITHOUT_PLAN",
+        reason: `${transactionId} has intent.json but no plan.json`,
+      });
     }
     if (intent.planHash !== planHash) {
-      return new JournalCorruptError({ code: "INTENT_PLAN_HASH", reason: `${transactionId}'s intent.json names a plan hash that does not match its plan.json` })
+      return new JournalCorruptError({
+        code: "INTENT_PLAN_HASH",
+        reason: `${transactionId}'s intent.json names a plan hash that does not match its plan.json`,
+      });
     }
-    const payloads = loadValidatedPayloads(deps, plan)
-    if (payloads instanceof Error) return payloads
-    return { kind: "roll-forward", transactionId, plan, planHash, payloads }
+    const payloads = loadValidatedPayloads(deps, plan);
+    if (payloads instanceof Error) return payloads;
+    return { kind: "roll-forward", transactionId, plan, planHash, payloads };
   }
 
   // No committed, conflict, or intent marker. A `null` plan means nothing was ever written
@@ -221,20 +291,27 @@ export function classifyTransaction(deps: TransactionFsDeps, transactionId: stri
   // but never-intended journal. Otherwise the plan and its payloads must both be valid for
   // the discard to be authorized (§4.6 row 1's "invalid plan... missing payload... hash
   // mismatch" still applies even though nothing downstream of them will be used).
-  if (plan === null) return { kind: "discard", transactionId }
-  const payloads = loadValidatedPayloads(deps, plan)
-  if (payloads instanceof Error) return payloads
-  return { kind: "discard", transactionId }
+  if (plan === null) return { kind: "discard", transactionId };
+  const payloads = loadValidatedPayloads(deps, plan);
+  if (payloads instanceof Error) return payloads;
+  return { kind: "discard", transactionId };
 }
 
 // ---- acting on one classification --------------------------------------------------
 
 export interface RecoveredTransaction {
-  readonly transactionId: string
-  readonly action: "discarded" | "rolled-forward" | "already-complete"
+  readonly transactionId: string;
+  readonly action: "discarded" | "rolled-forward" | "already-complete";
 }
 
-export type RecoverOneError = WritePermitInvalidError | TransactionIoError | DurabilityError | SafeFsError | JournalCorruptError | TransactionRecoveryConflictError | TransactionIoPendingError
+export type RecoverOneError =
+  | WritePermitInvalidError
+  | TransactionIoError
+  | DurabilityError
+  | SafeFsError
+  | JournalCorruptError
+  | TransactionRecoveryConflictError
+  | TransactionIoPendingError;
 
 async function recoverOneTransaction(
   deps: RecoveryFsDeps,
@@ -243,23 +320,23 @@ async function recoverOneTransaction(
   classification: Exclude<TransactionClassification, { kind: "conflict" }>,
 ): Promise<RecoverOneError | RecoveredTransaction> {
   if (classification.kind === "complete") {
-    return { transactionId: classification.transactionId, action: "already-complete" }
+    return { transactionId: classification.transactionId, action: "already-complete" };
   }
 
-  const permitCheck = assertActivePermit(mutex, permit)
-  if (permitCheck instanceof Error) return permitCheck
+  const permitCheck = assertActivePermit(mutex, permit);
+  if (permitCheck instanceof Error) return permitCheck;
 
   if (classification.kind === "discard") {
-    const absDir = deps.safeFs.resolve(transactionDir(classification.transactionId))
-    if (absDir instanceof Error) return absDir
-    const removed = deps.removeTransactionDir(absDir)
-    if (removed instanceof Error) return removed
+    const absDir = deps.safeFs.resolve(transactionDir(classification.transactionId));
+    if (absDir instanceof Error) return absDir;
+    const removed = deps.removeTransactionDir(absDir);
+    if (removed instanceof Error) return removed;
     // Durably persist the removal itself: a crash right after `rmSync` but before this
     // flush just re-discards the same (already half-gone) directory on the next scan —
     // still safe, since discard never depends on prior partial state.
-    const flushed = deps.flushDir(path.dirname(absDir))
-    if (flushed instanceof Error) return flushed
-    return { transactionId: classification.transactionId, action: "discarded" }
+    const flushed = deps.flushDir(path.dirname(absDir));
+    if (flushed instanceof Error) return flushed;
+    return { transactionId: classification.transactionId, action: "discarded" };
   }
 
   // roll-forward: `./engine`'s already-landed protocol owns every remaining decision —
@@ -270,16 +347,25 @@ async function recoverOneTransaction(
     plan: classification.plan,
     planHash: classification.planHash,
     payloads: classification.payloads,
-  })
-  if (result instanceof Error) return result
-  return { transactionId: classification.transactionId, action: "rolled-forward" }
+  });
+  if (result instanceof Error) return result;
+  return { transactionId: classification.transactionId, action: "rolled-forward" };
 }
 
 // ---- the full startup scan ----------------------------------------------------------
 
 export type RecoveryOutcome =
-  | { readonly ok: true; readonly recovered: number; readonly discarded: number; readonly alreadyComplete: number }
-  | { readonly ok: false; readonly transactionId: string; readonly error: ClassifyError | RecoverOneError }
+  | {
+      readonly ok: true;
+      readonly recovered: number;
+      readonly discarded: number;
+      readonly alreadyComplete: number;
+    }
+  | {
+      readonly ok: false;
+      readonly transactionId: string;
+      readonly error: ClassifyError | RecoverOneError;
+    };
 
 /**
  * The complete startup recovery pass (turn-durability §4.6; storage-identity §10.2): scan
@@ -300,37 +386,41 @@ export type RecoveryOutcome =
  * independently idempotent and already durable, so taking it can never be wrong regardless
  * of what a later, unrelated transaction turns out to be.
  */
-export async function recoverTransactions(deps: RecoveryFsDeps, mutex: WriteMutex, permit: ProjectWritePermit): Promise<RecoveryOutcome> {
-  const permitCheck = assertActivePermit(mutex, permit)
-  if (permitCheck instanceof Error) return { ok: false, transactionId: "", error: permitCheck }
+export async function recoverTransactions(
+  deps: RecoveryFsDeps,
+  mutex: WriteMutex,
+  permit: ProjectWritePermit,
+): Promise<RecoveryOutcome> {
+  const permitCheck = assertActivePermit(mutex, permit);
+  if (permitCheck instanceof Error) return { ok: false, transactionId: "", error: permitCheck };
 
-  const ids = listTransactionIds(deps)
-  if (ids instanceof Error) return { ok: false, transactionId: "", error: ids }
+  const ids = listTransactionIds(deps);
+  if (ids instanceof Error) return { ok: false, transactionId: "", error: ids };
 
-  let recovered = 0
-  let discarded = 0
-  let alreadyComplete = 0
+  let recovered = 0;
+  let discarded = 0;
+  let alreadyComplete = 0;
 
   for (const transactionId of ids) {
-    const classification = classifyTransaction(deps, transactionId)
-    if (classification instanceof Error) return { ok: false, transactionId, error: classification }
+    const classification = classifyTransaction(deps, transactionId);
+    if (classification instanceof Error) return { ok: false, transactionId, error: classification };
 
     if (classification.kind === "conflict") {
       const conflictError = new TransactionRecoveryConflictError({
         transactionId,
         operationIndex: classification.conflict.operationIndex,
         reason: classification.conflict.reason,
-      })
-      return { ok: false, transactionId, error: conflictError }
+      });
+      return { ok: false, transactionId, error: conflictError };
     }
 
-    const acted = await recoverOneTransaction(deps, mutex, permit, classification)
-    if (acted instanceof Error) return { ok: false, transactionId, error: acted }
+    const acted = await recoverOneTransaction(deps, mutex, permit, classification);
+    if (acted instanceof Error) return { ok: false, transactionId, error: acted };
 
-    if (acted.action === "discarded") discarded += 1
-    else if (acted.action === "rolled-forward") recovered += 1
-    else alreadyComplete += 1
+    if (acted.action === "discarded") discarded += 1;
+    else if (acted.action === "rolled-forward") recovered += 1;
+    else alreadyComplete += 1;
   }
 
-  return { ok: true, recovered, discarded, alreadyComplete }
+  return { ok: true, recovered, discarded, alreadyComplete };
 }

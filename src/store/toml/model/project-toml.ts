@@ -1,17 +1,18 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { pageSlugSchema } from "entities/page"
-import { rfc3339UtcSchema } from "infrastructure/clock"
-import { canonicalUuidv7Schema } from "infrastructure/uuid"
-import { TARGET_STACKS } from "../types"
-import type { ProjectManifest } from "../types"
+import { pageSlugSchema } from "entities/page";
+import { rfc3339UtcSchema } from "infrastructure/clock";
+import { canonicalUuidv7Schema } from "infrastructure/uuid";
+
+import { TARGET_STACKS } from "../types";
+import type { ProjectManifest } from "../types";
 
 /** The portable manifest's name inside `.termcraft/` (storage-identity §4, §5.1). */
-export const PROJECT_MANIFEST_FILENAME = "project.toml"
+export const PROJECT_MANIFEST_FILENAME = "project.toml";
 
 /** The only shipped portable schema version (storage-identity §5.1, §12). */
-export const PROJECT_MANIFEST_FORMAT_VERSION = 1
+export const PROJECT_MANIFEST_FORMAT_VERSION = 1;
 
 /**
  * `project.toml` is unreadable: not TOML, missing/non-integer `format_version`, a failed
@@ -42,19 +43,19 @@ const TOML_ESCAPES = new Map<string, string>([
   ["\n", "\\n"],
   ["\f", "\\f"],
   ["\r", "\\r"],
-])
+]);
 
 /** Highest code point a TOML basic string may carry literally before `\u` escaping (C0 range). */
-const HIGHEST_CONTROL_CODE = 0x1f
-const DELETE_CODE = 0x7f
+const HIGHEST_CONTROL_CODE = 0x1f;
+const DELETE_CODE = 0x7f;
 
 /** One character as it appears inside a TOML basic string. */
 function escapeTomlChar(char: string): string {
-  const named = TOML_ESCAPES.get(char)
-  if (named !== undefined) return named
-  const code = char.charCodeAt(0)
-  if (code > HIGHEST_CONTROL_CODE && code !== DELETE_CODE) return char
-  return `\\u${code.toString(16).padStart(4, "0")}`
+  const named = TOML_ESCAPES.get(char);
+  if (named !== undefined) return named;
+  const code = char.charCodeAt(0);
+  if (code > HIGHEST_CONTROL_CODE && code !== DELETE_CODE) return char;
+  return `\\u${code.toString(16).padStart(4, "0")}`;
 }
 
 /**
@@ -63,17 +64,20 @@ function escapeTomlChar(char: string): string {
  * hand-serializes its small closed field set rather than taking a new dependency.
  */
 export function encodeTomlString(value: string): string {
-  return `"${[...value].map(escapeTomlChar).join("")}"`
+  return `"${[...value].map(escapeTomlChar).join("")}"`;
 }
 
 /**
  * One deterministic `key = value` line. The closed value domain of both termcraft TOML
  * files is: integer, boolean, basic string, and array of basic strings.
  */
-export function tomlLine(key: string, value: string | number | boolean | readonly string[]): string {
-  if (typeof value === "string") return `${key} = ${encodeTomlString(value)}`
-  if (typeof value === "number" || typeof value === "boolean") return `${key} = ${value}`
-  return `${key} = [${value.map(encodeTomlString).join(", ")}]`
+export function tomlLine(
+  key: string,
+  value: string | number | boolean | readonly string[],
+): string {
+  if (typeof value === "string") return `${key} = ${encodeTomlString(value)}`;
+  if (typeof value === "number" || typeof value === "boolean") return `${key} = ${value}`;
+  return `${key} = [${value.map(encodeTomlString).join(", ")}]`;
 }
 
 /**
@@ -85,17 +89,17 @@ export function tomlLine(key: string, value: string | number | boolean | readonl
  */
 export function parseToml(text: string): Error | { readonly value: unknown } {
   try {
-    return { value: Bun.TOML.parse(text) as unknown }
+    return { value: Bun.TOML.parse(text) as unknown };
   } catch (thrown) {
-    return thrown instanceof Error ? thrown : new Error(String(thrown))
+    return thrown instanceof Error ? thrown : new Error(String(thrown));
   }
 }
 
 /** Maps the first Zod issue onto a `ManifestCorruptError`, mirroring the `entities/` decoders. */
 function toCorruptError(file: string, error: z.ZodError): ManifestCorruptError {
-  const issue = error.issues[0]
-  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE"
-  return new ManifestCorruptError({ file, code, reason: issue?.message ?? "invalid input" })
+  const issue = error.issues[0];
+  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE";
+  return new ManifestCorruptError({ file, code, reason: issue?.message ?? "invalid input" });
 }
 
 /**
@@ -104,10 +108,10 @@ function toCorruptError(file: string, error: z.ZodError): ManifestCorruptError {
  * outermost gate). Returns `null` when the value is missing or not an integer.
  */
 export function readFormatVersion(value: unknown): number | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null
-  const found = (value as Record<string, unknown>)["format_version"]
-  if (typeof found !== "number" || !Number.isInteger(found)) return null
-  return found
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const found = (value as Record<string, unknown>)["format_version"];
+  if (typeof found !== "number" || !Number.isInteger(found)) return null;
+  return found;
 }
 
 /**
@@ -125,8 +129,12 @@ const projectManifestSchema = z.strictObject({
   name: z.string(),
   created_at: rfc3339UtcSchema,
   target_stack: z.enum(TARGET_STACKS),
-  pages: z.array(pageSlugSchema).refine((pages) => new Set(pages).size === pages.length, { error: "`pages` must be duplicate-free" }),
-})
+  pages: z
+    .array(pageSlugSchema)
+    .refine((pages) => new Set(pages).size === pages.length, {
+      error: "`pages` must be duplicate-free",
+    }),
+});
 
 /**
  * Serialize a `ProjectManifest` as the portable `.termcraft/project.toml`
@@ -143,7 +151,7 @@ export function encodeProjectManifest(manifest: ProjectManifest): string {
     tomlLine("target_stack", manifest.targetStack),
     tomlLine("pages", manifest.pages),
     "",
-  ].join("\n")
+  ].join("\n");
 }
 
 /**
@@ -156,21 +164,34 @@ export function decodeProjectManifest(
   text: string,
   file: string = PROJECT_MANIFEST_FILENAME,
 ): ProjectManifest | ManifestCorruptError | ManifestTooNewError {
-  const parsed = parseToml(text)
+  const parsed = parseToml(text);
   if (parsed instanceof Error) {
-    return new ManifestCorruptError({ file, code: "TOML_PARSE", reason: "file is not valid TOML", cause: parsed })
+    return new ManifestCorruptError({
+      file,
+      code: "TOML_PARSE",
+      reason: "file is not valid TOML",
+      cause: parsed,
+    });
   }
 
-  const version = readFormatVersion(parsed.value)
+  const version = readFormatVersion(parsed.value);
   if (version === null) {
-    return new ManifestCorruptError({ file, code: "format_version", reason: "missing or non-integer `format_version`" })
+    return new ManifestCorruptError({
+      file,
+      code: "format_version",
+      reason: "missing or non-integer `format_version`",
+    });
   }
   if (version > PROJECT_MANIFEST_FORMAT_VERSION) {
-    return new ManifestTooNewError({ file, found: version, supported: PROJECT_MANIFEST_FORMAT_VERSION })
+    return new ManifestTooNewError({
+      file,
+      found: version,
+      supported: PROJECT_MANIFEST_FORMAT_VERSION,
+    });
   }
 
-  const result = projectManifestSchema.safeParse(parsed.value)
-  if (!result.success) return toCorruptError(file, result.error)
+  const result = projectManifestSchema.safeParse(parsed.value);
+  if (!result.success) return toCorruptError(file, result.error);
 
   return {
     formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
@@ -179,5 +200,5 @@ export function decodeProjectManifest(
     createdAt: result.data.created_at,
     targetStack: result.data.target_stack,
     pages: result.data.pages,
-  }
+  };
 }

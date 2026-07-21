@@ -2,12 +2,12 @@
  * Palette theme id bound at page level via `meta.theme` (§5.4). MVP ships
  * `dark-default` only; `light-default` arrives in v1.0.
  */
-export type ThemeId = "dark-default"
+export type ThemeId = "dark-default";
 
 /** A terminal-cell size (columns × rows). */
 export interface Size {
-  readonly w: number
-  readonly h: number
+  readonly w: number;
+  readonly h: number;
 }
 
 /**
@@ -22,39 +22,39 @@ export interface Size {
  */
 export interface ThemeTokens {
   /** Global terminal background (engine `bg`); also the knocked-out fg on solid amber chips. */
-  readonly background: string
+  readonly background: string;
   /** Elevated fill — status bar, lifted card/input bodies (engine `statusBg`). */
-  readonly surface: string
+  readonly surface: string;
   /** Primary body text (engine `fg`). */
-  readonly foreground: string
+  readonly foreground: string;
   /** Secondary/dim text — labels, metadata, sub-panel titles (engine `dim`). */
-  readonly foregroundMuted: string
+  readonly foregroundMuted: string;
   /** Faintest text — placeholders, disabled/ghost rows, hints, column headers (engine `faint`). */
-  readonly foregroundFaint: string
+  readonly foregroundFaint: string;
   /** Active structural frame — panel borders, pane dividers, gauge track (engine `border`). */
-  readonly border: string
+  readonly border: string;
   /** Subtle/inactive chrome — interior dividers, dimmed frames, quiet-chip bg (engine `line`). */
-  readonly line: string
+  readonly line: string;
   /** Primary accent — prompt/cursor, titles, active tab, ▸ marker, gauge fill (engine `amber`). */
-  readonly accent: string
+  readonly accent: string;
   /** Bright emphasis — popup/active titles, selected values, hover borders, warning emphasis (engine `amberHi`). */
-  readonly accentHi: string
+  readonly accentHi: string;
   /** Dimmed amber — generating-state borders, low-emphasis warning (engine `amberDim`). */
-  readonly accentDim: string
+  readonly accentDim: string;
   /** Selected-row background — the back-fill behind the current list/table/pin row (engine `sel`). */
-  readonly selection: string
+  readonly selection: string;
   /** Selected-row text — text/columns on the highlighted row (engine `selFg`). */
-  readonly selectionFg: string
+  readonly selectionFg: string;
   /** Success/live — ● live, ✓ resolved, sparkline bars (engine `green`). */
-  readonly success: string
+  readonly success: string;
   /** Warning/caution — ⚠ hints, ctx-threshold (engine `amberHi`; no dedicated warning hue). */
-  readonly warning: string
+  readonly warning: string;
   /** Error text/border — ✗ failures, invalid input, error modal (engine `red`). */
-  readonly danger: string
+  readonly danger: string;
   /** Error-band background — the strip behind a red error message (engine `redDim`). */
-  readonly dangerDim: string
+  readonly dangerDim: string;
   /** Status-bar background — bottom row + segment fills (engine `statusBg`). */
-  readonly statusBg: string
+  readonly statusBg: string;
 }
 
 /**
@@ -66,11 +66,11 @@ export interface ThemeTokens {
  */
 export interface PageMeta {
   /** Positive integer runtime-API compatibility identity (§7.1). */
-  readonly kitApiVersion: number
+  readonly kitApiVersion: number;
   /** Tab label and the page's display name. */
-  readonly title: string
+  readonly title: string;
   /** Smallest export size and the status-bar warning threshold. */
-  readonly minSize: Size
+  readonly minSize: Size;
   /** Token palette (§5.4). */
-  readonly theme: ThemeId
+  readonly theme: ThemeId;
 }

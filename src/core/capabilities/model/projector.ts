@@ -1,8 +1,8 @@
-import { canonicalJson, type CommandKindV1 } from "core/protocol"
+import { type CommandKindV1, canonicalJson } from "core/protocol";
 
-import type { CapabilityEntry, CapabilityRecord, KernelStateSnapshot } from "../types"
-import { evaluateCapabilityGuard } from "./guards"
-import type { CapabilityTargetByKindV1 } from "./target"
+import type { CapabilityEntry, CapabilityRecord, KernelStateSnapshot } from "../types";
+import { evaluateCapabilityGuard } from "./guards";
+import type { CapabilityTargetByKindV1 } from "./target";
 
 /**
  * The capability projector (kernel-command-contract §10.2, lines 905-921): "The capability
@@ -19,7 +19,7 @@ export function projectCapability<K extends CommandKindV1>(
   target: CapabilityTargetByKindV1[K],
   state: KernelStateSnapshot,
 ): CapabilityEntry<K> {
-  return { id: kind, target, state: evaluateCapabilityGuard(kind, target, state) }
+  return { id: kind, target, state: evaluateCapabilityGuard(kind, target, state) };
 }
 
 /**
@@ -35,7 +35,7 @@ export function projectCapabilities(
     id: request.id,
     target: request.target,
     state: evaluateCapabilityGuard(request.id, request.target, state),
-  }))
+  }));
 }
 
 /**
@@ -44,22 +44,24 @@ export function projectCapabilities(
  * targets no longer published."
  */
 export interface CapabilityChangeSet {
-  readonly changed: readonly CapabilityRecord[]
-  readonly removed: readonly Readonly<{ id: CommandKindV1; target: unknown }>[]
+  readonly changed: readonly CapabilityRecord[];
+  readonly removed: readonly Readonly<{ id: CommandKindV1; target: unknown }>[];
 }
 
 /** A stable, key-order-independent serialization of a value, for use as a Map/Set key. */
 function stableJson(value: unknown): string {
-  const json = canonicalJson(value)
+  const json = canonicalJson(value);
   if (json instanceof Error) {
-    console.warn(`core/capabilities projector: failed to canonicalize a capability key/state — ${json.message}`)
-    return JSON.stringify(value)
+    console.warn(
+      `core/capabilities projector: failed to canonicalize a capability key/state — ${json.message}`,
+    );
+    return JSON.stringify(value);
   }
-  return json
+  return json;
 }
 
 function capabilityKey(entry: Readonly<{ id: CommandKindV1; target: unknown }>): string {
-  return `${entry.id}::${stableJson(entry.target)}`
+  return `${entry.id}::${stableJson(entry.target)}`;
 }
 
 /**
@@ -74,18 +76,18 @@ export function diffCapabilities(
   previous: readonly CapabilityRecord[],
   next: readonly CapabilityRecord[],
 ): CapabilityChangeSet {
-  const previousByKey = new Map(previous.map((entry) => [capabilityKey(entry), entry]))
-  const nextKeys = new Set(next.map((entry) => capabilityKey(entry)))
+  const previousByKey = new Map(previous.map((entry) => [capabilityKey(entry), entry]));
+  const nextKeys = new Set(next.map((entry) => capabilityKey(entry)));
 
   const changed = next.filter((entry) => {
-    const prior = previousByKey.get(capabilityKey(entry))
-    if (prior === undefined) return true
-    return stableJson(prior.state) !== stableJson(entry.state)
-  })
+    const prior = previousByKey.get(capabilityKey(entry));
+    if (prior === undefined) return true;
+    return stableJson(prior.state) !== stableJson(entry.state);
+  });
 
   const removed = previous
     .filter((entry) => !nextKeys.has(capabilityKey(entry)))
-    .map((entry) => ({ id: entry.id, target: entry.target }))
+    .map((entry) => ({ id: entry.id, target: entry.target }));
 
-  return { changed, removed }
+  return { changed, removed };
 }

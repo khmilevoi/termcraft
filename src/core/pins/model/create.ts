@@ -1,12 +1,12 @@
-import type { PinMutations } from "core/ports"
-import type { EventPayloadByKindV1, FailureDtoV1, GeometryTokenV1 } from "core/protocol"
-import type { FrameTokenLedger, GeometryTokenLedger } from "core/preview"
-import { parsePageSlug } from "entities/page"
-import type { PinCreatedEvent } from "entities/pin"
-import type { Clock } from "infrastructure/clock"
-import { uuidv7 } from "infrastructure/uuid"
+import type { PinMutations } from "core/ports";
+import type { FrameTokenLedger, GeometryTokenLedger } from "core/preview";
+import type { EventPayloadByKindV1, FailureDtoV1, GeometryTokenV1 } from "core/protocol";
+import { parsePageSlug } from "entities/page";
+import type { PinCreatedEvent } from "entities/pin";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
-type PinsChangedPayloadV1 = EventPayloadByKindV1["pins.changed"]
+type PinsChangedPayloadV1 = EventPayloadByKindV1["pins.changed"];
 
 /**
  * `pin.create` (kernel-command-contract §8.2, §12.6 item 6): "Resolve, verify, and consume
@@ -39,41 +39,51 @@ type PinsChangedPayloadV1 = EventPayloadByKindV1["pins.changed"]
  */
 
 export interface CreatePinInputV1 {
-  readonly geometryToken: GeometryTokenV1
-  readonly text: string
+  readonly geometryToken: GeometryTokenV1;
+  readonly text: string;
 }
 
 export type CreatePinResultV1 =
   | { readonly kind: "rejected"; readonly code: "GEOMETRY_TOKEN_INVALID" | "GEOMETRY_TOKEN_STALE" }
-  | { readonly kind: "created"; readonly payload: PinsChangedPayloadV1 }
+  | { readonly kind: "created"; readonly payload: PinsChangedPayloadV1 };
 
 export interface CreatePinDeps {
-  readonly pinMutations: PinMutations
-  readonly clock: Clock
-  readonly frameTokenLedger: FrameTokenLedger
-  readonly geometryTokenLedger: GeometryTokenLedger
+  readonly pinMutations: PinMutations;
+  readonly clock: Clock;
+  readonly frameTokenLedger: FrameTokenLedger;
+  readonly geometryTokenLedger: GeometryTokenLedger;
 }
 
-export async function createPin(deps: CreatePinDeps, input: CreatePinInputV1): Promise<FailureDtoV1 | CreatePinResultV1> {
-  const currentIdentity = deps.frameTokenLedger.currentIdentity()
-  if (currentIdentity === null) return { kind: "rejected", code: "GEOMETRY_TOKEN_STALE" }
+export async function createPin(
+  deps: CreatePinDeps,
+  input: CreatePinInputV1,
+): Promise<FailureDtoV1 | CreatePinResultV1> {
+  const currentIdentity = deps.frameTokenLedger.currentIdentity();
+  if (currentIdentity === null) return { kind: "rejected", code: "GEOMETRY_TOKEN_STALE" };
 
-  const consumed = deps.geometryTokenLedger.consume(input.geometryToken, currentIdentity)
-  if (!consumed.ok) return { kind: "rejected", code: consumed.code }
+  const consumed = deps.geometryTokenLedger.consume(input.geometryToken, currentIdentity);
+  if (!consumed.ok) return { kind: "rejected", code: consumed.code };
 
-  const pageSlug = parsePageSlug(consumed.anchor.pageSlug)
+  const pageSlug = parsePageSlug(consumed.anchor.pageSlug);
   if (pageSlug instanceof Error) {
     // The anchor's pageSlug came from a previously resolved geometry query (never
     // caller-supplied here) — this is a contract violation in whatever minted the anchor,
     // not a reachable user-input problem. Per the errore rule against silently swallowing
     // errors, it is logged before being reported as a bounded failure.
-    console.error(`pin.create: geometry anchor pageSlug "${consumed.anchor.pageSlug}" failed to parse: ${pageSlug.message}`)
-    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: "geometry anchor named an invalid page", details: {} }
+    console.error(
+      `pin.create: geometry anchor pageSlug "${consumed.anchor.pageSlug}" failed to parse: ${pageSlug.message}`,
+    );
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "geometry anchor named an invalid page",
+      details: {},
+    };
   }
 
-  const pinId = uuidv7()
-  const recordId = uuidv7()
-  const ts = deps.clock.now().toISOString()
+  const pinId = uuidv7();
+  const recordId = uuidv7();
+  const ts = deps.clock.now().toISOString();
   const event: PinCreatedEvent = {
     kind: "pin:created",
     recordId,
@@ -83,10 +93,10 @@ export async function createPin(deps: CreatePinDeps, input: CreatePinInputV1): P
     fy: consumed.anchor.fy,
     text: input.text,
     ts,
-  }
+  };
 
-  const appended = await deps.pinMutations.appendStandaloneEvent(pageSlug, event)
-  if (appended !== undefined) return appended
+  const appended = await deps.pinMutations.appendStandaloneEvent(pageSlug, event);
+  if (appended !== undefined) return appended;
 
   return {
     kind: "created",
@@ -111,5 +121,5 @@ export async function createPin(deps: CreatePinDeps, input: CreatePinInputV1): P
       // pinId for pin.create" — the newly minted pin's own id is what caused this change.
       causeId: pinId,
     },
-  }
+  };
 }

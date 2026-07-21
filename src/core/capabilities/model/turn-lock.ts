@@ -1,6 +1,6 @@
-import type { CommandKindV1, UnavailableReason } from "core/protocol"
+import type { CommandKindV1, UnavailableReason } from "core/protocol";
 
-import type { KernelStateSnapshot } from "../types"
+import type { KernelStateSnapshot } from "../types";
 
 /**
  * kernel-command-contract §10.4 (lines 954-976), "Required turn-time capability matrix" —
@@ -38,13 +38,13 @@ export const TURN_LOCKED_KINDS: readonly CommandKindV1[] = [
   "restore.plan",
   "restore.confirm",
   "restore.retryRecord",
-]
+];
 
-const TURN_LOCKED_KIND_SET: ReadonlySet<CommandKindV1> = new Set(TURN_LOCKED_KINDS)
+const TURN_LOCKED_KIND_SET: ReadonlySet<CommandKindV1> = new Set(TURN_LOCKED_KINDS);
 
 /** True when `kind` is subject to §10.4's turn-time lock. */
 export function isTurnLockedKind(kind: CommandKindV1): boolean {
-  return TURN_LOCKED_KIND_SET.has(kind)
+  return TURN_LOCKED_KIND_SET.has(kind);
 }
 
 /**
@@ -60,18 +60,21 @@ export function isTurnLockedKind(kind: CommandKindV1): boolean {
  * and total): it still blocks, using §11.1's typed fallback `CAPABILITY_UNAVAILABLE`
  * instead of fabricating a `turnId` the snapshot does not actually have.
  */
-export function turnLockedReason(kind: CommandKindV1, state: KernelStateSnapshot): UnavailableReason | null {
-  if (!isTurnLockedKind(kind)) return null
-  if (state.turn.phase === "idle") return null
+export function turnLockedReason(
+  kind: CommandKindV1,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
+  if (!isTurnLockedKind(kind)) return null;
+  if (state.turn.phase === "idle") return null;
 
-  const { activeTurnId } = state.turn
+  const { activeTurnId } = state.turn;
   if (activeTurnId === null) {
     console.warn(
       `turnLockedReason: turn.phase is "${state.turn.phase}" (non-idle) but activeTurnId is null; ` +
         `locking "${kind}" with CAPABILITY_UNAVAILABLE instead of a fabricated turnId`,
-    )
-    return { code: "CAPABILITY_UNAVAILABLE" }
+    );
+    return { code: "CAPABILITY_UNAVAILABLE" };
   }
 
-  return { code: "TURN_RUNNING", turnId: activeTurnId }
+  return { code: "TURN_RUNNING", turnId: activeTurnId };
 }

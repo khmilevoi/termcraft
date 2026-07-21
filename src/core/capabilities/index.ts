@@ -11,18 +11,23 @@ export type {
   CapabilityTargetExtractor,
   GeometryQueryKindV1,
   RecoveryTargetV1,
-} from "./model/target"
+} from "./model/target";
 export {
   CapabilityTargetExtractionError,
   capabilityTargetExtractors,
   extractCapabilityTarget,
-} from "./model/target"
+} from "./model/target";
 
-export type { CapabilityEntry, CapabilityRecord, CapabilityState, KernelStateSnapshot } from "./types"
+export type {
+  CapabilityEntry,
+  CapabilityRecord,
+  CapabilityState,
+  KernelStateSnapshot,
+} from "./types";
 
-export { evaluateCapabilityGuard } from "./model/guards"
+export { evaluateCapabilityGuard } from "./model/guards";
 
-export { TURN_LOCKED_KINDS, isTurnLockedKind, turnLockedReason } from "./model/turn-lock"
+export { TURN_LOCKED_KINDS, isTurnLockedKind, turnLockedReason } from "./model/turn-lock";
 
-export type { CapabilityChangeSet } from "./model/projector"
-export { diffCapabilities, projectCapabilities, projectCapability } from "./model/projector"
+export type { CapabilityChangeSet } from "./model/projector";
+export { diffCapabilities, projectCapabilities, projectCapability } from "./model/projector";

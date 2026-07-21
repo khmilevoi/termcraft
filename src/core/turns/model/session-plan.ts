@@ -1,7 +1,7 @@
-import type { SessionCheckpointService, SessionPlan } from "core/ports"
-import type { FailureDtoV1 } from "core/protocol"
+import type { SessionCheckpointService, SessionPlan } from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
 
-import type { TurnDeadlines } from "./deadlines"
+import type { TurnDeadlines } from "./deadlines";
 
 /**
  * The resume-or-fresh decision through the `SessionCheckpointService` port
@@ -27,12 +27,12 @@ import type { TurnDeadlines } from "./deadlines"
  */
 
 export interface EvaluateSessionPlanDeps {
-  readonly sessionCheckpoint: SessionCheckpointService
+  readonly sessionCheckpoint: SessionCheckpointService;
 }
 
 export interface EvaluateSessionPlanInputV1 {
-  readonly chatId: string
-  readonly sessionScopeId: string
+  readonly chatId: string;
+  readonly sessionScopeId: string;
 }
 
 /**
@@ -44,18 +44,19 @@ export async function evaluateSessionPlan(
   deps: EvaluateSessionPlanDeps,
   input: EvaluateSessionPlanInputV1,
 ): Promise<FailureDtoV1 | SessionPlan> {
-  const verdict = await deps.sessionCheckpoint.evaluateResume(input)
-  if ("code" in verdict) return verdict
-  if (verdict.kind === "resume") return { kind: "resume", sessionId: verdict.sessionId, promptDelta: verdict.promptDelta }
+  const verdict = await deps.sessionCheckpoint.evaluateResume(input);
+  if ("code" in verdict) return verdict;
+  if (verdict.kind === "resume")
+    return { kind: "resume", sessionId: verdict.sessionId, promptDelta: verdict.promptDelta };
 
-  const seed = await deps.sessionCheckpoint.selectSeed(input.chatId)
-  if ("code" in seed) return seed
-  return { kind: "fresh", seed }
+  const seed = await deps.sessionCheckpoint.selectSeed(input.chatId);
+  if ("code" in seed) return seed;
+  return { kind: "fresh", seed };
 }
 
 export interface SessionFallbackDeps {
-  readonly sessionCheckpoint: SessionCheckpointService
-  readonly deadlines: TurnDeadlines
+  readonly sessionCheckpoint: SessionCheckpointService;
+  readonly deadlines: TurnDeadlines;
 }
 
 /**
@@ -65,22 +66,25 @@ export interface SessionFallbackDeps {
  * turn activity worth resetting silence for, and the caller gets the failure to handle
  * (likely terminalizing the turn), not a plan.
  */
-export async function fallbackToFreshSession(deps: SessionFallbackDeps, chatId: string): Promise<FailureDtoV1 | SessionPlan> {
-  const seed = await deps.sessionCheckpoint.selectSeed(chatId)
-  if ("code" in seed) return seed
+export async function fallbackToFreshSession(
+  deps: SessionFallbackDeps,
+  chatId: string,
+): Promise<FailureDtoV1 | SessionPlan> {
+  const seed = await deps.sessionCheckpoint.selectSeed(chatId);
+  if ("code" in seed) return seed;
 
-  deps.deadlines.noteSessionFallback()
-  return { kind: "fresh", seed }
+  deps.deadlines.noteSessionFallback();
+  return { kind: "fresh", seed };
 }
 
 export interface AdvanceSessionCheckpointDeps {
-  readonly sessionCheckpoint: SessionCheckpointService
+  readonly sessionCheckpoint: SessionCheckpointService;
 }
 
 export interface AdvanceSessionCheckpointInputV1 {
-  readonly chatId: string
-  readonly sessionScopeId: string
-  readonly sessionId: string
+  readonly chatId: string;
+  readonly sessionScopeId: string;
+  readonly sessionId: string;
 }
 
 /** §6.2: after the terminal agent outcome is durably appended, atomically advance the checkpoint to the prefix the backend session now reflects. */
@@ -88,5 +92,5 @@ export async function advanceSessionCheckpoint(
   deps: AdvanceSessionCheckpointDeps,
   input: AdvanceSessionCheckpointInputV1,
 ): Promise<FailureDtoV1 | undefined> {
-  return deps.sessionCheckpoint.advanceCheckpoint(input)
+  return deps.sessionCheckpoint.advanceCheckpoint(input);
 }

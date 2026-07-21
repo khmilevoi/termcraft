@@ -1,5 +1,3 @@
-import type { CommandKindV1, UnavailableReason, UUIDv7 } from "core/protocol"
-
 import type {
   CommitState,
   ExportState,
@@ -8,9 +6,10 @@ import type {
   ProjectState,
   RestoreState,
   TurnState,
-} from "core/machines"
+} from "core/machines";
+import type { CommandKindV1, UUIDv7, UnavailableReason } from "core/protocol";
 
-import type { CapabilityTargetByKindV1 } from "./model/target"
+import type { CapabilityTargetByKindV1 } from "./model/target";
 
 /**
  * `core/capabilities`'s shared vocabulary: §10.1's `CapabilityState`/`CapabilityEntry`
@@ -36,16 +35,16 @@ import type { CapabilityTargetByKindV1 } from "./model/target"
  */
 export type CapabilityState =
   | Readonly<{ available: true }>
-  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>
+  | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>;
 
 /**
  * §10.1's `CapabilityEntry<K>` (KCC:861-865), typed precisely per kind via
  * `CapabilityTargetByKindV1[K]`.
  */
 export interface CapabilityEntry<K extends CommandKindV1 = CommandKindV1> {
-  readonly id: K
-  readonly target: CapabilityTargetByKindV1[K]
-  readonly state: CapabilityState
+  readonly id: K;
+  readonly target: CapabilityTargetByKindV1[K];
+  readonly state: CapabilityState;
 }
 
 /**
@@ -56,9 +55,9 @@ export interface CapabilityEntry<K extends CommandKindV1 = CommandKindV1> {
  * to cast between the two.
  */
 export interface CapabilityRecord {
-  readonly id: CommandKindV1
-  readonly target: unknown
-  readonly state: CapabilityState
+  readonly id: CommandKindV1;
+  readonly target: unknown;
+  readonly state: CapabilityState;
 }
 
 /**
@@ -82,23 +81,23 @@ export interface CapabilityRecord {
  */
 export interface KernelStateSnapshot {
   readonly project: Readonly<{
-    readonly phase: ProjectState
+    readonly phase: ProjectState;
     /** `null` before `ready` is ever reached — §7.1: trust first exists at `ready`. */
-    readonly trust: "trusted" | "untrusted-read-only" | null
-  }>
+    readonly trust: "trusted" | "untrusted-read-only" | null;
+  }>;
   readonly turn: Readonly<{
-    readonly phase: TurnState
+    readonly phase: TurnState;
     /** The active turn's id, or `null` exactly when `phase === "idle"`. */
-    readonly activeTurnId: UUIDv7 | null
+    readonly activeTurnId: UUIDv7 | null;
     /** §7.2: "In `finalizing` after durable intent [cancel] is rejected with `CANCEL_TOO_LATE`." */
-    readonly commitIntentRecorded: boolean
-  }>
-  readonly restore: Readonly<{ readonly phase: RestoreState }>
-  readonly commit: Readonly<{ readonly phase: CommitState }>
-  readonly export: Readonly<{ readonly phase: ExportState }>
+    readonly commitIntentRecorded: boolean;
+  }>;
+  readonly restore: Readonly<{ readonly phase: RestoreState }>;
+  readonly commit: Readonly<{ readonly phase: CommitState }>;
+  readonly export: Readonly<{ readonly phase: ExportState }>;
   readonly preview: Readonly<{
-    readonly phase: PreviewState
-    readonly sourceKind: "current" | "historical" | null
-  }>
-  readonly migration: Readonly<{ readonly phase: MigrationState }>
+    readonly phase: PreviewState;
+    readonly sourceKind: "current" | "historical" | null;
+  }>;
+  readonly migration: Readonly<{ readonly phase: MigrationState }>;
 }

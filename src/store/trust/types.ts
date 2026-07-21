@@ -1,19 +1,19 @@
-import type { Clock } from "infrastructure/clock"
+import type { Clock } from "infrastructure/clock";
 
-import type { TrustLedgerError, TrustSubjectError } from "./model/trust-store"
+import type { TrustLedgerError, TrustSubjectError } from "./model/trust-store";
 
 /** Any failure `store/trust` can return — a `_tag`-discriminated union for propagating callers. */
-export type TrustError = TrustSubjectError | TrustLedgerError
+export type TrustError = TrustSubjectError | TrustLedgerError;
 
 /**
  * An OS-absolute path handed in by the composition root — never a caller-built managed
  * relative path. `store/types.ts` (T19) owns the shared alias; this local declaration
  * keeps the submodule self-contained until then.
  */
-export type AbsPath = string
+export type AbsPath = string;
 
 /** Lowercase-hex SHA-256. The trust key is one of these (storage-identity §8). */
-export type Sha256Hex = string
+export type Sha256Hex = string;
 
 /**
  * The local Git repository storage and the project's location within its worktree
@@ -24,11 +24,11 @@ export type Sha256Hex = string
  */
 export interface GitIdentity {
   /** Canonical (`/`-separated, drive-uppercased, no trailing separator) Git common dir. */
-  readonly canonicalGitCommonDir: string
+  readonly canonicalGitCommonDir: string;
   /** `infrastructure/fs-guard`'s canonical identity string for that directory. */
-  readonly gitCommonDirFilesystemIdentity: string
+  readonly gitCommonDirFilesystemIdentity: string;
   /** NFC repo-relative project path; `""` when the project IS the worktree root. */
-  readonly projectPathRelativeToWorktreeRoot: string
+  readonly projectPathRelativeToWorktreeRoot: string;
 }
 
 /**
@@ -37,16 +37,16 @@ export interface GitIdentity {
  * digested fields — nothing else can leak into the trust key.
  */
 export interface TrustSubjectInput {
-  readonly canonicalProjectPath: string
-  readonly projectFilesystemIdentity: string
-  readonly projectId: string
-  readonly git: GitIdentity | null
+  readonly canonicalProjectPath: string;
+  readonly projectFilesystemIdentity: string;
+  readonly projectId: string;
+  readonly git: GitIdentity | null;
 }
 
 /** A built subject: its digested inputs plus the derived trust key (storage-identity §8). */
 export interface TrustSubject extends TrustSubjectInput {
   /** Lowercase-hex SHA-256 of the complete `TrustSubjectV1` byte string. */
-  readonly key: Sha256Hex
+  readonly key: Sha256Hex;
 }
 
 /**
@@ -57,23 +57,23 @@ export interface TrustSubject extends TrustSubjectInput {
  */
 export interface TrustFsDeps {
   /** Resolve path aliases (junctions, symlinks) and, on Windows, the true on-disk casing. */
-  readonly realpath: (absPath: AbsPath) => string | Error
+  readonly realpath: (absPath: AbsPath) => string | Error;
   /** The canonical `unix:`/`windows:` filesystem-identity string (storage-identity §8). */
-  readonly fsIdentity: (absPath: AbsPath) => string | Error
+  readonly fsIdentity: (absPath: AbsPath) => string | Error;
   /** Create the ledger directory when it does not exist yet. */
-  readonly ensureDir: (absDir: AbsPath) => Error | undefined
+  readonly ensureDir: (absDir: AbsPath) => Error | undefined;
   /** Read a grant record; `null` means "no such file", which is simply "not granted". */
-  readonly readFile: (absPath: AbsPath) => Uint8Array | null | Error
+  readonly readFile: (absPath: AbsPath) => Uint8Array | null | Error;
   /** Durable atomic install (storage-identity §4.2) — the ledger's only write path. */
-  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined
+  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined;
 }
 
 /** Everything `createTrustStore` needs; every impure boundary is injected. */
 export interface TrustStoreDeps {
   /** The OS per-user termcraft state root that owns the machine trust ledger (§4). */
-  readonly userStateRoot: AbsPath
-  readonly clock: Clock
-  readonly fs: TrustFsDeps
+  readonly userStateRoot: AbsPath;
+  readonly clock: Clock;
+  readonly fs: TrustFsDeps;
 }
 
 /**
@@ -83,9 +83,13 @@ export interface TrustStoreDeps {
  * copy the machine-local path, filesystem identity, Git identity, or the grant.
  */
 export interface TrustStore {
-  buildSubject(root: AbsPath, projectId: string, git: GitIdentity | null): Promise<TrustError | TrustSubject>
+  buildSubject(
+    root: AbsPath,
+    projectId: string,
+    git: GitIdentity | null,
+  ): Promise<TrustError | TrustSubject>;
   /** `false` on a missing, unreadable, corrupt, or tampered grant — it never fails open. */
-  isGranted(subject: TrustSubject): Promise<boolean>
+  isGranted(subject: TrustSubject): Promise<boolean>;
   /** Records the grant durably; `undefined` on success. */
-  grant(subject: TrustSubject): Promise<TrustError | undefined>
+  grant(subject: TrustSubject): Promise<TrustError | undefined>;
 }

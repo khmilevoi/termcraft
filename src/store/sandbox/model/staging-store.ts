@@ -1,9 +1,22 @@
-import path from "node:path"
-import * as errore from "errore"
+import path from "node:path";
 
-import { isCanonicalUuidv7 } from "infrastructure/uuid"
-import type { CandidateSink, FsAccessError, LeafRejectedError, UnknownNamespaceError, UnsafeHardlinkError } from "store/safe-fs"
-import { IdentityChangedError, checkIdentityUnchanged, checkManagedLeaf, classifyNamespace, nodeCandidateDeps } from "store/safe-fs"
+import * as errore from "errore";
+
+import { isCanonicalUuidv7 } from "infrastructure/uuid";
+import type {
+  CandidateSink,
+  FsAccessError,
+  LeafRejectedError,
+  UnknownNamespaceError,
+  UnsafeHardlinkError,
+} from "store/safe-fs";
+import {
+  IdentityChangedError,
+  checkIdentityUnchanged,
+  checkManagedLeaf,
+  classifyNamespace,
+  nodeCandidateDeps,
+} from "store/safe-fs";
 
 import type {
   AbsPath,
@@ -15,8 +28,8 @@ import type {
   StagingStore,
   StagingStoreDeps,
   TurnWorkspace,
-} from "../types"
-import { computeProjectKey } from "./project-key"
+} from "../types";
+import { computeProjectKey } from "./project-key";
 
 // ---- errors ---------------------------------------------------------------------
 
@@ -52,40 +65,48 @@ export type StagingError =
   | LeafRejectedError
   | UnsafeHardlinkError
   | IdentityChangedError
-  | FsAccessError
+  | FsAccessError;
 
 // ---- layout (turn-durability §6.2) -----------------------------------------------
 
 /** `{userStateRoot}/sandboxes/<projectKey>/` — the stable per-project sandbox parent. */
 export function sandboxParentDir(userStateRoot: AbsPath, projectKey: Sha256Hex): AbsPath {
-  return path.join(userStateRoot, "sandboxes", projectKey)
+  return path.join(userStateRoot, "sandboxes", projectKey);
 }
 
 /** `.../turns/` — shared and idempotently created across every turn of one project. */
 export function turnsParentDir(userStateRoot: AbsPath, projectKey: Sha256Hex): AbsPath {
-  return path.join(sandboxParentDir(userStateRoot, projectKey), "turns")
+  return path.join(sandboxParentDir(userStateRoot, projectKey), "turns");
 }
 
 /** `.../turns/<turnId>/` — the create-new-only turn path (§6.2's `workspace_collision` unit). */
 export function turnDir(userStateRoot: AbsPath, projectKey: Sha256Hex, turnId: string): AbsPath {
-  return path.join(turnsParentDir(userStateRoot, projectKey), turnId)
+  return path.join(turnsParentDir(userStateRoot, projectKey), turnId);
 }
 
 /** `.../turns/<turnId>/workspace/` — the agent's cwd and only writable root (turn-durability §6.3). */
-export function turnWorkspaceDir(userStateRoot: AbsPath, projectKey: Sha256Hex, turnId: string): AbsPath {
-  return path.join(turnDir(userStateRoot, projectKey, turnId), "workspace")
+export function turnWorkspaceDir(
+  userStateRoot: AbsPath,
+  projectKey: Sha256Hex,
+  turnId: string,
+): AbsPath {
+  return path.join(turnDir(userStateRoot, projectKey, turnId), "workspace");
 }
 
 /** `.../turns/<turnId>/turn.json` — non-secret turn metadata plus the staged-file inventory (§6.2). */
-export function turnJsonPath(userStateRoot: AbsPath, projectKey: Sha256Hex, turnId: string): AbsPath {
-  return path.join(turnDir(userStateRoot, projectKey, turnId), "turn.json")
+export function turnJsonPath(
+  userStateRoot: AbsPath,
+  projectKey: Sha256Hex,
+  turnId: string,
+): AbsPath {
+  return path.join(turnDir(userStateRoot, projectKey, turnId), "turn.json");
 }
 
 // ---- production fs wiring --------------------------------------------------------
 
 /** The real Node/Bun bindings, reusing `store/safe-fs`'s already-tested streaming-copy primitives. */
 export function nodeStagingFsDeps(): StagingFsDeps {
-  const candidate = nodeCandidateDeps()
+  const candidate = nodeCandidateDeps();
   return {
     mkdirAll: candidate.mkdirAll,
     mkdirNew: candidate.mkdirNew,
@@ -93,40 +114,44 @@ export function nodeStagingFsDeps(): StagingFsDeps {
     createNewSink: candidate.createNewSink,
     createHash: candidate.createHash,
     removeTree: candidate.removeTree,
-  }
+  };
 }
 
 // ---- small helpers ----------------------------------------------------------------
 
 function isCollision(error: FsAccessError): boolean {
-  return error.code === "EEXIST"
+  return error.code === "EEXIST";
 }
 
 /** `mkdirNew` semantics, with an `EEXIST` failure translated to the domain `WorkspaceCollisionError`. */
 function mkdirNewOrCollision(fsDeps: StagingFsDeps, absPath: AbsPath): StagingError | undefined {
-  const made = fsDeps.mkdirNew(absPath)
-  if (made instanceof Error) return isCollision(made) ? new WorkspaceCollisionError({ path: absPath }) : made
-  return undefined
+  const made = fsDeps.mkdirNew(absPath);
+  if (made instanceof Error)
+    return isCollision(made) ? new WorkspaceCollisionError({ path: absPath }) : made;
+  return undefined;
 }
 
 /** Close a sink whose copy already failed and propagate the original failure, not the close outcome. */
 function closeSinkThen(sink: CandidateSink, error: StagingError): StagingError {
-  const closed = sink.close()
-  if (closed instanceof Error) console.warn("sandbox: staging sink close failed:", closed.message)
-  return error
+  const closed = sink.close();
+  if (closed instanceof Error) console.warn("sandbox: staging sink close failed:", closed.message);
+  return error;
 }
 
 /** Discard a turn tree WE created after a later step failed — never called before we own the path. */
 function discard(fsDeps: StagingFsDeps, turnPath: AbsPath, error: StagingError): StagingError {
-  fsDeps.removeTree(turnPath)
-  return error
+  fsDeps.removeTree(turnPath);
+  return error;
 }
 
 function validateIdentities(input: CreateTurnWorkspaceInput): InvalidIdentityError | undefined {
-  if (!isCanonicalUuidv7(input.projectId)) return new InvalidIdentityError({ field: "projectId", value: input.projectId })
-  if (!isCanonicalUuidv7(input.turnId)) return new InvalidIdentityError({ field: "turnId", value: input.turnId })
-  if (!isCanonicalUuidv7(input.targetChatId)) return new InvalidIdentityError({ field: "targetChatId", value: input.targetChatId })
-  return undefined
+  if (!isCanonicalUuidv7(input.projectId))
+    return new InvalidIdentityError({ field: "projectId", value: input.projectId });
+  if (!isCanonicalUuidv7(input.turnId))
+    return new InvalidIdentityError({ field: "turnId", value: input.turnId });
+  if (!isCanonicalUuidv7(input.targetChatId))
+    return new InvalidIdentityError({ field: "targetChatId", value: input.targetChatId });
+  return undefined;
 }
 
 // ---- copy ---------------------------------------------------------------------------
@@ -140,79 +165,90 @@ function validateIdentities(input: CreateTurnWorkspaceInput): InvalidIdentityErr
  * open and the post-copy recheck (§5.2/§5.4) — the same open-once/recheck discipline
  * `store/safe-fs`'s candidate assembly uses.
  */
-function copySourceFile(input: { absSourcePath: AbsPath; destPath: AbsPath; fs: StagingFsDeps }): StagingError | { sha256: Sha256Hex; size: number } {
-  const handle = input.fs.openSource(input.absSourcePath)
-  if (handle instanceof Error) return handle
+function copySourceFile(input: {
+  absSourcePath: AbsPath;
+  destPath: AbsPath;
+  fs: StagingFsDeps;
+}): StagingError | { sha256: Sha256Hex; size: number } {
+  const handle = input.fs.openSource(input.absSourcePath);
+  if (handle instanceof Error) return handle;
 
-  const before = handle.stat()
+  const before = handle.stat();
   if (before instanceof Error) {
-    handle.close()
-    return before
+    handle.close();
+    return before;
   }
 
-  const rejected = checkManagedLeaf(input.absSourcePath, before)
+  const rejected = checkManagedLeaf(input.absSourcePath, before);
   if (rejected instanceof Error) {
-    handle.close()
-    return rejected
+    handle.close();
+    return rejected;
   }
 
-  const sink = input.fs.createNewSink(input.destPath)
+  const sink = input.fs.createNewSink(input.destPath);
   if (sink instanceof Error) {
-    handle.close()
-    return sink
+    handle.close();
+    return sink;
   }
 
-  const hash = input.fs.createHash()
-  let copied = 0
+  const hash = input.fs.createHash();
+  let copied = 0;
   for (;;) {
-    const chunk = handle.read()
+    const chunk = handle.read();
     if (chunk instanceof Error) {
-      handle.close()
-      return closeSinkThen(sink, chunk)
+      handle.close();
+      return closeSinkThen(sink, chunk);
     }
-    if (chunk === null) break
-    copied += chunk.byteLength
-    hash.update(chunk)
-    const wrote = sink.write(chunk)
+    if (chunk === null) break;
+    copied += chunk.byteLength;
+    hash.update(chunk);
+    const wrote = sink.write(chunk);
     if (wrote instanceof Error) {
-      handle.close()
-      return closeSinkThen(sink, wrote)
+      handle.close();
+      return closeSinkThen(sink, wrote);
     }
   }
 
-  const closed = sink.close()
+  const closed = sink.close();
   if (closed instanceof Error) {
-    handle.close()
-    return closed
+    handle.close();
+    return closed;
   }
 
-  const after = handle.stat()
-  handle.close()
-  if (after instanceof Error) return after
+  const after = handle.stat();
+  handle.close();
+  if (after instanceof Error) return after;
 
-  const drifted = checkIdentityUnchanged(input.absSourcePath, before, after)
-  if (drifted instanceof Error) return drifted
+  const drifted = checkIdentityUnchanged(input.absSourcePath, before, after);
+  if (drifted instanceof Error) return drifted;
   if (copied !== before.size) {
-    return new IdentityChangedError({ path: input.absSourcePath, reason: `copied ${copied} bytes but the source reported ${before.size}` })
+    return new IdentityChangedError({
+      path: input.absSourcePath,
+      reason: `copied ${copied} bytes but the source reported ${before.size}`,
+    });
   }
 
-  return { sha256: hash.digestHex(), size: copied }
+  return { sha256: hash.digestHex(), size: copied };
 }
 
 /** Write an in-memory buffer as a create-new workspace file while hashing it (the `pages.json` manifest slice). */
-function writeInlineFile(input: { destPath: AbsPath; bytes: Uint8Array; fs: StagingFsDeps }): StagingError | { sha256: Sha256Hex; size: number } {
-  const sink = input.fs.createNewSink(input.destPath)
-  if (sink instanceof Error) return sink
+function writeInlineFile(input: {
+  destPath: AbsPath;
+  bytes: Uint8Array;
+  fs: StagingFsDeps;
+}): StagingError | { sha256: Sha256Hex; size: number } {
+  const sink = input.fs.createNewSink(input.destPath);
+  if (sink instanceof Error) return sink;
 
-  const hash = input.fs.createHash()
-  hash.update(input.bytes)
-  const wrote = sink.write(input.bytes)
-  if (wrote instanceof Error) return closeSinkThen(sink, wrote)
+  const hash = input.fs.createHash();
+  hash.update(input.bytes);
+  const wrote = sink.write(input.bytes);
+  if (wrote instanceof Error) return closeSinkThen(sink, wrote);
 
-  const closed = sink.close()
-  if (closed instanceof Error) return closed
+  const closed = sink.close();
+  if (closed instanceof Error) return closed;
 
-  return { sha256: hash.digestHex(), size: input.bytes.byteLength }
+  return { sha256: hash.digestHex(), size: input.bytes.byteLength };
 }
 
 /**
@@ -221,43 +257,61 @@ function writeInlineFile(input: { destPath: AbsPath; bytes: Uint8Array; fs: Stag
  * runtime-doc relative path outside the workspace's `agent-runtime-doc` grammar is rejected
  * before it is opened.
  */
-function stageAllFiles(input: { workspacePath: AbsPath; source: CreateTurnWorkspaceInput; fs: StagingFsDeps }): StagingError | StagedFile[] {
-  const files: StagedFile[] = []
+function stageAllFiles(input: {
+  workspacePath: AbsPath;
+  source: CreateTurnWorkspaceInput;
+  fs: StagingFsDeps;
+}): StagingError | StagedFile[] {
+  const files: StagedFile[] = [];
 
   if (input.source.pages.length > 0) {
-    const madePagesDir = input.fs.mkdirAll(path.join(input.workspacePath, "pages"))
-    if (madePagesDir instanceof Error) return madePagesDir
+    const madePagesDir = input.fs.mkdirAll(path.join(input.workspacePath, "pages"));
+    if (madePagesDir instanceof Error) return madePagesDir;
   }
   for (const page of input.source.pages) {
-    const relPath = `pages/${page.pageSlug}.tsx`
-    const destPath = path.join(input.workspacePath, "pages", `${page.pageSlug}.tsx`)
-    const copied = copySourceFile({ absSourcePath: page.absSourcePath, destPath, fs: input.fs })
-    if (copied instanceof Error) return copied
-    files.push({ relPath, namespace: "agent-page-source", sha256: copied.sha256, size: copied.size })
+    const relPath = `pages/${page.pageSlug}.tsx`;
+    const destPath = path.join(input.workspacePath, "pages", `${page.pageSlug}.tsx`);
+    const copied = copySourceFile({ absSourcePath: page.absSourcePath, destPath, fs: input.fs });
+    if (copied instanceof Error) return copied;
+    files.push({
+      relPath,
+      namespace: "agent-page-source",
+      sha256: copied.sha256,
+      size: copied.size,
+    });
   }
 
-  const manifestDest = path.join(input.workspacePath, "pages.json")
-  const manifestWritten = writeInlineFile({ destPath: manifestDest, bytes: input.source.manifestSlice, fs: input.fs })
-  if (manifestWritten instanceof Error) return manifestWritten
-  files.push({ relPath: "pages.json", namespace: "agent-manifest", sha256: manifestWritten.sha256, size: manifestWritten.size })
+  const manifestDest = path.join(input.workspacePath, "pages.json");
+  const manifestWritten = writeInlineFile({
+    destPath: manifestDest,
+    bytes: input.source.manifestSlice,
+    fs: input.fs,
+  });
+  if (manifestWritten instanceof Error) return manifestWritten;
+  files.push({
+    relPath: "pages.json",
+    namespace: "agent-manifest",
+    sha256: manifestWritten.sha256,
+    size: manifestWritten.size,
+  });
 
   for (const doc of input.source.runtimeDocs) {
-    const namespace = classifyNamespace("workspace", doc.relPath)
-    if (namespace instanceof Error) return namespace
+    const namespace = classifyNamespace("workspace", doc.relPath);
+    if (namespace instanceof Error) return namespace;
 
-    const destPath = path.join(input.workspacePath, ...doc.relPath.split("/"))
-    const parentDir = path.dirname(destPath)
+    const destPath = path.join(input.workspacePath, ...doc.relPath.split("/"));
+    const parentDir = path.dirname(destPath);
     if (parentDir !== input.workspacePath) {
-      const madeParent = input.fs.mkdirAll(parentDir)
-      if (madeParent instanceof Error) return madeParent
+      const madeParent = input.fs.mkdirAll(parentDir);
+      if (madeParent instanceof Error) return madeParent;
     }
 
-    const copied = copySourceFile({ absSourcePath: doc.absSourcePath, destPath, fs: input.fs })
-    if (copied instanceof Error) return copied
-    files.push({ relPath: doc.relPath, namespace, sha256: copied.sha256, size: copied.size })
+    const copied = copySourceFile({ absSourcePath: doc.absSourcePath, destPath, fs: input.fs });
+    if (copied instanceof Error) return copied;
+    files.push({ relPath: doc.relPath, namespace, sha256: copied.sha256, size: copied.size });
   }
 
-  return files
+  return files;
 }
 
 /**
@@ -268,13 +322,13 @@ function stageAllFiles(input: { workspacePath: AbsPath; source: CreateTurnWorksp
  * half — previously absent from this record entirely, so it did not survive a restart).
  */
 interface TurnJsonRecord {
-  readonly schemaVersion: 1
-  readonly turnId: string
-  readonly projectId: string
-  readonly targetChatId: string
-  readonly createdAt: string
-  readonly readSet: StagedTurnReadSet
-  readonly files: readonly StagedFile[]
+  readonly schemaVersion: 1;
+  readonly turnId: string;
+  readonly projectId: string;
+  readonly targetChatId: string;
+  readonly createdAt: string;
+  readonly readSet: StagedTurnReadSet;
+  readonly files: readonly StagedFile[];
 }
 
 // ---- the store --------------------------------------------------------------------
@@ -292,28 +346,31 @@ interface TurnJsonRecord {
 export function createStagingStore(deps: StagingStoreDeps): StagingStore {
   return {
     async createTurnWorkspace(input: CreateTurnWorkspaceInput) {
-      const invalidId = validateIdentities(input)
-      if (invalidId instanceof Error) return invalidId
+      const invalidId = validateIdentities(input);
+      if (invalidId instanceof Error) return invalidId;
 
-      const projectKey = computeProjectKey({ canonicalProjectRoot: input.canonicalProjectRoot, projectId: input.projectId })
-      const turnPath = turnDir(deps.userStateRoot, projectKey, input.turnId)
-      const workspacePath = turnWorkspaceDir(deps.userStateRoot, projectKey, input.turnId)
-      const jsonPath = turnJsonPath(deps.userStateRoot, projectKey, input.turnId)
+      const projectKey = computeProjectKey({
+        canonicalProjectRoot: input.canonicalProjectRoot,
+        projectId: input.projectId,
+      });
+      const turnPath = turnDir(deps.userStateRoot, projectKey, input.turnId);
+      const workspacePath = turnWorkspaceDir(deps.userStateRoot, projectKey, input.turnId);
+      const jsonPath = turnJsonPath(deps.userStateRoot, projectKey, input.turnId);
 
       // Shared across every turn of this project — idempotent, never ours alone to discard.
-      const parentReady = deps.fs.mkdirAll(turnsParentDir(deps.userStateRoot, projectKey))
-      if (parentReady instanceof Error) return parentReady
+      const parentReady = deps.fs.mkdirAll(turnsParentDir(deps.userStateRoot, projectKey));
+      if (parentReady instanceof Error) return parentReady;
 
       // The collision unit (§6.2): a pre-existing turn path is refused, untouched.
-      const turnCreated = mkdirNewOrCollision(deps.fs, turnPath)
-      if (turnCreated instanceof Error) return turnCreated
+      const turnCreated = mkdirNewOrCollision(deps.fs, turnPath);
+      if (turnCreated instanceof Error) return turnCreated;
 
       // From here on we own `turnPath`: any failure discards exactly the tree we made.
-      const workspaceCreated = mkdirNewOrCollision(deps.fs, workspacePath)
-      if (workspaceCreated instanceof Error) return discard(deps.fs, turnPath, workspaceCreated)
+      const workspaceCreated = mkdirNewOrCollision(deps.fs, workspacePath);
+      if (workspaceCreated instanceof Error) return discard(deps.fs, turnPath, workspaceCreated);
 
-      const staged = stageAllFiles({ workspacePath, source: input, fs: deps.fs })
-      if (staged instanceof Error) return discard(deps.fs, turnPath, staged)
+      const staged = stageAllFiles({ workspacePath, source: input, fs: deps.fs });
+      if (staged instanceof Error) return discard(deps.fs, turnPath, staged);
 
       const record: TurnJsonRecord = {
         schemaVersion: 1,
@@ -323,9 +380,17 @@ export function createStagingStore(deps: StagingStoreDeps): StagingStore {
         createdAt: deps.clock.now().toISOString(),
         readSet: input.readSet,
         files: staged,
-      }
-      const persisted = deps.durableWrite(jsonPath, new TextEncoder().encode(`${JSON.stringify(record)}\n`))
-      if (persisted instanceof Error) return discard(deps.fs, turnPath, new TurnJsonWriteError({ path: jsonPath, cause: persisted }))
+      };
+      const persisted = deps.durableWrite(
+        jsonPath,
+        new TextEncoder().encode(`${JSON.stringify(record)}\n`),
+      );
+      if (persisted instanceof Error)
+        return discard(
+          deps.fs,
+          turnPath,
+          new TurnJsonWriteError({ path: jsonPath, cause: persisted }),
+        );
 
       const workspace: TurnWorkspace = {
         turnId: input.turnId,
@@ -334,8 +399,8 @@ export function createStagingStore(deps: StagingStoreDeps): StagingStore {
         files: staged,
         totalBytes: staged.reduce((sum, file) => sum + file.size, 0),
         readSet: input.readSet,
-      }
-      return workspace
+      };
+      return workspace;
     },
 
     async retireWorkspace(workspace: TurnWorkspace) {
@@ -344,8 +409,8 @@ export function createStagingStore(deps: StagingStoreDeps): StagingStore {
       // further use for either. `removeTree` is a best-effort primitive (it warns and swallows
       // its own failures, matching every other cleanup call site in this file), so retiring an
       // already-gone or never-created turn is the same idempotent no-op.
-      deps.fs.removeTree(path.dirname(workspace.turnJsonPath))
-      return undefined
+      deps.fs.removeTree(path.dirname(workspace.turnJsonPath));
+      return undefined;
     },
-  }
+  };
 }

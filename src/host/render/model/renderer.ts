@@ -1,11 +1,11 @@
-import { createCliRenderer, type CliRenderer } from "@opentui/core"
-import { createRoot } from "@opentui/react"
+import { type CliRenderer, createCliRenderer } from "@opentui/core";
+import { createRoot } from "@opentui/react";
 
-import type { Size } from "../../types"
-import type { CapturedFrame, RenderHandle } from "../types"
-import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry"
-import { styledRowsFromSpanLines } from "./span-rows"
-import { makeHeadlessStreams } from "./streams"
+import type { Size } from "../../types";
+import type { CapturedFrame, RenderHandle } from "../types";
+import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry";
+import { styledRowsFromSpanLines } from "./span-rows";
+import { makeHeadlessStreams } from "./streams";
 
 /**
  * Create a headless OpenTUI renderer on the public API with fake TTY streams and
@@ -14,7 +14,7 @@ import { makeHeadlessStreams } from "./streams"
  * process, the `process.exit` that Spike D requires — never call it here).
  */
 export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> {
-  const { stdin, stdout } = makeHeadlessStreams(size)
+  const { stdin, stdout } = makeHeadlessStreams(size);
   const renderer: CliRenderer = await createCliRenderer({
     stdin: stdin as never,
     stdout: stdout as never,
@@ -26,55 +26,55 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
     externalOutputMode: "passthrough",
     useMouse: false,
     exitOnCtrlC: false,
-  })
-  const root = createRoot(renderer)
+  });
+  const root = createRoot(renderer);
 
   return {
     mount(node) {
-      root.render(node as never)
+      root.render(node as never);
     },
     async render() {
-      renderer.intermediateRender()
-      await renderer.idle()
+      renderer.intermediateRender();
+      await renderer.idle();
     },
     capture(): CapturedFrame {
-      const buffer = renderer.currentRenderBuffer
+      const buffer = renderer.currentRenderBuffer;
       return {
         width: buffer.width,
         height: buffer.height,
         rows: styledRowsFromSpanLines(buffer.getSpanLines()),
-      }
+      };
     },
     resize(size) {
-      renderer.resize(size.w, size.h)
+      renderer.resize(size.w, size.h);
     },
     destroy() {
-      root.unmount()
-      renderer.destroy()
+      root.unmount();
+      renderer.destroy();
     },
     hitTest(x, y) {
-      return hitTestRenderer(renderer, x, y)
+      return hitTestRenderer(renderer, x, y);
     },
     rectOf(id) {
-      return rectOfElement(renderer, id)
+      return rectOfElement(renderer, id);
     },
     describe(id) {
-      return describeElement(renderer, id)
+      return describeElement(renderer, id);
     },
     layoutTree() {
-      return layoutTreeOf(renderer)
+      return layoutTreeOf(renderer);
     },
-  }
+  };
 }
 
 /** One-shot render: create, mount, paint, capture, tear down. */
 export async function renderNodeOnce(node: unknown, size: Size): Promise<CapturedFrame> {
-  const handle = await createHeadlessRenderer(size)
+  const handle = await createHeadlessRenderer(size);
   try {
-    handle.mount(node)
-    await handle.render()
-    return handle.capture()
+    handle.mount(node);
+    await handle.render();
+    return handle.capture();
   } finally {
-    handle.destroy()
+    handle.destroy();
   }
 }

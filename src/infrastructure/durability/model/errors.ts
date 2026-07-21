@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /**
  * The durable-flush primitive is a Windows `bun:ffi` call into `kernel32.dll`

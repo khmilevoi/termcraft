@@ -1,4 +1,4 @@
-import type { FailureDtoV1 } from "core/protocol"
+import type { FailureDtoV1 } from "core/protocol";
 
 /**
  * `GitHistory` — DECLARED ONLY. No MVP implementation exists or is planned this phase:
@@ -23,56 +23,56 @@ import type { FailureDtoV1 } from "core/protocol"
  * core/ports/; the Git adapter inside store implements them").
  */
 
-export type GitRepositoryStateV1 = "unborn" | "no-repository" | "normal"
+export type GitRepositoryStateV1 = "unborn" | "no-repository" | "normal";
 
 export interface GitProjectStateV1 {
-  readonly repository: GitRepositoryStateV1
+  readonly repository: GitRepositoryStateV1;
   /** Full Git object id of `HEAD`; `null` when unborn or no repository. */
-  readonly headCommitId: string | null
+  readonly headCommitId: string | null;
 }
 
 /** The page's Git-tracking state (design §3's row-precedence inputs: unborn / untracked(±ancestry) / tracked(=HEAD?)). */
 export type PageTrackingStateV1 =
   | { readonly kind: "unborn" }
   | { readonly kind: "untracked"; readonly hasFirstParentAncestry: boolean }
-  | { readonly kind: "tracked"; readonly matchesHead: boolean }
+  | { readonly kind: "tracked"; readonly matchesHead: boolean };
 
 export interface PageGitStateV1 {
-  readonly tracking: PageTrackingStateV1
-  readonly currentSourceHash: string
+  readonly tracking: PageTrackingStateV1;
+  readonly currentSourceHash: string;
 }
 
 /** Bounded cursor/generation history request (projections-observability §8). Default 50, hard maximum 200. */
 export interface PageHistoryRequestV1 {
-  readonly sourcePath: string
-  readonly cursor?: string
-  readonly limit?: number
+  readonly sourcePath: string;
+  readonly cursor?: string;
+  readonly limit?: number;
 }
 
 /** One committed history entry — identified by full object id; short hash/author/timestamp/subject are display-only (design §3). */
 export interface CommitEntryV1 {
-  readonly commitId: string
-  readonly shortHash: string
-  readonly author: string
-  readonly committerTimestamp: string
-  readonly subject: string
+  readonly commitId: string;
+  readonly shortHash: string;
+  readonly author: string;
+  readonly committerTimestamp: string;
+  readonly subject: string;
 }
 
 export interface PageHistoryPageV1 {
-  readonly entries: readonly CommitEntryV1[]
-  readonly nextCursor: string | null
+  readonly entries: readonly CommitEntryV1[];
+  readonly nextCursor: string | null;
 }
 
 /** Whether the path has index/working-tree changes Restore planning must warn about or refuse against (design §7: "a staged source blocks Restore"). */
 export interface PageIndexStateV1 {
-  readonly staged: boolean
-  readonly unstagedChangePresent: boolean
+  readonly staged: boolean;
+  readonly unstagedChangePresent: boolean;
 }
 
 export interface GitHistory {
-  inspectProject(projectPath: string): Promise<FailureDtoV1 | GitProjectStateV1>
-  inspectPage(sourcePath: string): Promise<FailureDtoV1 | PageGitStateV1>
-  listPageCommits(request: PageHistoryRequestV1): Promise<FailureDtoV1 | PageHistoryPageV1>
-  readPageSource(commitId: string, sourcePath: string): Promise<FailureDtoV1 | Uint8Array>
-  inspectIndex(sourcePath: string): Promise<FailureDtoV1 | PageIndexStateV1>
+  inspectProject(projectPath: string): Promise<FailureDtoV1 | GitProjectStateV1>;
+  inspectPage(sourcePath: string): Promise<FailureDtoV1 | PageGitStateV1>;
+  listPageCommits(request: PageHistoryRequestV1): Promise<FailureDtoV1 | PageHistoryPageV1>;
+  readPageSource(commitId: string, sourcePath: string): Promise<FailureDtoV1 | Uint8Array>;
+  inspectIndex(sourcePath: string): Promise<FailureDtoV1 | PageIndexStateV1>;
 }

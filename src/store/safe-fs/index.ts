@@ -17,7 +17,7 @@ export type {
   SafeFsStat,
   SafeProjectFs,
   SafeProjectFsDeps,
-} from "./types"
+} from "./types";
 
 export {
   MAX_COMPONENT_BYTES,
@@ -29,7 +29,7 @@ export {
   detectNameCollisions,
   foldName,
   validateRelativePath,
-} from "./model/path-rules"
+} from "./model/path-rules";
 
 export {
   FsAccessError,
@@ -41,7 +41,7 @@ export {
   nodeSafeFsDeps,
   openManagedRoot,
   resolveManagedPath,
-} from "./model/no-follow"
+} from "./model/no-follow";
 
 export {
   IdentityChangedError,
@@ -52,9 +52,9 @@ export {
   checkManagedLeaf,
   detectDuplicateIdentity,
   identityKey,
-} from "./model/leaf-identity"
+} from "./model/leaf-identity";
 
-export type { LimitBudget, NamespaceLimit, RootAggregateLimit } from "./model/limits"
+export type { LimitBudget, NamespaceLimit, RootAggregateLimit } from "./model/limits";
 export {
   JSONL_MAX_PHYSICAL_LINE_BYTES,
   JSONL_MAX_SERIALIZED_OBJECT_BYTES,
@@ -66,7 +66,18 @@ export {
   UnknownNamespaceError,
   classifyNamespace,
   createLimitBudget,
-} from "./model/limits"
+} from "./model/limits";
 
-export type { CandidateDeps, CandidateFile, CandidateSink, CandidateSnapshot, IncrementalHash, SourceHandle } from "./model/candidate"
-export { WorkspaceChangedDuringSnapshotError, nodeCandidateDeps, snapshotToCandidate } from "./model/candidate"
+export type {
+  CandidateDeps,
+  CandidateFile,
+  CandidateSink,
+  CandidateSnapshot,
+  IncrementalHash,
+  SourceHandle,
+} from "./model/candidate";
+export {
+  WorkspaceChangedDuringSnapshotError,
+  nodeCandidateDeps,
+  snapshotToCandidate,
+} from "./model/candidate";

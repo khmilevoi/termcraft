@@ -1,13 +1,13 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { Clock } from "infrastructure/clock"
-import { uuidv7 } from "infrastructure/uuid"
-import type { PageSlug } from "entities/page"
-import type { StateMachine, ExportAction, ExportState } from "core/machines"
-import type { ExportRenderResultV1, PageReader, ProjectWriteCoordinator } from "core/ports"
-import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol"
+import type { ExportAction, ExportState, StateMachine } from "core/machines";
+import type { ExportRenderResultV1, PageReader, ProjectWriteCoordinator } from "core/ports";
+import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
-import type { ExportPageInputV1, ExportSnapshotV1 } from "../types"
+import type { ExportPageInputV1, ExportSnapshotV1 } from "../types";
 
 /**
  * `kernel.export.beginPublication` / `complete` / `failBeforeIntent` —
@@ -40,100 +40,120 @@ import type { ExportPageInputV1, ExportSnapshotV1 } from "../types"
  */
 
 export interface PublishExportRenderOutcomeV1 {
-  readonly pageSlug: PageSlug
-  readonly outcome: FailureDtoV1 | ExportRenderResultV1
+  readonly pageSlug: PageSlug;
+  readonly outcome: FailureDtoV1 | ExportRenderResultV1;
 }
 
 export interface PublishExportDeps {
-  readonly machine: StateMachine<ExportState, ExportAction>
-  readonly projectWrite: ProjectWriteCoordinator
-  readonly pageReader: PageReader
-  readonly clock: Clock
+  readonly machine: StateMachine<ExportState, ExportAction>;
+  readonly projectWrite: ProjectWriteCoordinator;
+  readonly pageReader: PageReader;
+  readonly clock: Clock;
 }
 
 export interface PublishExportInputV1 {
-  readonly snapshot: ExportSnapshotV1
+  readonly snapshot: ExportSnapshotV1;
   /** The current, freshly-resolved page list/settings to revalidate against the captured snapshot (§12.5). */
-  readonly currentPages: readonly ExportPageInputV1[]
-  readonly renders: readonly PublishExportRenderOutcomeV1[]
+  readonly currentPages: readonly ExportPageInputV1[];
+  readonly renders: readonly PublishExportRenderOutcomeV1[];
 }
 
 /** The durable publication fact this Kernel slice can record — `export/current.json`'s real write is a later slice's job (this module never touches disk). */
 export interface ExportPublicationIntentV1 {
-  readonly generationId: string
-  readonly pageCount: number
-  readonly recordedAt: string
+  readonly generationId: string;
+  readonly pageCount: number;
+  readonly recordedAt: string;
 }
 
 export type PublishExportResultV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
   | { readonly kind: "failed"; readonly failure: FailureDtoV1 }
   | { readonly kind: "stale"; readonly failure: FailureDtoV1 }
-  | { readonly kind: "published"; readonly intent: ExportPublicationIntentV1 }
+  | { readonly kind: "published"; readonly intent: ExportPublicationIntentV1 };
 
 function staleFailure(reason: string): FailureDtoV1 {
-  return { code: "EXPORT_SNAPSHOT_STALE", retryable: true, safeMessage: reason, details: {} }
+  return { code: "EXPORT_SNAPSHOT_STALE", retryable: true, safeMessage: reason, details: {} };
 }
 
 /** True when `current` matches the captured snapshot's identity/settings exactly, in order. */
-function settingsStillMatch(snapshot: ExportSnapshotV1, currentPages: readonly ExportPageInputV1[]): boolean {
-  if (snapshot.pages.length !== currentPages.length) return false
+function settingsStillMatch(
+  snapshot: ExportSnapshotV1,
+  currentPages: readonly ExportPageInputV1[],
+): boolean {
+  if (snapshot.pages.length !== currentPages.length) return false;
   for (let i = 0; i < snapshot.pages.length; i++) {
-    const captured = snapshot.pages[i]
-    const current = currentPages[i]
-    if (captured === undefined || current === undefined) return false
-    if (captured.pageSlug !== current.pageSlug) return false
-    if (captured.manifestIndex !== current.manifestIndex) return false
-    if (captured.theme !== current.theme) return false
-    if (captured.kitApiVersion !== current.kitApiVersion) return false
-    if (captured.minSize.w !== current.minSize.w || captured.minSize.h !== current.minSize.h) return false
+    const captured = snapshot.pages[i];
+    const current = currentPages[i];
+    if (captured === undefined || current === undefined) return false;
+    if (captured.pageSlug !== current.pageSlug) return false;
+    if (captured.manifestIndex !== current.manifestIndex) return false;
+    if (captured.theme !== current.theme) return false;
+    if (captured.kitApiVersion !== current.kitApiVersion) return false;
+    if (captured.minSize.w !== current.minSize.w || captured.minSize.h !== current.minSize.h)
+      return false;
   }
-  return true
+  return true;
 }
 
-export async function publishExport(deps: PublishExportDeps, input: PublishExportInputV1): Promise<PublishExportResultV1> {
-  const failedRender = input.renders.find((render): render is PublishExportRenderOutcomeV1 & { readonly outcome: FailureDtoV1 } => "code" in render.outcome)
-  if (failedRender !== undefined) return { kind: "failed", failure: failedRender.outcome }
+export async function publishExport(
+  deps: PublishExportDeps,
+  input: PublishExportInputV1,
+): Promise<PublishExportResultV1> {
+  const failedRender = input.renders.find(
+    (render): render is PublishExportRenderOutcomeV1 & { readonly outcome: FailureDtoV1 } =>
+      "code" in render.outcome,
+  );
+  if (failedRender !== undefined) return { kind: "failed", failure: failedRender.outcome };
 
-  const began = deps.machine.apply("kernel.export.beginPublication")
-  if (began.kind === "illegal") return { kind: "illegal", code: began.code }
+  const began = deps.machine.apply("kernel.export.beginPublication");
+  if (began.kind === "illegal") return { kind: "illegal", code: began.code };
 
-  const permit = await wrap(deps.projectWrite.acquire())
+  const permit = await wrap(deps.projectWrite.acquire());
 
   if (!settingsStillMatch(input.snapshot, input.currentPages)) {
-    deps.projectWrite.release(permit)
-    deps.machine.apply("kernel.export.failBeforeIntent")
-    return { kind: "stale", failure: staleFailure("the page list or resolved settings changed since the snapshot was captured") }
+    deps.projectWrite.release(permit);
+    deps.machine.apply("kernel.export.failBeforeIntent");
+    return {
+      kind: "stale",
+      failure: staleFailure(
+        "the page list or resolved settings changed since the snapshot was captured",
+      ),
+    };
   }
 
   for (const page of input.snapshot.pages) {
-    const source = await wrap(deps.pageReader.readSource(page.pageSlug))
+    const source = await wrap(deps.pageReader.readSource(page.pageSlug));
     if ("code" in source) {
-      deps.projectWrite.release(permit)
-      deps.machine.apply("kernel.export.failBeforeIntent")
-      return { kind: "failed", failure: source }
+      deps.projectWrite.release(permit);
+      deps.machine.apply("kernel.export.failBeforeIntent");
+      return { kind: "failed", failure: source };
     }
     if (source.sourceHash !== page.sourceHash) {
-      deps.projectWrite.release(permit)
-      deps.machine.apply("kernel.export.failBeforeIntent")
-      return { kind: "stale", failure: staleFailure(`page "${page.pageSlug}" source changed since the snapshot was captured`) }
+      deps.projectWrite.release(permit);
+      deps.machine.apply("kernel.export.failBeforeIntent");
+      return {
+        kind: "stale",
+        failure: staleFailure(
+          `page "${page.pageSlug}" source changed since the snapshot was captured`,
+        ),
+      };
     }
   }
 
-  deps.projectWrite.release(permit)
+  deps.projectWrite.release(permit);
 
   const intent: ExportPublicationIntentV1 = {
     generationId: uuidv7(),
     pageCount: input.snapshot.pages.length,
     recordedAt: deps.clock.now().toISOString(),
-  }
+  };
 
-  const completed = deps.machine.apply("kernel.export.complete")
+  const completed = deps.machine.apply("kernel.export.complete");
   if (completed.kind === "illegal") {
     // Defensive only: unreachable in practice — nothing between `beginPublication` and here
     // can move this machine — kept explicit per errore's rule against assuming success.
-    return { kind: "illegal", code: completed.code }
+    return { kind: "illegal", code: completed.code };
   }
 
-  return { kind: "published", intent }
+  return { kind: "published", intent };
 }

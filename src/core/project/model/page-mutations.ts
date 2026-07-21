@@ -1,11 +1,15 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { FailureDtoV1, PageRemovePlanV1, UUIDv7 } from "core/protocol"
-import type { PageMutations, PageReader, ProjectStore } from "core/ports"
-import type { ProjectWriteCoordinator } from "core/ports"
-import type { PageSlug } from "entities/page"
+import type { PageMutations, PageReader, ProjectStore, ProjectWriteCoordinator } from "core/ports";
+import type { FailureDtoV1, PageRemovePlanV1, UUIDv7 } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
-import { detectPageRemovePlanDrift, type FreshPageRemoveFactsV1, type PageRemovePlanLedger, type PlanDriftFieldV1 } from "./page-remove-plan"
+import {
+  type FreshPageRemoveFactsV1,
+  type PageRemovePlanLedger,
+  type PlanDriftFieldV1,
+  detectPageRemovePlanDrift,
+} from "./page-remove-plan";
 
 /**
  * The four page mutation commands (kernel-command-contract §8.2): `page.renameTitle`,
@@ -33,8 +37,8 @@ import { detectPageRemovePlanDrift, type FreshPageRemoveFactsV1, type PageRemove
 // ---------------------------------------------------------------------------
 
 export interface RenameTitleDeps {
-  readonly pageStore: PageReader & PageMutations
-  readonly planLedger: PageRemovePlanLedger
+  readonly pageStore: PageReader & PageMutations;
+  readonly planLedger: PageRemovePlanLedger;
 }
 
 /**
@@ -44,39 +48,45 @@ export interface RenameTitleDeps {
  * see `page-remove-plan.ts`'s header on why `invalidate()` is unconditional rather than
  * scoped to the SAME page.
  */
-export async function renameTitle(deps: RenameTitleDeps, pageSlug: PageSlug, title: string): Promise<FailureDtoV1 | undefined> {
+export async function renameTitle(
+  deps: RenameTitleDeps,
+  pageSlug: PageSlug,
+  title: string,
+): Promise<FailureDtoV1 | undefined> {
   // `PageMutations.renameTitle` returns `FailureDtoV1 | undefined` — a plain DTO, never an
   // `Error` instance (this ring's own idiom, see `project/model/trust.ts`'s identical note:
   // "the ring's own idiom for a `FailureDtoV1 | T` union where `T` is a plain DTO"). Success
   // here is exactly `undefined`, so presence is the failure check.
-  const result = await wrap(deps.pageStore.renameTitle(pageSlug, title))
-  if (result !== undefined) return result
-  deps.planLedger.invalidate()
-  return undefined
+  const result = await wrap(deps.pageStore.renameTitle(pageSlug, title));
+  if (result !== undefined) return result;
+  deps.planLedger.invalidate();
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
 // page.reorder
 // ---------------------------------------------------------------------------
 
-export type ReorderPagesResultV1 = { readonly kind: "reordered" } | { readonly kind: "invalid-permutation" }
+export type ReorderPagesResultV1 =
+  | { readonly kind: "reordered" }
+  | { readonly kind: "invalid-permutation" };
 
 export interface ReorderDeps {
-  readonly pageStore: PageReader & PageMutations
-  readonly planLedger: PageRemovePlanLedger
+  readonly pageStore: PageReader & PageMutations;
+  readonly planLedger: PageRemovePlanLedger;
 }
 
 /** True when `candidate` is exactly a reordering of `current` — same slugs, same count, no additions/removals/duplicates. */
 function isExactPermutation(current: readonly PageSlug[], candidate: readonly PageSlug[]): boolean {
-  if (current.length !== candidate.length) return false
-  const currentCounts = new Map<PageSlug, number>()
-  for (const slug of current) currentCounts.set(slug, (currentCounts.get(slug) ?? 0) + 1)
+  if (current.length !== candidate.length) return false;
+  const currentCounts = new Map<PageSlug, number>();
+  for (const slug of current) currentCounts.set(slug, (currentCounts.get(slug) ?? 0) + 1);
   for (const slug of candidate) {
-    const remaining = currentCounts.get(slug)
-    if (remaining === undefined || remaining === 0) return false
-    currentCounts.set(slug, remaining - 1)
+    const remaining = currentCounts.get(slug);
+    if (remaining === undefined || remaining === 0) return false;
+    currentCounts.set(slug, remaining - 1);
   }
-  return true
+  return true;
 }
 
 /**
@@ -85,33 +95,41 @@ function isExactPermutation(current: readonly PageSlug[], candidate: readonly Pa
  * never a subset or an added/removed identity" but does not enforce it (the fake blindly
  * overwrites) — this function is the one place that check runs, before any write.
  */
-export async function reorder(deps: ReorderDeps, order: readonly PageSlug[]): Promise<FailureDtoV1 | ReorderPagesResultV1> {
-  const current = await wrap(deps.pageStore.listSlugs())
-  if ("code" in current) return current
+export async function reorder(
+  deps: ReorderDeps,
+  order: readonly PageSlug[],
+): Promise<FailureDtoV1 | ReorderPagesResultV1> {
+  const current = await wrap(deps.pageStore.listSlugs());
+  if ("code" in current) return current;
 
-  if (!isExactPermutation(current, order)) return { kind: "invalid-permutation" }
+  if (!isExactPermutation(current, order)) return { kind: "invalid-permutation" };
 
-  const result = await wrap(deps.pageStore.reorder(order))
-  if (result !== undefined) return result
+  const result = await wrap(deps.pageStore.reorder(order));
+  if (result !== undefined) return result;
 
-  deps.planLedger.invalidate()
-  return { kind: "reordered" }
+  deps.planLedger.invalidate();
+  return { kind: "reordered" };
 }
 
 // ---------------------------------------------------------------------------
 // page.removeDiscardPlan
 // ---------------------------------------------------------------------------
 
-export type DiscardPageRemovePlanResultV1 = { readonly kind: "discarded" } | { readonly kind: "not-found" }
+export type DiscardPageRemovePlanResultV1 =
+  | { readonly kind: "discarded" }
+  | { readonly kind: "not-found" };
 
 export interface DiscardPageRemovePlanDeps {
-  readonly planLedger: PageRemovePlanLedger
+  readonly planLedger: PageRemovePlanLedger;
 }
 
 /** `page.removeDiscardPlan` (§7.1): "Clears only the matching active plan and performs no project write." Synchronous — no port I/O at all. */
-export function discardPageRemovePlan(deps: DiscardPageRemovePlanDeps, planId: UUIDv7): DiscardPageRemovePlanResultV1 {
-  const outcome = deps.planLedger.discard(planId)
-  return outcome === "discarded" ? { kind: "discarded" } : { kind: "not-found" }
+export function discardPageRemovePlan(
+  deps: DiscardPageRemovePlanDeps,
+  planId: UUIDv7,
+): DiscardPageRemovePlanResultV1 {
+  const outcome = deps.planLedger.discard(planId);
+  return outcome === "discarded" ? { kind: "discarded" } : { kind: "not-found" };
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +140,13 @@ export type ConfirmPageRemoveResultV1 =
   | { readonly kind: "removed"; readonly pageSlug: PageSlug }
   | { readonly kind: "not-found" }
   | { readonly kind: "stale"; readonly driftedFields: readonly PlanDriftFieldV1[] }
-  | { readonly kind: "failure"; readonly failure: FailureDtoV1 }
+  | { readonly kind: "failure"; readonly failure: FailureDtoV1 };
 
 export interface ConfirmPageRemoveDeps {
-  readonly pageStore: PageReader & PageMutations
-  readonly projectStore: ProjectStore
-  readonly planLedger: PageRemovePlanLedger
-  readonly mutex: ProjectWriteCoordinator
+  readonly pageStore: PageReader & PageMutations;
+  readonly projectStore: ProjectStore;
+  readonly planLedger: PageRemovePlanLedger;
+  readonly mutex: ProjectWriteCoordinator;
 }
 
 /**
@@ -142,32 +160,40 @@ export interface ConfirmPageRemoveDeps {
  * lock. The transaction (`pageStore.remove`) runs ONLY when `detectPageRemovePlanDrift`
  * reports zero drifted fields.
  */
-export async function confirmPageRemove(deps: ConfirmPageRemoveDeps, planId: UUIDv7): Promise<ConfirmPageRemoveResultV1> {
-  const permit = await wrap(deps.mutex.acquire())
+export async function confirmPageRemove(
+  deps: ConfirmPageRemoveDeps,
+  planId: UUIDv7,
+): Promise<ConfirmPageRemoveResultV1> {
+  const permit = await wrap(deps.mutex.acquire());
 
-  const plan = deps.planLedger.current()
+  const plan = deps.planLedger.current();
   if (plan === null || plan.pageRemovePlanId !== planId) {
-    deps.mutex.release(permit)
-    return { kind: "not-found" }
+    deps.mutex.release(permit);
+    return { kind: "not-found" };
   }
 
-  const fresh = await wrap(gatherFreshFacts(deps, plan))
+  const fresh = await wrap(gatherFreshFacts(deps, plan));
   if ("code" in fresh) {
-    deps.mutex.release(permit)
-    return { kind: "failure", failure: fresh }
+    deps.mutex.release(permit);
+    return { kind: "failure", failure: fresh };
   }
 
-  const drift = detectPageRemovePlanDrift(plan, fresh)
+  const drift = detectPageRemovePlanDrift(plan, fresh);
   if (drift instanceof Error) {
-    deps.mutex.release(permit)
+    deps.mutex.release(permit);
     return {
       kind: "failure",
-      failure: { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: drift.message, details: {} },
-    }
+      failure: {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: drift.message,
+        details: {},
+      },
+    };
   }
   if (drift.length > 0) {
-    deps.mutex.release(permit)
-    return { kind: "stale", driftedFields: drift }
+    deps.mutex.release(permit);
+    return { kind: "stale", driftedFields: drift };
   }
 
   // Re-read the ledger AFTER the awaits above. `gatherFreshFacts` can only report the
@@ -177,40 +203,40 @@ export async function confirmPageRemove(deps: ConfirmPageRemoveDeps, planId: UUI
   // change") clear the plan WITHOUT touching any of the five observable facts and WITHOUT
   // holding this mutex, so an invalidation landing inside this window is reachable, not
   // theoretical: without this check the page is deleted against a plan that no longer exists.
-  const stillActive = deps.planLedger.current()
+  const stillActive = deps.planLedger.current();
   if (stillActive === null || stillActive.pageRemovePlanId !== plan.pageRemovePlanId) {
-    deps.mutex.release(permit)
-    return { kind: "stale", driftedFields: ["planRevision"] }
+    deps.mutex.release(permit);
+    return { kind: "stale", driftedFields: ["planRevision"] };
   }
 
-  const removed = await wrap(deps.pageStore.remove(plan))
+  const removed = await wrap(deps.pageStore.remove(plan));
   if (removed !== undefined) {
-    deps.mutex.release(permit)
-    return { kind: "failure", failure: removed }
+    deps.mutex.release(permit);
+    return { kind: "failure", failure: removed };
   }
 
-  deps.planLedger.discard(plan.pageRemovePlanId)
-  deps.mutex.release(permit)
-  return { kind: "removed", pageSlug: plan.pageSlug as PageSlug }
+  deps.planLedger.discard(plan.pageRemovePlanId);
+  deps.mutex.release(permit);
+  return { kind: "removed", pageSlug: plan.pageSlug as PageSlug };
 }
 
 async function gatherFreshFacts(
   deps: Pick<ConfirmPageRemoveDeps, "pageStore" | "projectStore">,
   plan: PageRemovePlanV1,
 ): Promise<FailureDtoV1 | FreshPageRemoveFactsV1> {
-  const source = await wrap(deps.pageStore.readSource(plan.pageSlug as PageSlug))
-  if ("code" in source) return source
+  const source = await wrap(deps.pageStore.readSource(plan.pageSlug as PageSlug));
+  if ("code" in source) return source;
 
-  const orderedPageSlugs = await wrap(deps.pageStore.listSlugs())
-  if ("code" in orderedPageSlugs) return orderedPageSlugs
+  const orderedPageSlugs = await wrap(deps.pageStore.listSlugs());
+  if ("code" in orderedPageSlugs) return orderedPageSlugs;
 
-  const workspace = await wrap(deps.projectStore.readWorkspaceState())
-  if ("code" in workspace) return workspace
+  const workspace = await wrap(deps.projectStore.readWorkspaceState());
+  if ("code" in workspace) return workspace;
 
   return {
     sourceHash: source.sourceHash,
     orderedPageSlugs,
     activePageSlug: workspace.state.activePageSlug,
     planRevision: plan.planRevision,
-  }
+  };
 }

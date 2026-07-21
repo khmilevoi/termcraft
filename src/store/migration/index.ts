@@ -23,9 +23,18 @@ export type {
   MigrationStep,
   Sha256Hex,
   VerifiedBackup,
-} from "./types"
+} from "./types";
 
-export { DataFormatTooNewError, MIGRATION_CHAIN, NoMigrationPathError, checkFormatCounter, createMigrationRegistry, findMigrationSteps, migrationRegistry, readFormatCounter } from "./model/registry"
+export {
+  DataFormatTooNewError,
+  MIGRATION_CHAIN,
+  NoMigrationPathError,
+  checkFormatCounter,
+  createMigrationRegistry,
+  findMigrationSteps,
+  migrationRegistry,
+  readFormatCounter,
+} from "./model/registry";
 
 export {
   BACKUPS_DIR_NAME,
@@ -42,4 +51,4 @@ export {
   createBackupStore,
   nodeBackupStoreDeps,
   projectBackupsDir,
-} from "./model/backup-store"
+} from "./model/backup-store";

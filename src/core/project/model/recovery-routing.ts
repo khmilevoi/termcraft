@@ -1,17 +1,17 @@
-import type { CommandRejectionCode } from "core/protocol"
 import type {
   ExportAction,
   ExportState,
   MigrationAction,
   MigrationState,
-  RestoreAction,
-  RestoreState,
   ProjectAction,
   ProjectState,
+  RestoreAction,
+  RestoreState,
   StateMachine,
-} from "core/machines"
+} from "core/machines";
+import type { CommandRejectionCode } from "core/protocol";
 
-import type { IntendedRecoveryDomainV1 } from "../types"
+import type { IntendedRecoveryDomainV1 } from "../types";
 
 /**
  * KCC §12.7 (lines 1189-1195): "During project open, journal inspection first proves
@@ -35,16 +35,16 @@ import type { IntendedRecoveryDomainV1 } from "../types"
  */
 
 export interface RecoveryRoutingMachines {
-  readonly project: StateMachine<ProjectState, ProjectAction>
-  readonly restore: StateMachine<RestoreState, RestoreAction>
-  readonly exportMachine: StateMachine<ExportState, ExportAction>
-  readonly migration: StateMachine<MigrationState, MigrationAction>
+  readonly project: StateMachine<ProjectState, ProjectAction>;
+  readonly restore: StateMachine<RestoreState, RestoreAction>;
+  readonly exportMachine: StateMachine<ExportState, ExportAction>;
+  readonly migration: StateMachine<MigrationState, MigrationAction>;
 }
 
 export type RecoveryRoutingOutcomeV1 =
   | { readonly kind: "no-intent" }
   | { readonly kind: "routed"; readonly domain: IntendedRecoveryDomainV1 }
-  | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
+  | { readonly kind: "illegal"; readonly code: CommandRejectionCode };
 
 /**
  * Routes at most one domain journal to `recovering`. `intended === null` is "Journals
@@ -56,19 +56,19 @@ export function routeProjectRecovery(
   machines: RecoveryRoutingMachines,
   intended: IntendedRecoveryDomainV1 | null,
 ): RecoveryRoutingOutcomeV1 {
-  if (intended === null) return { kind: "no-intent" }
+  if (intended === null) return { kind: "no-intent" };
 
-  const projectOutcome = machines.project.apply("beginRecovery")
-  if (projectOutcome.kind === "illegal") return { kind: "illegal", code: projectOutcome.code }
+  const projectOutcome = machines.project.apply("beginRecovery");
+  if (projectOutcome.kind === "illegal") return { kind: "illegal", code: projectOutcome.code };
 
   // §12.7: "invokes exactly one of `kernel.restore.beginRecovery`,
   // `kernel.export.beginRecovery`, or `kernel.migration.beginRecovery` from that domain's
   // `idle` state" — the project-level edge above is already committed by this point, so
   // exactly one of the three calls below runs; the other two domain machines are never
   // touched.
-  if (intended === "restore") machines.restore.apply("kernel.restore.beginRecovery")
-  if (intended === "export") machines.exportMachine.apply("kernel.export.beginRecovery")
-  if (intended === "migration") machines.migration.apply("kernel.migration.beginRecovery")
+  if (intended === "restore") machines.restore.apply("kernel.restore.beginRecovery");
+  if (intended === "export") machines.exportMachine.apply("kernel.export.beginRecovery");
+  if (intended === "migration") machines.migration.apply("kernel.migration.beginRecovery");
 
-  return { kind: "routed", domain: intended }
+  return { kind: "routed", domain: intended };
 }

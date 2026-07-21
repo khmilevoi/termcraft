@@ -1,13 +1,13 @@
 /** The four supervised host modes (host-supervision §3.1). */
-export type HostMode = "preview" | "historical" | "smoke" | "export"
+export type HostMode = "preview" | "historical" | "smoke" | "export";
 
 /** Effective interaction mode of a mounted host (host-supervision §3.1). */
-export type InteractionMode = "static" | "interactive"
+export type InteractionMode = "static" | "interactive";
 
 /** A terminal-cell size (columns × rows) shared across the host module. */
 export interface Size {
-  readonly w: number
-  readonly h: number
+  readonly w: number;
+  readonly h: number;
 }
 
 /**
@@ -16,20 +16,20 @@ export interface Size {
  * color depth only (4/8/24-bit); later phases widen this (mouse, unicode width).
  */
 export interface TerminalCapabilities {
-  readonly colorDepth: number
+  readonly colorDepth: number;
 }
 
 /** The specification every host session (all four modes) is created from (§3.1). */
 export interface HostSessionSpec {
-  readonly mode: HostMode
-  readonly interactionMode: InteractionMode
-  readonly pageSlug: string
-  readonly sourcePath: string
-  readonly sourceHash: string
-  readonly kitApiVersion: number
-  readonly size: Size
-  readonly theme: string
-  readonly capabilities: TerminalCapabilities
+  readonly mode: HostMode;
+  readonly interactionMode: InteractionMode;
+  readonly pageSlug: string;
+  readonly sourcePath: string;
+  readonly sourceHash: string;
+  readonly kitApiVersion: number;
+  readonly size: Size;
+  readonly theme: string;
+  readonly capabilities: TerminalCapabilities;
 }
 
 /**
@@ -38,15 +38,15 @@ export interface HostSessionSpec {
  * incarnation. Supervisor-minted only — never caller-supplied.
  */
 export interface HostSessionIdentity {
-  readonly mode: HostMode
-  readonly pageSlug: string
-  readonly sourceHash: string
-  readonly kitApiVersion: number
-  readonly sessionId: string
-  readonly nonce: string
+  readonly mode: HostMode;
+  readonly pageSlug: string;
+  readonly sourceHash: string;
+  readonly kitApiVersion: number;
+  readonly sessionId: string;
+  readonly nonce: string;
 }
 
-import type { StyledRun } from "./protocol"
+import type { StyledRun } from "./protocol";
 
 /**
  * An immutable displayed-frame value handed to the UI (host-supervision §3.2/§5.3).
@@ -55,13 +55,13 @@ import type { StyledRun } from "./protocol"
  * facade. `frameSeq` is the incarnation-local monotonic decimal-uint64 string.
  */
 export interface PreviewFrame {
-  readonly sessionId: string
-  readonly sourceHash: string
-  readonly frameSeq: string
-  readonly width: number
-  readonly height: number
-  readonly rows: StyledRun[][]
+  readonly sessionId: string;
+  readonly sourceHash: string;
+  readonly frameSeq: string;
+  readonly width: number;
+  readonly height: number;
+  readonly rows: StyledRun[][];
 }
 
 /** The facade's stable identity: the incarnation identity minus the volatile nonce (§3.2). */
-export type PreviewIdentity = Omit<HostSessionIdentity, "nonce">
+export type PreviewIdentity = Omit<HostSessionIdentity, "nonce">;

@@ -1,12 +1,27 @@
-import fs from "node:fs"
-import path from "node:path"
-import * as errore from "errore"
+import fs from "node:fs";
+import path from "node:path";
 
-import { FsGuardUnavailableError, isReparsePoint } from "infrastructure/fs-guard"
-import type { ManagedRoot, ManagedRootKind, NoFollowDeps, SafeFsError, SafeFsStat, SafeProjectFs, SafeProjectFsDeps } from "../types"
-import { IdentityChangedError, checkManagedDirectory, checkManagedLeaf, identityKey } from "./leaf-identity"
-import { NAMESPACE_LIMITS, StorageLimitExceededError, classifyNamespace } from "./limits"
-import { detectNameCollisions, validateRelativePath } from "./path-rules"
+import * as errore from "errore";
+
+import { FsGuardUnavailableError, isReparsePoint } from "infrastructure/fs-guard";
+
+import type {
+  ManagedRoot,
+  ManagedRootKind,
+  NoFollowDeps,
+  SafeFsError,
+  SafeFsStat,
+  SafeProjectFs,
+  SafeProjectFsDeps,
+} from "../types";
+import {
+  IdentityChangedError,
+  checkManagedDirectory,
+  checkManagedLeaf,
+  identityKey,
+} from "./leaf-identity";
+import { NAMESPACE_LIMITS, StorageLimitExceededError, classifyNamespace } from "./limits";
+import { detectNameCollisions, validateRelativePath } from "./path-rules";
 
 /** A filesystem call failed. `code` is the errno symbol (`ENOENT`, `EACCES`, …) when the host supplied one. */
 export class FsAccessError extends errore.createTaggedError({
@@ -37,13 +52,16 @@ export class PathEscapeError extends errore.createTaggedError({
 
 /** True when an `FsAccessError` reports a missing path — the tail of a create target. */
 export function isNotFound(error: FsAccessError): boolean {
-  return error.code === "ENOENT" || error.code === "ENOTDIR"
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 /** Wrap a thrown filesystem rejection as a value, preserving the errno symbol. */
 export function accessError(op: string, absPath: string, cause: unknown): FsAccessError {
-  const code = typeof cause === "object" && cause !== null && "code" in cause ? String((cause as { code: unknown }).code) : "UNKNOWN"
-  return new FsAccessError({ op, path: absPath, code, cause })
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? String((cause as { code: unknown }).code)
+      : "UNKNOWN";
+  return new FsAccessError({ op, path: absPath, code, cause });
 }
 
 /** Project a `bigint` stat onto the §5.2 fact set the safety checks read. */
@@ -52,13 +70,14 @@ export function toSafeFsStat(stats: fs.BigIntStats): SafeFsStat {
     isFile: stats.isFile(),
     isDirectory: stats.isDirectory(),
     isSymbolicLink: stats.isSymbolicLink(),
-    isSpecial: stats.isFIFO() || stats.isSocket() || stats.isCharacterDevice() || stats.isBlockDevice(),
+    isSpecial:
+      stats.isFIFO() || stats.isSocket() || stats.isCharacterDevice() || stats.isBlockDevice(),
     nlink: Number(stats.nlink),
     dev: stats.dev,
     ino: stats.ino,
     size: Number(stats.size),
     mtimeNs: stats.mtimeNs,
-  }
+  };
 }
 
 /** The real Node/Bun bindings for the no-follow walk and the reads a `SafeProjectFs` performs. */
@@ -70,9 +89,15 @@ export function nodeSafeFsDeps(): SafeProjectFsDeps {
         catch: (cause) => accessError("lstat", absPath, cause),
       }),
     realpath: (absPath) =>
-      errore.try({ try: () => fs.realpathSync(absPath), catch: (cause) => accessError("realpath", absPath, cause) }),
+      errore.try({
+        try: () => fs.realpathSync(absPath),
+        catch: (cause) => accessError("realpath", absPath, cause),
+      }),
     readdir: (absPath) =>
-      errore.try({ try: () => fs.readdirSync(absPath), catch: (cause) => accessError("readdir", absPath, cause) }),
+      errore.try({
+        try: () => fs.readdirSync(absPath),
+        catch: (cause) => accessError("readdir", absPath, cause),
+      }),
     readFile: (absPath) =>
       errore.try({
         try: () => new Uint8Array(fs.readFileSync(absPath)),
@@ -81,25 +106,31 @@ export function nodeSafeFsDeps(): SafeProjectFsDeps {
     readRange: (absPath, start, end) =>
       errore.try({
         try: () => {
-          const length = end - start
-          const buffer = Buffer.alloc(length)
-          const fd = fs.openSync(absPath, "r")
+          const length = end - start;
+          const buffer = Buffer.alloc(length);
+          const fd = fs.openSync(absPath, "r");
           try {
-            let readTotal = 0
+            let readTotal = 0;
             while (readTotal < length) {
-              const readNow = fs.readSync(fd, buffer, readTotal, length - readTotal, start + readTotal)
-              if (readNow === 0) break // EOF before the requested length — the post-read identity/size recheck catches a stale caller-side stat.
-              readTotal += readNow
+              const readNow = fs.readSync(
+                fd,
+                buffer,
+                readTotal,
+                length - readTotal,
+                start + readTotal,
+              );
+              if (readNow === 0) break; // EOF before the requested length — the post-read identity/size recheck catches a stale caller-side stat.
+              readTotal += readNow;
             }
-            return new Uint8Array(buffer.subarray(0, readTotal))
+            return new Uint8Array(buffer.subarray(0, readTotal));
           } finally {
-            fs.closeSync(fd)
+            fs.closeSync(fd);
           }
         },
         catch: (cause) => accessError("readRange", absPath, cause),
       }),
     isReparsePoint,
-  }
+  };
 }
 
 /**
@@ -107,7 +138,7 @@ export function nodeSafeFsDeps(): SafeProjectFsDeps {
  * a POSIX root that legitimately differs by case from being treated as a prefix match.
  */
 function comparablePath(absPath: string): string {
-  return process.platform === "win32" ? absPath.toLowerCase() : absPath
+  return process.platform === "win32" ? absPath.toLowerCase() : absPath;
 }
 
 /**
@@ -120,22 +151,22 @@ function comparablePath(absPath: string): string {
  * create target cannot be resolved before it is created.
  */
 export function assertWithinRoot(input: {
-  rootReal: string
-  absPath: string
-  deps: Pick<NoFollowDeps, "realpath">
+  rootReal: string;
+  absPath: string;
+  deps: Pick<NoFollowDeps, "realpath">;
 }): PathEscapeError | FsAccessError | null {
-  const resolved = input.deps.realpath(input.absPath)
+  const resolved = input.deps.realpath(input.absPath);
   if (resolved instanceof Error) {
-    if (!isNotFound(resolved)) return resolved
-    const parent = path.dirname(input.absPath)
-    if (parent === input.absPath) return resolved
-    return assertWithinRoot({ ...input, absPath: parent })
+    if (!isNotFound(resolved)) return resolved;
+    const parent = path.dirname(input.absPath);
+    if (parent === input.absPath) return resolved;
+    return assertWithinRoot({ ...input, absPath: parent });
   }
 
-  const root = comparablePath(input.rootReal)
-  const target = comparablePath(resolved)
-  if (target === root || target.startsWith(root + path.sep)) return null
-  return new PathEscapeError({ relPath: input.absPath, resolved, root: input.rootReal })
+  const root = comparablePath(input.rootReal);
+  const target = comparablePath(resolved);
+  if (target === root || target.startsWith(root + path.sep)) return null;
+  return new PathEscapeError({ relPath: input.absPath, resolved, root: input.rootReal });
 }
 
 /**
@@ -145,23 +176,23 @@ export function assertWithinRoot(input: {
  * swapped underneath the process is caught rather than followed.
  */
 export function openManagedRoot(input: {
-  kind: ManagedRootKind
-  path: string
-  deps: NoFollowDeps
+  kind: ManagedRootKind;
+  path: string;
+  deps: NoFollowDeps;
 }): ManagedRoot | SafeFsError {
-  const stat = input.deps.lstat(input.path)
-  if (stat instanceof Error) return stat
+  const stat = input.deps.lstat(input.path);
+  if (stat instanceof Error) return stat;
 
-  const rejected = checkManagedDirectory(input.path, stat)
-  if (rejected instanceof Error) return rejected
+  const rejected = checkManagedDirectory(input.path, stat);
+  if (rejected instanceof Error) return rejected;
 
-  const reparse = checkReparsePoint(input.path, input.path, input.deps)
-  if (reparse instanceof Error) return reparse
+  const reparse = checkReparsePoint(input.path, input.path, input.deps);
+  if (reparse instanceof Error) return reparse;
 
-  const realPath = input.deps.realpath(input.path)
-  if (realPath instanceof Error) return realPath
+  const realPath = input.deps.realpath(input.path);
+  if (realPath instanceof Error) return realPath;
 
-  return { kind: input.kind, realPath, identity: identityKey(stat) }
+  return { kind: input.kind, realPath, identity: identityKey(stat) };
 }
 
 /**
@@ -174,13 +205,13 @@ function checkReparsePoint(
   root: string,
   deps: Pick<NoFollowDeps, "isReparsePoint">,
 ): ReparsePointRejectedError | FsAccessError | null {
-  const reparse = deps.isReparsePoint(absPath)
+  const reparse = deps.isReparsePoint(absPath);
   if (reparse instanceof Error) {
-    if (FsGuardUnavailableError.is(reparse)) return null
-    return accessError("getFileAttributes", absPath, reparse)
+    if (FsGuardUnavailableError.is(reparse)) return null;
+    return accessError("getFileAttributes", absPath, reparse);
   }
-  if (reparse) return new ReparsePointRejectedError({ component: absPath, root })
-  return null
+  if (reparse) return new ReparsePointRejectedError({ component: absPath, root });
+  return null;
 }
 
 /**
@@ -195,59 +226,64 @@ function checkReparsePoint(
  * the walk's attribute query might not classify.
  */
 export function resolveManagedPath(input: {
-  root: ManagedRoot
-  relPath: string
-  deps: NoFollowDeps
+  root: ManagedRoot;
+  relPath: string;
+  deps: NoFollowDeps;
 }): string | SafeFsError {
-  const components = validateRelativePath(input.relPath)
-  if (components instanceof Error) return components
+  const components = validateRelativePath(input.relPath);
+  if (components instanceof Error) return components;
 
-  const rootStat = input.deps.lstat(input.root.realPath)
-  if (rootStat instanceof Error) return rootStat
+  const rootStat = input.deps.lstat(input.root.realPath);
+  if (rootStat instanceof Error) return rootStat;
   if (identityKey(rootStat) !== input.root.identity) {
     return new IdentityChangedError({
       path: input.root.realPath,
       reason: `the managed root moved from ${input.root.identity} to ${identityKey(rootStat)}`,
-    })
+    });
   }
 
-  const walked = walkComponents(input.root, components, input.deps)
-  if (walked instanceof Error) return walked
+  const walked = walkComponents(input.root, components, input.deps);
+  if (walked instanceof Error) return walked;
 
-  const absPath = path.join(input.root.realPath, ...components)
-  const escaped = assertWithinRoot({ rootReal: input.root.realPath, absPath, deps: input.deps })
-  if (escaped instanceof Error) return escaped
+  const absPath = path.join(input.root.realPath, ...components);
+  const escaped = assertWithinRoot({ rootReal: input.root.realPath, absPath, deps: input.deps });
+  if (escaped instanceof Error) return escaped;
 
-  return absPath
+  return absPath;
 }
 
 /** Walk each component from the root, rejecting reparse points and non-directory intermediates. */
-function walkComponents(root: ManagedRoot, components: readonly string[], deps: NoFollowDeps): SafeFsError | null {
-  let prefix = root.realPath
+function walkComponents(
+  root: ManagedRoot,
+  components: readonly string[],
+  deps: NoFollowDeps,
+): SafeFsError | null {
+  let prefix = root.realPath;
   for (let index = 0; index < components.length; index += 1) {
-    const component = components[index]
-    if (component === undefined) continue
-    prefix = path.join(prefix, component)
+    const component = components[index];
+    if (component === undefined) continue;
+    prefix = path.join(prefix, component);
 
-    const stat = deps.lstat(prefix)
+    const stat = deps.lstat(prefix);
     if (stat instanceof Error) {
       // The tail does not exist yet: nothing further can be followed, so the walk stops
       // and the escape check runs against the deepest existing ancestor.
-      if (isNotFound(stat)) return null
-      return stat
+      if (isNotFound(stat)) return null;
+      return stat;
     }
-    if (stat.isSymbolicLink) return new ReparsePointRejectedError({ component: prefix, root: root.realPath })
+    if (stat.isSymbolicLink)
+      return new ReparsePointRejectedError({ component: prefix, root: root.realPath });
 
-    const reparse = checkReparsePoint(prefix, root.realPath, deps)
-    if (reparse instanceof Error) return reparse
+    const reparse = checkReparsePoint(prefix, root.realPath, deps);
+    if (reparse instanceof Error) return reparse;
 
-    const isIntermediate = index < components.length - 1
+    const isIntermediate = index < components.length - 1;
     if (isIntermediate) {
-      const rejected = checkManagedDirectory(prefix, stat)
-      if (rejected instanceof Error) return rejected
+      const rejected = checkManagedDirectory(prefix, stat);
+      if (rejected instanceof Error) return rejected;
     }
   }
-  return null
+  return null;
 }
 
 /**
@@ -258,7 +294,7 @@ function walkComponents(root: ManagedRoot, components: readonly string[], deps: 
  */
 export function createSafeProjectFs(root: ManagedRoot, deps: SafeProjectFsDeps): SafeProjectFs {
   function resolve(relPath: string): SafeFsError | string {
-    return resolveManagedPath({ root, relPath, deps })
+    return resolveManagedPath({ root, relPath, deps });
   }
 
   return {
@@ -266,118 +302,137 @@ export function createSafeProjectFs(root: ManagedRoot, deps: SafeProjectFsDeps):
     resolve,
 
     readFile(relPath) {
-      const namespace = classifyNamespace(root.kind, relPath)
-      if (namespace instanceof Error) return namespace
+      const namespace = classifyNamespace(root.kind, relPath);
+      if (namespace instanceof Error) return namespace;
 
-      const absPath = resolve(relPath)
-      if (absPath instanceof Error) return absPath
+      const absPath = resolve(relPath);
+      if (absPath instanceof Error) return absPath;
 
-      const stat = deps.lstat(absPath)
-      if (stat instanceof Error) return stat
+      const stat = deps.lstat(absPath);
+      if (stat instanceof Error) return stat;
 
-      const rejected = checkManagedLeaf(absPath, stat)
-      if (rejected instanceof Error) return rejected
+      const rejected = checkManagedLeaf(absPath, stat);
+      if (rejected instanceof Error) return rejected;
 
       // §5.3: existing oversized managed data is a named error, never a silent truncation.
-      const allowed = NAMESPACE_LIMITS[namespace].perFileBytes
+      const allowed = NAMESPACE_LIMITS[namespace].perFileBytes;
       if (stat.size > allowed) {
         return new StorageLimitExceededError({
           limit: `${namespace} per-file`,
           path: relPath,
           measured: stat.size,
           allowed,
-        })
+        });
       }
 
-      const bytes = deps.readFile(absPath)
-      if (bytes instanceof Error) return bytes
+      const bytes = deps.readFile(absPath);
+      if (bytes instanceof Error) return bytes;
 
-      const after = deps.lstat(absPath)
-      if (after instanceof Error) return after
-      const drifted = checkIdentityStable(absPath, stat, after)
-      if (drifted instanceof Error) return drifted
+      const after = deps.lstat(absPath);
+      if (after instanceof Error) return after;
+      const drifted = checkIdentityStable(absPath, stat, after);
+      if (drifted instanceof Error) return drifted;
 
-      return bytes
+      return bytes;
     },
 
     stat(relPath) {
-      const namespace = classifyNamespace(root.kind, relPath)
-      if (namespace instanceof Error) return namespace
+      const namespace = classifyNamespace(root.kind, relPath);
+      if (namespace instanceof Error) return namespace;
 
-      const absPath = resolve(relPath)
-      if (absPath instanceof Error) return absPath
+      const absPath = resolve(relPath);
+      if (absPath instanceof Error) return absPath;
 
-      const stat = deps.lstat(absPath)
-      if (stat instanceof Error) return stat
+      const stat = deps.lstat(absPath);
+      if (stat instanceof Error) return stat;
 
-      const rejected = checkManagedLeaf(absPath, stat)
-      if (rejected instanceof Error) return rejected
+      const rejected = checkManagedLeaf(absPath, stat);
+      if (rejected instanceof Error) return rejected;
 
-      return { size: stat.size }
+      return { size: stat.size };
     },
 
     readRange(relPath, start, end) {
-      const namespace = classifyNamespace(root.kind, relPath)
-      if (namespace instanceof Error) return namespace
+      const namespace = classifyNamespace(root.kind, relPath);
+      if (namespace instanceof Error) return namespace;
 
-      const absPath = resolve(relPath)
-      if (absPath instanceof Error) return absPath
+      const absPath = resolve(relPath);
+      if (absPath instanceof Error) return absPath;
 
-      const stat = deps.lstat(absPath)
-      if (stat instanceof Error) return stat
+      const stat = deps.lstat(absPath);
+      if (stat instanceof Error) return stat;
 
-      const rejected = checkManagedLeaf(absPath, stat)
-      if (rejected instanceof Error) return rejected
+      const rejected = checkManagedLeaf(absPath, stat);
+      if (rejected instanceof Error) return rejected;
 
       // §5.3: a range read never admits more than the namespace's own per-file ceiling —
       // same rule `readFile` enforces on the whole file.
-      const allowed = NAMESPACE_LIMITS[namespace].perFileBytes
+      const allowed = NAMESPACE_LIMITS[namespace].perFileBytes;
       if (end > allowed) {
-        return new StorageLimitExceededError({ limit: `${namespace} per-file`, path: relPath, measured: end, allowed })
+        return new StorageLimitExceededError({
+          limit: `${namespace} per-file`,
+          path: relPath,
+          measured: end,
+          allowed,
+        });
       }
       // The requested range must already exist — a caller's stale stat (the file shrank
       // since it last observed a length) is an identity drift, not silently clamped.
       if (end > stat.size) {
-        return new IdentityChangedError({ path: absPath, reason: `requested range end ${end} exceeds the file's current size ${stat.size}` })
+        return new IdentityChangedError({
+          path: absPath,
+          reason: `requested range end ${end} exceeds the file's current size ${stat.size}`,
+        });
       }
 
-      const bytes = deps.readRange(absPath, start, end)
-      if (bytes instanceof Error) return bytes
+      const bytes = deps.readRange(absPath, start, end);
+      if (bytes instanceof Error) return bytes;
 
       // Only the identity (dev/ino) is rechecked, not the size: unlike `readFile`, a bounded
       // range read of an immutable already-validated prefix legitimately tolerates the file
       // having GROWN (an append) between the two stats — only a REPLACED file is a problem.
-      const after = deps.lstat(absPath)
-      if (after instanceof Error) return after
+      const after = deps.lstat(absPath);
+      if (after instanceof Error) return after;
       if (stat.dev !== after.dev || stat.ino !== after.ino) {
-        return new IdentityChangedError({ path: absPath, reason: "the leaf's filesystem identity changed while it was being read" })
+        return new IdentityChangedError({
+          path: absPath,
+          reason: "the leaf's filesystem identity changed while it was being read",
+        });
       }
 
-      return bytes
+      return bytes;
     },
 
     list(relDir) {
-      const absPath = relDir === "" ? root.realPath : resolve(relDir)
-      if (absPath instanceof Error) return absPath
+      const absPath = relDir === "" ? root.realPath : resolve(relDir);
+      if (absPath instanceof Error) return absPath;
 
-      const stat = deps.lstat(absPath)
-      if (stat instanceof Error) return stat
-      const rejected = checkManagedDirectory(absPath, stat)
-      if (rejected instanceof Error) return rejected
+      const stat = deps.lstat(absPath);
+      if (stat instanceof Error) return stat;
+      const rejected = checkManagedDirectory(absPath, stat);
+      if (rejected instanceof Error) return rejected;
 
-      const names = deps.readdir(absPath)
-      if (names instanceof Error) return names
+      const names = deps.readdir(absPath);
+      if (names instanceof Error) return names;
 
-      const collision = detectNameCollisions(relDir, names)
-      if (collision instanceof Error) return collision
+      const collision = detectNameCollisions(relDir, names);
+      if (collision instanceof Error) return collision;
 
-      return names
+      return names;
     },
-  }
+  };
 }
 
 /** §5.2's "identity changes between validation and use", narrowed to the read path. */
-function checkIdentityStable(absPath: string, before: SafeFsStat, after: SafeFsStat): IdentityChangedError | null {
-  if (before.dev === after.dev && before.ino === after.ino && before.size === after.size) return null
-  return new IdentityChangedError({ path: absPath, reason: "the leaf changed while it was being read" })
+function checkIdentityStable(
+  absPath: string,
+  before: SafeFsStat,
+  after: SafeFsStat,
+): IdentityChangedError | null {
+  if (before.dev === after.dev && before.ino === after.ino && before.size === after.size)
+    return null;
+  return new IdentityChangedError({
+    path: absPath,
+    reason: "the leaf changed while it was being read",
+  });
 }

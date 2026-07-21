@@ -1,4 +1,4 @@
-import type { CommandKindV1, CommandRejectionCode, UInt64String, UUIDv7 } from "core/protocol"
+import type { CommandKindV1, CommandRejectionCode, UInt64String, UUIDv7 } from "core/protocol";
 
 /**
  * The revision check and its sole exception (kernel-command-contract §8.4).
@@ -46,19 +46,19 @@ export type TurnCancelPhase =
   | "snapshotting"
   | "validating"
   | "finalizing"
-  | "terminalizing"
+  | "terminalizing";
 
 /** The active turn's identity and cancel-relevant phase, as §8.4's rules need it. */
 export interface ActiveTurnCancelState {
-  readonly turnId: UUIDv7
-  readonly phase: TurnCancelPhase
+  readonly turnId: UUIDv7;
+  readonly phase: TurnCancelPhase;
   /**
    * True once `finalizing` has durably recorded commit intent (§7.2's `finalizing ->
    * committed` transition rule: "Legal only after durable committed marker"). Only
    * meaningful when `phase` is `"finalizing"` — every other phase runs before any commit
    * intent could exist and this field is ignored there.
    */
-  readonly durableIntentRecorded: boolean
+  readonly durableIntentRecorded: boolean;
 }
 
 /**
@@ -70,14 +70,14 @@ export interface ActiveTurnCancelState {
  * rather than reached for globally.
  */
 export interface TurnCancelProbe {
-  readonly activeTurn: () => ActiveTurnCancelState | null
+  readonly activeTurn: () => ActiveTurnCancelState | null;
 }
 
 /** The subset of §11.1's rejection codes this guard can produce. */
 export type RevisionGuardRejectionCode = Extract<
   CommandRejectionCode,
   "STALE_REVISION" | "TURN_NOT_ACTIVE" | "TURN_ID_MISMATCH" | "CANCEL_TOO_LATE"
->
+>;
 
 /**
  * A command as the guard needs to see it: every kind except `turn.cancel` is checked by
@@ -86,14 +86,14 @@ export type RevisionGuardRejectionCode = Extract<
  */
 export type RevisionGuardCommand =
   | {
-      readonly kind: Exclude<CommandKindV1, "turn.cancel">
-      readonly expectedRevision: UInt64String
+      readonly kind: Exclude<CommandKindV1, "turn.cancel">;
+      readonly expectedRevision: UInt64String;
     }
   | {
-      readonly kind: "turn.cancel"
-      readonly expectedRevision: UInt64String
-      readonly turnId: UUIDv7
-    }
+      readonly kind: "turn.cancel";
+      readonly expectedRevision: UInt64String;
+      readonly turnId: UUIDv7;
+    };
 
 /**
  * The guard's outcome. Three shapes, not a boolean, because the mailbox pipeline (§12.1)
@@ -105,13 +105,16 @@ export type RevisionGuardDecision =
   | { readonly kind: "proceed" }
   | { readonly kind: "accepted-no-op" }
   | {
-      readonly kind: "rejected"
-      readonly code: RevisionGuardRejectionCode
-      readonly currentRevision: UInt64String
-    }
+      readonly kind: "rejected";
+      readonly code: RevisionGuardRejectionCode;
+      readonly currentRevision: UInt64String;
+    };
 
 /** Phases in which a repeated cancel for the same turn is already underway (§8.4 rule 4). */
-const CANCEL_IN_PROGRESS_PHASES: ReadonlySet<TurnCancelPhase> = new Set(["stopping", "terminalizing"])
+const CANCEL_IN_PROGRESS_PHASES: ReadonlySet<TurnCancelPhase> = new Set([
+  "stopping",
+  "terminalizing",
+]);
 
 /**
  * Checks the revision guard for one command against the Kernel's current `stateRevision`.
@@ -119,53 +122,54 @@ const CANCEL_IN_PROGRESS_PHASES: ReadonlySet<TurnCancelPhase> = new Set(["stoppi
  * once each, so the same inputs always produce the same decision.
  */
 export function checkRevisionGuard(args: {
-  readonly command: RevisionGuardCommand
-  readonly currentRevision: UInt64String
-  readonly cancelProbe: TurnCancelProbe
+  readonly command: RevisionGuardCommand;
+  readonly currentRevision: UInt64String;
+  readonly cancelProbe: TurnCancelProbe;
 }): RevisionGuardDecision {
-  const { command, currentRevision, cancelProbe } = args
+  const { command, currentRevision, cancelProbe } = args;
 
   if (command.kind !== "turn.cancel") {
-    return checkOrdinaryRevision({ expectedRevision: command.expectedRevision, currentRevision })
+    return checkOrdinaryRevision({ expectedRevision: command.expectedRevision, currentRevision });
   }
 
-  return checkCancelGuard({ turnId: command.turnId, currentRevision, cancelProbe })
+  return checkCancelGuard({ turnId: command.turnId, currentRevision, cancelProbe });
 }
 
 /** §8.4's normal rule: exact equality or `STALE_REVISION`, nothing else considered. */
 function checkOrdinaryRevision(args: {
-  readonly expectedRevision: UInt64String
-  readonly currentRevision: UInt64String
+  readonly expectedRevision: UInt64String;
+  readonly currentRevision: UInt64String;
 }): RevisionGuardDecision {
-  if (args.expectedRevision === args.currentRevision) return { kind: "proceed" }
-  return { kind: "rejected", code: "STALE_REVISION", currentRevision: args.currentRevision }
+  if (args.expectedRevision === args.currentRevision) return { kind: "proceed" };
+  return { kind: "rejected", code: "STALE_REVISION", currentRevision: args.currentRevision };
 }
 
 /** §8.4's `turn.cancel` exception, transcribing its six numbered rules in order. */
 function checkCancelGuard(args: {
-  readonly turnId: UUIDv7
-  readonly currentRevision: UInt64String
-  readonly cancelProbe: TurnCancelProbe
+  readonly turnId: UUIDv7;
+  readonly currentRevision: UInt64String;
+  readonly cancelProbe: TurnCancelProbe;
 }): RevisionGuardDecision {
-  const { turnId, currentRevision, cancelProbe } = args
-  const active = cancelProbe.activeTurn()
+  const { turnId, currentRevision, cancelProbe } = args;
+  const active = cancelProbe.activeTurn();
 
   // Rule 5 (no active turn): nothing to cancel.
-  if (active === null) return { kind: "rejected", code: "TURN_NOT_ACTIVE", currentRevision }
+  if (active === null) return { kind: "rejected", code: "TURN_NOT_ACTIVE", currentRevision };
 
   // Rules 1 + 5 (different turn): the payload must name the exact current turnId. Checked
   // before anything else so a stale-revision cancel can never reach past the turn it
   // actually names, however the active turn's phase, into cancelling a newer one.
-  if (active.turnId !== turnId) return { kind: "rejected", code: "TURN_ID_MISMATCH", currentRevision }
+  if (active.turnId !== turnId)
+    return { kind: "rejected", code: "TURN_ID_MISMATCH", currentRevision };
 
   // Rule 4: a repeat cancel for the same turn while already stopping/terminalizing is an
   // accepted no-op, not a fresh rejection or a fresh state transition.
-  if (CANCEL_IN_PROGRESS_PHASES.has(active.phase)) return { kind: "accepted-no-op" }
+  if (CANCEL_IN_PROGRESS_PHASES.has(active.phase)) return { kind: "accepted-no-op" };
 
   // Rule 6: once finalizing has durably recorded commit intent, cancellation is forbidden
   // and roll-forward must finish instead.
   if (active.phase === "finalizing" && active.durableIntentRecorded) {
-    return { kind: "rejected", code: "CANCEL_TOO_LATE", currentRevision }
+    return { kind: "rejected", code: "CANCEL_TOO_LATE", currentRevision };
   }
 
   // Rules 2 + 3: the turn is active and still pre-intent — proceed regardless of how stale
@@ -173,5 +177,5 @@ function checkCancelGuard(args: {
   // cancellable phase, `terminalizing` for any other active pre-intent phase) is the turn
   // state machine's own transition (6C), not this guard's decision — the guard's only job
   // is deciding whether the command may reach that transition at all.
-  return { kind: "proceed" }
+  return { kind: "proceed" };
 }

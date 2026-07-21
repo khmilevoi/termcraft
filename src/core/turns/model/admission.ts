@@ -1,16 +1,22 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { Clock } from "infrastructure/clock"
-import { uuidv7 } from "infrastructure/uuid"
-import type { ChatUserRecord } from "entities/chat"
-import type { Pin } from "entities/pin"
-import type { PageSlug } from "entities/page"
-import type { CreateTurnWorkspaceInputV1, PinReader, StagingService, TurnAdmissionInputV1, TurnTransactionService } from "core/ports"
-import type { StateMachine, TurnAction, TurnState } from "core/machines"
+import type { StateMachine, TurnAction, TurnState } from "core/machines";
+import type {
+  CreateTurnWorkspaceInputV1,
+  PinReader,
+  StagingService,
+  TurnAdmissionInputV1,
+  TurnTransactionService,
+} from "core/ports";
+import type { ChatUserRecord } from "entities/chat";
+import type { PageSlug } from "entities/page";
+import type { Pin } from "entities/pin";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
-import type { AdmissionCandidatePinV1, AdmissionInputV1, AdmissionOutcomeV1 } from "../types"
-import { createTurnFence } from "./fence"
-import { toFinalizeReadSet } from "./read-set"
+import type { AdmissionCandidatePinV1, AdmissionInputV1, AdmissionOutcomeV1 } from "../types";
+import { createTurnFence } from "./fence";
+import { toFinalizeReadSet } from "./read-set";
 
 /**
  * `turn.start` -> admission: `idle -> admitting -> workspace-ready`
@@ -46,11 +52,11 @@ import { toFinalizeReadSet } from "./read-set"
  */
 
 export interface AdmissionDeps {
-  readonly machine: StateMachine<TurnState, TurnAction>
-  readonly clock: Clock
-  readonly pinReader: PinReader
-  readonly turnTransactions: TurnTransactionService
-  readonly staging: StagingService
+  readonly machine: StateMachine<TurnState, TurnAction>;
+  readonly clock: Clock;
+  readonly pinReader: PinReader;
+  readonly turnTransactions: TurnTransactionService;
+  readonly staging: StagingService;
 }
 
 /**
@@ -64,43 +70,51 @@ export interface AdmissionDeps {
  * item 1 never makes a stale pin reference fatal to sending a new message), but per the
  * errore rule against silently swallowing errors, it is logged before being dropped.
  */
-async function resolveOpenPins(pinReader: PinReader, candidates: readonly AdmissionCandidatePinV1[]): Promise<string[]> {
-  const pageSlugs: PageSlug[] = []
+async function resolveOpenPins(
+  pinReader: PinReader,
+  candidates: readonly AdmissionCandidatePinV1[],
+): Promise<string[]> {
+  const pageSlugs: PageSlug[] = [];
   for (const candidate of candidates) {
-    if (!pageSlugs.includes(candidate.pageSlug)) pageSlugs.push(candidate.pageSlug)
+    if (!pageSlugs.includes(candidate.pageSlug)) pageSlugs.push(candidate.pageSlug);
   }
 
-  const foldedByPage = new Map<PageSlug, readonly Pin[]>()
+  const foldedByPage = new Map<PageSlug, readonly Pin[]>();
   for (const pageSlug of pageSlugs) {
-    const pins = await wrap(pinReader.fold(pageSlug))
+    const pins = await wrap(pinReader.fold(pageSlug));
     if ("code" in pins) {
-      console.warn(`admission: dropping candidate pins on page "${pageSlug}" — fold failed: ${pins.safeMessage}`)
-      continue
+      console.warn(
+        `admission: dropping candidate pins on page "${pageSlug}" — fold failed: ${pins.safeMessage}`,
+      );
+      continue;
     }
-    foldedByPage.set(pageSlug, pins)
+    foldedByPage.set(pageSlug, pins);
   }
 
-  const resolved: string[] = []
+  const resolved: string[] = [];
   for (const candidate of candidates) {
-    if (resolved.includes(candidate.pinId)) continue
-    const pins = foldedByPage.get(candidate.pageSlug)
-    if (pins === undefined) continue
-    const match = pins.find((pin) => pin.pinId === candidate.pinId)
-    if (match === undefined) continue
-    if (match.status !== "open") continue
-    resolved.push(candidate.pinId)
+    if (resolved.includes(candidate.pinId)) continue;
+    const pins = foldedByPage.get(candidate.pageSlug);
+    if (pins === undefined) continue;
+    const match = pins.find((pin) => pin.pinId === candidate.pinId);
+    if (match === undefined) continue;
+    if (match.status !== "open") continue;
+    resolved.push(candidate.pinId);
   }
-  return resolved
+  return resolved;
 }
 
-export async function runAdmission(deps: AdmissionDeps, input: AdmissionInputV1): Promise<AdmissionOutcomeV1> {
-  const begin = deps.machine.apply("beginAdmission")
-  if (begin.kind === "illegal") return { kind: "illegal", code: begin.code }
+export async function runAdmission(
+  deps: AdmissionDeps,
+  input: AdmissionInputV1,
+): Promise<AdmissionOutcomeV1> {
+  const begin = deps.machine.apply("beginAdmission");
+  if (begin.kind === "illegal") return { kind: "illegal", code: begin.code };
 
-  const turnId = uuidv7()
-  const createdAt = deps.clock.now().toISOString()
+  const turnId = uuidv7();
+  const createdAt = deps.clock.now().toISOString();
 
-  const resolvedPinIds = await wrap(resolveOpenPins(deps.pinReader, input.candidatePins))
+  const resolvedPinIds = await wrap(resolveOpenPins(deps.pinReader, input.candidatePins));
 
   const userRecord: ChatUserRecord = {
     kind: "user",
@@ -110,16 +124,17 @@ export async function runAdmission(deps: AdmissionDeps, input: AdmissionInputV1)
     ts: createdAt,
     ...(input.selection !== undefined ? { selection: input.selection } : {}),
     ...(resolvedPinIds.length > 0 ? { pins: resolvedPinIds } : {}),
-  }
+  };
 
   const admissionInput: TurnAdmissionInputV1 = {
     turnId,
     targetChatId: input.targetChatId,
     userRecord,
     createdAt,
-  }
-  const admissionCommit = await wrap(deps.turnTransactions.admit(admissionInput))
-  if ("code" in admissionCommit) return { kind: "blocked", phase: "admit", failure: admissionCommit }
+  };
+  const admissionCommit = await wrap(deps.turnTransactions.admit(admissionInput));
+  if ("code" in admissionCommit)
+    return { kind: "blocked", phase: "admit", failure: admissionCommit };
 
   const workspaceInput: CreateTurnWorkspaceInputV1 = {
     turnId,
@@ -128,18 +143,18 @@ export async function runAdmission(deps: AdmissionDeps, input: AdmissionInputV1)
     manifestSlice: input.workspace.manifestSlice,
     runtimeDocs: input.workspace.runtimeDocs,
     readSet: input.workspace.readSet,
-  }
-  const workspace = await wrap(deps.staging.createTurnWorkspace(workspaceInput))
-  if ("code" in workspace) return { kind: "blocked", phase: "workspace", failure: workspace }
+  };
+  const workspace = await wrap(deps.staging.createTurnWorkspace(workspaceInput));
+  if ("code" in workspace) return { kind: "blocked", phase: "workspace", failure: workspace };
 
-  const readSet = toFinalizeReadSet(workspace.readSet)
-  if (readSet instanceof Error) return { kind: "blocked", phase: "read-set", error: readSet }
+  const readSet = toFinalizeReadSet(workspace.readSet);
+  if (readSet instanceof Error) return { kind: "blocked", phase: "read-set", error: readSet };
 
-  const fence = createTurnFence(turnId)
-  if (fence instanceof Error) return { kind: "blocked", phase: "fence", error: fence }
+  const fence = createTurnFence(turnId);
+  if (fence instanceof Error) return { kind: "blocked", phase: "fence", error: fence };
 
-  const finish = deps.machine.apply("finishAdmission")
-  if (finish.kind === "illegal") return { kind: "illegal", code: finish.code }
+  const finish = deps.machine.apply("finishAdmission");
+  if (finish.kind === "illegal") return { kind: "illegal", code: finish.code };
 
   return {
     kind: "workspace-ready",
@@ -152,5 +167,5 @@ export async function runAdmission(deps: AdmissionDeps, input: AdmissionInputV1)
       readSet,
       fence,
     },
-  }
+  };
 }

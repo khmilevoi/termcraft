@@ -1,20 +1,20 @@
 /** @jsxImportSource @opentui/react */
-import type { ThemeTokens } from "../types"
-import { activeTokens } from "../model/tokens"
+import type { ThemeTokens } from "../types";
+import { activeTokens } from "../model/tokens";
 
 /** Props for the `Panel` bordered container. `id` is the mandatory stable id (§3.2). */
 export interface PanelProps {
   /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
-  readonly id: string
+  readonly id: string;
   /** Optional caption drawn into the top border. */
-  readonly title?: string
-  readonly children?: unknown
+  readonly title?: string;
+  readonly children?: unknown;
   /** Uniform inner padding inside the border. */
-  readonly padding?: number
+  readonly padding?: number;
   /** A semantic token for the border; defaults to `border`. Design variants: `accent` (active/popup), `accentHi` (hover), `danger` (error), `line` (dimmed). */
-  readonly borderColor?: keyof ThemeTokens
+  readonly borderColor?: keyof ThemeTokens;
   /** A semantic token for the title; defaults to `foreground`. Design variants: `accentHi` (popup/active), `foregroundMuted` (welded sub-panel). */
-  readonly titleColor?: keyof ThemeTokens
+  readonly titleColor?: keyof ThemeTokens;
 }
 
 /**
@@ -27,7 +27,7 @@ export interface PanelProps {
  * the element for host geometry.
  */
 export function Panel(props: PanelProps) {
-  const tokens = activeTokens()
+  const tokens = activeTokens();
   return (
     <box
       id={props.id}
@@ -40,5 +40,5 @@ export function Panel(props: PanelProps) {
     >
       {props.children}
     </box>
-  )
+  );
 }

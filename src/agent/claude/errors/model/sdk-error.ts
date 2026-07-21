@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /**
  * Stable codes for failures raised at the Claude SDK boundary (spawn, stream,
@@ -8,7 +8,7 @@ import * as errore from "errore"
  * `STREAM_FAILED` and `SPAWN_FAILED` are the codes actually raised at the SDK
  * boundary.
  */
-export type AgentErrorCode = "SPAWN_FAILED" | "STREAM_FAILED"
+export type AgentErrorCode = "SPAWN_FAILED" | "STREAM_FAILED";
 
 /**
  * A failure crossing the `@anthropic-ai/claude-agent-sdk` boundary.
@@ -26,6 +26,6 @@ export class ClaudeSdkError extends errore.createTaggedError({
   message: "Claude SDK failure [$code]: $reason",
 }) {
   constructor(args: { code: AgentErrorCode; reason: string | number; cause?: unknown }) {
-    super(args)
+    super(args);
   }
 }

@@ -1,9 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test";
 
-import { COMMAND_KIND_COUNT, COMMAND_KINDS_V1, commandFamilyOf } from "./command-kind"
-import { commandPayloadSchemas } from "./command-payload"
-import { EVENT_KIND_COUNT, EVENT_KINDS_V1 } from "./event-kind"
-import { eventPayloadV1SchemaByKind } from "./event-payload"
+import { COMMAND_KINDS_V1, COMMAND_KIND_COUNT, commandFamilyOf } from "./command-kind";
+import { commandPayloadSchemas } from "./command-payload";
+import { EVENT_KINDS_V1, EVENT_KIND_COUNT } from "./event-kind";
+import { eventPayloadV1SchemaByKind } from "./event-payload";
 
 /**
  * The §13.2 "DTO round trip and closure" contract: "every `CommandKindV1` has exactly one
@@ -61,7 +61,7 @@ const COMMAND_KINDS_PER_SPEC: string[] = [
   "migration.confirm",
   "migration.discardPlan",
   "migration.retryRecovery",
-]
+];
 
 const EVENT_KINDS_PER_SPEC: string[] = [
   "kernel.snapshot",
@@ -107,82 +107,82 @@ const EVENT_KINDS_PER_SPEC: string[] = [
   "pins.changed",
   "git.statusChanged",
   "diagnostics.changed",
-]
+];
 
 describe("CommandKindV1 closure", () => {
   test("matches the §8.1 union verbatim, in spec order", () => {
-    const actual: string[] = [...COMMAND_KINDS_V1]
-    expect(actual).toEqual(COMMAND_KINDS_PER_SPEC)
-  })
+    const actual: string[] = [...COMMAND_KINDS_V1];
+    expect(actual).toEqual(COMMAND_KINDS_PER_SPEC);
+  });
 
   test("has exactly the count the spec fixes, and the constant agrees with the array", () => {
-    expect(COMMAND_KINDS_PER_SPEC.length).toBe(43)
-    expect(COMMAND_KIND_COUNT).toBe(43)
-    expect(COMMAND_KINDS_V1.length).toBe(COMMAND_KIND_COUNT)
-  })
+    expect(COMMAND_KINDS_PER_SPEC.length).toBe(43);
+    expect(COMMAND_KIND_COUNT).toBe(43);
+    expect(COMMAND_KINDS_V1.length).toBe(COMMAND_KIND_COUNT);
+  });
 
   test("contains no duplicate member", () => {
-    expect(new Set(COMMAND_KINDS_V1).size).toBe(COMMAND_KINDS_V1.length)
-  })
+    expect(new Set(COMMAND_KINDS_V1).size).toBe(COMMAND_KINDS_V1.length);
+  });
 
   test("every kind resolves to a family, and every family is non-empty", () => {
-    const families = new Set(COMMAND_KINDS_V1.map(commandFamilyOf))
+    const families = new Set(COMMAND_KINDS_V1.map(commandFamilyOf));
     for (const kind of COMMAND_KINDS_V1) {
-      expect(kind.startsWith(`${commandFamilyOf(kind)}.`)).toBe(true)
+      expect(kind.startsWith(`${commandFamilyOf(kind)}.`)).toBe(true);
     }
-    expect(families.size).toBeGreaterThan(0)
-  })
-})
+    expect(families.size).toBeGreaterThan(0);
+  });
+});
 
 describe("EventKindV1 closure", () => {
   test("matches the §9 union verbatim, in spec order", () => {
-    const actual: string[] = [...EVENT_KINDS_V1]
-    expect(actual).toEqual(EVENT_KINDS_PER_SPEC)
-  })
+    const actual: string[] = [...EVENT_KINDS_V1];
+    expect(actual).toEqual(EVENT_KINDS_PER_SPEC);
+  });
 
   test("has exactly the count the spec fixes, and the constant agrees with the array", () => {
-    expect(EVENT_KINDS_PER_SPEC.length).toBe(43)
-    expect(EVENT_KIND_COUNT).toBe(43)
-    expect(EVENT_KINDS_V1.length).toBe(EVENT_KIND_COUNT)
-  })
+    expect(EVENT_KINDS_PER_SPEC.length).toBe(43);
+    expect(EVENT_KIND_COUNT).toBe(43);
+    expect(EVENT_KINDS_V1.length).toBe(EVENT_KIND_COUNT);
+  });
 
   test("contains no duplicate member", () => {
-    expect(new Set(EVENT_KINDS_V1).size).toBe(EVENT_KINDS_V1.length)
-  })
+    expect(new Set(EVENT_KINDS_V1).size).toBe(EVENT_KINDS_V1.length);
+  });
 
   test("carries no frame kind — frames use the separate PreviewSession stream (§7.6)", () => {
     for (const kind of EVENT_KINDS_V1) {
-      expect(kind.includes("frame")).toBe(false)
+      expect(kind.includes("frame")).toBe(false);
     }
-  })
-})
+  });
+});
 
 describe("payload map closure", () => {
   test("every command kind has exactly one payload schema, and the map has no extra key", () => {
-    const keys: string[] = Object.keys(commandPayloadSchemas)
-    expect(keys.sort()).toEqual([...COMMAND_KINDS_PER_SPEC].sort())
-  })
+    const keys: string[] = Object.keys(commandPayloadSchemas);
+    expect(keys.sort()).toEqual([...COMMAND_KINDS_PER_SPEC].sort());
+  });
 
   test("every event kind has exactly one payload schema, and the map has no extra key", () => {
-    const keys: string[] = Object.keys(eventPayloadV1SchemaByKind)
-    expect(keys.sort()).toEqual([...EVENT_KINDS_PER_SPEC].sort())
-  })
+    const keys: string[] = Object.keys(eventPayloadV1SchemaByKind);
+    expect(keys.sort()).toEqual([...EVENT_KINDS_PER_SPEC].sort());
+  });
 
   test("every command payload schema actually parses — none is a placeholder stub", () => {
     for (const kind of COMMAND_KINDS_V1) {
-      const schema = commandPayloadSchemas[kind]
-      expect(typeof schema.safeParse).toBe("function")
+      const schema = commandPayloadSchemas[kind];
+      expect(typeof schema.safeParse).toBe("function");
       // A schema that accepts literally anything would silently disable payload
       // validation for that kind; every §8.2 payload rejects at least a non-object.
-      expect(schema.safeParse(Symbol("nope")).success).toBe(false)
+      expect(schema.safeParse(Symbol("nope")).success).toBe(false);
     }
-  })
+  });
 
   test("every event payload schema actually parses — none is a placeholder stub", () => {
     for (const kind of EVENT_KINDS_V1) {
-      const schema = eventPayloadV1SchemaByKind[kind]
-      expect(typeof schema.safeParse).toBe("function")
-      expect(schema.safeParse(Symbol("nope")).success).toBe(false)
+      const schema = eventPayloadV1SchemaByKind[kind];
+      expect(typeof schema.safeParse).toBe("function");
+      expect(schema.safeParse(Symbol("nope")).success).toBe(false);
     }
-  })
-})
+  });
+});

@@ -4,16 +4,17 @@
 // assembles the PRODUCTION instance. NON-Reatom injected adapter — no atoms,
 // no connect-hook lifetimes; the run/process lifetime is owned explicitly
 // (hardening §3.8).
-export { createClaudeBackend } from "./backend"
-export { createRealQueryFn } from "./query"
-export type { ClaudeBackendDeps, ClaudeQuery, ClaudeQueryFn } from "./types"
+export { createClaudeBackend } from "./backend";
+export { createRealQueryFn } from "./query";
+export type { ClaudeBackendDeps, ClaudeQuery, ClaudeQueryFn } from "./types";
 
-import { isReparsePoint } from "infrastructure/fs-guard"
-import { createJobObjectTree } from "infrastructure/process"
-import type { AgentBackend } from "agent/types"
-import { createClaudeBackend } from "./backend"
-import { createRealQueryFn } from "./query"
-import type { ClaudeBackendDeps } from "./types"
+import type { AgentBackend } from "agent/types";
+import { isReparsePoint } from "infrastructure/fs-guard";
+import { createJobObjectTree } from "infrastructure/process";
+
+import { createClaudeBackend } from "./backend";
+import { createRealQueryFn } from "./query";
+import type { ClaudeBackendDeps } from "./types";
 
 /**
  * `hasReparsePoint` narrows `isReparsePoint`'s
@@ -28,7 +29,7 @@ import type { ClaudeBackendDeps } from "./types"
  * not itself defeat confinement.
  */
 function hasReparsePoint(candidatePath: string): boolean {
-  return isReparsePoint(candidatePath) === true
+  return isReparsePoint(candidatePath) === true;
 }
 
 /**
@@ -45,10 +46,10 @@ export function createProductionClaudeBackendDeps(): ClaudeBackendDeps {
     processTreeFactory: createJobObjectTree,
     wait: (ms) => Bun.sleep(ms),
     hasReparsePoint,
-  }
+  };
 }
 
 /** Production wiring: real SDK query + real Job Object tree + real sleep + the Spike F reparse backstop. */
 export function createProductionClaudeBackend(): AgentBackend {
-  return createClaudeBackend(createProductionClaudeBackendDeps())
+  return createClaudeBackend(createProductionClaudeBackendDeps());
 }

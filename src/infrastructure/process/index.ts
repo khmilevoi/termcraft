@@ -1,6 +1,6 @@
-export type { ProcessTree, ProcessTreeFactory } from "./types"
-export { ProcessTreeError } from "./types"
-export { createJobObjectTree } from "./model/job-object"
+export type { ProcessTree, ProcessTreeFactory } from "./types";
+export { ProcessTreeError } from "./types";
+export { createJobObjectTree } from "./model/job-object";
 
 /**
  * finding [3] (nit, decided): `createFakeProcessTree` is a deterministic test
@@ -25,4 +25,4 @@ export { createJobObjectTree } from "./model/job-object"
  * process tree keeps running. NEVER pass this to a production
  * `processTreeFactory`. Import it only from `*.test.ts` files.
  */
-export { createFakeProcessTree } from "./model/job-object"
+export { createFakeProcessTree } from "./model/job-object";

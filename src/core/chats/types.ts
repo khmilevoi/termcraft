@@ -1,4 +1,4 @@
-import type { EventPayloadByKindV1 } from "core/protocol"
+import type { EventPayloadByKindV1 } from "core/protocol";
 
 /**
  * `core/chats`'s shared vocabulary (CLAUDE.md "Code style": `types.ts` holds a module's
@@ -15,7 +15,7 @@ import type { EventPayloadByKindV1 } from "core/protocol"
  * map's `chat.changed` payload down to its `added` element type is the same type
  * without a second, un-re-exported import path (see `descriptors.ts`'s identical note).
  */
-export type ChatSummaryV1 = EventPayloadByKindV1["chat.changed"]["added"][number]
+export type ChatSummaryV1 = EventPayloadByKindV1["chat.changed"]["added"][number];
 
 /**
  * `model.select`'s validated triple (kernel-command-contract §8.2: "backend, model,
@@ -24,9 +24,9 @@ export type ChatSummaryV1 = EventPayloadByKindV1["chat.changed"]["added"][number
  * capability-driven).
  */
 export interface ModelSelectionV1 {
-  readonly backend: string
-  readonly model: string
-  readonly effort: string
+  readonly backend: string;
+  readonly model: string;
+  readonly effort: string;
 }
 
 /**
@@ -37,5 +37,5 @@ export interface ModelSelectionV1 {
  * specific public code.
  */
 export interface ModelSelectionRejectionV1 {
-  readonly code: "CAPABILITY_UNAVAILABLE"
+  readonly code: "CAPABILITY_UNAVAILABLE";
 }

@@ -1,11 +1,11 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { ProtocolError } from "../../protocol"
-import type { LoadPageArgs, LoadedPage, ValidatedPageMeta } from "../types"
+import { ProtocolError } from "../../protocol";
+import type { LoadPageArgs, LoadedPage, ValidatedPageMeta } from "../types";
 
 /** The one legal authored module edge (runtime-api §2). */
-const RUNTIME_SPECIFIER = "@termcraft/runtime"
+const RUNTIME_SPECIFIER = "@termcraft/runtime";
 
 /**
  * Specifiers `Bun.Transpiler.scanImports` reports as `require-call` for ANY
@@ -32,18 +32,22 @@ const RUNTIME_SPECIFIER = "@termcraft/runtime"
  * access is gained). Closing it in the host would need an AST scan — deferred to
  * when the Gate's scanner (phase 3) can be shared.
  */
-const COMPILER_INJECTED_JSX_SPECIFIERS = new Set(["react", "react/jsx-runtime", "react/jsx-dev-runtime"])
+const COMPILER_INJECTED_JSX_SPECIFIERS = new Set([
+  "react",
+  "react/jsx-runtime",
+  "react/jsx-dev-runtime",
+]);
 
 /** Lowercase-hex SHA-256 over the exact source bytes (host-supervision §3.1). */
 export function computeSourceHash(bytes: Uint8Array): string {
-  return new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+  return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
 const malformed = (reason: string, cause?: unknown) =>
-  new ProtocolError({ code: "MALFORMED_PROTOCOL", reason, cause })
+  new ProtocolError({ code: "MALFORMED_PROTOCOL", reason, cause });
 
 const sourceHashMismatch = (reason: string) =>
-  new ProtocolError({ code: "SOURCE_HASH_MISMATCH", reason })
+  new ProtocolError({ code: "SOURCE_HASH_MISMATCH", reason });
 
 /**
  * Re-scan a page's source for module edges before linking it (runtime-api §3.1,
@@ -64,7 +68,7 @@ const sourceHashMismatch = (reason: string) =>
  * authority for the type-only rule.
  */
 export function scanPageImports(sourceText: string): ProtocolError | void {
-  const transpiler = new Bun.Transpiler({ loader: "tsx" })
+  const transpiler = new Bun.Transpiler({ loader: "tsx" });
   // §5: unparseable source is a protocol violation, not a throw. `scanImports`
   // throws a Bun `BuildMessage` on syntactically broken TSX (a hash-matching but
   // corrupt or hand-edited snapshot reaches here). Crucially, `BuildMessage` is
@@ -74,23 +78,24 @@ export function scanPageImports(sourceText: string): ProtocolError | void {
   // catch ANY throw and convert it to a typed ProtocolError value.
   const imports = (() => {
     try {
-      return transpiler.scanImports(sourceText)
+      return transpiler.scanImports(sourceText);
     } catch (cause) {
-      return malformed("page source is not parseable", cause)
+      return malformed("page source is not parseable", cause);
     }
-  })()
-  if (imports instanceof ProtocolError) return imports
+  })();
+  if (imports instanceof ProtocolError) return imports;
   for (const record of imports) {
     // runtime-api §3.1: only a STATIC import of the exact root specifier is
     // accepted; a dynamic-import or require-call of the runtime is rejected even
     // though it names the runtime. (A re-export also reports `import-statement`
     // and is indistinguishable here — that case stays the Gate AST scan's job.)
-    if (record.path === RUNTIME_SPECIFIER && record.kind === "import-statement") continue
-    if (record.kind === "require-call" && COMPILER_INJECTED_JSX_SPECIFIERS.has(record.path)) continue
+    if (record.path === RUNTIME_SPECIFIER && record.kind === "import-statement") continue;
+    if (record.kind === "require-call" && COMPILER_INJECTED_JSX_SPECIFIERS.has(record.path))
+      continue;
     return new ProtocolError({
       code: "MALFORMED_PROTOCOL",
       reason: `forbidden import ${JSON.stringify(record.path)}; a page may import only "${RUNTIME_SPECIFIER}"`,
-    })
+    });
   }
 }
 
@@ -107,14 +112,14 @@ export function scanPageImports(sourceText: string): ProtocolError | void {
 export async function loadPage(args: LoadPageArgs): Promise<ProtocolError | LoadedPage> {
   const bytes = await Bun.file(args.sourcePath)
     .bytes()
-    .catch((cause) => malformed(`cannot read source at ${args.sourcePath}`, cause))
-  if (bytes instanceof ProtocolError) return bytes
+    .catch((cause) => malformed(`cannot read source at ${args.sourcePath}`, cause));
+  if (bytes instanceof ProtocolError) return bytes;
 
-  const sourceHash = computeSourceHash(bytes)
+  const sourceHash = computeSourceHash(bytes);
   if (sourceHash !== args.expectedSourceHash) {
     return sourceHashMismatch(
       `source hash mismatch: expected ${args.expectedSourceHash}, computed ${sourceHash}`,
-    )
+    );
   }
 
   // §5: invalid UTF-8 is a protocol violation, not a throw. TextDecoder with
@@ -123,51 +128,51 @@ export async function loadPage(args: LoadPageArgs): Promise<ProtocolError | Load
   const sourceText = errore.try({
     try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     catch: (cause) => malformed("source is not valid UTF-8", cause),
-  })
-  if (sourceText instanceof ProtocolError) return sourceText
+  });
+  if (sourceText instanceof ProtocolError) return sourceText;
 
-  const scanError = scanPageImports(sourceText)
-  if (scanError instanceof ProtocolError) return scanError
+  const scanError = scanPageImports(sourceText);
+  if (scanError instanceof ProtocolError) return scanError;
 
   const linked = await import(args.sourcePath).catch((cause) =>
     malformed(`failed to link page at ${args.sourcePath}`, cause),
-  )
-  if (linked instanceof ProtocolError) return linked
+  );
+  if (linked instanceof ProtocolError) return linked;
 
-  const meta = validateMeta((linked as { meta?: unknown }).meta)
-  if (meta instanceof ProtocolError) return meta
+  const meta = validateMeta((linked as { meta?: unknown }).meta);
+  if (meta instanceof ProtocolError) return meta;
 
-  const component = (linked as { default?: unknown }).default
+  const component = (linked as { default?: unknown }).default;
   if (typeof component !== "function") {
-    return malformed("page default export must be a component function")
+    return malformed("page default export must be a component function");
   }
 
-  return { meta, component, sourceHash }
+  return { meta, component, sourceHash };
 }
 
-const THEME_MAX = 64
-const TITLE_MAX = 256
-const AXIS_MAX = 2048
+const THEME_MAX = 64;
+const TITLE_MAX = 256;
+const AXIS_MAX = 2048;
 
 const pageSizeSchema = z.object({
   w: z.number().int().positive().max(AXIS_MAX),
   h: z.number().int().positive().max(AXIS_MAX),
-})
+});
 
 const pageMetaSchema = z.object({
   kitApiVersion: z.number().int().positive(),
   title: z.string().min(1).max(TITLE_MAX),
   theme: z.string().min(1).max(THEME_MAX),
   minSize: pageSizeSchema,
-})
+});
 
 /** Structurally validate the imported `meta` (runtime-api §4 static contract). */
 function validateMeta(value: unknown): ProtocolError | ValidatedPageMeta {
-  const result = pageMetaSchema.safeParse(value)
+  const result = pageMetaSchema.safeParse(value);
   if (!result.success) {
-    const issue = result.error.issues[0]
-    const path = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "meta"
-    return malformed(`${path}: ${issue?.message ?? "invalid page meta"}`)
+    const issue = result.error.issues[0];
+    const path = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "meta";
+    return malformed(`${path}: ${issue?.message ?? "invalid page meta"}`);
   }
-  return result.data
+  return result.data;
 }

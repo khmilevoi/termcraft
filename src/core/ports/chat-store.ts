@@ -1,5 +1,5 @@
-import type { FailureDtoV1 } from "core/protocol"
-import type { ChatRecord } from "entities/chat"
+import type { FailureDtoV1 } from "core/protocol";
+import type { ChatRecord } from "entities/chat";
 
 /**
  * The chat read/write surface `core` consumes. Split into a reader (open a chat, page its
@@ -24,34 +24,38 @@ import type { ChatRecord } from "entities/chat"
 
 /** A chat's first line, minus the store's internal `formatVersion`/`kind` framing tags. */
 export interface ChatHeaderV1 {
-  readonly chatId: string
-  readonly createdAt: string
+  readonly chatId: string;
+  readonly createdAt: string;
 }
 
 /** Mirrors `store/jsonl`'s `PageCursor` (a generation + byte offset), redrawn per C1. */
 export interface ChatPageCursorV1 {
-  readonly generation: number
-  readonly beforeOffset: number
+  readonly generation: number;
+  readonly beforeOffset: number;
 }
 
 export interface ChatLoadResultV1 {
-  readonly records: readonly ChatRecord[]
-  readonly prevCursor: ChatPageCursorV1 | null
+  readonly records: readonly ChatRecord[];
+  readonly prevCursor: ChatPageCursorV1 | null;
 }
 
 export interface ChatHandleV1 {
-  readonly header: ChatHeaderV1
-  loadTail(limit?: number, byteBudget?: number): Promise<FailureDtoV1 | ChatLoadResultV1>
-  loadBefore(cursor: ChatPageCursorV1, limit?: number, byteBudget?: number): Promise<FailureDtoV1 | ChatLoadResultV1>
+  readonly header: ChatHeaderV1;
+  loadTail(limit?: number, byteBudget?: number): Promise<FailureDtoV1 | ChatLoadResultV1>;
+  loadBefore(
+    cursor: ChatPageCursorV1,
+    limit?: number,
+    byteBudget?: number,
+  ): Promise<FailureDtoV1 | ChatLoadResultV1>;
 }
 
 export interface ChatReader {
-  open(chatId: string): Promise<FailureDtoV1 | ChatHandleV1>
+  open(chatId: string): Promise<FailureDtoV1 | ChatHandleV1>;
 }
 
 export interface ChatMutations {
   /** `chat.create` (§8.2): "Create and select a fresh chat through a Kernel transaction." */
-  create(): Promise<FailureDtoV1 | ChatHeaderV1>
+  create(): Promise<FailureDtoV1 | ChatHeaderV1>;
   /** `chat.switch` (§8.2): "Select an existing chat without changing shared pages, preview, selection, or pins." */
-  switchActive(chatId: string): Promise<FailureDtoV1 | undefined>
+  switchActive(chatId: string): Promise<FailureDtoV1 | undefined>;
 }

@@ -3,16 +3,16 @@
 /** Props for the `Column` layout container. `id` is the mandatory stable id (§3.2). */
 export interface ColumnProps {
   /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
-  readonly id: string
-  readonly children?: unknown
+  readonly id: string;
+  readonly children?: unknown;
   /** Cells of space inserted between children (Yoga gap). */
-  readonly gap?: number
+  readonly gap?: number;
   /** Uniform inner padding on all sides. */
-  readonly padding?: number
+  readonly padding?: number;
   /** Cross-axis placement of children; maps to Yoga `alignItems`. */
-  readonly align?: "start" | "center" | "end" | "stretch"
+  readonly align?: "start" | "center" | "end" | "stretch";
   /** Main-axis distribution of children; maps to Yoga `justifyContent`. */
-  readonly justify?: "start" | "center" | "end" | "between" | "around"
+  readonly justify?: "start" | "center" | "end" | "between" | "around";
 }
 
 /** Public prop value → Yoga `alignItems` value. `start`/`end` gain the `flex-` prefix. */
@@ -21,7 +21,7 @@ const ALIGN = {
   center: "center",
   end: "flex-end",
   stretch: "stretch",
-} as const
+} as const;
 
 /** Public prop value → Yoga `justifyContent` value. `between`/`around` become `space-*`. */
 const JUSTIFY = {
@@ -30,7 +30,7 @@ const JUSTIFY = {
   end: "flex-end",
   between: "space-between",
   around: "space-around",
-} as const
+} as const;
 
 /**
  * A vertical flex container (design-system §3.2). Stacks its children in a
@@ -50,5 +50,5 @@ export function Column(props: ColumnProps) {
     >
       {props.children}
     </box>
-  )
+  );
 }

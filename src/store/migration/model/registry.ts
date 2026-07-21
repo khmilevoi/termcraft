@@ -1,6 +1,6 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
-import type { FormatCounterField, MigrationRegistry, MigrationStep } from "../types"
+import type { FormatCounterField, MigrationRegistry, MigrationStep } from "../types";
 
 // storage-identity §12's migration-safety gate, in two independent pieces:
 //
@@ -43,21 +43,21 @@ export class DataFormatTooNewError extends errore.createTaggedError({
  * schema, exactly as those two existing decoders already do).
  */
 export function readFormatCounter(field: FormatCounterField, value: unknown): number | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null
-  const found = (value as Record<string, unknown>)[field]
-  if (typeof found !== "number" || !Number.isInteger(found)) return null
-  return found
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const found = (value as Record<string, unknown>)[field];
+  if (typeof found !== "number" || !Number.isInteger(found)) return null;
+  return found;
 }
 
 /** The hard §12 gate: `found > supported` is always {@link DataFormatTooNewError}, never a shape complaint. */
 export function checkFormatCounter(input: {
-  readonly file: string
-  readonly field: FormatCounterField
-  readonly found: number
-  readonly supported: number
+  readonly file: string;
+  readonly field: FormatCounterField;
+  readonly found: number;
+  readonly supported: number;
 }): DataFormatTooNewError | null {
-  if (input.found > input.supported) return new DataFormatTooNewError(input)
-  return null
+  if (input.found > input.supported) return new DataFormatTooNewError(input);
+  return null;
 }
 
 // ---- the migration chain (storage-identity §12) ---------------------------------------
@@ -68,7 +68,7 @@ export function checkFormatCounter(input: {
  * directly. Not exported as mutable: appending a migration means editing this literal,
  * not calling a `register()` function at runtime.
  */
-export const MIGRATION_CHAIN: readonly MigrationStep[] = []
+export const MIGRATION_CHAIN: readonly MigrationStep[] = [];
 
 /** No registered step walks `kind` from `fromVersion` to `toVersion` in the given chain. */
 export class NoMigrationPathError extends errore.createTaggedError({
@@ -85,35 +85,41 @@ export class NoMigrationPathError extends errore.createTaggedError({
  * without ever populating the shipped one.
  */
 export function findMigrationSteps(input: {
-  readonly kind: string
-  readonly fromVersion: number
-  readonly toVersion: number
-  readonly chain?: readonly MigrationStep[]
+  readonly kind: string;
+  readonly fromVersion: number;
+  readonly toVersion: number;
+  readonly chain?: readonly MigrationStep[];
 }): NoMigrationPathError | readonly MigrationStep[] {
-  const chain = input.chain ?? MIGRATION_CHAIN
-  if (input.fromVersion === input.toVersion) return []
+  const chain = input.chain ?? MIGRATION_CHAIN;
+  if (input.fromVersion === input.toVersion) return [];
 
-  const steps: MigrationStep[] = []
-  let cursor = input.fromVersion
+  const steps: MigrationStep[] = [];
+  let cursor = input.fromVersion;
   while (cursor !== input.toVersion) {
-    const next = chain.find((step) => step.kind === input.kind && step.fromVersion === cursor)
+    const next = chain.find((step) => step.kind === input.kind && step.fromVersion === cursor);
     if (next === undefined) {
-      return new NoMigrationPathError({ kind: input.kind, fromVersion: input.fromVersion, toVersion: input.toVersion })
+      return new NoMigrationPathError({
+        kind: input.kind,
+        fromVersion: input.fromVersion,
+        toVersion: input.toVersion,
+      });
     }
-    steps.push(next)
-    cursor = next.toVersion
+    steps.push(next);
+    cursor = next.toVersion;
   }
-  return steps
+  return steps;
 }
 
 /** Build a {@link MigrationRegistry} over `chain` (defaults to the shipped, empty {@link MIGRATION_CHAIN}). */
-export function createMigrationRegistry(chain: readonly MigrationStep[] = MIGRATION_CHAIN): MigrationRegistry {
+export function createMigrationRegistry(
+  chain: readonly MigrationStep[] = MIGRATION_CHAIN,
+): MigrationRegistry {
   return {
     chain,
     findSteps: (input) => findMigrationSteps({ ...input, chain }),
     checkNotTooNew: checkFormatCounter,
-  }
+  };
 }
 
 /** THE live, shipped registry: an empty chain, wired through the real gate. */
-export const migrationRegistry: MigrationRegistry = createMigrationRegistry()
+export const migrationRegistry: MigrationRegistry = createMigrationRegistry();

@@ -1,8 +1,12 @@
-import { z } from "zod"
+import { z } from "zod";
 
-import { uuidv7Schema, type UUIDv7 } from "./ids"
-import { uint64StringSchema, type UInt64String } from "./uint64"
-import { REASON_CODES_V1, unavailableReasonV1Schema, type UnavailableReason } from "./unavailable-reason"
+import { type UUIDv7, uuidv7Schema } from "./ids";
+import { type UInt64String, uint64StringSchema } from "./uint64";
+import {
+  REASON_CODES_V1,
+  type UnavailableReason,
+  unavailableReasonV1Schema,
+} from "./unavailable-reason";
 
 /**
  * The closed v1 immediate-rejection code registry (kernel-command-contract §11.1).
@@ -15,22 +19,22 @@ import { REASON_CODES_V1, unavailableReasonV1Schema, type UnavailableReason } fr
  * happen. There is no import cycle to avoid here — this file already depends on
  * `./unavailable-reason` for `RejectedCommandV1.reasons`, so the edge only runs one way.
  */
-export const COMMAND_REJECTION_CODES_V1 = REASON_CODES_V1
+export const COMMAND_REJECTION_CODES_V1 = REASON_CODES_V1;
 
-export type CommandRejectionCode = (typeof COMMAND_REJECTION_CODES_V1)[number]
+export type CommandRejectionCode = (typeof COMMAND_REJECTION_CODES_V1)[number];
 
 /** The exact member count §11.1 fixes. A drifted union fails the closure test, not a review. */
-export const COMMAND_REJECTION_CODE_COUNT = 31
+export const COMMAND_REJECTION_CODE_COUNT = 31;
 
-const COMMAND_REJECTION_CODE_SET: ReadonlySet<string> = new Set(COMMAND_REJECTION_CODES_V1)
+const COMMAND_REJECTION_CODE_SET: ReadonlySet<string> = new Set(COMMAND_REJECTION_CODES_V1);
 
 /** True when `raw` names a v1 command-rejection code. */
 export function isCommandRejectionCode(raw: string): raw is CommandRejectionCode {
-  return COMMAND_REJECTION_CODE_SET.has(raw)
+  return COMMAND_REJECTION_CODE_SET.has(raw);
 }
 
 /** Zod schema over the closed union. */
-export const commandRejectionCodeSchema = z.enum(COMMAND_REJECTION_CODES_V1)
+export const commandRejectionCodeSchema = z.enum(COMMAND_REJECTION_CODES_V1);
 
 /**
  * `CommandResultV1 = AcceptedCommandV1 | RejectedCommandV1` (kernel-command-contract §8.3),
@@ -43,13 +47,13 @@ export const commandRejectionCodeSchema = z.enum(COMMAND_REJECTION_CODES_V1)
  * exists for `disposition: "started"` — so it is `.optional()`, not `.nullable()`.
  */
 export interface AcceptedCommandV1 {
-  readonly protocolVersion: 1
-  readonly commandId: UUIDv7
-  readonly status: "accepted"
-  readonly acceptedRevision: UInt64String
-  readonly resultingRevision: UInt64String
-  readonly disposition: "completed" | "started" | "no-op"
-  readonly operationId?: UUIDv7
+  readonly protocolVersion: 1;
+  readonly commandId: UUIDv7;
+  readonly status: "accepted";
+  readonly acceptedRevision: UInt64String;
+  readonly resultingRevision: UInt64String;
+  readonly disposition: "completed" | "started" | "no-op";
+  readonly operationId?: UUIDv7;
 }
 
 export const acceptedCommandV1Schema = z.strictObject({
@@ -60,7 +64,7 @@ export const acceptedCommandV1Schema = z.strictObject({
   resultingRevision: uint64StringSchema,
   disposition: z.enum(["completed", "started", "no-op"]),
   operationId: uuidv7Schema.optional(),
-})
+});
 
 /**
  * The rejected half of `CommandResultV1` (§8.3). `reasons` is spec-typed as the
@@ -69,12 +73,12 @@ export const acceptedCommandV1Schema = z.strictObject({
  * that non-emptiness, not just "an array of `UnavailableReason`".
  */
 export interface RejectedCommandV1 {
-  readonly protocolVersion: 1
-  readonly commandId: UUIDv7
-  readonly status: "rejected"
-  readonly currentRevision: UInt64String
-  readonly code: CommandRejectionCode
-  readonly reasons: readonly [UnavailableReason, ...UnavailableReason[]]
+  readonly protocolVersion: 1;
+  readonly commandId: UUIDv7;
+  readonly status: "rejected";
+  readonly currentRevision: UInt64String;
+  readonly code: CommandRejectionCode;
+  readonly reasons: readonly [UnavailableReason, ...UnavailableReason[]];
 }
 
 export const rejectedCommandV1Schema = z.strictObject({
@@ -94,21 +98,21 @@ export const rejectedCommandV1Schema = z.strictObject({
    * cast — and a cast would discard the very guarantee.
    */
   reasons: z.tuple([unavailableReasonV1Schema], unavailableReasonV1Schema).readonly(),
-})
+});
 
 /**
  * Binds each schema to the interface §8.3 declares. If a schema and its interface ever
  * drift — a field renamed on one side, or `reasons` degraded back to a plain array —
  * this is a compile error rather than a runtime surprise at the first `parse`.
  */
-const _acceptedMatchesSpec = acceptedCommandV1Schema satisfies z.ZodType<AcceptedCommandV1>
-const _rejectedMatchesSpec = rejectedCommandV1Schema satisfies z.ZodType<RejectedCommandV1>
-void _acceptedMatchesSpec
-void _rejectedMatchesSpec
+const _acceptedMatchesSpec = acceptedCommandV1Schema satisfies z.ZodType<AcceptedCommandV1>;
+const _rejectedMatchesSpec = rejectedCommandV1Schema satisfies z.ZodType<RejectedCommandV1>;
+void _acceptedMatchesSpec;
+void _rejectedMatchesSpec;
 
-export type CommandResultV1 = AcceptedCommandV1 | RejectedCommandV1
+export type CommandResultV1 = AcceptedCommandV1 | RejectedCommandV1;
 
 export const commandResultV1Schema = z.discriminatedUnion("status", [
   acceptedCommandV1Schema,
   rejectedCommandV1Schema,
-])
+]);

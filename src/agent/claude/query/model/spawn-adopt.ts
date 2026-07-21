@@ -1,6 +1,8 @@
-import { spawn } from "node:child_process"
-import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk"
-import type { ProcessTree } from "infrastructure/process"
+import { spawn } from "node:child_process";
+
+import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
+
+import type { ProcessTree } from "infrastructure/process";
 
 /**
  * Spawns the Claude CLI ourselves (instead of letting the SDK spawn it
@@ -30,42 +32,52 @@ export function createSpawnAndAdopt(
       env: options.env,
       // `options.signal` is the SDK's forwarded graceful signal — safe to pass.
       signal: options.signal,
-    })
+    });
 
     if (typeof child.pid !== "number") {
-      console.warn(`${logLabel}: spawned CLI has no pid, cannot adopt it into the owned process tree`)
+      console.warn(
+        `${logLabel}: spawned CLI has no pid, cannot adopt it into the owned process tree`,
+      );
       // Recording the failure on the tree is the only channel back to the
       // caller (errore rule 21 covers the log; the flag covers correctness):
       // an exit-confirmation poll must never read a tree nothing was ever
       // adopted into as "confirmed drained".
-      processTree.noteAdoptionOutcome(false)
-      return child
+      processTree.noteAdoptionOutcome(false);
+      return child;
     }
 
-    const adopted = processTree.adopt(child.pid)
+    const adopted = processTree.adopt(child.pid);
     if (adopted instanceof Error) {
-      console.warn(`${logLabel}: adopt(${child.pid}) failed, the process tree may not own the CLI:`, adopted.message)
-      processTree.noteAdoptionOutcome(false)
-      return child
+      console.warn(
+        `${logLabel}: adopt(${child.pid}) failed, the process tree may not own the CLI:`,
+        adopted.message,
+      );
+      processTree.noteAdoptionOutcome(false);
+      return child;
     }
 
     // The assign-before-descendant-spawn race is not OS-guaranteed (no
     // `CREATE_SUSPENDED` reachable from Bun/Node spawn) — re-read
     // `activeProcesses()` to verify membership rather than assume the `adopt`
     // call above actually landed the process in the job.
-    const verified = processTree.activeProcesses()
+    const verified = processTree.activeProcesses();
     if (verified instanceof Error) {
-      console.warn(`${logLabel}: activeProcesses() re-read after adopt(${child.pid}) failed:`, verified.message)
-      processTree.noteAdoptionOutcome(false)
-      return child
+      console.warn(
+        `${logLabel}: activeProcesses() re-read after adopt(${child.pid}) failed:`,
+        verified.message,
+      );
+      processTree.noteAdoptionOutcome(false);
+      return child;
     }
     if (verified < 1) {
-      console.warn(`${logLabel}: activeProcesses() re-read reported ${verified} immediately after adopt(${child.pid})`)
-      processTree.noteAdoptionOutcome(false)
-      return child
+      console.warn(
+        `${logLabel}: activeProcesses() re-read reported ${verified} immediately after adopt(${child.pid})`,
+      );
+      processTree.noteAdoptionOutcome(false);
+      return child;
     }
 
-    processTree.noteAdoptionOutcome(true)
-    return child
-  }
+    processTree.noteAdoptionOutcome(true);
+    return child;
+  };
 }

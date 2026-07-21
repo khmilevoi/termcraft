@@ -1,18 +1,18 @@
 // ProtocolError is type-only here (it flows through the table as a terminal outcome
 // when the pump settles a request with a MALFORMED_PROTOCOL identity error).
-import type { ControlEnvelope, ProtocolError } from "../../protocol"
-import type { RequestTable } from "../types"
-import type { Clock, TimerHandle } from "./clock"
-import { SupervisorError } from "./errors"
+import type { ControlEnvelope, ProtocolError } from "../../protocol";
+import type { RequestTable } from "../types";
+import type { Clock, TimerHandle } from "./clock";
+import { SupervisorError } from "./errors";
 
 /** Outstanding request table capacity (host-supervision §8). */
-export const REQUEST_TABLE_CAPACITY = 64
-const QUERY_TIMEOUT_MS = 2_000
+export const REQUEST_TABLE_CAPACITY = 64;
+const QUERY_TIMEOUT_MS = 2_000;
 
 interface PendingEntry {
-  readonly kind: string
-  readonly settle: (result: ControlEnvelope | ProtocolError | SupervisorError) => void
-  readonly timer: TimerHandle
+  readonly kind: string;
+  readonly settle: (result: ControlEnvelope | ProtocolError | SupervisorError) => void;
+  readonly timer: TimerHandle;
 }
 
 /**
@@ -26,60 +26,75 @@ export function createRequestTable(
   clock: Clock,
   opts?: { onTimeout?: () => void; capacity?: number; timeoutMs?: number },
 ): RequestTable {
-  const capacity = opts?.capacity ?? REQUEST_TABLE_CAPACITY
-  const timeoutMs = opts?.timeoutMs ?? QUERY_TIMEOUT_MS
-  const onTimeout = opts?.onTimeout
-  const entries = new Map<string, PendingEntry>()
+  const capacity = opts?.capacity ?? REQUEST_TABLE_CAPACITY;
+  const timeoutMs = opts?.timeoutMs ?? QUERY_TIMEOUT_MS;
+  const onTimeout = opts?.onTimeout;
+  const entries = new Map<string, PendingEntry>();
 
-  function register(requestId: string, kind: string): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
+  function register(
+    requestId: string,
+    kind: string,
+  ): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
     if (entries.size >= capacity) {
       return Promise.resolve(
-        new SupervisorError({ code: "TOO_MANY_REQUESTS", reason: `request table full (${capacity})` }),
-      )
+        new SupervisorError({
+          code: "TOO_MANY_REQUESTS",
+          reason: `request table full (${capacity})`,
+        }),
+      );
     }
     if (entries.has(requestId)) {
       return Promise.resolve(
-        new SupervisorError({ code: "TRANSPORT_ERROR", reason: `duplicate requestId ${requestId}` }),
-      )
+        new SupervisorError({
+          code: "TRANSPORT_ERROR",
+          reason: `duplicate requestId ${requestId}`,
+        }),
+      );
     }
     // `Promise.withResolvers` hands back the resolver directly, so there is no
     // definite-assignment dance and no TS7 `never`-narrowing trap to work around.
     const { promise, resolve: settle } = Promise.withResolvers<
       ControlEnvelope | ProtocolError | SupervisorError
-    >()
+    >();
     const timer = clock.setTimer(timeoutMs, () => {
-      entries.delete(requestId)
-      onTimeout?.()
-      settle(new SupervisorError({ code: "QUERY_TIMEOUT", reason: `no response for ${kind} within ${timeoutMs}ms` }))
-    })
-    entries.set(requestId, { kind, settle, timer })
-    return promise
+      entries.delete(requestId);
+      onTimeout?.();
+      settle(
+        new SupervisorError({
+          code: "QUERY_TIMEOUT",
+          reason: `no response for ${kind} within ${timeoutMs}ms`,
+        }),
+      );
+    });
+    entries.set(requestId, { kind, settle, timer });
+    return promise;
   }
 
   function resolve(responseTo: string, envelope: ControlEnvelope): void {
-    const entry = entries.get(responseTo)
-    if (entry === undefined) return // late / unknown response — discarded (§9)
-    entry.timer.cancel()
-    entries.delete(responseTo)
-    entry.settle(envelope)
+    const entry = entries.get(responseTo);
+    if (entry === undefined) return; // late / unknown response — discarded (§9)
+    entry.timer.cancel();
+    entries.delete(responseTo);
+    entry.settle(envelope);
   }
 
   function supersede(requestId: string, reason: string): void {
-    const entry = entries.get(requestId)
-    if (entry === undefined) return
-    entry.timer.cancel()
-    entries.delete(requestId)
-    entry.settle(new SupervisorError({ code: "SUPERSEDED", reason }))
+    const entry = entries.get(requestId);
+    if (entry === undefined) return;
+    entry.timer.cancel();
+    entries.delete(requestId);
+    entry.settle(new SupervisorError({ code: "SUPERSEDED", reason }));
   }
 
   function clear(error?: ProtocolError | SupervisorError): void {
     const terminal =
-      error ?? new SupervisorError({ code: "TRANSPORT_ERROR", reason: "request table cleared on teardown" })
+      error ??
+      new SupervisorError({ code: "TRANSPORT_ERROR", reason: "request table cleared on teardown" });
     for (const entry of entries.values()) {
-      entry.timer.cancel()
-      entry.settle(error === undefined ? terminal : error)
+      entry.timer.cancel();
+      entry.settle(error === undefined ? terminal : error);
     }
-    entries.clear()
+    entries.clear();
   }
 
   return {
@@ -88,5 +103,5 @@ export function createRequestTable(
     supersede,
     clear,
     size: () => entries.size,
-  }
+  };
 }

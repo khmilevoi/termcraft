@@ -1,12 +1,12 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { ChatMutations, ProjectStore } from "core/ports"
-import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol"
+import type { ChatMutations, ProjectStore } from "core/ports";
+import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol";
 
-import type { ChatDirectory } from "./chat-directory"
-import { buildChatChangedPayload } from "./chat-changed"
+import { buildChatChangedPayload } from "./chat-changed";
+import type { ChatDirectory } from "./chat-directory";
 
-type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"]
+type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
 
 /**
  * `chat.create` (kernel-command-contract §8.2): "Create and select a fresh chat through a
@@ -23,20 +23,24 @@ type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"]
  */
 
 export interface CreateChatDeps {
-  readonly chats: ChatMutations
-  readonly projectStore: ProjectStore
-  readonly directory: ChatDirectory
+  readonly chats: ChatMutations;
+  readonly projectStore: ProjectStore;
+  readonly directory: ChatDirectory;
 }
 
-export async function createChat(deps: CreateChatDeps): Promise<FailureDtoV1 | ChatChangedPayloadV1> {
-  const header = await wrap(deps.chats.create())
-  if ("code" in header) return header
+export async function createChat(
+  deps: CreateChatDeps,
+): Promise<FailureDtoV1 | ChatChangedPayloadV1> {
+  const header = await wrap(deps.chats.create());
+  if ("code" in header) return header;
 
-  const written = await wrap(deps.projectStore.writeWorkspaceState({ activeChatId: header.chatId }))
-  if (written !== undefined) return written
+  const written = await wrap(
+    deps.projectStore.writeWorkspaceState({ activeChatId: header.chatId }),
+  );
+  if (written !== undefined) return written;
 
-  const summary = { chatId: header.chatId, createdAt: header.createdAt }
-  deps.directory.upsert(summary)
+  const summary = { chatId: header.chatId, createdAt: header.createdAt };
+  deps.directory.upsert(summary);
 
-  return buildChatChangedPayload({ activeChatId: header.chatId, added: [summary] })
+  return buildChatChangedPayload({ activeChatId: header.chatId, added: [summary] });
 }

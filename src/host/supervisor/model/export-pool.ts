@@ -1,6 +1,6 @@
-import { ProtocolError } from "../../protocol"
-import type { ExportPool, ExportTask, ExportTaskOutcome, OneShotResult } from "../types"
-import { SupervisorError } from "./errors"
+import { ProtocolError } from "../../protocol";
+import type { ExportPool, ExportTask, ExportTaskOutcome, OneShotResult } from "../types";
+import { SupervisorError } from "./errors";
 
 /**
  * Injected seam for the bounded export worker pool (§11.4). `runTask` drives ONE
@@ -9,9 +9,9 @@ import { SupervisorError } from "./errors"
  * default worker count; `workers` is the optional machine-local override.
  */
 export interface ExportPoolDeps {
-  readonly runTask: (task: ExportTask) => Promise<ProtocolError | SupervisorError | OneShotResult>
-  readonly cpuCount: number
-  readonly workers?: number
+  readonly runTask: (task: ExportTask) => Promise<ProtocolError | SupervisorError | OneShotResult>;
+  readonly cpuCount: number;
+  readonly workers?: number;
 }
 
 /**
@@ -20,8 +20,8 @@ export interface ExportPoolDeps {
  * so clamping 0/negative up to 1 and >8 down to 8 is the defensive resolution.
  */
 export function resolveExportWorkerCount(cpuCount: number, override?: number): number {
-  if (override === undefined) return Math.min(4, Math.max(1, Math.floor(cpuCount / 2)))
-  return Math.min(8, Math.max(1, Math.floor(override)))
+  if (override === undefined) return Math.min(4, Math.max(1, Math.floor(cpuCount / 2)));
+  return Math.min(8, Math.max(1, Math.floor(override)));
 }
 
 /** Publish order is manifest then (w, h) — NEVER completion order (§11.4). */
@@ -30,7 +30,7 @@ function byManifestThenSize(a: ExportTaskOutcome, b: ExportTaskOutcome): number 
     a.manifestIndex - b.manifestIndex ||
     a.spec.size.w - b.spec.size.w ||
     a.spec.size.h - b.spec.size.h
-  )
+  );
 }
 
 /**
@@ -46,12 +46,12 @@ function byManifestThenSize(a: ExportTaskOutcome, b: ExportTaskOutcome): number 
 export function createExportPool(deps: ExportPoolDeps): ExportPool {
   return {
     async run(tasks) {
-      if (tasks.length === 0) return []
+      if (tasks.length === 0) return [];
 
-      const workerCount = resolveExportWorkerCount(deps.cpuCount, deps.workers)
-      const outcomes: ExportTaskOutcome[] = []
-      let nextIndex = 0
-      let failure: ProtocolError | SupervisorError | null = null
+      const workerCount = resolveExportWorkerCount(deps.cpuCount, deps.workers);
+      const outcomes: ExportTaskOutcome[] = [];
+      let nextIndex = 0;
+      let failure: ProtocolError | SupervisorError | null = null;
 
       // One worker loop: pull the next task by the shared cursor until the queue
       // drains or a sibling recorded the first failure (all-or-nothing cancel).
@@ -59,27 +59,28 @@ export function createExportPool(deps: ExportPoolDeps): ExportPool {
       // hands each task to exactly one worker.
       async function worker(): Promise<void> {
         while (true) {
-          if (failure !== null) return
-          const index = nextIndex
-          if (index >= tasks.length) return
-          nextIndex = index + 1
-          const task = tasks[index]
-          if (task === undefined) return
-          const result = await deps.runTask(task)
+          if (failure !== null) return;
+          const index = nextIndex;
+          if (index >= tasks.length) return;
+          nextIndex = index + 1;
+          const task = tasks[index];
+          if (task === undefined) return;
+          const result = await deps.runTask(task);
           if (result instanceof Error) {
-            if (failure === null) failure = result
-            else console.warn("export pool: dropping a secondary in-flight failure:", result.message)
-            return
+            if (failure === null) failure = result;
+            else
+              console.warn("export pool: dropping a secondary in-flight failure:", result.message);
+            return;
           }
-          outcomes.push({ manifestIndex: task.manifestIndex, spec: task.spec, result })
+          outcomes.push({ manifestIndex: task.manifestIndex, spec: task.spec, result });
         }
       }
 
-      const loopCount = Math.min(workerCount, tasks.length)
-      await Promise.all(Array.from({ length: loopCount }, () => worker()))
+      const loopCount = Math.min(workerCount, tasks.length);
+      await Promise.all(Array.from({ length: loopCount }, () => worker()));
 
-      if (failure !== null) return failure
-      return outcomes.sort(byManifestThenSize)
+      if (failure !== null) return failure;
+      return outcomes.sort(byManifestThenSize);
     },
-  }
+  };
 }

@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /** A healthCheck probe failure (installed/logged-in classification). Generic across backends. */
 export class AgentHealthProbeError extends errore.createTaggedError({

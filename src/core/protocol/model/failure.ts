@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from "zod";
 
 /**
  * The closed v1 operational-failure code registry (kernel-command-contract §11.2),
@@ -38,22 +38,22 @@ export const OPERATIONAL_FAILURE_CODES_V1 = [
   "HOST_CIRCUIT_OPEN",
   "PERSISTENCE_FAILED",
   "RESOURCE_LIMIT_EXCEEDED",
-] as const
+] as const;
 
-export type OperationalFailureCode = (typeof OPERATIONAL_FAILURE_CODES_V1)[number]
+export type OperationalFailureCode = (typeof OPERATIONAL_FAILURE_CODES_V1)[number];
 
 /** The exact member count §11.2 fixes. A drifted union fails the closure test, not a review. */
-export const OPERATIONAL_FAILURE_CODE_COUNT = 30
+export const OPERATIONAL_FAILURE_CODE_COUNT = 30;
 
-const OPERATIONAL_FAILURE_CODE_SET: ReadonlySet<string> = new Set(OPERATIONAL_FAILURE_CODES_V1)
+const OPERATIONAL_FAILURE_CODE_SET: ReadonlySet<string> = new Set(OPERATIONAL_FAILURE_CODES_V1);
 
 /** True when `raw` names a v1 operational-failure code. */
 export function isOperationalFailureCode(raw: string): raw is OperationalFailureCode {
-  return OPERATIONAL_FAILURE_CODE_SET.has(raw)
+  return OPERATIONAL_FAILURE_CODE_SET.has(raw);
 }
 
 /** Zod schema over the closed union. */
-export const operationalFailureCodeSchema = z.enum(OPERATIONAL_FAILURE_CODES_V1)
+export const operationalFailureCodeSchema = z.enum(OPERATIONAL_FAILURE_CODES_V1);
 
 /**
  * The bound on `FailureDtoV1.details` (this module's own encoding — §11.2 says only
@@ -61,11 +61,11 @@ export const operationalFailureCodeSchema = z.enum(OPERATIONAL_FAILURE_CODES_V1)
  * a diagnostic payload (e.g. `part`, `exitCode`, `host`, `signal`) while still being a
  * closed, reviewable ceiling rather than an unbounded bag a stray loop could fill.
  */
-export const FAILURE_DETAILS_MAX_KEYS = 16
+export const FAILURE_DETAILS_MAX_KEYS = 16;
 /** Exported so its boundary is a test fixture, not a number re-typed by hand in a test. */
-export const FAILURE_DETAIL_KEY_MAX_LENGTH = 64
+export const FAILURE_DETAIL_KEY_MAX_LENGTH = 64;
 /** Exported so its boundary is a test fixture, not a number re-typed by hand in a test. */
-export const FAILURE_DETAIL_STRING_VALUE_MAX_LENGTH = 500
+export const FAILURE_DETAIL_STRING_VALUE_MAX_LENGTH = 500;
 
 /**
  * A single detail value: a JSON primitive, never an object, array, `Error`, or other
@@ -79,7 +79,7 @@ const failureDetailValueSchema = z.union([
   z.number(),
   z.boolean(),
   z.null(),
-])
+]);
 
 /**
  * `FailureDtoV1.details` (my bounded encoding of "bounded details"): a record of
@@ -91,7 +91,7 @@ export const failureDetailsV1Schema = z
   .record(z.string().min(1).max(FAILURE_DETAIL_KEY_MAX_LENGTH), failureDetailValueSchema)
   .refine((details) => Object.keys(details).length <= FAILURE_DETAILS_MAX_KEYS, {
     message: `expected at most ${FAILURE_DETAILS_MAX_KEYS} detail keys`,
-  })
+  });
 
 /**
  * A terminal operation failure (§11.2): "Terminal operation events include a typed
@@ -105,10 +105,10 @@ export const failureDetailsV1Schema = z
  * `event-payload.ts` DTO that carries a `FailureDtoV1` for no gain this slice needs.
  */
 export interface FailureDtoV1 {
-  readonly code: OperationalFailureCode
-  readonly retryable: boolean
-  readonly safeMessage: string
-  readonly details: Readonly<Record<string, string | number | boolean | null>>
+  readonly code: OperationalFailureCode;
+  readonly retryable: boolean;
+  readonly safeMessage: string;
+  readonly details: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /**
@@ -122,24 +122,24 @@ export interface FailureDtoV1 {
 const applySourceChangedDetailsSchema = failureDetailsV1Schema.refine(
   (details) => details.part === "page" || details.part === "manifest",
   { message: 'APPLY_SOURCE_CHANGED details.part must be "page" or "manifest"' },
-)
+);
 const applyStaleDetailsSchema = failureDetailsV1Schema.refine(
   (details) => details.part === "chat" || details.part === "pins",
   { message: 'APPLY_STALE details.part must be "chat" or "pins"' },
-)
+);
 
 const applySourceChangedFailureSchema = z.strictObject({
   code: z.literal("APPLY_SOURCE_CHANGED"),
   retryable: z.boolean(),
   safeMessage: z.string(),
   details: applySourceChangedDetailsSchema,
-})
+});
 const applyStaleFailureSchema = z.strictObject({
   code: z.literal("APPLY_STALE"),
   retryable: z.boolean(),
   safeMessage: z.string(),
   details: applyStaleDetailsSchema,
-})
+});
 
 /** The 28 codes §11.2 does not fix a typed detail for — kept on the general bounded record. */
 const GENERAL_OPERATIONAL_FAILURE_CODES_V1 = OPERATIONAL_FAILURE_CODES_V1.filter(
@@ -148,17 +148,17 @@ const GENERAL_OPERATIONAL_FAILURE_CODES_V1 = OPERATIONAL_FAILURE_CODES_V1.filter
 ) as [
   Exclude<OperationalFailureCode, "APPLY_SOURCE_CHANGED" | "APPLY_STALE">,
   ...Exclude<OperationalFailureCode, "APPLY_SOURCE_CHANGED" | "APPLY_STALE">[],
-]
+];
 
 const generalOperationalFailureSchema = z.strictObject({
   code: z.enum(GENERAL_OPERATIONAL_FAILURE_CODES_V1),
   retryable: z.boolean(),
   safeMessage: z.string(),
   details: failureDetailsV1Schema,
-})
+});
 
 export const failureDtoV1Schema = z.discriminatedUnion("code", [
   applySourceChangedFailureSchema,
   applyStaleFailureSchema,
   generalOperationalFailureSchema,
-])
+]);

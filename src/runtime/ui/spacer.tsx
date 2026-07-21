@@ -3,9 +3,9 @@
 /** Props for the `Spacer`. `id` is the mandatory stable id (§3.2). */
 export interface SpacerProps {
   /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
-  readonly id: string
+  readonly id: string;
   /** Fixed cell size (width and height); omit for a flexible spacer. */
-  readonly size?: number
+  readonly size?: number;
 }
 
 /**
@@ -16,7 +16,7 @@ export interface SpacerProps {
  */
 export function Spacer(props: SpacerProps) {
   if (props.size === undefined) {
-    return <box id={props.id} flexGrow={1} />
+    return <box id={props.id} flexGrow={1} />;
   }
-  return <box id={props.id} width={props.size} height={props.size} />
+  return <box id={props.id} width={props.size} height={props.size} />;
 }

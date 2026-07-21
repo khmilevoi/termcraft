@@ -1,11 +1,16 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { FsAccessError, isNotFound } from "store/safe-fs"
-import type { SafeFsError } from "store/safe-fs"
+import { FsAccessError, isNotFound } from "store/safe-fs";
+import type { SafeFsError } from "store/safe-fs";
 
-import { installJsonIfAbsent, type TransactionFsDeps } from "./engine"
-import { JournalCorruptError, JournalTooNewError, TRANSACTIONS_LOCAL_DIR, TRANSACTION_JOURNAL_FORMAT_VERSION } from "./plan"
+import { type TransactionFsDeps, installJsonIfAbsent } from "./engine";
+import {
+  JournalCorruptError,
+  JournalTooNewError,
+  TRANSACTIONS_LOCAL_DIR,
+  TRANSACTION_JOURNAL_FORMAT_VERSION,
+} from "./plan";
 
 // turn-durability §3.1: "`format.json` has its own journal format version and is readable
 // before project schema migration. A journal format newer than the binary produces
@@ -21,9 +26,9 @@ import { JournalCorruptError, JournalTooNewError, TRANSACTIONS_LOCAL_DIR, TRANSA
 // Workspace here instead of `classifyTransaction` falling through to `discard` and deleting
 // the unrecognized directory (the exact failure mode the finding traced).
 
-export const JOURNAL_FORMAT_PATH = `${TRANSACTIONS_LOCAL_DIR}/format.json`
+export const JOURNAL_FORMAT_PATH = `${TRANSACTIONS_LOCAL_DIR}/format.json`;
 
-const journalFormatSchema = z.object({ journalVersion: z.number().int().nonnegative() })
+const journalFormatSchema = z.object({ journalVersion: z.number().int().nonnegative() });
 
 /**
  * Read `transactions.local/format.json`. A MISSING file is `null` — treated as the implicit
@@ -35,28 +40,48 @@ const journalFormatSchema = z.object({ journalVersion: z.number().int().nonnegat
  */
 export function readJournalFormat(
   deps: Pick<TransactionFsDeps, "safeFs">,
-): SafeFsError | JournalCorruptError | JournalTooNewError | { readonly journalVersion: number } | null {
-  const bytes = deps.safeFs.readFile(JOURNAL_FORMAT_PATH)
+):
+  | SafeFsError
+  | JournalCorruptError
+  | JournalTooNewError
+  | { readonly journalVersion: number }
+  | null {
+  const bytes = deps.safeFs.readFile(JOURNAL_FORMAT_PATH);
   if (bytes instanceof Error) {
-    if (bytes instanceof FsAccessError && isNotFound(bytes)) return null
-    return bytes
+    if (bytes instanceof FsAccessError && isNotFound(bytes)) return null;
+    return bytes;
   }
 
   // Boxed inside the `try` on purpose: a bare `unknown | Error` union collapses to `unknown`
   // and destroys the `instanceof Error` narrowing below (errore boundary rule).
   const parsed = errore.try({
-    try: (): { readonly value: unknown } => ({ value: JSON.parse(new TextDecoder().decode(bytes)) as unknown }),
-    catch: (cause) => new JournalCorruptError({ code: "FORMAT_JSON_PARSE", reason: `${JOURNAL_FORMAT_PATH} is not valid JSON`, cause }),
-  })
-  if (parsed instanceof Error) return parsed
+    try: (): { readonly value: unknown } => ({
+      value: JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    }),
+    catch: (cause) =>
+      new JournalCorruptError({
+        code: "FORMAT_JSON_PARSE",
+        reason: `${JOURNAL_FORMAT_PATH} is not valid JSON`,
+        cause,
+      }),
+  });
+  if (parsed instanceof Error) return parsed;
 
-  const result = journalFormatSchema.safeParse(parsed.value)
-  if (!result.success) return new JournalCorruptError({ code: "FORMAT_JSON_SHAPE", reason: `${JOURNAL_FORMAT_PATH} has an invalid shape` })
+  const result = journalFormatSchema.safeParse(parsed.value);
+  if (!result.success)
+    return new JournalCorruptError({
+      code: "FORMAT_JSON_SHAPE",
+      reason: `${JOURNAL_FORMAT_PATH} has an invalid shape`,
+    });
 
   if (result.data.journalVersion > TRANSACTION_JOURNAL_FORMAT_VERSION) {
-    return new JournalTooNewError({ file: JOURNAL_FORMAT_PATH, found: result.data.journalVersion, supported: TRANSACTION_JOURNAL_FORMAT_VERSION })
+    return new JournalTooNewError({
+      file: JOURNAL_FORMAT_PATH,
+      found: result.data.journalVersion,
+      supported: TRANSACTION_JOURNAL_FORMAT_VERSION,
+    });
   }
-  return result.data
+  return result.data;
 }
 
 /**
@@ -66,5 +91,7 @@ export function readJournalFormat(
  * project this binary has ever opened) is left untouched.
  */
 export function ensureJournalFormat(deps: TransactionFsDeps) {
-  return installJsonIfAbsent(deps, JOURNAL_FORMAT_PATH, { journalVersion: TRANSACTION_JOURNAL_FORMAT_VERSION })
+  return installJsonIfAbsent(deps, JOURNAL_FORMAT_PATH, {
+    journalVersion: TRANSACTION_JOURNAL_FORMAT_VERSION,
+  });
 }

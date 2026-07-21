@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Export model (kernel-command-contract §7.5).
@@ -11,7 +11,13 @@ import { createStateMachine, type StateMachine, type TransitionTable } from "./s
  * drives this machine; it does not reimplement its legality.
  */
 
-export type ExportState = "idle" | "preparing" | "rendering" | "publishing" | "recovering" | "blocked"
+export type ExportState =
+  | "idle"
+  | "preparing"
+  | "rendering"
+  | "publishing"
+  | "recovering"
+  | "blocked";
 
 export type ExportAction =
   | "kernel.export.begin"
@@ -23,7 +29,7 @@ export type ExportAction =
   | "kernel.export.beginRecovery"
   | "kernel.export.completeRecovery"
   | "kernel.export.blockRecovery"
-  | "kernel.export.retryRecovery"
+  | "kernel.export.retryRecovery";
 
 /** §7.5's table, transcribed row for row; a multi-source row becomes one edge per source. */
 export const EXPORT_TRANSITION_TABLE: TransitionTable<ExportState, ExportAction> = {
@@ -51,7 +57,7 @@ export const EXPORT_TRANSITION_TABLE: TransitionTable<ExportState, ExportAction>
   "kernel.export.completeRecovery": [{ from: "recovering", to: "idle" }],
   "kernel.export.blockRecovery": [{ from: "recovering", to: "blocked" }],
   "kernel.export.retryRecovery": [{ from: "blocked", to: "recovering" }],
-}
+};
 
 /**
  * Builds one Kernel's Export model. §11.1: `OPERATION_BUSY` is "The relevant
@@ -64,5 +70,5 @@ export function reatomExportStateMachine(): StateMachine<ExportState, ExportActi
     initial: "idle",
     table: EXPORT_TRANSITION_TABLE,
     illegalCode: "OPERATION_BUSY",
-  })
+  });
 }

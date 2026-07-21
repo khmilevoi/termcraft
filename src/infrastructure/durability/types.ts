@@ -3,7 +3,7 @@ import type {
   DurabilityUnavailableError,
   DurableWriteError,
   UnsupportedVolumeError,
-} from "./model/errors"
+} from "./model/errors";
 
 /**
  * Any failure the durability primitives can return — a `_tag`-discriminated union
@@ -14,4 +14,4 @@ export type DurabilityError =
   | DurabilityUnavailableError
   | DirectoryFlushError
   | UnsupportedVolumeError
-  | DurableWriteError
+  | DurableWriteError;

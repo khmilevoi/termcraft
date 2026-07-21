@@ -1,18 +1,18 @@
-import type { PageMeta } from "entities/page"
+import type { PageMeta } from "entities/page";
 
-import type { DiagnosticsStoreIoError } from "./model/diagnostics-store"
-import type { PageMetaCacheIoError } from "./model/page-meta-cache"
-import type { RenderCacheIoError } from "./model/render-cache"
+import type { DiagnosticsStoreIoError } from "./model/diagnostics-store";
+import type { PageMetaCacheIoError } from "./model/page-meta-cache";
+import type { RenderCacheIoError } from "./model/render-cache";
 
 /**
  * An OS-absolute path handed in by the composition root — never a caller-built managed
  * relative path. `store/types.ts` (T19) owns the shared alias; this local declaration
  * keeps the submodule self-contained until then.
  */
-export type AbsPath = string
+export type AbsPath = string;
 
 /** Lowercase-hex SHA-256. */
-export type Sha256Hex = string
+export type Sha256Hex = string;
 
 // ---- shared filesystem seam -----------------------------------------------------
 //
@@ -28,14 +28,14 @@ export type Sha256Hex = string
 /** The impure filesystem boundary every projection store needs, injected for testability. */
 export interface ProjectionFsDeps {
   /** `null` means "no such file" (an ordinary miss); `Error` means a real I/O fault. */
-  readonly readFile: (absPath: AbsPath) => Uint8Array | null | Error
+  readonly readFile: (absPath: AbsPath) => Uint8Array | null | Error;
   /** The atomic temp-write -> verify -> rename -> flush-dir install (`infrastructure/durability`). */
-  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined
+  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined;
   /** Best-effort delete, used by quota eviction and corrupt-entry cleanup. Missing is success. */
-  readonly remove: (absPath: AbsPath) => Error | undefined
+  readonly remove: (absPath: AbsPath) => Error | undefined;
   /** Entry file names directly under `absDir`; `[]` when the directory does not exist yet. */
-  readonly listFiles: (absDir: AbsPath) => readonly string[] | Error
-  readonly ensureDir: (absDir: AbsPath) => Error | undefined
+  readonly listFiles: (absDir: AbsPath) => readonly string[] | Error;
+  readonly ensureDir: (absDir: AbsPath) => Error | undefined;
 }
 
 // ---- page-meta cache (storage-identity §7) ---------------------------------------
@@ -47,9 +47,9 @@ export interface ProjectionFsDeps {
  * grammar re-validated to serve as one.
  */
 export interface PageMetaKey {
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly extractorVersion: number
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly extractorVersion: number;
 }
 
 /**
@@ -60,28 +60,28 @@ export interface PageMetaKey {
  * gap without inventing a parallel shape.
  */
 export interface PageMetaEntry {
-  readonly key: PageMetaKey
-  readonly meta: PageMeta
+  readonly key: PageMetaKey;
+  readonly meta: PageMeta;
 }
 
 // ---- diagnostics store (projections §6) ------------------------------------------
 
 export interface DiagnosticsKey {
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly kitApiVersion: number
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly kitApiVersion: number;
 }
 
 export interface DiagnosticRange {
-  readonly line: number
-  readonly column: number
+  readonly line: number;
+  readonly column: number;
 }
 
 export interface DiagnosticItem {
-  readonly code: string
-  readonly severity: "error" | "warning" | "info"
-  readonly message: string
-  readonly range?: DiagnosticRange
+  readonly code: string;
+  readonly severity: "error" | "warning" | "info";
+  readonly message: string;
+  readonly range?: DiagnosticRange;
 }
 
 /**
@@ -94,26 +94,26 @@ export interface DiagnosticItem {
  * `provenance` therefore describes the entry's most recent whole-entry write.
  */
 export interface DiagnosticsEntry {
-  readonly key: DiagnosticsKey
-  readonly schemaVersion: number
-  readonly provenance: "gate" | "host"
-  readonly observedAt: string // RFC 3339
-  readonly diagnostics: readonly DiagnosticItem[]
+  readonly key: DiagnosticsKey;
+  readonly schemaVersion: number;
+  readonly provenance: "gate" | "host";
+  readonly observedAt: string; // RFC 3339
+  readonly diagnostics: readonly DiagnosticItem[];
 }
 
 /** Injected so tests can control which keys survive an eviction sweep (§6.2 "pinned during the active process"). */
-export type DiagnosticsPinPredicate = (key: DiagnosticsKey) => boolean
+export type DiagnosticsPinPredicate = (key: DiagnosticsKey) => boolean;
 
 // ---- render cache (projections §10.2) --------------------------------------------
 
 /** The exact §10.2 logical key. `flags` is canonicalized with SORTED keys before hashing/comparison. */
 export interface ExportRenderKey {
-  readonly sourceHash: Sha256Hex
-  readonly kitApiVersion: number
-  readonly rendererVersion: string
-  readonly size: { readonly width: number; readonly height: number }
-  readonly theme: string
-  readonly flags: Readonly<Record<string, boolean | number | string>>
+  readonly sourceHash: Sha256Hex;
+  readonly kitApiVersion: number;
+  readonly rendererVersion: string;
+  readonly size: { readonly width: number; readonly height: number };
+  readonly theme: string;
+  readonly flags: Readonly<Record<string, boolean | number | string>>;
 }
 
 /**
@@ -126,14 +126,14 @@ export interface ExportRenderKey {
  * only guarantees they round-trip byte-exact under their own recorded checksums.
  */
 export interface RenderEntry {
-  readonly key: ExportRenderKey
-  readonly styledFrame: Uint8Array
-  readonly textFrame: Uint8Array
-  readonly layout: Uint8Array
+  readonly key: ExportRenderKey;
+  readonly styledFrame: Uint8Array;
+  readonly textFrame: Uint8Array;
+  readonly layout: Uint8Array;
 }
 
-export type RenderPinPredicate = (key: ExportRenderKey) => boolean
+export type RenderPinPredicate = (key: ExportRenderKey) => boolean;
 
 // ---- error unions -----------------------------------------------------------------
 
-export type ProjectionsError = PageMetaCacheIoError | DiagnosticsStoreIoError | RenderCacheIoError
+export type ProjectionsError = PageMetaCacheIoError | DiagnosticsStoreIoError | RenderCacheIoError;

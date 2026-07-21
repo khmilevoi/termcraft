@@ -1,7 +1,12 @@
-import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk"
-import type { PermissionResultLike } from "agent/confinement"
+import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 
-type Policy = (toolName: string, input: Record<string, unknown>, blockedPath?: string) => PermissionResultLike
+import type { PermissionResultLike } from "agent/confinement";
+
+type Policy = (
+  toolName: string,
+  input: Record<string, unknown>,
+  blockedPath?: string,
+) => PermissionResultLike;
 
 /**
  * Adapt a shared confinement policy to the SDK's `canUseTool` callback. The
@@ -12,7 +17,9 @@ type Policy = (toolName: string, input: Record<string, unknown>, blockedPath?: s
  */
 export function createCanUseTool(policy: Policy): CanUseTool {
   return async (toolName, input, options) => {
-    const decision = policy(toolName, input, options.blockedPath)
-    return decision.behavior === "allow" ? { behavior: "allow" } : { behavior: "deny", message: decision.message }
-  }
+    const decision = policy(toolName, input, options.blockedPath);
+    return decision.behavior === "allow"
+      ? { behavior: "allow" }
+      : { behavior: "deny", message: decision.message };
+  };
 }

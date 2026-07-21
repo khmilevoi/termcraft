@@ -1,8 +1,8 @@
-import type { CapturedLine } from "@opentui/core"
+import type { CapturedLine } from "@opentui/core";
 
-import type { StyledRun } from "../../protocol"
-import { attributesToMask } from "./attributes"
-import { rgbaToColor } from "./color"
+import type { StyledRun } from "../../protocol";
+import { attributesToMask } from "./attributes";
+import { rgbaToColor } from "./color";
 
 /**
  * Map OpenTUI capture rows to protocol styled rows. Runs are preserved 1:1 (the
@@ -17,5 +17,5 @@ export function styledRowsFromSpanLines(lines: CapturedLine[]): StyledRun[][] {
       bg: rgbaToColor(span.bg),
       attrs: attributesToMask(span.attributes),
     })),
-  )
+  );
 }

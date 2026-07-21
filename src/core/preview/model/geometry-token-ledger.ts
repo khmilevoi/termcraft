@@ -1,6 +1,6 @@
-import type { FrameIdentityV1, GeometryTokenV1 } from "core/protocol"
-import type { Clock } from "infrastructure/clock"
-import { uuidv7 } from "infrastructure/uuid"
+import type { FrameIdentityV1, GeometryTokenV1 } from "core/protocol";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * `GeometryTokenLedger` (kernel-command-contract §8.1, §12.6 items 5-6, §13.3).
@@ -34,38 +34,41 @@ import { uuidv7 } from "infrastructure/uuid"
  * worse than simply bounding memory the same way an LRU-by-insertion cache would.
  */
 
-export const GEOMETRY_TOKEN_LEDGER_CAPACITY = 4096
-export const GEOMETRY_TOKEN_TTL_MS = 30_000
+export const GEOMETRY_TOKEN_LEDGER_CAPACITY = 4096;
+export const GEOMETRY_TOKEN_TTL_MS = 30_000;
 
 /** The private binding one geometry token guards — never inspectable or editable by the UI (§8.1). */
 export interface GeometryAnchorV1 {
-  readonly identity: FrameIdentityV1
-  readonly pageSlug: string
-  readonly elementId: string
-  readonly fx: number
-  readonly fy: number
+  readonly identity: FrameIdentityV1;
+  readonly pageSlug: string;
+  readonly elementId: string;
+  readonly fx: number;
+  readonly fy: number;
 }
 
 export type GeometryTokenConsumption =
   | { readonly ok: true; readonly anchor: GeometryAnchorV1 }
-  | { readonly ok: false; readonly code: "GEOMETRY_TOKEN_INVALID" | "GEOMETRY_TOKEN_STALE" }
+  | { readonly ok: false; readonly code: "GEOMETRY_TOKEN_INVALID" | "GEOMETRY_TOKEN_STALE" };
 
 export interface GeometryTokenLedgerDeps {
-  readonly clock: Clock
+  readonly clock: Clock;
 }
 
 export interface GeometryTokenLedger {
   /** Mints a fresh opaque token for a successful resolving `hit`/`pin-anchor` query. Always succeeds — evicts the oldest entry first if at capacity. */
-  readonly mint: (anchor: GeometryAnchorV1) => GeometryTokenV1
+  readonly mint: (anchor: GeometryAnchorV1) => GeometryTokenV1;
   /** `pin.create`'s token check (§12.6 item 6): consumes the entry once on success, never on a STALE identity mismatch. */
-  readonly consume: (token: GeometryTokenV1, currentIdentity: FrameIdentityV1) => GeometryTokenConsumption
+  readonly consume: (
+    token: GeometryTokenV1,
+    currentIdentity: FrameIdentityV1,
+  ) => GeometryTokenConsumption;
   /** The live entry count — for capacity-bound tests, never a public capability signal. */
-  readonly size: () => number
+  readonly size: () => number;
 }
 
 interface LedgerEntry {
-  readonly anchor: GeometryAnchorV1
-  readonly mintedAtMs: number
+  readonly anchor: GeometryAnchorV1;
+  readonly mintedAtMs: number;
 }
 
 function identitiesMatch(a: FrameIdentityV1, b: FrameIdentityV1): boolean {
@@ -74,45 +77,48 @@ function identitiesMatch(a: FrameIdentityV1, b: FrameIdentityV1): boolean {
     a.nonce === b.nonce &&
     a.sourceHash === b.sourceHash &&
     a.frameSeq === b.frameSeq
-  )
+  );
 }
 
 /** Builds one Kernel's geometry-token ledger. A factory, not module state: two kernels — or two tests — must never share one. */
 export function createGeometryTokenLedger(deps: GeometryTokenLedgerDeps): GeometryTokenLedger {
   // Map iteration order is insertion order in JS, which is exactly what FIFO eviction needs.
-  const entries = new Map<GeometryTokenV1, LedgerEntry>()
+  const entries = new Map<GeometryTokenV1, LedgerEntry>();
 
   function mint(anchor: GeometryAnchorV1): GeometryTokenV1 {
     if (entries.size >= GEOMETRY_TOKEN_LEDGER_CAPACITY) {
-      const oldestKey = entries.keys().next().value
-      if (oldestKey !== undefined) entries.delete(oldestKey)
+      const oldestKey = entries.keys().next().value;
+      if (oldestKey !== undefined) entries.delete(oldestKey);
     }
-    const token = uuidv7()
-    entries.set(token, { anchor, mintedAtMs: deps.clock.now().getTime() })
-    return token
+    const token = uuidv7();
+    entries.set(token, { anchor, mintedAtMs: deps.clock.now().getTime() });
+    return token;
   }
 
-  function consume(token: GeometryTokenV1, currentIdentity: FrameIdentityV1): GeometryTokenConsumption {
-    const entry = entries.get(token)
-    if (entry === undefined) return { ok: false, code: "GEOMETRY_TOKEN_INVALID" }
+  function consume(
+    token: GeometryTokenV1,
+    currentIdentity: FrameIdentityV1,
+  ): GeometryTokenConsumption {
+    const entry = entries.get(token);
+    if (entry === undefined) return { ok: false, code: "GEOMETRY_TOKEN_INVALID" };
 
-    const ageMs = deps.clock.now().getTime() - entry.mintedAtMs
+    const ageMs = deps.clock.now().getTime() - entry.mintedAtMs;
     if (ageMs >= GEOMETRY_TOKEN_TTL_MS) {
-      entries.delete(token)
-      return { ok: false, code: "GEOMETRY_TOKEN_INVALID" }
+      entries.delete(token);
+      return { ok: false, code: "GEOMETRY_TOKEN_INVALID" };
     }
 
     if (!identitiesMatch(entry.anchor.identity, currentIdentity)) {
-      return { ok: false, code: "GEOMETRY_TOKEN_STALE" }
+      return { ok: false, code: "GEOMETRY_TOKEN_STALE" };
     }
 
-    entries.delete(token) // consumed once (§8.1) — only on the success path.
-    return { ok: true, anchor: entry.anchor }
+    entries.delete(token); // consumed once (§8.1) — only on the success path.
+    return { ok: true, anchor: entry.anchor };
   }
 
   function size(): number {
-    return entries.size
+    return entries.size;
   }
 
-  return { mint, consume, size }
+  return { mint, consume, size };
 }

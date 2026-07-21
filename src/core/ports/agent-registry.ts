@@ -1,4 +1,4 @@
-import type { AgentBackend, BackendCapabilities } from "./agent-backend"
+import type { AgentBackend, BackendCapabilities } from "./agent-backend";
 
 /**
  * The registry `core` consumes instead of a single `AgentBackend` (code-structure §8):
@@ -21,7 +21,7 @@ import type { AgentBackend, BackendCapabilities } from "./agent-backend"
  */
 export interface AgentRegistry {
   /** Every backend's static capabilities — the picker's full models × efforts catalog. */
-  list(): readonly BackendCapabilities[]
+  list(): readonly BackendCapabilities[];
   /** `null` for an id no registered backend reports — `model.select`'s `AGENT_UNAVAILABLE`-shaped rejection path, never a thrown lookup error. */
-  get(backendId: string): AgentBackend | null
+  get(backendId: string): AgentBackend | null;
 }

@@ -1,12 +1,13 @@
-import type { FailureDtoV1 } from "core/protocol"
-import type { AssertConforms } from "../index"
+import type { FailureDtoV1 } from "core/protocol";
+
+import type { AssertConforms } from "../index";
 import type {
   ProjectLeaseIdentityV1,
   ProjectManifestV1,
   ProjectStore,
   WorkspaceStateReadV1,
   WorkspaceStateV1,
-} from "../project-store"
+} from "../project-store";
 
 /**
  * In-memory {@link ProjectStore} fake (6D task brief). Backed by a mutable manifest and a
@@ -32,28 +33,31 @@ const DEFAULT_WORKSPACE_STATE: WorkspaceStateV1 = {
   fullscreenPreview: false,
   sessionCheckpoints: [],
   resourceLimits: {},
-}
+};
 
-export type ProjectStoreFailableMethod = "readManifest" | "readWorkspaceState" | "writeWorkspaceState"
+export type ProjectStoreFailableMethod =
+  | "readManifest"
+  | "readWorkspaceState"
+  | "writeWorkspaceState";
 
 export type ProjectStoreCall =
   | { readonly method: "readManifest" }
   | { readonly method: "readWorkspaceState" }
   | { readonly method: "writeWorkspaceState"; readonly patch: Partial<WorkspaceStateV1> }
-  | { readonly method: "close" }
+  | { readonly method: "close" };
 
 export interface FakeProjectStore extends ProjectStore {
-  readonly calls: readonly ProjectStoreCall[]
+  readonly calls: readonly ProjectStoreCall[];
   /** Queues exactly one {@link FailureDtoV1} for the next call to `method` (FIFO; consumed one at a time). */
-  failNext(method: ProjectStoreFailableMethod, failure: FailureDtoV1): void
+  failNext(method: ProjectStoreFailableMethod, failure: FailureDtoV1): void;
 }
 
 export function createFakeProjectStore(options: {
-  readonly root: string
-  readonly manifest?: Partial<ProjectManifestV1>
-  readonly workspaceState?: Partial<WorkspaceStateV1>
+  readonly root: string;
+  readonly manifest?: Partial<ProjectManifestV1>;
+  readonly workspaceState?: Partial<WorkspaceStateV1>;
 }): FakeProjectStore {
-  const lease: ProjectLeaseIdentityV1 = { root: options.root }
+  const lease: ProjectLeaseIdentityV1 = { root: options.root };
   const manifest: ProjectManifestV1 = {
     projectId: "fake-project-1",
     name: "Fake Project",
@@ -61,48 +65,50 @@ export function createFakeProjectStore(options: {
     targetStack: "generic",
     pages: [],
     ...options.manifest,
-  }
-  let state: WorkspaceStateV1 = { ...DEFAULT_WORKSPACE_STATE, ...options.workspaceState }
-  let missing = options.workspaceState === undefined
-  let corrupt = false
+  };
+  let state: WorkspaceStateV1 = { ...DEFAULT_WORKSPACE_STATE, ...options.workspaceState };
+  let missing = options.workspaceState === undefined;
+  let corrupt = false;
 
-  const calls: ProjectStoreCall[] = []
+  const calls: ProjectStoreCall[] = [];
   const queues: Record<ProjectStoreFailableMethod, FailureDtoV1[]> = {
     readManifest: [],
     readWorkspaceState: [],
     writeWorkspaceState: [],
-  }
+  };
 
   function failNext(method: ProjectStoreFailableMethod, failure: FailureDtoV1): void {
-    queues[method].push(failure)
+    queues[method].push(failure);
   }
 
   async function readManifest(): Promise<FailureDtoV1 | ProjectManifestV1> {
-    calls.push({ method: "readManifest" })
-    const queued = queues.readManifest.shift()
-    if (queued !== undefined) return queued
-    return manifest
+    calls.push({ method: "readManifest" });
+    const queued = queues.readManifest.shift();
+    if (queued !== undefined) return queued;
+    return manifest;
   }
 
   async function readWorkspaceState(): Promise<FailureDtoV1 | WorkspaceStateReadV1> {
-    calls.push({ method: "readWorkspaceState" })
-    const queued = queues.readWorkspaceState.shift()
-    if (queued !== undefined) return queued
-    return { state, missing, corrupt }
+    calls.push({ method: "readWorkspaceState" });
+    const queued = queues.readWorkspaceState.shift();
+    if (queued !== undefined) return queued;
+    return { state, missing, corrupt };
   }
 
-  async function writeWorkspaceState(patch: Partial<WorkspaceStateV1>): Promise<FailureDtoV1 | undefined> {
-    calls.push({ method: "writeWorkspaceState", patch })
-    const queued = queues.writeWorkspaceState.shift()
-    if (queued !== undefined) return queued
-    state = { ...state, ...patch }
-    missing = false
-    corrupt = false
-    return undefined
+  async function writeWorkspaceState(
+    patch: Partial<WorkspaceStateV1>,
+  ): Promise<FailureDtoV1 | undefined> {
+    calls.push({ method: "writeWorkspaceState", patch });
+    const queued = queues.writeWorkspaceState.shift();
+    if (queued !== undefined) return queued;
+    state = { ...state, ...patch };
+    missing = false;
+    corrupt = false;
+    return undefined;
   }
 
   async function close(): Promise<void> {
-    calls.push({ method: "close" })
+    calls.push({ method: "close" });
   }
 
   return {
@@ -114,7 +120,7 @@ export function createFakeProjectStore(options: {
     close,
     calls,
     failNext,
-  }
+  };
 }
 
-type _Conforms = AssertConforms<ProjectStore, FakeProjectStore>
+type _Conforms = AssertConforms<ProjectStore, FakeProjectStore>;

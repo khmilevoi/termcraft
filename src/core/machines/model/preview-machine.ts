@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Preview model (kernel-command-contract §7.6).
@@ -24,7 +24,14 @@ import { createStateMachine, type StateMachine, type TransitionTable } from "./s
  *   second edge this factory could pick between.
  */
 
-export type PreviewState = "disabled" | "idle" | "starting" | "live" | "switching" | "failed" | "circuit-open"
+export type PreviewState =
+  | "disabled"
+  | "idle"
+  | "starting"
+  | "live"
+  | "switching"
+  | "failed"
+  | "circuit-open";
 
 export type PreviewAction =
   | "kernel.preview.enable"
@@ -40,10 +47,17 @@ export type PreviewAction =
   | "kernel.preview.setThemeCapabilities"
   | "kernel.preview.forwardInput"
   | "kernel.preview.queryGeometry"
-  | "kernel.preview.disable"
+  | "kernel.preview.disable";
 
 /** Every non-`disabled` state (§7.6: "any open state | kernel.preview.disable | disabled"). */
-const OPEN_STATES: readonly PreviewState[] = ["idle", "starting", "live", "switching", "failed", "circuit-open"]
+const OPEN_STATES: readonly PreviewState[] = [
+  "idle",
+  "starting",
+  "live",
+  "switching",
+  "failed",
+  "circuit-open",
+];
 
 /** §7.6's table, transcribed row for row; a multi-source/multi-action row expands to one edge each. */
 export const PREVIEW_TRANSITION_TABLE: TransitionTable<PreviewState, PreviewAction> = {
@@ -74,7 +88,7 @@ export const PREVIEW_TRANSITION_TABLE: TransitionTable<PreviewState, PreviewActi
   "kernel.preview.forwardInput": [{ from: "live", to: "live", noOp: true }],
   "kernel.preview.queryGeometry": [{ from: "live", to: "live", noOp: true }],
   "kernel.preview.disable": OPEN_STATES.map((from) => ({ from, to: "disabled" as const })),
-}
+};
 
 /**
  * Builds one Kernel's Preview model. §11.1: `OPERATION_BUSY` is "The relevant
@@ -87,5 +101,5 @@ export function reatomPreviewStateMachine(): StateMachine<PreviewState, PreviewA
     initial: "disabled",
     table: PREVIEW_TRANSITION_TABLE,
     illegalCode: "OPERATION_BUSY",
-  })
+  });
 }

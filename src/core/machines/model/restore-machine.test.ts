@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test"
-import { context } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
 
-import { reatomRestoreStateMachine, type RestoreAction, type RestoreState } from "./restore-machine"
+import { context } from "@reatom/core";
+
+import {
+  type RestoreAction,
+  type RestoreState,
+  reatomRestoreStateMachine,
+} from "./restore-machine";
 
 /**
  * kernel-command-contract §7.3, §13.1.
@@ -20,7 +25,7 @@ const RESTORE_STATES: readonly RestoreState[] = [
   "record-pending",
   "recovering",
   "blocked",
-]
+];
 
 const RESTORE_ACTIONS: readonly RestoreAction[] = [
   "kernel.restore.beginPlan",
@@ -35,12 +40,12 @@ const RESTORE_ACTIONS: readonly RestoreAction[] = [
   "kernel.restore.retryRecord",
   "kernel.restore.blockRecovery",
   "kernel.restore.retryRecovery",
-]
+];
 
 interface ExpectedEdge {
-  readonly from: RestoreState
-  readonly action: RestoreAction
-  readonly to: RestoreState
+  readonly from: RestoreState;
+  readonly action: RestoreAction;
+  readonly to: RestoreState;
 }
 
 // One row per §7.3 table entry, multi-source rows expanded to one edge per source.
@@ -60,18 +65,18 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "record-pending", action: "kernel.restore.retryRecord", to: "recovering" },
   { from: "recovering", action: "kernel.restore.blockRecovery", to: "blocked" },
   { from: "blocked", action: "kernel.restore.retryRecovery", to: "recovering" },
-]
+];
 
-const ILLEGAL_CODE = "OPERATION_BUSY"
+const ILLEGAL_CODE = "OPERATION_BUSY";
 
 function findExpected(from: RestoreState, action: RestoreAction): ExpectedEdge | undefined {
-  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action)
+  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action);
 }
 
 /** Drives a fresh machine straight to `phase` via a known-legal edge path. */
 function machineAt(phase: RestoreState) {
-  const m = reatomRestoreStateMachine()
-  if (phase === "idle") return m
+  const m = reatomRestoreStateMachine();
+  if (phase === "idle") return m;
   const path: Record<Exclude<RestoreState, "idle">, readonly RestoreAction[]> = {
     planning: ["kernel.restore.beginPlan"],
     "awaiting-confirmation": ["kernel.restore.beginPlan", "kernel.restore.planReady"],
@@ -84,54 +89,54 @@ function machineAt(phase: RestoreState) {
     ],
     recovering: ["kernel.restore.beginRecovery"],
     blocked: ["kernel.restore.beginRecovery", "kernel.restore.blockRecovery"],
-  }
-  for (const action of path[phase]) m.apply(action)
-  return m
+  };
+  for (const action of path[phase]) m.apply(action);
+  return m;
 }
 
 describe("reatomRestoreStateMachine", () => {
   test("starts idle", () => {
     context.start(() => {
-      expect(reatomRestoreStateMachine().phase()).toBe("idle")
-    })
-  })
+      expect(reatomRestoreStateMachine().phase()).toBe("idle");
+    });
+  });
 
   test("the phase atom carries the §6 trace root", () => {
     context.start(() => {
-      expect(reatomRestoreStateMachine().phaseAtom.name).toBe("kernel.restore.state")
-    })
-  })
+      expect(reatomRestoreStateMachine().phaseAtom.name).toBe("kernel.restore.state");
+    });
+  });
 
   test("the hand-counted §7.3 edge total is 15", () => {
-    expect(EXPECTED_EDGES.length).toBe(15)
-  })
+    expect(EXPECTED_EDGES.length).toBe(15);
+  });
 
   test("every (state, action) pair matches the §7.3 table exactly", () => {
     context.start(() => {
       for (const from of RESTORE_STATES) {
         for (const action of RESTORE_ACTIONS) {
-          const expected = findExpected(from, action)
-          const m = machineAt(from)
-          const outcome = m.apply(action)
+          const expected = findExpected(from, action);
+          const m = machineAt(from);
+          const outcome = m.apply(action);
 
           if (expected === undefined) {
-            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action })
-            expect(m.phase()).toBe(from)
-            continue
+            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action });
+            expect(m.phase()).toBe(from);
+            continue;
           }
 
-          expect(outcome).toEqual({ kind: "changed", from, to: expected.to })
-          expect(m.phase()).toBe(expected.to)
+          expect(outcome).toEqual({ kind: "changed", from, to: expected.to });
+          expect(m.phase()).toBe(expected.to);
         }
       }
-    })
-  })
+    });
+  });
 
   test("complete reaches idle from all three of executing, record-pending, and recovering", () => {
     context.start(() => {
-      expect(machineAt("executing").apply("kernel.restore.complete").kind).toBe("changed")
-      expect(machineAt("record-pending").apply("kernel.restore.complete").kind).toBe("changed")
-      expect(machineAt("recovering").apply("kernel.restore.complete").kind).toBe("changed")
-    })
-  })
-})
+      expect(machineAt("executing").apply("kernel.restore.complete").kind).toBe("changed");
+      expect(machineAt("record-pending").apply("kernel.restore.complete").kind).toBe("changed");
+      expect(machineAt("recovering").apply("kernel.restore.complete").kind).toBe("changed");
+    });
+  });
+});
