@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { uuidv7 } from "infrastructure/uuid";
-import { sha256Hex, encodeChatHeaderLine } from "store/jsonl";
+import { encodeChatHeaderLine, sha256Hex } from "store/jsonl";
 import {
   PROJECT_GITIGNORE_FILENAME,
   PROJECT_MANIFEST_FILENAME,
@@ -16,10 +16,13 @@ import {
   encodeWorkspaceLocalState,
   renderProjectGitignore,
 } from "store/toml";
-import type { TransactionBoundary, TransactionOperation, TransactionPlan } from "store/transaction";
-import { chatJsonlPath } from "store/transaction";
-import type { ChildPayload } from "store/transaction";
-import { runCrashCase } from "store/transaction";
+import type {
+  ChildPayload,
+  TransactionBoundary,
+  TransactionOperation,
+  TransactionPlan,
+} from "store/transaction";
+import { chatJsonlPath, runCrashCase } from "store/transaction";
 
 import type { StoreDeps } from "../types";
 import { ProjectAlreadyExistsError, createStore, nodeStoreDeps } from "./factory";

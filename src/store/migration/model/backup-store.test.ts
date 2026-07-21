@@ -22,7 +22,7 @@ import {
 } from "store/transaction";
 import type { FileImage, TransactionOperation, TransactionWrapperDeps } from "store/transaction";
 
-import type { CreateBackupInput, BackupStoreDeps } from "../types";
+import type { BackupStoreDeps, CreateBackupInput } from "../types";
 import {
   BACKUP_MANIFEST_FILENAME,
   MigrationBackupFailedError,

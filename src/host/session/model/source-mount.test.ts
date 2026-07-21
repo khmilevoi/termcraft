@@ -3,9 +3,9 @@ import { describe, expect, test } from "bun:test";
 import { ProtocolError } from "../../protocol";
 import {
   computeSourceHash,
-  scanPageImports,
   computeSourceHash as hashBytes,
   loadPage,
+  scanPageImports,
 } from "./source-mount";
 
 describe("computeSourceHash", () => {
