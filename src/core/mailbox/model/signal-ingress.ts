@@ -1,4 +1,4 @@
-import { action, atom, wrap, type Atom } from "@reatom/core"
+import { action, atom, bind, type Atom } from "@reatom/core"
 
 import type { TurnBackendLeaseV1, TurnFenceProbe } from "../types"
 
@@ -18,7 +18,7 @@ import type { TurnBackendLeaseV1, TurnFenceProbe } from "../types"
  * `STALE_BACKEND_EVENT_DROPPED` — "Diagnostic only; a turn fence did not match."
  *
  * This module owns exactly the FENCE — the three-field comparison, the drop-and-count,
- * and the `wrap`ped re-entry into Reatom. It does not itself decide what
+ * and the bound re-entry into Reatom. It does not itself decide what
  * `STALE_BACKEND_EVENT_DROPPED`'s `diagnostics.changed` payload looks like (§9's
  * `generation`-keyed diagnostic stream is a separate, not-yet-owned piece of machinery)
  * — `onStaleDropped` is the injected seam a future diagnostics component hangs off, so
@@ -53,7 +53,7 @@ export interface SignalIngress<S extends TurnBackendLeaseV1> {
   /**
    * The mailbox's one entry point for this signal family. Safe to call from ANYWHERE —
    * a raw process/event callback, a `setTimeout`, code with no active Reatom frame at
-   * all — because it is built with `wrap` (see `createSignalIngress`'s comment) against
+   * all — because it is built with `bind` (see `createSignalIngress`'s comment) against
    * the frame active when this ingress was constructed.
    */
   readonly deliver: (signal: S) => void
@@ -77,7 +77,7 @@ function leaseMatches(active: TurnBackendLeaseV1 | null, signal: TurnBackendLeas
  * counter and invalidate each other's assertions.
  *
  * Must be constructed inside an active Reatom `context.start(...)` frame, matching
- * every other factory in this module: `deliver` is `wrap`ped here, at construction
+ * every other factory in this module: `deliver` is bound here, at construction
  * time, against whatever frame is active right now — not fresh on every call — for the
  * same reason `dispatch.ts`'s own two `wrap` calls are captured once at its
  * construction: there is exactly one Kernel Reatom context for this mailbox's whole
@@ -102,13 +102,19 @@ export function createSignalIngress<S extends TurnBackendLeaseV1>(deps: SignalIn
     deps.onAccepted(signal)
   }
 
-  const deliver = wrap(handle)
-  // `droppedCountAtom` is scoped to the SAME frame `deliver` writes into (both are
-  // captured by `wrap` at this same construction time) — a caller reading `droppedCount`
-  // from outside any `context.start(...)` (a diagnostics poller, a test) needs the same
-  // re-entry `deliver` gets, or it would read an entirely different frame's untouched
-  // copy of `droppedCountAtom` instead of the one `recordDrop` actually incremented.
-  const droppedCount = wrap(() => droppedCountAtom())
+  // `bind`, not `wrap`. The Reatom rules split these by WHO calls the function: `wrap` is
+  // for a continuation resumed inside a frame this unit is already in (after an `await`,
+  // a `.then`), while `bind` is for a callback something ELSE invokes later from outside —
+  // which is exactly `deliver`'s contract (see its doc comment: a raw backend callback, a
+  // timer, code with no active Reatom frame at all). Both re-enter the construction-time
+  // frame; using the one that names the actual situation keeps the intent readable.
+  const deliver = bind(handle)
+  // `droppedCountAtom` is scoped to the SAME frame `deliver` writes into (both are bound
+  // at this same construction time) — a caller reading `droppedCount` from outside any
+  // `context.start(...)` (a diagnostics poller, a test) needs the same re-entry `deliver`
+  // gets, or it would read an entirely different frame's untouched copy of
+  // `droppedCountAtom` instead of the one `recordDrop` actually incremented.
+  const droppedCount = bind(() => droppedCountAtom())
 
   return {
     deliver,

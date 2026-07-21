@@ -143,7 +143,7 @@ describe("createSignalIngress — dropped-count bookkeeping and diagnostics", ()
   })
 })
 
-describe("createSignalIngress — wrap re-enters the constructing frame at the async boundary", () => {
+describe("createSignalIngress — bind re-enters the constructing frame from an external callback", () => {
   test("deliver still correctly reaches onAccepted when invoked from completely outside any context.start(...)", async () => {
     // §6: "Service callbacks return to the same mailbox through wrap; they never set
     // model atoms directly." `deliver` is built once, inside `context.start(...)`
@@ -165,9 +165,9 @@ describe("createSignalIngress — wrap re-enters the constructing frame at the a
     expect(onAccepted.mock.calls.length).toBe(1)
     // The decisive half of this test: `recordDrop` is a Reatom action writing an atom
     // (`droppedCountAtom`) created in the SAME construction-time frame `droppedCount`
-    // itself is wrapped against. Sending a MISMATCHED signal from the same external
+    // itself is bound against. Sending a MISMATCHED signal from the same external
     // `setTimeout` boundary, then reading the count back, only agrees if `deliver`
-    // actually re-entered that frame — an unwrapped `deliver` would write the drop into
+    // actually re-entered that frame — an unbound `deliver` would write the drop into
     // whatever frame happens to be ambient in the `setTimeout` callback instead, and
     // `droppedCount()` would still read back 0.
     await new Promise<void>((resolve) => {
