@@ -8,7 +8,7 @@ import type { AgentInfo } from "agent/types"
 import type { ClaudeQueryFn } from "agent/claude/types"
 import { CLAUDE_BACKEND_ID } from "agent/claude/model/backend-id"
 import { makeSpawnAndAdopt } from "agent/claude/model/spawn-adopt"
-import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/model/tool-tables"
+import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools"
 
 /**
  * Fired once a verdict has already left `readUntilClassified`'s `for await`

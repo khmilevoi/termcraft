@@ -1,6 +1,6 @@
 import type { SDKMessage, SDKResultError, SDKResultMessage, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk"
 import type { AgentEvent, TokenUsage } from "entities/turn"
-import { mapToolUse } from "agent/claude/model/tool-op"
+import { mapToolUse } from "agent/claude/tools"
 
 /**
  * Compute the 0–100 context-window share, or null when no model reported a

@@ -6,7 +6,7 @@ import type { AgentTask } from "agent/types"
 import type { ClaudeQuery, ClaudeQueryFn } from "../types"
 import { planToSessionOptions } from "./session-plan"
 import { makeSpawnAndAdopt } from "./spawn-adopt"
-import { CLAUDE_CONFINEMENT_TABLES } from "./tool-tables"
+import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools"
 
 /**
  * Production seam: the real SDK `query`. The SDK's `Query` (an
@@ -18,8 +18,6 @@ import { CLAUDE_CONFINEMENT_TABLES } from "./tool-tables"
 export function createRealQueryFn(): ClaudeQueryFn {
   return (params) => query(params)
 }
-
-const DISALLOWED = ["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch"]
 
 export interface QueryOptionDeps {
   readonly abortController: AbortController
@@ -46,7 +44,7 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
     additionalDirectories: [],
     settingSources: [],
     permissionMode: "default",
-    disallowedTools: DISALLOWED,
+    disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
     model: task.model,
     effort: task.effort,
     systemPrompt: task.systemPrompt,

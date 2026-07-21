@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/model/tool-tables"
+import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools"
 import { createConfinementPolicy } from "./policy"
 
 const staging = path.resolve("C:\\state\\turns\\019a\\workspace")
