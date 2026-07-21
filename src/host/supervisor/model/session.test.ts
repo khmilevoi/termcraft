@@ -292,6 +292,67 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     await session.stop()
   })
 
+  test("query correlates a geometry request through the request table and decodes the typed ok reply (blocker B1)", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const frameIdentity = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(frameIdentity, { kind: "hit", x: 0, y: 0 })
+    expect(result).not.toBeInstanceOf(SupervisorError)
+    expect(result).not.toBeInstanceOf(ProtocolError)
+    if (result instanceof Error) throw result
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error("expected ok:true")
+    expect(result.frameIdentity).toEqual(frameIdentity)
+    expect(result.result.echoedKind).toBe("query-hit")
+    await session.stop()
+  })
+
+  test("query maps each GeometryQuery kind to its own wire kind (query-rect/describe/layout)", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const frameIdentity = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+
+    const rect = await session.query(frameIdentity, { kind: "rect", elementId: "panel" })
+    if (rect instanceof Error) throw rect
+    if (!rect.ok) throw new Error("expected ok:true")
+    expect(rect.result.echoedKind).toBe("query-rect")
+
+    const describe = await session.query(frameIdentity, { kind: "describe", elementId: "panel" })
+    if (describe instanceof Error) throw describe
+    if (!describe.ok) throw new Error("expected ok:true")
+    expect(describe.result.echoedKind).toBe("query-describe")
+
+    const layout = await session.query(frameIdentity, { kind: "layout" })
+    if (layout instanceof Error) throw layout
+    if (!layout.ok) throw new Error("expected ok:true")
+    expect(layout.result.echoedKind).toBe("query-layout")
+    await session.stop()
+  })
+
+  test("a child's STALE_FRAME refusal is decoded as a typed result, not a thrown/fatal error (§7.1)", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: () => ({ ok: false, code: "STALE_FRAME", reason: "not the current frame" }),
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const frameIdentity = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "999" }
+    const result = await session.query(frameIdentity, { kind: "hit", x: 0, y: 0 })
+    if (result instanceof Error) throw result
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error("expected ok:false")
+    expect(result.code).toBe("STALE_FRAME")
+    expect(session.phase).toBe("ready") // a typed refusal is not a protocol violation
+    await session.stop()
+  })
+
   test("a heartbeat feeds the watchdog; 5 s of silence tears down to failed with HEARTBEAT_TIMEOUT", async () => {
     const child = livePreviewChild(spec, runtimeDeclaration) as ScriptedChild & { emitHeartbeat(): void }
     const clock = createManualClock()
@@ -480,5 +541,139 @@ describe("createHostSession flood detection (2D-3, §8)", () => {
     await waitUntil(() => fatals.length === 1, "onFatal fired on stderr flood")
     expect(session.phase).toBe("failed")
     expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("STDERR_FLOOD")
+  })
+})
+
+// --- control-queue.ts / control-mailbox.ts wired into the live path ---
+
+/**
+ * A request table with an inflated real capacity (10,000) AND a `size()` that always
+ * reports 0, so a queue-capacity test isn't gated by the (much smaller) 64-slot request
+ * table — every enqueued request also holds a table slot until answered, so testing the
+ * queue's OWN 256 boundary needs the table's pre-send guards (`sendRequest`/`stop()`, both
+ * of which read `.size()`) out of the way. Mirrors `fullTableDeps` above, in the opposite
+ * direction: `register`/`resolve`/`supersede`/`clear` still operate on the real 10,000-slot
+ * table, so correlation stays real; only the exposed `.size()` lies.
+ */
+function unboundedTableDeps(base: HostSessionDeps): HostSessionDeps {
+  return {
+    ...base,
+    createRequestTable: (clock, opts) => {
+      const real = createRequestTable(clock, { ...opts, capacity: 10_000 })
+      return { ...real, size: () => 0 }
+    },
+  }
+}
+
+describe("createHostSession outbound control-queue wiring (§8, HOST_BACKPRESSURED/preview.writable)", () => {
+  test("filling the outbound queue to 256 rejects the next discrete command with HOST_BACKPRESSURED and fires onBackpressureChange", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const base = deps(child).deps
+    const backpressureEvents: ("backpressured" | "writable")[] = []
+    const session = createHostSession(spec, unboundedTableDeps({ ...base, onBackpressureChange: (s) => backpressureEvents.push(s) }))
+    const started = await session.start()
+    if (started instanceof Error) throw started
+
+    // Hold writes so the drain's FIRST dequeue never completes: item 1 leaves the queue
+    // (pumpOutbound dequeues eagerly) but is stuck awaiting its write, so items 2..257
+    // accumulate behind it without being dequeued — deterministic, no microtask-timing
+    // guesswork. entries.length reaches 256 exactly at the 257th enqueue (1 dequeued + 256
+    // still queued), which is also where the queue's own `backpressured` flag flips.
+    child.holdWrites()
+    const pending: Promise<unknown>[] = []
+    for (let i = 0; i < 257; i += 1) pending.push(session.resize({ w: 10, h: 10 }))
+    expect(backpressureEvents).toEqual(["backpressured"])
+
+    const overflow = await session.resize({ w: 11, h: 11 })
+    expect(overflow).toBeInstanceOf(SupervisorError)
+    if (overflow instanceof SupervisorError) expect(overflow.code).toBe("HOST_BACKPRESSURED")
+
+    child.releaseWrites()
+    await Promise.all(pending) // let the drain catch up so stop() below is clean
+    await waitUntil(() => backpressureEvents.includes("writable"), "onBackpressureChange fired writable once drained")
+    await session.stop()
+  })
+
+  test("a rejected-by-backpressure request never reaches the wire — total writes equal exactly the 257 accepted resizes", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const base = deps(child).deps
+    const session = createHostSession(spec, unboundedTableDeps(base))
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const writtenAtReady = child.written.length
+
+    child.holdWrites()
+    const pending: Promise<unknown>[] = []
+    for (let i = 0; i < 257; i += 1) pending.push(session.resize({ w: 10, h: 10 }))
+    const overflow = await session.resize({ w: 11, h: 11 })
+    expect(overflow).toBeInstanceOf(SupervisorError)
+
+    child.releaseWrites()
+    await Promise.all(pending) // let all 257 legitimate resizes actually drain to the wire
+    // Exactly 257 new writes — the 258th (backpressured) request contributed none.
+    expect(child.written.length - writtenAtReady).toBe(257)
+    await session.stop()
+  })
+})
+
+describe("createHostSession inbound control-mailbox wiring (§8, CONTROL_BACKPRESSURE)", () => {
+  test("an inbound burst past the 256-entry mailbox is CONTROL_BACKPRESSURE — kills the incarnation", async () => {
+    const clock = createManualClock()
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const base = deps(child, clock).deps
+    const fatals: (SupervisorError | ProtocolError)[] = []
+    const controlEvents: string[] = []
+    const session = createHostSession(spec, { ...base, onFatal: (e) => fatals.push(e), onControlEvent: (e) => controlEvents.push(e.kind) })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+
+    // 257 unsolicited (non-response, non-heartbeat, non-error) envelopes, emitted in one
+    // synchronous burst. The clock is never advanced, so the clock-scheduled mailbox drain
+    // never runs — they must pile up in the bounded mailbox instead of draining instantly.
+    for (let i = 0; i < 257; i += 1) {
+      const envelope: ControlEnvelope = {
+        protocolVersion: 1,
+        kind: "runtime-warning",
+        sessionId: session.identity.sessionId,
+        nonce: session.identity.nonce,
+        messageId: String(1000 + i),
+        body: {},
+      }
+      const framed = frameControl(envelope)
+      if (framed instanceof ProtocolError) throw framed
+      child.emit(framed)
+    }
+    await waitUntil(() => fatals.length === 1, "CONTROL_BACKPRESSURE fatal fired")
+    expect(fatals[0] instanceof SupervisorError && fatals[0].code).toBe("CONTROL_BACKPRESSURE")
+    expect(session.phase).toBe("failed")
+  })
+
+  test("an ordinary unsolicited control envelope still reaches onControlEvent once drained (no regression for the common case)", async () => {
+    const clock = createManualClock()
+    const child = livePreviewChild(spec, runtimeDeclaration)
+    const base = deps(child, clock).deps
+    const controlEvents: string[] = []
+    const session = createHostSession(spec, { ...base, onControlEvent: (e) => controlEvents.push(e.kind) })
+    const started = await session.start()
+    if (started instanceof Error) throw started
+
+    const envelope: ControlEnvelope = {
+      protocolVersion: 1,
+      kind: "runtime-warning",
+      sessionId: session.identity.sessionId,
+      nonce: session.identity.nonce,
+      messageId: "2000",
+      body: {},
+    }
+    const framed = frameControl(envelope)
+    if (framed instanceof ProtocolError) throw framed
+    child.emit(framed)
+    // Give the pump's async decode a real chance to run WITHOUT advancing the clock —
+    // the envelope must sit offered-but-undelivered until the scheduled drain fires.
+    for (let i = 0; i < 50 && controlEvents.length === 0; i += 1) await Promise.resolve()
+    expect(controlEvents).toHaveLength(0)
+    clock.advance(0) // let the scheduled mailbox drain run
+    await waitUntil(() => controlEvents.includes("runtime-warning"), "onControlEvent fired via the mailbox drain")
+    await session.stop()
   })
 })

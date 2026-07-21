@@ -66,6 +66,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     if (envelope.kind === "resize") return handleResize(envelope)
     if (envelope.kind === "set-mode") return handleSetMode(envelope)
     if (envelope.kind === "ping") return handlePing(envelope)
+    if (GEOMETRY_QUERY_KINDS.has(envelope.kind)) return handleQuery(envelope)
     if (envelope.kind === "shutdown") return handleShutdown(envelope)
     return fail(unknownKind(envelope.kind, phase))
   }
@@ -301,6 +302,96 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     if (envelope.requestId === undefined) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "ping must carry a requestId" }))
     // Echo the request kind (§7 has no `pong` in the closed family); correlate by responseTo.
     sendResponse(envelope.requestId, "ping", { ok: true })
+  }
+
+  /** Blocker B1: the closed geometry-query wire kinds (§7 request family names; §7.1: the
+   * Kernel-level `pin-anchor` refinement travels AS `query-hit` — the wire never sees a
+   * fifth kind). */
+  const GEOMETRY_QUERY_KINDS = new Set(["query-hit", "query-rect", "query-describe", "query-layout"])
+
+  /** The identity of the frame the host has ACTUALLY sealed right now — no new seal, no
+   * `frameCounter` increment (§7.1: a query reads the current sealed frame, it never mints one). */
+  function currentFrameIdentity(): FrameIdentity {
+    return { sessionId: identity!.sessionId, nonce: identity!.nonce, sourceHash: sourceHash!, frameSeq: lastFrameSeq }
+  }
+
+  type ParsedGeometryQuery =
+    | { readonly kind: "hit"; readonly x: number; readonly y: number }
+    | { readonly kind: "rect" | "describe"; readonly elementId: string }
+    | { readonly kind: "layout" }
+
+  /**
+   * Validates the request's carried `frameIdentity` (the Kernel resolves a `FrameToken` to
+   * this identity and sends it in the host request — host-supervision §7.1) plus the
+   * per-kind fields the closed query union defines (kernel-command-contract §8.2, redrawn
+   * on the wire without the Kernel-only `pin-anchor` discriminator per §7.1).
+   */
+  function parseGeometryQueryBody(wireKind: string, body: ControlEnvelope["body"]): ProtocolError | { frameIdentity: FrameIdentity; query: ParsedGeometryQuery } {
+    const bad = (reason: string) => new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${wireKind}: ${reason}` })
+    const raw = body.frameIdentity
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return bad("frameIdentity must be an object")
+    const ri = raw as { sessionId?: unknown; nonce?: unknown; sourceHash?: unknown; frameSeq?: unknown }
+    if (typeof ri.sessionId !== "string" || typeof ri.nonce !== "string" || typeof ri.sourceHash !== "string" || typeof ri.frameSeq !== "string") {
+      return bad("frameIdentity.sessionId/nonce/sourceHash/frameSeq must all be strings")
+    }
+    const frameIdentity: FrameIdentity = { sessionId: ri.sessionId, nonce: ri.nonce, sourceHash: ri.sourceHash, frameSeq: ri.frameSeq }
+
+    if (wireKind === "query-hit") {
+      const x = body.x
+      const y = body.y
+      if (typeof x !== "number" || !Number.isSafeInteger(x) || x < 0) return bad("x must be a non-negative integer")
+      if (typeof y !== "number" || !Number.isSafeInteger(y) || y < 0) return bad("y must be a non-negative integer")
+      return { frameIdentity, query: { kind: "hit", x, y } }
+    }
+    if (wireKind === "query-rect" || wireKind === "query-describe") {
+      const elementId = body.elementId
+      if (typeof elementId !== "string" || elementId.length === 0) return bad("elementId must be a non-empty string")
+      return { frameIdentity, query: { kind: wireKind === "query-rect" ? "rect" : "describe", elementId } }
+    }
+    return { frameIdentity, query: { kind: "layout" } }
+  }
+
+  /** Real geometry, resolved from the live `RenderHandle` — never fabricated (CLAUDE.md). */
+  function resolveGeometry(query: ParsedGeometryQuery): Record<string, unknown> {
+    if (renderer === null) return {}
+    if (query.kind === "hit") return { elementId: renderer.hitTest(query.x, query.y) }
+    if (query.kind === "rect") {
+      const rect = renderer.rectOf(query.elementId)
+      return { found: rect !== null, rect }
+    }
+    if (query.kind === "describe") {
+      const described = renderer.describe(query.elementId)
+      return { found: described !== null, kind: described?.kind ?? null }
+    }
+    return { tree: renderer.layoutTree() }
+  }
+
+  function handleQuery(envelope: ControlEnvelope): void {
+    if (envelope.requestId === undefined) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} must carry a requestId` }))
+    if (renderer === null) return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} before mount` }))
+    const parsed = parseGeometryQueryBody(envelope.kind, envelope.body)
+    if (parsed instanceof ProtocolError) return fail(parsed)
+
+    const current = currentFrameIdentity()
+    const { frameIdentity: requested } = parsed
+    const isCurrent =
+      requested.sessionId === current.sessionId &&
+      requested.nonce === current.nonce &&
+      requested.sourceHash === current.sourceHash &&
+      requested.frameSeq === current.frameSeq
+    // §7.1: "If the requested frame is no longer the host's current sealed frame, the host
+    // returns STALE_FRAME without geometry" — a normal typed refusal, not a protocol violation.
+    if (!isCurrent) {
+      sendResponse(envelope.requestId, envelope.kind, {
+        ok: false,
+        code: "STALE_FRAME",
+        reason: `requested frame ${requested.frameSeq} is not the current sealed frame ${current.frameSeq}`,
+      })
+      return
+    }
+
+    const result = resolveGeometry(parsed.query)
+    sendResponse(envelope.requestId, envelope.kind, { ok: true, frameIdentity: current, result })
   }
 
   function handleShutdown(envelope: ControlEnvelope): void {

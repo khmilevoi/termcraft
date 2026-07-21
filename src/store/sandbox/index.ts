@@ -16,12 +16,12 @@ export type {
   ReadSetFileSnapshot,
   Sha256Hex,
   StagedFile,
+  StagedTurnReadSet,
   StagingFsDeps,
   StagingPageSource,
   StagingRuntimeDoc,
   StagingStore,
   StagingStoreDeps,
-  TurnReadSet,
   TurnWorkspace,
 } from "./types"
 

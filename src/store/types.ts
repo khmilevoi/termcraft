@@ -1,13 +1,13 @@
 import type { ChatHeader, ChatRecord } from "entities/chat"
 import type { PageSlug } from "entities/page"
-import type { Pin } from "entities/pin"
+import type { Pin, PinEvent } from "entities/pin"
 import type { Clock } from "infrastructure/clock"
 import type { DurabilityError } from "infrastructure/durability"
 
 import type { LeaseLockApi, ProjectLease } from "store/lease"
 import type { PageCursor } from "store/jsonl"
 import type { SafeFsError, SafeProjectFs, SafeProjectFsDeps, StorageLimitExceededError } from "store/safe-fs"
-import type { ManifestCorruptError, ManifestTooNewError, ProjectManifest, WorkspaceStateLoad } from "store/toml"
+import type { ManifestCorruptError, ManifestTooNewError, ProjectManifest, WorkspaceLocalState, WorkspaceStateLoad } from "store/toml"
 import type {
   CommittedMarker,
   JournalCorruptError,
@@ -21,6 +21,7 @@ import type {
   TurnAdmissionInput,
   TurnFinalizeInput,
   TurnTerminalizeInput,
+  WriteMutex,
 } from "store/transaction"
 import type { TrustStore } from "store/trust"
 import type {
@@ -56,10 +57,20 @@ import type { JsonlOpenError } from "./model/factory"
 //    landed `store/transaction` engine (`runTransaction`) never split prepare from apply —
 //    every wrapper (T15) calls it as one atomic prepare-through-roll-forward async
 //    function — and every wrapper input already carries its own `mutex`/`permit` fields.
-//    Rather than surface that plumbing on the port (a caller would have to acquire a
-//    permit it can never meaningfully hold onto between two engine calls), this
-//    `TransactionEngine` owns one `WriteMutex` internally and acquires/releases a permit
-//    around each call itself; a caller never sees `ProjectWritePermit` at all.
+//    Rather than surface that plumbing on every named method (a caller would otherwise have
+//    to acquire a permit it can never meaningfully hold onto between two engine calls), each
+//    `TransactionEngine` method acquires/releases its own permit internally; a caller of
+//    those methods never sees `ProjectWritePermit` at all.
+//
+//    UPDATED (phase 6 blocker B2): export preparation still needs to hold ONE SHORT permit
+//    across several non-engine reads (capture a coherent source/settings snapshot), release
+//    it before rendering, then reacquire the mutex for publication (kernel contract §7.5,
+//    §12.5) — a need the paragraph above did not anticipate. `OpenProject.writeMutex` now
+//    exposes the SAME `WriteMutex` instance every `TransactionEngine` method acquires
+//    against internally (never a second, independently-created mutex — that would silently
+//    break single-writer exclusion). A caller that only invokes named `TransactionEngine`
+//    methods still never touches `ProjectWritePermit`; only a caller that needs to hold
+//    exclusion across multiple non-engine steps reaches for `writeMutex` directly.
 // 2. `TxOutcome`/`RecoveryOutcome` are kept as NAMED types for the phase-6 lift, but
 //    `TransactionEngine`'s own methods return the landed wrappers' actual return type
 //    (`Error | CommittedMarker`, the plain errore union every other boundary in this
@@ -187,6 +198,98 @@ export type TransactionError =
   | MigrationStaleError
   | MigrationBackupFailedError
 
+// ---- named domain methods (phase-6 blocker B3) -------------------------------------
+//
+// `core` may not import `store/transaction`'s submodules (module DAG, CLAUDE.md
+// "Imports"), so the six MVP commands the plan names — `chat.create`, `page.renameTitle`,
+// `page.reorder`, `page.removeConfirm`, `pin.setStatus`, `model.select`, plus
+// active-page/active-chat writes and checkpoint persistence — need a legal path that never
+// requires a caller to learn `TransactionOperation`'s shape. Each method below builds its
+// own operation(s) internally from `store/transaction`'s already-landed builders
+// (`buildManifestOperation`, `buildWorkspaceLocalPatchOperation`,
+// `buildStandalonePinEventOperation`, `observeFileImage`) and runs them through the same
+// `runProjectMutation` base engine every other project mutation uses — `core` sees only
+// these named methods and their plain-data inputs.
+
+export interface CreateChatInput {
+  readonly transactionId: string
+  readonly actionId: string
+  readonly chatId: string
+  readonly projectId: string
+  readonly createdAt: string
+}
+
+export interface SetActiveChatInput {
+  readonly transactionId: string
+  readonly actionId: string
+  /** `null` clears the explicit choice — the caller falls back to the newest valid chat (storage-identity §6.1). */
+  readonly activeChatId: string | null
+  readonly createdAt: string
+}
+
+export interface SetActivePageInput {
+  readonly transactionId: string
+  readonly actionId: string
+  /** `null` clears the explicit choice — the caller falls back to the first listed page (storage-identity §6.1). */
+  readonly activePageSlug: PageSlug | null
+  readonly createdAt: string
+}
+
+export interface RenamePageTitleInput {
+  readonly transactionId: string
+  readonly actionId: string
+  readonly pageSlug: PageSlug
+  /** The page's complete new source bytes (the `meta.title` edit is baked into the source by the caller — a page title is not a manifest field, entities/page's `PageMeta`). */
+  readonly newBytes: Uint8Array
+  readonly createdAt: string
+}
+
+export interface ReorderPagesInput {
+  readonly transactionId: string
+  readonly actionId: string
+  /** The portable manifest as currently on disk — read by the caller first, matching `TurnFinalizeInput.manifestBefore`'s convention. */
+  readonly manifestBefore: ProjectManifest
+  readonly orderedSlugs: readonly PageSlug[]
+  readonly createdAt: string
+}
+
+export interface RemovePageInput {
+  readonly transactionId: string
+  readonly actionId: string
+  readonly manifestBefore: ProjectManifest
+  readonly pageSlug: PageSlug
+  readonly createdAt: string
+}
+
+export interface AppendPinEventInput {
+  readonly transactionId: string
+  readonly actionId: string
+  readonly pageSlug: PageSlug
+  /** Needed only to mint a NEW comments-log header when the page has no pins yet — a page's very first pin event durably creates its header in the SAME transaction. */
+  readonly projectId: string
+  /** Fully built by the caller — a user-driven `pin:status` (`pin.setStatus`, `actionId` set) or a standalone `pin:created`. */
+  readonly event: PinEvent
+  readonly createdAt: string
+}
+
+export interface SetWorkspaceLocalInput {
+  readonly transactionId: string
+  readonly actionId: string
+  /** Shallow-merged onto the current on-disk state (or the §6.1 defaults if absent/corrupt) — an omitted key keeps its current value. */
+  readonly patch: Partial<WorkspaceLocalState>
+  readonly createdAt: string
+}
+
+export interface AdvanceSessionCheckpointInput {
+  readonly transactionId: string
+  readonly actionId: string
+  readonly chatId: string
+  readonly sessionScopeId: string
+  readonly sessionId: string
+  readonly recordCount: number
+  readonly createdAt: string
+}
+
 /**
  * Every mutating method acquires and releases its own `ProjectWritePermit` internally
  * (see divergence note 1) — a caller passes only the wrapper's domain fields, never a
@@ -199,6 +302,25 @@ export interface TransactionEngine {
   terminalizeTurn(input: Omit<TurnTerminalizeInput, "mutex" | "permit">): Promise<Error | CommittedMarker>
   /** Startup roll-forward before Workspace opens (§10.2 / §12). */
   recover(): Promise<RecoveryOutcome>
+
+  /** `chat.create`: mints a new chat header (create-new — a collision surfaces as the engine's ordinary CAS conflict). */
+  createChat(input: CreateChatInput): Promise<Error | CommittedMarker>
+  /** Active-chat write (storage-identity §6.1). */
+  setActiveChat(input: SetActiveChatInput): Promise<Error | CommittedMarker>
+  /** Active-page write (storage-identity §6.1). */
+  setActivePage(input: SetActivePageInput): Promise<Error | CommittedMarker>
+  /** `page.renameTitle`: replaces one canonical page's source bytes in place. */
+  renamePageTitle(input: RenamePageTitleInput): Promise<Error | CommittedMarker>
+  /** `page.reorder`: rewrites `project.toml`'s page order — a no-op plan when the order is already current. */
+  reorderPages(input: ReorderPagesInput): Promise<Error | CommittedMarker>
+  /** `page.removeConfirm`: drops a page from the manifest and deletes its canonical source and comments log. */
+  removePage(input: RemovePageInput): Promise<Error | CommittedMarker>
+  /** `pin.setStatus` (and standalone `pin:created`): one append-only comments-log event. */
+  appendPinEvent(input: AppendPinEventInput): Promise<Error | CommittedMarker>
+  /** `model.select` and every other machine-local field write share this one generic patch. */
+  setWorkspaceLocal(input: SetWorkspaceLocalInput): Promise<Error | CommittedMarker>
+  /** Checkpoint persistence (storage-identity §6.2): hashes the target chat's current prefix and durably records the advanced checkpoint. */
+  advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput): Promise<Error | CommittedMarker>
 }
 
 // ---- trust (storage-identity §8) ---------------------------------------------------
@@ -228,7 +350,7 @@ export interface ProjectionStore {
 
 // ---- staging (turn-durability §6.2, projections §9) ---------------------------------
 
-export type { CreateTurnWorkspaceInput, StagingError, StagingStore, TurnWorkspace } from "store/sandbox"
+export type { CreateTurnWorkspaceInput, StagedTurnReadSet, StagingError, StagingStore, TurnWorkspace } from "store/sandbox"
 
 // ---- migration (storage-identity §12) ------------------------------------------------
 
@@ -288,6 +410,15 @@ export interface OpenProject {
   readonly recovery: RecoveryOutcome
   readonly orphanTurns: readonly OrphanTurnOutcome[]
   readonly transactions: TransactionEngine
+  /**
+   * The SAME `WriteMutex` instance `transactions`'s own methods acquire/release against
+   * internally (blocker B2) — never a second, independently-created mutex, which would
+   * silently break single-writer exclusion. Export preparation is the reason this exists:
+   * it holds one short permit while it captures a coherent source/settings snapshot,
+   * releases it before rendering, then reacquires the mutex for publication (kernel
+   * contract §7.5, §12.5) — a sequence no single `TransactionEngine` method call can express.
+   */
+  readonly writeMutex: WriteMutex
   readonly manifest: ManifestStore
   readonly workspaceState: WorkspaceStateStore
   readonly chats: ChatStore

@@ -32,6 +32,7 @@ import type { ProjectManifest } from "store/toml"
 import {
   JSONL_MAX_PHYSICAL_LINE_BYTES,
   JSONL_LF,
+  advanceSessionCheckpoint as computeAdvancedSessionCheckpoint,
   buildChatIndex,
   createNodeChatIndexPageStore,
   createNodeChatIndexStateStore,
@@ -48,6 +49,9 @@ import {
 import type { ChatIndexCanonicalSource, ChatIndexDeps, ChatIndexStateStore } from "store/jsonl"
 import {
   admitTurn,
+  buildManifestOperation,
+  buildPinEventOperations,
+  buildWorkspaceLocalPatchOperation,
   canonicalPagePath,
   chatJsonlPath,
   createWriteMutex,
@@ -55,6 +59,7 @@ import {
   finalizeTurn,
   nodeRecoveryFsDeps,
   nodeTransactionFsDeps,
+  observeFileImage,
   pageCommentsPath,
   readJournalFormat,
   recoverTransactions,
@@ -105,6 +110,19 @@ import type {
   TransactionEngine,
   TxOutcome,
   WorkspaceStateStore,
+} from "../types"
+// `TransactionEngine`'s named-method inputs (phase-6 blocker B3) — kept in their own import
+// so the long list above (already the module's pre-existing surface) stays untouched.
+import type {
+  AdvanceSessionCheckpointInput,
+  AppendPinEventInput,
+  CreateChatInput,
+  RemovePageInput,
+  RenamePageTitleInput,
+  ReorderPagesInput,
+  SetActiveChatInput,
+  SetActivePageInput,
+  SetWorkspaceLocalInput,
 } from "../types"
 
 // `store/model/factory.ts` — the composition-root entry point (T19). Wires every already-
@@ -203,8 +221,19 @@ async function withPermit<T>(mutex: WriteMutex, fn: (permit: ProjectWritePermit)
 
 // ---- transaction engine (turn-durability §4) -----------------------------------------
 
-function makeTransactionEngine(fs: TransactionFsDeps, deps: StoreDeps): TransactionEngine {
-  const mutex = createWriteMutex()
+/** `payload` from a builder's optional `[payloadId, bytes]` tuple, as the `Map` every `runProjectMutation` call needs. */
+function payloadMapOf(payload?: readonly [string, Uint8Array]): Map<string, Uint8Array> {
+  return payload === undefined ? new Map() : new Map([payload])
+}
+
+/**
+ * `mutex` is created ONCE by the caller (`openProject`/`createProject`) and threaded in
+ * here rather than created internally, so the SAME instance can also be exposed as
+ * `OpenProject.writeMutex` (blocker B2) — every method below acquires/releases against it,
+ * and so does a caller holding `writeMutex` directly; there is exactly one exclusion
+ * primitive for this open project, never two.
+ */
+function makeTransactionEngine(mutex: WriteMutex, fs: TransactionFsDeps, deps: StoreDeps): TransactionEngine {
   const wrapperDeps: TransactionWrapperDeps = { fs, append: { newPayloadId: deps.uuidv7 } }
 
   const engine: TransactionEngine = {
@@ -223,6 +252,233 @@ function makeTransactionEngine(fs: TransactionFsDeps, deps: StoreDeps): Transact
     async recover() {
       const recoveryFsDeps = buildRecoveryFsDeps(fs.safeFs, deps)
       return withPermit(mutex, (permit) => recoverTransactions(recoveryFsDeps, mutex, permit))
+    },
+
+    // ---- named domain methods (phase-6 blocker B3) -----------------------------------
+    // `core` never learns `TransactionOperation`'s shape: each method below builds its own
+    // operation(s) from the already-landed builders (`observeFileImage`,
+    // `buildManifestOperation`, `buildWorkspaceLocalPatchOperation`,
+    // `buildStandalonePinEventOperation`) and runs them through the same `runProjectMutation`
+    // base engine every other project mutation already uses.
+
+    async createChat(input: CreateChatInput) {
+      return withPermit(mutex, async (permit) => {
+        const header: ChatHeader = { kind: "chat", formatVersion: 1, projectId: input.projectId, chatId: input.chatId, createdAt: input.createdAt }
+        const headerLine = encodeChatHeaderLine(header)
+        if (headerLine instanceof Error) return headerLine
+
+        const payloadId = deps.uuidv7()
+        const operation: TransactionOperation = {
+          index: 0,
+          target: chatJsonlPath(input.chatId),
+          mode: "replace",
+          oldImage: { state: "absent" }, // create-new: an existing header at this chatId surfaces as the engine's ordinary CAS conflict, never a silent overwrite
+          newImage: { state: "file", sha256: sha256Hex(headerLine), size: headerLine.byteLength },
+          payloadId,
+        }
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "chat-creation",
+          operations: [operation],
+          payloads: new Map([[payloadId, headerLine]]),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async setActiveChat(input: SetActiveChatInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildWorkspaceLocalPatchOperation(wrapperDeps, (current) => ({ ...current, activeChatId: input.activeChatId }))
+        if (built instanceof Error) return built
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "local-state-write",
+          operations: [built.operation],
+          payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async setActivePage(input: SetActivePageInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildWorkspaceLocalPatchOperation(wrapperDeps, (current) => ({ ...current, activePageSlug: input.activePageSlug }))
+        if (built instanceof Error) return built
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "local-state-write",
+          operations: [built.operation],
+          payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async renamePageTitle(input: RenamePageTitleInput) {
+      return withPermit(mutex, async (permit) => {
+        const target = canonicalPagePath(input.pageSlug)
+        const oldImage = observeFileImage(fs, target)
+        if (oldImage instanceof Error) return oldImage
+
+        const payloadId = deps.uuidv7()
+        const operation: TransactionOperation = {
+          index: 0,
+          target,
+          mode: "replace",
+          oldImage,
+          newImage: { state: "file", sha256: sha256Hex(input.newBytes), size: input.newBytes.byteLength },
+          payloadId,
+        }
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "title-edit",
+          operations: [operation],
+          payloads: new Map([[payloadId, input.newBytes]]),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async reorderPages(input: ReorderPagesInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildManifestOperation(wrapperDeps, input.manifestBefore, input.orderedSlugs)
+        if (built instanceof Error) return built
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "page-reorder",
+          // `built === null` when the requested order already matches the durable manifest —
+          // a legal, deterministic no-op transaction rather than a special-cased early return.
+          operations: built === null ? [] : [{ ...built.operation, index: 0 }],
+          payloads: built === null ? new Map() : payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async removePage(input: RemovePageInput) {
+      return withPermit(mutex, async (permit) => {
+        const remainingSlugs = input.manifestBefore.pages.filter((slug) => slug !== input.pageSlug)
+        const manifestOp = buildManifestOperation(wrapperDeps, input.manifestBefore, remainingSlugs)
+        if (manifestOp instanceof Error) return manifestOp
+
+        const canonicalTarget = canonicalPagePath(input.pageSlug)
+        const canonicalOldImage = observeFileImage(fs, canonicalTarget)
+        if (canonicalOldImage instanceof Error) return canonicalOldImage
+
+        const commentsTarget = pageCommentsPath(input.pageSlug)
+        const commentsOldImage = observeFileImage(fs, commentsTarget)
+        if (commentsOldImage instanceof Error) return commentsOldImage
+
+        const operations: TransactionOperation[] = []
+        const payloads = new Map<string, Uint8Array>()
+        if (manifestOp !== null) {
+          operations.push({ ...manifestOp.operation, index: operations.length })
+          if (manifestOp.payload !== undefined) payloads.set(manifestOp.payload[0], manifestOp.payload[1])
+        }
+        // Deleting an already-absent target is a documented no-op at apply time (`engine.ts`'s
+        // `applyFixedOperation`: current already matches newImage=absent) — so both deletes are
+        // always included, whether or not this page's canonical source/comments log exist.
+        operations.push({ index: operations.length, target: canonicalTarget, mode: "delete", oldImage: canonicalOldImage, newImage: { state: "absent" } })
+        operations.push({ index: operations.length, target: commentsTarget, mode: "delete", oldImage: commentsOldImage, newImage: { state: "absent" } })
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "page-remove",
+          operations,
+          payloads,
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async appendPinEvent(input: AppendPinEventInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildPinEventOperations(wrapperDeps, { pageSlug: input.pageSlug, projectId: input.projectId, event: input.event })
+        if (built instanceof Error) return built
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "pin-event",
+          operations: built.operations,
+          payloads: built.payloads,
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async setWorkspaceLocal(input: SetWorkspaceLocalInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildWorkspaceLocalPatchOperation(wrapperDeps, (current) => ({ ...current, ...input.patch }))
+        if (built instanceof Error) return built
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "local-state-write",
+          operations: [built.operation],
+          payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        })
+      })
+    },
+
+    async advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput) {
+      return withPermit(mutex, async (permit) => {
+        const chatBytes = fs.safeFs.readFile(chatJsonlPath(input.chatId))
+        if (chatBytes instanceof Error) return chatBytes
+
+        const checkpoint = computeAdvancedSessionCheckpoint({
+          chatId: input.chatId,
+          sessionScopeId: input.sessionScopeId,
+          sessionId: input.sessionId,
+          recordCount: input.recordCount,
+          chunks: [chatBytes],
+        })
+        if (checkpoint instanceof Error) return checkpoint
+
+        const built = buildWorkspaceLocalPatchOperation(wrapperDeps, (current) => ({
+          ...current,
+          // One checkpoint per (chatId, sessionScopeId) — replace the matching entry if one
+          // already exists, otherwise append (storage-identity §6.2).
+          sessionCheckpoints: [
+            ...current.sessionCheckpoints.filter((entry) => entry.chatId !== checkpoint.chatId || entry.sessionScopeId !== checkpoint.sessionScopeId),
+            checkpoint,
+          ],
+        }))
+        if (built instanceof Error) return built
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "local-state-write",
+          operations: [built.operation],
+          payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        })
+      })
     },
   }
   return engine
@@ -613,12 +869,14 @@ function assembleOpenProject(input: {
   readonly recovery: OpenProject["recovery"]
   readonly orphanTurns: readonly OrphanTurnOutcome[]
   readonly engine: TransactionEngine
+  /** The SAME `WriteMutex` `engine` acquires/releases against internally (blocker B2) — never a second instance. */
+  readonly writeMutex: WriteMutex
   readonly manifestStore: ManifestStore
   readonly workspaceStateStore: WorkspaceStateStore
   /** storage-identity §5.2 identity anchor: every chat/comments header opened under this project must name exactly this `projectId` (finding #2). */
   readonly projectId: string
 }): OpenProject {
-  const { root, safeFs, lease, deps, recovery, orphanTurns, engine, manifestStore, workspaceStateStore, projectId } = input
+  const { root, safeFs, lease, deps, recovery, orphanTurns, engine, writeMutex, manifestStore, workspaceStateStore, projectId } = input
 
   let closed = false
   const project: OpenProject = {
@@ -628,6 +886,7 @@ function assembleOpenProject(input: {
     recovery,
     orphanTurns,
     transactions: engine,
+    writeMutex,
     manifest: manifestStore,
     workspaceState: workspaceStateStore,
     chats: makeChatStore(safeFs, deps, projectId),
@@ -704,11 +963,12 @@ async function openProject(deps: StoreDeps, root: AbsPath): Promise<Error | Open
   }
 
   // 7. orphan turn scan
-  const engine = makeTransactionEngine(engineFsDeps, deps)
+  const writeMutex = createWriteMutex()
+  const engine = makeTransactionEngine(writeMutex, engineFsDeps, deps)
   const orphanTurns = await scanOrphanTurns({ safeFs, engine, deps, projectId: manifestRead.projectId })
 
   // 8. load stores + 9. open
-  return assembleOpenProject({ root, safeFs, lease, deps, recovery, orphanTurns, engine, manifestStore, workspaceStateStore, projectId: manifestRead.projectId })
+  return assembleOpenProject({ root, safeFs, lease, deps, recovery, orphanTurns, engine, writeMutex, manifestStore, workspaceStateStore, projectId: manifestRead.projectId })
 }
 
 // ---- new-project creation (storage-identity §14.2) ---------------------------------------
@@ -755,7 +1015,8 @@ async function createProject(deps: StoreDeps, input: CreateProjectInput): Promis
     return journalFormatWritten
   }
 
-  const engine = makeTransactionEngine(engineFsDeps, deps)
+  const writeMutex = createWriteMutex()
+  const engine = makeTransactionEngine(writeMutex, engineFsDeps, deps)
 
   const projectId = deps.uuidv7()
   const chatId = deps.uuidv7()
@@ -820,6 +1081,7 @@ async function createProject(deps: StoreDeps, input: CreateProjectInput): Promis
     recovery: { ok: true, recovered: 0, discarded: 0, alreadyComplete: 0 },
     orphanTurns: [],
     engine,
+    writeMutex,
     manifestStore: makeManifestStore(safeFs),
     workspaceStateStore: makeWorkspaceStateStore(safeFs),
     projectId,

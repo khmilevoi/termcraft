@@ -79,8 +79,14 @@ export interface PinsReadSetEntry {
  * `TurnWorkspace.readSet` (or `turn.json` directly) and translates it 1:1 into
  * `store/transaction`'s own `TurnReadSet` (`FileImage`/`AppendBase`-shaped) for the
  * finalization CAS — that translation is the caller's job, not this module's.
+ *
+ * NAMED `StagedTurnReadSet`, not `TurnReadSet` (phase-6 decision C6): `store/transaction`
+ * already exports its OWN `TurnReadSet` — a structurally different, `FileImage`/`AppendBase`
+ * -keyed finalization-time shape — and both used to reach `store`'s public surface under the
+ * identical name. Renaming this staging-time one is what lets `store/index.ts` re-export
+ * both without a collision.
  */
-export interface TurnReadSet {
+export interface StagedTurnReadSet {
   readonly manifest: ReadSetFileSnapshot | null
   readonly canonicalPages: readonly CanonicalPageReadSetEntry[]
   readonly chat: ReadSetAppendBase
@@ -92,7 +98,7 @@ export interface TurnReadSet {
  * §6.2/§7.2). `manifestSlice` is the already-assembled `pages.json` bytes: unlike the
  * canonical pages and runtime docs, the manifest slice is synthesized fresh per turn — not
  * copied from an existing file — so it is handed in as bytes rather than a source path.
- * `readSet` is the send-time read set captured at admission (see {@link TurnReadSet}) —
+ * `readSet` is the send-time read set captured at admission (see {@link StagedTurnReadSet}) —
  * durably persisted in `turn.json` rather than kept only in caller memory.
  */
 export interface CreateTurnWorkspaceInput {
@@ -103,7 +109,7 @@ export interface CreateTurnWorkspaceInput {
   readonly pages: readonly StagingPageSource[]
   readonly manifestSlice: Uint8Array
   readonly runtimeDocs: readonly StagingRuntimeDoc[]
-  readonly readSet: TurnReadSet
+  readonly readSet: StagedTurnReadSet
 }
 
 /** One file staged into the workspace, with the hash computed while it was copied. */
@@ -124,7 +130,7 @@ export interface TurnWorkspace {
   readonly turnJsonPath: AbsPath
   readonly files: readonly StagedFile[]
   readonly totalBytes: number
-  readonly readSet: TurnReadSet
+  readonly readSet: StagedTurnReadSet
 }
 
 /** Everything `createStagingStore` needs; every impure boundary is injected. */
@@ -145,4 +151,20 @@ export interface StagingStoreDeps {
  */
 export interface StagingStore {
   createTurnWorkspace(input: CreateTurnWorkspaceInput): Promise<StagingError | TurnWorkspace>
+  /**
+   * Release the machine-local workspace once its candidate is frozen (or the turn is
+   * abandoned) — the "workspace retirement" half of phase-6 blocker B3's staging exposure
+   * (`core/ports/staging.ts`'s already-declared `StagingService.retireWorkspace`, which this
+   * satisfies). Removes the WHOLE turn tree (`turns/<turnId>/`, workspace and `turn.json`
+   * together), never merely the workspace subdirectory — a retired turn has no further use
+   * for either. Idempotent: retiring an already-retired (or never-created) turn is a no-op,
+   * matching `WriteMutex.release`'s own "already gone is not an error" convention.
+   *
+   * DIVERGENCE (documented, not hidden): design §6.5/§14.4 also names a QUARANTINE outcome —
+   * an unconfirmed process-tree exit retains the tree for operator diagnosis instead of
+   * deleting it. That is a distinct, not-yet-landed capability (the crash-recovery
+   * confirmation gap tracked outside this task); this method is the ordinary
+   * confirmed-exit/abandoned-turn release path only.
+   */
+  retireWorkspace(workspace: TurnWorkspace): Promise<StagingError | undefined>
 }

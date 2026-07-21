@@ -40,6 +40,16 @@ export interface ScriptedChild extends SpawnedChild {
   simulateExit(options?: { code?: number; signal?: string }): void
   readonly written: Uint8Array[]
   onWrite?: (bytes: Uint8Array) => void
+  /**
+   * Test control (§8 outbound-queue backpressure tests): while held, `stdin.write` returns
+   * a promise that stays pending until `releaseWrites()` — the write is still recorded
+   * (`written`/`onWrite` fire immediately, matching real stdin's synchronous buffering), but
+   * the CALLER'S `await writeFramed(...)` does not resolve, so a queue's own drain loop
+   * genuinely cannot advance past the held write. Lets a test fill a bounded outbound queue
+   * to its real capacity without racing microtask timing.
+   */
+  holdWrites(): void
+  releaseWrites(): void
 }
 
 /** A minimal async queue: `push`/`end` producer, `[Symbol.asyncIterator]` consumer. */
@@ -100,11 +110,15 @@ export function createScriptedChild(onWrite?: (bytes: Uint8Array) => void): Scri
     resolveExited(code)
   }
 
+  let holding = false
+  let heldWrites: (() => void)[] = []
+
   const stdin: ChildStdin = {
     write(bytes) {
       written.push(bytes)
       child.onWrite?.(bytes)
-      return true
+      if (!holding) return true
+      return new Promise<void>((resolve) => heldWrites.push(resolve))
     },
     flush() {
       return true
@@ -132,6 +146,15 @@ export function createScriptedChild(onWrite?: (bytes: Uint8Array) => void): Scri
     endStdout: () => stdout.end(),
     emitStderr: (bytes) => stderr.push(bytes),
     simulateExit: (options) => settle(options?.code ?? 0, options?.signal ?? null),
+    holdWrites: () => {
+      holding = true
+    },
+    releaseWrites: () => {
+      holding = false
+      const resolvers = heldWrites
+      heldWrites = []
+      for (const resolve of resolvers) resolve()
+    },
     written,
     onWrite,
   }

@@ -3,6 +3,7 @@ import { createRoot } from "@opentui/react"
 
 import type { Size } from "../../types"
 import type { CapturedFrame, RenderHandle } from "../types"
+import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry"
 import { styledRowsFromSpanLines } from "./span-rows"
 import { makeHeadlessStreams } from "./streams"
 
@@ -50,6 +51,18 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
     destroy() {
       root.unmount()
       renderer.destroy()
+    },
+    hitTest(x, y) {
+      return hitTestRenderer(renderer, x, y)
+    },
+    rectOf(id) {
+      return rectOfElement(renderer, id)
+    },
+    describe(id) {
+      return describeElement(renderer, id)
+    },
+    layoutTree() {
+      return layoutTreeOf(renderer)
     },
   }
 }

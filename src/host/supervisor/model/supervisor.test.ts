@@ -117,6 +117,9 @@ function fakeFactory(opts?: { startFor?: (attempt: number) => ProtocolError | Su
         async ping() {
           return ready
         },
+        async query(frameIdentity) {
+          return { ok: true, frameIdentity, result: {} }
+        },
       },
       crash(error) {
         phase = "failed"

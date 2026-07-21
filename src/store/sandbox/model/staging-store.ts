@@ -10,10 +10,10 @@ import type {
   CreateTurnWorkspaceInput,
   Sha256Hex,
   StagedFile,
+  StagedTurnReadSet,
   StagingFsDeps,
   StagingStore,
   StagingStoreDeps,
-  TurnReadSet,
   TurnWorkspace,
 } from "../types"
 import { computeProjectKey } from "./project-key"
@@ -273,7 +273,7 @@ interface TurnJsonRecord {
   readonly projectId: string
   readonly targetChatId: string
   readonly createdAt: string
-  readonly readSet: TurnReadSet
+  readonly readSet: StagedTurnReadSet
   readonly files: readonly StagedFile[]
 }
 
@@ -336,6 +336,16 @@ export function createStagingStore(deps: StagingStoreDeps): StagingStore {
         readSet: input.readSet,
       }
       return workspace
+    },
+
+    async retireWorkspace(workspace: TurnWorkspace) {
+      // The turn's WHOLE tree (`turns/<turnId>/`) — `workspace.root` names only the nested
+      // `workspace/` subdirectory `turn.json` sits alongside, and a retired turn has no
+      // further use for either. `removeTree` is a best-effort primitive (it warns and swallows
+      // its own failures, matching every other cleanup call site in this file), so retiring an
+      // already-gone or never-created turn is the same idempotent no-op.
+      deps.fs.removeTree(path.dirname(workspace.turnJsonPath))
+      return undefined
     },
   }
 }

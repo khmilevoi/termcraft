@@ -1,6 +1,7 @@
-export type { CapturedFrame, RenderHandle, RenderSize } from "./types"
+export type { CapturedFrame, DescribedElement, LayoutNode, Rect, RenderHandle, RenderSize } from "./types"
 export { rgbaToColor } from "./model/color"
 export { attributesToMask } from "./model/attributes"
 export { styledRowsFromSpanLines } from "./model/span-rows"
 export { makeHeadlessStreams } from "./model/streams"
 export { createHeadlessRenderer, renderNodeOnce } from "./model/renderer"
+export { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./model/geometry"

@@ -4,7 +4,7 @@ import type { ChatAgentRecord, ChatRecord, ChatSystemCancelledRecord, ChatSystem
 import type { PageSlug } from "entities/page"
 import type { PinEvent, PinStatusEvent } from "entities/pin"
 import type { AppendBase, AppendBuilderDeps } from "store/jsonl"
-import { buildChatAppend, buildPinAppend, computeAfterImage, readChatJsonl, readPinsJsonl, sha256Hex } from "store/jsonl"
+import { buildChatAppend, buildPinAppend, computeAfterImage, encodeCommentsHeaderLine, encodePinEventLine, readChatJsonl, readPinsJsonl, sha256Hex } from "store/jsonl"
 import { FsAccessError, isNotFound } from "store/safe-fs"
 import type { SafeFsError } from "store/safe-fs"
 import type { ProjectManifest, WorkspaceLocalState } from "store/toml"
@@ -157,8 +157,14 @@ function fileImageForBefore(base: AppendBase): FileImage {
   return base.length === 0 ? { state: "absent" } : { state: "file", sha256: base.prefixSha256, size: base.length }
 }
 
-/** Observe a fixed (non-JSONL) managed target's current `FileImage`, e.g. `project.toml` or one canonical page. */
-function observeFileImage(fs: TransactionFsDeps, relPath: string): SafeFsError | FileImage {
+/**
+ * Observe a fixed (non-JSONL) managed target's current `FileImage`, e.g. `project.toml` or
+ * one canonical page. Exported (phase-6 blocker B3) so `store/model/factory.ts`'s named
+ * `TransactionEngine` methods can build their own `replace`/`delete` operations from the
+ * same current-state observation this file's own wrappers already use — reusing the
+ * primitive rather than re-implementing the identical `readFile`/`isNotFound` dance.
+ */
+export function observeFileImage(fs: TransactionFsDeps, relPath: string): SafeFsError | FileImage {
   const bytes = fs.safeFs.readFile(relPath)
   if (bytes instanceof Error && bytes instanceof FsAccessError && isNotFound(bytes)) return { state: "absent" }
   if (bytes instanceof Error) return bytes
@@ -329,8 +335,14 @@ function buildChangedPageOperation(deps: TransactionWrapperDeps, page: ChangedPa
   }
 }
 
-/** turn-durability §7.4 item 2 — `null` when `validatedPageSlugs` already matches the durable manifest (no unrelated file is touched). */
-function buildManifestOperation(deps: TransactionWrapperDeps, before: ProjectManifest, validatedPageSlugs: readonly PageSlug[]): SafeFsError | BuiltOperation | null {
+/**
+ * turn-durability §7.4 item 2 — `null` when `validatedPageSlugs` already matches the durable
+ * manifest (no unrelated file is touched). Exported (phase-6 blocker B3): `page.reorder` and
+ * `page.removeConfirm` are both, at bottom, "rewrite `project.toml`'s page order" — the exact
+ * operation this helper already builds for turn finalization — so `store/model/factory.ts`'s
+ * named methods reuse it rather than re-deriving the same replace operation a second way.
+ */
+export function buildManifestOperation(deps: TransactionWrapperDeps, before: ProjectManifest, validatedPageSlugs: readonly PageSlug[]): SafeFsError | BuiltOperation | null {
   const unchanged = before.pages.length === validatedPageSlugs.length && before.pages.every((slug, at) => slug === validatedPageSlugs[at])
   if (unchanged) return null
 
@@ -346,14 +358,21 @@ function buildManifestOperation(deps: TransactionWrapperDeps, before: ProjectMan
   }
 }
 
-/** turn-durability §7.4 item 3 — composed from the THEN-CURRENT local file so unrelated preferences/session checkpoints are preserved. */
-function buildWorkspaceLocalOperation(deps: TransactionWrapperDeps, requestedActivePage: PageSlug): SafeFsError | BuiltOperation {
+/**
+ * Build a `workspace.local.toml` replace operation from a caller-supplied patch of the
+ * THEN-CURRENT local state, so unrelated preferences/session checkpoints are preserved
+ * (turn-durability §7.4 item 3's exact discipline, generalized). Exported (phase-6 blocker
+ * B3): every machine-local write `TransactionEngine` gains a named method for — active
+ * chat, active page, `model.select`, and every other local field, plus checkpoint advance —
+ * is this same "read current, patch, replace" shape with a different `patch` function.
+ */
+export function buildWorkspaceLocalPatchOperation(deps: TransactionWrapperDeps, patch: (current: WorkspaceLocalState) => WorkspaceLocalState): SafeFsError | BuiltOperation {
   const current = deps.fs.safeFs.readFile(WORKSPACE_STATE_FILENAME)
   if (current instanceof Error && !(current instanceof FsAccessError && isNotFound(current))) return current
   const currentBytes = current instanceof Error ? null : current
 
   const loaded = loadWorkspaceLocalState({ text: currentBytes === null ? null : new TextDecoder().decode(currentBytes) })
-  const nextState: WorkspaceLocalState = { ...loaded.state, activePageSlug: requestedActivePage }
+  const nextState = patch(loaded.state)
   const bytes = new TextEncoder().encode(encodeWorkspaceLocalState(nextState))
   const oldImage: FileImage = currentBytes === null ? { state: "absent" } : { state: "file", sha256: sha256Hex(currentBytes), size: currentBytes.byteLength }
   const payloadId = deps.append.newPayloadId()
@@ -361,6 +380,11 @@ function buildWorkspaceLocalOperation(deps: TransactionWrapperDeps, requestedAct
     operation: { index: 0, target: WORKSPACE_STATE_FILENAME, mode: "replace", oldImage, newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength }, payloadId },
     payload: [payloadId, bytes],
   }
+}
+
+/** turn-durability §7.4 item 3 — the finalization-specific case of {@link buildWorkspaceLocalPatchOperation}: set only `activePageSlug`. */
+function buildWorkspaceLocalOperation(deps: TransactionWrapperDeps, requestedActivePage: PageSlug): SafeFsError | BuiltOperation {
+  return buildWorkspaceLocalPatchOperation(deps, (current) => ({ ...current, activePageSlug: requestedActivePage }))
 }
 
 function buildAgentRecordOperation(deps: TransactionWrapperDeps, chatPath: string, turnId: string, record: ChatAgentRecord): SafeFsError | ChatMutationLockedError | Error | BuiltOperation {
@@ -595,7 +619,17 @@ export async function terminalizeTurn(deps: TransactionWrapperDeps, input: TurnT
 // events, and explicit JSONL repair.
 // ======================================================================================
 
-export type ProjectMutationKind = "project-creation" | "local-state-write" | "title-edit" | "pin-event" | "jsonl-repair"
+export type ProjectMutationKind =
+  | "project-creation"
+  | "local-state-write"
+  | "title-edit"
+  | "pin-event"
+  | "jsonl-repair"
+  // Phase-6 blocker B3's named `TransactionEngine` methods, added without disturbing any
+  // already-shipped kind's meaning:
+  | "chat-creation"
+  | "page-reorder"
+  | "page-remove"
 
 export interface ProjectMutationInput {
   readonly mutex: WriteMutex
@@ -633,10 +667,19 @@ export interface StandalonePinEventInput {
 }
 
 /**
- * Build the one operation + payload a standalone pin event (a user open/reopen/create, not
- * a turn's automatic resolution) needs — ready to hand to {@link runProjectMutation} with
- * `mutationKind: "pin-event"`. Kept separate from `runProjectMutation` itself so a caller
- * that wants to batch a pin event alongside another operation in one plan still can.
+ * Build the one operation + payload a standalone pin event needs onto an ALREADY-EXISTING
+ * comments log — ready to hand to {@link runProjectMutation} with `mutationKind: "pin-event"`.
+ * Kept separate from `runProjectMutation` itself so a caller that wants to batch a pin event
+ * alongside another operation in one plan still can.
+ *
+ * SCOPE (documented, not hidden): this never writes a comments-log HEADER — it assumes one is
+ * already durable at `target` (`readPinsBefore`'s only non-error, non-`emptyBefore` path).
+ * Called directly on a page with no comments log yet, it silently appends the event onto zero
+ * prefix bytes with no header line at all, which `PinStore.fold`/`readPinsJsonl` then refuse
+ * to open (`missing or invalid comments header`). {@link buildPinEventOperations} is the
+ * header-aware entry point every new caller should use instead; this function stays exported
+ * for the caller that has already proven the log exists (e.g. immediately after this same
+ * function's own use).
  */
 export function buildStandalonePinEventOperation(
   deps: TransactionWrapperDeps,
@@ -661,6 +704,60 @@ export function buildStandalonePinEventOperation(
     },
     payloads: new Map([[appended.descriptor.appendedPayloadId, appended.bytes]]),
   }
+}
+
+export interface PinEventInput {
+  readonly pageSlug: PageSlug
+  /** Needed only to mint a NEW comments header (storage-identity §11.2) when the log does not exist yet; ignored when it already does. */
+  readonly projectId: string
+  readonly event: PinEvent
+}
+
+/**
+ * The header-aware entry point for `pin.setStatus`/standalone `pin:created` (phase-6 blocker
+ * B3): when the page's comments log already exists, this is exactly
+ * {@link buildStandalonePinEventOperation}'s one operation. When it does NOT — a page's very
+ * first pin — this returns a single create-new `replace` of the WHOLE file (header line then
+ * the event line, concatenated) instead. Deliberately NOT two operations (a header replace
+ * plus a separate append) against the same target: the engine's final-state verification
+ * (`engine.ts`'s `verifyRealizedOperations`) checks every operation's target against ITS OWN
+ * `newImage` once roll-forward finishes, so an earlier operation's promised image would be
+ * invalidated the instant a later operation on the same target grows the file further. A
+ * brand-new file has no meaningful "append vs. replace" distinction — both mean "this file
+ * now contains exactly these bytes" — so `replace` is the only operation this plan needs.
+ */
+export function buildPinEventOperations(
+  deps: TransactionWrapperDeps,
+  input: PinEventInput,
+): SafeFsError | ChatMutationLockedError | Error | { readonly operations: readonly TransactionOperation[]; readonly payloads: ReadonlyMap<string, Uint8Array> } {
+  const target = pageCommentsPath(input.pageSlug)
+  const existing = deps.fs.safeFs.readFile(target)
+  const missing = existing instanceof Error && existing instanceof FsAccessError && isNotFound(existing)
+  if (existing instanceof Error && !missing) return existing
+
+  if (!missing) {
+    const built = buildStandalonePinEventOperation(deps, { pageSlug: input.pageSlug, event: input.event })
+    if (built instanceof Error) return built
+    return { operations: [built.operation], payloads: built.payloads }
+  }
+
+  const headerLine = encodeCommentsHeaderLine({ kind: "pins", formatVersion: 1, projectId: input.projectId, pageSlug: input.pageSlug })
+  if (headerLine instanceof Error) return headerLine
+  const eventLine = encodePinEventLine(input.event)
+  if (eventLine instanceof Error) return eventLine
+
+  const bytes = Buffer.concat([headerLine, eventLine])
+  const payloadId = deps.append.newPayloadId()
+  const operation: TransactionOperation = {
+    index: 0,
+    target,
+    mode: "replace",
+    oldImage: { state: "absent" },
+    newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength },
+    payloadId,
+  }
+
+  return { operations: [operation], payloads: new Map([[payloadId, bytes]]) }
 }
 
 // ======================================================================================

@@ -10,7 +10,7 @@ import { durableFileWrite } from "infrastructure/durability"
 import type { Clock } from "infrastructure/clock"
 import { FsAccessError, IdentityChangedError, LeafRejectedError, UnknownNamespaceError, UnsafeHardlinkError, type SafeFsStat } from "store/safe-fs"
 
-import type { CreateTurnWorkspaceInput, StagingFsDeps, StagingStoreDeps, TurnReadSet } from "../types"
+import type { CreateTurnWorkspaceInput, StagedTurnReadSet, StagingFsDeps, StagingStoreDeps } from "../types"
 import { computeProjectKey } from "./project-key"
 import {
   InvalidIdentityError,
@@ -122,8 +122,11 @@ function memoryStagingFs(sources: Record<string, SeededSource> = {}) {
       return { update: (chunk) => void hasher.update(chunk), digestHex: () => hasher.digest("hex") }
     },
     removeTree(absPath) {
-      for (const key of [...files.keys()]) if (key === absPath || key.startsWith(`${absPath}/`)) files.delete(key)
-      for (const key of [...dirs.keys()]) if (key === absPath || key.startsWith(`${absPath}/`)) dirs.delete(key)
+      // Platform-neutral prefix check: `path.join`-built keys use `path.sep` (backslash on
+      // Windows), not a hardcoded `/` — a bug this file's own `retireWorkspace` coverage
+      // exposed (a nested subdirectory's removal was silently never observed on Windows).
+      for (const key of [...files.keys()]) if (key === absPath || key.startsWith(`${absPath}${path.sep}`)) files.delete(key)
+      for (const key of [...dirs.keys()]) if (key === absPath || key.startsWith(`${absPath}${path.sep}`)) dirs.delete(key)
     },
   }
 
@@ -170,7 +173,7 @@ const RUNTIME_DTS = new TextEncoder().encode("export type Foo = string\n")
 /** A plausible send-time read set (turn-durability §7.2 step 4): one present canonical page,
  * one expected-absent entry for a potential new target, the captured chat's append base, and
  * one contributing comments log. */
-function sampleReadSet(): TurnReadSet {
+function sampleReadSet(): StagedTurnReadSet {
   return {
     manifest: { sha256: "a".repeat(64), size: 128 },
     canonicalPages: [
@@ -444,6 +447,43 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
   })
 })
 
+// ---- retireWorkspace (phase-6 blocker B3: the workspace-retirement exposure) -------------
+
+describe("retireWorkspace — turn-durability §5.4/§7.3's release half", () => {
+  test("removes the whole turn tree — the staged workspace files AND the turn directory itself", async () => {
+    const memory = memoryStagingFs(seededSources())
+    const durable = memoryDurableWriter()
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }))
+
+    const workspace = await store.createTurnWorkspace(validInput())
+    if (workspace instanceof Error) throw workspace
+    const turnPath = turnDir(USER_STATE_ROOT, projectKey, TURN_ID)
+    expect(memory.dirs.has(turnPath)).toBe(true) // sanity: it really was there before retiring
+
+    const retired = await store.retireWorkspace(workspace)
+    expect(retired).toBeUndefined()
+
+    expect(memory.dirs.has(turnPath)).toBe(false)
+    expect(memory.dirs.has(turnWorkspaceDir(USER_STATE_ROOT, projectKey, TURN_ID))).toBe(false)
+    expect([...memory.files.keys()].some((key) => key.startsWith(turnPath))).toBe(false)
+  })
+
+  test("is idempotent — retiring an already-retired (or never-created) turn is a no-op, never an error", async () => {
+    const memory = memoryStagingFs(seededSources())
+    const durable = memoryDurableWriter()
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }))
+
+    const workspace = await store.createTurnWorkspace(validInput())
+    if (workspace instanceof Error) throw workspace
+
+    expect(await store.retireWorkspace(workspace)).toBeUndefined()
+    expect(await store.retireWorkspace(workspace)).toBeUndefined() // second call: already gone
+
+    const neverCreated: typeof workspace = { ...workspace, turnId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d99", turnJsonPath: turnJsonPath(USER_STATE_ROOT, projectKey, "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d99"), root: turnWorkspaceDir(USER_STATE_ROOT, projectKey, "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d99") }
+    expect(await store.retireWorkspace(neverCreated)).toBeUndefined()
+  })
+})
+
 // ---- the production wiring, against a real volume ----------------------------------
 
 const realRoots: string[] = []
@@ -496,5 +536,34 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
     )
     expect(collided).toBeInstanceOf(WorkspaceCollisionError)
     expect(fs.existsSync(path.join(result.root, "pages", "home.tsx"))).toBe(true)
+  })
+
+  test("retireWorkspace deletes the workspace AND turn.json — the whole turn tree, on a real volume", async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcraft-sandbox-state-"))
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "termcraft-sandbox-project-"))
+    realRoots.push(stateRoot, projectRoot)
+
+    const pageSrc = path.join(projectRoot, "home.tsx")
+    fs.writeFileSync(pageSrc, "export const meta = { title: 'Home' }\n")
+
+    const store = createStagingStore({ userStateRoot: stateRoot, clock: frozenClock, fs: nodeStagingFsDeps(), durableWrite: durableFileWrite })
+
+    const workspace = await store.createTurnWorkspace(
+      validInput({ turnId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d40", canonicalProjectRoot: projectRoot, pages: [{ pageSlug: homeSlug, absSourcePath: pageSrc }], runtimeDocs: [] }),
+    )
+    if (workspace instanceof Error) throw workspace
+    const turnPath = path.dirname(workspace.turnJsonPath)
+    expect(fs.existsSync(turnPath)).toBe(true)
+    expect(fs.existsSync(workspace.turnJsonPath)).toBe(true)
+
+    const retired = await store.retireWorkspace(workspace)
+    expect(retired).toBeUndefined()
+
+    expect(fs.existsSync(workspace.root)).toBe(false)
+    expect(fs.existsSync(workspace.turnJsonPath)).toBe(false)
+    expect(fs.existsSync(turnPath)).toBe(false)
+
+    // Idempotent: retiring an already-gone turn tree is a no-op, never an error.
+    expect(await store.retireWorkspace(workspace)).toBeUndefined()
   })
 })

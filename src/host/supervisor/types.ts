@@ -1,6 +1,7 @@
 import type {
   ControlEnvelope,
   FrameEnvelope,
+  FrameIdentity,
   ProtocolError,
   PublicLimits,
   RuntimeDeclarationBundleV1,
@@ -86,6 +87,14 @@ export interface HostSessionDeps {
   readonly sessionId?: string
   /** A fatal post-`ready` outcome (heartbeat timeout, unresponsive, crash, protocol error). 2D-3 consumes it. */
   readonly onFatal?: (error: SupervisorError | ProtocolError) => void
+  /**
+   * Wires `control-queue.ts`/`control-mailbox.ts` into the live path: fires `"backpressured"`
+   * when the OUTBOUND queue crosses to full (a subsequent discrete command then gets
+   * `HOST_BACKPRESSURED` instead of being queued) and `"writable"` when it drains back below
+   * the low-water mark (§8). A later Kernel adapter turns these into `preview.backpressured` /
+   * `preview.writable` EventKinds; `host` only exposes the underlying signal.
+   */
+  readonly onBackpressureChange?: (state: "backpressured" | "writable") => void
   /** Test seams — default to the real constructors. The broker guard needs the minted identity. */
   readonly createBroker?: (guard: { sessionId: string; nonce: string; sourceHash: string }) => FrameBroker
   readonly createRequestTable?: (
@@ -99,6 +108,28 @@ export interface HostSessionDeps {
   readonly createFloodMonitor?: (clock: Clock) => FloodMonitor
 }
 
+/**
+ * Blocker B1's closed host-wire geometry-query kinds (host-supervision §7 request family
+ * names). §7.1: the Kernel-level `pin-anchor` refinement travels AS `query-hit` on the
+ * wire — "the host protocol closed query families are unchanged" — so this union has no
+ * fifth `pin-anchor` member; only the Kernel (a later phase) distinguishes it.
+ */
+export type GeometryQuery =
+  | { readonly kind: "hit"; readonly x: number; readonly y: number }
+  | { readonly kind: "rect" | "describe"; readonly elementId: string }
+  | { readonly kind: "layout" }
+
+/**
+ * One geometry-query outcome (§7.1): the identity of the frame the host actually answered
+ * against (so a caller can detect staleness itself) plus a closed, per-kind result record;
+ * or the typed `STALE_FRAME` refusal when the requested frame is no longer the host's
+ * currently sealed frame. Never a raw `ControlEnvelope` — this is decoded/typed once here,
+ * mirroring `resize`/`setMode`'s existing correlated-request shape.
+ */
+export type GeometryQueryResult =
+  | { readonly ok: true; readonly frameIdentity: FrameIdentity; readonly result: Readonly<Record<string, unknown>> }
+  | { readonly ok: false; readonly code: "STALE_FRAME"; readonly reason: string }
+
 /** The typed session handle returned to Kernel code (§3.1). No raw streams/process. */
 export interface HostSession {
   readonly identity: HostSessionIdentity
@@ -111,6 +142,15 @@ export interface HostSession {
   resize(size: Size): Promise<ControlEnvelope | ProtocolError | SupervisorError>
   setMode(mode: InteractionMode): Promise<ControlEnvelope | ProtocolError | SupervisorError>
   ping(): Promise<ControlEnvelope | ProtocolError | SupervisorError>
+  /**
+   * Blocker B1: `checkHit`/`rectOf`/`describe`/`layoutTree` (design doc §4.2), correlated
+   * through the same request table as `resize`/`setMode`/`ping` (2 s `QUERY_TIMEOUT` /
+   * `SUPERSEDED` / `TOO_MANY_REQUESTS` all apply unchanged). `frameIdentity` is the frame
+   * the CALLER expects to still be current — the Kernel resolves a `FrameToken` to this
+   * identity before calling (host-supervision §7.1); this method never mints or resolves
+   * tokens itself.
+   */
+  query(frameIdentity: FrameIdentity, query: GeometryQuery): Promise<ProtocolError | SupervisorError | GeometryQueryResult>
 }
 
 /** The UI-facing preview facade subset the 2C child supports today (§3.2). */
@@ -122,6 +162,8 @@ export interface PreviewSession {
   readonly frames: AsyncIterable<PreviewFrame>
   resize(size: Size): void
   setMode(mode: InteractionMode): void
+  /** Blocker B1 — see `HostSession.query`'s doc comment; forwarded verbatim. */
+  query(frameIdentity: FrameIdentity, query: GeometryQuery): Promise<ProtocolError | SupervisorError | GeometryQueryResult>
   retry(): void
   close(): Promise<void>
 }
@@ -271,16 +313,20 @@ export interface SupervisorEvent {
 }
 
 /**
- * A stable, crash-loop-safe preview handle (§10, §10.1). Its `identity` (nonce
- * omitted) and `frames` relay survive automatic restart; `retry` performs the
- * user-triggered manual retry that clears the key's budget once.
+ * Blocker B4's resolution: `HostSupervisor.preview()` returns THIS — a `PreviewSession`
+ * (host-supervision §3.2's UI-facing shape: identity, mode, interactionMode, frames,
+ * resize, setMode, query, retry, close) composed with the supervisor's own restart/
+ * backoff/circuit management, not the narrower crash-loop-only handle that used to be
+ * `PreviewHandle` (see `preview-session.ts`'s header and `supervisor.ts`'s `sessionFor`
+ * for where the composition lives). `identity` (nonce omitted) and `frames` survive
+ * automatic restart exactly as the old `PreviewHandle` did; `resize`/`setMode`/`query`
+ * delegate to whichever incarnation is CURRENTLY live and are the part that did not exist
+ * before this decision. `state()` is host's own addition beyond the UI-facing shape —
+ * lifecycle observability the Kernel-facing `core/ports` narrowing is free to omit.
  */
-export interface PreviewHandle {
-  readonly identity: PreviewIdentity
-  readonly frames: AsyncIterable<PreviewFrame>
+export interface SupervisedPreviewSession extends PreviewSession {
+  /** The current supervised lifecycle state (§10) — an observability extra past the base facade. */
   state(): SupervisorState
-  retry(): void
-  close(): Promise<void>
 }
 
 /** Injected dependencies of the standalone `HostSupervisor` (§13). */
@@ -363,7 +409,7 @@ export interface ExportPool {
  * Phase 6 injects it behind the Kernel command/event boundary.
  */
 export interface HostSupervisor {
-  preview(spec: HostSessionSpec): PreviewHandle | SupervisorError
+  preview(spec: HostSessionSpec): SupervisedPreviewSession | SupervisorError
   /** Live (non-stopped, non-queued) incarnation count across all keys (§13 ≤10). */
   liveCount(): number
   stopAll(): Promise<void>

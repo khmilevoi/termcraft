@@ -15,10 +15,13 @@
 // whole store is testable against fakes and the T14 crash-injection harness.
 export type {
   AbsPath,
+  AdvanceSessionCheckpointInput,
+  AppendPinEventInput,
   BackupStore,
   ChangedPageOp,
   ChatHandle,
   ChatStore,
+  CreateChatInput,
   CreateProjectInput,
   CreateTurnWorkspaceInput,
   GitIdentity,
@@ -39,8 +42,15 @@ export type {
   ProjectMutationInput,
   ProjectWritePermit,
   RecoveryOutcome,
+  RemovePageInput,
+  RenamePageTitleInput,
+  ReorderPagesInput,
   ResolvedPinAppend,
+  SetActiveChatInput,
+  SetActivePageInput,
+  SetWorkspaceLocalInput,
   Sha256Hex,
+  StagedTurnReadSet,
   StagingError,
   StagingStore,
   Store,
@@ -66,3 +76,23 @@ export type { DiagnosticsEntry, DiagnosticsKey, ExportRenderKey, PageMetaEntry, 
 // Tagged error classes are values (usable with `instanceof`) as well as types, so they are
 // re-exported here rather than under `export type` above.
 export { JsonlOpenError, ProjectAlreadyExistsError, ProjectLayoutError, createStore, nodeStoreDeps, toTxOutcome } from "./model/factory"
+
+// ---- candidate assembly + session-checkpoint facade (phase-6 blocker B3 exposure) ------
+//
+// Neither of these is new capability — `snapshotToCandidate` (turn-durability §5.4/§7.3) and
+// the checkpoint facade (storage-identity §6.2) already exist in `store/safe-fs`/`store/jsonl`
+// — but `core` may not import a submodule directly (module DAG), so both are re-exported at
+// this top level for the first time here.
+export type { CandidateDeps, CandidateFile, CandidateSnapshot } from "store/safe-fs"
+export { snapshotToCandidate } from "store/safe-fs"
+
+export type { SessionPrefixHash, SessionResumeDecision, SessionResumeMismatchReason, SessionSeed } from "store/jsonl"
+export {
+  SESSION_SEED_MAX_RECORDS,
+  SESSION_SEED_MAX_TEXT_BYTES,
+  SessionPrefixError,
+  advanceSessionCheckpoint,
+  computeSessionPrefixHash,
+  evaluateSessionResume,
+  selectSeedRecords,
+} from "store/jsonl"

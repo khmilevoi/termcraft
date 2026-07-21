@@ -278,6 +278,118 @@ function controlEnvelope(kind: string, body: ControlEnvelope["body"], requestId?
   return framed.slice(8)
 }
 
+const GeometryFixtureComponent = () => (
+  <box id="panel">
+    <text id="label">geo-ok</text>
+  </box>
+)
+
+async function readiedWithGeometry() {
+  return readied({
+    loadPage: async () => ({
+      meta: { kitApiVersion: 1, title: "Dashboard", minSize: { w: 16, h: 3 }, theme: "dark-default" },
+      component: GeometryFixtureComponent,
+      sourceHash: "a".repeat(64),
+    }),
+  })
+}
+
+function queryEnvelope(kind: string, frameIdentity: Record<string, string>, extra: Record<string, unknown> = {}, requestId = "20"): Uint8Array {
+  return controlEnvelope(kind, { frameIdentity, ...extra } as ControlEnvelope["body"], requestId)
+}
+
+describe("host session — ready-phase geometry queries (design doc §4.2, host-supervision §7.1)", () => {
+  test("query-hit resolves a real element id at an in-bounds point under the current sealed frame", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      queryEnvelope("query-hit", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }, { x: 0, y: 0 }),
+    )
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    expect(response.kind).toBe("query-hit")
+    expect(response.responseTo).toBe("20")
+    const body = response.body as { ok: boolean; frameIdentity: { frameSeq: string }; result: { elementId: string | null } }
+    expect(body.ok).toBe(true)
+    expect(body.frameIdentity.frameSeq).toBe("1")
+    expect(body.result.elementId).not.toBeNull()
+  })
+
+  test("query-rect resolves the element's real box for a known id, and found:false for an unknown id", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      queryEnvelope("query-rect", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }, { elementId: "panel" }),
+    )
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    const body = response.body as { ok: boolean; result: { found: boolean; rect: { width: number; height: number } | null } }
+    expect(body.ok).toBe(true)
+    expect(body.result.found).toBe(true)
+    expect(body.result.rect?.width).toBeGreaterThan(0)
+
+    h.out.length = 0
+    await session.receiveControlPayload(
+      queryEnvelope("query-rect", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }, { elementId: "missing" }, "21"),
+    )
+    const missResponse = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    const missBody = missResponse.body as { ok: boolean; result: { found: boolean; rect: unknown } }
+    expect(missBody.ok).toBe(true)
+    expect(missBody.result.found).toBe(false)
+    expect(missBody.result.rect).toBeNull()
+  })
+
+  test("query-describe resolves the real underlying kind for a known id", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      queryEnvelope("query-describe", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }, { elementId: "label" }),
+    )
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    const body = response.body as { ok: boolean; result: { found: boolean; kind: string | null } }
+    expect(body.ok).toBe(true)
+    expect(body.result.found).toBe(true)
+    expect(typeof body.result.kind).toBe("string")
+  })
+
+  test("query-layout resolves the real mounted tree including both stable ids", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      queryEnvelope("query-layout", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }),
+    )
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    interface TreeNode {
+      id: string
+      children: TreeNode[]
+    }
+    const body = response.body as unknown as { ok: boolean; result: { tree: TreeNode } }
+    expect(body.ok).toBe(true)
+    const ids: string[] = []
+    const collect = (node: TreeNode): void => {
+      ids.push(node.id)
+      for (const child of node.children) collect(child)
+    }
+    collect(body.result.tree)
+    expect(ids).toContain("panel")
+    expect(ids).toContain("label")
+  })
+
+  test("a query against a frameSeq that is no longer current is refused with STALE_FRAME, not fatal", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      queryEnvelope("query-hit", { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "999" }, { x: 0, y: 0 }),
+    )
+    const response = (h.out.find((m) => m.type === "control") as { payload: ControlEnvelope }).payload
+    const body = response.body as { ok: boolean; code: string }
+    expect(body.ok).toBe(false)
+    expect(body.code).toBe("STALE_FRAME")
+    expect(h.exits).toHaveLength(0) // a stale query is a normal typed refusal, not a protocol violation
+  })
+
+  test("a query-hit without a requestId is fatal (MALFORMED_PROTOCOL)", async () => {
+    const { h, session } = await readiedWithGeometry()
+    await session.receiveControlPayload(
+      controlEnvelope("query-hit", { frameIdentity: { sessionId: SESSION_ID, nonce: NONCE, sourceHash: "a".repeat(64), frameSeq: "1" }, x: 0, y: 0 }),
+    )
+    expect(h.exits).toHaveLength(1)
+  })
+})
+
 describe("host session — ready-phase control", () => {
   test("resize re-renders and emits a new frame with an incremented frameSeq", async () => {
     const { h, session } = await readied()

@@ -7,7 +7,7 @@ import {
   PROTOCOL_HARD_LIMITS,
   ProtocolError,
 } from "../../protocol"
-import type { ControlEnvelope, FrameEnvelope, ProtocolViolationCode, PublicLimits } from "../../protocol"
+import type { ControlEnvelope, FrameEnvelope, FrameIdentity, ProtocolViolationCode, PublicLimits } from "../../protocol"
 import type { HostSessionIdentity, HostSessionSpec } from "../../types"
 import { SupervisorError } from "./errors"
 import { buildClientHello, verifyHostHello } from "./handshake"
@@ -22,9 +22,16 @@ import { createFrameBroker } from "./frame-broker"
 import { createRequestTable, REQUEST_TABLE_CAPACITY } from "./request-table"
 import { createHeartbeatWatchdog } from "./heartbeat-watchdog"
 import { createFloodMonitor } from "./flood-monitor"
+import { createControlQueue } from "./control-queue"
+import { createControlMailbox } from "./control-mailbox"
+import type { TimerHandle } from "./clock"
 import type {
+  ControlMailbox,
+  ControlQueue,
   FloodMonitor,
   FrameBroker,
+  GeometryQuery,
+  GeometryQueryResult,
   HeartbeatWatchdog,
   HostSession,
   HostSessionDeps,
@@ -68,6 +75,43 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // (before decode/coalescing), so a 2000-frame/s or >128 MiB/s or >1 MiB/s-stderr
   // child trips PROTOCOL_FLOOD / STDERR_FLOOD → onPumpFatal → deterministic circuit-open.
   const floodMonitor: FloodMonitor = (deps.createFloodMonitor ?? createFloodMonitor)(deps.clock)
+  // §8 bounded ordered outbound queue: every post-ready request (resize/set-mode/ping/
+  // query-*/shutdown) enqueues here instead of writing directly; `pumpOutbound` is the
+  // sole drain. Discrete-only for now — coalescing resize/mousemove/hover is deferred
+  // (see this file's header note); a full discrete queue is still the thing that makes
+  // `HOST_BACKPRESSURED`/`preview.writable` real, observable outcomes (blocker wiring).
+  const controlQueue: ControlQueue = createControlQueue()
+  let queueBackpressured = false
+  controlQueue.onWritable(() => {
+    if (!queueBackpressured) return
+    queueBackpressured = false
+    deps.onBackpressureChange?.("writable")
+  })
+  let outboundDraining = false
+
+  // §8 bounded inbound mailbox: a decoupled producer (the pump, below) / consumer (this
+  // clock-scheduled drain) pair. Offering then draining in the SAME synchronous step would
+  // make the mailbox unable to ever hold more than one entry, so the drain is scheduled on
+  // the injected clock instead — a slow/absent consumer genuinely lets entries pile up to
+  // the bound, and `CONTROL_BACKPRESSURE` becomes a reachable, testable outcome instead of
+  // a permanently-vacuous code path.
+  const controlMailbox: ControlMailbox = createControlMailbox()
+  let mailboxDrainTimer: TimerHandle | null = null
+  function scheduleMailboxDrain(): void {
+    if (mailboxDrainTimer !== null) return
+    mailboxDrainTimer = deps.clock.setTimer(0, () => {
+      mailboxDrainTimer = null
+      drainMailbox()
+    })
+  }
+  function drainMailbox(): void {
+    while (true) {
+      const next = controlMailbox.drain()
+      if (next === null) return
+      deps.onControlEvent?.(next)
+    }
+  }
+
   let pumpTask: Promise<void> = Promise.resolve()
 
   let child: SpawnedChild | null = null
@@ -251,7 +295,18 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
         watchdog.feedHeartbeat()
         continue
       }
-      deps.onControlEvent?.({ kind: envelope.kind, envelope })
+      // §8: every other unsolicited (non-response, non-heartbeat, non-error) control
+      // envelope is a domain/lifecycle event bound for the Kernel, routed through the
+      // bounded inbound mailbox rather than dispatched directly (see this file's
+      // `controlMailbox` doc comment for why offer+drain must stay decoupled).
+      const offered = controlMailbox.offer({ kind: envelope.kind, envelope })
+      if (offered instanceof SupervisorError) {
+        controlMailbox.offerTerminal({ kind: envelope.kind, envelope })
+        drainMailbox() // flush ordinary entries + the terminal one before tearing down
+        onPumpFatal(offered)
+        return
+      }
+      scheduleMailboxDrain()
     }
     // inbound ended. If we were still ready, the child exited unexpectedly.
     if (phase === "ready") onPumpFatal(new SupervisorError({ code: "CHILD_EXITED", reason: "stdout closed while ready" }))
@@ -363,6 +418,33 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     return null
   }
 
+  // The sole drain of `controlQueue` (§8): dequeues in FIFO/reserved-shutdown-priority
+  // order and writes ONE envelope at a time, so writes stay ordered even though several
+  // callers may enqueue concurrently. Re-entrant calls are coalesced into the single
+  // in-flight loop via `outboundDraining`.
+  async function pumpOutbound(): Promise<void> {
+    if (outboundDraining) return
+    outboundDraining = true
+    try {
+      while (true) {
+        const next = controlQueue.dequeue()
+        if (next === null) return
+        if (child === null) continue // torn down mid-drain; nothing left to write to
+        const bytes = encodeControlEnvelope(next.envelope)
+        if (bytes instanceof ProtocolError) {
+          requestTable.supersede(next.envelope.requestId ?? "", `${next.kind} encode failed [${bytes.code}]`)
+          continue
+        }
+        const sent = await writeFramed(child, bytes)
+        if (sent instanceof SupervisorError) {
+          requestTable.supersede(next.envelope.requestId ?? "", `${next.kind} write failed [${sent.code}]`)
+        }
+      }
+    } finally {
+      outboundDraining = false
+    }
+  }
+
   async function sendRequest(kind: string, body: ControlEnvelope["body"]): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
     if (phase !== "ready" || child === null) {
       return new SupervisorError({ code: "TRANSPORT_ERROR", reason: `${kind} requires a ready session (was "${phase}")` })
@@ -382,22 +464,72 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       requestId,
       body,
     }
-    const bytes = encodeControlEnvelope(envelope)
-    if (bytes instanceof ProtocolError) {
-      requestTable.supersede(requestId, `${kind} encode failed [${bytes.code}]`)
-      return bytes
+    const enqueued = controlQueue.enqueue({ kind, envelope })
+    if (enqueued instanceof SupervisorError) {
+      requestTable.supersede(requestId, `${kind} rejected: ${enqueued.reason}`)
+      return enqueued
     }
-    const sent = await writeFramed(child, bytes)
-    if (sent instanceof SupervisorError) {
-      requestTable.supersede(requestId, `${kind} write failed [${sent.code}]`)
-      return sent
+    if (controlQueue.isBackpressured() && !queueBackpressured) {
+      queueBackpressured = true
+      deps.onBackpressureChange?.("backpressured")
     }
+    void pumpOutbound()
     return promise
   }
 
   const resize = (size: Size) => sendRequest("resize", { size: { w: size.w, h: size.h } })
   const setMode = (mode: InteractionMode) => sendRequest("set-mode", { interactionMode: mode })
   const ping = () => sendRequest("ping", {})
+
+  // Blocker B1: `query-hit`/`query-rect`/`query-describe`/`query-layout` (§7 request family
+  // names; §7.1's Kernel-level `pin-anchor` refinement is not a fifth wire kind — see
+  // `GeometryQuery`'s doc comment). Correlated through the SAME `sendRequest` path as
+  // resize/setMode/ping, so QUERY_TIMEOUT/SUPERSEDED/TOO_MANY_REQUESTS all apply unchanged.
+  function wireKindFor(query: GeometryQuery): string {
+    return `query-${query.kind}`
+  }
+  function queryFieldsOf(query: GeometryQuery): Record<string, string | number> {
+    if (query.kind === "hit") return { x: query.x, y: query.y }
+    if (query.kind === "layout") return {}
+    return { elementId: query.elementId }
+  }
+  function parseGeometryReply(envelope: ControlEnvelope): ProtocolError | GeometryQueryResult {
+    const body = envelope.body
+    if (body.ok === false) {
+      const code = body.code
+      if (code !== "STALE_FRAME") {
+        return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `unexpected ${envelope.kind} refusal code ${String(code)}` })
+      }
+      const reason = typeof body.reason === "string" ? body.reason : "stale frame"
+      return { ok: false, code: "STALE_FRAME", reason }
+    }
+    const rawIdentity = body.frameIdentity
+    if (rawIdentity === null || typeof rawIdentity !== "object" || Array.isArray(rawIdentity)) {
+      return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} reply missing frameIdentity` })
+    }
+    const ri = rawIdentity as { sessionId?: unknown; nonce?: unknown; sourceHash?: unknown; frameSeq?: unknown }
+    if (typeof ri.sessionId !== "string" || typeof ri.nonce !== "string" || typeof ri.sourceHash !== "string" || typeof ri.frameSeq !== "string") {
+      return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} reply frameIdentity fields must be strings` })
+    }
+    const result = body.result
+    if (result === null || typeof result !== "object" || Array.isArray(result)) {
+      return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} reply missing result` })
+    }
+    return {
+      ok: true,
+      frameIdentity: { sessionId: ri.sessionId, nonce: ri.nonce, sourceHash: ri.sourceHash, frameSeq: ri.frameSeq },
+      result: result as Record<string, unknown>,
+    }
+  }
+  async function query(frameIdentity: FrameIdentity, geometryQuery: GeometryQuery): Promise<ProtocolError | SupervisorError | GeometryQueryResult> {
+    const body: ControlEnvelope["body"] = {
+      frameIdentity: { sessionId: frameIdentity.sessionId, nonce: frameIdentity.nonce, sourceHash: frameIdentity.sourceHash, frameSeq: frameIdentity.frameSeq },
+      ...queryFieldsOf(geometryQuery),
+    }
+    const result = await sendRequest(wireKindFor(geometryQuery), body)
+    if (result instanceof Error) return result
+    return parseGeometryReply(result)
+  }
 
   // Kill + reap the child and tear down all resources; used on every failure path.
   async function failWith<E extends ProtocolError | SupervisorError>(error: E): Promise<E> {
@@ -427,6 +559,8 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     broker.close()        // ends the frame iterator on every exit path (§10.1, brief invariant 5)
     watchdog.stop()       // idempotent; no-op if never started (pre-ready)
     requestTable.clear()  // settles stragglers; no-op if empty (a post-ready fatal already cleared with the specific error)
+    mailboxDrainTimer?.cancel() // no dangling scheduled drain past teardown (clock.pending() must return to 0)
+    mailboxDrainTimer = null
     if (child !== null) await reapChild(child, kill)
     stderrDrain?.stop()
     if (stderrDrain !== null) await stderrDrain.settled
@@ -467,28 +601,21 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       }
     }
 
-    // Graceful: register the shutdown so the pump can route its ack, send it, then
-    // await the ack under a dedicated 1 s deadline (§9). The pump remains the sole
-    // reader; stop() never pulls inbound.
+    // Graceful: register the shutdown so the pump can route its ack, enqueue it into the
+    // RESERVED shutdown slot (§8 — always accepted, even at capacity, and dequeued with
+    // priority), then await the ack under a dedicated 1 s deadline (§9). An encode/write
+    // failure inside `pumpOutbound` settles `ackPromise` via `requestTable.supersede`,
+    // which the generic `ack instanceof Error` branch below already forces on — one path
+    // for every "the ack never arrived" reason, not three bespoke ones.
     const shutdownRequestId = nextRequestId()
     const ackPromise = requestTable.register(shutdownRequestId, "shutdown")
     const shutdown: ControlEnvelope = {
       protocolVersion: 1, kind: "shutdown", sessionId: identity.sessionId, nonce: identity.nonce,
       messageId: nextMessageId(), requestId: shutdownRequestId, body: {},
     }
-    const bytes = encodeControlEnvelope(shutdown)
+    controlQueue.enqueueShutdown({ kind: "shutdown", envelope: shutdown })
+    void pumpOutbound()
     const forcing = await (async (): Promise<null | { reason: string }> => {
-      if (bytes instanceof ProtocolError) {
-        console.warn("host-supervisor: shutdown encode failed, forcing:", bytes.message)
-        requestTable.supersede(shutdownRequestId, "shutdown encode failed")
-        return { reason: `forced: shutdown encode failed [${bytes.code}]` }
-      }
-      const sent = await writeFramed(activeChild, bytes)
-      if (sent instanceof SupervisorError) {
-        console.warn("host-supervisor: shutdown write failed, forcing:", sent.message)
-        requestTable.supersede(shutdownRequestId, "shutdown write failed")
-        return { reason: `forced: shutdown write failed [${sent.code}]` }
-      }
       const ack = await raceShutdownAck(ackPromise)
       if (ack instanceof Error) {
         const code = ack instanceof SupervisorError || ack instanceof ProtocolError ? ack.code : "UNKNOWN"
@@ -538,5 +665,6 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     resize,
     setMode,
     ping,
+    query,
   }
 }

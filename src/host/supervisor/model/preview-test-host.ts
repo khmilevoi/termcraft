@@ -18,7 +18,14 @@ export interface LivePreviewChild extends ScriptedChild {
 export function livePreviewChild(
   spec: HostSessionSpec,
   runtimeDeclaration: RuntimeDeclarationBundleV1,
-  options?: { setModeEcho?: InteractionMode },
+  options?: {
+    setModeEcho?: InteractionMode
+    /** Overrides the canned query reply BODY for `query-hit`/`query-rect`/`query-describe`/
+     * `query-layout` (blocker B1). Defaults to `{ ok: true, frameIdentity: <as requested>,
+     * result: { echoedKind } }` — enough to prove correlation + wire-kind mapping without a
+     * real render tree. A test overrides this to script `STALE_FRAME` or a specific result. */
+    queryReply?: (wireKind: string, requestBody: Record<string, unknown>) => Record<string, unknown>
+  },
 ): LivePreviewChild {
   const child = createScriptedChild() as LivePreviewChild
   let id: { sessionId: string; nonce: string } | null = null
@@ -64,6 +71,13 @@ export function livePreviewChild(
       if (raw.kind === "set-mode") {
         const echo = options?.setModeEcho ?? (raw.body.interactionMode as InteractionMode)
         return send({ protocolVersion: 1, kind: "set-mode", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { interactionMode: echo } })
+      }
+      if (raw.kind === "query-hit" || raw.kind === "query-rect" || raw.kind === "query-describe" || raw.kind === "query-layout") {
+        const requestBody = raw.body as unknown as Record<string, unknown>
+        const replyBody = options?.queryReply
+          ? options.queryReply(raw.kind, requestBody)
+          : { ok: true, frameIdentity: requestBody.frameIdentity, result: { echoedKind: raw.kind } }
+        return send({ protocolVersion: 1, kind: raw.kind, sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: replyBody as ControlEnvelope["body"] })
       }
       if (raw.kind === "shutdown") {
         send({ protocolVersion: 1, kind: "shutdown-ack", sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: { ok: true } })
