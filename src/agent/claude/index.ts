@@ -4,15 +4,15 @@
 // assembles the PRODUCTION instance. NON-Reatom injected adapter — no atoms,
 // no connect-hook lifetimes; the run/process lifetime is owned explicitly
 // (hardening §3.8).
-export { createClaudeBackend } from "./model/claude-backend"
-export { createRealQueryFn } from "./model/query-fn"
+export { createClaudeBackend } from "./backend"
+export { createRealQueryFn } from "./query"
 export type { ClaudeBackendDeps, ClaudeQuery, ClaudeQueryFn } from "./types"
 
 import { isReparsePoint } from "infrastructure/fs-guard"
 import { createJobObjectTree } from "infrastructure/process"
 import type { AgentBackend } from "agent/types"
-import { createClaudeBackend } from "./model/claude-backend"
-import { createRealQueryFn } from "./model/query-fn"
+import { createClaudeBackend } from "./backend"
+import { createRealQueryFn } from "./query"
 import type { ClaudeBackendDeps } from "./types"
 
 /**

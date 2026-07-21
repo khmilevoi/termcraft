@@ -43,9 +43,9 @@ test("code is constrained to AgentErrorCode — a typo'd code does not typecheck
   // template-variable type is a plain `string | number`, so a typo'd code
   // like "STREAM_FAILURE" (for STREAM_FAILED) would compile silently and
   // any `err.code` switch would fall through unnoticed at runtime.
-  const makeWithTypoedCode = () => {
+  const createWithTypoedCode = () => {
     // @ts-expect-error — "STREAM_FAILURE" is not a valid AgentErrorCode (typo for STREAM_FAILED)
     return new ClaudeSdkError({ code: "STREAM_FAILURE", reason: "x" })
   }
-  expect(typeof makeWithTypoedCode).toBe("function")
+  expect(typeof createWithTypoedCode).toBe("function")
 })

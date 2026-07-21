@@ -5,12 +5,10 @@ import * as errore from "errore"
  * abort). These are INTERNAL — the adapter maps them to `AgentRunOutcome` /
  * `AgentEvent` values and never rethrows past its own surface.
  *
- * `ABORTED` and `RESULT_ERROR` have no construction site yet — they are
- * reserved vocabulary for callers that need to distinguish a user-initiated
- * abort or a malformed result message from a plain stream failure, not dead
- * code. `STREAM_FAILED` currently covers both cases in `agent-run.ts`.
+ * `STREAM_FAILED` and `SPAWN_FAILED` are the codes actually raised at the SDK
+ * boundary.
  */
-export type AgentErrorCode = "SPAWN_FAILED" | "STREAM_FAILED" | "ABORTED" | "RESULT_ERROR"
+export type AgentErrorCode = "SPAWN_FAILED" | "STREAM_FAILED"
 
 /**
  * A failure crossing the `@anthropic-ai/claude-agent-sdk` boundary.

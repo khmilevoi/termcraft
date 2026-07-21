@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { planToSessionOptions } from "./session-plan"
+import { planToSessionOptions } from "./session-options"
 
 test("a resume plan passes resume:sessionId and forkSession:false", () => {
   expect(planToSessionOptions({ kind: "resume", sessionId: "s9", promptDelta: null })).toEqual({

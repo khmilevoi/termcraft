@@ -11,7 +11,7 @@ import type { ProcessTree } from "infrastructure/process"
  * than the mismatch being absorbed.
  *
  * Both SDK entry points that spawn a CLI use this: a fenced turn
- * (`query-fn.ts`) and the health probe (`health.ts`). They must not drift —
+ * (`query-options.ts`) and the health probe (`probe.ts`). They must not drift —
  * a probe with a weaker adoption contract than a turn is exactly the unowned
  * orphan that §6.5's confirmed-exit guarantee exists to prevent. `logLabel`
  * only names the caller in warnings; the ownership contract is identical.
@@ -20,7 +20,7 @@ import type { ProcessTree } from "infrastructure/process"
  * its Job Object membership are explicit, adapter-owned state (CLAUDE.md /
  * plan Global Constraints), matching `agent/`'s non-Reatom adapter status.
  */
-export function makeSpawnAndAdopt(
+export function createSpawnAndAdopt(
   processTree: ProcessTree,
   logLabel: string,
 ): (options: SpawnOptions) => SpawnedProcess {

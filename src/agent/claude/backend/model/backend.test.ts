@@ -4,10 +4,10 @@ import type { ProcessTree, ProcessTreeFactory } from "infrastructure/process"
 import { createFakeProcessTree, ProcessTreeError } from "infrastructure/process"
 import { deriveSessionScope } from "agent/session"
 import type { AgentRun, AgentTask, FencedEvent } from "agent/types"
-import type { ClaudeQuery, ClaudeQueryFn } from "../types"
+import type { ClaudeQuery, ClaudeQueryFn } from "agent/claude/types"
 import { CLAUDE_BACKEND_ID } from "./backend-id"
-import { createClaudeBackend } from "./claude-backend"
-import { claudeCapabilities } from "./health"
+import { createClaudeBackend } from "./backend"
+import { claudeCapabilities } from "./capabilities"
 
 /** Every async test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
 const GUARD_MS = 2000
@@ -154,8 +154,13 @@ test("capabilities are the static Claude table", () => {
   expect(backend.capabilities()).toEqual(claudeCapabilities())
 })
 
+// The degraded run's own shape (single error event + matching backend-error
+// outcome) is now covered directly against `createDegradedRun` in
+// agent/run/model/degraded-run.test.ts — this test stays here only to prove
+// the wiring: a `processTreeFactory` failure actually reaches that path with
+// the factory's own message, and logs a warning.
 test(
-  "a ProcessTreeError from the factory degrades the run to a single error event + backend-error outcome",
+  "a ProcessTreeError from the factory degrades the run to a backend-error outcome, and warns",
   async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
     try {
@@ -165,11 +170,6 @@ test(
         wait: async () => {},
       })
       const run = backend.startTurn(task)
-      const events: FencedEvent[] = []
-      for await (const ev of run.events) events.push(ev)
-      expect(events).toEqual([
-        { fence: task.fence, event: { kind: "error", message: "Process-tree failure: no Job Object support" } },
-      ])
       expect(await run.outcome).toEqual({
         kind: "backend-error",
         message: "Process-tree failure: no Job Object support",

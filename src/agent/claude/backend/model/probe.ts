@@ -1,14 +1,14 @@
 import * as errore from "errore"
 import os from "node:os"
-import type { CanUseTool, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { createConfinementPolicy } from "agent/confinement"
 import { runHealthProbe } from "agent/health"
 import type { HealthProbeDeps } from "agent/health"
 import type { AgentInfo } from "agent/types"
 import type { ClaudeQueryFn } from "agent/claude/types"
-import { CLAUDE_BACKEND_ID } from "agent/claude/model/backend-id"
-import { makeSpawnAndAdopt } from "agent/claude/model/spawn-adopt"
+import { createCanUseTool, createSpawnAndAdopt } from "agent/claude/query"
 import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools"
+import { CLAUDE_BACKEND_ID } from "./backend-id"
 
 /**
  * Fired once a verdict has already left `readUntilClassified`'s `for await`
@@ -71,18 +71,16 @@ const PROBE_CWD = os.tmpdir()
  */
 function buildProbeOptions(deps: HealthProbeDeps): Options {
   const policy = createConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES)
-  const canUseTool: CanUseTool = async (toolName, input, options) => {
-    const decision = policy(toolName, input, options.blockedPath)
-    return decision.behavior === "allow" ? { behavior: "allow" } : { behavior: "deny", message: decision.message }
-  }
   return {
     cwd: PROBE_CWD,
     additionalDirectories: [],
     settingSources: [],
     permissionMode: "default",
     abortController: deps.abortController,
-    canUseTool,
-    ...(deps.processTree !== null ? { spawnClaudeCodeProcess: makeSpawnAndAdopt(deps.processTree, "agent/health") } : {}),
+    canUseTool: createCanUseTool(policy),
+    ...(deps.processTree !== null
+      ? { spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/probe") }
+      : {}),
   }
 }
 

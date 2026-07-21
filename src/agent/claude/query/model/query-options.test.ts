@@ -4,7 +4,7 @@ import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
 import { createFakeProcessTree, ProcessTreeError } from "infrastructure/process"
 import type { AgentTask } from "agent/types"
-import { buildQueryOptions } from "./query-fn"
+import { buildQueryOptions } from "./query-options"
 
 const staging = path.resolve("C:\\ws")
 const task: AgentTask = {
@@ -105,7 +105,7 @@ function createRecordingProcessTree(): {
 
 /**
  * A `ProcessTree` fake whose `adopt`/`activeProcesses` outcomes are
- * individually scriptable, for driving `makeSpawnAndAdopt`'s four
+ * individually scriptable, for driving `createSpawnAndAdopt`'s four
  * degraded branches ([11]) one at a time. `noteAdoptionOutcome` calls and
  * `activeProcesses()` call count are both recorded for assertion.
  */

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { claudeCapabilities } from "./health"
+import { claudeCapabilities } from "./capabilities"
 
 test("capabilities advertise canUseTool confinement and rebindable sessions", () => {
   const caps = claudeCapabilities()

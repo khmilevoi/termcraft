@@ -3,8 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createProductionClaudeBackend, createProductionClaudeBackendDeps } from "./index"
-import { CLAUDE_BACKEND_ID } from "./model/backend-id"
-import { claudeCapabilities } from "./model/health"
+import { CLAUDE_BACKEND_ID, claudeCapabilities } from "./backend"
 
 test("the production backend exposes the five port methods and static capabilities", () => {
   const backend = createProductionClaudeBackend()

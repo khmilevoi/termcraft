@@ -1,23 +1,11 @@
-import { query } from "@anthropic-ai/claude-agent-sdk"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
 import { createConfinementPolicy } from "agent/confinement"
 import type { AgentTask } from "agent/types"
-import type { ClaudeQuery, ClaudeQueryFn } from "../types"
-import { planToSessionOptions } from "./session-plan"
-import { makeSpawnAndAdopt } from "./spawn-adopt"
+import { createCanUseTool } from "./can-use-tool"
+import { planToSessionOptions } from "./session-options"
+import { createSpawnAndAdopt } from "./spawn-adopt"
 import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools"
-
-/**
- * Production seam: the real SDK `query`. The SDK's `Query` (an
- * `AsyncGenerator<SDKMessage, void>` with `interrupt()`) satisfies
- * {@link ClaudeQuery} structurally, so this assigns WITHOUT a cast on purpose —
- * a cast here would silently absorb any future SDK signature drift instead of
- * failing the typecheck.
- */
-export function createRealQueryFn(): ClaudeQueryFn {
-  return (params) => query(params)
-}
 
 export interface QueryOptionDeps {
   readonly abortController: AbortController
@@ -54,10 +42,7 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
       ? { pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable }
       : {}),
     ...sessionOpts,
-    canUseTool: async (toolName, input, options) => {
-      const decision = policy(toolName, input, options.blockedPath)
-      return decision.behavior === "allow" ? { behavior: "allow" } : { behavior: "deny", message: decision.message }
-    },
-    spawnClaudeCodeProcess: makeSpawnAndAdopt(deps.processTree, "agent/query-fn"),
+    canUseTool: createCanUseTool(policy),
+    spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/query"),
   }
 }

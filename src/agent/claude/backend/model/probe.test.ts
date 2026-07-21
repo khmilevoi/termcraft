@@ -4,7 +4,7 @@ import type { Options, SDKMessage, SpawnedProcess } from "@anthropic-ai/claude-a
 import type { ProcessTree } from "infrastructure/process"
 import { createFakeProcessTree } from "infrastructure/process"
 import type { ClaudeQuery, ClaudeQueryFn } from "agent/claude/types"
-import { CLAUDE_BACKEND_ID } from "agent/claude/model/backend-id"
+import { CLAUDE_BACKEND_ID } from "./backend-id"
 import { probeClaudeHealth } from "./probe"
 
 /** A `ProcessTree` fake for tests that don't care about adoption/close specifics. */
