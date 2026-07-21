@@ -32,7 +32,12 @@ export async function runHealthProbe(
   read: HealthProbeReader,
   deps: HealthProbeDeps,
 ): Promise<AgentInfo> {
-  const result = await withProbeDeadline(read(), deps).catch(
+  // `read` is an injected callback typed to return a Promise, but nothing
+  // stops a non-async implementation from throwing synchronously. Calling it
+  // here, inside the promise chain, instead of as a bare argument turns that
+  // synchronous throw into a rejection the `.catch` below can convert into a
+  // value, keeping the single `close()` call below reachable on every path.
+  const result = await withProbeDeadline(Promise.resolve().then(read), deps).catch(
     (e) => new AgentHealthProbeError({ reason: describeThrown(e), cause: e }),
   )
 
