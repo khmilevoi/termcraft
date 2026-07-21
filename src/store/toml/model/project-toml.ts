@@ -129,11 +129,9 @@ const projectManifestSchema = z.strictObject({
   name: z.string(),
   created_at: rfc3339UtcSchema,
   target_stack: z.enum(TARGET_STACKS),
-  pages: z
-    .array(pageSlugSchema)
-    .refine((pages) => new Set(pages).size === pages.length, {
-      error: "`pages` must be duplicate-free",
-    }),
+  pages: z.array(pageSlugSchema).refine((pages) => new Set(pages).size === pages.length, {
+    error: "`pages` must be duplicate-free",
+  }),
 });
 
 /**

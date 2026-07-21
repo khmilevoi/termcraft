@@ -157,16 +157,14 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const { promise: timeout, resolve: resolveTimeout } = Promise.withResolvers<SupervisorError>();
     const remaining = Math.max(0, deadlineAt - deps.clock.now());
     const timer = deps.clock.setTimer(remaining, () => resolveTimeout(timeoutError));
-    const next = inbound
-      .next()
-      .then((result) =>
-        result.done
-          ? new SupervisorError({
-              code: "CHILD_EXITED",
-              reason: "stdout closed before the expected message",
-            })
-          : result.value,
-      );
+    const next = inbound.next().then((result) =>
+      result.done
+        ? new SupervisorError({
+            code: "CHILD_EXITED",
+            reason: "stdout closed before the expected message",
+          })
+        : result.value,
+    );
     const winner = await Promise.race([next, timeout]);
     timer.cancel();
     return winner;
