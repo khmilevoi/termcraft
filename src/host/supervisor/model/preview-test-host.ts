@@ -15,6 +15,26 @@ export interface LivePreviewChild extends ScriptedChild {
   emitHeartbeat(): void
 }
 
+/**
+ * Echoes back the wire-level fields the request actually carried (adversarial review of
+ * slice 6D, item 1): `x`/`y` for `query-hit`, `elementId` for `query-rect`/`query-describe`.
+ * These are exactly the fields `host-state-machine.ts`'s `parseGeometryQueryBody` requires
+ * and rejects a MALFORMED_PROTOCOL for when missing — echoing them back (instead of a fixed
+ * canned result) lets a supervisor-side test prove the REQUEST body reached the wire intact,
+ * not just that a reply came back correlated. `query-layout` carries no extra fields.
+ */
+function echoQueryFields(wireKind: string, requestBody: Record<string, unknown>): Record<string, unknown> {
+  const echoed: Record<string, unknown> = { echoedKind: wireKind }
+  if (wireKind === "query-hit") {
+    echoed.x = requestBody.x
+    echoed.y = requestBody.y
+  }
+  if (wireKind === "query-rect" || wireKind === "query-describe") {
+    echoed.elementId = requestBody.elementId
+  }
+  return echoed
+}
+
 export function livePreviewChild(
   spec: HostSessionSpec,
   runtimeDeclaration: RuntimeDeclarationBundleV1,
@@ -76,7 +96,7 @@ export function livePreviewChild(
         const requestBody = raw.body as unknown as Record<string, unknown>
         const replyBody = options?.queryReply
           ? options.queryReply(raw.kind, requestBody)
-          : { ok: true, frameIdentity: requestBody.frameIdentity, result: { echoedKind: raw.kind } }
+          : { ok: true, frameIdentity: requestBody.frameIdentity, result: echoQueryFields(raw.kind, requestBody) }
         return send({ protocolVersion: 1, kind: raw.kind, sessionId: id.sessionId, nonce: id.nonce, messageId: nextId(), responseTo: raw.requestId, body: replyBody as ControlEnvelope["body"] })
       }
       if (raw.kind === "shutdown") {

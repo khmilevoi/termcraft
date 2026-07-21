@@ -299,7 +299,7 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     const started = await session.start()
     if (started instanceof Error) throw started
     const frameIdentity = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
-    const result = await session.query(frameIdentity, { kind: "hit", x: 0, y: 0 })
+    const result = await session.query(frameIdentity, { kind: "hit", x: 12, y: 34 })
     expect(result).not.toBeInstanceOf(SupervisorError)
     expect(result).not.toBeInstanceOf(ProtocolError)
     if (result instanceof Error) throw result
@@ -307,6 +307,12 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     if (!result.ok) throw new Error("expected ok:true")
     expect(result.frameIdentity).toEqual(frameIdentity)
     expect(result.result.echoedKind).toBe("query-hit")
+    // §7/blocker B1 adversarial review item 1: the request BODY (not just the reply
+    // correlation) must reach the wire intact. `queryFieldsOf` is what puts x/y onto the
+    // envelope; the fake host (preview-test-host.ts) echoes them straight back, so a
+    // `queryFieldsOf` that drops x/y (e.g. `return {}`) surfaces here as `undefined`.
+    expect(result.result.x).toBe(12)
+    expect(result.result.y).toBe(34)
     await session.stop()
   })
 
@@ -318,15 +324,19 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     if (started instanceof Error) throw started
     const frameIdentity = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
 
-    const rect = await session.query(frameIdentity, { kind: "rect", elementId: "panel" })
+    const rect = await session.query(frameIdentity, { kind: "rect", elementId: "panel-rect" })
     if (rect instanceof Error) throw rect
     if (!rect.ok) throw new Error("expected ok:true")
     expect(rect.result.echoedKind).toBe("query-rect")
+    // §7/blocker B1 adversarial review item 1: elementId must reach the wire, not just
+    // the reply's correlation id — a `queryFieldsOf` that drops it surfaces as `undefined`.
+    expect(rect.result.elementId).toBe("panel-rect")
 
-    const describe = await session.query(frameIdentity, { kind: "describe", elementId: "panel" })
+    const describe = await session.query(frameIdentity, { kind: "describe", elementId: "panel-describe" })
     if (describe instanceof Error) throw describe
     if (!describe.ok) throw new Error("expected ok:true")
     expect(describe.result.echoedKind).toBe("query-describe")
+    expect(describe.result.elementId).toBe("panel-describe")
 
     const layout = await session.query(frameIdentity, { kind: "layout" })
     if (layout instanceof Error) throw layout
@@ -435,6 +445,111 @@ describe("createHostSession post-ready pump (2D-2)", () => {
     await waitUntil(() => fatals.length === 1, "pump fataled on the wrong-nonce frame")
     expect(session.phase).toBe("failed")
     expect(fatals[0] instanceof ProtocolError && fatals[0].code).toBe("MALFORMED_PROTOCOL")
+  })
+})
+
+// --- adversarial review of slice 6D, item 4: parseGeometryReply's malformed-reply
+// branches had zero coverage, and it never checked that the reply's echoed
+// frameIdentity EQUALS the one the caller requested — a child answering against a
+// DIFFERENT frame would pass through as ok:true. Every scenario here drives through
+// the public `session.query()` API using `livePreviewChild`'s `queryReply` seam
+// (never re-invents a double), so the query correlates through the REAL request
+// table and only the reply BODY shape is scripted.
+describe("createHostSession query reply decoding — malformed replies (adversarial review item 4)", () => {
+  test("a reply that echoes a DIFFERENT frameIdentity than requested is a fatal MALFORMED_PROTOCOL, not silently accepted as ok:true", async () => {
+    const wrongIdentity = { sessionId: "some-other-session", nonce: "b".repeat(32), sourceHash: "b".repeat(64), frameSeq: "999" }
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: () => ({ ok: true, frameIdentity: wrongIdentity, result: { echoedKind: "query-hit" } }),
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const requested = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(requested, { kind: "hit", x: 1, y: 1 })
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) {
+      expect(result.code).toBe("MALFORMED_PROTOCOL")
+      expect(result.reason).toContain("frameIdentity")
+    }
+    expect(session.phase).toBe("ready") // a decode-level rejection, not a pump-fatal teardown
+    await session.stop()
+  })
+
+  test("a reply with a missing frameIdentity is a MALFORMED_PROTOCOL", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: () => ({ ok: true, result: {} }),
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const requested = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(requested, { kind: "layout" })
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) {
+      expect(result.code).toBe("MALFORMED_PROTOCOL")
+      expect(result.reason).toContain("missing frameIdentity")
+    }
+    await session.stop()
+  })
+
+  test("a reply whose frameIdentity fields are not all strings is a MALFORMED_PROTOCOL", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: (_kind, requestBody) => ({
+        ok: true,
+        frameIdentity: { ...(requestBody.frameIdentity as object), frameSeq: 1 }, // a number, not a string
+        result: {},
+      }),
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const requested = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(requested, { kind: "layout" })
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) {
+      expect(result.code).toBe("MALFORMED_PROTOCOL")
+      expect(result.reason).toContain("must be strings")
+    }
+    await session.stop()
+  })
+
+  test("a reply with a missing/non-object result is a MALFORMED_PROTOCOL", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: (_kind, requestBody) => ({ ok: true, frameIdentity: requestBody.frameIdentity }), // no `result` key at all
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const requested = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(requested, { kind: "layout" })
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) {
+      expect(result.code).toBe("MALFORMED_PROTOCOL")
+      expect(result.reason).toContain("missing result")
+    }
+    await session.stop()
+  })
+
+  test("a refusal (ok:false) carrying any code OTHER than STALE_FRAME is a MALFORMED_PROTOCOL, not silently accepted", async () => {
+    const child = livePreviewChild(spec, runtimeDeclaration, {
+      queryReply: () => ({ ok: false, code: "SOME_UNKNOWN_CODE", reason: "not a real refusal" }),
+    })
+    const { deps: sessionDeps } = deps(child)
+    const session = createHostSession(spec, sessionDeps)
+    const started = await session.start()
+    if (started instanceof Error) throw started
+    const requested = { sessionId: session.identity.sessionId, nonce: session.identity.nonce, sourceHash: spec.sourceHash, frameSeq: "1" }
+    const result = await session.query(requested, { kind: "layout" })
+    expect(result).toBeInstanceOf(ProtocolError)
+    if (result instanceof ProtocolError) {
+      expect(result.code).toBe("MALFORMED_PROTOCOL")
+      expect(result.reason).toContain("unexpected")
+    }
+    await session.stop()
   })
 })
 

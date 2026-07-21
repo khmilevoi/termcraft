@@ -493,7 +493,11 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     if (query.kind === "layout") return {}
     return { elementId: query.elementId }
   }
-  function parseGeometryReply(envelope: ControlEnvelope): ProtocolError | GeometryQueryResult {
+  // `requested` is the frameIdentity the CALLER asked about (§7.1). The entire geometry
+  // token chain rests on the reply actually being ABOUT that frame — a child that answers
+  // against a different (e.g. stale/forged) frame must not pass through as ok:true just
+  // because its reply happens to be well-formed (adversarial review item 4).
+  function parseGeometryReply(envelope: ControlEnvelope, requested: FrameIdentity): ProtocolError | GeometryQueryResult {
     const body = envelope.body
     if (body.ok === false) {
       const code = body.code
@@ -510,6 +514,9 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const ri = rawIdentity as { sessionId?: unknown; nonce?: unknown; sourceHash?: unknown; frameSeq?: unknown }
     if (typeof ri.sessionId !== "string" || typeof ri.nonce !== "string" || typeof ri.sourceHash !== "string" || typeof ri.frameSeq !== "string") {
       return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} reply frameIdentity fields must be strings` })
+    }
+    if (ri.sessionId !== requested.sessionId || ri.nonce !== requested.nonce || ri.sourceHash !== requested.sourceHash || ri.frameSeq !== requested.frameSeq) {
+      return new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: `${envelope.kind} reply echoed a different frameIdentity than requested` })
     }
     const result = body.result
     if (result === null || typeof result !== "object" || Array.isArray(result)) {
@@ -528,7 +535,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     }
     const result = await sendRequest(wireKindFor(geometryQuery), body)
     if (result instanceof Error) return result
-    return parseGeometryReply(result)
+    return parseGeometryReply(result, frameIdentity)
   }
 
   // Kill + reap the child and tear down all resources; used on every failure path.

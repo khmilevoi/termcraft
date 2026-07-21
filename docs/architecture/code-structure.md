@@ -414,11 +414,17 @@ vendor tier's own pre-split run-loop file.
   no code satisfies the `SmokeRenderer` interface itself, and no composition root
   wires the two together, because `main.ts` does not exist
 - `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
-  real `HostSupervisor`/restart-aware `PreviewHandle` shapes item 5's naming list
-  fixes as spec-given
-- `src/host/supervisor/model/preview-session.ts` — a second, non-restart-aware
-  `PreviewSession` facade over one `HostSession`; both shapes exist with no `core`
-  yet to choose between them
+  real `HostSupervisor`; blocker B4 (phase 6 slice 6D) resolved the former
+  restart-aware-`PreviewHandle`-vs-non-restart-aware-`PreviewSession` split —
+  `preview()` now returns a `SupervisedPreviewSession` composing both: the stable
+  identity/frames/retry/close a `PreviewHandle` used to provide, plus
+  `resize`/`setMode`/`query`/`interactionMode` rebound to whichever incarnation is
+  currently live (`supervisor.ts`'s `sessionFor`). There is no separate
+  `PreviewHandle` type anymore
+- `src/host/supervisor/model/preview-session.ts` — `createPreviewSession`, a
+  single-incarnation (no restart) `PreviewSession` facade; its header comment
+  records why `supervisor.ts` follows the same interactionMode/resize/setMode/query
+  pattern rather than reusing this function directly
 - `src/gate/model/import-scan.ts` — the saved-page import allowlist (item 11's last
   forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal
 - `src/host/session/model/resolver.ts` — the runtime resolver plugin item 9
@@ -462,10 +468,14 @@ the code does not encode**
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet
-- `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` — the
-  slice of the protocol surface `host` has not landed: `forwardInput`/`setTweak`/
-  `setTheme`/geometry `query()`, the bounded control-queue/mailbox wiring into the
-  live path, and the conformant `capture` export reply
+- `docs/superpowers/specs/2026-07-16-host-supervision-protocol-design.md` — blocker
+  B1 (phase 6 slice 6D) closed the geometry `query()` wire kind, correlation, and
+  real `checkHit`/`rectOf`/`describe`/`layoutTree` backing (§4.2, §7.1); the bounded
+  control-queue/mailbox are now wired into `session.ts`'s live path. Still not
+  landed: `forwardInput`/`setTweak`/`setTheme`, resize/mousemove/hover coalescing
+  (the queue wiring is discrete-only for now), and the conformant `capture` export
+  reply. `describe`/`layoutTree`'s semantic kind/label vocabulary awaits
+  `@termcraft/runtime`'s component catalog (§5.2), which does not exist yet either
 - `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — §3.1 the
   target single-facade JSX specifier (`@termcraft/runtime/jsx-runtime`) the current
   three-specifier resolver stands in for

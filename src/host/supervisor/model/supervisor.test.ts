@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { PROTOCOL_HARD_LIMITS, ProtocolError } from "../../protocol"
-import type { ControlEnvelope, RuntimeDeclarationBundleV1 } from "../../protocol"
-import type { HostSessionSpec, PreviewFrame } from "../../types"
+import type { ControlEnvelope, FrameIdentity, RuntimeDeclarationBundleV1 } from "../../protocol"
+import type { HostSessionSpec, InteractionMode, PreviewFrame, Size } from "../../types"
 import { createManualClock } from "./clock"
 import { SupervisorError } from "./errors"
 import { createPreviewRelay } from "./preview-relay"
 import { createHostSupervisor } from "./supervisor"
-import type { HostSession, HostSessionDeps, ReadyOutcome, StopOutcome, SupervisorEvent } from "../types"
+import type { GeometryQuery, HostSession, HostSessionDeps, ReadyOutcome, StopOutcome, SupervisorEvent } from "../types"
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
@@ -41,6 +41,15 @@ interface FakeIncarnation {
   readonly startError: ProtocolError | SupervisorError | null
   stopped: boolean
   startResolved: boolean
+  /**
+   * Per-incarnation call recorders (adversarial review of slice 6D, item 3): the
+   * composed `SupervisedPreviewSession.resize`/`setMode`/`query` must delegate to
+   * WHICHEVER incarnation is current at call time, never a captured-once reference.
+   * These arrays let a test prove a call landed on THIS incarnation and not another.
+   */
+  readonly resizeCalls: Size[]
+  readonly setModeCalls: InteractionMode[]
+  readonly queryCalls: { frameIdentity: FrameIdentity; query: GeometryQuery }[]
 }
 
 /**
@@ -85,6 +94,9 @@ function fakeFactory(opts?: { startFor?: (attempt: number) => ProtocolError | Su
       startError,
       stopped: false,
       startResolved: false,
+      resizeCalls: [],
+      setModeCalls: [],
+      queryCalls: [],
       session: {
         identity,
         get phase() {
@@ -108,17 +120,22 @@ function fakeFactory(opts?: { startFor?: (attempt: number) => ProtocolError | Su
           return { phase: "stopped", forced: false, exitCode: 0, signalCode: null, reason: "test stop" }
         },
         frames: relay.frames,
-        async resize() {
+        async resize(size) {
+          inc.resizeCalls.push(size)
           return ready
         },
-        async setMode() {
-          return ready
+        async setMode(mode) {
+          inc.setModeCalls.push(mode)
+          return { ...ready, kind: "set-mode", body: { interactionMode: mode } }
         },
         async ping() {
           return ready
         },
-        async query(frameIdentity) {
-          return { ok: true, frameIdentity, result: {} }
+        async query(frameIdentity, query) {
+          inc.queryCalls.push({ frameIdentity, query })
+          // `answeredByNonce` is this test's own marker (not a wire field) — it lets a
+          // test prove WHICH incarnation actually answered, across a restart.
+          return { ok: true, frameIdentity, result: { answeredByNonce: nonce } }
         },
       },
       crash(error) {
@@ -379,5 +396,98 @@ describe("createHostSupervisor — trust + teardown (§13)", () => {
     expect(b.state()).toBe("stopped")
     expect(clock.pending()).toBe(0)
     expect(factory.incarnations.every((i) => i.stopped || i.startError !== null || i.session.phase === "failed")).toBe(true)
+  })
+})
+
+// --- adversarial review of slice 6D, item 3: the composed PreviewSession delegation
+// (`sessionFor` in supervisor.ts) had zero coverage — no test ever called
+// resize()/setMode()/query() on a SUPERVISED session, so a `query()` that returned an
+// unconditional TRANSPORT_ERROR passed the whole suite. The interesting part is the
+// REBINDING across restart: `resize`/`setMode`/`query` must read `ks.current` fresh on
+// every call, delegating to whichever incarnation is live NOW, not the one captured when
+// the session object was first built.
+
+describe("createHostSupervisor — composed session delegation + restart rebinding (adversarial review item 3)", () => {
+  test("resize/setMode/query on the composed session reach the CURRENT incarnation and rebind to the NEW one after an automatic restart", async () => {
+    const factory = fakeFactory()
+    const { supervisor, clock } = makeSupervisor(factory)
+    const handle = supervisor.preview(specFor())
+    if (handle instanceof Error) throw handle
+    await waitUntil(() => handle.state() === "ready", "1st ready")
+    const first = factory.incarnations[0]!
+
+    // resize/setMode are fire-and-forget on the UI-facing facade (§7) — wait on the
+    // fake incarnation's OWN recorded call, not on a (void) return value.
+    handle.resize({ w: 111, h: 22 })
+    await waitUntil(() => first.resizeCalls.length === 1, "resize reached the 1st incarnation")
+    expect(first.resizeCalls[0]).toEqual({ w: 111, h: 22 })
+
+    handle.setMode("interactive")
+    await waitUntil(() => first.setModeCalls.length === 1, "setMode reached the 1st incarnation")
+    expect(first.setModeCalls[0]).toBe("interactive")
+    // §7: interactionMode updates ONLY from the accepted response, never optimistically.
+    await waitUntil(() => handle.interactionMode === "interactive", "interactionMode updated from the accepted set-mode response")
+
+    const frameIdentity1 = { sessionId: handle.identity.sessionId, nonce: first.nonce, sourceHash: handle.identity.sourceHash, frameSeq: "1" }
+    const query1: GeometryQuery = { kind: "layout" }
+    const result1 = await handle.query(frameIdentity1, query1)
+    if (result1 instanceof Error) throw result1
+    if (!result1.ok) throw new Error("expected ok:true")
+    expect(result1.result.answeredByNonce).toBe(first.nonce) // answered by the 1st incarnation
+    expect(first.queryCalls).toEqual([{ frameIdentity: frameIdentity1, query: query1 }])
+
+    // Crash + automatic restart. The composed session object stays the SAME reference
+    // (blocker B4), but its delegation target must move to the fresh incarnation.
+    first.crash(crash())
+    await waitUntil(() => handle.state() === "backoff", "backoff")
+    clock.advance(250)
+    await waitUntil(() => factory.incarnations.length === 2 && handle.state() === "ready", "2nd ready")
+    const second = factory.incarnations[1]!
+    expect(second).not.toBe(first)
+
+    handle.resize({ w: 5, h: 5 })
+    await waitUntil(() => second.resizeCalls.length === 1, "resize now reaches the 2nd incarnation")
+    expect(first.resizeCalls).toHaveLength(1) // the dead 1st incarnation never got a second call
+
+    const frameIdentity2 = { sessionId: handle.identity.sessionId, nonce: second.nonce, sourceHash: handle.identity.sourceHash, frameSeq: "1" }
+    const result2 = await handle.query(frameIdentity2, query1)
+    if (result2 instanceof Error) throw result2
+    if (!result2.ok) throw new Error("expected ok:true")
+    expect(result2.result.answeredByNonce).toBe(second.nonce) // answered by the NEW incarnation
+    expect(first.queryCalls).toHaveLength(1) // still only the pre-crash call
+    expect(second.queryCalls).toHaveLength(1)
+
+    // The SAME session object is what `preview()` still hands back for this key.
+    const reacquired = supervisor.preview(specFor())
+    if (reacquired instanceof Error) throw reacquired
+    expect(reacquired).toBe(handle)
+
+    await supervisor.stopAll()
+  })
+
+  test("resize/setMode/query on a session with no live incarnation (backoff) are dropped/rejected, never delegated to a dead incarnation", async () => {
+    const factory = fakeFactory()
+    const { supervisor, clock } = makeSupervisor(factory)
+    const handle = supervisor.preview(specFor())
+    if (handle instanceof Error) throw handle
+    await waitUntil(() => handle.state() === "ready", "ready")
+    const first = factory.incarnations[0]!
+
+    first.crash(crash())
+    await waitUntil(() => handle.state() === "backoff", "backoff — no live incarnation right now")
+
+    handle.resize({ w: 1, h: 1 }) // must not throw, must not touch the dead incarnation
+    handle.setMode("interactive")
+    const frameIdentity = { sessionId: handle.identity.sessionId, nonce: first.nonce, sourceHash: handle.identity.sourceHash, frameSeq: "1" }
+    const result = await handle.query(frameIdentity, { kind: "layout" })
+    expect(result).toBeInstanceOf(SupervisorError)
+    if (result instanceof SupervisorError) expect(result.code).toBe("TRANSPORT_ERROR")
+    expect(first.resizeCalls).toHaveLength(0)
+    expect(first.setModeCalls).toHaveLength(0)
+    expect(first.queryCalls).toHaveLength(0)
+
+    clock.advance(250)
+    await waitUntil(() => handle.state() === "ready", "restarted")
+    await supervisor.stopAll()
   })
 })
