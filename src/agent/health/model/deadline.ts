@@ -27,6 +27,26 @@ function describeThrown(cause: unknown): string {
 }
 
 /**
+ * Boundary guard: `wait` is an injected seam (production sleeps, tests
+ * script it) whose documented shape is "never rejects" — but nothing
+ * enforces that on a misbehaving injection. Without this guard, a rejecting
+ * `wait` would reject the `Promise.race` below outright, and the abandoned
+ * real read (`pending`) would be left with neither a `.catch` nor an abort —
+ * its later rejection would surface unhandled. A rejection here is logged
+ * and treated as "the deadline timer is unusable", not propagated: `timedOut`
+ * still eventually settles to a `ProbeDeadlineAbortError`, letting `pending`
+ * alone effectively decide the race.
+ *
+ * Mirrors `agent/run/model/exit-confirm.ts`'s `safeWait` — duplicated locally
+ * (not imported) because `agent/health` must not depend on `agent/run`.
+ */
+async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
+  await wait(ms).catch((cause) => {
+    console.warn("agent/health: injected wait() rejected during probe deadline:", describeThrown(cause))
+  })
+}
+
+/**
  * Bound the probe read so a CLI that connects and then emits nothing cannot
  * hang `runHealthProbe` — and therefore `AgentBackend.healthCheck()` —
  * forever. Uses the injected `wait` seam (mirrors `RunDeps.wait` in
@@ -43,7 +63,7 @@ export async function withProbeDeadline<T>(
 ): Promise<T | ProbeDeadlineAbortError> {
   const wait = deps.wait ?? defaultWait
   const deadlineMs = deps.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS
-  const timedOut = wait(deadlineMs).then(() => new ProbeDeadlineAbortError({ deadlineMs }))
+  const timedOut = safeWait(wait, deadlineMs).then(() => new ProbeDeadlineAbortError({ deadlineMs }))
 
   const winner = await Promise.race([pending, timedOut])
   if (!(winner instanceof ProbeDeadlineAbortError)) return winner

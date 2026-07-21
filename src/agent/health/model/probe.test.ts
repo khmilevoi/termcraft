@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import type { AgentInfo } from "agent/types"
 import type { ProcessTree } from "infrastructure/process"
 import type { HealthProbeReader } from "../types"
@@ -14,6 +14,18 @@ describe("runHealthProbe classification", () => {
   test("passes a vendor verdict through unchanged", async () => {
     const verdict = { backendId: "x", health: { status: "ready" as const }, account: null }
     expect(await runHealthProbe("x", async () => verdict, deps)).toEqual(verdict)
+  })
+
+  test("a vendor verdict with a mismatched backendId is substituted, logged, and otherwise passed through", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const verdict = { backendId: "wrong-id", health: { status: "ready" as const }, account: null }
+      const info = await runHealthProbe("x", async () => verdict, deps)
+      expect(info).toEqual({ backendId: "x", health: { status: "ready" }, account: null })
+      expect(warnSpy).toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   test("a clean close with no verdict is not-logged-in, never ready, and reports account: null", async () => {

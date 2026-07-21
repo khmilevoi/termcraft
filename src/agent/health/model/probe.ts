@@ -56,7 +56,18 @@ export async function runHealthProbe(
     return { backendId, health: { status: notInstalled ? "not-installed" : "not-logged-in" }, account: null }
   }
 
-  if (result !== null) return result
+  if (result !== null) {
+    // The vendor `read` is trusted for everything except its own `backendId`
+    // echo — a reader that returns a mismatched id would otherwise pass
+    // straight through and misattribute this verdict to the wrong backend.
+    if (result.backendId !== backendId) {
+      console.warn(
+        `agent/health: probe verdict backendId mismatch (expected "${backendId}", got "${result.backendId}"); substituting the expected id`,
+      )
+      return { ...result, backendId }
+    }
+    return result
+  }
 
   // The stream closed cleanly without ever classifying. The CLI ran without
   // throwing, so this is not "not-installed"; nothing confirmed a working

@@ -26,3 +26,23 @@ test("the degraded run's fence matches the fence it was created with", () => {
   const run = createDegradedRun(fence, "boom")
   expect(run.fence).toBe(fence)
 })
+
+// --- events matches createEventQueue's single-reader contract (Fix 4) -------
+
+test("a second concurrent iterator fails loudly instead of silently replaying the event", () => {
+  const run = createDegradedRun(fence, "boom")
+  const first = run.events[Symbol.asyncIterator]()
+  const second = run.events[Symbol.asyncIterator]()
+  expect(first).not.toBe(second)
+  expect(second.next()).rejects.toThrow("agent/run: AgentRun.events supports only one reader at a time")
+})
+
+test("return() completes the iterator protocol cleanly, matching a for-await break", async () => {
+  const run = createDegradedRun(fence, "boom")
+  const iterator = run.events[Symbol.asyncIterator]()
+  expect(typeof iterator.return).toBe("function")
+  const result = await iterator.return?.()
+  expect(result).toEqual({ value: undefined, done: true })
+  // A subsequent next() also reports done -- return() is terminal.
+  expect(await iterator.next()).toEqual({ value: undefined, done: true })
+})

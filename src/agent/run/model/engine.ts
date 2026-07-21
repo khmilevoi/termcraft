@@ -26,6 +26,12 @@ class RunDriverError extends errore.createTaggedError({
 /** Default §6.5 exit-confirmation budget when the caller does not override it. */
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5000
 
+/** How long the engine waits for a driver to return after it has already
+ *  claimed an outcome. A driver returns immediately in the normal case; this
+ *  bounds the pathological one where the vendor stream's own close never
+ *  settles, so `outcome` cannot be held hostage by it. */
+const DRIVER_RETURN_GRACE_MS = 2000
+
 function describeThrown(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
@@ -66,6 +72,21 @@ export function startAgentRun(
   })
 
   /**
+   * Resolves the instant a natural outcome is claimed (i.e. exactly when
+   * `latch("natural")` wins inside `sink.complete()` or the driver-threw
+   * backstop below) — independent of whether the driver's own `driver(sink)`
+   * promise has settled yet. `runDriver()` races the driver's return against
+   * this signal plus `DRIVER_RETURN_GRACE_MS` so a driver that claims and then
+   * hangs (e.g. a `for await` whose `IteratorClose` never settles) cannot
+   * hold `outcome` — and therefore `cancel()` and the backend's `tree.close()`
+   * wiring — hostage forever.
+   */
+  let resolveClaimedSignal: () => void = () => {}
+  const claimedSignal = new Promise<void>((resolve) => {
+    resolveClaimedSignal = resolve
+  })
+
+  /**
    * turn-durability §6.4/§6.5: a natural completion must CONFIRM the whole
    * process tree exited before the kernel may retire the fence and snapshot the
    * candidate workspace. If the first poll cannot confirm, escalate exactly like
@@ -96,24 +117,50 @@ export function startAgentRun(
       for (const event of finalEvents ?? []) queue.push(event)
       queue.finish()
       claimed = outcome
+      resolveClaimedSignal()
     },
   }
 
+  /**
+   * Drive the vendor driver to completion, without letting a driver that has
+   * already claimed an outcome hold `outcome` hostage if its own promise
+   * never settles (Fix 1). `driverPromise` is chained with `.catch()` rather
+   * than wrapped in try/catch below so it can be raced: it never itself
+   * rejects (the catch swallows and logs, errore rule 21), so an abandoned
+   * driver settling late is inert rather than an unhandled rejection.
+   */
   async function runDriver(): Promise<void> {
-    try {
-      await driver(sink)
-    } catch (cause) {
+    const driverPromise = driver(sink).catch((cause) => {
       // Backstop only: a driver is expected to convert its own boundary throws.
-      // Swallowed and logged (errore rule 21) so a leak cannot leave `outcome`
-      // pending forever.
       console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause))
       if (latch("natural")) {
         const driverError = new RunDriverError({ reason: describeThrown(cause), cause })
         queue.push({ kind: "error", message: driverError.message })
         queue.finish()
         claimed = { kind: "backend-error", message: driverError.message, sessionId: null }
+        resolveClaimedSignal()
       }
-    }
+    })
+
+    // Wait for whichever comes first: the driver actually returning, or —
+    // once it has claimed an outcome via `complete()` — the bounded grace
+    // period. A driver that returns promptly (the normal case) settles
+    // `driverPromise` well before any grace timer would matter, so this adds
+    // no observable delay. `deps.wait`'s rejection is guarded the same way
+    // `exit-confirm.ts`'s `safeWait` guards it: an injected `wait` is
+    // documented "never rejects", but a misbehaving one must not turn into an
+    // unhandled rejection out of a fire-and-forget `void runDriver()`.
+    await Promise.race([
+      driverPromise,
+      claimedSignal.then(() =>
+        deps.wait(DRIVER_RETURN_GRACE_MS).catch((cause) => {
+          console.warn(
+            "agent/run: injected wait() rejected during the driver-return grace period:",
+            describeThrown(cause),
+          )
+        }),
+      ),
+    ])
 
     if (claimed === null && latch("natural")) {
       // The driver returned without claiming an outcome and without cancel
@@ -168,10 +215,15 @@ export function startAgentRun(
    *     exists one level up, inside the SDK itself, and already runs as part
    *     of rung 1: the installed `@anthropic-ai/claude-agent-sdk` (0.3.212)
    *     closes its process transport on `abortController.abort()` — the same
-   *     `AbortController` this file passes in as `Options.abortController`
-   *     and aborts on the line below — by first calling `processStdin.end()`
-   *     (EOF, the CLI's own graceful-shutdown signal) and only THEN, after a
-   *     fixed ~2000ms grace window, considering any escalation at all
+   *     `AbortController` this file aborts on the line below, which
+   *     `RunDeps.abortController`'s doc comment (`../types.ts`) requires the
+   *     driver's own vendor call to be wired to observe. This file never sees
+   *     `Options` itself — the vendor backend (for Claude,
+   *     `agent/claude/backend/model/backend.ts`) is what passes this same
+   *     controller into the SDK as `Options.abortController` — by first
+   *     calling `processStdin.end()` (EOF, the CLI's own graceful-shutdown
+   *     signal) and only THEN, after a fixed ~2000ms grace window, considering
+   *     any escalation at all
    *     (verified by reading the bundled `sdk.mjs`: `ProcessTransport.close()`,
    *     wait constant `wbe = 2000`). That stdin-EOF-plus-~2s sequence fires
    *     before this file's own rung 2 poll or rung 4 kill ever runs — the

@@ -1,16 +1,38 @@
 import type { AgentRun, AgentRunOutcome, FencedEvent } from "agent/types"
 import type { TurnFence } from "entities/turn"
 
-/** An `AsyncIterable` that yields `event` exactly once, then completes. */
+/**
+ * An `AsyncIterable` that yields `event` exactly once, then completes.
+ * Matches `createEventQueue`'s single-reader contract
+ * (`run/model/event-queue.ts`) so both `AgentRun` producers in the shared
+ * tier behave the same way to a consumer that has no way to know which one
+ * it got: only one reader is ever handed out — a second, concurrent
+ * `[Symbol.asyncIterator]()` call fails loudly instead of silently handing
+ * out an independent replay of the event — and `return()` is implemented so
+ * a `for await...break` completes the iterator protocol cleanly.
+ */
 function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {
+  let readerTaken = false
   return {
     [Symbol.asyncIterator]() {
+      if (readerTaken) {
+        // A second concurrent reader fails loudly instead of silently
+        // replaying `event` — matching `createEventQueue`'s contract.
+        return {
+          next: () => Promise.reject(new Error("agent/run: AgentRun.events supports only one reader at a time")),
+        }
+      }
+      readerTaken = true
       let delivered = false
       return {
         next: async (): Promise<IteratorResult<FencedEvent>> => {
           if (delivered) return { value: undefined, done: true }
           delivered = true
           return { value: event, done: false }
+        },
+        return: async (): Promise<IteratorResult<FencedEvent>> => {
+          delivered = true
+          return { value: undefined, done: true }
         },
       }
     },

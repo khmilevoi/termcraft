@@ -47,7 +47,29 @@ export type RunDriver = (sink: RunSink) => Promise<void>
 
 /** Deps for {@link startAgentRun}. Carries no vendor type — by design. */
 export interface RunDeps {
+  /**
+   * The process tree the driver's own vendor call MUST adopt its spawned
+   * processes into. Exit confirmation (§6.4/§6.5, `confirmExit`/
+   * `escalateAndConfirm` in `./model/exit-confirm.ts`) only ever polls
+   * `activeProcesses()`/`terminate()` on THIS tree — a driver that adopts
+   * into a different tree leaves this one permanently empty, so every run
+   * ends `unconfirmed-exit` even on a perfectly clean completion.
+   */
   readonly processTree: ProcessTree
+  /**
+   * The `AbortController` the driver's own vendor call MUST be wired to
+   * observe — e.g. passed as that vendor SDK's own `Options.abortController`,
+   * or whatever mechanism the vendor actually reads for cancellation.
+   * Cancel-ladder rung 1 (`runCancelLadder` in `./model/engine.ts`) calls
+   * `.abort()` on exactly this controller and nothing else — it is the
+   * ladder's ONLY graceful stop (see that function's doc comment for why
+   * rungs 2-4 exist and what rung 3 would have been). A driver that
+   * constructs and observes its own, different `AbortController` silently
+   * disables rung 1: `abort()` here fires on a controller nobody is
+   * listening to, the vendor stream keeps running, and every cancel
+   * degrades straight to rung 4's hard `terminate()`, losing the entire
+   * graceful window.
+   */
   readonly abortController: AbortController
   /** Injectable delay for the §6.5 waits; production = `(ms) => Bun.sleep(ms)`. */
   readonly wait: (ms: number) => Promise<void>

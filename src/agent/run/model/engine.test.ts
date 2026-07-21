@@ -475,3 +475,70 @@ test(
   },
   GUARD_MS,
 )
+
+// --- a driver that claims an outcome and then hangs must not wedge outcome
+// or cancel() forever (Fix 1: a driver's own IteratorClose can hang after
+// `complete()` has already run) -------------------------------------------
+
+test(
+  "a driver that claims an outcome and then hangs still resolves outcome, unblocking the downstream tree.close() wiring backend.ts relies on",
+  async () => {
+    let closeCalls = 0
+    const tree: ProcessTree = { ...drainedTree(), close: () => { closeCalls += 1 } }
+    const { run } = startAgentRun(
+      fence,
+      async (sink: RunSink) => {
+        sink.complete({ kind: "completed", finalText: "done", usage: null, sessionId: "s1" })
+        await new Promise(() => {}) // claims, then never returns -- e.g. a hung IteratorClose
+      },
+      deps({ processTree: tree }),
+    )
+    // Mirrors agent/claude/backend/model/backend.ts's
+    // `void run.outcome.then((outcome) => { tree.close(); ... })` wiring: if
+    // `outcome` never settled, this `.then()` would never fire and the tree's
+    // kill-on-close would never arm.
+    void run.outcome.then(() => tree.close())
+
+    expect(await run.outcome).toEqual({ kind: "completed", finalText: "done", usage: null, sessionId: "s1" })
+    await Bun.sleep(0)
+    expect(closeCalls).toBe(1)
+  },
+  GUARD_MS,
+)
+
+test(
+  "cancel() resolves against a driver that claimed and then hung, instead of awaiting a never-settling outcome",
+  async () => {
+    const { cancel } = startAgentRun(
+      fence,
+      async (sink: RunSink) => {
+        sink.complete({ kind: "completed", finalText: "done", usage: null, sessionId: "s1" })
+        await new Promise(() => {})
+      },
+      deps(),
+    )
+    // cancel() loses the latch race to the already-claimed natural outcome
+    // and falls into `await outcomePromise` -- before Fix 1 that promise
+    // never settled because `runDriver()` was itself stuck awaiting the
+    // hung driver before ever reaching `resolveWithExitConfirm`.
+    await expect(cancel()).resolves.toBeUndefined()
+  },
+  GUARD_MS,
+)
+
+test(
+  "a driver that hangs without ever claiming an outcome is still cancellable (the driver-return grace race must not interfere)",
+  async () => {
+    const tree = createFakeProcessTree({ counts: [2], ownershipConfirmed: true })
+    const { run, cancel } = startAgentRun(
+      fence,
+      async () => {
+        await new Promise(() => {}) // never calls complete(), never returns
+      },
+      deps({ processTree: tree, confirmTimeoutMs: 500 }),
+    )
+    await cancel()
+    expect(await run.outcome).toEqual({ kind: "cancelled", exitConfirmed: true })
+  },
+  GUARD_MS,
+)
