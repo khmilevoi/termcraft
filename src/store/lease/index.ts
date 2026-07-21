@@ -15,6 +15,12 @@ export type {
   LeaseStore,
   LeaseStoreDeps,
   ProjectLease,
-} from "./types"
-export { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "./model/lease"
-export { createLeaseStore, leaseLockPath, leaseNonce, systemLeaseIdentity, windowsLeaseLockApi } from "./model/lease"
+} from "./types";
+export { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "./model/lease";
+export {
+  createLeaseStore,
+  leaseLockPath,
+  leaseNonce,
+  systemLeaseIdentity,
+  windowsLeaseLockApi,
+} from "./model/lease";

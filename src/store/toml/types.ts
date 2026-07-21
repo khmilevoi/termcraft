@@ -1,13 +1,13 @@
-import type { PageSlug } from "entities/page"
+import type { PageSlug } from "entities/page";
 
 /**
  * The portable target stack (storage-identity §5.1). It lives in `project.toml`, not in a
  * `config.toml` — the first shipped layout has no `config.toml` at all.
  */
-export type TargetStack = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "generic"
+export type TargetStack = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "generic";
 
 /** Every valid `target_stack` value, in the order storage-identity §5.1 lists them. */
-export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "generic"] as const
+export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "generic"] as const;
 
 /**
  * `.termcraft/project.toml` — the PORTABLE project state (storage-identity §5.1), with
@@ -18,41 +18,41 @@ export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "gen
  * (§5.1, §16.1). Everything omitted here lives in {@link WorkspaceLocalState}.
  */
 export interface ProjectManifest {
-  readonly formatVersion: 1
-  readonly projectId: string
-  readonly name: string
+  readonly formatVersion: 1;
+  readonly projectId: string;
+  readonly name: string;
   /** UTC RFC 3339. */
-  readonly createdAt: string
-  readonly targetStack: TargetStack
+  readonly createdAt: string;
+  readonly targetStack: TargetStack;
   /** Ordered and duplicate-free: listing and tab order, NOT page identity allocation (§5.1). */
-  readonly pages: readonly PageSlug[]
+  readonly pages: readonly PageSlug[];
 }
 
 /** Preview size mode (storage-identity §6.1; master design §8.1 item 10). */
-export type PreviewSizeMode = "auto" | "preset" | "custom"
+export type PreviewSizeMode = "auto" | "preset" | "custom";
 
 /**
  * The two shipped size presets, named exactly as master design §8.1 item 10 pins them
  * (80×24 and 120×40). Storage §6.1 names the `preset` mode but not which preset is
  * selected, so the preset id itself comes from the design spec.
  */
-export type PreviewSizePreset = "80x24" | "120x40"
+export type PreviewSizePreset = "80x24" | "120x40";
 
 /** Every valid `preview_size_preset` value. */
-export const PREVIEW_SIZE_PRESETS = ["80x24", "120x40"] as const
+export const PREVIEW_SIZE_PRESETS = ["80x24", "120x40"] as const;
 
 /**
  * Preview color-capability simulation (storage-identity §6.1). The three simulated tiers
  * are named by master design §8.1 item 9 / §5.4 ("truecolor/256/16"); `null` means no
  * simulation — the terminal's real capability is used.
  */
-export type ColorCapability = "truecolor" | "256" | "16"
+export type ColorCapability = "truecolor" | "256" | "16";
 
 /** Every valid `color_capability` value. */
-export const COLOR_CAPABILITIES = ["truecolor", "256", "16"] as const
+export const COLOR_CAPABILITIES = ["truecolor", "256", "16"] as const;
 
 /** Static preview vs. the interactive prototype (storage-identity §6.1; design §3.5/§8.1 item 11). */
-export type RenderMode = "static" | "interactive"
+export type RenderMode = "static" | "interactive";
 
 /**
  * One `(chatId, sessionScopeId)` session checkpoint (storage-identity §6.2). `prefixHash`
@@ -61,15 +61,15 @@ export type RenderMode = "static" | "interactive"
  * portable state.
  */
 export interface SessionCheckpoint {
-  readonly chatId: string
+  readonly chatId: string;
   /** Backend-supplied opaque scope discriminator; never a credential or raw vendor session id (§6.2). */
-  readonly sessionScopeId: string
+  readonly sessionScopeId: string;
   /** The backend's opaque session id (§6.2). */
-  readonly sessionId: string
+  readonly sessionId: string;
   /** Complete records after the chat header that the session is known to reflect. */
-  readonly recordCount: number
+  readonly recordCount: number;
   /** Lowercase-hex SHA-256 of the exact prefix bytes. */
-  readonly prefixHash: string
+  readonly prefixHash: string;
 }
 
 /**
@@ -88,14 +88,14 @@ export interface SessionCheckpoint {
  * - `absoluteTurnDeadlineMinutes` — default 30, 10–60 (projections §12).
  */
 export interface ResourceLimitOverrides {
-  readonly diagnosticsQuotaBytes?: number
-  readonly renderCacheQuotaBytes?: number
-  readonly exportWorkers?: number
-  readonly previewFps?: number
-  readonly operationsLogSegmentBytes?: number
-  readonly operationsLogRetentionSegments?: number
-  readonly silenceTimeoutSeconds?: number
-  readonly absoluteTurnDeadlineMinutes?: number
+  readonly diagnosticsQuotaBytes?: number;
+  readonly renderCacheQuotaBytes?: number;
+  readonly exportWorkers?: number;
+  readonly previewFps?: number;
+  readonly operationsLogSegmentBytes?: number;
+  readonly operationsLogRetentionSegments?: number;
+  readonly silenceTimeoutSeconds?: number;
+  readonly absoluteTurnDeadlineMinutes?: number;
 }
 
 /**
@@ -113,26 +113,26 @@ export interface ResourceLimitOverrides {
  * in phase 4.
  */
 export interface WorkspaceLocalState {
-  readonly formatVersion: 1
+  readonly formatVersion: 1;
   /** `null` = unset; the caller falls back to the first listed page (§6.1). */
-  readonly activePageSlug: PageSlug | null
+  readonly activePageSlug: PageSlug | null;
   /** `null` = unset; the caller falls back to the newest valid chat by header `createdAt` (§6.1). */
-  readonly activeChatId: string | null
+  readonly activeChatId: string | null;
   /** Backend-owned validated strings (§6.1); `null` = the compiled default applies. */
-  readonly backend: string | null
-  readonly model: string | null
-  readonly effort: string | null
-  readonly previewSizeMode: PreviewSizeMode
+  readonly backend: string | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly previewSizeMode: PreviewSizeMode;
   /** Present only when `previewSizeMode === "preset"`. */
-  readonly previewSizePreset: PreviewSizePreset | null
+  readonly previewSizePreset: PreviewSizePreset | null;
   /** Present only when `previewSizeMode === "custom"`. */
-  readonly previewCustomWidth: number | null
-  readonly previewCustomHeight: number | null
+  readonly previewCustomWidth: number | null;
+  readonly previewCustomHeight: number | null;
   /** Non-persistent-at-page-level theme override (§6.1; design §5.4). */
-  readonly themeOverride: string | null
-  readonly colorCapability: ColorCapability | null
-  readonly renderMode: RenderMode
-  readonly fullscreenPreview: boolean
-  readonly sessionCheckpoints: readonly SessionCheckpoint[]
-  readonly resourceLimits: ResourceLimitOverrides
+  readonly themeOverride: string | null;
+  readonly colorCapability: ColorCapability | null;
+  readonly renderMode: RenderMode;
+  readonly fullscreenPreview: boolean;
+  readonly sessionCheckpoints: readonly SessionCheckpoint[];
+  readonly resourceLimits: ResourceLimitOverrides;
 }

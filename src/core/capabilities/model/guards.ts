@@ -1,18 +1,17 @@
-import type { CommandKindV1, UnavailableReason } from "core/protocol"
-
 import {
   EXPORT_TRANSITION_TABLE,
   MIGRATION_TRANSITION_TABLE,
+  type MigrationAction,
   PREVIEW_TRANSITION_TABLE,
   PROJECT_TRANSITION_TABLE,
-  type MigrationAction,
   type TransitionTable,
-} from "core/machines"
-import { deferredCapabilityReason } from "core/versions"
+} from "core/machines";
+import type { CommandKindV1, UnavailableReason } from "core/protocol";
+import { deferredCapabilityReason } from "core/versions";
 
-import type { CapabilityState, KernelStateSnapshot } from "../types"
-import type { CapabilityTargetByKindV1 } from "./target"
-import { turnLockedReason } from "./turn-lock"
+import type { CapabilityState, KernelStateSnapshot } from "../types";
+import type { CapabilityTargetByKindV1 } from "./target";
+import { turnLockedReason } from "./turn-lock";
 
 /**
  * The one pure guard implementation (kernel-command-contract §10.2, lines 905-921): "Each
@@ -38,12 +37,16 @@ export function evaluateCapabilityGuard(
   target: unknown,
   state: KernelStateSnapshot,
 ): CapabilityState {
-  const reasons = dedupeByCode(collectReasons(kind, target, state))
-  if (reasons.length === 0) return { available: true }
-  return { available: false, reasons: reasons as [UnavailableReason, ...UnavailableReason[]] }
+  const reasons = dedupeByCode(collectReasons(kind, target, state));
+  if (reasons.length === 0) return { available: true };
+  return { available: false, reasons: reasons as [UnavailableReason, ...UnavailableReason[]] };
 }
 
-function collectReasons(kind: CommandKindV1, target: unknown, state: KernelStateSnapshot): UnavailableReason[] {
+function collectReasons(
+  kind: CommandKindV1,
+  target: unknown,
+  state: KernelStateSnapshot,
+): UnavailableReason[] {
   const candidates: readonly (UnavailableReason | null)[] = [
     projectNotReadyReason(kind, state),
     projectUntrustedReason(kind, state),
@@ -52,19 +55,19 @@ function collectReasons(kind: CommandKindV1, target: unknown, state: KernelState
     historicalSourceReason(kind, state),
     familySpecificReason(kind, target, state),
     deferredCapabilityReason(kind),
-  ]
-  return candidates.filter((reason): reason is UnavailableReason => reason !== null)
+  ];
+  return candidates.filter((reason): reason is UnavailableReason => reason !== null);
 }
 
 function dedupeByCode(reasons: readonly UnavailableReason[]): UnavailableReason[] {
-  const seenCodes = new Set<string>()
-  const result: UnavailableReason[] = []
+  const seenCodes = new Set<string>();
+  const result: UnavailableReason[] = [];
   for (const reason of reasons) {
-    if (seenCodes.has(reason.code)) continue
-    seenCodes.add(reason.code)
-    result.push(reason)
+    if (seenCodes.has(reason.code)) continue;
+    seenCodes.add(reason.code);
+    result.push(reason);
   }
-  return result
+  return result;
 }
 
 function isLegalTransition<Phase extends string, Action extends string>(
@@ -72,9 +75,9 @@ function isLegalTransition<Phase extends string, Action extends string>(
   from: Phase,
   action: Action,
 ): boolean {
-  const edges = table[action]
-  if (edges === undefined) return false
-  return edges.some((edge) => edge.from === from)
+  const edges = table[action];
+  if (edges === undefined) return false;
+  return edges.some((edge) => edge.from === from);
 }
 
 // --- §7.1 (lines 222-228): PROJECT_NOT_READY / PROJECT_UNTRUSTED -----------------------
@@ -91,20 +94,23 @@ const PROJECT_NOT_READY_EXEMPT_KINDS: ReadonlySet<CommandKindV1> = new Set([
   "project.retryOpen",
   "project.close",
   "project.setTrust",
-])
+]);
 
-function projectNotReadyReason(kind: CommandKindV1, state: KernelStateSnapshot): UnavailableReason | null {
-  if (PROJECT_NOT_READY_EXEMPT_KINDS.has(kind)) return null
-  if (state.project.phase === "ready") return null
+function projectNotReadyReason(
+  kind: CommandKindV1,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
+  if (PROJECT_NOT_READY_EXEMPT_KINDS.has(kind)) return null;
+  if (state.project.phase === "ready") return null;
 
   // §7.1's own exception: "a trusted pre-Workspace migration plan/confirmation."
   const isPreWorkspaceMigrationException =
     (kind === "migration.plan" || kind === "migration.confirm") &&
     state.project.phase === "opening" &&
-    state.project.trust === "trusted"
-  if (isPreWorkspaceMigrationException) return null
+    state.project.trust === "trusted";
+  if (isPreWorkspaceMigrationException) return null;
 
-  return { code: "PROJECT_NOT_READY" }
+  return { code: "PROJECT_NOT_READY" };
 }
 
 /**
@@ -118,12 +124,15 @@ const PROJECT_UNTRUSTED_EXEMPT_KINDS: ReadonlySet<CommandKindV1> = new Set([
   "project.setTrust",
   "project.close",
   "history.open",
-])
+]);
 
-function projectUntrustedReason(kind: CommandKindV1, state: KernelStateSnapshot): UnavailableReason | null {
-  if (state.project.trust !== "untrusted-read-only") return null
-  if (PROJECT_UNTRUSTED_EXEMPT_KINDS.has(kind)) return null
-  return { code: "PROJECT_UNTRUSTED" }
+function projectUntrustedReason(
+  kind: CommandKindV1,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
+  if (state.project.trust !== "untrusted-read-only") return null;
+  if (PROJECT_UNTRUSTED_EXEMPT_KINDS.has(kind)) return null;
+  return { code: "PROJECT_UNTRUSTED" };
 }
 
 // --- §7.7 (lines 401-412): MigrationState === idle requirement -------------------------
@@ -153,12 +162,15 @@ const MIGRATION_IDLE_REQUIRED_KINDS: ReadonlySet<CommandKindV1> = new Set([
   "commit.plan",
   "commit.confirm",
   "commit.discardPlan",
-])
+]);
 
-function migrationNotIdleReason(kind: CommandKindV1, state: KernelStateSnapshot): UnavailableReason | null {
-  if (!MIGRATION_IDLE_REQUIRED_KINDS.has(kind)) return null
-  if (state.migration.phase === "idle") return null
-  return { code: "CAPABILITY_UNAVAILABLE" }
+function migrationNotIdleReason(
+  kind: CommandKindV1,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
+  if (!MIGRATION_IDLE_REQUIRED_KINDS.has(kind)) return null;
+  if (state.migration.phase === "idle") return null;
+  return { code: "CAPABILITY_UNAVAILABLE" };
 }
 
 // --- §7.2 (lines 230-270): the turn family's own state-machine-derived reasons ----------
@@ -169,15 +181,15 @@ function migrationNotIdleReason(kind: CommandKindV1, state: KernelStateSnapshot)
  * comment) because this is the more specific code the same fact deserves.
  */
 function turnStartReason(state: KernelStateSnapshot): UnavailableReason | null {
-  if (state.turn.phase === "idle") return null
+  if (state.turn.phase === "idle") return null;
   if (state.turn.activeTurnId === null) {
     console.warn(
       `evaluateCapabilityGuard: turn.phase is "${state.turn.phase}" (non-idle) but activeTurnId is null; ` +
         `rejecting turn.start with CAPABILITY_UNAVAILABLE instead of a fabricated turnId`,
-    )
-    return { code: "CAPABILITY_UNAVAILABLE" }
+    );
+    return { code: "CAPABILITY_UNAVAILABLE" };
   }
-  return { code: "TURN_ALREADY_ACTIVE", turnId: state.turn.activeTurnId }
+  return { code: "TURN_ALREADY_ACTIVE", turnId: state.turn.activeTurnId };
 }
 
 /**
@@ -188,35 +200,39 @@ function turnStartReason(state: KernelStateSnapshot): UnavailableReason | null {
  * names a different turn").
  */
 function turnCancelReason(target: unknown, state: KernelStateSnapshot): UnavailableReason | null {
-  const { turnId } = target as CapabilityTargetByKindV1["turn.cancel"]
-  const { phase, activeTurnId, commitIntentRecorded } = state.turn
+  const { turnId } = target as CapabilityTargetByKindV1["turn.cancel"];
+  const { phase, activeTurnId, commitIntentRecorded } = state.turn;
 
-  if (phase === "idle") return { code: "TURN_NOT_ACTIVE" }
+  if (phase === "idle") return { code: "TURN_NOT_ACTIVE" };
   if (phase === "committed" || phase === "terminal" || phase === "backend-unhealthy") {
-    return { code: "TURN_NOT_ACTIVE" }
+    return { code: "TURN_NOT_ACTIVE" };
   }
   if (activeTurnId === null) {
     console.warn(
       `evaluateCapabilityGuard: turn.phase is "${phase}" (active) but activeTurnId is null; ` +
         `rejecting turn.cancel with TURN_NOT_ACTIVE instead of comparing against a fabricated turnId`,
-    )
-    return { code: "TURN_NOT_ACTIVE" }
+    );
+    return { code: "TURN_NOT_ACTIVE" };
   }
-  if (turnId !== activeTurnId) return { code: "TURN_ID_MISMATCH", turnId: activeTurnId }
-  if (phase === "finalizing" && commitIntentRecorded) return { code: "CANCEL_TOO_LATE", turnId: activeTurnId }
-  return null
+  if (turnId !== activeTurnId) return { code: "TURN_ID_MISMATCH", turnId: activeTurnId };
+  if (phase === "finalizing" && commitIntentRecorded)
+    return { code: "CANCEL_TOO_LATE", turnId: activeTurnId };
+  return null;
 }
 
 // --- Preview family: §7.6 phase legality plus the historical-source rule ---------------
 
-const PREVIEW_HISTORICAL_BLOCKED_MODE = "interactive"
+const PREVIEW_HISTORICAL_BLOCKED_MODE = "interactive";
 
 /** §7.6: "Tweaks and interactive mutation are unavailable on historical source." */
-function previewHistoricalReason(target: unknown, state: KernelStateSnapshot): UnavailableReason | null {
-  const { mode } = target as CapabilityTargetByKindV1["preview.setMode"]
-  if (mode !== PREVIEW_HISTORICAL_BLOCKED_MODE) return null
-  if (state.preview.sourceKind !== "historical") return null
-  return { code: "HISTORICAL_PREVIEW_READ_ONLY" }
+function previewHistoricalReason(
+  target: unknown,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
+  const { mode } = target as CapabilityTargetByKindV1["preview.setMode"];
+  if (mode !== PREVIEW_HISTORICAL_BLOCKED_MODE) return null;
+  if (state.preview.sourceKind !== "historical") return null;
+  return { code: "HISTORICAL_PREVIEW_READ_ONLY" };
 }
 
 /**
@@ -237,16 +253,16 @@ const HISTORICAL_SOURCE_BLOCKED_KINDS: ReadonlySet<CommandKindV1> = new Set([
   "pin.create",
   "pin.setStatus",
   "preview.setTweak",
-])
+]);
 
 /** Blocks mutation of a historical source for the kinds §11.1 lists. */
 function historicalSourceReason(
   kind: CommandKindV1,
   state: KernelStateSnapshot,
 ): UnavailableReason | null {
-  if (!HISTORICAL_SOURCE_BLOCKED_KINDS.has(kind)) return null
-  if (state.preview.sourceKind !== "historical") return null
-  return { code: "HISTORICAL_PREVIEW_READ_ONLY" }
+  if (!HISTORICAL_SOURCE_BLOCKED_KINDS.has(kind)) return null;
+  if (state.preview.sourceKind !== "historical") return null;
+  return { code: "HISTORICAL_PREVIEW_READ_ONLY" };
 }
 
 function previewFamilyReason(
@@ -254,7 +270,7 @@ function previewFamilyReason(
   target: unknown,
   state: KernelStateSnapshot,
 ): UnavailableReason | null {
-  const phase = state.preview.phase
+  const phase = state.preview.phase;
 
   switch (kind) {
     case "preview.selectPage":
@@ -262,40 +278,44 @@ function previewFamilyReason(
     case "preview.selectCurrent": {
       const legal =
         isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.beginStart") ||
-        isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.beginSwitch")
-      return legal ? null : { code: "OPERATION_BUSY" }
+        isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.beginSwitch");
+      return legal ? null : { code: "OPERATION_BUSY" };
     }
     case "preview.resize":
       return isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.resize")
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
     case "preview.setThemeCapabilities":
-      return isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.setThemeCapabilities")
+      return isLegalTransition(
+        PREVIEW_TRANSITION_TABLE,
+        phase,
+        "kernel.preview.setThemeCapabilities",
+      )
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
     case "preview.setMode": {
       if (!isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.setMode")) {
-        return { code: "OPERATION_BUSY" }
+        return { code: "OPERATION_BUSY" };
       }
-      return previewHistoricalReason(target, state)
+      return previewHistoricalReason(target, state);
     }
     case "preview.retry":
       return isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.retryCircuit")
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
     case "preview.close":
       return isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.disable")
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
     case "preview.queryGeometry":
       return isLegalTransition(PREVIEW_TRANSITION_TABLE, phase, "kernel.preview.queryGeometry")
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
     // preview.forwardInput/setTweak are Tier-C deferred (core/versions); this family
     // function has nothing further to say about their phase legality.
     case "preview.forwardInput":
     case "preview.setTweak":
-      return null
+      return null;
   }
 }
 
@@ -305,15 +325,15 @@ function migrationFamilyReason(
   kind: Extract<CommandKindV1, `migration.${string}`>,
   state: KernelStateSnapshot,
 ): UnavailableReason | null {
-  const phase = state.migration.phase
+  const phase = state.migration.phase;
   const legalByAction: Readonly<Record<typeof kind, MigrationAction>> = {
     "migration.plan": "kernel.migration.beginPlan",
     "migration.confirm": "kernel.migration.confirm",
     "migration.discardPlan": "kernel.migration.discardPlan",
     "migration.retryRecovery": "kernel.migration.retryRecovery",
-  }
-  const legal = isLegalTransition(MIGRATION_TRANSITION_TABLE, phase, legalByAction[kind])
-  return legal ? null : { code: "CAPABILITY_UNAVAILABLE" }
+  };
+  const legal = isLegalTransition(MIGRATION_TRANSITION_TABLE, phase, legalByAction[kind]);
+  return legal ? null : { code: "CAPABILITY_UNAVAILABLE" };
 }
 
 // --- The per-kind dispatch table ---------------------------------------------------------
@@ -328,38 +348,42 @@ function migrationFamilyReason(
  * checks run after the guard and are not capability inputs" — so nothing beyond the
  * cross-cutting rules applies to them at the guard layer.
  */
-function familySpecificReason(kind: CommandKindV1, target: unknown, state: KernelStateSnapshot): UnavailableReason | null {
+function familySpecificReason(
+  kind: CommandKindV1,
+  target: unknown,
+  state: KernelStateSnapshot,
+): UnavailableReason | null {
   switch (kind) {
     case "project.create":
       return isLegalTransition(PROJECT_TRANSITION_TABLE, state.project.phase, "beginCreate")
         ? null
-        : { code: "CAPABILITY_UNAVAILABLE" }
+        : { code: "CAPABILITY_UNAVAILABLE" };
     case "project.open":
       return isLegalTransition(PROJECT_TRANSITION_TABLE, state.project.phase, "beginOpen")
         ? null
-        : { code: "CAPABILITY_UNAVAILABLE" }
+        : { code: "CAPABILITY_UNAVAILABLE" };
     case "project.retryOpen":
       return isLegalTransition(PROJECT_TRANSITION_TABLE, state.project.phase, "retryOpen")
         ? null
-        : { code: "CAPABILITY_UNAVAILABLE" }
+        : { code: "CAPABILITY_UNAVAILABLE" };
     case "project.close":
       return isLegalTransition(PROJECT_TRANSITION_TABLE, state.project.phase, "beginClose")
         ? null
-        : { code: "CAPABILITY_UNAVAILABLE" }
+        : { code: "CAPABILITY_UNAVAILABLE" };
     case "project.setTrust":
       return isLegalTransition(PROJECT_TRANSITION_TABLE, state.project.phase, "setTrust")
         ? null
-        : { code: "CAPABILITY_UNAVAILABLE" }
+        : { code: "CAPABILITY_UNAVAILABLE" };
 
     case "turn.start":
-      return turnStartReason(state)
+      return turnStartReason(state);
     case "turn.cancel":
-      return turnCancelReason(target, state)
+      return turnCancelReason(target, state);
 
     case "export.start":
       return isLegalTransition(EXPORT_TRANSITION_TABLE, state.export.phase, "kernel.export.begin")
         ? null
-        : { code: "OPERATION_BUSY" }
+        : { code: "OPERATION_BUSY" };
 
     case "preview.selectPage":
     case "preview.selectHistorical":
@@ -372,15 +396,15 @@ function familySpecificReason(kind: CommandKindV1, target: unknown, state: Kerne
     case "preview.queryGeometry":
     case "preview.retry":
     case "preview.close":
-      return previewFamilyReason(kind, target, state)
+      return previewFamilyReason(kind, target, state);
 
     case "migration.plan":
     case "migration.confirm":
     case "migration.discardPlan":
     case "migration.retryRecovery":
-      return migrationFamilyReason(kind, state)
+      return migrationFamilyReason(kind, state);
 
     default:
-      return null
+      return null;
   }
 }

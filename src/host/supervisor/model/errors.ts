@@ -1,4 +1,4 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 /**
  * Stable diagnostic codes for supervisor lifecycle/queue/timeout failures
@@ -28,7 +28,7 @@ export type SupervisorErrorCode =
   | "PROTOCOL_FLOOD"
   | "STDERR_FLOOD"
   | "HOST_CAPACITY"
-  | "CIRCUIT_OPEN"
+  | "CIRCUIT_OPEN";
 
 /**
  * A supervisor lifecycle failure. Fatal for the incarnation that produced it.

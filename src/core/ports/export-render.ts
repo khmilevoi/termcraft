@@ -1,5 +1,5 @@
-import type { FailureDtoV1, Sha256Hex } from "core/protocol"
-import type { PageSlug, Size } from "entities/page"
+import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { PageSlug, Size } from "entities/page";
 
 /**
  * `ExportRenderPort`: one bounded render task plus the pool-shape facts Export's
@@ -16,42 +16,42 @@ import type { PageSlug, Size } from "entities/page"
  */
 
 export interface RuntimeDeclarationBundleV1 {
-  readonly module: "@termcraft/runtime"
-  readonly currentKitApiVersion: number
-  readonly supportedKitApiVersions: readonly number[]
-  readonly publicCapabilityIds: readonly string[]
+  readonly module: "@termcraft/runtime";
+  readonly currentKitApiVersion: number;
+  readonly supportedKitApiVersions: readonly number[];
+  readonly publicCapabilityIds: readonly string[];
 }
 
 /** One export task: a captured source at one requested size, ordered by manifest then (w,h) (§11.4). */
 export interface ExportRenderTaskV1 {
-  readonly pageSlug: PageSlug
-  readonly sourcePath: string
-  readonly sourceHash: Sha256Hex
-  readonly kitApiVersion: number
-  readonly size: Size
-  readonly theme: string
+  readonly pageSlug: PageSlug;
+  readonly sourcePath: string;
+  readonly sourceHash: Sha256Hex;
+  readonly kitApiVersion: number;
+  readonly size: Size;
+  readonly theme: string;
   /** Project page order (manifest order) — the primary publish-order key (§11.4). */
-  readonly manifestIndex: number
+  readonly manifestIndex: number;
 }
 
 /** One task's rendered payloads — opaque bytes, mirroring `projections.ts`'s `RenderEntryV1`. */
 export interface ExportRenderResultV1 {
-  readonly manifestIndex: number
-  readonly styledFrame: Uint8Array
-  readonly textFrame: Uint8Array
-  readonly layout: Uint8Array
+  readonly manifestIndex: number;
+  readonly styledFrame: Uint8Array;
+  readonly textFrame: Uint8Array;
+  readonly layout: Uint8Array;
 }
 
 /** The bounded worker-pool shape (§11.4): `min(4, max(1, floor(cpu/2)))` by default, 1-8 machine-local override, ready queue at most twice the worker count. */
 export interface ExportRenderPoolBoundsV1 {
-  readonly minWorkers: number
-  readonly maxWorkers: number
-  readonly readyQueueMultiplier: number
+  readonly minWorkers: number;
+  readonly maxWorkers: number;
+  readonly readyQueueMultiplier: number;
 }
 
 export interface ExportRenderPort {
-  readonly poolBounds: ExportRenderPoolBoundsV1
-  readonly runtimeDeclaration: RuntimeDeclarationBundleV1
+  readonly poolBounds: ExportRenderPoolBoundsV1;
+  readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
   /** One bounded render, pool-scheduled by the adapter; results still assemble in manifest/(w,h) order at the caller, never completion order (§11.4). */
-  renderOne(task: ExportRenderTaskV1): Promise<FailureDtoV1 | ExportRenderResultV1>
+  renderOne(task: ExportRenderTaskV1): Promise<FailureDtoV1 | ExportRenderResultV1>;
 }

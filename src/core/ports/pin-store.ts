@@ -1,6 +1,6 @@
-import type { FailureDtoV1 } from "core/protocol"
-import type { PageSlug } from "entities/page"
-import type { Pin, PinEvent } from "entities/pin"
+import type { FailureDtoV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
+import type { Pin, PinEvent } from "entities/pin";
 
 /**
  * The pin read/write surface `core` consumes. `PinReader.fold` mirrors `store/index.ts`'s
@@ -22,10 +22,10 @@ import type { Pin, PinEvent } from "entities/pin"
  * work a sibling agent owns in this same slice.
  */
 export interface PinReader {
-  fold(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly Pin[]>
+  fold(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly Pin[]>;
 }
 
 export interface PinMutations {
   /** A standalone `pin:created`/`pin:status` event — not the turn's automatic resolution. */
-  appendStandaloneEvent(pageSlug: PageSlug, event: PinEvent): Promise<FailureDtoV1 | undefined>
+  appendStandaloneEvent(pageSlug: PageSlug, event: PinEvent): Promise<FailureDtoV1 | undefined>;
 }

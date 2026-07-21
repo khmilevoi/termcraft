@@ -1,6 +1,7 @@
-import type { FailureDtoV1, Sha256Hex } from "core/protocol"
-import type { Size } from "entities/page"
-import type { InteractionModeV1, PreviewSession, TerminalCapabilitiesV1 } from "./preview-session"
+import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { Size } from "entities/page";
+
+import type { InteractionModeV1, PreviewSession, TerminalCapabilitiesV1 } from "./preview-session";
 
 /**
  * `HostSupervisorPort`: the standalone Kernel-side supervisor over multiple preview
@@ -24,18 +25,18 @@ import type { InteractionModeV1, PreviewSession, TerminalCapabilitiesV1 } from "
  * `host/supervisor/types.ts` itself says "phase 6 wires this onto the Kernel event channel."
  */
 
-export type HostModeV1 = "preview" | "historical" | "smoke" | "export"
+export type HostModeV1 = "preview" | "historical" | "smoke" | "export";
 
 export interface HostSessionSpecV1 {
-  readonly mode: HostModeV1
-  readonly interactionMode: InteractionModeV1
-  readonly pageSlug: string
-  readonly sourcePath: string
-  readonly sourceHash: Sha256Hex
-  readonly kitApiVersion: number
-  readonly size: Size
-  readonly theme: string
-  readonly capabilities: TerminalCapabilitiesV1
+  readonly mode: HostModeV1;
+  readonly interactionMode: InteractionModeV1;
+  readonly pageSlug: string;
+  readonly sourcePath: string;
+  readonly sourceHash: Sha256Hex;
+  readonly kitApiVersion: number;
+  readonly size: Size;
+  readonly theme: string;
+  readonly capabilities: TerminalCapabilitiesV1;
 }
 
 /**
@@ -43,22 +44,22 @@ export interface HostSessionSpecV1 {
  * env values, or source contents; only the source-hash prefix and a nonce-free identity.
  */
 export interface SupervisorEventV1 {
-  readonly type: "spawning" | "ready" | "backoff" | "circuitOpened" | "stopped"
-  readonly key: string
-  readonly sessionId: string
-  readonly pageSlug: string
-  readonly sourceHashPrefix: string
-  readonly attempt?: number
-  readonly delayMs?: number
-  readonly attempts?: number
-  readonly reason?: string
+  readonly type: "spawning" | "ready" | "backoff" | "circuitOpened" | "stopped";
+  readonly key: string;
+  readonly sessionId: string;
+  readonly pageSlug: string;
+  readonly sourceHashPrefix: string;
+  readonly attempt?: number;
+  readonly delayMs?: number;
+  readonly attempts?: number;
+  readonly reason?: string;
 }
 
 export interface HostSupervisorPort {
-  preview(spec: HostSessionSpecV1): Promise<FailureDtoV1 | PreviewSession>
+  preview(spec: HostSessionSpecV1): Promise<FailureDtoV1 | PreviewSession>;
   /** Live (non-stopped, non-queued) incarnation count across all keys (§13: ≤10). */
-  liveCount(): number
-  stopAll(): Promise<void>
+  liveCount(): number;
+  stopAll(): Promise<void>;
   /** Subscribe to bounded lifecycle diagnostics; returns the unsubscribe function. */
-  onEvent(listener: (event: SupervisorEventV1) => void): () => void
+  onEvent(listener: (event: SupervisorEventV1) => void): () => void;
 }

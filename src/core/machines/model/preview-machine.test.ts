@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test"
-import { context } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
 
-import { reatomPreviewStateMachine, type PreviewAction, type PreviewState } from "./preview-machine"
+import { context } from "@reatom/core";
+
+import {
+  type PreviewAction,
+  type PreviewState,
+  reatomPreviewStateMachine,
+} from "./preview-machine";
 
 /**
  * kernel-command-contract §7.6, §13.1.
@@ -28,7 +33,7 @@ const PREVIEW_STATES: readonly PreviewState[] = [
   "switching",
   "failed",
   "circuit-open",
-]
+];
 
 const PREVIEW_ACTIONS: readonly PreviewAction[] = [
   "kernel.preview.enable",
@@ -45,16 +50,23 @@ const PREVIEW_ACTIONS: readonly PreviewAction[] = [
   "kernel.preview.forwardInput",
   "kernel.preview.queryGeometry",
   "kernel.preview.disable",
-]
+];
 
 interface ExpectedEdge {
-  readonly from: PreviewState
-  readonly action: PreviewAction
-  readonly to: PreviewState
-  readonly noOp?: boolean
+  readonly from: PreviewState;
+  readonly action: PreviewAction;
+  readonly to: PreviewState;
+  readonly noOp?: boolean;
 }
 
-const OPEN_STATES: readonly PreviewState[] = ["idle", "starting", "live", "switching", "failed", "circuit-open"]
+const OPEN_STATES: readonly PreviewState[] = [
+  "idle",
+  "starting",
+  "live",
+  "switching",
+  "failed",
+  "circuit-open",
+];
 
 const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "disabled", action: "kernel.preview.enable", to: "idle" },
@@ -75,19 +87,23 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "live", action: "kernel.preview.setThemeCapabilities", to: "live" },
   { from: "live", action: "kernel.preview.forwardInput", to: "live", noOp: true },
   { from: "live", action: "kernel.preview.queryGeometry", to: "live", noOp: true },
-  ...OPEN_STATES.map((from) => ({ from, action: "kernel.preview.disable" as const, to: "disabled" as const })),
-]
+  ...OPEN_STATES.map((from) => ({
+    from,
+    action: "kernel.preview.disable" as const,
+    to: "disabled" as const,
+  })),
+];
 
-const ILLEGAL_CODE = "OPERATION_BUSY"
+const ILLEGAL_CODE = "OPERATION_BUSY";
 
 function findExpected(from: PreviewState, action: PreviewAction): ExpectedEdge | undefined {
-  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action)
+  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action);
 }
 
 /** Drives a fresh machine straight to `phase` via a known-legal edge path. */
 function machineAt(phase: PreviewState) {
-  const m = reatomPreviewStateMachine()
-  if (phase === "disabled") return m
+  const m = reatomPreviewStateMachine();
+  if (phase === "disabled") return m;
   const path: Record<Exclude<PreviewState, "disabled">, readonly PreviewAction[]> = {
     idle: ["kernel.preview.enable"],
     starting: ["kernel.preview.enable", "kernel.preview.beginStart"],
@@ -105,78 +121,78 @@ function machineAt(phase: PreviewState) {
       "kernel.preview.sessionFailed",
       "kernel.preview.openCircuit",
     ],
-  }
-  for (const action of path[phase]) m.apply(action)
-  return m
+  };
+  for (const action of path[phase]) m.apply(action);
+  return m;
 }
 
 describe("reatomPreviewStateMachine", () => {
   test("starts disabled", () => {
     context.start(() => {
-      expect(reatomPreviewStateMachine().phase()).toBe("disabled")
-    })
-  })
+      expect(reatomPreviewStateMachine().phase()).toBe("disabled");
+    });
+  });
 
   test("the phase atom carries the §6 trace root", () => {
     context.start(() => {
-      expect(reatomPreviewStateMachine().phaseAtom.name).toBe("kernel.preview.state")
-    })
-  })
+      expect(reatomPreviewStateMachine().phaseAtom.name).toBe("kernel.preview.state");
+    });
+  });
 
   test("the hand-counted §7.6 edge total is 24", () => {
-    expect(EXPECTED_EDGES.length).toBe(24)
-  })
+    expect(EXPECTED_EDGES.length).toBe(24);
+  });
 
   test("every (state, action) pair matches the §7.6 table exactly", () => {
     context.start(() => {
       for (const from of PREVIEW_STATES) {
         for (const action of PREVIEW_ACTIONS) {
-          const expected = findExpected(from, action)
-          const m = machineAt(from)
-          const outcome = m.apply(action)
+          const expected = findExpected(from, action);
+          const m = machineAt(from);
+          const outcome = m.apply(action);
 
           if (expected === undefined) {
-            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action })
-            expect(m.phase()).toBe(from)
-            continue
+            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action });
+            expect(m.phase()).toBe(from);
+            continue;
           }
 
           if (expected.noOp === true) {
-            expect(outcome).toEqual({ kind: "no-op", phase: from })
+            expect(outcome).toEqual({ kind: "no-op", phase: from });
           } else {
-            expect(outcome).toEqual({ kind: "changed", from, to: expected.to })
+            expect(outcome).toEqual({ kind: "changed", from, to: expected.to });
           }
-          expect(m.phase()).toBe(expected.to)
+          expect(m.phase()).toBe(expected.to);
         }
       }
-    })
-  })
+    });
+  });
 
   test("setMode is a real change while forwardInput is an explicit no-op, both from live to live", () => {
     // §7.6: the tweak/mode/resize/theme quartet mutates authoritative state even though
     // PreviewState itself stays "live"; forwardInput/queryGeometry explicitly do not
     // bump stateRevision unless authoritative state changes.
     context.start(() => {
-      const setMode = machineAt("live").apply("kernel.preview.setMode")
-      expect(setMode.kind).toBe("changed")
+      const setMode = machineAt("live").apply("kernel.preview.setMode");
+      expect(setMode.kind).toBe("changed");
 
-      const forwardInput = machineAt("live").apply("kernel.preview.forwardInput")
-      expect(forwardInput.kind).toBe("no-op")
-    })
-  })
+      const forwardInput = machineAt("live").apply("kernel.preview.forwardInput");
+      expect(forwardInput.kind).toBe("no-op");
+    });
+  });
 
   test("disable is legal from every non-disabled state and illegal from disabled itself", () => {
     context.start(() => {
       for (const from of OPEN_STATES) {
-        expect(machineAt(from).apply("kernel.preview.disable").kind).toBe("changed")
+        expect(machineAt(from).apply("kernel.preview.disable").kind).toBe("changed");
       }
-      const alreadyDisabled = reatomPreviewStateMachine()
+      const alreadyDisabled = reatomPreviewStateMachine();
       expect(alreadyDisabled.apply("kernel.preview.disable")).toEqual({
         kind: "illegal",
         code: ILLEGAL_CODE,
         from: "disabled",
         action: "kernel.preview.disable",
-      })
-    })
-  })
-})
+      });
+    });
+  });
+});

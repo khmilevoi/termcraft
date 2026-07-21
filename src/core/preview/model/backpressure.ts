@@ -28,64 +28,64 @@
  * a connect hook owning this state's lifetime.
  */
 
-export const HOST_CONTROL_QUEUE_CAPACITY = 256
-export const HOST_CONTROL_QUEUE_LOW_WATER_MARK = 128
+export const HOST_CONTROL_QUEUE_CAPACITY = 256;
+export const HOST_CONTROL_QUEUE_LOW_WATER_MARK = 128;
 
 export type PreviewBackpressureTransitionV1 =
   | { readonly kind: "backpressured"; readonly queueSize: number }
-  | { readonly kind: "writable"; readonly queueSize: number }
+  | { readonly kind: "writable"; readonly queueSize: number };
 
 export interface PreviewBackpressure {
-  readonly queueSize: () => number
+  readonly queueSize: () => number;
   /** Reserves one non-coalescible queue slot. Refuses with `HOST_BACKPRESSURED` only at the literal 256 cap. */
-  readonly reserve: () => "HOST_BACKPRESSURED" | undefined
+  readonly reserve: () => "HOST_BACKPRESSURED" | undefined;
   /** Releases one previously reserved slot (the command drained/completed). A safe no-op on an empty queue. */
-  readonly release: () => void
+  readonly release: () => void;
   /** Fires exactly on the 256-crossing and the sub-128-crossing. Returns the unsubscribe function. */
-  readonly onTransition: (listener: (event: PreviewBackpressureTransitionV1) => void) => () => void
+  readonly onTransition: (listener: (event: PreviewBackpressureTransitionV1) => void) => () => void;
 }
 
 /** Builds one live preview session's backpressure tracker. A factory: two sessions must never share a counter. */
 export function createPreviewBackpressure(): PreviewBackpressure {
-  let size = 0
+  let size = 0;
   // The hysteresis flag: true from the 256-crossing until the sub-128-crossing.
-  let backpressured = false
-  const listeners = new Set<(event: PreviewBackpressureTransitionV1) => void>()
+  let backpressured = false;
+  const listeners = new Set<(event: PreviewBackpressureTransitionV1) => void>();
 
   function emit(event: PreviewBackpressureTransitionV1): void {
-    for (const listener of listeners) listener(event)
+    for (const listener of listeners) listener(event);
   }
 
   function queueSize(): number {
-    return size
+    return size;
   }
 
   function reserve(): "HOST_BACKPRESSURED" | undefined {
-    if (size >= HOST_CONTROL_QUEUE_CAPACITY) return "HOST_BACKPRESSURED"
-    size += 1
+    if (size >= HOST_CONTROL_QUEUE_CAPACITY) return "HOST_BACKPRESSURED";
+    size += 1;
     if (!backpressured && size >= HOST_CONTROL_QUEUE_CAPACITY) {
-      backpressured = true
-      emit({ kind: "backpressured", queueSize: size })
+      backpressured = true;
+      emit({ kind: "backpressured", queueSize: size });
     }
-    return undefined
+    return undefined;
   }
 
   function release(): void {
     if (size === 0) {
-      console.warn("preview backpressure: release() called on an empty queue, ignored")
-      return
+      console.warn("preview backpressure: release() called on an empty queue, ignored");
+      return;
     }
-    size -= 1
+    size -= 1;
     if (backpressured && size < HOST_CONTROL_QUEUE_LOW_WATER_MARK) {
-      backpressured = false
-      emit({ kind: "writable", queueSize: size })
+      backpressured = false;
+      emit({ kind: "writable", queueSize: size });
     }
   }
 
   function onTransition(listener: (event: PreviewBackpressureTransitionV1) => void): () => void {
-    listeners.add(listener)
-    return () => listeners.delete(listener)
+    listeners.add(listener);
+    return () => listeners.delete(listener);
   }
 
-  return { queueSize, reserve, release, onTransition }
+  return { queueSize, reserve, release, onTransition };
 }

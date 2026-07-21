@@ -1,6 +1,6 @@
-import type { ThemeId, ThemeTokens } from "../types"
-import { atom, computed } from "./reatom"
-import { DEFAULT_THEME_ID, themeTokens } from "./tokens"
+import type { ThemeId, ThemeTokens } from "../types";
+import { atom, computed } from "./reatom";
+import { DEFAULT_THEME_ID, themeTokens } from "./tokens";
 
 /**
  * Declares a page's tweak controls (runtime-api §6). DORMANT in the MVP: like
@@ -9,7 +9,7 @@ import { DEFAULT_THEME_ID, themeTokens } from "./tokens"
  * phase-7 UI (`defineTweaks` is exported but inert until then).
  */
 export function defineTweaks<T extends Record<string, unknown>>(declaration: T): T {
-  return declaration
+  return declaration;
 }
 
 /**
@@ -20,21 +20,27 @@ export function defineTweaks<T extends Record<string, unknown>>(declaration: T):
  * export behavior never depends on a private global. MVP defaults are
  * `preview` + `static`; a page must not write them.
  */
-export const hostModeAtom = atom<"preview" | "export">("preview", "runtime.capability.hostMode")
-export const interactionModeAtom = atom<"static" | "interactive">("static", "runtime.capability.interactionMode")
+export const hostModeAtom = atom<"preview" | "export">("preview", "runtime.capability.hostMode");
+export const interactionModeAtom = atom<"static" | "interactive">(
+  "static",
+  "runtime.capability.interactionMode",
+);
 
 /** True while the host renders this page for deterministic export (§6, §11.4). */
-export const isExportAtom = computed(() => hostModeAtom() === "export", "runtime.capability.isExport")
+export const isExportAtom = computed(
+  () => hostModeAtom() === "export",
+  "runtime.capability.isExport",
+);
 
 /** A page-readable helper for the export flag (reads {@link isExportAtom}). */
 export function isExport(): boolean {
-  return isExportAtom()
+  return isExportAtom();
 }
 
 /** The theme capability (§6): the active theme id and its resolved token palette. */
 export interface ThemeCapability {
-  readonly themeId: ThemeId
-  readonly tokens: ThemeTokens
+  readonly themeId: ThemeId;
+  readonly tokens: ThemeTokens;
 }
 
 /**
@@ -43,5 +49,5 @@ export interface ThemeCapability {
  * `meta.theme`) rides with the phase-7 theme capability wiring.
  */
 export function themeCapability(): ThemeCapability {
-  return { themeId: DEFAULT_THEME_ID, tokens: themeTokens(DEFAULT_THEME_ID) }
+  return { themeId: DEFAULT_THEME_ID, tokens: themeTokens(DEFAULT_THEME_ID) };
 }

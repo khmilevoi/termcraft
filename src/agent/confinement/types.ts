@@ -1,6 +1,6 @@
 export type PermissionResultLike =
   | { readonly behavior: "allow" }
-  | { readonly behavior: "deny"; readonly message: string }
+  | { readonly behavior: "deny"; readonly message: string };
 
 /**
  * The vendor tool vocabulary a confinement policy is parameterized over
@@ -11,11 +11,11 @@ export type PermissionResultLike =
  */
 export interface ConfinementTables {
   /** File tools whose primary path argument must stay inside staging. */
-  readonly fileTools: ReadonlySet<string>
+  readonly fileTools: ReadonlySet<string>;
   /** Tools denied outright regardless of arguments. */
-  readonly deniedTools: ReadonlySet<string>
+  readonly deniedTools: ReadonlySet<string>;
   /** File tools whose path argument is optional, defaulting to the process cwd. */
-  readonly optionalPathTools: ReadonlySet<string>
+  readonly optionalPathTools: ReadonlySet<string>;
   /** Field names, in order, that carry a tool's primary path argument. */
-  readonly pathFields: readonly string[]
+  readonly pathFields: readonly string[];
 }

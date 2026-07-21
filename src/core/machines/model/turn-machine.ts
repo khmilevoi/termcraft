@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Kernel turn model (kernel-command-contract §7.2, lines 230-270).
@@ -28,7 +28,7 @@ export type TurnState =
   | "committed"
   | "terminalizing"
   | "terminal"
-  | "backend-unhealthy"
+  | "backend-unhealthy";
 
 export type TurnAction =
   | "beginAdmission"
@@ -45,7 +45,7 @@ export type TurnAction =
   | "settle"
   | "finishTerminalization"
   | "confirmBackendHealthy"
-  | "requestCancel"
+  | "requestCancel";
 
 /** The full `kernel.turn.<verb>` name for every {@link TurnAction}, §7.2 verbatim. */
 export const TURN_ACTION_FULL_NAME: Readonly<Record<TurnAction, string>> = {
@@ -64,7 +64,7 @@ export const TURN_ACTION_FULL_NAME: Readonly<Record<TurnAction, string>> = {
   finishTerminalization: "kernel.turn.finishTerminalization",
   confirmBackendHealthy: "kernel.turn.confirmBackendHealthy",
   requestCancel: "kernel.turn.requestCancel",
-}
+};
 
 /**
  * §7.2's table, transcribed row for row, PLUS the `requestCancel` edges from §7.2's own
@@ -145,7 +145,7 @@ export const TURN_TRANSITION_TABLE: TransitionTable<TurnState, TurnAction> = {
     { from: "finalizing", to: "terminalizing" },
     { from: "terminalizing", to: "terminalizing", noOp: true },
   ],
-}
+};
 
 /**
  * §7.2: "`turn.start` is rejected with `TURN_ALREADY_ACTIVE` in every non-idle state."
@@ -156,7 +156,7 @@ export const TURN_TRANSITION_TABLE: TransitionTable<TurnState, TurnAction> = {
  * (e.g. `settle` from `running` has no natural "already active" reading); selecting a more
  * specific code per command for those cases is the guard layer's job, not this machine's.
  */
-const TURN_ILLEGAL_CODE = "TURN_ALREADY_ACTIVE"
+const TURN_ILLEGAL_CODE = "TURN_ALREADY_ACTIVE";
 
 /**
  * Builds one Kernel's turn model. A factory, not a module-level machine: §5 scopes Kernel
@@ -169,20 +169,20 @@ export function reatomTurnStateMachine(): StateMachine<TurnState, TurnAction> {
     initial: "idle",
     table: TURN_TRANSITION_TABLE,
     illegalCode: TURN_ILLEGAL_CODE,
-  })
+  });
 }
 
 // --- Attempt bookkeeping (§7.2: "Attempts are integers 1 through 4; every retry
 // increments `attempt` and replaces `leaseNonce` before the next process starts.") -------
 
-export const MIN_TURN_ATTEMPT = 1
-export const MAX_TURN_ATTEMPT = 4
+export const MIN_TURN_ATTEMPT = 1;
+export const MAX_TURN_ATTEMPT = 4;
 
-export type TurnAttempt = 1 | 2 | 3 | 4
+export type TurnAttempt = 1 | 2 | 3 | 4;
 
 /** True when `value` is one of the four legal §7.2 attempt numbers. */
 export function isTurnAttempt(value: number): value is TurnAttempt {
-  return Number.isInteger(value) && value >= MIN_TURN_ATTEMPT && value <= MAX_TURN_ATTEMPT
+  return Number.isInteger(value) && value >= MIN_TURN_ATTEMPT && value <= MAX_TURN_ATTEMPT;
 }
 
 /**
@@ -191,13 +191,13 @@ export function isTurnAttempt(value: number): value is TurnAttempt {
  * attempt — so the guard layer must call this helper before invoking `retryAfterGate`.
  */
 export function canRetryAfterGate(attempt: TurnAttempt): boolean {
-  return attempt < MAX_TURN_ATTEMPT
+  return attempt < MAX_TURN_ATTEMPT;
 }
 
 // --- Terminal outcome (§7.2: "`terminal` carries `failed | cancelled | stale |
 // interrupted`.") --------------------------------------------------------------------
 
-export type TurnTerminalOutcome = "failed" | "cancelled" | "stale" | "interrupted"
+export type TurnTerminalOutcome = "failed" | "cancelled" | "stale" | "interrupted";
 
 /** The four §7.2 terminal outcomes, in spec order. */
 export const TURN_TERMINAL_OUTCOMES: readonly TurnTerminalOutcome[] = [
@@ -206,4 +206,4 @@ export const TURN_TERMINAL_OUTCOMES: readonly TurnTerminalOutcome[] = [
   "cancelled",
   "stale",
   "interrupted",
-]
+];

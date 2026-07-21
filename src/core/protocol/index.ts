@@ -9,11 +9,11 @@
 // The unions here are CLOSED (§2.12). Adding a kind means a schema, a guard, a capability
 // mapping, a transition-table entry, and contract tests (§8.2) — never just a union member.
 
-export type { ProtocolVersion } from "./types"
-export { PROTOCOL_VERSION } from "./types"
+export type { ProtocolVersion } from "./types";
+export { PROTOCOL_VERSION } from "./types";
 
 // --- Primitives -----------------------------------------------------------------
-export type { UInt64String } from "./model/uint64"
+export type { UInt64String } from "./model/uint64";
 export {
   UINT64_MAX,
   Uint64DecodeError,
@@ -22,9 +22,9 @@ export {
   encodeUint64String,
   isUint64String,
   uint64StringSchema,
-} from "./model/uint64"
+} from "./model/uint64";
 
-export type { HostNonce, Sha256Hex, UUIDv7 } from "./model/ids"
+export type { HostNonce, Sha256Hex, UUIDv7 } from "./model/ids";
 export {
   hostNonceSchema,
   isHostNonce,
@@ -32,9 +32,9 @@ export {
   isUuidv7,
   sha256HexSchema,
   uuidv7Schema,
-} from "./model/ids"
+} from "./model/ids";
 
-export { CanonicalHashError, canonicalHash, canonicalJson } from "./model/canonical-hash"
+export { CanonicalHashError, canonicalHash, canonicalJson } from "./model/canonical-hash";
 
 // --- Shared DTOs ----------------------------------------------------------------
 export type {
@@ -46,7 +46,7 @@ export type {
   PageDescriptorV1,
   PageRemovePlanV1,
   PinDtoV1,
-} from "./model/shared-dto"
+} from "./model/shared-dto";
 export {
   diagnosticDtoV1Schema,
   frameIdentityV1Schema,
@@ -56,10 +56,10 @@ export {
   pageDescriptorV1Schema,
   pageRemovePlanV1Schema,
   pinDtoV1Schema,
-} from "./model/shared-dto"
+} from "./model/shared-dto";
 
 // --- Commands -------------------------------------------------------------------
-export type { CommandFamilyV1, CommandKindV1 } from "./model/command-kind"
+export type { CommandFamilyV1, CommandKindV1 } from "./model/command-kind";
 export {
   COMMAND_FAMILIES_V1,
   COMMAND_KIND_COUNT,
@@ -67,17 +67,17 @@ export {
   commandFamilyOf,
   commandKindV1Schema,
   isCommandKindV1,
-} from "./model/command-kind"
+} from "./model/command-kind";
 
-export type { CommandPayloadByKindV1 } from "./model/command-payload"
-export { commandPayloadSchemaFor, commandPayloadSchemas } from "./model/command-payload"
+export type { CommandPayloadByKindV1 } from "./model/command-payload";
+export { commandPayloadSchemaFor, commandPayloadSchemas } from "./model/command-payload";
 
-export type { CommandEnvelopeV1 } from "./model/command-envelope"
+export type { CommandEnvelopeV1 } from "./model/command-envelope";
 export {
   CommandDecodeError,
   decodeCommandEnvelope,
   envelopeFingerprint,
-} from "./model/command-envelope"
+} from "./model/command-envelope";
 
 // --- Results, failures, reasons -------------------------------------------------
 export type {
@@ -85,7 +85,7 @@ export type {
   CommandRejectionCode,
   CommandResultV1,
   RejectedCommandV1,
-} from "./model/command-result"
+} from "./model/command-result";
 export {
   COMMAND_REJECTION_CODES_V1,
   acceptedCommandV1Schema,
@@ -93,32 +93,32 @@ export {
   commandResultV1Schema,
   isCommandRejectionCode,
   rejectedCommandV1Schema,
-} from "./model/command-result"
+} from "./model/command-result";
 
-export type { FailureDtoV1, OperationalFailureCode } from "./model/failure"
+export type { FailureDtoV1, OperationalFailureCode } from "./model/failure";
 export {
   OPERATIONAL_FAILURE_CODES_V1,
   failureDtoV1Schema,
   isOperationalFailureCode,
   operationalFailureCodeSchema,
-} from "./model/failure"
+} from "./model/failure";
 
-export type { UnavailableReason } from "./model/unavailable-reason"
+export type { UnavailableReason } from "./model/unavailable-reason";
 export {
   REASON_CODES_V1,
   UNAVAILABLE_REASON_PRIORITY_V1,
   primaryReason,
   unavailableReasonV1Schema,
-} from "./model/unavailable-reason"
+} from "./model/unavailable-reason";
 
 // --- Events ---------------------------------------------------------------------
-export type { EventKindV1 } from "./model/event-kind"
+export type { EventKindV1 } from "./model/event-kind";
 export {
   EVENT_KIND_COUNT,
   EVENT_KINDS_V1,
   eventKindV1Schema,
   isEventKindV1,
-} from "./model/event-kind"
+} from "./model/event-kind";
 
-export type { EventPayloadByKindV1 } from "./model/event-payload"
-export { eventPayloadV1SchemaByKind } from "./model/event-payload"
+export type { EventPayloadByKindV1 } from "./model/event-payload";
+export { eventPayloadV1SchemaByKind } from "./model/event-payload";

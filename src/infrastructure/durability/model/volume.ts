@@ -1,6 +1,7 @@
-import path from "node:path"
-import { type DurabilityUnavailableError, UnsupportedVolumeError } from "./errors"
-import { DRIVE_FIXED, DRIVE_RAMDISK, driveTypeName, loadKernel32, toWideString } from "./kernel32"
+import path from "node:path";
+
+import { type DurabilityUnavailableError, UnsupportedVolumeError } from "./errors";
+import { DRIVE_FIXED, DRIVE_RAMDISK, driveTypeName, loadKernel32, toWideString } from "./kernel32";
 
 /**
  * The raw `GetDriveTypeW` code for the volume that holds `rootPath` (which must
@@ -8,9 +9,9 @@ import { DRIVE_FIXED, DRIVE_RAMDISK, driveTypeName, loadKernel32, toWideString }
  * the FFI is unavailable.
  */
 export function getDriveType(rootPath: string): number | DurabilityUnavailableError {
-  const k32 = loadKernel32()
-  if (k32 instanceof Error) return k32
-  return k32.symbols.GetDriveTypeW(toWideString(rootPath))
+  const k32 = loadKernel32();
+  if (k32 instanceof Error) return k32;
+  return k32.symbols.GetDriveTypeW(toWideString(rootPath));
 }
 
 /**
@@ -20,7 +21,7 @@ export function getDriveType(rootPath: string): number | DurabilityUnavailableEr
  * the gate is exhaustively testable without a non-local volume.
  */
 export function isDurableDriveType(code: number): boolean {
-  return code === DRIVE_FIXED || code === DRIVE_RAMDISK
+  return code === DRIVE_FIXED || code === DRIVE_RAMDISK;
 }
 
 /**
@@ -29,12 +30,14 @@ export function isDurableDriveType(code: number): boolean {
  * heuristic about the volume, not proof the flush primitive works on it — the
  * store composes it with a real `flushDir` probe on its own transaction directory.
  */
-export function assertDurableVolume(anyPath: string): UnsupportedVolumeError | DurabilityUnavailableError | undefined {
-  const root = path.parse(path.resolve(anyPath)).root
-  const type = getDriveType(root)
-  if (type instanceof Error) return type
+export function assertDurableVolume(
+  anyPath: string,
+): UnsupportedVolumeError | DurabilityUnavailableError | undefined {
+  const root = path.parse(path.resolve(anyPath)).root;
+  const type = getDriveType(root);
+  if (type instanceof Error) return type;
   if (!isDurableDriveType(type)) {
-    return new UnsupportedVolumeError({ path: anyPath, driveType: driveTypeName(type) })
+    return new UnsupportedVolumeError({ path: anyPath, driveType: driveTypeName(type) });
   }
-  return undefined
+  return undefined;
 }

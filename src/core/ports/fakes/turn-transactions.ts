@@ -1,5 +1,6 @@
-import type { FailureDtoV1 } from "core/protocol"
-import type { AssertConforms } from "../index"
+import type { FailureDtoV1 } from "core/protocol";
+
+import type { AssertConforms } from "../index";
 import type {
   ResolvedPinAppendV1,
   TurnAdmissionInputV1,
@@ -7,7 +8,7 @@ import type {
   TurnFinalizeInputV1,
   TurnTerminalizeInputV1,
   TurnTransactionService,
-} from "../turn-transactions"
+} from "../turn-transactions";
 
 /**
  * In-memory {@link TurnTransactionService} fake (6D task brief). No real CAS/read-set
@@ -23,62 +24,66 @@ import type {
  * script per call.
  */
 
-export type TurnTransactionFailableMethod = "admit" | "finalize" | "terminalize"
+export type TurnTransactionFailableMethod = "admit" | "finalize" | "terminalize";
 
 export type TurnTransactionCall =
   | { readonly method: "admit"; readonly input: TurnAdmissionInputV1 }
-  | { readonly method: "finalize"; readonly input: TurnFinalizeInputV1; readonly appliedResolvedPins: readonly ResolvedPinAppendV1[] }
-  | { readonly method: "terminalize"; readonly input: TurnTerminalizeInputV1 }
+  | {
+      readonly method: "finalize";
+      readonly input: TurnFinalizeInputV1;
+      readonly appliedResolvedPins: readonly ResolvedPinAppendV1[];
+    }
+  | { readonly method: "terminalize"; readonly input: TurnTerminalizeInputV1 };
 
 export interface FakeTurnTransactionService extends TurnTransactionService {
-  readonly calls: readonly TurnTransactionCall[]
-  failNext(method: TurnTransactionFailableMethod, failure: FailureDtoV1): void
+  readonly calls: readonly TurnTransactionCall[];
+  failNext(method: TurnTransactionFailableMethod, failure: FailureDtoV1): void;
 }
 
 export function createFakeTurnTransactionService(): FakeTurnTransactionService {
-  const calls: TurnTransactionCall[] = []
-  let counter = 0
+  const calls: TurnTransactionCall[] = [];
+  let counter = 0;
 
   const queues: Record<TurnTransactionFailableMethod, FailureDtoV1[]> = {
     admit: [],
     finalize: [],
     terminalize: [],
-  }
+  };
 
   function failNext(method: TurnTransactionFailableMethod, failure: FailureDtoV1): void {
-    queues[method].push(failure)
+    queues[method].push(failure);
   }
 
   function mintCommit(): TurnCommitV1 {
-    counter += 1
-    return { transactionId: `fake-transaction-${counter}` }
+    counter += 1;
+    return { transactionId: `fake-transaction-${counter}` };
   }
 
   async function admit(input: TurnAdmissionInputV1): Promise<FailureDtoV1 | TurnCommitV1> {
-    calls.push({ method: "admit", input })
-    const queued = queues.admit.shift()
-    if (queued !== undefined) return queued
-    return mintCommit()
+    calls.push({ method: "admit", input });
+    const queued = queues.admit.shift();
+    if (queued !== undefined) return queued;
+    return mintCommit();
   }
 
   async function finalize(input: TurnFinalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1> {
     const appliedResolvedPins = input.resolvedPins.filter((resolved) =>
       input.changedPages.some((changed) => changed.pageSlug === resolved.pageSlug),
-    )
-    calls.push({ method: "finalize", input, appliedResolvedPins })
-    const queued = queues.finalize.shift()
-    if (queued !== undefined) return queued
-    return mintCommit()
+    );
+    calls.push({ method: "finalize", input, appliedResolvedPins });
+    const queued = queues.finalize.shift();
+    if (queued !== undefined) return queued;
+    return mintCommit();
   }
 
   async function terminalize(input: TurnTerminalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1> {
-    calls.push({ method: "terminalize", input })
-    const queued = queues.terminalize.shift()
-    if (queued !== undefined) return queued
-    return mintCommit()
+    calls.push({ method: "terminalize", input });
+    const queued = queues.terminalize.shift();
+    if (queued !== undefined) return queued;
+    return mintCommit();
   }
 
-  return { admit, finalize, terminalize, calls, failNext }
+  return { admit, finalize, terminalize, calls, failNext };
 }
 
-type _Conforms = AssertConforms<TurnTransactionService, FakeTurnTransactionService>
+type _Conforms = AssertConforms<TurnTransactionService, FakeTurnTransactionService>;

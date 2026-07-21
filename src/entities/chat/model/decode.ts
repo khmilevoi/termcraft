@@ -1,10 +1,11 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { rfc3339UtcSchema } from "infrastructure/clock"
-import { canonicalUuidv7Schema } from "infrastructure/uuid"
-import { pageSlugSchema } from "entities/page"
-import type { ChatHeader, ChatRecord } from "../types"
+import { pageSlugSchema } from "entities/page";
+import { rfc3339UtcSchema } from "infrastructure/clock";
+import { canonicalUuidv7Schema } from "infrastructure/uuid";
+
+import type { ChatHeader, ChatRecord } from "../types";
 
 /**
  * A schema or identity violation in a chat header/record (storage-identity §11.1/§11.2).
@@ -19,14 +20,14 @@ export class ChatDecodeError extends errore.createTaggedError({
 }) {}
 
 function fail(code: string, reason: string): ChatDecodeError {
-  return new ChatDecodeError({ code, reason })
+  return new ChatDecodeError({ code, reason });
 }
 
 /** Maps the first Zod issue to a `ChatDecodeError` (decoders fail on the first violation, like the hand-rolled checks they replace). */
 function toDecodeError(error: z.ZodError): ChatDecodeError {
-  const issue = error.issues[0]
-  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE"
-  return fail(code, issue?.message ?? "invalid input")
+  const issue = error.issues[0];
+  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE";
+  return fail(code, issue?.message ?? "invalid input");
 }
 
 const chatHeaderSchema = z.object({
@@ -35,17 +36,17 @@ const chatHeaderSchema = z.object({
   projectId: canonicalUuidv7Schema,
   chatId: canonicalUuidv7Schema,
   createdAt: rfc3339UtcSchema,
-})
+});
 
 const chatSelectionSchema = z.object({
   pageSlug: pageSlugSchema,
   element: z.string().min(1),
-})
+});
 
 const chatWarningSnapshotSchema = z.object({
   kind: z.string().min(1),
   message: z.string().min(1),
-})
+});
 
 const chatUserRecordSchema = z.object({
   kind: z.literal("user"),
@@ -55,7 +56,7 @@ const chatUserRecordSchema = z.object({
   selection: chatSelectionSchema.optional(),
   pins: z.array(canonicalUuidv7Schema).optional(),
   ts: rfc3339UtcSchema,
-})
+});
 
 const chatAgentRecordSchema = z.object({
   kind: z.literal("agent"),
@@ -65,7 +66,7 @@ const chatAgentRecordSchema = z.object({
   changedPages: z.array(pageSlugSchema),
   warnings: z.array(chatWarningSnapshotSchema),
   ts: rfc3339UtcSchema,
-})
+});
 
 const chatSystemErrorRecordSchema = z.object({
   kind: z.literal("system:error"),
@@ -76,7 +77,7 @@ const chatSystemErrorRecordSchema = z.object({
   reason: z.string().min(1).optional(),
   text: z.string().min(1),
   ts: rfc3339UtcSchema,
-})
+});
 
 const chatSystemCancelledRecordSchema = z.object({
   kind: z.literal("system:cancelled"),
@@ -85,7 +86,7 @@ const chatSystemCancelledRecordSchema = z.object({
   actionId: canonicalUuidv7Schema.optional(),
   text: z.string().min(1),
   ts: rfc3339UtcSchema,
-})
+});
 
 const chatSystemRestoreRecordSchema = z.object({
   kind: z.literal("system:restore"),
@@ -94,7 +95,7 @@ const chatSystemRestoreRecordSchema = z.object({
   pageSlug: pageSlugSchema,
   sourceCommit: z.string().min(1),
   ts: rfc3339UtcSchema,
-})
+});
 
 /**
  * `turnId`/`actionId` are mutually exclusive on `system:error`/`system:cancelled`
@@ -111,22 +112,22 @@ const chatRecordSchema = z
     chatSystemRestoreRecordSchema,
   ])
   .superRefine((val, ctx) => {
-    if (val.kind !== "system:error" && val.kind !== "system:cancelled") return
-    const hasTurn = val.turnId !== undefined
-    const hasAction = val.actionId !== undefined
+    if (val.kind !== "system:error" && val.kind !== "system:cancelled") return;
+    const hasTurn = val.turnId !== undefined;
+    const hasAction = val.actionId !== undefined;
     if (hasTurn === hasAction) {
-      ctx.addIssue({ code: "custom", message: "exactly one of `turnId`/`actionId` is required" })
+      ctx.addIssue({ code: "custom", message: "exactly one of `turnId`/`actionId` is required" });
     }
-  })
+  });
 
 /**
  * Decode a chat JSONL header line (storage-identity §11.2): `kind = "chat"`,
  * `formatVersion = 1`, and canonical `projectId`/`chatId`/`createdAt` identities.
  */
 export function decodeChatHeader(value: unknown): ChatHeader | ChatDecodeError {
-  const result = chatHeaderSchema.safeParse(value)
-  if (!result.success) return toDecodeError(result.error)
-  return result.data
+  const result = chatHeaderSchema.safeParse(value);
+  if (!result.success) return toDecodeError(result.error);
+  return result.data;
 }
 
 /**
@@ -136,7 +137,7 @@ export function decodeChatHeader(value: unknown): ChatHeader | ChatDecodeError {
  * reader/1-MiB-bound and file-order rules live in `store/jsonl`, not here.
  */
 export function decodeChatRecord(value: unknown): ChatRecord | ChatDecodeError {
-  const result = chatRecordSchema.safeParse(value)
-  if (!result.success) return toDecodeError(result.error)
-  return result.data
+  const result = chatRecordSchema.safeParse(value);
+  if (!result.success) return toDecodeError(result.error);
+  return result.data;
 }

@@ -1,11 +1,13 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { createConfinementPolicy } from "agent/confinement"
-import type { AgentTask } from "agent/types"
-import { createCanUseTool } from "./can-use-tool"
-import { planToSessionOptions } from "./session-options"
-import { createSpawnAndAdopt } from "./spawn-adopt"
-import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools"
-import type { QueryOptionDeps } from "../types"
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
+
+import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools";
+import { createConfinementPolicy } from "agent/confinement";
+import type { AgentTask } from "agent/types";
+
+import type { QueryOptionDeps } from "../types";
+import { createCanUseTool } from "./can-use-tool";
+import { planToSessionOptions } from "./session-options";
+import { createSpawnAndAdopt } from "./spawn-adopt";
 
 /**
  * Build the SDK `Options` for one fenced attempt. Binds cwd + only-writable-root
@@ -16,8 +18,8 @@ import type { QueryOptionDeps } from "../types"
 export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Options {
   const policy = createConfinementPolicy(task.workspacePath, CLAUDE_CONFINEMENT_TABLES, {
     hasReparsePoint: deps.hasReparsePoint,
-  })
-  const sessionOpts = planToSessionOptions(task.session)
+  });
+  const sessionOpts = planToSessionOptions(task.session);
   return {
     cwd: task.workspacePath,
     additionalDirectories: [],
@@ -35,5 +37,5 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
     ...sessionOpts,
     canUseTool: createCanUseTool(policy),
     spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/query"),
-  }
+  };
 }

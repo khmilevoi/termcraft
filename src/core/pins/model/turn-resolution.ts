@@ -1,6 +1,6 @@
-import type { PageSlug } from "entities/page"
-import type { ResolvedPinAppendV1 } from "core/ports"
-import { uuidv7 } from "infrastructure/uuid"
+import type { ResolvedPinAppendV1 } from "core/ports";
+import type { PageSlug } from "entities/page";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * Sent-pin turn resolution (kernel-command-contract §12.2 item 8; turn-durability §7.4
@@ -21,23 +21,25 @@ import { uuidv7 } from "infrastructure/uuid"
  */
 
 export interface SentPinV1 {
-  readonly pinId: string
-  readonly pageSlug: PageSlug
+  readonly pinId: string;
+  readonly pageSlug: PageSlug;
 }
 
 export interface ResolveSentPinAppendsInputV1 {
-  readonly turnId: string
-  readonly sentPins: readonly SentPinV1[]
-  readonly changedPages: readonly PageSlug[]
-  readonly createdAt: string
+  readonly turnId: string;
+  readonly sentPins: readonly SentPinV1[];
+  readonly changedPages: readonly PageSlug[];
+  readonly createdAt: string;
 }
 
 /** Builds the turn's automatic `pin:status resolved` appends — never a user-action `actionId`. */
-export function resolveSentPinAppends(input: ResolveSentPinAppendsInputV1): readonly ResolvedPinAppendV1[] {
+export function resolveSentPinAppends(
+  input: ResolveSentPinAppendsInputV1,
+): readonly ResolvedPinAppendV1[] {
   // §7.4 item 5, verbatim: "An empty design diff resolves no pin."
-  if (input.changedPages.length === 0) return []
+  if (input.changedPages.length === 0) return [];
 
-  const changed = new Set(input.changedPages)
+  const changed = new Set(input.changedPages);
   return input.sentPins
     .filter((pin) => changed.has(pin.pageSlug))
     .map(
@@ -52,5 +54,5 @@ export function resolveSentPinAppends(input: ResolveSentPinAppendsInputV1): read
           ts: input.createdAt,
         },
       }),
-    )
+    );
 }

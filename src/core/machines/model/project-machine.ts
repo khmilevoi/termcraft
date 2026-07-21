@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Kernel project model (kernel-command-contract §7.1, lines 189-228).
@@ -16,7 +16,7 @@ import { createStateMachine, type StateMachine, type TransitionTable } from "./s
  * `kernel.project.` prefix on every table row.
  */
 
-export type ProjectState = "closed" | "opening" | "recovering" | "ready" | "blocked" | "closing"
+export type ProjectState = "closed" | "opening" | "recovering" | "ready" | "blocked" | "closing";
 
 export type ProjectAction =
   | "beginCreate"
@@ -32,7 +32,7 @@ export type ProjectAction =
   | "discardPageRemovePlan"
   | "beginClose"
   | "finishClose"
-  | "retryOpen"
+  | "retryOpen";
 
 /** The full `kernel.project.<verb>` name for every {@link ProjectAction}, §7.1 verbatim. */
 export const PROJECT_ACTION_FULL_NAME: Readonly<Record<ProjectAction, string>> = {
@@ -50,7 +50,7 @@ export const PROJECT_ACTION_FULL_NAME: Readonly<Record<ProjectAction, string>> =
   beginClose: "kernel.project.beginClose",
   finishClose: "kernel.project.finishClose",
   retryOpen: "kernel.project.retryOpen",
-}
+};
 
 /**
  * §7.1's table, transcribed row for row. A row listing multiple sources for one action
@@ -104,7 +104,7 @@ export const PROJECT_TRANSITION_TABLE: TransitionTable<ProjectState, ProjectActi
   finishClose: [{ from: "closing", to: "closed" }],
   // `blocked | retryOpen | opening`
   retryOpen: [{ from: "blocked", to: "opening" }],
-}
+};
 
 /**
  * §7.1: "All project-scoped commands except open/create/retry/close/trust and a trusted
@@ -117,7 +117,7 @@ export const PROJECT_TRANSITION_TABLE: TransitionTable<ProjectState, ProjectActi
  * (e.g. distinguishing an already-open project from a genuinely not-ready one) is the guard
  * layer's job, not this machine's.
  */
-const PROJECT_ILLEGAL_CODE = "PROJECT_NOT_READY"
+const PROJECT_ILLEGAL_CODE = "PROJECT_NOT_READY";
 
 /**
  * Builds one Kernel's project model. A factory, not a module-level machine: §5 scopes
@@ -130,5 +130,5 @@ export function reatomProjectStateMachine(): StateMachine<ProjectState, ProjectA
     initial: "closed",
     table: PROJECT_TRANSITION_TABLE,
     illegalCode: PROJECT_ILLEGAL_CODE,
-  })
+  });
 }

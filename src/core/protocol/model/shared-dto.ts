@@ -1,10 +1,10 @@
-import { z } from "zod"
+import { z } from "zod";
 
-import { rfc3339UtcSchema } from "infrastructure/clock"
-import { pageSlugSchema } from "entities/page"
+import { pageSlugSchema } from "entities/page";
+import { rfc3339UtcSchema } from "infrastructure/clock";
 
-import { hostNonceSchema, sha256HexSchema, uuidv7Schema, type Sha256Hex, type UUIDv7 } from "./ids"
-import { uint64StringSchema, type UInt64String } from "./uint64"
+import { type Sha256Hex, type UUIDv7, hostNonceSchema, sha256HexSchema, uuidv7Schema } from "./ids";
+import { type UInt64String, uint64StringSchema } from "./uint64";
 
 /**
  * DTO shapes shared by more than one command payload, event payload, or ledger entry
@@ -22,7 +22,7 @@ import { uint64StringSchema, type UInt64String } from "./uint64"
  */
 
 /** A fraction in the closed unit interval [0,1] — a pin's normalized anchor coordinate. */
-const fractionSchema = z.number().min(0).max(1)
+const fractionSchema = z.number().min(0).max(1);
 
 /**
  * The complete incarnation-local frame identity (§4, §12.5). No frame, query, or token
@@ -30,10 +30,10 @@ const fractionSchema = z.number().min(0).max(1)
  * changes, so a bare sequence number means nothing on its own.
  */
 export interface FrameIdentityV1 {
-  readonly previewSessionId: UUIDv7
-  readonly nonce: string
-  readonly sourceHash: Sha256Hex
-  readonly frameSeq: UInt64String
+  readonly previewSessionId: UUIDv7;
+  readonly nonce: string;
+  readonly sourceHash: Sha256Hex;
+  readonly frameSeq: UInt64String;
 }
 
 export const frameIdentityV1Schema = z.strictObject({
@@ -41,25 +41,25 @@ export const frameIdentityV1Schema = z.strictObject({
   nonce: hostNonceSchema,
   sourceHash: sha256HexSchema,
   frameSeq: uint64StringSchema,
-})
+});
 
 /**
  * An opaque frame token (§8.1). It is query-authorizing only after the UI's typed
  * display acknowledgement, and it "cannot create a pin" — the binding stays in the
  * Kernel ledger and never travels in the DTO.
  */
-export type FrameTokenV1 = UUIDv7
+export type FrameTokenV1 = UUIDv7;
 
-export const frameTokenV1Schema = uuidv7Schema
+export const frameTokenV1Schema = uuidv7Schema;
 
 /**
  * An opaque geometry token (§8.1). Minted only by a resolving `hit`/`pin-anchor` query;
  * its private ledger entry binds `(FrameIdentityV1, pageSlug, elementId, fx, fy)`, none
  * of which the UI can inspect, edit, or synthesize.
  */
-export type GeometryTokenV1 = UUIDv7
+export type GeometryTokenV1 = UUIDv7;
 
-export const geometryTokenV1Schema = uuidv7Schema
+export const geometryTokenV1Schema = uuidv7Schema;
 
 /**
  * The immutable page-removal plan (§8.1). Confirmation is possession of the still-current
@@ -68,14 +68,14 @@ export const geometryTokenV1Schema = uuidv7Schema
  * field exists here to accept.
  */
 export interface PageRemovePlanV1 {
-  readonly pageRemovePlanId: UUIDv7
-  readonly pageSlug: string
-  readonly sourceHash: Sha256Hex
-  readonly orderedPageSlugs: readonly string[]
-  readonly pageOrderHash: Sha256Hex
-  readonly activePageSlug: string | null
-  readonly fallbackPageSlug: string | null
-  readonly planRevision: UInt64String
+  readonly pageRemovePlanId: UUIDv7;
+  readonly pageSlug: string;
+  readonly sourceHash: Sha256Hex;
+  readonly orderedPageSlugs: readonly string[];
+  readonly pageOrderHash: Sha256Hex;
+  readonly activePageSlug: string | null;
+  readonly fallbackPageSlug: string | null;
+  readonly planRevision: UInt64String;
 }
 
 export const pageRemovePlanV1Schema = z.strictObject({
@@ -87,13 +87,13 @@ export const pageRemovePlanV1Schema = z.strictObject({
   activePageSlug: pageSlugSchema.nullable(),
   fallbackPageSlug: pageSlugSchema.nullable(),
   planRevision: uint64StringSchema,
-})
+});
 
 /** A bounded, display-safe error carried inside a descriptor — never a native `Error`. */
 const safeErrorSchema = z.strictObject({
   code: z.string().min(1),
   safeMessage: z.string(),
-})
+});
 
 /**
  * A page descriptor (§9). Discriminated on `status`, so an `invalid` descriptor cannot
@@ -102,20 +102,20 @@ const safeErrorSchema = z.strictObject({
  */
 export type PageDescriptorV1 =
   | {
-      readonly status: "ready"
-      readonly pageSlug: string
-      readonly sourceHash: Sha256Hex
-      readonly title: string
-      readonly minSize: { readonly w: number; readonly h: number }
-      readonly theme: string
-      readonly kitApiVersion: number
+      readonly status: "ready";
+      readonly pageSlug: string;
+      readonly sourceHash: Sha256Hex;
+      readonly title: string;
+      readonly minSize: { readonly w: number; readonly h: number };
+      readonly theme: string;
+      readonly kitApiVersion: number;
     }
   | {
-      readonly status: "invalid"
-      readonly pageSlug: string
-      readonly sourceHash: Sha256Hex
-      readonly error: { readonly code: string; readonly safeMessage: string }
-    }
+      readonly status: "invalid";
+      readonly pageSlug: string;
+      readonly sourceHash: Sha256Hex;
+      readonly error: { readonly code: string; readonly safeMessage: string };
+    };
 
 const readyPageDescriptorSchema = z.strictObject({
   status: z.literal("ready"),
@@ -128,19 +128,19 @@ const readyPageDescriptorSchema = z.strictObject({
   }),
   theme: z.string().min(1),
   kitApiVersion: z.number().int().positive(),
-})
+});
 
 const invalidPageDescriptorSchema = z.strictObject({
   status: z.literal("invalid"),
   pageSlug: pageSlugSchema,
   sourceHash: sha256HexSchema,
   error: safeErrorSchema,
-})
+});
 
 export const pageDescriptorV1Schema = z.discriminatedUnion("status", [
   readyPageDescriptorSchema,
   invalidPageDescriptorSchema,
-])
+]);
 
 /**
  * One entry in a descriptor change set (§9). Both hash bindings are explicit: §9 requires
@@ -148,10 +148,10 @@ export const pageDescriptorV1Schema = z.discriminatedUnion("status", [
  * page states `beforeSourceHash: null` rather than omitting it.
  */
 export interface PageDescriptorChangeV1 {
-  readonly pageSlug: string
-  readonly kind: "added" | "updated" | "removed" | "reordered"
-  readonly beforeSourceHash: Sha256Hex | null
-  readonly afterSourceHash: Sha256Hex | null
+  readonly pageSlug: string;
+  readonly kind: "added" | "updated" | "removed" | "reordered";
+  readonly beforeSourceHash: Sha256Hex | null;
+  readonly afterSourceHash: Sha256Hex | null;
 }
 
 export const pageDescriptorChangeV1Schema = z.strictObject({
@@ -159,7 +159,7 @@ export const pageDescriptorChangeV1Schema = z.strictObject({
   kind: z.enum(["added", "updated", "removed", "reordered"]),
   beforeSourceHash: sha256HexSchema.nullable(),
   afterSourceHash: sha256HexSchema.nullable(),
-})
+});
 
 /**
  * A complete pin as the UI sees it (§9). `pins.changed` always carries the whole DTO
@@ -167,16 +167,16 @@ export const pageDescriptorChangeV1Schema = z.strictObject({
  * stream, and it has no project-store write path at all.
  */
 export interface PinDtoV1 {
-  readonly pinId: UUIDv7
-  readonly pageSlug: string
-  readonly elementId: string
-  readonly fx: number
-  readonly fy: number
-  readonly text: string
-  readonly status: "open" | "resolved"
-  readonly createdRecordId: UUIDv7
-  readonly latestRecordId: UUIDv7
-  readonly updatedAt: string
+  readonly pinId: UUIDv7;
+  readonly pageSlug: string;
+  readonly elementId: string;
+  readonly fx: number;
+  readonly fy: number;
+  readonly text: string;
+  readonly status: "open" | "resolved";
+  readonly createdRecordId: UUIDv7;
+  readonly latestRecordId: UUIDv7;
+  readonly updatedAt: string;
 }
 
 export const pinDtoV1Schema = z.strictObject({
@@ -190,7 +190,7 @@ export const pinDtoV1Schema = z.strictObject({
   createdRecordId: uuidv7Schema,
   latestRecordId: uuidv7Schema,
   updatedAt: rfc3339UtcSchema,
-})
+});
 
 /**
  * A bounded diagnostic (§9). The strict shape is a privacy boundary as much as a schema:
@@ -200,13 +200,13 @@ export const pinDtoV1Schema = z.strictObject({
  * exactly the leak those rules exist to prevent.
  */
 export interface DiagnosticDtoV1 {
-  readonly diagnosticId: UUIDv7
-  readonly scope: "project" | "turn" | "preview" | "git" | "migration"
-  readonly severity: "info" | "warning" | "error"
-  readonly code: string
-  readonly safeMessage: string
-  readonly pageSlug?: string
-  readonly sourceHash?: Sha256Hex
+  readonly diagnosticId: UUIDv7;
+  readonly scope: "project" | "turn" | "preview" | "git" | "migration";
+  readonly severity: "info" | "warning" | "error";
+  readonly code: string;
+  readonly safeMessage: string;
+  readonly pageSlug?: string;
+  readonly sourceHash?: Sha256Hex;
 }
 
 export const diagnosticDtoV1Schema = z.strictObject({
@@ -217,4 +217,4 @@ export const diagnosticDtoV1Schema = z.strictObject({
   safeMessage: z.string(),
   pageSlug: pageSlugSchema.optional(),
   sourceHash: sha256HexSchema.optional(),
-})
+});

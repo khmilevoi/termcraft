@@ -4,10 +4,14 @@
 // `pin-projection.ts`'s header for the named divergence this resolves), plus `pin.create`,
 // which consumes a Kernel-issued `GeometryTokenV1` exactly once (§12.6 item 6).
 
-export { PinProjectionError, projectPinEvents } from "./model/pin-projection"
+export { PinProjectionError, projectPinEvents } from "./model/pin-projection";
 
-export type { SetPinStatusDeps, SetPinStatusInputV1, SetPinStatusResultV1 } from "./model/set-status"
-export { setPinStatus } from "./model/set-status"
+export type {
+  SetPinStatusDeps,
+  SetPinStatusInputV1,
+  SetPinStatusResultV1,
+} from "./model/set-status";
+export { setPinStatus } from "./model/set-status";
 
-export type { CreatePinDeps, CreatePinInputV1, CreatePinResultV1 } from "./model/create"
-export { createPin } from "./model/create"
+export type { CreatePinDeps, CreatePinInputV1, CreatePinResultV1 } from "./model/create";
+export { createPin } from "./model/create";

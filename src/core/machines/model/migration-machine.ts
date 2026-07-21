@@ -1,4 +1,4 @@
-import { createStateMachine, type StateMachine, type TransitionTable } from "./state-machine"
+import { type StateMachine, type TransitionTable, createStateMachine } from "./state-machine";
 
 /**
  * The Migration model (kernel-command-contract §7.7).
@@ -18,7 +18,7 @@ export type MigrationState =
   | "transforming"
   | "publishing"
   | "recovering"
-  | "blocked"
+  | "blocked";
 
 export type MigrationAction =
   | "kernel.migration.beginPlan"
@@ -33,7 +33,7 @@ export type MigrationAction =
   | "kernel.migration.beginRecovery"
   | "kernel.migration.completeRecovery"
   | "kernel.migration.blockRecovery"
-  | "kernel.migration.retryRecovery"
+  | "kernel.migration.retryRecovery";
 
 /** §7.7's table, transcribed row for row; a multi-source row becomes one edge per source. */
 export const MIGRATION_TRANSITION_TABLE: TransitionTable<MigrationState, MigrationAction> = {
@@ -66,7 +66,7 @@ export const MIGRATION_TRANSITION_TABLE: TransitionTable<MigrationState, Migrati
   "kernel.migration.completeRecovery": [{ from: "recovering", to: "idle" }],
   "kernel.migration.blockRecovery": [{ from: "recovering", to: "blocked" }],
   "kernel.migration.retryRecovery": [{ from: "blocked", to: "recovering" }],
-}
+};
 
 /**
  * Builds one Kernel's Migration model. §11.1: `OPERATION_BUSY` is "The relevant
@@ -79,5 +79,5 @@ export function reatomMigrationStateMachine(): StateMachine<MigrationState, Migr
     initial: "idle",
     table: MIGRATION_TRANSITION_TABLE,
     illegalCode: "OPERATION_BUSY",
-  })
+  });
 }

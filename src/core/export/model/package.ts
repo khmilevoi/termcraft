@@ -1,8 +1,8 @@
-import type { RuntimeDeclarationBundleV1 } from "core/ports"
-import type { FailureDtoV1 } from "core/protocol"
+import type { RuntimeDeclarationBundleV1 } from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
 
-import type { ExportSnapshotV1 } from "../types"
-import type { ExportRenderJobResultV1 } from "./render-jobs"
+import type { ExportSnapshotV1 } from "../types";
+import type { ExportRenderJobResultV1 } from "./render-jobs";
 
 /**
  * Export package assembly (kernel-command-contract §7.5/§12.5; storage-identity §5.2;
@@ -26,26 +26,26 @@ import type { ExportRenderJobResultV1 } from "./render-jobs"
  */
 
 export interface ExportPackageFileV1 {
-  readonly relPath: string
-  readonly bytes: Uint8Array
+  readonly relPath: string;
+  readonly bytes: Uint8Array;
 }
 
 export interface AssembleExportPackageInputV1 {
-  readonly snapshot: ExportSnapshotV1
-  readonly renders: readonly ExportRenderJobResultV1[]
-  readonly runtimeDeclaration: RuntimeDeclarationBundleV1
+  readonly snapshot: ExportSnapshotV1;
+  readonly renders: readonly ExportRenderJobResultV1[];
+  readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
 }
 
 export type AssembleExportPackageResultV1 =
   | { readonly kind: "failed"; readonly failure: FailureDtoV1 }
-  | { readonly kind: "assembled"; readonly files: readonly ExportPackageFileV1[] }
+  | { readonly kind: "assembled"; readonly files: readonly ExportPackageFileV1[] };
 
 function textFile(relPath: string, text: string): ExportPackageFileV1 {
-  return { relPath, bytes: new TextEncoder().encode(text) }
+  return { relPath, bytes: new TextEncoder().encode(text) };
 }
 
 function sizeLabel(size: { readonly w: number; readonly h: number }): string {
-  return `${size.w}x${size.h}`
+  return `${size.w}x${size.h}`;
 }
 
 function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
@@ -58,56 +58,68 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
     "",
     "## Pages",
     "",
-  ]
+  ];
 
   for (const page of input.snapshot.pages) {
-    lines.push(`### ${page.pageSlug}`)
-    lines.push("")
-    lines.push(`- theme: ${page.theme}`)
-    lines.push(`- kitApiVersion: ${page.kitApiVersion}`)
-    lines.push(`- source: pages/${page.pageSlug}/page.tsx`)
-    lines.push(`- layout: layout/${page.pageSlug}.json (unpopulated in this MVP export)`)
+    lines.push(`### ${page.pageSlug}`);
+    lines.push("");
+    lines.push(`- theme: ${page.theme}`);
+    lines.push(`- kitApiVersion: ${page.kitApiVersion}`);
+    lines.push(`- source: pages/${page.pageSlug}/page.tsx`);
+    lines.push(`- layout: layout/${page.pageSlug}.json (unpopulated in this MVP export)`);
 
-    const pageRenders = input.renders.filter((render) => render.pageSlug === page.pageSlug)
+    const pageRenders = input.renders.filter((render) => render.pageSlug === page.pageSlug);
     if (pageRenders.length > 0) {
-      lines.push("- rendered sizes:")
+      lines.push("- rendered sizes:");
       for (const render of pageRenders) {
-        lines.push(`  - ${sizeLabel(render.size)} -> snapshots/${page.pageSlug}/${sizeLabel(render.size)}.txt`)
+        lines.push(
+          `  - ${sizeLabel(render.size)} -> snapshots/${page.pageSlug}/${sizeLabel(render.size)}.txt`,
+        );
       }
     }
-    lines.push("")
+    lines.push("");
   }
 
-  lines.push("## Runtime")
-  lines.push("")
-  lines.push(`- module: ${input.runtimeDeclaration.module}`)
-  lines.push(`- currentKitApiVersion: ${input.runtimeDeclaration.currentKitApiVersion}`)
-  lines.push(`- supportedKitApiVersions: ${input.runtimeDeclaration.supportedKitApiVersions.join(", ")}`)
-  lines.push("")
+  lines.push("## Runtime");
+  lines.push("");
+  lines.push(`- module: ${input.runtimeDeclaration.module}`);
+  lines.push(`- currentKitApiVersion: ${input.runtimeDeclaration.currentKitApiVersion}`);
+  lines.push(
+    `- supportedKitApiVersions: ${input.runtimeDeclaration.supportedKitApiVersions.join(", ")}`,
+  );
+  lines.push("");
 
-  return lines.join("\n")
+  return lines.join("\n");
 }
 
 /** Assembles the export package's in-memory file list, or refuses wholesale on the first failed render. */
-export function assembleExportPackage(input: AssembleExportPackageInputV1): AssembleExportPackageResultV1 {
-  const failedRender = input.renders.find((render): render is ExportRenderJobResultV1 & { readonly outcome: FailureDtoV1 } => "code" in render.outcome)
-  if (failedRender !== undefined) return { kind: "failed", failure: failedRender.outcome }
+export function assembleExportPackage(
+  input: AssembleExportPackageInputV1,
+): AssembleExportPackageResultV1 {
+  const failedRender = input.renders.find(
+    (render): render is ExportRenderJobResultV1 & { readonly outcome: FailureDtoV1 } =>
+      "code" in render.outcome,
+  );
+  if (failedRender !== undefined) return { kind: "failed", failure: failedRender.outcome };
 
-  const files: ExportPackageFileV1[] = []
+  const files: ExportPackageFileV1[] = [];
 
-  files.push(textFile("design-prompt.md", buildDesignPrompt(input)))
-  files.push(textFile("runtime-api.json", JSON.stringify(input.runtimeDeclaration, null, 2)))
+  files.push(textFile("design-prompt.md", buildDesignPrompt(input)));
+  files.push(textFile("runtime-api.json", JSON.stringify(input.runtimeDeclaration, null, 2)));
 
   for (const page of input.snapshot.pages) {
-    files.push({ relPath: `pages/${page.pageSlug}/page.tsx`, bytes: page.bytes })
+    files.push({ relPath: `pages/${page.pageSlug}/page.tsx`, bytes: page.bytes });
     // Deliberately `{}`, never `render.outcome.layout` — see this file's header divergence note.
-    files.push(textFile(`layout/${page.pageSlug}.json`, "{}"))
+    files.push(textFile(`layout/${page.pageSlug}.json`, "{}"));
   }
 
   for (const render of input.renders) {
-    if ("code" in render.outcome) continue // unreachable past the wholesale refusal above
-    files.push({ relPath: `snapshots/${render.pageSlug}/${sizeLabel(render.size)}.txt`, bytes: render.outcome.textFrame })
+    if ("code" in render.outcome) continue; // unreachable past the wholesale refusal above
+    files.push({
+      relPath: `snapshots/${render.pageSlug}/${sizeLabel(render.size)}.txt`,
+      bytes: render.outcome.textFrame,
+    });
   }
 
-  return { kind: "assembled", files }
+  return { kind: "assembled", files };
 }

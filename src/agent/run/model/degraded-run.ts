@@ -1,5 +1,5 @@
-import type { AgentRun, AgentRunOutcome, FencedEvent } from "agent/types"
-import type { TurnFence } from "entities/turn"
+import type { AgentRun, AgentRunOutcome, FencedEvent } from "agent/types";
+import type { TurnFence } from "entities/turn";
 
 /**
  * An `AsyncIterable` that yields `event` exactly once, then completes.
@@ -12,31 +12,34 @@ import type { TurnFence } from "entities/turn"
  * a `for await...break` completes the iterator protocol cleanly.
  */
 function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {
-  let readerTaken = false
+  let readerTaken = false;
   return {
     [Symbol.asyncIterator]() {
       if (readerTaken) {
         // A second concurrent reader fails loudly instead of silently
         // replaying `event` — matching `createEventQueue`'s contract.
         return {
-          next: () => Promise.reject(new Error("agent/run: AgentRun.events supports only one reader at a time")),
-        }
+          next: () =>
+            Promise.reject(
+              new Error("agent/run: AgentRun.events supports only one reader at a time"),
+            ),
+        };
       }
-      readerTaken = true
-      let delivered = false
+      readerTaken = true;
+      let delivered = false;
       return {
         next: async (): Promise<IteratorResult<FencedEvent>> => {
-          if (delivered) return { value: undefined, done: true }
-          delivered = true
-          return { value: event, done: false }
+          if (delivered) return { value: undefined, done: true };
+          delivered = true;
+          return { value: event, done: false };
         },
         return: async (): Promise<IteratorResult<FencedEvent>> => {
-          delivered = true
-          return { value: undefined, done: true }
+          delivered = true;
+          return { value: undefined, done: true };
         },
-      }
+      };
     },
-  }
+  };
 }
 
 /**
@@ -48,10 +51,10 @@ function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {
  * the fence, then a matching `backend-error` outcome.
  */
 export function createDegradedRun(fence: TurnFence, message: string): AgentRun {
-  const outcome: AgentRunOutcome = { kind: "backend-error", message, sessionId: null }
+  const outcome: AgentRunOutcome = { kind: "backend-error", message, sessionId: null };
   return {
     fence,
     events: singleEventIterable({ fence, event: { kind: "error", message } }),
     outcome: Promise.resolve(outcome),
-  }
+  };
 }

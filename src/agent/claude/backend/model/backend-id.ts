@@ -9,4 +9,4 @@
  * (Codex) added later cannot desynchronise the session-scope key namespace
  * from the reported backendId by only updating one of the two call sites.
  */
-export const CLAUDE_BACKEND_ID = "claude"
+export const CLAUDE_BACKEND_ID = "claude";

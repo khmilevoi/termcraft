@@ -1,5 +1,6 @@
-import * as errore from "errore"
-import type { HealthProbeDeps } from "../types"
+import * as errore from "errore";
+
+import type { HealthProbeDeps } from "../types";
 
 /** Fired when no classifying message (nor a clean stream end) arrives within the probe deadline. */
 export class ProbeDeadlineAbortError extends errore.createTaggedError({
@@ -11,19 +12,19 @@ export class ProbeDeadlineAbortError extends errore.createTaggedError({
 /** Probe read budget (master §9). No spec value is given; generous enough for
  * a cold CLI start + auth handshake, bounded so a silent CLI cannot hang
  * `healthCheck()` forever. Overridable via {@link HealthProbeDeps.deadlineMs}. */
-export const DEFAULT_PROBE_DEADLINE_MS = 20_000
+export const DEFAULT_PROBE_DEADLINE_MS = 20_000;
 
 /** Real default for {@link HealthProbeDeps.wait}: `unref`'d so an abandoned
  * deadline (the read finished first) never keeps the process alive. */
 export function defaultWait(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms).unref()
-  })
+    setTimeout(resolve, ms).unref();
+  });
 }
 
 /** Renders a thrown/rejected value into a stable message even when it is not an `Error` instance. */
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**
@@ -42,8 +43,11 @@ function describeThrown(cause: unknown): string {
  */
 async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
   await wait(ms).catch((cause) => {
-    console.warn("agent/health: injected wait() rejected during probe deadline:", describeThrown(cause))
-  })
+    console.warn(
+      "agent/health: injected wait() rejected during probe deadline:",
+      describeThrown(cause),
+    );
+  });
 }
 
 /**
@@ -61,20 +65,25 @@ export async function withProbeDeadline<T>(
   pending: Promise<T>,
   deps: Pick<HealthProbeDeps, "abortController" | "wait" | "deadlineMs">,
 ): Promise<T | ProbeDeadlineAbortError> {
-  const wait = deps.wait ?? defaultWait
-  const deadlineMs = deps.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS
-  const timedOut = safeWait(wait, deadlineMs).then(() => new ProbeDeadlineAbortError({ deadlineMs }))
+  const wait = deps.wait ?? defaultWait;
+  const deadlineMs = deps.deadlineMs ?? DEFAULT_PROBE_DEADLINE_MS;
+  const timedOut = safeWait(wait, deadlineMs).then(
+    () => new ProbeDeadlineAbortError({ deadlineMs }),
+  );
 
-  const winner = await Promise.race([pending, timedOut])
-  if (!(winner instanceof ProbeDeadlineAbortError)) return winner
+  const winner = await Promise.race([pending, timedOut]);
+  if (!(winner instanceof ProbeDeadlineAbortError)) return winner;
 
-  deps.abortController.abort(winner)
+  deps.abortController.abort(winner);
   pending.catch((e) => {
     // Deliberately swallowed (rule: log what you don't propagate) — the
     // deadline already produced runHealthProbe's verdict; a late rejection
     // from the abandoned read is expected once we abort it above, not a new
     // failure.
-    console.warn("agent/health: probe read failed after the deadline already fired:", describeThrown(e))
-  })
-  return winner
+    console.warn(
+      "agent/health: probe read failed after the deadline already fired:",
+      describeThrown(e),
+    );
+  });
+  return winner;
 }

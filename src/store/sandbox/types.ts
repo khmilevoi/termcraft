@@ -1,20 +1,25 @@
-import type { PageSlug } from "entities/page"
-import type { Clock } from "infrastructure/clock"
-import type { CandidateDeps, ManagedNamespace } from "store/safe-fs"
+import type { PageSlug } from "entities/page";
+import type { Clock } from "infrastructure/clock";
+import type { CandidateDeps, ManagedNamespace } from "store/safe-fs";
 
-import type { InvalidIdentityError, StagingError, TurnJsonWriteError, WorkspaceCollisionError } from "./model/staging-store"
+import type {
+  InvalidIdentityError,
+  StagingError,
+  TurnJsonWriteError,
+  WorkspaceCollisionError,
+} from "./model/staging-store";
 
-export type { InvalidIdentityError, StagingError, TurnJsonWriteError, WorkspaceCollisionError }
+export type { InvalidIdentityError, StagingError, TurnJsonWriteError, WorkspaceCollisionError };
 
 /**
  * An OS-absolute path handed in by the composition root — never a caller-built managed
  * relative path. `store/types.ts` (T19) owns the shared alias; this local declaration
  * keeps the submodule self-contained until then.
  */
-export type AbsPath = string
+export type AbsPath = string;
 
 /** Lowercase-hex SHA-256. */
-export type Sha256Hex = string
+export type Sha256Hex = string;
 
 /**
  * The narrow slice of `store/safe-fs`'s tested candidate-copy primitives (`model/candidate.ts`)
@@ -23,12 +28,15 @@ export type Sha256Hex = string
  * submodules' write primitives from silently drifting apart; `nodeStagingFsDeps` (in
  * `model/staging-store.ts`) wires it to `store/safe-fs`'s `nodeCandidateDeps` directly.
  */
-export type StagingFsDeps = Pick<CandidateDeps, "mkdirAll" | "mkdirNew" | "openSource" | "createNewSink" | "createHash" | "removeTree">
+export type StagingFsDeps = Pick<
+  CandidateDeps,
+  "mkdirAll" | "mkdirNew" | "openSource" | "createNewSink" | "createHash" | "removeTree"
+>;
 
 /** One canonical page to stage, already resolved to an absolute source path by the caller. */
 export interface StagingPageSource {
-  readonly pageSlug: PageSlug
-  readonly absSourcePath: AbsPath
+  readonly pageSlug: PageSlug;
+  readonly absSourcePath: AbsPath;
 }
 
 /**
@@ -37,32 +45,32 @@ export interface StagingPageSource {
  * (`store/safe-fs`'s `classifyNamespace`) before anything is copied.
  */
 export interface StagingRuntimeDoc {
-  readonly relPath: string
-  readonly absSourcePath: AbsPath
+  readonly relPath: string;
+  readonly absSourcePath: AbsPath;
 }
 
 /** A `project.toml` or canonical-page snapshot in the send-time read set — the same fact `store/transaction`'s `FileImage.file` variant carries, re-declared locally per this codebase's own convention (e.g. `store/transaction/model/plan.ts`'s `preparedAppendSchema`) rather than importing across `store/` submodules the plan does not wire as dependent. */
 export interface ReadSetFileSnapshot {
-  readonly sha256: Sha256Hex
-  readonly size: number
+  readonly sha256: Sha256Hex;
+  readonly size: number;
 }
 
 /** A JSONL append-base snapshot in the send-time read set — the exact length and prefix hash of the valid bytes read at admission time (mirrors `store/jsonl`'s `AppendBase`, re-declared locally for the same reason as {@link ReadSetFileSnapshot}). */
 export interface ReadSetAppendBase {
-  readonly length: number
-  readonly prefixSha256: Sha256Hex
+  readonly length: number;
+  readonly prefixSha256: Sha256Hex;
 }
 
 /** One canonical page's snapshot in the send-time read set. `snapshot: null` marks an expected-absence entry — a potential new target that did not exist at admission time (turn-durability §7.2 step 4: the CAS still re-checks that absence at finalization). */
 export interface CanonicalPageReadSetEntry {
-  readonly pageSlug: PageSlug
-  readonly snapshot: ReadSetFileSnapshot | null
+  readonly pageSlug: PageSlug;
+  readonly snapshot: ReadSetFileSnapshot | null;
 }
 
 /** One comments log's append base in the send-time read set — every page whose selection or sent pins contributed context (turn-durability §7.2 step 4). */
 export interface PinsReadSetEntry {
-  readonly pageSlug: PageSlug
-  readonly base: ReadSetAppendBase
+  readonly pageSlug: PageSlug;
+  readonly base: ReadSetAppendBase;
 }
 
 /**
@@ -87,10 +95,10 @@ export interface PinsReadSetEntry {
  * both without a collision.
  */
 export interface StagedTurnReadSet {
-  readonly manifest: ReadSetFileSnapshot | null
-  readonly canonicalPages: readonly CanonicalPageReadSetEntry[]
-  readonly chat: ReadSetAppendBase
-  readonly pins: readonly PinsReadSetEntry[]
+  readonly manifest: ReadSetFileSnapshot | null;
+  readonly canonicalPages: readonly CanonicalPageReadSetEntry[];
+  readonly chat: ReadSetAppendBase;
+  readonly pins: readonly PinsReadSetEntry[];
 }
 
 /**
@@ -102,22 +110,22 @@ export interface StagedTurnReadSet {
  * durably persisted in `turn.json` rather than kept only in caller memory.
  */
 export interface CreateTurnWorkspaceInput {
-  readonly canonicalProjectRoot: AbsPath
-  readonly projectId: string
-  readonly turnId: string
-  readonly targetChatId: string
-  readonly pages: readonly StagingPageSource[]
-  readonly manifestSlice: Uint8Array
-  readonly runtimeDocs: readonly StagingRuntimeDoc[]
-  readonly readSet: StagedTurnReadSet
+  readonly canonicalProjectRoot: AbsPath;
+  readonly projectId: string;
+  readonly turnId: string;
+  readonly targetChatId: string;
+  readonly pages: readonly StagingPageSource[];
+  readonly manifestSlice: Uint8Array;
+  readonly runtimeDocs: readonly StagingRuntimeDoc[];
+  readonly readSet: StagedTurnReadSet;
 }
 
 /** One file staged into the workspace, with the hash computed while it was copied. */
 export interface StagedFile {
-  readonly relPath: string
-  readonly namespace: ManagedNamespace
-  readonly sha256: Sha256Hex
-  readonly size: number
+  readonly relPath: string;
+  readonly namespace: ManagedNamespace;
+  readonly sha256: Sha256Hex;
+  readonly size: number;
 }
 
 /**
@@ -125,22 +133,22 @@ export interface StagedFile {
  * been durably persisted and verified.
  */
 export interface TurnWorkspace {
-  readonly turnId: string
-  readonly root: AbsPath
-  readonly turnJsonPath: AbsPath
-  readonly files: readonly StagedFile[]
-  readonly totalBytes: number
-  readonly readSet: StagedTurnReadSet
+  readonly turnId: string;
+  readonly root: AbsPath;
+  readonly turnJsonPath: AbsPath;
+  readonly files: readonly StagedFile[];
+  readonly totalBytes: number;
+  readonly readSet: StagedTurnReadSet;
 }
 
 /** Everything `createStagingStore` needs; every impure boundary is injected. */
 export interface StagingStoreDeps {
   /** The OS per-user termcraft state root that owns the sandbox parent (storage-identity §4). */
-  readonly userStateRoot: AbsPath
-  readonly clock: Clock
-  readonly fs: StagingFsDeps
+  readonly userStateRoot: AbsPath;
+  readonly clock: Clock;
+  readonly fs: StagingFsDeps;
   /** Durable atomic install (storage-identity §4.2) — `turn.json`'s only write path. */
-  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined
+  readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined;
 }
 
 /**
@@ -150,7 +158,7 @@ export interface StagingStoreDeps {
  * submodule owns only the pre-run creation of the turn's writable workspace.
  */
 export interface StagingStore {
-  createTurnWorkspace(input: CreateTurnWorkspaceInput): Promise<StagingError | TurnWorkspace>
+  createTurnWorkspace(input: CreateTurnWorkspaceInput): Promise<StagingError | TurnWorkspace>;
   /**
    * Release the machine-local workspace once its candidate is frozen (or the turn is
    * abandoned) — the "workspace retirement" half of phase-6 blocker B3's staging exposure
@@ -166,5 +174,5 @@ export interface StagingStore {
    * confirmation gap tracked outside this task); this method is the ordinary
    * confirmed-exit/abandoned-turn release path only.
    */
-  retireWorkspace(workspace: TurnWorkspace): Promise<StagingError | undefined>
+  retireWorkspace(workspace: TurnWorkspace): Promise<StagingError | undefined>;
 }

@@ -1,13 +1,13 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
-import type { PageSlug } from "entities/page"
 import type {
   AppendBaseV1,
   FileImageV1,
   ReadSetFileSnapshotV1,
   StagedTurnReadSetV1,
   TurnReadSetV1,
-} from "core/ports"
+} from "core/ports";
+import type { PageSlug } from "entities/page";
 
 /**
  * The 1:1 translation from the staging-time read set to the finalize-time one
@@ -42,8 +42,8 @@ export class ReadSetTranslationError extends errore.createTaggedError({
 
 /** `null` (staging: no such file) becomes an explicit absent image (finalization). */
 function toFileImage(snapshot: ReadSetFileSnapshotV1 | null): FileImageV1 {
-  if (snapshot === null) return { state: "absent" }
-  return { state: "file", sha256: snapshot.sha256, size: snapshot.size }
+  if (snapshot === null) return { state: "absent" };
+  return { state: "file", sha256: snapshot.sha256, size: snapshot.size };
 }
 
 /** Builds a map from keyed entries, refusing to silently collapse a duplicate key. */
@@ -53,15 +53,15 @@ function toMap<Entry, Value>(
   keyOf: (entry: Entry) => PageSlug,
   valueOf: (entry: Entry) => Value,
 ): ReadSetTranslationError | ReadonlyMap<PageSlug, Value> {
-  const map = new Map<PageSlug, Value>()
+  const map = new Map<PageSlug, Value>();
   for (const entry of entries) {
-    const key = keyOf(entry)
+    const key = keyOf(entry);
     if (map.has(key)) {
-      return new ReadSetTranslationError({ reason: `${label} lists page "${key}" more than once` })
+      return new ReadSetTranslationError({ reason: `${label} lists page "${key}" more than once` });
     }
-    map.set(key, valueOf(entry))
+    map.set(key, valueOf(entry));
   }
-  return map
+  return map;
 }
 
 /** Translates a staged read set into the shape the finalization CAS compares against. */
@@ -73,16 +73,16 @@ export function toFinalizeReadSet(
     "canonicalPages",
     (entry) => entry.pageSlug,
     (entry): FileImageV1 => toFileImage(entry.snapshot),
-  )
-  if (canonicalPages instanceof Error) return canonicalPages
+  );
+  if (canonicalPages instanceof Error) return canonicalPages;
 
   const pins = toMap(
     staged.pins,
     "pins",
     (entry) => entry.pageSlug,
     (entry): AppendBaseV1 => ({ length: entry.base.length, prefixSha256: entry.base.prefixSha256 }),
-  )
-  if (pins instanceof Error) return pins
+  );
+  if (pins instanceof Error) return pins;
 
   return {
     manifest: toFileImage(staged.manifest),
@@ -91,5 +91,5 @@ export function toFinalizeReadSet(
     // from a port and nothing guarantees the caller stopped holding it.
     chat: { length: staged.chat.length, prefixSha256: staged.chat.prefixSha256 },
     pins,
-  }
+  };
 }

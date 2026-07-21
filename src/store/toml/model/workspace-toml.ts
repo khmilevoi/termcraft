@@ -1,17 +1,18 @@
-import * as errore from "errore"
-import { z } from "zod"
+import * as errore from "errore";
+import { z } from "zod";
 
-import { pageSlugSchema } from "entities/page"
-import { canonicalUuidv7Schema } from "infrastructure/uuid"
-import { COLOR_CAPABILITIES, PREVIEW_SIZE_PRESETS } from "../types"
-import type { ResourceLimitOverrides, SessionCheckpoint, WorkspaceLocalState } from "../types"
-import { parseToml, readFormatVersion, tomlLine } from "./project-toml"
+import { pageSlugSchema } from "entities/page";
+import { canonicalUuidv7Schema } from "infrastructure/uuid";
+
+import { COLOR_CAPABILITIES, PREVIEW_SIZE_PRESETS } from "../types";
+import type { ResourceLimitOverrides, SessionCheckpoint, WorkspaceLocalState } from "../types";
+import { parseToml, readFormatVersion, tomlLine } from "./project-toml";
 
 /** The machine-local state file's name inside `.termcraft/` (storage-identity §6.1). */
-export const WORKSPACE_STATE_FILENAME = "workspace.local.toml"
+export const WORKSPACE_STATE_FILENAME = "workspace.local.toml";
 
 /** `workspace.local.toml` carries its OWN format counter, independent of `project.toml` (§12). */
-export const WORKSPACE_STATE_FORMAT_VERSION = 1
+export const WORKSPACE_STATE_FORMAT_VERSION = 1;
 
 /**
  * `workspace.local.toml` is unreadable: not TOML, a bad `format_version`, an unknown key,
@@ -37,9 +38,9 @@ export class WorkspaceStateTooNewError extends errore.createTaggedError({
   message: "$file has format_version $found, newer than the supported version $supported",
 }) {}
 
-const KiB = 1024
-const MiB = 1024 * KiB
-const GiB = 1024 * MiB
+const KiB = 1024;
+const MiB = 1024 * KiB;
+const GiB = 1024 * MiB;
 
 /**
  * The §6.1 resource-limit override ranges, sourced from the projections/scale design's
@@ -55,11 +56,11 @@ const RESOURCE_LIMIT_RANGES = {
   operationsLogRetentionSegments: ["operations_log_retention_segments", 2, 10], // projections §13
   silenceTimeoutSeconds: ["silence_timeout_seconds", 30, 600], // projections §12
   absoluteTurnDeadlineMinutes: ["absolute_turn_deadline_minutes", 10, 60], // projections §12
-} as const satisfies Record<keyof ResourceLimitOverrides, readonly [string, number, number]>
+} as const satisfies Record<keyof ResourceLimitOverrides, readonly [string, number, number]>;
 
-type ResourceLimitKey = keyof typeof RESOURCE_LIMIT_RANGES
+type ResourceLimitKey = keyof typeof RESOURCE_LIMIT_RANGES;
 
-const RESOURCE_LIMIT_KEYS = Object.keys(RESOURCE_LIMIT_RANGES) as readonly ResourceLimitKey[]
+const RESOURCE_LIMIT_KEYS = Object.keys(RESOURCE_LIMIT_RANGES) as readonly ResourceLimitKey[];
 
 /**
  * An in-range integer override. Zero, negative, fractional, and out-of-range values are
@@ -67,8 +68,8 @@ const RESOURCE_LIMIT_KEYS = Object.keys(RESOURCE_LIMIT_RANGES) as readonly Resou
  * through local configuration (projections §12).
  */
 function overrideSchema(key: ResourceLimitKey) {
-  const [, min, max] = RESOURCE_LIMIT_RANGES[key]
-  return z.number().int().min(min).max(max).optional()
+  const [, min, max] = RESOURCE_LIMIT_RANGES[key];
+  return z.number().int().min(min).max(max).optional();
 }
 
 const resourceLimitsSchema = z.strictObject({
@@ -80,10 +81,12 @@ const resourceLimitsSchema = z.strictObject({
   operations_log_retention_segments: overrideSchema("operationsLogRetentionSegments"),
   silence_timeout_seconds: overrideSchema("silenceTimeoutSeconds"),
   absolute_turn_deadline_minutes: overrideSchema("absoluteTurnDeadlineMinutes"),
-})
+});
 
 /** Lowercase-hex SHA-256, the form every termcraft digest is written in (storage-identity §8, §6.2). */
-const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/, { error: "must be a lowercase-hex SHA-256 digest" })
+const sha256HexSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, { error: "must be a lowercase-hex SHA-256 digest" });
 
 const sessionCheckpointSchema = z.strictObject({
   chat_id: canonicalUuidv7Schema,
@@ -94,7 +97,7 @@ const sessionCheckpointSchema = z.strictObject({
   session_id: z.string().min(1),
   record_count: z.number().int().min(0),
   prefix_hash: sha256HexSchema,
-})
+});
 
 /**
  * The §6.1 local field set. KEY SPELLINGS: §6.1 enumerates these in prose and pins no TOML
@@ -148,13 +151,23 @@ const workspaceStateSchema = z
     session_checkpoints: z.array(sessionCheckpointSchema).optional(),
   })
   .superRefine((state, ctx) => {
-    if (state.preview_size_mode === "custom" && (state.preview_custom_width === undefined || state.preview_custom_height === undefined)) {
-      ctx.addIssue({ code: "custom", message: "`custom` preview size mode requires both `preview_custom_width` and `preview_custom_height`" })
+    if (
+      state.preview_size_mode === "custom" &&
+      (state.preview_custom_width === undefined || state.preview_custom_height === undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "`custom` preview size mode requires both `preview_custom_width` and `preview_custom_height`",
+      });
     }
     if (state.preview_size_mode === "preset" && state.preview_size_preset === undefined) {
-      ctx.addIssue({ code: "custom", message: "`preset` preview size mode requires `preview_size_preset`" })
+      ctx.addIssue({
+        code: "custom",
+        message: "`preset` preview size mode requires `preview_size_preset`",
+      });
     }
-  })
+  });
 
 /**
  * The deterministic defaults §6.1 mandates when `workspace.local.toml` is absent or
@@ -181,24 +194,24 @@ export function defaultWorkspaceLocalState(): WorkspaceLocalState {
     fullscreenPreview: false,
     sessionCheckpoints: [],
     resourceLimits: {},
-  }
+  };
 }
 
 /** Emit `key = value` only when the value is set; an unset local choice is an ABSENT key, never a sentinel. */
 function optionalLine(key: string, value: string | number | null): readonly string[] {
-  if (value === null) return []
-  return [tomlLine(key, value)]
+  if (value === null) return [];
+  return [tomlLine(key, value)];
 }
 
 /** The `[resource_limits]` sub-table, emitted only when at least one override is set. */
 function resourceLimitLines(limits: ResourceLimitOverrides): readonly string[] {
   const entries = RESOURCE_LIMIT_KEYS.flatMap((key) => {
-    const value = limits[key]
-    if (value === undefined) return []
-    return [tomlLine(RESOURCE_LIMIT_RANGES[key][0], value)]
-  })
-  if (entries.length === 0) return []
-  return ["", "[resource_limits]", ...entries]
+    const value = limits[key];
+    if (value === undefined) return [];
+    return [tomlLine(RESOURCE_LIMIT_RANGES[key][0], value)];
+  });
+  if (entries.length === 0) return [];
+  return ["", "[resource_limits]", ...entries];
 }
 
 /** One `[[session_checkpoints]]` array-of-tables entry per checkpoint, in list order. */
@@ -211,7 +224,7 @@ function sessionCheckpointLines(checkpoints: readonly SessionCheckpoint[]): read
     tomlLine("session_id", checkpoint.sessionId),
     tomlLine("record_count", checkpoint.recordCount),
     tomlLine("prefix_hash", checkpoint.prefixHash),
-  ])
+  ]);
 }
 
 /**
@@ -240,26 +253,28 @@ export function encodeWorkspaceLocalState(state: WorkspaceLocalState): string {
     ...resourceLimitLines(state.resourceLimits),
     ...sessionCheckpointLines(state.sessionCheckpoints),
     "",
-  ].join("\n")
+  ].join("\n");
 }
 
 /** Maps the first Zod issue onto a `WorkspaceStateCorruptError`. */
 function toCorruptError(file: string, error: z.ZodError): WorkspaceStateCorruptError {
-  const issue = error.issues[0]
-  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE"
-  return new WorkspaceStateCorruptError({ file, code, reason: issue?.message ?? "invalid input" })
+  const issue = error.issues[0];
+  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE";
+  return new WorkspaceStateCorruptError({ file, code, reason: issue?.message ?? "invalid input" });
 }
 
 /** Narrow the parsed `[resource_limits]` table back to the camelCase override record. */
-function toResourceLimits(table: z.infer<typeof resourceLimitsSchema> | undefined): ResourceLimitOverrides {
-  if (table === undefined) return {}
+function toResourceLimits(
+  table: z.infer<typeof resourceLimitsSchema> | undefined,
+): ResourceLimitOverrides {
+  if (table === undefined) return {};
   return Object.fromEntries(
     RESOURCE_LIMIT_KEYS.flatMap((key) => {
-      const value = table[RESOURCE_LIMIT_RANGES[key][0]]
-      if (value === undefined) return []
-      return [[key, value] as const]
+      const value = table[RESOURCE_LIMIT_RANGES[key][0]];
+      if (value === undefined) return [];
+      return [[key, value] as const];
     }),
-  )
+  );
 }
 
 /**
@@ -272,23 +287,36 @@ export function decodeWorkspaceLocalState(
   text: string,
   file: string = WORKSPACE_STATE_FILENAME,
 ): WorkspaceLocalState | WorkspaceStateCorruptError | WorkspaceStateTooNewError {
-  const parsed = parseToml(text)
+  const parsed = parseToml(text);
   if (parsed instanceof Error) {
-    return new WorkspaceStateCorruptError({ file, code: "TOML_PARSE", reason: "file is not valid TOML", cause: parsed })
+    return new WorkspaceStateCorruptError({
+      file,
+      code: "TOML_PARSE",
+      reason: "file is not valid TOML",
+      cause: parsed,
+    });
   }
 
-  const version = readFormatVersion(parsed.value)
+  const version = readFormatVersion(parsed.value);
   if (version === null) {
-    return new WorkspaceStateCorruptError({ file, code: "format_version", reason: "missing or non-integer `format_version`" })
+    return new WorkspaceStateCorruptError({
+      file,
+      code: "format_version",
+      reason: "missing or non-integer `format_version`",
+    });
   }
   if (version > WORKSPACE_STATE_FORMAT_VERSION) {
-    return new WorkspaceStateTooNewError({ file, found: version, supported: WORKSPACE_STATE_FORMAT_VERSION })
+    return new WorkspaceStateTooNewError({
+      file,
+      found: version,
+      supported: WORKSPACE_STATE_FORMAT_VERSION,
+    });
   }
 
-  const result = workspaceStateSchema.safeParse(parsed.value)
-  if (!result.success) return toCorruptError(file, result.error)
+  const result = workspaceStateSchema.safeParse(parsed.value);
+  if (!result.success) return toCorruptError(file, result.error);
 
-  const data = result.data
+  const data = result.data;
   return {
     formatVersion: WORKSPACE_STATE_FORMAT_VERSION,
     activePageSlug: data.active_page_slug ?? null,
@@ -312,23 +340,23 @@ export function decodeWorkspaceLocalState(
       prefixHash: entry.prefix_hash,
     })),
     resourceLimits: toResourceLimits(data.resource_limits),
-  }
+  };
 }
 
 /** The outcome of reading `workspace.local.toml` under the §6.1 policy. */
 export interface WorkspaceStateLoad {
   /** Always usable: the decoded state, or the deterministic defaults. */
-  readonly state: WorkspaceLocalState
+  readonly state: WorkspaceLocalState;
   /** `true` when no file existed — defaults apply and nothing is reported (§6.1). */
-  readonly missing: boolean
+  readonly missing: boolean;
   /**
    * Non-null when the file existed but was unusable. The caller REPORTS this; it must not
    * rewrite, clear, or reset the file — §6.1 preserves it "until the user explicitly
    * resets it".
    */
-  readonly corrupt: WorkspaceStateCorruptError | WorkspaceStateTooNewError | null
+  readonly corrupt: WorkspaceStateCorruptError | WorkspaceStateTooNewError | null;
   /** The exact on-disk text when `corrupt` is set, so a reporter can quote it without re-reading. */
-  readonly preservedText: string | null
+  readonly preservedText: string | null;
 }
 
 /**
@@ -345,16 +373,29 @@ export interface WorkspaceStateLoad {
  * It is pure by design (`text` in, value out) — the impure read belongs to the caller's
  * `SafeProjectFs`, which owns the managed-path rules.
  */
-export function loadWorkspaceLocalState(input: { readonly text: string | null; readonly file?: string }): WorkspaceStateLoad {
-  const file = input.file ?? WORKSPACE_STATE_FILENAME
+export function loadWorkspaceLocalState(input: {
+  readonly text: string | null;
+  readonly file?: string;
+}): WorkspaceStateLoad {
+  const file = input.file ?? WORKSPACE_STATE_FILENAME;
   if (input.text === null) {
-    return { state: defaultWorkspaceLocalState(), missing: true, corrupt: null, preservedText: null }
+    return {
+      state: defaultWorkspaceLocalState(),
+      missing: true,
+      corrupt: null,
+      preservedText: null,
+    };
   }
 
-  const decoded = decodeWorkspaceLocalState(input.text, file)
+  const decoded = decodeWorkspaceLocalState(input.text, file);
   if (decoded instanceof Error) {
-    return { state: defaultWorkspaceLocalState(), missing: false, corrupt: decoded, preservedText: input.text }
+    return {
+      state: defaultWorkspaceLocalState(),
+      missing: false,
+      corrupt: decoded,
+      preservedText: input.text,
+    };
   }
 
-  return { state: decoded, missing: false, corrupt: null, preservedText: null }
+  return { state: decoded, missing: false, corrupt: null, preservedText: null };
 }

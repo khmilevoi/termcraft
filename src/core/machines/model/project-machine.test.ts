@@ -1,12 +1,13 @@
-import { describe, expect, test } from "bun:test"
-import { context } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
+
+import { context } from "@reatom/core";
 
 import {
   PROJECT_ACTION_FULL_NAME,
-  reatomProjectStateMachine,
   type ProjectAction,
   type ProjectState,
-} from "./project-machine"
+  reatomProjectStateMachine,
+} from "./project-machine";
 
 /**
  * kernel-command-contract §7.1 (lines 189-228), §13.1.
@@ -26,7 +27,7 @@ const PROJECT_STATES: readonly ProjectState[] = [
   "ready",
   "blocked",
   "closing",
-]
+];
 
 const PROJECT_ACTIONS: readonly ProjectAction[] = [
   "beginCreate",
@@ -43,13 +44,13 @@ const PROJECT_ACTIONS: readonly ProjectAction[] = [
   "beginClose",
   "finishClose",
   "retryOpen",
-]
+];
 
 interface ExpectedEdge {
-  readonly from: ProjectState
-  readonly action: ProjectAction
-  readonly to: ProjectState
-  readonly noOp?: boolean
+  readonly from: ProjectState;
+  readonly action: ProjectAction;
+  readonly to: ProjectState;
+  readonly noOp?: boolean;
 }
 
 // One entry per §7.1 table row, multi-source rows expanded to one edge per source, and the
@@ -76,80 +77,80 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "blocked", action: "beginClose", to: "closing" },
   { from: "closing", action: "finishClose", to: "closed" },
   { from: "blocked", action: "retryOpen", to: "opening" },
-]
+];
 
-const ILLEGAL_CODE = "PROJECT_NOT_READY"
+const ILLEGAL_CODE = "PROJECT_NOT_READY";
 
 function findExpected(from: ProjectState, action: ProjectAction): ExpectedEdge | undefined {
-  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action)
+  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action);
 }
 
 /** Drives a fresh machine straight to `phase` via a known-legal edge path. */
 function machineAt(phase: ProjectState) {
-  const m = reatomProjectStateMachine()
-  if (phase === "closed") return m
+  const m = reatomProjectStateMachine();
+  if (phase === "closed") return m;
   const path: Record<Exclude<ProjectState, "closed">, readonly ProjectAction[]> = {
     opening: ["beginOpen"],
     recovering: ["beginOpen", "beginRecovery"],
     ready: ["beginOpen", "beginRecovery", "finishOpen"],
     blocked: ["beginOpen", "beginRecovery", "blockOpen"],
     closing: ["beginOpen", "beginRecovery", "finishOpen", "beginClose"],
-  }
-  for (const action of path[phase]) m.apply(action)
-  return m
+  };
+  for (const action of path[phase]) m.apply(action);
+  return m;
 }
 
 describe("reatomProjectStateMachine", () => {
   test("starts closed", () => {
     context.start(() => {
-      expect(reatomProjectStateMachine().phase()).toBe("closed")
-    })
-  })
+      expect(reatomProjectStateMachine().phase()).toBe("closed");
+    });
+  });
 
   test("the phase atom carries the §6 trace root", () => {
     context.start(() => {
-      expect(reatomProjectStateMachine().phaseAtom.name).toBe("kernel.project.state")
-    })
-  })
+      expect(reatomProjectStateMachine().phaseAtom.name).toBe("kernel.project.state");
+    });
+  });
 
   test("the hand-counted §7.1 edge total is 18", () => {
-    expect(EXPECTED_EDGES.length).toBe(18)
-  })
+    expect(EXPECTED_EDGES.length).toBe(18);
+  });
 
   test("every (state, action) pair matches the §7.1 table exactly", () => {
     context.start(() => {
       for (const from of PROJECT_STATES) {
         for (const action of PROJECT_ACTIONS) {
-          const expected = findExpected(from, action)
-          const m = machineAt(from)
-          const outcome = m.apply(action)
+          const expected = findExpected(from, action);
+          const m = machineAt(from);
+          const outcome = m.apply(action);
 
           if (expected === undefined) {
-            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action })
-            expect(m.phase()).toBe(from)
-            continue
+            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action });
+            expect(m.phase()).toBe(from);
+            continue;
           }
 
           if (expected.noOp === true) {
-            expect(outcome).toEqual({ kind: "no-op", phase: from })
+            expect(outcome).toEqual({ kind: "no-op", phase: from });
           } else {
-            expect(outcome).toEqual({ kind: "changed", from, to: expected.to })
+            expect(outcome).toEqual({ kind: "changed", from, to: expected.to });
           }
-          expect(m.phase()).toBe(expected.to)
+          expect(m.phase()).toBe(expected.to);
         }
       }
-    })
-  })
+    });
+  });
 
   test("two machines built by the factory are independent", () => {
     context.start(() => {
-      const a = reatomProjectStateMachine()
-      const b = reatomProjectStateMachine()
-      a.apply("beginOpen")
-      expect(a.phase()).toBe("opening")
-      expect(b.phase()).toBe("closed")
-    })
-  })
+      const a = reatomProjectStateMachine();
+      const b = reatomProjectStateMachine();
+      a.apply("beginOpen");
+      expect(a.phase()).toBe("opening");
+      expect(b.phase()).toBe("closed");
+    });
+  });
 
   test("PROJECT_ACTION_FULL_NAME names every action with its kernel.project.<verb> form", () => {
     // Independent hand-transcription of §7.1's dotted action names, so a typo in the
@@ -169,11 +170,11 @@ describe("reatomProjectStateMachine", () => {
       beginClose: "kernel.project.beginClose",
       finishClose: "kernel.project.finishClose",
       retryOpen: "kernel.project.retryOpen",
-    }
+    };
     for (const action of PROJECT_ACTIONS) {
-      expect(PROJECT_ACTION_FULL_NAME[action]).toBe(expectedFullNames[action])
+      expect(PROJECT_ACTION_FULL_NAME[action]).toBe(expectedFullNames[action]);
     }
-  })
+  });
 
   test("beginPageRemovePlan from ready is phase-legal; the trusted/no-active-turn/listed-page precondition is the caller's, not the table's", () => {
     // §7.1: "Requires trusted writable state, no active turn, and a listed page." A
@@ -181,8 +182,12 @@ describe("reatomProjectStateMachine", () => {
     // phase level — those preconditions are guard-layer concerns evaluated before the
     // action ever reaches this machine.
     context.start(() => {
-      const m = machineAt("ready")
-      expect(m.apply("beginPageRemovePlan")).toEqual({ kind: "changed", from: "ready", to: "ready" })
-    })
-  })
-})
+      const m = machineAt("ready");
+      expect(m.apply("beginPageRemovePlan")).toEqual({
+        kind: "changed",
+        from: "ready",
+        to: "ready",
+      });
+    });
+  });
+});

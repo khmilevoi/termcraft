@@ -1,7 +1,7 @@
-import { action, atom, type Atom } from "@reatom/core"
+import { type Atom, action, atom } from "@reatom/core";
 
-import { encodeUint64String, type UInt64String, type UUIDv7 } from "core/protocol"
-import { uuidv7 } from "infrastructure/uuid"
+import { type UInt64String, type UUIDv7, encodeUint64String } from "core/protocol";
+import { uuidv7 } from "infrastructure/uuid";
 
 /**
  * The Kernel's two independent counters (kernel-command-contract §4).
@@ -22,18 +22,18 @@ import { uuidv7 } from "infrastructure/uuid"
  */
 export interface KernelCounters {
   /** UUIDv7 identifying this Kernel process lifetime (§4). Carries no reconnect semantics. */
-  readonly kernelInstanceId: UUIDv7
+  readonly kernelInstanceId: UUIDv7;
   /** The current authoritative state revision, DTO-encoded. */
-  readonly stateRevision: () => UInt64String
+  readonly stateRevision: () => UInt64String;
   /** The last assigned event sequence, DTO-encoded. */
-  readonly eventSeq: () => UInt64String
+  readonly eventSeq: () => UInt64String;
   /** Advances the revision by exactly one and returns the new value. */
-  readonly advanceRevision: () => UInt64String
+  readonly advanceRevision: () => UInt64String;
   /** Assigns the next event sequence and returns it. */
-  readonly nextEventSeq: () => UInt64String
+  readonly nextEventSeq: () => UInt64String;
   /** The underlying atoms, exposed so the projector and tests can observe them by name. */
-  readonly stateRevisionAtom: Atom<bigint>
-  readonly eventSeqAtom: Atom<bigint>
+  readonly stateRevisionAtom: Atom<bigint>;
+  readonly eventSeqAtom: Atom<bigint>;
 }
 
 /**
@@ -49,20 +49,20 @@ export interface KernelCounters {
  * the result, which is the value the caller must stamp onto the envelope it is building.
  */
 export function createKernelCounters(): KernelCounters {
-  const stateRevisionAtom = atom(0n, "kernel.stateRevision")
-  const eventSeqAtom = atom(0n, "kernel.eventSeq")
+  const stateRevisionAtom = atom(0n, "kernel.stateRevision");
+  const eventSeqAtom = atom(0n, "kernel.eventSeq");
 
   const advanceRevision = action(() => {
-    const next = stateRevisionAtom() + 1n
-    stateRevisionAtom.set(next)
-    return encodeUint64String(next)
-  }, "kernel.advanceRevision")
+    const next = stateRevisionAtom() + 1n;
+    stateRevisionAtom.set(next);
+    return encodeUint64String(next);
+  }, "kernel.advanceRevision");
 
   const nextEventSeq = action(() => {
-    const next = eventSeqAtom() + 1n
-    eventSeqAtom.set(next)
-    return encodeUint64String(next)
-  }, "kernel.nextEventSeq")
+    const next = eventSeqAtom() + 1n;
+    eventSeqAtom.set(next);
+    return encodeUint64String(next);
+  }, "kernel.nextEventSeq");
 
   return {
     kernelInstanceId: uuidv7(),
@@ -72,5 +72,5 @@ export function createKernelCounters(): KernelCounters {
     nextEventSeq,
     stateRevisionAtom,
     eventSeqAtom,
-  }
+  };
 }

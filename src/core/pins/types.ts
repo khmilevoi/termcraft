@@ -13,4 +13,4 @@
  * 6G to plug into; only its own capability guard (frame/geometry token verification) and
  * mutation function are missing.
  */
-export {}
+export {};

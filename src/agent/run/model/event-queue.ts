@@ -1,11 +1,11 @@
-import type { AgentEvent, TurnFence } from "entities/turn"
-import type { FencedEvent } from "agent/types"
+import type { FencedEvent } from "agent/types";
+import type { AgentEvent, TurnFence } from "entities/turn";
 
 /** A minimal single-reader async queue bridging a run's driver to `AgentRun.events`. */
 export interface EventQueue {
-  push(event: AgentEvent): void
-  finish(): void
-  readonly iterable: AsyncIterable<FencedEvent>
+  push(event: AgentEvent): void;
+  finish(): void;
+  readonly iterable: AsyncIterable<FencedEvent>;
 }
 
 /**
@@ -28,54 +28,54 @@ export interface EventQueue {
  *    retain output forever once the one reader is provably gone.
  */
 export function createEventQueue(fence: TurnFence): EventQueue {
-  const buffered: FencedEvent[] = []
-  let waitingReader: ((result: IteratorResult<FencedEvent>) => void) | null = null
-  let done = false
-  let abandoned = false
-  let abandonedDropLogged = false
-  let readerTaken = false
+  const buffered: FencedEvent[] = [];
+  let waitingReader: ((result: IteratorResult<FencedEvent>) => void) | null = null;
+  let done = false;
+  let abandoned = false;
+  let abandonedDropLogged = false;
+  let readerTaken = false;
 
   function push(event: AgentEvent): void {
     if (abandoned) {
       if (!abandonedDropLogged) {
-        abandonedDropLogged = true
-        console.warn("agent/run: events consumer is gone (break/return); dropping further events")
+        abandonedDropLogged = true;
+        console.warn("agent/run: events consumer is gone (break/return); dropping further events");
       }
-      return
+      return;
     }
-    const item: FencedEvent = { fence, event }
+    const item: FencedEvent = { fence, event };
     if (waitingReader !== null) {
-      const resolve = waitingReader
-      waitingReader = null
-      resolve({ value: item, done: false })
-      return
+      const resolve = waitingReader;
+      waitingReader = null;
+      resolve({ value: item, done: false });
+      return;
     }
-    buffered.push(item)
+    buffered.push(item);
   }
 
   function finish(): void {
-    done = true
+    done = true;
     if (waitingReader !== null) {
-      const resolve = waitingReader
-      waitingReader = null
-      resolve({ value: undefined, done: true })
+      const resolve = waitingReader;
+      waitingReader = null;
+      resolve({ value: undefined, done: true });
     }
   }
 
   function next(): Promise<IteratorResult<FencedEvent>> {
-    const buffered0 = buffered.shift()
-    if (buffered0 !== undefined) return Promise.resolve({ value: buffered0, done: false })
-    if (done) return Promise.resolve({ value: undefined, done: true })
+    const buffered0 = buffered.shift();
+    if (buffered0 !== undefined) return Promise.resolve({ value: buffered0, done: false });
+    if (done) return Promise.resolve({ value: undefined, done: true });
     return new Promise((resolve) => {
-      waitingReader = resolve
-    })
+      waitingReader = resolve;
+    });
   }
 
   function returnReader(): Promise<IteratorResult<FencedEvent>> {
-    abandoned = true
-    buffered.length = 0 // nothing will ever read this again — release it now
-    waitingReader = null
-    return Promise.resolve({ value: undefined, done: true })
+    abandoned = true;
+    buffered.length = 0; // nothing will ever read this again — release it now
+    waitingReader = null;
+    return Promise.resolve({ value: undefined, done: true });
   }
 
   return {
@@ -87,12 +87,15 @@ export function createEventQueue(fence: TurnFence): EventQueue {
           // A second concurrent reader fails loudly instead of sharing
           // `waitingReader` with the first and deadlocking it.
           return {
-            next: () => Promise.reject(new Error("agent/run: AgentRun.events supports only one reader at a time")),
-          }
+            next: () =>
+              Promise.reject(
+                new Error("agent/run: AgentRun.events supports only one reader at a time"),
+              ),
+          };
         }
-        readerTaken = true
-        return { next, return: returnReader }
+        readerTaken = true;
+        return { next, return: returnReader };
       },
     },
-  }
+  };
 }

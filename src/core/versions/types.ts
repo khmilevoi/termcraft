@@ -12,4 +12,4 @@
  * `core/versions` grows (see the roadmap's `turns/`, `export/`, `chats/` folder list) is
  * expected to add real shared types here.
  */
-export {}
+export {};

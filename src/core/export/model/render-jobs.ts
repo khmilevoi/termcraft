@@ -1,9 +1,15 @@
-import type { ExportRenderKeyV1, ExportRenderPort, ExportRenderResultV1, ExportRenderTaskV1, RenderCache } from "core/ports"
-import type { FailureDtoV1 } from "core/protocol"
-import type { PageSlug, Size } from "entities/page"
+import type {
+  ExportRenderKeyV1,
+  ExportRenderPort,
+  ExportRenderResultV1,
+  ExportRenderTaskV1,
+  RenderCache,
+} from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
+import type { PageSlug, Size } from "entities/page";
 
-import type { ExportPageSnapshotV1, ExportSnapshotV1 } from "../types"
-import { computeExportSizeLadder } from "./size-ladder"
+import type { ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
+import { computeExportSizeLadder } from "./size-ladder";
 
 /**
  * The "rendering" phase's own dispatch (kernel-command-contract §7.5, §11.4, §13.4). No
@@ -27,21 +33,25 @@ import { computeExportSizeLadder } from "./size-ladder"
  */
 
 export interface ExportRenderJobDeps {
-  readonly renderPort: ExportRenderPort
-  readonly renderCache: RenderCache
-  readonly rendererVersion: string
+  readonly renderPort: ExportRenderPort;
+  readonly renderCache: RenderCache;
+  readonly rendererVersion: string;
 }
 
 export interface ExportRenderJobResultV1 {
-  readonly manifestIndex: number
-  readonly pageSlug: PageSlug
-  readonly size: Size
-  readonly outcome: FailureDtoV1 | ExportRenderResultV1
-  readonly cacheHit: boolean
+  readonly manifestIndex: number;
+  readonly pageSlug: PageSlug;
+  readonly size: Size;
+  readonly outcome: FailureDtoV1 | ExportRenderResultV1;
+  readonly cacheHit: boolean;
 }
 
 /** The §10.2 render-cache key for one (page, size) render. */
-export function buildExportRenderKey(page: ExportPageSnapshotV1, size: Size, rendererVersion: string): ExportRenderKeyV1 {
+export function buildExportRenderKey(
+  page: ExportPageSnapshotV1,
+  size: Size,
+  rendererVersion: string,
+): ExportRenderKeyV1 {
   return {
     sourceHash: page.sourceHash,
     kitApiVersion: page.kitApiVersion,
@@ -52,7 +62,7 @@ export function buildExportRenderKey(page: ExportPageSnapshotV1, size: Size, ren
     // reserves the field so a future flag (e.g. a deterministic-render toggle) does not
     // require a key-shape migration.
     flags: {},
-  }
+  };
 }
 
 function buildExportRenderTask(page: ExportPageSnapshotV1, size: Size): ExportRenderTaskV1 {
@@ -64,39 +74,69 @@ function buildExportRenderTask(page: ExportPageSnapshotV1, size: Size): ExportRe
     size,
     theme: page.theme,
     manifestIndex: page.manifestIndex,
-  }
+  };
 }
 
-async function renderJob(deps: ExportRenderJobDeps, page: ExportPageSnapshotV1, size: Size): Promise<ExportRenderJobResultV1> {
-  const key = buildExportRenderKey(page, size, deps.rendererVersion)
+async function renderJob(
+  deps: ExportRenderJobDeps,
+  page: ExportPageSnapshotV1,
+  size: Size,
+): Promise<ExportRenderJobResultV1> {
+  const key = buildExportRenderKey(page, size, deps.rendererVersion);
 
-  const cached = await deps.renderCache.get(key)
+  const cached = await deps.renderCache.get(key);
   if (cached !== null && "code" in cached) {
     // A cache I/O fault is never fatal to a render — it degrades to a miss, logged so the
     // fault stays visible per errore's rule against silently swallowing it.
-    console.warn(`render-jobs: render cache read failed for page "${page.pageSlug}" — treating as a miss: ${cached.safeMessage}`)
+    console.warn(
+      `render-jobs: render cache read failed for page "${page.pageSlug}" — treating as a miss: ${cached.safeMessage}`,
+    );
   } else if (cached !== null) {
     return {
       manifestIndex: page.manifestIndex,
       pageSlug: page.pageSlug,
       size,
-      outcome: { manifestIndex: page.manifestIndex, styledFrame: cached.styledFrame, textFrame: cached.textFrame, layout: cached.layout },
+      outcome: {
+        manifestIndex: page.manifestIndex,
+        styledFrame: cached.styledFrame,
+        textFrame: cached.textFrame,
+        layout: cached.layout,
+      },
       cacheHit: true,
-    }
+    };
   }
 
-  const task = buildExportRenderTask(page, size)
-  const rendered = await deps.renderPort.renderOne(task)
+  const task = buildExportRenderTask(page, size);
+  const rendered = await deps.renderPort.renderOne(task);
   if ("code" in rendered) {
-    return { manifestIndex: page.manifestIndex, pageSlug: page.pageSlug, size, outcome: rendered, cacheHit: false }
+    return {
+      manifestIndex: page.manifestIndex,
+      pageSlug: page.pageSlug,
+      size,
+      outcome: rendered,
+      cacheHit: false,
+    };
   }
 
-  const putFailure = await deps.renderCache.put({ key, styledFrame: rendered.styledFrame, textFrame: rendered.textFrame, layout: rendered.layout })
+  const putFailure = await deps.renderCache.put({
+    key,
+    styledFrame: rendered.styledFrame,
+    textFrame: rendered.textFrame,
+    layout: rendered.layout,
+  });
   if (putFailure !== undefined) {
-    console.warn(`render-jobs: failed to populate the render cache for page "${page.pageSlug}": ${putFailure.safeMessage}`)
+    console.warn(
+      `render-jobs: failed to populate the render cache for page "${page.pageSlug}": ${putFailure.safeMessage}`,
+    );
   }
 
-  return { manifestIndex: page.manifestIndex, pageSlug: page.pageSlug, size, outcome: rendered, cacheHit: false }
+  return {
+    manifestIndex: page.manifestIndex,
+    pageSlug: page.pageSlug,
+    size,
+    outcome: rendered,
+    cacheHit: false,
+  };
 }
 
 /** Dispatches every (page, ladder size) render for `snapshot`, ordered by (manifestIndex, w, h) — never completion order. */
@@ -104,21 +144,21 @@ export async function runExportRendering(
   deps: ExportRenderJobDeps,
   snapshot: ExportSnapshotV1,
 ): Promise<readonly ExportRenderJobResultV1[]> {
-  const byPageSlug = new Map(snapshot.pages.map((page) => [page.pageSlug, page]))
-  const ladder = computeExportSizeLadder(snapshot.pages)
+  const byPageSlug = new Map(snapshot.pages.map((page) => [page.pageSlug, page]));
+  const ladder = computeExportSizeLadder(snapshot.pages);
 
   const jobs = ladder.map((entry) => {
-    const page = byPageSlug.get(entry.pageSlug)
+    const page = byPageSlug.get(entry.pageSlug);
     if (page === undefined) {
       // Unreachable: the ladder is derived FROM `snapshot.pages`, so every entry's
       // `pageSlug` is present in this map by construction. Kept explicit rather than a
       // non-null assertion, per errore's rule against silently trusting an invariant.
-      console.warn(`render-jobs: ladder entry for unknown page "${entry.pageSlug}" — skipped`)
-      return null
+      console.warn(`render-jobs: ladder entry for unknown page "${entry.pageSlug}" — skipped`);
+      return null;
     }
-    return renderJob(deps, page, entry.size)
-  })
+    return renderJob(deps, page, entry.size);
+  });
 
-  const dispatched = jobs.filter((job): job is Promise<ExportRenderJobResultV1> => job !== null)
-  return Promise.all(dispatched)
+  const dispatched = jobs.filter((job): job is Promise<ExportRenderJobResultV1> => job !== null);
+  return Promise.all(dispatched);
 }

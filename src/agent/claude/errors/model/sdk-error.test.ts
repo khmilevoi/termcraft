@@ -1,15 +1,17 @@
-import { expect, test } from "bun:test"
-import * as errore from "errore"
-import { ClaudeSdkError } from "./sdk-error"
+import { expect, test } from "bun:test";
+
+import * as errore from "errore";
+
+import { ClaudeSdkError } from "./sdk-error";
 
 test("ClaudeSdkError carries a stable code and preserves cause", () => {
-  const cause = new Error("spawn ENOENT")
-  const err = new ClaudeSdkError({ code: "SPAWN_FAILED", reason: "cli not found", cause })
-  expect(err).toBeInstanceOf(Error)
-  expect(err._tag).toBe("ClaudeSdkError")
-  expect(err.code).toBe("SPAWN_FAILED")
-  expect(err.cause).toBe(cause)
-})
+  const cause = new Error("spawn ENOENT");
+  const err = new ClaudeSdkError({ code: "SPAWN_FAILED", reason: "cli not found", cause });
+  expect(err).toBeInstanceOf(Error);
+  expect(err._tag).toBe("ClaudeSdkError");
+  expect(err.code).toBe("SPAWN_FAILED");
+  expect(err.cause).toBe(cause);
+});
 
 // NOTE: `findCause(Error)` is not useful here — the installed errore@0.14.1
 // `findCause` checks the error itself before walking `.cause`, and every
@@ -21,10 +23,10 @@ test("ClaudeSdkError carries a stable code and preserves cause", () => {
 // cause-chain walk.
 test("findCause walks past ClaudeSdkError to a specific cause class", () => {
   class SpawnFailure extends Error {}
-  const cause = new SpawnFailure("spawn ENOENT")
-  const err = new ClaudeSdkError({ code: "SPAWN_FAILED", reason: "cli not found", cause })
-  expect(err.findCause(SpawnFailure)).toBe(cause)
-})
+  const cause = new SpawnFailure("spawn ENOENT");
+  const err = new ClaudeSdkError({ code: "SPAWN_FAILED", reason: "cli not found", cause });
+  expect(err.findCause(SpawnFailure)).toBe(cause);
+});
 
 test("isAbortError walks a ClaudeSdkError cause chain", () => {
   class Timeout extends errore.createTaggedError({
@@ -32,9 +34,13 @@ test("isAbortError walks a ClaudeSdkError cause chain", () => {
     message: "t",
     extends: errore.AbortError,
   }) {}
-  const wrapped = new ClaudeSdkError({ code: "STREAM_FAILED", reason: "aborted", cause: new Timeout({}) })
-  expect(errore.isAbortError(wrapped)).toBe(true)
-})
+  const wrapped = new ClaudeSdkError({
+    code: "STREAM_FAILED",
+    reason: "aborted",
+    cause: new Timeout({}),
+  });
+  expect(errore.isAbortError(wrapped)).toBe(true);
+});
 
 test("code is constrained to AgentErrorCode — a typo'd code does not typecheck", () => {
   // Compile-time check, verified by `bun x tsc --noEmit` (bun test strips
@@ -45,7 +51,7 @@ test("code is constrained to AgentErrorCode — a typo'd code does not typecheck
   // any `err.code` switch would fall through unnoticed at runtime.
   const createWithTypoedCode = () => {
     // @ts-expect-error — "STREAM_FAILURE" is not a valid AgentErrorCode (typo for STREAM_FAILED)
-    return new ClaudeSdkError({ code: "STREAM_FAILURE", reason: "x" })
-  }
-  expect(typeof createWithTypoedCode).toBe("function")
-})
+    return new ClaudeSdkError({ code: "STREAM_FAILURE", reason: "x" });
+  };
+  expect(typeof createWithTypoedCode).toBe("function");
+});

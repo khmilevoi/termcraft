@@ -1,5 +1,5 @@
-import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol"
-import type { PageSlug } from "entities/page"
+import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
 /**
  * The page read/write surface `core` consumes, split the same way as `chat-store.ts`:
@@ -23,21 +23,21 @@ import type { PageSlug } from "entities/page"
  */
 
 export interface PageSourceV1 {
-  readonly bytes: Uint8Array
-  readonly sourceHash: Sha256Hex
+  readonly bytes: Uint8Array;
+  readonly sourceHash: Sha256Hex;
 }
 
 export interface PageReader {
-  readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | PageSourceV1>
+  readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | PageSourceV1>;
   /** = the manifest's `pages` array (the manifest is the sole ordering authority, storage-identity §5.1). */
-  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>
+  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>;
 }
 
 export interface PageMutations {
   /** `page.renameTitle` (§8.2): "Mechanically rewrite static `meta.title` through one `project-mutation` transaction." */
-  renameTitle(pageSlug: PageSlug, title: string): Promise<FailureDtoV1 | undefined>
+  renameTitle(pageSlug: PageSlug, title: string): Promise<FailureDtoV1 | undefined>;
   /** `page.reorder` (§8.2): "Replace only portable page order through one transaction." `order` is the exact permutation of already-listed slugs — never a subset or an added/removed identity. */
-  reorder(order: readonly PageSlug[]): Promise<FailureDtoV1 | undefined>
+  reorder(order: readonly PageSlug[]): Promise<FailureDtoV1 | undefined>;
   /** `page.removeConfirm` (§8.2): "Revalidate the complete active plan under the project-write mutex and execute its one bound `project-mutation`." */
-  remove(plan: PageRemovePlanV1): Promise<FailureDtoV1 | undefined>
+  remove(plan: PageRemovePlanV1): Promise<FailureDtoV1 | undefined>;
 }

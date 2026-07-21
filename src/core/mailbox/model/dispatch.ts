@@ -1,9 +1,8 @@
-import { wrap } from "@reatom/core"
-import * as errore from "errore"
+import { wrap } from "@reatom/core";
+import * as errore from "errore";
 
+import type { KernelCounters } from "core/kernel/model/counters";
 import {
-  decodeCommandEnvelope,
-  primaryReason,
   type AcceptedCommandV1,
   type CanonicalHashError,
   type CommandDecodeError,
@@ -15,14 +14,24 @@ import {
   type UInt64String,
   type UUIDv7,
   type UnavailableReason,
-} from "core/protocol"
-import type { KernelCounters } from "core/kernel/model/counters"
+  decodeCommandEnvelope,
+  primaryReason,
+} from "core/protocol";
 
-import { DedupeRejectionError, type DedupeLedger } from "./dedupe-ledger"
-import type { EventBus } from "./event-bus"
-import { checkRevisionGuard, type RevisionGuardCommand, type RevisionGuardDecision, type TurnCancelProbe } from "./revision-guard"
-
-import type { GuardRegistry, HandlerRegistry, KernelStateSnapshot, TargetExtractor } from "../types"
+import type {
+  GuardRegistry,
+  HandlerRegistry,
+  KernelStateSnapshot,
+  TargetExtractor,
+} from "../types";
+import { type DedupeLedger, DedupeRejectionError } from "./dedupe-ledger";
+import type { EventBus } from "./event-bus";
+import {
+  type RevisionGuardCommand,
+  type RevisionGuardDecision,
+  type TurnCancelProbe,
+  checkRevisionGuard,
+} from "./revision-guard";
 
 /**
  * The Kernel command mailbox's dispatch pipeline (kernel-command-contract §12.1).
@@ -91,19 +100,21 @@ export class MailboxHandlerError extends errore.createTaggedError({
 }) {}
 
 export interface DispatchDeps {
-  readonly counters: KernelCounters
-  readonly dedupeLedger: DedupeLedger
-  readonly eventBus: EventBus
-  readonly cancelProbe: TurnCancelProbe
+  readonly counters: KernelCounters;
+  readonly dedupeLedger: DedupeLedger;
+  readonly eventBus: EventBus;
+  readonly cancelProbe: TurnCancelProbe;
   /** §10.2's `currentKernelState`, read fresh on every command — see `../types`. */
-  readonly readKernelState: () => KernelStateSnapshot
-  readonly extractTarget: TargetExtractor
-  readonly evaluateGuard: GuardRegistry
-  readonly handle: HandlerRegistry
+  readonly readKernelState: () => KernelStateSnapshot;
+  readonly extractTarget: TargetExtractor;
+  readonly evaluateGuard: GuardRegistry;
+  readonly handle: HandlerRegistry;
 }
 
 export interface Dispatch {
-  readonly dispatch: (raw: unknown) => Promise<CommandDecodeError | CanonicalHashError | CommandResultV1>
+  readonly dispatch: (
+    raw: unknown,
+  ) => Promise<CommandDecodeError | CanonicalHashError | CommandResultV1>;
 }
 
 /**
@@ -132,8 +143,11 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
    * (`kernel.advanceRevision`, `mailbox.publishTransition`, and in 6C each state machine's
    * transition), which is where the trace names that matter live.
    */
-  function applyTransition(envelope: CommandEnvelopeV1, currentRevision: UInt64String): CommandResultV1 {
-    const outcome = deps.handle(envelope)
+  function applyTransition(
+    envelope: CommandEnvelopeV1,
+    currentRevision: UInt64String,
+  ): CommandResultV1 {
+    const outcome = deps.handle(envelope);
 
     if (outcome.disposition === "no-op") {
       if (outcome.events.length > 0) {
@@ -144,13 +158,19 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
         // an error that is not otherwise propagated, then the events are discarded.
         console.warn(
           `core/mailbox: handler for "${envelope.kind}" returned events with disposition "no-op" — discarding them`,
-        )
+        );
       }
-      return accepted(envelope.commandId, currentRevision, currentRevision, "no-op", outcome.operationId)
+      return accepted(
+        envelope.commandId,
+        currentRevision,
+        currentRevision,
+        "no-op",
+        outcome.operationId,
+      );
     }
 
-    const resultingRevision = deps.counters.advanceRevision()
-    const published = deps.eventBus.publishTransition(outcome.events)
+    const resultingRevision = deps.counters.advanceRevision();
+    const published = deps.eventBus.publishTransition(outcome.events);
     if (published instanceof Error) {
       // The revision has already moved by this point, and nothing in this pipeline can
       // roll a committed Reatom transition back. `publishTransition` failing here means
@@ -162,10 +182,16 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
         `core/mailbox: publishTransition rejected "${envelope.kind}"'s events after the revision already ` +
           `advanced to ${resultingRevision}:`,
         published.message,
-      )
+      );
     }
 
-    return accepted(envelope.commandId, currentRevision, resultingRevision, outcome.disposition, outcome.operationId)
+    return accepted(
+      envelope.commandId,
+      currentRevision,
+      resultingRevision,
+      outcome.disposition,
+      outcome.operationId,
+    );
   }
 
   /**
@@ -185,45 +211,45 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
     const outcome = errore.try({
       try: () => runFirstSeenUnguarded(envelope),
       catch: (cause: Error) => new MailboxHandlerError({ kind: envelope.kind, cause }),
-    })
+    });
     if (outcome instanceof Error) {
       // Not silently swallowed (errore rule 21): a handler that throws is a 6C contract
       // violation the caller cannot act on, so it is logged loudly and reported as the
       // §11.1 typed fallback rather than as a protocol-level rejection code that would
       // misattribute the failure to the command.
-      console.error(`core/mailbox: dispatch of "${envelope.kind}" threw:`, outcome.message)
+      console.error(`core/mailbox: dispatch of "${envelope.kind}" threw:`, outcome.message);
       return rejected(envelope.commandId, deps.counters.stateRevision(), "CAPABILITY_UNAVAILABLE", [
         { code: "CAPABILITY_UNAVAILABLE" },
-      ])
+      ]);
     }
-    return outcome
+    return outcome;
   }
 
   function runFirstSeenUnguarded(envelope: CommandEnvelopeV1): CommandResultV1 {
-    const currentRevision = deps.counters.stateRevision()
+    const currentRevision = deps.counters.stateRevision();
 
     const revisionDecision = checkRevisionGuard({
       command: toRevisionGuardCommand(envelope),
       currentRevision,
       cancelProbe: deps.cancelProbe,
-    })
+    });
 
     if (revisionDecision.kind === "rejected") {
       return rejected(envelope.commandId, revisionDecision.currentRevision, revisionDecision.code, [
         buildRevisionRejectionReason(revisionDecision, deps.cancelProbe),
-      ])
+      ]);
     }
 
     if (revisionDecision.kind === "accepted-no-op") {
       // §8.4 rule 4: a repeat `turn.cancel` while stopping/terminalizing "returns
       // accepted no-op for the same turn" — no guard, no handler, no revision change,
       // no event; the guard/handler steps below are skipped entirely for this path.
-      return accepted(envelope.commandId, currentRevision, currentRevision, "no-op")
+      return accepted(envelope.commandId, currentRevision, currentRevision, "no-op");
     }
 
     // §12.1 step 3.
-    const target = deps.extractTarget(envelope.kind, envelope.payload)
-    const guardDecision = deps.evaluateGuard(envelope.kind, target, deps.readKernelState())
+    const target = deps.extractTarget(envelope.kind, envelope.payload);
+    const guardDecision = deps.evaluateGuard(envelope.kind, target, deps.readKernelState());
 
     if (!guardDecision.available) {
       // "A failure records and returns Rejected without a model transition" — recording
@@ -234,10 +260,10 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
         currentRevision,
         primaryReason(guardDecision.reasons).code,
         guardDecision.reasons,
-      )
+      );
     }
 
-    return applyTransition(envelope, currentRevision)
+    return applyTransition(envelope, currentRevision);
   }
 
   // `dedupeLedger.run` always defers `execute` by at least one microtask
@@ -252,17 +278,19 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
   // context" row), and every command must land in THAT context no matter what
   // non-Reatom code (an IPC handler, a test) happens to call `dispatch()` from, or how
   // long after construction it does so.
-  const runFirstSeenWrapped = wrap(runFirstSeen)
+  const runFirstSeenWrapped = wrap(runFirstSeen);
   const finalizeResultWrapped = wrap(
     (outcome: CanonicalHashError | DedupeRejectionError | CommandResultV1) =>
       outcome instanceof DedupeRejectionError ? toDedupeRejection(outcome, deps.counters) : outcome,
-  )
+  );
 
-  function dispatch(raw: unknown): Promise<CommandDecodeError | CanonicalHashError | CommandResultV1> {
+  function dispatch(
+    raw: unknown,
+  ): Promise<CommandDecodeError | CanonicalHashError | CommandResultV1> {
     // Step 2, first clause — see this file's module comment for why this must finish,
     // successfully, before the dedupe ledger is ever consulted.
-    const envelope = decodeCommandEnvelope(raw)
-    if (envelope instanceof Error) return Promise.resolve(envelope)
+    const envelope = decodeCommandEnvelope(raw);
+    if (envelope instanceof Error) return Promise.resolve(envelope);
 
     // Step 2's remaining two clauses, plus steps 3-5, all happen inside `runFirstSeen`
     // — but ONLY for a first-seen `commandId`. `dedupeLedger.run` short-circuits a
@@ -270,10 +298,10 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
     // does not replay prior events" and performs no revision check of its own.
     return deps.dedupeLedger
       .run(raw, envelope.commandId, () => Promise.resolve(runFirstSeenWrapped(envelope)))
-      .then(finalizeResultWrapped)
+      .then(finalizeResultWrapped);
   }
 
-  return { dispatch }
+  return { dispatch };
 }
 
 function accepted(
@@ -290,8 +318,8 @@ function accepted(
     acceptedRevision,
     resultingRevision,
     disposition,
-  }
-  return operationId === undefined ? base : { ...base, operationId }
+  };
+  return operationId === undefined ? base : { ...base, operationId };
 }
 
 function rejected(
@@ -300,7 +328,7 @@ function rejected(
   code: CommandRejectionCode,
   reasons: readonly [UnavailableReason, ...UnavailableReason[]],
 ): RejectedCommandV1 {
-  return { protocolVersion: 1, commandId, status: "rejected", currentRevision, code, reasons }
+  return { protocolVersion: 1, commandId, status: "rejected", currentRevision, code, reasons };
 }
 
 /**
@@ -313,10 +341,14 @@ function rejected(
  */
 function toRevisionGuardCommand(envelope: CommandEnvelopeV1): RevisionGuardCommand {
   if (envelope.kind !== "turn.cancel") {
-    return { kind: envelope.kind, expectedRevision: envelope.expectedRevision }
+    return { kind: envelope.kind, expectedRevision: envelope.expectedRevision };
   }
-  const payload = envelope.payload as CommandPayloadByKindV1["turn.cancel"]
-  return { kind: "turn.cancel", expectedRevision: envelope.expectedRevision, turnId: payload.turnId }
+  const payload = envelope.payload as CommandPayloadByKindV1["turn.cancel"];
+  return {
+    kind: "turn.cancel",
+    expectedRevision: envelope.expectedRevision,
+    turnId: payload.turnId,
+  };
 }
 
 /**
@@ -334,20 +366,22 @@ function buildRevisionRejectionReason(
 ): UnavailableReason {
   switch (decision.code) {
     case "STALE_REVISION":
-      return { code: "STALE_REVISION", requiredRevision: decision.currentRevision }
+      return { code: "STALE_REVISION", requiredRevision: decision.currentRevision };
     case "TURN_NOT_ACTIVE":
-      return { code: "TURN_NOT_ACTIVE" }
+      return { code: "TURN_NOT_ACTIVE" };
     case "TURN_ID_MISMATCH":
     case "CANCEL_TOO_LATE": {
       // Both codes only fire when `checkRevisionGuard` already confirmed a turn is
       // active (its own rules 5/6) — re-consulting the same probe here is cheap and
       // keeps this module from inventing a turnId the guard itself did not report.
-      const active = cancelProbe.activeTurn()
+      const active = cancelProbe.activeTurn();
       if (active === null) {
-        console.warn(`core/mailbox: cancel probe reported no active turn while building a ${decision.code} reason`)
-        return { code: "CAPABILITY_UNAVAILABLE" }
+        console.warn(
+          `core/mailbox: cancel probe reported no active turn while building a ${decision.code} reason`,
+        );
+        return { code: "CAPABILITY_UNAVAILABLE" };
       }
-      return { code: decision.code, turnId: active.turnId }
+      return { code: decision.code, turnId: active.turnId };
     }
   }
 }
@@ -364,18 +398,20 @@ function buildRevisionRejectionReason(
  * does not fit, not because `dedupe-ledger.ts` is expected to ever produce it today.
  */
 function toDedupeRejection(err: DedupeRejectionError, counters: KernelCounters): RejectedCommandV1 {
-  const reason = dedupeReasonFor(err.code)
+  const reason = dedupeReasonFor(err.code);
   // `err.commandId` is `string | number` for the same `VarProps` reason as `err.code`
   // above; `dedupe-ledger.ts`'s `reject()` only ever constructs it from an already
   // `UUIDv7`-typed parameter, so this narrows a fact the type system cannot see, not a
   // real runtime possibility.
-  return rejected(err.commandId as UUIDv7, counters.stateRevision(), reason.code, [reason])
+  return rejected(err.commandId as UUIDv7, counters.stateRevision(), reason.code, [reason]);
 }
 
 function dedupeReasonFor(code: string | number): UnavailableReason {
-  if (code === "COMMAND_ID_REUSE_MISMATCH") return { code }
-  if (code === "COMMAND_ID_EXPIRED") return { code }
-  if (code === "COMMAND_DEDUPE_CAPACITY") return { code }
-  console.warn(`core/mailbox: unexpected dedupe rejection code "${String(code)}" — falling back to CAPABILITY_UNAVAILABLE`)
-  return { code: "CAPABILITY_UNAVAILABLE" }
+  if (code === "COMMAND_ID_REUSE_MISMATCH") return { code };
+  if (code === "COMMAND_ID_EXPIRED") return { code };
+  if (code === "COMMAND_DEDUPE_CAPACITY") return { code };
+  console.warn(
+    `core/mailbox: unexpected dedupe rejection code "${String(code)}" — falling back to CAPABILITY_UNAVAILABLE`,
+  );
+  return { code: "CAPABILITY_UNAVAILABLE" };
 }

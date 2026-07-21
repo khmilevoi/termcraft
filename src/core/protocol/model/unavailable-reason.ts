@@ -1,9 +1,9 @@
-import { z } from "zod"
+import { z } from "zod";
 
-import { pageSlugSchema } from "entities/page"
+import { pageSlugSchema } from "entities/page";
 
-import { uuidv7Schema } from "./ids"
-import { uint64StringSchema } from "./uint64"
+import { uuidv7Schema } from "./ids";
+import { uint64StringSchema } from "./uint64";
 
 /**
  * kernel-command-contract §11.1: "`UnavailableReason` is a discriminated union using
@@ -22,7 +22,7 @@ import { uint64StringSchema } from "./uint64"
  */
 
 /** The plan families §11.1's `PLAN_NOT_FOUND`/`PLAN_STALE` rows name: "Page-removal, Restore, commit, or migration plan id". */
-const PLAN_KINDS = ["pageRemove", "restore", "commit", "migration"] as const
+const PLAN_KINDS = ["pageRemove", "restore", "commit", "migration"] as const;
 
 /**
  * The single 31-code registry for §11.1's code space, in table order. `command-result.ts`
@@ -62,86 +62,86 @@ export const REASON_CODES_V1 = [
   "GEOMETRY_TOKEN_INVALID",
   "GEOMETRY_TOKEN_STALE",
   "CAPABILITY_UNAVAILABLE",
-] as const
+] as const;
 
-type ReasonCode = (typeof REASON_CODES_V1)[number]
+type ReasonCode = (typeof REASON_CODES_V1)[number];
 
 /** Builds the details-free variant shared by every code with no code-specific payload. */
 function detailsFreeReason<C extends ReasonCode>(code: C) {
-  return z.strictObject({ code: z.literal(code) })
+  return z.strictObject({ code: z.literal(code) });
 }
 
 // --- Codes carrying the "active turnId" detail (turn-lifecycle rows) ---
 const turnAlreadyActiveReasonSchema = z.strictObject({
   code: z.literal("TURN_ALREADY_ACTIVE"),
   turnId: uuidv7Schema,
-})
+});
 const turnRunningReasonSchema = z.strictObject({
   code: z.literal("TURN_RUNNING"),
   turnId: uuidv7Schema,
-})
+});
 const turnIdMismatchReasonSchema = z.strictObject({
   code: z.literal("TURN_ID_MISMATCH"),
   turnId: uuidv7Schema,
-})
+});
 const cancelTooLateReasonSchema = z.strictObject({
   code: z.literal("CANCEL_TOO_LATE"),
   turnId: uuidv7Schema,
-})
+});
 
 // --- The "scope" detail (commit scope, §10.1's `commit.plan` target vocabulary) ---
 const gitScopeCleanReasonSchema = z.strictObject({
   code: z.literal("GIT_SCOPE_CLEAN"),
   scope: z.enum(["current-page", "infrastructure", "whole-project"]),
-})
+});
 
 // --- The "page slug" detail ---
 const sourceStagedReasonSchema = z.strictObject({
   code: z.literal("SOURCE_STAGED"),
   pageSlug: pageSlugSchema,
-})
+});
 
 // --- The "plan id" detail, qualified by which plan family it names ---
 const planNotFoundReasonSchema = z.strictObject({
   code: z.literal("PLAN_NOT_FOUND"),
   planKind: z.enum(PLAN_KINDS),
   planId: uuidv7Schema,
-})
+});
 const planStaleReasonSchema = z.strictObject({
   code: z.literal("PLAN_STALE"),
   planKind: z.enum(PLAN_KINDS),
   planId: uuidv7Schema,
-})
+});
 
 // --- The "required revision" detail ---
 const staleRevisionReasonSchema = z.strictObject({
   code: z.literal("STALE_REVISION"),
   requiredRevision: uint64StringSchema,
-})
+});
 
 // --- Every remaining code: no code-specific detail beyond the code itself ---
-const unsupportedProtocolReasonSchema = detailsFreeReason("UNSUPPORTED_PROTOCOL")
-const invalidEnvelopeReasonSchema = detailsFreeReason("INVALID_ENVELOPE")
-const commandIdReuseMismatchReasonSchema = detailsFreeReason("COMMAND_ID_REUSE_MISMATCH")
-const commandIdExpiredReasonSchema = detailsFreeReason("COMMAND_ID_EXPIRED")
-const commandDedupeCapacityReasonSchema = detailsFreeReason("COMMAND_DEDUPE_CAPACITY")
-const projectNotReadyReasonSchema = detailsFreeReason("PROJECT_NOT_READY")
-const projectUntrustedReasonSchema = detailsFreeReason("PROJECT_UNTRUSTED")
-const turnNotActiveReasonSchema = detailsFreeReason("TURN_NOT_ACTIVE")
-const historicalPreviewReadOnlyReasonSchema = detailsFreeReason("HISTORICAL_PREVIEW_READ_ONLY")
-const gitUnavailableReasonSchema = detailsFreeReason("GIT_UNAVAILABLE")
-const notGitRepositoryReasonSchema = detailsFreeReason("NOT_GIT_REPOSITORY")
-const gitSequencerActiveReasonSchema = detailsFreeReason("GIT_SEQUENCER_ACTIVE")
-const confirmationRequiredReasonSchema = detailsFreeReason("CONFIRMATION_REQUIRED")
-const noPagesReasonSchema = detailsFreeReason("NO_PAGES")
-const operationBusyReasonSchema = detailsFreeReason("OPERATION_BUSY")
-const hostBackpressuredReasonSchema = detailsFreeReason("HOST_BACKPRESSURED")
-const tooManyRequestsReasonSchema = detailsFreeReason("TOO_MANY_REQUESTS")
-const frameTokenInvalidReasonSchema = detailsFreeReason("FRAME_TOKEN_INVALID")
-const frameTokenStaleReasonSchema = detailsFreeReason("FRAME_TOKEN_STALE")
-const geometryTokenInvalidReasonSchema = detailsFreeReason("GEOMETRY_TOKEN_INVALID")
-const geometryTokenStaleReasonSchema = detailsFreeReason("GEOMETRY_TOKEN_STALE")
-const capabilityUnavailableReasonSchema = detailsFreeReason("CAPABILITY_UNAVAILABLE")
+const unsupportedProtocolReasonSchema = detailsFreeReason("UNSUPPORTED_PROTOCOL");
+const invalidEnvelopeReasonSchema = detailsFreeReason("INVALID_ENVELOPE");
+const commandIdReuseMismatchReasonSchema = detailsFreeReason("COMMAND_ID_REUSE_MISMATCH");
+const commandIdExpiredReasonSchema = detailsFreeReason("COMMAND_ID_EXPIRED");
+const commandDedupeCapacityReasonSchema = detailsFreeReason("COMMAND_DEDUPE_CAPACITY");
+const projectNotReadyReasonSchema = detailsFreeReason("PROJECT_NOT_READY");
+const projectUntrustedReasonSchema = detailsFreeReason("PROJECT_UNTRUSTED");
+const turnNotActiveReasonSchema = detailsFreeReason("TURN_NOT_ACTIVE");
+const historicalPreviewReadOnlyReasonSchema = detailsFreeReason("HISTORICAL_PREVIEW_READ_ONLY");
+const gitUnavailableReasonSchema = detailsFreeReason("GIT_UNAVAILABLE");
+const notGitRepositoryReasonSchema = detailsFreeReason("NOT_GIT_REPOSITORY");
+const gitSequencerActiveReasonSchema = detailsFreeReason("GIT_SEQUENCER_ACTIVE");
+const confirmationRequiredReasonSchema = detailsFreeReason("CONFIRMATION_REQUIRED");
+const noPagesReasonSchema = detailsFreeReason("NO_PAGES");
+const operationBusyReasonSchema = detailsFreeReason("OPERATION_BUSY");
+const hostBackpressuredReasonSchema = detailsFreeReason("HOST_BACKPRESSURED");
+const tooManyRequestsReasonSchema = detailsFreeReason("TOO_MANY_REQUESTS");
+const frameTokenInvalidReasonSchema = detailsFreeReason("FRAME_TOKEN_INVALID");
+const frameTokenStaleReasonSchema = detailsFreeReason("FRAME_TOKEN_STALE");
+const geometryTokenInvalidReasonSchema = detailsFreeReason("GEOMETRY_TOKEN_INVALID");
+const geometryTokenStaleReasonSchema = detailsFreeReason("GEOMETRY_TOKEN_STALE");
+const capabilityUnavailableReasonSchema = detailsFreeReason("CAPABILITY_UNAVAILABLE");
 
 /**
  * Binds every code in {@link REASON_CODES_V1} to its variant schema, typed as
@@ -183,7 +183,7 @@ const REASON_SCHEMA_BY_CODE = {
   GEOMETRY_TOKEN_INVALID: geometryTokenInvalidReasonSchema,
   GEOMETRY_TOKEN_STALE: geometryTokenStaleReasonSchema,
   CAPABILITY_UNAVAILABLE: capabilityUnavailableReasonSchema,
-} satisfies Record<ReasonCode, z.ZodType>
+} satisfies Record<ReasonCode, z.ZodType>;
 
 /**
  * `UnavailableReason` (§11.1/§10.1), in §11.1 table order. Built by mapping
@@ -197,9 +197,9 @@ export const unavailableReasonV1Schema = z.discriminatedUnion(
     (typeof REASON_SCHEMA_BY_CODE)[ReasonCode],
     ...(typeof REASON_SCHEMA_BY_CODE)[ReasonCode][],
   ],
-)
+);
 
-export type UnavailableReason = z.infer<typeof unavailableReasonV1Schema>
+export type UnavailableReason = z.infer<typeof unavailableReasonV1Schema>;
 
 /**
  * The stable priority table §10.1 requires: "The first unavailable reason is selected
@@ -252,11 +252,11 @@ export const UNAVAILABLE_REASON_PRIORITY_V1 = [
   "GEOMETRY_TOKEN_STALE",
   // Tier 10 — typed fallback.
   "CAPABILITY_UNAVAILABLE",
-] as const satisfies readonly ReasonCode[]
+] as const satisfies readonly ReasonCode[];
 
 const PRIORITY_RANK: ReadonlyMap<ReasonCode, number> = new Map(
   UNAVAILABLE_REASON_PRIORITY_V1.map((code, index) => [code, index]),
-)
+);
 
 /**
  * `PRIORITY_RANK` is built from `UNAVAILABLE_REASON_PRIORITY_V1`, which `satisfies
@@ -270,10 +270,12 @@ const PRIORITY_RANK: ReadonlyMap<ReasonCode, number> = new Map(
  * reason.
  */
 function rankOf(code: ReasonCode): number {
-  const rank = PRIORITY_RANK.get(code)
-  if (rank !== undefined) return rank
-  console.warn(`primaryReason: no priority rank for reason code "${code}" — defaulting to lowest priority`)
-  return Number.POSITIVE_INFINITY
+  const rank = PRIORITY_RANK.get(code);
+  if (rank !== undefined) return rank;
+  console.warn(
+    `primaryReason: no priority rank for reason code "${code}" — defaulting to lowest priority`,
+  );
+  return Number.POSITIVE_INFINITY;
 }
 
 /**
@@ -286,5 +288,5 @@ export function primaryReason(
 ): UnavailableReason {
   return reasons.reduce((best, candidate) =>
     rankOf(candidate.code) < rankOf(best.code) ? candidate : best,
-  )
+  );
 }

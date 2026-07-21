@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test";
 
-import { FrameDecoder } from "infrastructure/framing"
-import { decodeControlEnvelope, encodeControlEnvelope } from "./control-envelope"
-import { decodeFrameEnvelope, encodeFrameEnvelope } from "./frame"
-import { decodeClientHello, encodeClientHello } from "./hello"
-import type { ClientHelloV1, ControlEnvelope, FrameEnvelope } from "../types"
+import { FrameDecoder } from "infrastructure/framing";
+
+import type { ClientHelloV1, ControlEnvelope, FrameEnvelope } from "../types";
+import { decodeControlEnvelope, encodeControlEnvelope } from "./control-envelope";
+import { decodeFrameEnvelope, encodeFrameEnvelope } from "./frame";
+import { decodeClientHello, encodeClientHello } from "./hello";
 
 const hello: ClientHelloV1 = {
   framingVersion: 1,
@@ -30,7 +31,7 @@ const hello: ClientHelloV1 = {
     maxFrameHeight: 2048,
     maxFrameCells: 262144,
   },
-}
+};
 
 const envelope: ControlEnvelope = {
   protocolVersion: 1,
@@ -39,7 +40,7 @@ const envelope: ControlEnvelope = {
   nonce: hello.nonce,
   messageId: "2",
   body: { tick: "42", lastFrameSeq: "5" },
-}
+};
 
 const frame: FrameEnvelope = {
   protocolVersion: 1,
@@ -51,51 +52,51 @@ const frame: FrameEnvelope = {
   width: 2,
   height: 1,
   rows: [[{ text: "hi", fg: "default", bg: "default", attrs: 0 }]],
-}
+};
 
 function encodeAll(): Uint8Array {
   const parts = [
     encodeClientHello(hello),
     encodeControlEnvelope(envelope),
     encodeFrameEnvelope(frame),
-  ]
-  const bytes: Uint8Array[] = []
+  ];
+  const bytes: Uint8Array[] = [];
   for (const part of parts) {
-    if (part instanceof Error) throw part
-    bytes.push(part)
+    if (part instanceof Error) throw part;
+    bytes.push(part);
   }
-  const total = bytes.reduce((sum, part) => sum + part.byteLength, 0)
-  const joined = new Uint8Array(total)
+  const total = bytes.reduce((sum, part) => sum + part.byteLength, 0);
+  const joined = new Uint8Array(total);
   bytes.reduce((offset, part) => {
-    joined.set(part, offset)
-    return offset + part.byteLength
-  }, 0)
-  return joined
+    joined.set(part, offset);
+    return offset + part.byteLength;
+  }, 0);
+  return joined;
 }
 
 describe("protocol wire integration", () => {
   test("decodes a hello + control + frame stream delivered one byte at a time", () => {
-    const stream = encodeAll()
-    const decoder = new FrameDecoder()
-    const collected = []
+    const stream = encodeAll();
+    const decoder = new FrameDecoder();
+    const collected = [];
     for (const byte of stream) {
-      const frames = decoder.feed(new Uint8Array([byte]))
-      if (frames instanceof Error) throw frames
-      collected.push(...frames)
+      const frames = decoder.feed(new Uint8Array([byte]));
+      if (frames instanceof Error) throw frames;
+      collected.push(...frames);
     }
-    expect(collected).toHaveLength(3)
+    expect(collected).toHaveLength(3);
 
-    const helloFrame = collected[0]
-    const controlFrame = collected[1]
-    const dataFrame = collected[2]
-    if (!helloFrame || !controlFrame || !dataFrame) throw new Error("missing frame")
+    const helloFrame = collected[0];
+    const controlFrame = collected[1];
+    const dataFrame = collected[2];
+    if (!helloFrame || !controlFrame || !dataFrame) throw new Error("missing frame");
 
-    expect(helloFrame.messageClass).toBe("control")
-    expect(controlFrame.messageClass).toBe("control")
-    expect(dataFrame.messageClass).toBe("data")
+    expect(helloFrame.messageClass).toBe("control");
+    expect(controlFrame.messageClass).toBe("control");
+    expect(dataFrame.messageClass).toBe("data");
 
-    expect(decodeClientHello(helloFrame.payload)).toEqual(hello)
-    expect(decodeControlEnvelope(controlFrame.payload)).toEqual(envelope)
-    expect(decodeFrameEnvelope(dataFrame.payload)).toEqual(frame)
-  })
-})
+    expect(decodeClientHello(helloFrame.payload)).toEqual(hello);
+    expect(decodeControlEnvelope(controlFrame.payload)).toEqual(envelope);
+    expect(decodeFrameEnvelope(dataFrame.payload)).toEqual(frame);
+  });
+});

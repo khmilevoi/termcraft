@@ -1,4 +1,4 @@
-import { getBaseAttributes, TextAttributes } from "@opentui/core"
+import { TextAttributes, getBaseAttributes } from "@opentui/core";
 
 /**
  * Map OpenTUI's text-attribute integer to the protocol 6-bit mask (§5.3). NOT a
@@ -8,13 +8,13 @@ import { getBaseAttributes, TextAttributes } from "@opentui/core"
  * upper bits.
  */
 export function attributesToMask(raw: number): number {
-  const base = getBaseAttributes(raw)
-  let mask = 0
-  if (base & TextAttributes.BOLD) mask |= 1
-  if (base & TextAttributes.DIM) mask |= 2
-  if (base & TextAttributes.ITALIC) mask |= 4
-  if (base & TextAttributes.UNDERLINE) mask |= 8
-  if (base & TextAttributes.INVERSE) mask |= 16
-  if (base & TextAttributes.STRIKETHROUGH) mask |= 32
-  return mask
+  const base = getBaseAttributes(raw);
+  let mask = 0;
+  if (base & TextAttributes.BOLD) mask |= 1;
+  if (base & TextAttributes.DIM) mask |= 2;
+  if (base & TextAttributes.ITALIC) mask |= 4;
+  if (base & TextAttributes.UNDERLINE) mask |= 8;
+  if (base & TextAttributes.INVERSE) mask |= 16;
+  if (base & TextAttributes.STRIKETHROUGH) mask |= 32;
+  return mask;
 }

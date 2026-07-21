@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from "zod";
 
 /**
  * The closed v1 control-event registry (kernel-command-contract §9), transcribed
@@ -55,19 +55,19 @@ export const EVENT_KINDS_V1 = [
   "pins.changed",
   "git.statusChanged",
   "diagnostics.changed",
-] as const
+] as const;
 
-export type EventKindV1 = (typeof EVENT_KINDS_V1)[number]
+export type EventKindV1 = (typeof EVENT_KINDS_V1)[number];
 
 /** The exact member count §9 fixes. */
-export const EVENT_KIND_COUNT = 43
+export const EVENT_KIND_COUNT = 43;
 
-const EVENT_KIND_SET: ReadonlySet<string> = new Set(EVENT_KINDS_V1)
+const EVENT_KIND_SET: ReadonlySet<string> = new Set(EVENT_KINDS_V1);
 
 /** True when `raw` names a v1 event kind. */
 export function isEventKindV1(raw: string): raw is EventKindV1 {
-  return EVENT_KIND_SET.has(raw)
+  return EVENT_KIND_SET.has(raw);
 }
 
 /** Zod schema over the closed union. */
-export const eventKindV1Schema = z.enum(EVENT_KINDS_V1)
+export const eventKindV1Schema = z.enum(EVENT_KINDS_V1);

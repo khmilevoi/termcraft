@@ -1,5 +1,5 @@
-import type { Sha256Hex } from "core/protocol"
-import type { PageSlug, Size } from "entities/page"
+import type { Sha256Hex } from "core/protocol";
+import type { PageSlug, Size } from "entities/page";
 
 /**
  * `core/export`'s shared vocabulary (kernel-command-contract §7.5, §12.5, §13.4).
@@ -11,19 +11,19 @@ import type { PageSlug, Size } from "entities/page"
  * only re-reads bytes/hash LIVE, under the short permit, to prove nothing drifted since.
  */
 export interface ExportPageInputV1 {
-  readonly pageSlug: PageSlug
-  readonly sourcePath: string
+  readonly pageSlug: PageSlug;
+  readonly sourcePath: string;
   /** Project page order (manifest order) — the primary publish-order key (§11.4/§12.5). */
-  readonly manifestIndex: number
-  readonly minSize: Size
-  readonly theme: string
-  readonly kitApiVersion: number
+  readonly manifestIndex: number;
+  readonly minSize: Size;
+  readonly theme: string;
+  readonly kitApiVersion: number;
 }
 
 /** One page's captured snapshot: caller-resolved identity/settings plus a source read taken live, under the permit. */
 export interface ExportPageSnapshotV1 extends ExportPageInputV1 {
-  readonly sourceHash: Sha256Hex
-  readonly bytes: Uint8Array
+  readonly sourceHash: Sha256Hex;
+  readonly bytes: Uint8Array;
 }
 
 /**
@@ -32,7 +32,7 @@ export interface ExportPageSnapshotV1 extends ExportPageInputV1 {
  * is held, released immediately after (`model/snapshot.ts`).
  */
 export interface ExportSnapshotV1 {
-  readonly pages: readonly ExportPageSnapshotV1[]
+  readonly pages: readonly ExportPageSnapshotV1[];
   /** RFC 3339 UTC — when this snapshot was captured (injected clock, never `Date.now()`). */
-  readonly capturedAt: string
+  readonly capturedAt: string;
 }

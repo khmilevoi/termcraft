@@ -1,6 +1,6 @@
-import { atom, type Atom } from "@reatom/core"
+import { type Atom, atom } from "@reatom/core";
 
-import type { CommandRejectionCode } from "core/protocol"
+import type { CommandRejectionCode } from "core/protocol";
 
 /**
  * The shared mechanism behind the seven Reatom state machines
@@ -20,48 +20,48 @@ import type { CommandRejectionCode } from "core/protocol"
 
 /** One legal edge: a source phase, its target, and whether it counts as a real change. */
 export interface Transition<Phase extends string> {
-  readonly from: Phase
-  readonly to: Phase
+  readonly from: Phase;
+  readonly to: Phase;
   /**
    * A same-state edge that §13.1 classifies as "an explicit no-op" rather than "a real
    * revision-changing update". It is legal, but it must not advance `stateRevision`
    * (§4: only "each atomic authoritative Kernel state transition" does).
    */
-  readonly noOp?: boolean
+  readonly noOp?: boolean;
 }
 
 /** Every named action of one domain, mapped to the edges that action may take. */
 export type TransitionTable<Phase extends string, Action extends string> = Readonly<
   Record<Action, readonly Transition<Phase>[]>
->
+>;
 
 /** What applying an action did. */
 export type TransitionOutcome<Phase extends string, Action extends string> =
   | { readonly kind: "changed"; readonly from: Phase; readonly to: Phase }
   | { readonly kind: "no-op"; readonly phase: Phase }
   | {
-      readonly kind: "illegal"
-      readonly code: CommandRejectionCode
-      readonly from: Phase
-      readonly action: Action
-    }
+      readonly kind: "illegal";
+      readonly code: CommandRejectionCode;
+      readonly from: Phase;
+      readonly action: Action;
+    };
 
 export interface StateMachineConfig<Phase extends string, Action extends string> {
   /** The `kernel.<domain>` trace root §6's factory table fixes. */
-  readonly traceRoot: string
-  readonly initial: Phase
-  readonly table: TransitionTable<Phase, Action>
+  readonly traceRoot: string;
+  readonly initial: Phase;
+  readonly table: TransitionTable<Phase, Action>;
   /** The rejection code an unlisted (source, action) pair returns for this domain. */
-  readonly illegalCode: CommandRejectionCode
+  readonly illegalCode: CommandRejectionCode;
 }
 
 export interface StateMachine<Phase extends string, Action extends string> {
-  readonly phase: () => Phase
-  readonly phaseAtom: Atom<Phase>
+  readonly phase: () => Phase;
+  readonly phaseAtom: Atom<Phase>;
   /** Applies a named action, moving the machine only if the pair is listed. */
-  readonly apply: (action: Action) => TransitionOutcome<Phase, Action>
+  readonly apply: (action: Action) => TransitionOutcome<Phase, Action>;
   /** Whether the action is legal from the current phase — a pure read, no transition. */
-  readonly canApply: (action: Action) => boolean
+  readonly canApply: (action: Action) => boolean;
 }
 
 /**
@@ -72,35 +72,35 @@ export interface StateMachine<Phase extends string, Action extends string> {
 export function createStateMachine<Phase extends string, Action extends string>(
   config: StateMachineConfig<Phase, Action>,
 ): StateMachine<Phase, Action> {
-  const phaseAtom = atom<Phase>(config.initial, `${config.traceRoot}.state`)
+  const phaseAtom = atom<Phase>(config.initial, `${config.traceRoot}.state`);
 
   function edgeFor(action: Action, from: Phase): Transition<Phase> | null {
-    const edges = config.table[action]
-    if (edges === undefined) return null
-    return edges.find((edge) => edge.from === from) ?? null
+    const edges = config.table[action];
+    if (edges === undefined) return null;
+    return edges.find((edge) => edge.from === from) ?? null;
   }
 
   function apply(action: Action): TransitionOutcome<Phase, Action> {
-    const from = phaseAtom()
-    const edge = edgeFor(action, from)
+    const from = phaseAtom();
+    const edge = edgeFor(action, from);
     if (edge === null) {
       // §6: an unlisted pair "is illegal and returns the table's domain rejection code
       // WITHOUT CHANGING STATE" — so this branch deliberately touches no atom.
-      return { kind: "illegal", code: config.illegalCode, from, action }
+      return { kind: "illegal", code: config.illegalCode, from, action };
     }
 
     if (edge.noOp === true) {
       // Legal, but explicitly not a state change: the caller must not advance the
       // revision for it (§4/§13.1).
-      return { kind: "no-op", phase: from }
+      return { kind: "no-op", phase: from };
     }
 
-    phaseAtom.set(edge.to)
-    return { kind: "changed", from, to: edge.to }
+    phaseAtom.set(edge.to);
+    return { kind: "changed", from, to: edge.to };
   }
 
   function canApply(action: Action): boolean {
-    return edgeFor(action, phaseAtom()) !== null
+    return edgeFor(action, phaseAtom()) !== null;
   }
 
   return {
@@ -108,5 +108,5 @@ export function createStateMachine<Phase extends string, Action extends string>(
     phaseAtom,
     apply,
     canApply,
-  }
+  };
 }

@@ -1,4 +1,4 @@
-import type { SessionScopeInput } from "agent/types"
+import type { SessionScopeInput } from "agent/types";
 
 /**
  * Fallback account discriminator for backends that cannot supply a stable
@@ -10,7 +10,7 @@ import type { SessionScopeInput } from "agent/types"
  * nothing ever reads again. A module-level constant makes every call within
  * this process agree, while a fresh process still gets its own value.
  */
-const UNRESUMABLE_ACCOUNT = `unresumable:${Bun.randomUUIDv7()}`
+const UNRESUMABLE_ACCOUNT = `unresumable:${Bun.randomUUIDv7()}`;
 
 /**
  * The opaque `sessionScopeId` for the store checkpoint key (storage-identity
@@ -24,9 +24,9 @@ const UNRESUMABLE_ACCOUNT = `unresumable:${Bun.randomUUIDv7()}`
  * mandate: this file has nothing async or stateful for Reatom to model).
  */
 export function deriveSessionScope(backendId: string, input: SessionScopeInput): string {
-  const account = input.account ?? UNRESUMABLE_ACCOUNT
-  const material = [backendId, account, input.model, input.workspaceIdentity].join(" ")
-  const hasher = new Bun.CryptoHasher("sha256")
-  hasher.update(material)
-  return hasher.digest("hex")
+  const account = input.account ?? UNRESUMABLE_ACCOUNT;
+  const material = [backendId, account, input.model, input.workspaceIdentity].join(" ");
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(material);
+  return hasher.digest("hex");
 }

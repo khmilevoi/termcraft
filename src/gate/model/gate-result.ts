@@ -1,4 +1,4 @@
-import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types"
+import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
 
 /**
  * Assemble a `GateResult` from the stages' collected fatal errors + non-fatal
@@ -12,10 +12,10 @@ export function makeGateResult(
   warnings: readonly GateWarning[],
   descriptor: PageDescriptor | null,
 ): GateResult {
-  return { ok: errors.length === 0, errors, warnings, descriptor }
+  return { ok: errors.length === 0, errors, warnings, descriptor };
 }
 
 /** True when the candidate is safe to make canonical (no fatal errors). */
 export function isPassing(result: GateResult): boolean {
-  return result.ok
+  return result.ok;
 }

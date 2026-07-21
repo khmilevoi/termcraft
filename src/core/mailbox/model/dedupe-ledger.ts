@@ -1,15 +1,15 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
 import {
-  envelopeFingerprint,
-  isUuidv7,
   type CanonicalHashError,
   type CommandRejectionCode,
   type CommandResultV1,
   type Sha256Hex,
   type UUIDv7,
-} from "core/protocol"
-import type { Clock } from "infrastructure/clock"
+  envelopeFingerprint,
+  isUuidv7,
+} from "core/protocol";
+import type { Clock } from "infrastructure/clock";
 
 /**
  * The Kernel's per-process command dedupe ledger (kernel-command-contract §8.5).
@@ -42,10 +42,10 @@ import type { Clock } from "infrastructure/clock"
  */
 
 /** The ledger's default capacity (§8.5: "at most 65,536 results"). Overridable for tests. */
-export const DEDUPE_CAPACITY = 65_536
+export const DEDUPE_CAPACITY = 65_536;
 
 /** The ledger's default retry horizon in milliseconds (§8.5: "a 15-minute retry horizon"). */
-export const DEDUPE_HORIZON_MS = 15 * 60 * 1000
+export const DEDUPE_HORIZON_MS = 15 * 60 * 1000;
 
 /**
  * The subset of §11.1's rejection codes this ledger can produce. Derived from — and
@@ -57,9 +57,9 @@ const DEDUPE_REJECTION_CODES = [
   "COMMAND_ID_REUSE_MISMATCH",
   "COMMAND_ID_EXPIRED",
   "COMMAND_DEDUPE_CAPACITY",
-] as const satisfies readonly CommandRejectionCode[]
+] as const satisfies readonly CommandRejectionCode[];
 
-export type DedupeRejectionCode = (typeof DEDUPE_REJECTION_CODES)[number]
+export type DedupeRejectionCode = (typeof DEDUPE_REJECTION_CODES)[number];
 
 /** One of the three §8.5 immediate rejections this ledger decides on its own. */
 export class DedupeRejectionError extends errore.createTaggedError({
@@ -68,8 +68,8 @@ export class DedupeRejectionError extends errore.createTaggedError({
 }) {}
 
 interface DedupeEntry {
-  readonly fingerprint: Sha256Hex
-  readonly promise: Promise<CommandResultV1>
+  readonly fingerprint: Sha256Hex;
+  readonly promise: Promise<CommandResultV1>;
 }
 
 export interface DedupeLedger {
@@ -86,15 +86,15 @@ export interface DedupeLedger {
     envelopeRaw: unknown,
     commandId: UUIDv7,
     execute: () => Promise<CommandResultV1>,
-  ) => Promise<CanonicalHashError | DedupeRejectionError | CommandResultV1>
+  ) => Promise<CanonicalHashError | DedupeRejectionError | CommandResultV1>;
   /** The number of ids currently recorded. Exposed for tests and diagnostics only. */
-  readonly size: () => number
+  readonly size: () => number;
 }
 
 export interface DedupeLedgerDeps {
-  readonly clock: Clock
-  readonly capacity?: number
-  readonly horizonMs?: number
+  readonly clock: Clock;
+  readonly capacity?: number;
+  readonly horizonMs?: number;
 }
 
 /**
@@ -108,9 +108,9 @@ export function uuidv7TimestampMs(id: UUIDv7): Error | number {
   // stops a malformed id reaching here. Parsing one with BigInt() throws a SyntaxError,
   // which would escape `run`'s declared `Error | T` return synchronously — so the shape
   // is validated first and the failure comes back as a value, per the errore rules.
-  if (!isUuidv7(id)) return new TypeError(`not a canonical UUIDv7: ${id}`)
-  const hex = id.replace(/-/g, "").slice(0, 12)
-  return Number(BigInt(`0x${hex}`))
+  if (!isUuidv7(id)) return new TypeError(`not a canonical UUIDv7: ${id}`);
+  const hex = id.replace(/-/g, "").slice(0, 12);
+  return Number(BigInt(`0x${hex}`));
 }
 
 /**
@@ -120,8 +120,8 @@ export function uuidv7TimestampMs(id: UUIDv7): Error | number {
  * after another — silently share dedupe entries and invalidate each other's assertions.
  */
 export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
-  const capacity = deps.capacity ?? DEDUPE_CAPACITY
-  const horizonMs = deps.horizonMs ?? DEDUPE_HORIZON_MS
+  const capacity = deps.capacity ?? DEDUPE_CAPACITY;
+  const horizonMs = deps.horizonMs ?? DEDUPE_HORIZON_MS;
 
   /**
    * Deliberately a plain closure `Map`, NOT a Reatom atom — the one place in this module
@@ -136,10 +136,14 @@ export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
    * The ledger is also not reactive: nothing computes off it, no projector reads it. It is
    * process-local infrastructure, so an atom bought nothing and cost the invariant.
    */
-  const entries = new Map<UUIDv7, DedupeEntry>()
+  const entries = new Map<UUIDv7, DedupeEntry>();
 
-  function reject(commandId: UUIDv7, code: DedupeRejectionCode, reason: string): DedupeRejectionError {
-    return new DedupeRejectionError({ commandId, code, reason })
+  function reject(
+    commandId: UUIDv7,
+    code: DedupeRejectionCode,
+    reason: string,
+  ): DedupeRejectionError {
+    return new DedupeRejectionError({ commandId, code, reason });
   }
 
   function run(
@@ -147,10 +151,10 @@ export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
     commandId: UUIDv7,
     execute: () => Promise<CommandResultV1>,
   ): Promise<CanonicalHashError | DedupeRejectionError | CommandResultV1> {
-    const fingerprint = envelopeFingerprint(envelopeRaw)
-    if (fingerprint instanceof Error) return Promise.resolve(fingerprint)
+    const fingerprint = envelopeFingerprint(envelopeRaw);
+    if (fingerprint instanceof Error) return Promise.resolve(fingerprint);
 
-    const existing = entries.get(commandId)
+    const existing = entries.get(commandId);
     if (existing !== undefined) {
       if (existing.fingerprint !== fingerprint) {
         return Promise.resolve(
@@ -159,24 +163,28 @@ export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
             "COMMAND_ID_REUSE_MISMATCH",
             "commandId is already bound to a different canonical envelope",
           ),
-        )
+        );
       }
       // §8.5: "returns the exact stored result ... without a transition, event replay, or
       // revision change" — `execute` is never called again on this path.
-      return existing.promise
+      return existing.promise;
     }
 
     // §8.5's expiry check applies only to ids not yet in the ledger — a duplicate of a
     // known id is never "executed as new" regardless of how old its embedded timestamp is.
-    const floor = deps.clock.now().getTime() - horizonMs
-    const stamp = uuidv7TimestampMs(commandId)
+    const floor = deps.clock.now().getTime() - horizonMs;
+    const stamp = uuidv7TimestampMs(commandId);
     if (stamp instanceof Error) {
-      return Promise.resolve(reject(commandId, "COMMAND_ID_EXPIRED", stamp.message))
+      return Promise.resolve(reject(commandId, "COMMAND_ID_EXPIRED", stamp.message));
     }
     if (stamp < floor) {
       return Promise.resolve(
-        reject(commandId, "COMMAND_ID_EXPIRED", "commandId timestamp is older than the dedupe floor"),
-      )
+        reject(
+          commandId,
+          "COMMAND_ID_EXPIRED",
+          "commandId timestamp is older than the dedupe floor",
+        ),
+      );
     }
 
     if (entries.size >= capacity) {
@@ -186,13 +194,15 @@ export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
       // deadlocks permanently: after 65,536 commands every subsequent command is refused
       // for the life of the process, however long ago each entry expired.
       for (const [id] of entries) {
-        const recorded = uuidv7TimestampMs(id)
-        if (recorded instanceof Error || recorded < floor) entries.delete(id)
+        const recorded = uuidv7TimestampMs(id);
+        if (recorded instanceof Error || recorded < floor) entries.delete(id);
       }
     }
 
     if (entries.size >= capacity) {
-      return Promise.resolve(reject(commandId, "COMMAND_DEDUPE_CAPACITY", "dedupe ledger is at capacity"))
+      return Promise.resolve(
+        reject(commandId, "COMMAND_DEDUPE_CAPACITY", "dedupe ledger is at capacity"),
+      );
     }
 
     // The entry is recorded BEFORE `execute` runs, per §8.5: "the ledger stores a canonical
@@ -203,13 +213,13 @@ export function createDedupeLedger(deps: DedupeLedgerDeps): DedupeLedger {
     // `Error | T` value — a caller's `.catch()` cannot catch what has no promise yet.
     // Deferring the call through a resolved promise makes a sync throw a rejection, and
     // the entry is in place before either can happen.
-    const promise = Promise.resolve().then(execute)
-    entries.set(commandId, { fingerprint, promise })
-    return promise
+    const promise = Promise.resolve().then(execute);
+    entries.set(commandId, { fingerprint, promise });
+    return promise;
   }
 
   return {
     run,
     size: () => entries.size,
-  }
+  };
 }

@@ -1,5 +1,5 @@
-import type { FailureDtoV1, Sha256Hex } from "core/protocol"
-import type { PageSlug } from "entities/page"
+import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
 /**
  * The open-project facade `core` needs at startup (turn-durability §12 / storage-identity
@@ -20,7 +20,7 @@ import type { PageSlug } from "entities/page"
  */
 
 /** The portable `target_stack` values (storage-identity §5.1), redrawn locally per C1. */
-export type TargetStackV1 = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "generic"
+export type TargetStackV1 = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "generic";
 
 /**
  * `.termcraft/project.toml`'s five semantic fields (storage-identity §5.1), minus nothing —
@@ -29,39 +29,39 @@ export type TargetStackV1 = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "ge
  * §16.1) — see `WorkspaceStateV1` below for all of that.
  */
 export interface ProjectManifestV1 {
-  readonly projectId: string
-  readonly name: string
+  readonly projectId: string;
+  readonly name: string;
   /** UTC RFC 3339. */
-  readonly createdAt: string
-  readonly targetStack: TargetStackV1
+  readonly createdAt: string;
+  readonly targetStack: TargetStackV1;
   /** Ordered, duplicate-free: listing/tab order, NOT page identity allocation (§5.1). */
-  readonly pages: readonly PageSlug[]
+  readonly pages: readonly PageSlug[];
 }
 
-export type PreviewSizeModeV1 = "auto" | "preset" | "custom"
-export type PreviewSizePresetV1 = "80x24" | "120x40"
-export type ColorCapabilityV1 = "truecolor" | "256" | "16"
-export type RenderModeV1 = "static" | "interactive"
+export type PreviewSizeModeV1 = "auto" | "preset" | "custom";
+export type PreviewSizePresetV1 = "80x24" | "120x40";
+export type ColorCapabilityV1 = "truecolor" | "256" | "16";
+export type RenderModeV1 = "static" | "interactive";
 
 /** One `(chatId, sessionScopeId)` checkpoint (storage-identity §6.2) — see `session-checkpoint.ts` for the port that reads/advances these. */
 export interface SessionCheckpointV1 {
-  readonly chatId: string
-  readonly sessionScopeId: string
-  readonly sessionId: string
-  readonly recordCount: number
-  readonly prefixHash: Sha256Hex
+  readonly chatId: string;
+  readonly sessionScopeId: string;
+  readonly sessionId: string;
+  readonly recordCount: number;
+  readonly prefixHash: Sha256Hex;
 }
 
 /** The optional typed resource-limit overrides (storage-identity §6.1, projections §16.1). Every key absent means the compiled default applies. */
 export interface ResourceLimitOverridesV1 {
-  readonly diagnosticsQuotaBytes?: number
-  readonly renderCacheQuotaBytes?: number
-  readonly exportWorkers?: number
-  readonly previewFps?: number
-  readonly operationsLogSegmentBytes?: number
-  readonly operationsLogRetentionSegments?: number
-  readonly silenceTimeoutSeconds?: number
-  readonly absoluteTurnDeadlineMinutes?: number
+  readonly diagnosticsQuotaBytes?: number;
+  readonly renderCacheQuotaBytes?: number;
+  readonly exportWorkers?: number;
+  readonly previewFps?: number;
+  readonly operationsLogSegmentBytes?: number;
+  readonly operationsLogRetentionSegments?: number;
+  readonly silenceTimeoutSeconds?: number;
+  readonly absoluteTurnDeadlineMinutes?: number;
 }
 
 /**
@@ -72,22 +72,22 @@ export interface ResourceLimitOverridesV1 {
  */
 export interface WorkspaceStateV1 {
   /** `null` = unset; falls back to the first listed manifest page. */
-  readonly activePageSlug: PageSlug | null
+  readonly activePageSlug: PageSlug | null;
   /** `null` = unset; falls back to the newest valid chat by header `createdAt`. */
-  readonly activeChatId: string | null
-  readonly backend: string | null
-  readonly model: string | null
-  readonly effort: string | null
-  readonly previewSizeMode: PreviewSizeModeV1
-  readonly previewSizePreset: PreviewSizePresetV1 | null
-  readonly previewCustomWidth: number | null
-  readonly previewCustomHeight: number | null
-  readonly themeOverride: string | null
-  readonly colorCapability: ColorCapabilityV1 | null
-  readonly renderMode: RenderModeV1
-  readonly fullscreenPreview: boolean
-  readonly sessionCheckpoints: readonly SessionCheckpointV1[]
-  readonly resourceLimits: ResourceLimitOverridesV1
+  readonly activeChatId: string | null;
+  readonly backend: string | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly previewSizeMode: PreviewSizeModeV1;
+  readonly previewSizePreset: PreviewSizePresetV1 | null;
+  readonly previewCustomWidth: number | null;
+  readonly previewCustomHeight: number | null;
+  readonly themeOverride: string | null;
+  readonly colorCapability: ColorCapabilityV1 | null;
+  readonly renderMode: RenderModeV1;
+  readonly fullscreenPreview: boolean;
+  readonly sessionCheckpoints: readonly SessionCheckpointV1[];
+  readonly resourceLimits: ResourceLimitOverridesV1;
 }
 
 /**
@@ -97,21 +97,21 @@ export interface WorkspaceStateV1 {
  * ordinary "never written yet" case, not an error.
  */
 export interface WorkspaceStateReadV1 {
-  readonly state: WorkspaceStateV1
-  readonly missing: boolean
-  readonly corrupt: boolean
+  readonly state: WorkspaceStateV1;
+  readonly missing: boolean;
+  readonly corrupt: boolean;
 }
 
 /** A held `ProjectLease` (storage-identity §9) minus its OS-handle internals — core needs only that one is held, not how. */
 export interface ProjectLeaseIdentityV1 {
-  readonly root: string
+  readonly root: string;
 }
 
 export interface ProjectStore {
-  readonly root: string
-  readonly lease: ProjectLeaseIdentityV1
-  readManifest(): Promise<FailureDtoV1 | ProjectManifestV1>
-  readWorkspaceState(): Promise<FailureDtoV1 | WorkspaceStateReadV1>
+  readonly root: string;
+  readonly lease: ProjectLeaseIdentityV1;
+  readManifest(): Promise<FailureDtoV1 | ProjectManifestV1>;
+  readWorkspaceState(): Promise<FailureDtoV1 | WorkspaceStateReadV1>;
   /**
    * `model.select` (kernel-command-contract §8.2: "Validate backend capability and store
    * the machine-local selection") — one of the six commands blocker B3 names as
@@ -122,7 +122,7 @@ export interface ProjectStore {
    * `buildWorkspaceLocalOperation`) rather than requiring the caller to reconstruct the
    * whole document to change one field.
    */
-  writeWorkspaceState(patch: Partial<WorkspaceStateV1>): Promise<FailureDtoV1 | undefined>
+  writeWorkspaceState(patch: Partial<WorkspaceStateV1>): Promise<FailureDtoV1 | undefined>;
   /** Releases the lease; every other project-scoped port becomes unsafe to use after this resolves. */
-  close(): Promise<void>
+  close(): Promise<void>;
 }

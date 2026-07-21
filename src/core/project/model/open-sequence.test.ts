@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test"
-import { context, wrap } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
 
-import { parsePageSlug } from "entities/page"
-import type { PageSlug } from "entities/page"
-import type { FailureDtoV1 } from "core/protocol"
-import type { ProjectStore } from "core/ports"
+import { context, wrap } from "@reatom/core";
+
+import {
+  reatomExportStateMachine,
+  reatomMigrationStateMachine,
+  reatomProjectStateMachine,
+  reatomRestoreStateMachine,
+} from "core/machines";
+import type { ProjectStore } from "core/ports";
 import {
   createFakeChatStore,
   createFakePageStore,
@@ -12,16 +16,13 @@ import {
   createFakeProjectStore,
   createFakeRecoveryService,
   createFakeTrustGate,
-} from "core/ports/fakes"
-import {
-  reatomExportStateMachine,
-  reatomMigrationStateMachine,
-  reatomProjectStateMachine,
-  reatomRestoreStateMachine,
-} from "core/machines"
+} from "core/ports/fakes";
+import type { FailureDtoV1 } from "core/protocol";
+import { parsePageSlug } from "entities/page";
+import type { PageSlug } from "entities/page";
 
-import { runOpenSequence, type OpenSequenceDeps } from "./open-sequence"
-import type { RecoveryRoutingMachines } from "./recovery-routing"
+import { type OpenSequenceDeps, runOpenSequence } from "./open-sequence";
+import type { RecoveryRoutingMachines } from "./recovery-routing";
 
 /**
  * TD §12's ordered startup sequence end to end, against 6D's fakes only. ORDER IS THE
@@ -43,12 +44,17 @@ import type { RecoveryRoutingMachines } from "./recovery-routing"
  */
 
 function slug(value: string): PageSlug {
-  const parsed = parsePageSlug(value)
-  if (parsed instanceof Error) throw parsed
-  return parsed
+  const parsed = parsePageSlug(value);
+  if (parsed instanceof Error) throw parsed;
+  return parsed;
 }
 
-const FAILURE: FailureDtoV1 = { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: "boom", details: {} }
+const FAILURE: FailureDtoV1 = {
+  code: "PERSISTENCE_FAILED",
+  retryable: false,
+  safeMessage: "boom",
+  details: {},
+};
 
 function machines(): RecoveryRoutingMachines {
   return {
@@ -56,35 +62,39 @@ function machines(): RecoveryRoutingMachines {
     restore: reatomRestoreStateMachine(),
     exportMachine: reatomExportStateMachine(),
     migration: reatomMigrationStateMachine(),
-  }
+  };
 }
 
 /** A deps set that runs the WHOLE sequence to a clean `opened` result; each test spreads its own overrides on top. */
-function baseDeps(log: string[], store: ProjectStore, m: RecoveryRoutingMachines): OpenSequenceDeps {
+function baseDeps(
+  log: string[],
+  store: ProjectStore,
+  m: RecoveryRoutingMachines,
+): OpenSequenceDeps {
   return {
     mode: "create",
     projectId: "fake-project-1",
     git: null,
     openProjectStore: async () => {
-      log.push("open-project-store")
-      return store
+      log.push("open-project-store");
+      return store;
     },
     readJournalFormat: async () => {
-      log.push("journal-format")
-      return undefined
+      log.push("journal-format");
+      return undefined;
     },
     recovery: createFakeRecoveryService(),
     findIntendedRecoveryDomain: async () => {
-      log.push("recovery-routing")
-      return null
+      log.push("recovery-routing");
+      return null;
     },
     recoverPendingMigrations: async () => {
-      log.push("migrations-gate")
-      return undefined
+      log.push("migrations-gate");
+      return undefined;
     },
     validateSchemas: async () => {
-      log.push("schema-validation")
-      return undefined
+      log.push("schema-validation");
+      return undefined;
     },
     pageReader: createFakePageStore({ order: [] }),
     pinReader: createFakePinStore(),
@@ -92,285 +102,296 @@ function baseDeps(log: string[], store: ProjectStore, m: RecoveryRoutingMachines
     trustGate: createFakeTrustGate(),
     promptTrustDecision: async () => "grant",
     machines: m,
-  }
+  };
 }
 
 describe("runOpenSequence — step ordering", () => {
   test("closed | beginOpen is illegal from a non-closed project: returns illegal, no step runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const deps = baseDeps(log, store, m)
-      m.project.apply("beginOpen") // already "opening" before the sequence starts
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const deps = baseDeps(log, store, m);
+      m.project.apply("beginOpen"); // already "opening" before the sequence starts
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "illegal", code: "PROJECT_NOT_READY" })
-      expect(log).toEqual([])
-    })
-  })
+      expect(outcome).toEqual({ kind: "illegal", code: "PROJECT_NOT_READY" });
+      expect(log).toEqual([]);
+    });
+  });
 
   test("step 1-2 (lease/fs) failure blocks before journal-format ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         openProjectStore: async () => {
-          log.push("open-project-store")
-          return FAILURE
+          log.push("open-project-store");
+          return FAILURE;
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "open-project-store", failure: FAILURE })
-      expect(log).toEqual(["open-project-store"])
-      expect(m.project.phase()).toBe("blocked")
-    })
-  })
+      expect(outcome).toEqual({ kind: "blocked", step: "open-project-store", failure: FAILURE });
+      expect(log).toEqual(["open-project-store"]);
+      expect(m.project.phase()).toBe("blocked");
+    });
+  });
 
   test("step 3 (journal format) failure blocks before transaction-recovery ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         readJournalFormat: async () => {
-          log.push("journal-format")
-          return FAILURE
+          log.push("journal-format");
+          return FAILURE;
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "journal-format", failure: FAILURE })
-      expect(log).toEqual(["open-project-store", "journal-format"])
-      expect(m.project.phase()).toBe("blocked")
-    })
-  })
+      expect(outcome).toEqual({ kind: "blocked", step: "journal-format", failure: FAILURE });
+      expect(log).toEqual(["open-project-store", "journal-format"]);
+      expect(m.project.phase()).toBe("blocked");
+    });
+  });
 
   test("step 4 (transaction recovery) conflict blocks before recovery-routing ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const recovery = createFakeRecoveryService()
-      recovery.scriptRecoverOutcome({ ok: false, transactionId: "tx-1", error: FAILURE })
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery }
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const recovery = createFakeRecoveryService();
+      recovery.scriptRecoverOutcome({ ok: false, transactionId: "tx-1", error: FAILURE });
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "transaction-recovery", failure: FAILURE })
-      expect(log).toEqual(["open-project-store", "journal-format"])
-      expect(recovery.calls.map((c) => c.method)).toEqual(["recover"])
-      expect(m.project.phase()).toBe("blocked")
-    })
-  })
+      expect(outcome).toEqual({ kind: "blocked", step: "transaction-recovery", failure: FAILURE });
+      expect(log).toEqual(["open-project-store", "journal-format"]);
+      expect(recovery.calls.map((c) => c.method)).toEqual(["recover"]);
+      expect(m.project.phase()).toBe("blocked");
+    });
+  });
 
   test("step 5 (recovery-routing discovery) failure blocks before migrations-gate ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         findIntendedRecoveryDomain: async () => {
-          log.push("recovery-routing")
-          return FAILURE
+          log.push("recovery-routing");
+          return FAILURE;
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "recovery-routing", failure: FAILURE })
-      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing"])
-      expect(m.project.phase()).toBe("blocked")
-    })
-  })
+      expect(outcome).toEqual({ kind: "blocked", step: "recovery-routing", failure: FAILURE });
+      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing"]);
+      expect(m.project.phase()).toBe("blocked");
+    });
+  });
 
   test("an intended recovery journal stops the sequence at 'recovering' — migrations-gate never runs (KCC §7.7: post-intent recovery runs before trust)", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         findIntendedRecoveryDomain: async () => {
-          log.push("recovery-routing")
-          return "migration"
+          log.push("recovery-routing");
+          return "migration";
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "recovering", domain: "migration" })
-      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing"])
-      expect(m.project.phase()).toBe("recovering")
-      expect(m.migration.phase()).toBe("recovering")
-    })
-  })
+      expect(outcome).toEqual({ kind: "recovering", domain: "migration" });
+      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing"]);
+      expect(m.project.phase()).toBe("recovering");
+      expect(m.migration.phase()).toBe("recovering");
+    });
+  });
 
   test("step 6 (migrations gate) failure blocks before schema-validation ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         recoverPendingMigrations: async () => {
-          log.push("migrations-gate")
-          return FAILURE
+          log.push("migrations-gate");
+          return FAILURE;
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "migrations-gate", failure: FAILURE })
-      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing", "migrations-gate"])
-    })
-  })
+      expect(outcome).toEqual({ kind: "blocked", step: "migrations-gate", failure: FAILURE });
+      expect(log).toEqual([
+        "open-project-store",
+        "journal-format",
+        "recovery-routing",
+        "migrations-gate",
+      ]);
+    });
+  });
 
   test("step 7 (schema validation) failure blocks before the orphan-turn scan ever runs", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const recovery = createFakeRecoveryService()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const recovery = createFakeRecoveryService();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         recovery,
         validateSchemas: async () => {
-          log.push("schema-validation")
-          return FAILURE
+          log.push("schema-validation");
+          return FAILURE;
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "blocked", step: "schema-validation", failure: FAILURE })
-      expect(log).toEqual(["open-project-store", "journal-format", "recovery-routing", "migrations-gate", "schema-validation"])
-      expect(recovery.calls.map((c) => c.method)).toEqual(["recover"]) // scanOrphanTurns never reached
-    })
-  })
-
-  test("step 8 (orphan-turn scan) port failure blocks before content-validation ever runs", async () => {
-    await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const recovery = createFakeRecoveryService()
-      recovery.failNext("scanOrphanTurns", FAILURE)
-      const pageReader = createFakePageStore({ order: [] })
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader }
-
-      const outcome = await wrap(runOpenSequence(deps))
-
-      expect(outcome).toEqual({ kind: "blocked", step: "orphan-turn-scan", failure: FAILURE })
-      expect(pageReader.calls).toEqual([]) // content-validation never reached
-    })
-  })
-
-  test("step 8 chat_corrupt blocks before content-validation ever runs", async () => {
-    await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const recovery = createFakeRecoveryService({
-        orphans: [{ chatId: "chat-a", turnId: "turn-1", terminalized: false }],
-      })
-      const pageReader = createFakePageStore({ order: [] })
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader }
-
-      const outcome = await wrap(runOpenSequence(deps))
-
-      if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`)
-      expect(outcome.step).toBe("orphan-turn-scan")
-      expect(pageReader.calls).toEqual([]) // content-validation never reached
-      expect(m.project.phase()).toBe("blocked")
-    })
-  })
-
-  test("step 9 (content validation: a listed page unreadable) blocks before trust is ever resolved", async () => {
-    await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake", manifest: { pages: [slug("home")] } })
-      const m = machines()
-      const pageReader = createFakePageStore({ order: [slug("home")] }) // no seeded source -> readSource() fails
-      const trustGate = createFakeTrustGate()
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), pageReader, trustGate }
-
-      const outcome = await wrap(runOpenSequence(deps))
-
-      if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`)
-      expect(outcome.step).toBe("content-validation")
-      expect(trustGate.calls).toEqual([]) // trust step never reached
-    })
-  })
-
-  test("happy path with nothing to recover: opened, trusted, every step ran in order", async () => {
-    await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const deps = baseDeps(log, store, m)
-
-      const outcome = await wrap(runOpenSequence(deps))
-
-      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" })
+      expect(outcome).toEqual({ kind: "blocked", step: "schema-validation", failure: FAILURE });
       expect(log).toEqual([
         "open-project-store",
         "journal-format",
         "recovery-routing",
         "migrations-gate",
         "schema-validation",
-      ])
-      expect(m.project.phase()).toBe("ready")
-    })
-  })
-})
+      ]);
+      expect(recovery.calls.map((c) => c.method)).toEqual(["recover"]); // scanOrphanTurns never reached
+    });
+  });
+
+  test("step 8 (orphan-turn scan) port failure blocks before content-validation ever runs", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const recovery = createFakeRecoveryService();
+      recovery.failNext("scanOrphanTurns", FAILURE);
+      const pageReader = createFakePageStore({ order: [] });
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader };
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      expect(outcome).toEqual({ kind: "blocked", step: "orphan-turn-scan", failure: FAILURE });
+      expect(pageReader.calls).toEqual([]); // content-validation never reached
+    });
+  });
+
+  test("step 8 chat_corrupt blocks before content-validation ever runs", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const recovery = createFakeRecoveryService({
+        orphans: [{ chatId: "chat-a", turnId: "turn-1", terminalized: false }],
+      });
+      const pageReader = createFakePageStore({ order: [] });
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader };
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`);
+      expect(outcome.step).toBe("orphan-turn-scan");
+      expect(pageReader.calls).toEqual([]); // content-validation never reached
+      expect(m.project.phase()).toBe("blocked");
+    });
+  });
+
+  test("step 9 (content validation: a listed page unreadable) blocks before trust is ever resolved", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake", manifest: { pages: [slug("home")] } });
+      const m = machines();
+      const pageReader = createFakePageStore({ order: [slug("home")] }); // no seeded source -> readSource() fails
+      const trustGate = createFakeTrustGate();
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), pageReader, trustGate };
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`);
+      expect(outcome.step).toBe("content-validation");
+      expect(trustGate.calls).toEqual([]); // trust step never reached
+    });
+  });
+
+  test("happy path with nothing to recover: opened, trusted, every step ran in order", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const deps = baseDeps(log, store, m);
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" });
+      expect(log).toEqual([
+        "open-project-store",
+        "journal-format",
+        "recovery-routing",
+        "migrations-gate",
+        "schema-validation",
+      ]);
+      expect(m.project.phase()).toBe("ready");
+    });
+  });
+});
 
 describe("runOpenSequence — trust (KCC §7.1/§12.8)", () => {
   test("project.create implicitly grants trust and never prompts", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const trustGate = createFakeTrustGate()
-      let prompted = false
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const trustGate = createFakeTrustGate();
+      let prompted = false;
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         mode: "create",
         trustGate,
         promptTrustDecision: async () => {
-          prompted = true
-          return "grant"
+          prompted = true;
+          return "grant";
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" })
-      expect(prompted).toBe(false)
-      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "grant"])
-    })
-  })
+      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" });
+      expect(prompted).toBe(false);
+      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "grant"]);
+    });
+  });
 
   test("project.open with a prior grant skips the prompt entirely", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const trustGate = createFakeTrustGate()
-      let prompted = false
-      const projectId = "fake-project-1"
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const trustGate = createFakeTrustGate();
+      let prompted = false;
+      const projectId = "fake-project-1";
       // Pre-grant the exact subject this run will build.
-      const subject = await trustGate.buildSubject(store.root, projectId, null)
-      if ("code" in subject) throw new Error("unexpected failure")
-      await trustGate.grant(subject)
+      const subject = await trustGate.buildSubject(store.root, projectId, null);
+      if ("code" in subject) throw new Error("unexpected failure");
+      await trustGate.grant(subject);
 
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
@@ -378,59 +399,59 @@ describe("runOpenSequence — trust (KCC §7.1/§12.8)", () => {
         projectId,
         trustGate,
         promptTrustDecision: async () => {
-          prompted = true
-          return "grant"
+          prompted = true;
+          return "grant";
         },
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" })
-      expect(prompted).toBe(false)
-    })
-  })
+      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" });
+      expect(prompted).toBe(false);
+    });
+  });
 
   test("project.open with no prior grant prompts, and an explicit refusal ends 'opened' with untrusted-read-only — never calling grant", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const trustGate = createFakeTrustGate()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const trustGate = createFakeTrustGate();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         mode: "open",
         trustGate,
         promptTrustDecision: async () => "refuse",
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "opened", store, trust: "untrusted-read-only" })
-      expect(m.project.phase()).toBe("ready")
+      expect(outcome).toEqual({ kind: "opened", store, trust: "untrusted-read-only" });
+      expect(m.project.phase()).toBe("ready");
       // KCC §12.8's negative: refusal never calls TrustGate.grant, and this module's own
       // Deps type names no Gate/HostSupervisor/migration-transform/export dependency at
       // all — a refusal path cannot start what it was never given a reference to.
-      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "isGranted"])
-    })
-  })
+      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "isGranted"]);
+    });
+  });
 
   test("project.open with no prior grant and an explicit grant durably records it", async () => {
     await context.start(async () => {
-      const log: string[] = []
-      const store = createFakeProjectStore({ root: "/fake" })
-      const m = machines()
-      const trustGate = createFakeTrustGate()
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const trustGate = createFakeTrustGate();
       const deps: OpenSequenceDeps = {
         ...baseDeps(log, store, m),
         mode: "open",
         trustGate,
         promptTrustDecision: async () => "grant",
-      }
+      };
 
-      const outcome = await wrap(runOpenSequence(deps))
+      const outcome = await wrap(runOpenSequence(deps));
 
-      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" })
-      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "isGranted", "grant"])
-    })
-  })
-})
+      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" });
+      expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "isGranted", "grant"]);
+    });
+  });
+});

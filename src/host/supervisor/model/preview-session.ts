@@ -1,7 +1,7 @@
-import type { FrameIdentity } from "../../protocol"
-import type { HostSessionSpec, InteractionMode, PreviewIdentity, Size } from "../../types"
-import type { GeometryQuery, HostSessionDeps, PreviewSession } from "../types"
-import { createHostSession } from "./session"
+import type { FrameIdentity } from "../../protocol";
+import type { HostSessionSpec, InteractionMode, PreviewIdentity, Size } from "../../types";
+import type { GeometryQuery, HostSessionDeps, PreviewSession } from "../types";
+import { createHostSession } from "./session";
 
 /**
  * The UI-facing `PreviewSession` facade subset (host-supervision §3.2) over a SINGLE
@@ -26,9 +26,9 @@ import { createHostSession } from "./session"
  * both.
  */
 export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDeps): PreviewSession {
-  const session = createHostSession(spec, deps)
-  const mode: "preview" | "historical" = spec.mode === "historical" ? "historical" : "preview"
-  let interactionMode: InteractionMode = spec.interactionMode
+  const session = createHostSession(spec, deps);
+  const mode: "preview" | "historical" = spec.mode === "historical" ? "historical" : "preview";
+  let interactionMode: InteractionMode = spec.interactionMode;
 
   // Kick off the incarnation. The pump publishes frames to the broker as they arrive.
   // On success the facade adopts the ACCEPTED ready response's effective interactionMode
@@ -37,50 +37,51 @@ export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDep
   // error is surfaced via onFatal — or logged if no sink is injected (never swallowed).
   void session.start().then((outcome) => {
     if (outcome instanceof Error) {
-      if (deps.onFatal) deps.onFatal(outcome)
-      else console.warn("preview-session: startup failed:", outcome.message)
-      return
+      if (deps.onFatal) deps.onFatal(outcome);
+      else console.warn("preview-session: startup failed:", outcome.message);
+      return;
     }
-    const echoed = outcome.ready.body.interactionMode
-    if (echoed === "static" || echoed === "interactive") interactionMode = echoed
-  })
+    const echoed = outcome.ready.body.interactionMode;
+    if (echoed === "static" || echoed === "interactive") interactionMode = echoed;
+  });
 
   return {
     get identity(): PreviewIdentity {
-      const { nonce: _nonce, ...rest } = session.identity
-      return rest
+      const { nonce: _nonce, ...rest } = session.identity;
+      return rest;
     },
     get mode() {
-      return mode
+      return mode;
     },
     get interactionMode() {
-      return interactionMode
+      return interactionMode;
     },
     frames: session.frames,
     resize(size: Size) {
       // Fire-and-forget dispatch; the response is diagnostic-only in 2D-2 (no queue/
       // backpressure surface until 2D-3) but a dropped error is LOGGED, never swallowed.
       void session.resize(size).then((result) => {
-        if (result instanceof Error) console.warn("preview-session: resize failed:", result.message)
-      })
+        if (result instanceof Error)
+          console.warn("preview-session: resize failed:", result.message);
+      });
     },
     setMode(next: InteractionMode) {
       void session.setMode(next).then((result) => {
         if (result instanceof Error) {
-          console.warn("preview-session: set-mode failed:", result.message) // rejection/timeout/stale preserves the prior mode (§7)
-          return
+          console.warn("preview-session: set-mode failed:", result.message); // rejection/timeout/stale preserves the prior mode (§7)
+          return;
         }
-        if (result.body.interactionMode === next) interactionMode = next
-      })
+        if (result.body.interactionMode === next) interactionMode = next;
+      });
     },
     query(frameIdentity: FrameIdentity, query: GeometryQuery) {
-      return session.query(frameIdentity, query)
+      return session.query(frameIdentity, query);
     },
     retry() {
       // 2D-2 stub — the restart budget/circuit that acts on this lands in 2D-3.
     },
     async close() {
-      await session.stop()
+      await session.stop();
     },
-  }
+  };
 }

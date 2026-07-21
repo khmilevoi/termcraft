@@ -1,4 +1,4 @@
-import type { CommandKindV1, UnavailableReason } from "core/protocol"
+import type { CommandKindV1, UnavailableReason } from "core/protocol";
 
 /**
  * The SINGLE home of the MVP Tier-C "deferred family" decision
@@ -48,13 +48,13 @@ export const DEFERRED_CAPABILITY_KINDS: readonly CommandKindV1[] = [
   "history.open",
   "preview.forwardInput",
   "preview.setTweak",
-]
+];
 
-const DEFERRED_CAPABILITY_KIND_SET: ReadonlySet<CommandKindV1> = new Set(DEFERRED_CAPABILITY_KINDS)
+const DEFERRED_CAPABILITY_KIND_SET: ReadonlySet<CommandKindV1> = new Set(DEFERRED_CAPABILITY_KINDS);
 
 /** True when `kind` is one of the 10 Tier-C kinds with no MVP service behind its guard. */
 export function isDeferredCapabilityKind(kind: CommandKindV1): boolean {
-  return DEFERRED_CAPABILITY_KIND_SET.has(kind)
+  return DEFERRED_CAPABILITY_KIND_SET.has(kind);
 }
 
 /**
@@ -68,7 +68,7 @@ export function isDeferredCapabilityKind(kind: CommandKindV1): boolean {
 // that decoration would leak process-wide into every other kind's reason, permanently.
 const CAPABILITY_UNAVAILABLE_REASON: UnavailableReason = Object.freeze({
   code: "CAPABILITY_UNAVAILABLE",
-})
+});
 
 /**
  * `kind`'s Tier-C reason, or `null` when `kind` has a real MVP service and this file has
@@ -77,6 +77,6 @@ const CAPABILITY_UNAVAILABLE_REASON: UnavailableReason = Object.freeze({
  * is what makes the primary code identical on both paths.
  */
 export function deferredCapabilityReason(kind: CommandKindV1): UnavailableReason | null {
-  if (!isDeferredCapabilityKind(kind)) return null
-  return CAPABILITY_UNAVAILABLE_REASON
+  if (!isDeferredCapabilityKind(kind)) return null;
+  return CAPABILITY_UNAVAILABLE_REASON;
 }

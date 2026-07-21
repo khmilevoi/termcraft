@@ -1,12 +1,12 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { Clock } from "infrastructure/clock"
-import type { PageSlug } from "entities/page"
-import type { StateMachine, ExportAction, ExportState } from "core/machines"
-import type { PageReader, ProjectWriteCoordinator } from "core/ports"
-import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol"
+import type { ExportAction, ExportState, StateMachine } from "core/machines";
+import type { PageReader, ProjectWriteCoordinator } from "core/ports";
+import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
+import type { Clock } from "infrastructure/clock";
 
-import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "../types"
+import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
 
 /**
  * `kernel.export.begin` / `beginRendering` — `idle -> preparing -> rendering`
@@ -49,20 +49,20 @@ import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "
  */
 
 export interface CaptureExportSnapshotDeps {
-  readonly machine: StateMachine<ExportState, ExportAction>
-  readonly projectWrite: ProjectWriteCoordinator
-  readonly pageReader: PageReader
-  readonly clock: Clock
+  readonly machine: StateMachine<ExportState, ExportAction>;
+  readonly projectWrite: ProjectWriteCoordinator;
+  readonly pageReader: PageReader;
+  readonly clock: Clock;
 }
 
 export interface CaptureExportSnapshotInputV1 {
-  readonly pages: readonly ExportPageInputV1[]
+  readonly pages: readonly ExportPageInputV1[];
 }
 
 export type CaptureExportSnapshotResultV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
   | { readonly kind: "failed"; readonly failure: FailureDtoV1 }
-  | { readonly kind: "captured"; readonly snapshot: ExportSnapshotV1 }
+  | { readonly kind: "captured"; readonly snapshot: ExportSnapshotV1 };
 
 function pageReadFailure(pageSlug: PageSlug, cause: FailureDtoV1): FailureDtoV1 {
   return {
@@ -70,43 +70,43 @@ function pageReadFailure(pageSlug: PageSlug, cause: FailureDtoV1): FailureDtoV1 
     retryable: cause.retryable,
     safeMessage: `failed to read canonical source for page "${pageSlug}": ${cause.safeMessage}`,
     details: { pageSlug },
-  }
+  };
 }
 
 export async function captureExportSnapshot(
   deps: CaptureExportSnapshotDeps,
   input: CaptureExportSnapshotInputV1,
 ): Promise<CaptureExportSnapshotResultV1> {
-  if (input.pages.length === 0) return { kind: "illegal", code: "NO_PAGES" }
+  if (input.pages.length === 0) return { kind: "illegal", code: "NO_PAGES" };
 
-  const began = deps.machine.apply("kernel.export.begin")
-  if (began.kind === "illegal") return { kind: "illegal", code: began.code }
+  const began = deps.machine.apply("kernel.export.begin");
+  if (began.kind === "illegal") return { kind: "illegal", code: began.code };
 
-  const permit = await wrap(deps.projectWrite.acquire())
+  const permit = await wrap(deps.projectWrite.acquire());
 
-  const pages: ExportPageSnapshotV1[] = []
+  const pages: ExportPageSnapshotV1[] = [];
   for (const page of input.pages) {
-    const source = await wrap(deps.pageReader.readSource(page.pageSlug))
+    const source = await wrap(deps.pageReader.readSource(page.pageSlug));
     if ("code" in source) {
-      deps.projectWrite.release(permit)
-      deps.machine.apply("kernel.export.fail")
-      return { kind: "failed", failure: pageReadFailure(page.pageSlug, source) }
+      deps.projectWrite.release(permit);
+      deps.machine.apply("kernel.export.fail");
+      return { kind: "failed", failure: pageReadFailure(page.pageSlug, source) };
     }
-    pages.push({ ...page, sourceHash: source.sourceHash, bytes: source.bytes })
+    pages.push({ ...page, sourceHash: source.sourceHash, bytes: source.bytes });
   }
 
-  deps.projectWrite.release(permit)
+  deps.projectWrite.release(permit);
 
-  const beganRendering = deps.machine.apply("kernel.export.beginRendering")
+  const beganRendering = deps.machine.apply("kernel.export.beginRendering");
   if (beganRendering.kind === "illegal") {
     // Defensive only: unreachable in practice — nothing between `begin` and here can move
     // this machine — but per errore's rule against assuming success, it is an explicit
     // branch rather than a swallowed possibility.
-    return { kind: "illegal", code: beganRendering.code }
+    return { kind: "illegal", code: beganRendering.code };
   }
 
   return {
     kind: "captured",
     snapshot: { pages, capturedAt: deps.clock.now().toISOString() },
-  }
+  };
 }

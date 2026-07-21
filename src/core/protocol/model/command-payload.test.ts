@@ -1,15 +1,15 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test";
 
-import { uuidv7 } from "infrastructure/uuid"
+import { uuidv7 } from "infrastructure/uuid";
 
-import { COMMAND_KINDS_V1, type CommandKindV1 } from "./command-kind"
-import { commandPayloadSchemaFor, commandPayloadSchemas } from "./command-payload"
+import { COMMAND_KINDS_V1, type CommandKindV1 } from "./command-kind";
+import { commandPayloadSchemaFor, commandPayloadSchemas } from "./command-payload";
 
-const SHA = "a".repeat(40)
+const SHA = "a".repeat(40);
 
 interface Fixture {
-  readonly valid: unknown
-  readonly breaks: readonly unknown[]
+  readonly valid: unknown;
+  readonly breaks: readonly unknown[];
 }
 
 /**
@@ -33,7 +33,11 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
       },
       { root: "", creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" }, text: "hi" },
       { root: "/abs/project", creationDefaults: { trust: "trusted" }, text: "hi" },
-      { root: "/abs/project", creationDefaults: { trust: "trusted", workspaceIdentity: "w" }, text: "" },
+      {
+        root: "/abs/project",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "w" },
+        text: "",
+      },
     ],
   },
   "project.open": {
@@ -141,7 +145,11 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     ],
   },
   "preview.setThemeCapabilities": {
-    valid: { previewSessionId: uuidv7(), themeId: "dark-default", terminalCapabilities: { colorDepth: 24 } },
+    valid: {
+      previewSessionId: uuidv7(),
+      themeId: "dark-default",
+      terminalCapabilities: { colorDepth: 24 },
+    },
     breaks: [
       {
         previewSessionId: uuidv7(),
@@ -174,7 +182,11 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     ],
   },
   "preview.setTweak": {
-    valid: { previewSessionId: uuidv7(), tweakId: "accent-color", value: { kind: "string", value: "red" } },
+    valid: {
+      previewSessionId: uuidv7(),
+      tweakId: "accent-color",
+      value: { kind: "string", value: "red" },
+    },
     breaks: [
       {
         previewSessionId: uuidv7(),
@@ -261,7 +273,12 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
   "commit.confirm": {
     valid: { commitPlanId: uuidv7(), message: "chore: sync termcraft", warningAcknowledged: true },
     breaks: [
-      { commitPlanId: uuidv7(), message: "chore: sync termcraft", warningAcknowledged: true, extra: 1 },
+      {
+        commitPlanId: uuidv7(),
+        message: "chore: sync termcraft",
+        warningAcknowledged: true,
+        extra: 1,
+      },
       { commitPlanId: uuidv7(), message: "", warningAcknowledged: true },
       { commitPlanId: uuidv7(), message: "chore: sync termcraft", warningAcknowledged: "true" },
     ],
@@ -294,107 +311,109 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     valid: { migrationActionId: uuidv7() },
     breaks: [{ migrationActionId: uuidv7(), extra: 1 }, { migrationActionId: "bad" }, {}],
   },
-}
+};
 
 describe("commandPayloadSchemas", () => {
   test("covers exactly the 43 v1 command kinds — no missing or extra entry", () => {
-    expect(Object.keys(commandPayloadSchemas).sort()).toEqual([...COMMAND_KINDS_V1].sort())
-  })
+    expect(Object.keys(commandPayloadSchemas).sort()).toEqual([...COMMAND_KINDS_V1].sort());
+  });
 
   for (const kind of COMMAND_KINDS_V1) {
     test(`${kind}: accepts its valid payload and rejects every break`, () => {
-      const schema = commandPayloadSchemas[kind]
-      const fixture = FIXTURES[kind]
-      expect(schema.safeParse(fixture.valid).success).toBe(true)
+      const schema = commandPayloadSchemas[kind];
+      const fixture = FIXTURES[kind];
+      expect(schema.safeParse(fixture.valid).success).toBe(true);
       for (const bad of fixture.breaks) {
-        expect(schema.safeParse(bad).success).toBe(false)
+        expect(schema.safeParse(bad).success).toBe(false);
       }
-    })
+    });
   }
-})
+});
 
 describe("commandPayloadSchemaFor", () => {
   test("returns the exact same schema instance the map holds", () => {
     for (const kind of COMMAND_KINDS_V1) {
-      expect(commandPayloadSchemaFor(kind)).toBe(commandPayloadSchemas[kind])
+      expect(commandPayloadSchemaFor(kind)).toBe(commandPayloadSchemas[kind]);
     }
-  })
-})
+  });
+});
 
 describe("project.retryOpen — closed recovery discriminated union", () => {
   test("accepts all three recovery kinds", () => {
-    const schema = commandPayloadSchemas["project.retryOpen"]
-    expect(schema.safeParse({ recovery: { kind: "restore", restoreActionId: uuidv7() } }).success).toBe(
+    const schema = commandPayloadSchemas["project.retryOpen"];
+    expect(
+      schema.safeParse({ recovery: { kind: "restore", restoreActionId: uuidv7() } }).success,
+    ).toBe(true);
+    expect(schema.safeParse({ recovery: { kind: "export", operationId: uuidv7() } }).success).toBe(
       true,
-    )
-    expect(schema.safeParse({ recovery: { kind: "export", operationId: uuidv7() } }).success).toBe(true)
+    );
     expect(
       schema.safeParse({ recovery: { kind: "migration", migrationActionId: uuidv7() } }).success,
-    ).toBe(true)
-  })
+    ).toBe(true);
+  });
 
   test("rejects a variant carrying another variant's id field", () => {
-    const schema = commandPayloadSchemas["project.retryOpen"]
+    const schema = commandPayloadSchemas["project.retryOpen"];
     expect(schema.safeParse({ recovery: { kind: "restore", operationId: uuidv7() } }).success).toBe(
       false,
-    )
-  })
-})
+    );
+  });
+});
 
 describe("preview.queryGeometry — closed hit/rect/describe/layout/pin-anchor query union", () => {
-  const schema = commandPayloadSchemas["preview.queryGeometry"]
-  const frameToken = uuidv7()
+  const schema = commandPayloadSchemas["preview.queryGeometry"];
+  const frameToken = uuidv7();
 
   test("accepts every closed query kind", () => {
-    expect(schema.safeParse({ frameToken, query: { kind: "hit", x: 1, y: 2 } }).success).toBe(true)
-    expect(schema.safeParse({ frameToken, query: { kind: "rect", elementId: "header" } }).success).toBe(
-      true,
-    )
+    expect(schema.safeParse({ frameToken, query: { kind: "hit", x: 1, y: 2 } }).success).toBe(true);
+    expect(
+      schema.safeParse({ frameToken, query: { kind: "rect", elementId: "header" } }).success,
+    ).toBe(true);
     expect(
       schema.safeParse({ frameToken, query: { kind: "describe", elementId: "header" } }).success,
-    ).toBe(true)
-    expect(schema.safeParse({ frameToken, query: { kind: "layout" } }).success).toBe(true)
-    expect(schema.safeParse({ frameToken, query: { kind: "pin-anchor", x: 1, y: 2 } }).success).toBe(
-      true,
-    )
-  })
+    ).toBe(true);
+    expect(schema.safeParse({ frameToken, query: { kind: "layout" } }).success).toBe(true);
+    expect(
+      schema.safeParse({ frameToken, query: { kind: "pin-anchor", x: 1, y: 2 } }).success,
+    ).toBe(true);
+  });
 
   test("rejects an unlisted query kind", () => {
-    expect(schema.safeParse({ frameToken, query: { kind: "scroll" } }).success).toBe(false)
-  })
+    expect(schema.safeParse({ frameToken, query: { kind: "scroll" } }).success).toBe(false);
+  });
 
   test("rejects a layout query carrying extra fields", () => {
-    expect(schema.safeParse({ frameToken, query: { kind: "layout", x: 1 } }).success).toBe(false)
-  })
-})
+    expect(schema.safeParse({ frameToken, query: { kind: "layout", x: 1 } }).success).toBe(false);
+  });
+});
 
 describe("preview.forwardInput — closed key/click/mousemove union", () => {
-  const schema = commandPayloadSchemas["preview.forwardInput"]
-  const previewSessionId = uuidv7()
+  const schema = commandPayloadSchemas["preview.forwardInput"];
+  const previewSessionId = uuidv7();
 
   test("accepts every closed input kind", () => {
     expect(
       schema.safeParse({ previewSessionId, input: { kind: "key", key: "Enter" } }).success,
-    ).toBe(true)
+    ).toBe(true);
     expect(
       schema.safeParse({ previewSessionId, input: { kind: "click", x: 1, y: 2, button: "left" } })
         .success,
-    ).toBe(true)
+    ).toBe(true);
     expect(
       schema.safeParse({ previewSessionId, input: { kind: "mousemove", x: 1, y: 2 } }).success,
-    ).toBe(true)
-  })
+    ).toBe(true);
+  });
 
   test("rejects a click missing its button", () => {
-    expect(schema.safeParse({ previewSessionId, input: { kind: "click", x: 1, y: 2 } }).success).toBe(
-      false,
-    )
-  })
-})
+    expect(
+      schema.safeParse({ previewSessionId, input: { kind: "click", x: 1, y: 2 } }).success,
+    ).toBe(false);
+  });
+});
 
 describe("preview.setTweak — closed string/number/boolean tweak value union", () => {
-  const schema = commandPayloadSchemas["preview.setTweak"]
-  const previewSessionId = uuidv7()
+  const schema = commandPayloadSchemas["preview.setTweak"];
+  const previewSessionId = uuidv7();
 
   test("accepts every closed tweak value kind", () => {
     expect(
@@ -403,103 +422,106 @@ describe("preview.setTweak — closed string/number/boolean tweak value union", 
         tweakId: "accent-color",
         value: { kind: "string", value: "red" },
       }).success,
-    ).toBe(true)
+    ).toBe(true);
     expect(
       schema.safeParse({
         previewSessionId,
         tweakId: "accent-color",
         value: { kind: "number", value: 42 },
       }).success,
-    ).toBe(true)
+    ).toBe(true);
     expect(
       schema.safeParse({
         previewSessionId,
         tweakId: "accent-color",
         value: { kind: "boolean", value: true },
       }).success,
-    ).toBe(true)
-  })
+    ).toBe(true);
+  });
 
   test("rejects an unlisted tweak value kind", () => {
     expect(
-      schema.safeParse({ previewSessionId, tweakId: "accent-color", value: { kind: "object", value: {} } })
-        .success,
-    ).toBe(false)
-  })
-})
+      schema.safeParse({
+        previewSessionId,
+        tweakId: "accent-color",
+        value: { kind: "object", value: {} },
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("project.setTrust — closed trust enum", () => {
   test("accepts both trust values", () => {
-    const schema = commandPayloadSchemas["project.setTrust"]
-    expect(schema.safeParse({ trust: "trusted", workspaceIdentity: "ws-1" }).success).toBe(true)
+    const schema = commandPayloadSchemas["project.setTrust"];
+    expect(schema.safeParse({ trust: "trusted", workspaceIdentity: "ws-1" }).success).toBe(true);
     expect(
       schema.safeParse({ trust: "untrusted-read-only", workspaceIdentity: "ws-1" }).success,
-    ).toBe(true)
-  })
-})
+    ).toBe(true);
+  });
+});
 
 describe("preview.setMode — closed mode enum", () => {
   test("accepts both static and interactive modes", () => {
-    const schema = commandPayloadSchemas["preview.setMode"]
-    const previewSessionId = uuidv7()
-    expect(schema.safeParse({ previewSessionId, mode: "static" }).success).toBe(true)
-    expect(schema.safeParse({ previewSessionId, mode: "interactive" }).success).toBe(true)
-  })
-})
+    const schema = commandPayloadSchemas["preview.setMode"];
+    const previewSessionId = uuidv7();
+    expect(schema.safeParse({ previewSessionId, mode: "static" }).success).toBe(true);
+    expect(schema.safeParse({ previewSessionId, mode: "interactive" }).success).toBe(true);
+  });
+});
 
 describe("pin.setStatus — closed status enum", () => {
   test("accepts both open and resolved statuses", () => {
-    const schema = commandPayloadSchemas["pin.setStatus"]
-    const pinId = uuidv7()
-    expect(schema.safeParse({ pinId, status: "open" }).success).toBe(true)
-    expect(schema.safeParse({ pinId, status: "resolved" }).success).toBe(true)
-  })
-})
+    const schema = commandPayloadSchemas["pin.setStatus"];
+    const pinId = uuidv7();
+    expect(schema.safeParse({ pinId, status: "open" }).success).toBe(true);
+    expect(schema.safeParse({ pinId, status: "resolved" }).success).toBe(true);
+  });
+});
 
 describe("commit.plan — closed scope enum", () => {
   test("accepts all three commit scopes", () => {
-    const schema = commandPayloadSchemas["commit.plan"]
-    expect(schema.safeParse({ scope: "current-page" }).success).toBe(true)
-    expect(schema.safeParse({ scope: "infrastructure" }).success).toBe(true)
-    expect(schema.safeParse({ scope: "whole-project" }).success).toBe(true)
-  })
-})
+    const schema = commandPayloadSchemas["commit.plan"];
+    expect(schema.safeParse({ scope: "current-page" }).success).toBe(true);
+    expect(schema.safeParse({ scope: "infrastructure" }).success).toBe(true);
+    expect(schema.safeParse({ scope: "whole-project" }).success).toBe(true);
+  });
+});
 
 describe("migration.plan — empty or typed selected file-kind scope", () => {
-  const schema = commandPayloadSchemas["migration.plan"]
+  const schema = commandPayloadSchemas["migration.plan"];
 
   test("accepts the exact empty object", () => {
-    expect(schema.safeParse({}).success).toBe(true)
-  })
+    expect(schema.safeParse({}).success).toBe(true);
+  });
 
   test("accepts a typed selected file-kind scope", () => {
-    expect(schema.safeParse({ scope: { fileKinds: ["legacy-page"] } }).success).toBe(true)
-  })
+    expect(schema.safeParse({ scope: { fileKinds: ["legacy-page"] } }).success).toBe(true);
+  });
 
   test("rejects a non-empty fileKinds-less scope and an empty fileKinds list", () => {
-    expect(schema.safeParse({ scope: {} }).success).toBe(false)
-    expect(schema.safeParse({ scope: { fileKinds: [] } }).success).toBe(false)
-  })
-})
+    expect(schema.safeParse({ scope: {} }).success).toBe(false);
+    expect(schema.safeParse({ scope: { fileKinds: [] } }).success).toBe(false);
+  });
+});
 
 describe("pin.create — geometryToken plus text, no other identity", () => {
-  const schema = commandPayloadSchemas["pin.create"]
+  const schema = commandPayloadSchemas["pin.create"];
 
   test("allows empty pin text, matching the stored PinDtoV1 convention", () => {
-    expect(schema.safeParse({ geometryToken: uuidv7(), text: "" }).success).toBe(true)
-  })
+    expect(schema.safeParse({ geometryToken: uuidv7(), text: "" }).success).toBe(true);
+  });
 
   test("rejects a page/element/rectangle riding along with the token", () => {
     expect(
       schema.safeParse({ geometryToken: uuidv7(), text: "note", pageSlug: "dashboard" }).success,
-    ).toBe(false)
-  })
-})
+    ).toBe(false);
+  });
+});
 
 describe("page.reorder — exact permutation of listed slugs", () => {
-  const schema = commandPayloadSchemas["page.reorder"]
+  const schema = commandPayloadSchemas["page.reorder"];
 
   test("accepts the empty permutation", () => {
-    expect(schema.safeParse({ pageSlugs: [] }).success).toBe(true)
-  })
-})
+    expect(schema.safeParse({ pageSlugs: [] }).success).toBe(true);
+  });
+});

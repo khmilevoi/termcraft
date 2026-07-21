@@ -1,13 +1,13 @@
-import { wrap } from "@reatom/core"
+import { wrap } from "@reatom/core";
 
-import type { StateMachine, TurnAction, TurnState } from "core/machines"
-import type { AgentBackend, AgentRunOutcome, AgentTask, FencedEvent } from "core/ports"
-import type { PublishableEventV1, TurnBackendLeaseV1 } from "core/mailbox"
-import type { CommandRejectionCode, EventPayloadByKindV1 } from "core/protocol"
-import type { TokenUsage } from "entities/turn"
+import type { StateMachine, TurnAction, TurnState } from "core/machines";
+import type { PublishableEventV1, TurnBackendLeaseV1 } from "core/mailbox";
+import type { AgentBackend, AgentRunOutcome, AgentTask, FencedEvent } from "core/ports";
+import type { CommandRejectionCode, EventPayloadByKindV1 } from "core/protocol";
+import type { TokenUsage } from "entities/turn";
 
-import type { TurnDeadlines } from "./deadlines"
-import type { TurnFence, TurnFenceError } from "./fence"
+import type { TurnDeadlines } from "./deadlines";
+import type { TurnFence, TurnFenceError } from "./fence";
 
 /**
  * `kernel.turn.beginAttempt` / `beginStopping` / `requestCancel` — `workspace-ready ->
@@ -37,48 +37,62 @@ import type { TurnFence, TurnFenceError } from "./fence"
  *     very first thing the resolved value's continuation does.
  */
 
-type TurnAttemptStartedPayloadV1 = EventPayloadByKindV1["turn.attemptStarted"]
-type TurnProgressPayloadV1 = EventPayloadByKindV1["turn.progress"]
+type TurnAttemptStartedPayloadV1 = EventPayloadByKindV1["turn.attemptStarted"];
+type TurnProgressPayloadV1 = EventPayloadByKindV1["turn.progress"];
 
 export interface TurnAttemptDeps {
-  readonly machine: StateMachine<TurnState, TurnAction>
-  readonly agentBackend: AgentBackend
-  readonly deadlines: TurnDeadlines
-  readonly publish: (event: PublishableEventV1<"turn.attemptStarted"> | PublishableEventV1<"turn.progress">) => void
+  readonly machine: StateMachine<TurnState, TurnAction>;
+  readonly agentBackend: AgentBackend;
+  readonly deadlines: TurnDeadlines;
+  readonly publish: (
+    event: PublishableEventV1<"turn.attemptStarted"> | PublishableEventV1<"turn.progress">,
+  ) => void;
 }
 
 export interface TurnAttemptInputV1 {
-  readonly turnId: string
-  readonly fence: TurnFence
+  readonly turnId: string;
+  readonly fence: TurnFence;
   /** Everything `AgentTask` needs except `fence` — this module mints and attaches that itself. */
-  readonly task: Omit<AgentTask, "fence">
+  readonly task: Omit<AgentTask, "fence">;
 }
 
 export type TurnAttemptOutcomeV1 =
-  | { readonly kind: "completed"; readonly finalText: string; readonly usage: TokenUsage | null; readonly sessionId: string }
+  | {
+      readonly kind: "completed";
+      readonly finalText: string;
+      readonly usage: TokenUsage | null;
+      readonly sessionId: string;
+    }
   | { readonly kind: "failed"; readonly message: string; readonly sessionId: string | null }
   | { readonly kind: "cancelled" }
-  | { readonly kind: "backend-unhealthy" }
+  | { readonly kind: "backend-unhealthy" };
 
 export interface TurnAttemptHandle {
-  readonly outcome: Promise<TurnAttemptOutcomeV1>
+  readonly outcome: Promise<TurnAttemptOutcomeV1>;
   /** Requests cancellation. Does not resolve until exit is confirmed — see ordering (a) above. */
-  readonly requestCancel: () => Promise<void>
+  readonly requestCancel: () => Promise<void>;
 }
 
 export type TurnAttemptStartResultV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
-  | { readonly kind: "started"; readonly handle: TurnAttemptHandle }
+  | { readonly kind: "started"; readonly handle: TurnAttemptHandle };
 
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function toAttemptOutcome(raw: AgentRunOutcome): TurnAttemptOutcomeV1 {
-  if (raw.kind === "completed") return { kind: "completed", finalText: raw.finalText, usage: raw.usage, sessionId: raw.sessionId }
-  if (raw.kind === "backend-error") return { kind: "failed", message: raw.message, sessionId: raw.sessionId }
-  if (raw.kind === "cancelled") return { kind: "cancelled" }
-  return { kind: "backend-unhealthy" } // AgentRunOutcome's remaining case, "unconfirmed-exit".
+  if (raw.kind === "completed")
+    return {
+      kind: "completed",
+      finalText: raw.finalText,
+      usage: raw.usage,
+      sessionId: raw.sessionId,
+    };
+  if (raw.kind === "backend-error")
+    return { kind: "failed", message: raw.message, sessionId: raw.sessionId };
+  if (raw.kind === "cancelled") return { kind: "cancelled" };
+  return { kind: "backend-unhealthy" }; // AgentRunOutcome's remaining case, "unconfirmed-exit".
 }
 
 /**
@@ -89,12 +103,12 @@ function toAttemptOutcome(raw: AgentRunOutcome): TurnAttemptOutcomeV1 {
  * brand so the ALREADY-LANDED comparison (never reimplemented here) can run against it.
  */
 function asLease(fence: FencedEvent["fence"]): TurnBackendLeaseV1 {
-  return fence as TurnBackendLeaseV1
+  return fence as TurnBackendLeaseV1;
 }
 
 /** `entities/turn`'s `AgentEvent` mirrors `turn.progress`'s payload content field for field (see `event-payload.ts`'s own note); this is that mirror, named for the target shape. */
 function toProgressContent(event: FencedEvent["event"]): TurnProgressPayloadV1["content"] {
-  return event
+  return event;
 }
 
 /**
@@ -104,14 +118,17 @@ function toProgressContent(event: FencedEvent["event"]): TurnProgressPayloadV1["
  * — retiring the fence first (ordering (b) above). Returns synchronously with a live handle;
  * the caller may `requestCancel()` at any point before `outcome` settles.
  */
-export function startTurnAttempt(deps: TurnAttemptDeps, input: TurnAttemptInputV1): TurnFenceError | TurnAttemptStartResultV1 {
-  const began = deps.machine.apply("beginAttempt")
-  if (began.kind === "illegal") return { kind: "illegal", code: began.code }
+export function startTurnAttempt(
+  deps: TurnAttemptDeps,
+  input: TurnAttemptInputV1,
+): TurnFenceError | TurnAttemptStartResultV1 {
+  const began = deps.machine.apply("beginAttempt");
+  if (began.kind === "illegal") return { kind: "illegal", code: began.code };
 
-  const lease = input.fence.beginAttempt()
-  if (lease instanceof Error) return lease
+  const lease = input.fence.beginAttempt();
+  if (lease instanceof Error) return lease;
 
-  const fullTask: AgentTask = { ...input.task, fence: lease }
+  const fullTask: AgentTask = { ...input.task, fence: lease };
 
   // Captured ONCE here, inside the caller's active Reatom context — mirrors
   // `core/mailbox/model/dispatch.ts`'s "wrap captured once, not fresh per call": both
@@ -120,45 +137,57 @@ export function startTurnAttempt(deps: TurnAttemptDeps, input: TurnAttemptInputV
   // be lost.
   const handleFencedEvent = wrap((fencedEvent: FencedEvent) => {
     if (!input.fence.accepts(asLease(fencedEvent.fence))) {
-      console.warn(`core/turns/attempt: dropping a stale event for turn ${input.turnId} attempt ${lease.attempt}`)
-      return
+      console.warn(
+        `core/turns/attempt: dropping a stale event for turn ${input.turnId} attempt ${lease.attempt}`,
+      );
+      return;
     }
-    deps.deadlines.noteEvent()
-    const payload: TurnProgressPayloadV1 = { turnId: lease.turnId, attempt: lease.attempt, content: toProgressContent(fencedEvent.event) }
-    deps.publish({ kind: "turn.progress", payload, correlation: { turnId: lease.turnId } })
-  })
+    deps.deadlines.noteEvent();
+    const payload: TurnProgressPayloadV1 = {
+      turnId: lease.turnId,
+      attempt: lease.attempt,
+      content: toProgressContent(fencedEvent.event),
+    };
+    deps.publish({ kind: "turn.progress", payload, correlation: { turnId: lease.turnId } });
+  });
 
   // Set only by `requestCancel`, so the natural-completion path below knows whether
   // `requestCancel` already drove `running -> stopping` itself (in which case calling
   // `beginStopping` afterward would be a redundant, illegal same-state call).
-  let cancelRequested = false
+  let cancelRequested = false;
 
   const finalizeOutcome = wrap((raw: AgentRunOutcome): TurnAttemptOutcomeV1 => {
     if (!cancelRequested) {
-      const stopped = deps.machine.apply("beginStopping")
+      const stopped = deps.machine.apply("beginStopping");
       if (stopped.kind === "illegal") {
-        console.warn(`core/turns/attempt: beginStopping illegal (${stopped.code}) for turn ${input.turnId}`)
+        console.warn(
+          `core/turns/attempt: beginStopping illegal (${stopped.code}) for turn ${input.turnId}`,
+        );
       }
     }
     // Ordering (b): retire strictly before the caller can ever freeze a candidate for
     // this attempt.
-    input.fence.retire()
-    return toAttemptOutcome(raw)
-  })
+    input.fence.retire();
+    return toAttemptOutcome(raw);
+  });
 
-  const run = deps.agentBackend.startTurn(fullTask)
+  const run = deps.agentBackend.startTurn(fullTask);
 
-  deps.deadlines.noteAttemptStarted()
+  deps.deadlines.noteAttemptStarted();
   const startedPayload: TurnAttemptStartedPayloadV1 = {
     turnId: lease.turnId,
     attempt: lease.attempt,
     deadline: new Date(deps.deadlines.absoluteDeadlineAt()).toISOString(),
-  }
-  deps.publish({ kind: "turn.attemptStarted", payload: startedPayload, correlation: { turnId: lease.turnId } })
+  };
+  deps.publish({
+    kind: "turn.attemptStarted",
+    payload: startedPayload,
+    correlation: { turnId: lease.turnId },
+  });
 
   async function pump(): Promise<void> {
     for await (const fencedEvent of run.events) {
-      handleFencedEvent(fencedEvent)
+      handleFencedEvent(fencedEvent);
     }
   }
   // Fire-and-forget: `outcome` must settle whether or not anything drives this loop to
@@ -166,21 +195,26 @@ export function startTurnAttempt(deps: TurnAttemptDeps, input: TurnAttemptInputV
   // runDriver()` note. A rejection here is a producer bug in the port, logged rather than
   // left as an unhandled rejection.
   void pump().catch((cause) => {
-    console.warn(`core/turns/attempt: event pump failed for turn ${input.turnId} attempt ${lease.attempt}:`, describeThrown(cause))
-  })
+    console.warn(
+      `core/turns/attempt: event pump failed for turn ${input.turnId} attempt ${lease.attempt}:`,
+      describeThrown(cause),
+    );
+  });
 
-  const outcome = run.outcome.then(finalizeOutcome)
+  const outcome = run.outcome.then(finalizeOutcome);
 
   const requestCancel = wrap((): Promise<void> => {
     if (!cancelRequested) {
-      cancelRequested = true
-      const cancelled = deps.machine.apply("requestCancel")
+      cancelRequested = true;
+      const cancelled = deps.machine.apply("requestCancel");
       if (cancelled.kind === "illegal") {
-        console.warn(`core/turns/attempt: requestCancel illegal (${cancelled.code}) for turn ${input.turnId}`)
+        console.warn(
+          `core/turns/attempt: requestCancel illegal (${cancelled.code}) for turn ${input.turnId}`,
+        );
       }
     }
-    return deps.agentBackend.cancel(run)
-  })
+    return deps.agentBackend.cancel(run);
+  });
 
-  return { kind: "started", handle: { outcome, requestCancel } }
+  return { kind: "started", handle: { outcome, requestCancel } };
 }

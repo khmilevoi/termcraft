@@ -1,9 +1,9 @@
-import type { ChatMutations, ProjectStore } from "core/ports"
-import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol"
+import type { ChatMutations, ProjectStore } from "core/ports";
+import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol";
 
-import { buildChatChangedPayload } from "./chat-changed"
+import { buildChatChangedPayload } from "./chat-changed";
 
-type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"]
+type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
 
 /**
  * `chat.switch` (kernel-command-contract §8.2): "Select an existing chat without changing
@@ -16,16 +16,19 @@ type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"]
  * `ChatDirectory.upsert`).
  */
 export interface SwitchChatDeps {
-  readonly chats: ChatMutations
-  readonly projectStore: ProjectStore
+  readonly chats: ChatMutations;
+  readonly projectStore: ProjectStore;
 }
 
-export async function switchChat(deps: SwitchChatDeps, chatId: string): Promise<FailureDtoV1 | ChatChangedPayloadV1> {
-  const switched = await deps.chats.switchActive(chatId)
-  if (switched !== undefined) return switched
+export async function switchChat(
+  deps: SwitchChatDeps,
+  chatId: string,
+): Promise<FailureDtoV1 | ChatChangedPayloadV1> {
+  const switched = await deps.chats.switchActive(chatId);
+  if (switched !== undefined) return switched;
 
-  const written = await deps.projectStore.writeWorkspaceState({ activeChatId: chatId })
-  if (written !== undefined) return written
+  const written = await deps.projectStore.writeWorkspaceState({ activeChatId: chatId });
+  if (written !== undefined) return written;
 
-  return buildChatChangedPayload({ activeChatId: chatId })
+  return buildChatChangedPayload({ activeChatId: chatId });
 }

@@ -1,12 +1,20 @@
-import fs from "node:fs"
-import path from "node:path"
-import * as errore from "errore"
+import fs from "node:fs";
+import path from "node:path";
 
-import type { Clock } from "infrastructure/clock"
-import { durableFileWrite } from "infrastructure/durability"
-import { sha256Hex } from "store/jsonl"
+import * as errore from "errore";
 
-import type { AbsPath, BackupManifest, BackupManifestFileEntry, BackupStore, BackupStoreDeps, CreateBackupInput } from "../types"
+import type { Clock } from "infrastructure/clock";
+import { durableFileWrite } from "infrastructure/durability";
+import { sha256Hex } from "store/jsonl";
+
+import type {
+  AbsPath,
+  BackupManifest,
+  BackupManifestFileEntry,
+  BackupStore,
+  BackupStoreDeps,
+  CreateBackupInput,
+} from "../types";
 
 // `store/migration`'s backup store — the storage-identity §12 / turn-durability §11
 // verified-backup protocol under `{userStateRoot}/backups/{projectId}/{migrationActionId}/`,
@@ -44,7 +52,8 @@ export class MigrationIoError extends errore.createTaggedError({
 /** One `createBackup` call failed at a named step; every project file remains unchanged (see module header). */
 export class MigrationBackupFailedError extends errore.createTaggedError({
   name: "MigrationBackupFailedError",
-  message: "migration backup for project $projectId action $migrationActionId failed at step $step: $reason",
+  message:
+    "migration backup for project $projectId action $migrationActionId failed at step $step: $reason",
 }) {}
 
 /**
@@ -63,26 +72,44 @@ export class MigrationStaleError extends errore.createTaggedError({
 
 // ---- layout (turn-durability §11 step 3) -----------------------------------------------
 
-export const BACKUPS_DIR_NAME = "backups"
-export const BACKUP_MANIFEST_FILENAME = "backup-manifest.json"
-export const BACKUP_VERIFIED_FILENAME = "VERIFIED"
+export const BACKUPS_DIR_NAME = "backups";
+export const BACKUP_MANIFEST_FILENAME = "backup-manifest.json";
+export const BACKUP_VERIFIED_FILENAME = "VERIFIED";
 /** `backup-manifest.json`/`VERIFIED`'s own `schemaVersion` (storage-identity §12's "other JSON" counter). */
-export const BACKUP_MANIFEST_SCHEMA_VERSION = 1
+export const BACKUP_MANIFEST_SCHEMA_VERSION = 1;
 
 export function backupsRootDir(userStateRoot: AbsPath): AbsPath {
-  return path.join(userStateRoot, BACKUPS_DIR_NAME)
+  return path.join(userStateRoot, BACKUPS_DIR_NAME);
 }
 export function projectBackupsDir(userStateRoot: AbsPath, projectId: string): AbsPath {
-  return path.join(backupsRootDir(userStateRoot), projectId)
+  return path.join(backupsRootDir(userStateRoot), projectId);
 }
-export function backupActionDir(userStateRoot: AbsPath, projectId: string, migrationActionId: string): AbsPath {
-  return path.join(projectBackupsDir(userStateRoot, projectId), migrationActionId)
+export function backupActionDir(
+  userStateRoot: AbsPath,
+  projectId: string,
+  migrationActionId: string,
+): AbsPath {
+  return path.join(projectBackupsDir(userStateRoot, projectId), migrationActionId);
 }
-export function backupManifestPath(userStateRoot: AbsPath, projectId: string, migrationActionId: string): AbsPath {
-  return path.join(backupActionDir(userStateRoot, projectId, migrationActionId), BACKUP_MANIFEST_FILENAME)
+export function backupManifestPath(
+  userStateRoot: AbsPath,
+  projectId: string,
+  migrationActionId: string,
+): AbsPath {
+  return path.join(
+    backupActionDir(userStateRoot, projectId, migrationActionId),
+    BACKUP_MANIFEST_FILENAME,
+  );
 }
-export function backupVerifiedMarkerPath(userStateRoot: AbsPath, projectId: string, migrationActionId: string): AbsPath {
-  return path.join(backupActionDir(userStateRoot, projectId, migrationActionId), BACKUP_VERIFIED_FILENAME)
+export function backupVerifiedMarkerPath(
+  userStateRoot: AbsPath,
+  projectId: string,
+  migrationActionId: string,
+): AbsPath {
+  return path.join(
+    backupActionDir(userStateRoot, projectId, migrationActionId),
+    BACKUP_VERIFIED_FILENAME,
+  );
 }
 
 // ---- production wiring -----------------------------------------------------------------
@@ -96,12 +123,12 @@ export function nodeBackupStoreDeps(userStateRoot: AbsPath, clock: Clock): Backu
     ensureDir: (absDir) => {
       const made = errore.try({
         try: () => {
-          fs.mkdirSync(absDir, { recursive: true })
-          return undefined
+          fs.mkdirSync(absDir, { recursive: true });
+          return undefined;
         },
         catch: (cause) => new MigrationIoError({ operation: "mkdir", path: absDir, cause }),
-      })
-      return made instanceof Error ? made : undefined
+      });
+      return made instanceof Error ? made : undefined;
     },
     mkdirNew: (absDir) => {
       // Non-recursive on purpose: `mkdirSync` without `recursive` fails with EEXIST when
@@ -109,29 +136,40 @@ export function nodeBackupStoreDeps(userStateRoot: AbsPath, clock: Clock): Backu
       // directory create-new (turn-durability §11 step 3).
       const made = errore.try({
         try: () => {
-          fs.mkdirSync(absDir)
-          return undefined
+          fs.mkdirSync(absDir);
+          return undefined;
         },
         catch: (cause) => new MigrationIoError({ operation: "mkdir-new", path: absDir, cause }),
-      })
-      return made instanceof Error ? made : undefined
+      });
+      return made instanceof Error ? made : undefined;
     },
     readFile: (absPath) =>
       errore.try({
         try: () => new Uint8Array(fs.readFileSync(absPath)),
         catch: (cause) => new MigrationIoError({ operation: "read", path: absPath, cause }),
       }),
-  }
+  };
 }
 
 // ---- the protocol -----------------------------------------------------------------------
 
 function joinRelPath(dir: AbsPath, relPath: string): AbsPath {
-  return path.join(dir, ...relPath.split("/"))
+  return path.join(dir, ...relPath.split("/"));
 }
 
-function failed(input: CreateBackupInput, step: string, reason: string, cause: unknown): MigrationBackupFailedError {
-  return new MigrationBackupFailedError({ projectId: input.projectId, migrationActionId: input.migrationActionId, step, reason, cause })
+function failed(
+  input: CreateBackupInput,
+  step: string,
+  reason: string,
+  cause: unknown,
+): MigrationBackupFailedError {
+  return new MigrationBackupFailedError({
+    projectId: input.projectId,
+    migrationActionId: input.migrationActionId,
+    step,
+    reason,
+    cause,
+  });
 }
 
 /**
@@ -143,24 +181,27 @@ function failed(input: CreateBackupInput, step: string, reason: string, cause: u
 export function createBackupStore(deps: BackupStoreDeps): BackupStore {
   return {
     async createBackup(input: CreateBackupInput) {
-      const dir = backupActionDir(deps.userStateRoot, input.projectId, input.migrationActionId)
+      const dir = backupActionDir(deps.userStateRoot, input.projectId, input.migrationActionId);
 
-      const parentReady = deps.ensureDir(projectBackupsDir(deps.userStateRoot, input.projectId))
-      if (parentReady instanceof Error) return failed(input, "ensure-parent", parentReady.message, parentReady)
+      const parentReady = deps.ensureDir(projectBackupsDir(deps.userStateRoot, input.projectId));
+      if (parentReady instanceof Error)
+        return failed(input, "ensure-parent", parentReady.message, parentReady);
 
-      const created = deps.mkdirNew(dir)
-      if (created instanceof Error) return failed(input, "create-new", created.message, created)
+      const created = deps.mkdirNew(dir);
+      if (created instanceof Error) return failed(input, "create-new", created.message, created);
 
-      const files: BackupManifestFileEntry[] = []
+      const files: BackupManifestFileEntry[] = [];
       for (const file of input.files) {
-        const destPath = joinRelPath(dir, file.relPath)
-        const parent = path.dirname(destPath)
+        const destPath = joinRelPath(dir, file.relPath);
+        const parent = path.dirname(destPath);
         if (parent !== dir) {
-          const madeParent = deps.ensureDir(parent)
-          if (madeParent instanceof Error) return failed(input, `copy:${file.relPath}`, madeParent.message, madeParent)
+          const madeParent = deps.ensureDir(parent);
+          if (madeParent instanceof Error)
+            return failed(input, `copy:${file.relPath}`, madeParent.message, madeParent);
         }
-        const written = deps.durableWrite(destPath, file.bytes)
-        if (written instanceof Error) return failed(input, `copy:${file.relPath}`, written.message, written)
+        const written = deps.durableWrite(destPath, file.bytes);
+        if (written instanceof Error)
+          return failed(input, `copy:${file.relPath}`, written.message, written);
 
         files.push({
           relPath: file.relPath,
@@ -168,7 +209,7 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
           sha256: sha256Hex(file.bytes),
           sourceFormat: file.sourceFormat,
           backupTime: deps.clock.now().toISOString(),
-        })
+        });
       }
 
       const manifest: BackupManifest = {
@@ -177,45 +218,71 @@ export function createBackupStore(deps: BackupStoreDeps): BackupStore {
         projectId: input.projectId,
         termcraftVersion: input.termcraftVersion,
         files,
-      }
-      const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest))
-      const wroteManifest = deps.durableWrite(backupManifestPath(deps.userStateRoot, input.projectId, input.migrationActionId), manifestBytes)
-      if (wroteManifest instanceof Error) return failed(input, "manifest", wroteManifest.message, wroteManifest)
+      };
+      const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+      const wroteManifest = deps.durableWrite(
+        backupManifestPath(deps.userStateRoot, input.projectId, input.migrationActionId),
+        manifestBytes,
+      );
+      if (wroteManifest instanceof Error)
+        return failed(input, "manifest", wroteManifest.message, wroteManifest);
 
       // Reopen every copy and verify length + SHA-256 against BOTH the source and the
       // manifest (storage-identity §12 step 4) — a deliberate second pass distinct from
       // `durableFileWrite`'s own internal reopen-verify, run only after every copy AND
       // the manifest are durable.
       for (let index = 0; index < input.files.length; index += 1) {
-        const file = input.files[index]
-        const entry = files[index]
+        const file = input.files[index];
+        const entry = files[index];
         // Unreachable: `files` is built by one pass over `input.files`, so the arrays are
         // index-aligned and equal-length. Fails CLOSED rather than `continue`-ing — silently
         // skipping a file's verification is the exact failure mode step 4 exists to prevent.
         if (file === undefined || entry === undefined) {
-          return failed(input, `verify:index-${index}`, "the copy inventory is not aligned with the input file list", null)
+          return failed(
+            input,
+            `verify:index-${index}`,
+            "the copy inventory is not aligned with the input file list",
+            null,
+          );
         }
 
-        const destPath = joinRelPath(dir, file.relPath)
-        const reopened = deps.readFile(destPath)
-        if (reopened instanceof Error) return failed(input, `verify:${file.relPath}`, reopened.message, reopened)
+        const destPath = joinRelPath(dir, file.relPath);
+        const reopened = deps.readFile(destPath);
+        if (reopened instanceof Error)
+          return failed(input, `verify:${file.relPath}`, reopened.message, reopened);
 
-        const sourceDigest = sha256Hex(file.bytes)
-        const reopenedDigest = sha256Hex(reopened)
+        const sourceDigest = sha256Hex(file.bytes);
+        const reopenedDigest = sha256Hex(reopened);
         if (reopened.byteLength !== file.bytes.byteLength || reopenedDigest !== sourceDigest) {
-          return failed(input, `verify:${file.relPath}`, "the reopened copy does not match the source bytes", null)
+          return failed(
+            input,
+            `verify:${file.relPath}`,
+            "the reopened copy does not match the source bytes",
+            null,
+          );
         }
         if (reopened.byteLength !== entry.byteLength || reopenedDigest !== entry.sha256) {
-          return failed(input, `verify:${file.relPath}`, "the reopened copy does not match its manifest entry", null)
+          return failed(
+            input,
+            `verify:${file.relPath}`,
+            "the reopened copy does not match its manifest entry",
+            null,
+          );
         }
       }
 
-      const manifestDigest = sha256Hex(manifestBytes)
-      const verifiedBytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: BACKUP_MANIFEST_SCHEMA_VERSION, manifestDigest }))
-      const wroteVerified = deps.durableWrite(backupVerifiedMarkerPath(deps.userStateRoot, input.projectId, input.migrationActionId), verifiedBytes)
-      if (wroteVerified instanceof Error) return failed(input, "verified-marker", wroteVerified.message, wroteVerified)
+      const manifestDigest = sha256Hex(manifestBytes);
+      const verifiedBytes = new TextEncoder().encode(
+        JSON.stringify({ schemaVersion: BACKUP_MANIFEST_SCHEMA_VERSION, manifestDigest }),
+      );
+      const wroteVerified = deps.durableWrite(
+        backupVerifiedMarkerPath(deps.userStateRoot, input.projectId, input.migrationActionId),
+        verifiedBytes,
+      );
+      if (wroteVerified instanceof Error)
+        return failed(input, "verified-marker", wroteVerified.message, wroteVerified);
 
-      return { backupDir: dir, manifest, manifestDigest }
+      return { backupDir: dir, manifest, manifestDigest };
     },
-  }
+  };
 }

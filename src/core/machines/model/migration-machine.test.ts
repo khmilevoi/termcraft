@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test"
-import { context } from "@reatom/core"
+import { describe, expect, test } from "bun:test";
 
-import { reatomMigrationStateMachine, type MigrationAction, type MigrationState } from "./migration-machine"
+import { context } from "@reatom/core";
+
+import {
+  type MigrationAction,
+  type MigrationState,
+  reatomMigrationStateMachine,
+} from "./migration-machine";
 
 /**
  * kernel-command-contract §7.7, §13.1.
@@ -21,7 +26,7 @@ const MIGRATION_STATES: readonly MigrationState[] = [
   "publishing",
   "recovering",
   "blocked",
-]
+];
 
 const MIGRATION_ACTIONS: readonly MigrationAction[] = [
   "kernel.migration.beginPlan",
@@ -37,12 +42,12 @@ const MIGRATION_ACTIONS: readonly MigrationAction[] = [
   "kernel.migration.completeRecovery",
   "kernel.migration.blockRecovery",
   "kernel.migration.retryRecovery",
-]
+];
 
 interface ExpectedEdge {
-  readonly from: MigrationState
-  readonly action: MigrationAction
-  readonly to: MigrationState
+  readonly from: MigrationState;
+  readonly action: MigrationAction;
+  readonly to: MigrationState;
 }
 
 // One row per §7.7 table entry, multi-source rows expanded to one edge per source.
@@ -63,22 +68,26 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "recovering", action: "kernel.migration.completeRecovery", to: "idle" },
   { from: "recovering", action: "kernel.migration.blockRecovery", to: "blocked" },
   { from: "blocked", action: "kernel.migration.retryRecovery", to: "recovering" },
-]
+];
 
-const ILLEGAL_CODE = "OPERATION_BUSY"
+const ILLEGAL_CODE = "OPERATION_BUSY";
 
 function findExpected(from: MigrationState, action: MigrationAction): ExpectedEdge | undefined {
-  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action)
+  return EXPECTED_EDGES.find((edge) => edge.from === from && edge.action === action);
 }
 
 /** Drives a fresh machine straight to `phase` via a known-legal edge path. */
 function machineAt(phase: MigrationState) {
-  const m = reatomMigrationStateMachine()
-  if (phase === "idle") return m
+  const m = reatomMigrationStateMachine();
+  if (phase === "idle") return m;
   const path: Record<Exclude<MigrationState, "idle">, readonly MigrationAction[]> = {
     planning: ["kernel.migration.beginPlan"],
     "awaiting-confirmation": ["kernel.migration.beginPlan", "kernel.migration.planReady"],
-    "backing-up": ["kernel.migration.beginPlan", "kernel.migration.planReady", "kernel.migration.confirm"],
+    "backing-up": [
+      "kernel.migration.beginPlan",
+      "kernel.migration.planReady",
+      "kernel.migration.confirm",
+    ],
     transforming: [
       "kernel.migration.beginPlan",
       "kernel.migration.planReady",
@@ -94,48 +103,48 @@ function machineAt(phase: MigrationState) {
     ],
     recovering: ["kernel.migration.beginRecovery"],
     blocked: ["kernel.migration.beginRecovery", "kernel.migration.blockRecovery"],
-  }
-  for (const action of path[phase]) m.apply(action)
-  return m
+  };
+  for (const action of path[phase]) m.apply(action);
+  return m;
 }
 
 describe("reatomMigrationStateMachine", () => {
   test("starts idle", () => {
     context.start(() => {
-      expect(reatomMigrationStateMachine().phase()).toBe("idle")
-    })
-  })
+      expect(reatomMigrationStateMachine().phase()).toBe("idle");
+    });
+  });
 
   test("the phase atom carries the §6 trace root", () => {
     context.start(() => {
-      expect(reatomMigrationStateMachine().phaseAtom.name).toBe("kernel.migration.state")
-    })
-  })
+      expect(reatomMigrationStateMachine().phaseAtom.name).toBe("kernel.migration.state");
+    });
+  });
 
   test("the hand-counted §7.7 edge total is 16", () => {
-    expect(EXPECTED_EDGES.length).toBe(16)
-  })
+    expect(EXPECTED_EDGES.length).toBe(16);
+  });
 
   test("every (state, action) pair matches the §7.7 table exactly", () => {
     context.start(() => {
       for (const from of MIGRATION_STATES) {
         for (const action of MIGRATION_ACTIONS) {
-          const expected = findExpected(from, action)
-          const m = machineAt(from)
-          const outcome = m.apply(action)
+          const expected = findExpected(from, action);
+          const m = machineAt(from);
+          const outcome = m.apply(action);
 
           if (expected === undefined) {
-            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action })
-            expect(m.phase()).toBe(from)
-            continue
+            expect(outcome).toEqual({ kind: "illegal", code: ILLEGAL_CODE, from, action });
+            expect(m.phase()).toBe(from);
+            continue;
           }
 
-          expect(outcome).toEqual({ kind: "changed", from, to: expected.to })
-          expect(m.phase()).toBe(expected.to)
+          expect(outcome).toEqual({ kind: "changed", from, to: expected.to });
+          expect(m.phase()).toBe(expected.to);
         }
       }
-    })
-  })
+    });
+  });
 
   test("failBeforeIntent is legal from all three of backing-up, transforming, and publishing", () => {
     // §7.7's row lists backing-up/transforming together and publishing separately, but
@@ -145,12 +154,12 @@ describe("reatomMigrationStateMachine", () => {
         kind: "changed",
         from: "backing-up",
         to: "idle",
-      })
+      });
       expect(machineAt("transforming").apply("kernel.migration.failBeforeIntent")).toEqual({
         kind: "changed",
         from: "transforming",
         to: "idle",
-      })
+      });
       // §7.7 + §13.1: publishing -> failBeforeIntent -> idle is legal only "when journal
       // inspection proves no durable commit intent exists" — the table encodes the edge;
       // proving the precondition is the caller's (orchestration slice's) job, not
@@ -159,7 +168,7 @@ describe("reatomMigrationStateMachine", () => {
         kind: "changed",
         from: "publishing",
         to: "idle",
-      })
-    })
-  })
-})
+      });
+    });
+  });
+});

@@ -1,14 +1,17 @@
-import * as errore from "errore"
-import os from "node:os"
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { createConfinementPolicy } from "agent/confinement"
-import { runHealthProbe } from "agent/health"
-import type { HealthProbeDeps } from "agent/health"
-import type { AgentInfo } from "agent/types"
-import type { ClaudeQueryFn } from "agent/claude/types"
-import { createCanUseTool, createSpawnAndAdopt } from "agent/claude/query"
-import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools"
-import { CLAUDE_BACKEND_ID } from "./backend-id"
+import os from "node:os";
+
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as errore from "errore";
+
+import { createCanUseTool, createSpawnAndAdopt } from "agent/claude/query";
+import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools";
+import type { ClaudeQueryFn } from "agent/claude/types";
+import { createConfinementPolicy } from "agent/confinement";
+import { runHealthProbe } from "agent/health";
+import type { HealthProbeDeps } from "agent/health";
+import type { AgentInfo } from "agent/types";
+
+import { CLAUDE_BACKEND_ID } from "./backend-id";
 
 /**
  * Fired once a verdict has already left `readUntilClassified`'s `for await`
@@ -40,7 +43,7 @@ class ProbeClassifiedAbortError extends errore.createTaggedError({
  * answered. `os.tmpdir()` is a fixed, project-independent scratch location:
  * nothing a project can plant reaches it.
  */
-const PROBE_CWD = os.tmpdir()
+const PROBE_CWD = os.tmpdir();
 
 /**
  * Build SDK options for the probe's minimal "ping" query, isolated AT LEAST
@@ -70,7 +73,7 @@ const PROBE_CWD = os.tmpdir()
  * fallback still runs the probe instead of reporting a false verdict.
  */
 function buildProbeOptions(deps: HealthProbeDeps): Options {
-  const policy = createConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES)
+  const policy = createConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES);
   return {
     cwd: PROBE_CWD,
     additionalDirectories: [],
@@ -81,7 +84,7 @@ function buildProbeOptions(deps: HealthProbeDeps): Options {
     ...(deps.processTree !== null
       ? { spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/probe") }
       : {}),
-  }
+  };
 }
 
 /**
@@ -100,20 +103,20 @@ function classifyMessage(msg: SDKMessage): AgentInfo | null {
     // installed SDK's `SDKSystemMessage` has no field that is one, so `null`
     // — which safely disables cross-process resume for this backend
     // (types.ts `AgentInfo.account` doc) — is the honest value, not a guess.
-    return { backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "ready" }, account: null };
   }
   if (msg.type === "auth_status") {
-    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null };
   }
   if (msg.type === "assistant" && msg.error === "authentication_failed") {
-    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null }
+    return { backendId: CLAUDE_BACKEND_ID, health: { status: "not-logged-in" }, account: null };
   }
-  return null
+  return null;
 }
 
 /** Renders a thrown/rejected value into a stable message even when it is not an `Error` instance. */
 function describeThrown(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**
@@ -135,25 +138,28 @@ function describeThrown(cause: unknown): string {
  * a value at the lowest call-stack level, mirroring `createClaudeDriver` in
  * claude/run/model/drive-stream.ts.
  */
-async function readUntilClassified(queryFn: ClaudeQueryFn, deps: HealthProbeDeps): Promise<AgentInfo | null> {
-  const stream = queryFn({ prompt: "ping", options: buildProbeOptions(deps) })
-  let verdict: AgentInfo | null = null
+async function readUntilClassified(
+  queryFn: ClaudeQueryFn,
+  deps: HealthProbeDeps,
+): Promise<AgentInfo | null> {
+  const stream = queryFn({ prompt: "ping", options: buildProbeOptions(deps) });
+  let verdict: AgentInfo | null = null;
   try {
     for await (const msg of stream) {
-      verdict = classifyMessage(msg)
-      if (verdict !== null) break
+      verdict = classifyMessage(msg);
+      if (verdict !== null) break;
     }
   } catch (cause) {
-    if (verdict === null) throw cause
+    if (verdict === null) throw cause;
     console.warn(
       "agent/health: ignoring a stream-close failure that arrived after a verdict was already classified:",
       describeThrown(cause),
-    )
+    );
   }
   // Fired only once the verdict (or a clean stream end) has fully left the
   // loop above, never while `for await` is still mid-iteration.
-  if (verdict !== null) deps.abortController.abort(new ProbeClassifiedAbortError({}))
-  return verdict
+  if (verdict !== null) deps.abortController.abort(new ProbeClassifiedAbortError({}));
+  return verdict;
 }
 
 /**
@@ -162,6 +168,9 @@ async function readUntilClassified(queryFn: ClaudeQueryFn, deps: HealthProbeDeps
  * vocabulary — the deadline, the tree close, the ambiguity classification —
  * belongs to `runHealthProbe` (agent/health).
  */
-export function probeClaudeHealth(queryFn: ClaudeQueryFn, deps: HealthProbeDeps): Promise<AgentInfo> {
-  return runHealthProbe(CLAUDE_BACKEND_ID, () => readUntilClassified(queryFn, deps), deps)
+export function probeClaudeHealth(
+  queryFn: ClaudeQueryFn,
+  deps: HealthProbeDeps,
+): Promise<AgentInfo> {
+  return runHealthProbe(CLAUDE_BACKEND_ID, () => readUntilClassified(queryFn, deps), deps);
 }

@@ -1,5 +1,6 @@
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { ProcessTreeFactory } from "infrastructure/process"
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+
+import type { ProcessTreeFactory } from "infrastructure/process";
 
 /**
  * The minimal SDK surface the run loop consumes (injection seam, mirrors
@@ -10,23 +11,23 @@ import type { ProcessTreeFactory } from "infrastructure/process"
  * piecemeal from wherever it happened to be defined first.
  */
 export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
-  interrupt(): Promise<unknown>
+  interrupt(): Promise<unknown>;
 }
 
 /** Injected query seam: production wraps the SDK `query`, tests script an async generator. */
-export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => ClaudeQuery
+export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => ClaudeQuery;
 
 /** Deps for `createClaudeBackend` (./backend/model/backend.ts). */
 export interface ClaudeBackendDeps {
-  readonly queryFn: ClaudeQueryFn
+  readonly queryFn: ClaudeQueryFn;
   /** Constructs a fresh, independently owned process tree per `startTurn` call (§6.5). */
-  readonly processTreeFactory: ProcessTreeFactory
+  readonly processTreeFactory: ProcessTreeFactory;
   /** Injectable delay for the §6.5 exit-confirmation polls; production = `(ms) => Bun.sleep(ms)`. */
-  readonly wait: (ms: number) => Promise<void>
+  readonly wait: (ms: number) => Promise<void>;
   /** Override for the CLI path in a compiled binary (Spike H compiled-binary parity). */
-  readonly pathToClaudeCodeExecutable?: string
+  readonly pathToClaudeCodeExecutable?: string;
   /** Reparse-point backstop injected on Windows (Spike F). */
-  readonly hasReparsePoint?: (p: string) => boolean
+  readonly hasReparsePoint?: (p: string) => boolean;
   /** Override for the §6.5 exit-confirmation budget; `startAgentRun` supplies its own default when omitted. */
-  readonly confirmTimeoutMs?: number
+  readonly confirmTimeoutMs?: number;
 }

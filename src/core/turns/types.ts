@@ -1,6 +1,3 @@
-import type { ChatSelection, ChatUserRecord } from "entities/chat"
-import type { PageSlug } from "entities/page"
-import type { CommandRejectionCode, FailureDtoV1, UUIDv7 } from "core/protocol"
 import type {
   StagedTurnReadSetV1,
   StagingPageSourceV1,
@@ -8,10 +5,13 @@ import type {
   TurnCommitV1,
   TurnReadSetV1,
   TurnWorkspaceV1,
-} from "core/ports"
+} from "core/ports";
+import type { CommandRejectionCode, FailureDtoV1, UUIDv7 } from "core/protocol";
+import type { ChatSelection, ChatUserRecord } from "entities/chat";
+import type { PageSlug } from "entities/page";
 
-import type { TurnFence, TurnFenceError } from "./model/fence"
-import type { ReadSetTranslationError } from "./model/read-set"
+import type { TurnFence, TurnFenceError } from "./model/fence";
+import type { ReadSetTranslationError } from "./model/read-set";
 
 /**
  * `core/turns`'s shared vocabulary (CLAUDE.md "Code style": `types.ts` holds a module's
@@ -27,16 +27,16 @@ import type { ReadSetTranslationError } from "./model/read-set"
  * to re-check, never a pre-decided inclusion).
  */
 export interface AdmissionCandidatePinV1 {
-  readonly pageSlug: PageSlug
-  readonly pinId: string
+  readonly pageSlug: PageSlug;
+  readonly pinId: string;
 }
 
 /** The raw material `StagingService.createTurnWorkspace` needs verbatim, minus the `turnId`/`targetChatId` admission itself mints/captures. */
 export interface AdmissionWorkspaceMaterialV1 {
-  readonly pages: readonly StagingPageSourceV1[]
-  readonly manifestSlice: Uint8Array
-  readonly runtimeDocs: readonly StagingRuntimeDocV1[]
-  readonly readSet: StagedTurnReadSetV1
+  readonly pages: readonly StagingPageSourceV1[];
+  readonly manifestSlice: Uint8Array;
+  readonly runtimeDocs: readonly StagingRuntimeDocV1[];
+  readonly readSet: StagedTurnReadSetV1;
 }
 
 /**
@@ -46,15 +46,15 @@ export interface AdmissionWorkspaceMaterialV1 {
  * re-resolve live, and the workspace-assembly material.
  */
 export interface AdmissionInputV1 {
-  readonly targetChatId: string
-  readonly text: string
-  readonly selection?: ChatSelection
-  readonly candidatePins: readonly AdmissionCandidatePinV1[]
-  readonly workspace: AdmissionWorkspaceMaterialV1
+  readonly targetChatId: string;
+  readonly text: string;
+  readonly selection?: ChatSelection;
+  readonly candidatePins: readonly AdmissionCandidatePinV1[];
+  readonly workspace: AdmissionWorkspaceMaterialV1;
 }
 
 /** Which of `finishAdmission`'s three §7.2 preconditions (committed user record, verified workspace, complete read-set hashes) a run stopped at, plus the fence mint that follows them. */
-export type AdmissionBlockedPhaseV1 = "admit" | "workspace" | "read-set" | "fence"
+export type AdmissionBlockedPhaseV1 = "admit" | "workspace" | "read-set" | "fence";
 
 /**
  * The fully captured turn identity `workspace-ready` carries forward to the attempt/
@@ -64,18 +64,26 @@ export type AdmissionBlockedPhaseV1 = "admit" | "workspace" | "read-set" | "fenc
  * not yet begun) attempt fence.
  */
 export interface TurnContextV1 {
-  readonly turnId: UUIDv7
-  readonly targetChatId: string
-  readonly userRecord: ChatUserRecord
-  readonly admissionCommit: TurnCommitV1
-  readonly workspace: TurnWorkspaceV1
-  readonly readSet: TurnReadSetV1
-  readonly fence: TurnFence
+  readonly turnId: UUIDv7;
+  readonly targetChatId: string;
+  readonly userRecord: ChatUserRecord;
+  readonly admissionCommit: TurnCommitV1;
+  readonly workspace: TurnWorkspaceV1;
+  readonly readSet: TurnReadSetV1;
+  readonly fence: TurnFence;
 }
 
 export type AdmissionOutcomeV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
-  | { readonly kind: "blocked"; readonly phase: "admit" | "workspace"; readonly failure: FailureDtoV1 }
-  | { readonly kind: "blocked"; readonly phase: "read-set"; readonly error: ReadSetTranslationError }
+  | {
+      readonly kind: "blocked";
+      readonly phase: "admit" | "workspace";
+      readonly failure: FailureDtoV1;
+    }
+  | {
+      readonly kind: "blocked";
+      readonly phase: "read-set";
+      readonly error: ReadSetTranslationError;
+    }
   | { readonly kind: "blocked"; readonly phase: "fence"; readonly error: TurnFenceError }
-  | { readonly kind: "workspace-ready"; readonly context: TurnContextV1 }
+  | { readonly kind: "workspace-ready"; readonly context: TurnContextV1 };

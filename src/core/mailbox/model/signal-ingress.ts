@@ -1,6 +1,6 @@
-import { action, atom, bind, type Atom } from "@reatom/core"
+import { type Atom, action, atom, bind } from "@reatom/core";
 
-import type { TurnBackendLeaseV1, TurnFenceProbe } from "../types"
+import type { TurnBackendLeaseV1, TurnFenceProbe } from "../types";
 
 /**
  * The Kernel mailbox's fenced ingress for backend turn signals (kernel-command-contract
@@ -36,17 +36,17 @@ import type { TurnBackendLeaseV1, TurnFenceProbe } from "../types"
 
 /** One dropped signal's context, handed to the optional `onStaleDropped` seam. */
 export interface StaleBackendSignal<S extends TurnBackendLeaseV1 = TurnBackendLeaseV1> {
-  readonly signal: S
+  readonly signal: S;
   /** `TurnState`'s lease at the moment of the drop — `null` when no turn was active at all. */
-  readonly activeLease: TurnBackendLeaseV1 | null
+  readonly activeLease: TurnBackendLeaseV1 | null;
 }
 
 export interface SignalIngressDeps<S extends TurnBackendLeaseV1> {
-  readonly fenceProbe: TurnFenceProbe
+  readonly fenceProbe: TurnFenceProbe;
   /** Called ONLY when `signal`'s lease matches the active one on all three fields. */
-  readonly onAccepted: (signal: S) => void
+  readonly onAccepted: (signal: S) => void;
   /** Optional §11.2 diagnostic seam — see this file's module comment. */
-  readonly onStaleDropped?: (dropped: StaleBackendSignal<S>) => void
+  readonly onStaleDropped?: (dropped: StaleBackendSignal<S>) => void;
 }
 
 export interface SignalIngress<S extends TurnBackendLeaseV1> {
@@ -56,17 +56,21 @@ export interface SignalIngress<S extends TurnBackendLeaseV1> {
    * all — because it is built with `bind` (see `createSignalIngress`'s comment) against
    * the frame active when this ingress was constructed.
    */
-  readonly deliver: (signal: S) => void
+  readonly deliver: (signal: S) => void;
   /** The number of signals dropped for a lease mismatch so far. */
-  readonly droppedCount: () => number
+  readonly droppedCount: () => number;
   /** The underlying atom, exposed so tests/diagnostics can observe it by name. */
-  readonly droppedCountAtom: Atom<number>
+  readonly droppedCountAtom: Atom<number>;
 }
 
 /** All three fields must agree — §12.2 step 3's "compares all three fields", not any subset. */
 function leaseMatches(active: TurnBackendLeaseV1 | null, signal: TurnBackendLeaseV1): boolean {
-  if (active === null) return false
-  return active.turnId === signal.turnId && active.attempt === signal.attempt && active.leaseNonce === signal.leaseNonce
+  if (active === null) return false;
+  return (
+    active.turnId === signal.turnId &&
+    active.attempt === signal.attempt &&
+    active.leaseNonce === signal.leaseNonce
+  );
 }
 
 /**
@@ -85,21 +89,23 @@ function leaseMatches(active: TurnBackendLeaseV1 | null, signal: TurnBackendLeas
  * uncontrolled code (a backend process callback) calls with no reactive context of its
  * own to offer.
  */
-export function createSignalIngress<S extends TurnBackendLeaseV1>(deps: SignalIngressDeps<S>): SignalIngress<S> {
-  const droppedCountAtom = atom(0, "mailbox.signalIngress.droppedCount")
+export function createSignalIngress<S extends TurnBackendLeaseV1>(
+  deps: SignalIngressDeps<S>,
+): SignalIngress<S> {
+  const droppedCountAtom = atom(0, "mailbox.signalIngress.droppedCount");
 
   const recordDrop = action(() => {
-    droppedCountAtom.set(droppedCountAtom() + 1)
-  }, "mailbox.signalIngress.recordDrop")
+    droppedCountAtom.set(droppedCountAtom() + 1);
+  }, "mailbox.signalIngress.recordDrop");
 
   function handle(signal: S): void {
-    const active = deps.fenceProbe.currentLease()
+    const active = deps.fenceProbe.currentLease();
     if (!leaseMatches(active, signal)) {
-      recordDrop()
-      deps.onStaleDropped?.({ signal, activeLease: active })
-      return
+      recordDrop();
+      deps.onStaleDropped?.({ signal, activeLease: active });
+      return;
     }
-    deps.onAccepted(signal)
+    deps.onAccepted(signal);
   }
 
   // `bind`, not `wrap`. The Reatom rules split these by WHO calls the function: `wrap` is
@@ -108,17 +114,17 @@ export function createSignalIngress<S extends TurnBackendLeaseV1>(deps: SignalIn
   // which is exactly `deliver`'s contract (see its doc comment: a raw backend callback, a
   // timer, code with no active Reatom frame at all). Both re-enter the construction-time
   // frame; using the one that names the actual situation keeps the intent readable.
-  const deliver = bind(handle)
+  const deliver = bind(handle);
   // `droppedCountAtom` is scoped to the SAME frame `deliver` writes into (both are bound
   // at this same construction time) — a caller reading `droppedCount` from outside any
   // `context.start(...)` (a diagnostics poller, a test) needs the same re-entry `deliver`
   // gets, or it would read an entirely different frame's untouched copy of
   // `droppedCountAtom` instead of the one `recordDrop` actually incremented.
-  const droppedCount = bind(() => droppedCountAtom())
+  const droppedCount = bind(() => droppedCountAtom());
 
   return {
     deliver,
     droppedCount,
     droppedCountAtom,
-  }
+  };
 }

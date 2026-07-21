@@ -1,4 +1,4 @@
-import type { PreviewFrameV1 } from "core/ports"
+import type { PreviewFrameV1 } from "core/ports";
 
 /**
  * The Kernel-side latest-wins frame slot (host-supervision-protocol §8: "Preview frame
@@ -18,36 +18,36 @@ import type { PreviewFrameV1 } from "core/ports"
  */
 export interface FrameBroker {
   /** Atomically replaces the pending frame. Synchronous — never awaits, never blocks. */
-  readonly publish: (frame: PreviewFrameV1) => void
+  readonly publish: (frame: PreviewFrameV1) => void;
   /** A non-consuming peek at the most recently published frame, or `null` before the first publish or after `clear()`. */
-  readonly current: () => PreviewFrameV1 | null
+  readonly current: () => PreviewFrameV1 | null;
   /** Frames replaced by a later `publish()` before ever being displayed (host-supervision §8's `framesCoalesced`). */
-  readonly framesCoalesced: () => number
+  readonly framesCoalesced: () => number;
   /** Drops the pending frame with no change to the coalesce count — a session/source switch starts clean. */
-  readonly clear: () => void
+  readonly clear: () => void;
 }
 
 /** Builds one live session's frame broker. A factory, not module state: two sessions must never share a slot. */
 export function createFrameBroker(): FrameBroker {
-  let pending: PreviewFrameV1 | null = null
-  let coalesced = 0
+  let pending: PreviewFrameV1 | null = null;
+  let coalesced = 0;
 
   function publish(frame: PreviewFrameV1): void {
-    if (pending !== null) coalesced += 1
-    pending = frame
+    if (pending !== null) coalesced += 1;
+    pending = frame;
   }
 
   function current(): PreviewFrameV1 | null {
-    return pending
+    return pending;
   }
 
   function framesCoalesced(): number {
-    return coalesced
+    return coalesced;
   }
 
   function clear(): void {
-    pending = null
+    pending = null;
   }
 
-  return { publish, current, framesCoalesced, clear }
+  return { publish, current, framesCoalesced, clear };
 }

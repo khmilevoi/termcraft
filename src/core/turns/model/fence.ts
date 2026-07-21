@@ -1,8 +1,8 @@
-import { action, atom, type Atom } from "@reatom/core"
-import * as errore from "errore"
+import { type Atom, action, atom } from "@reatom/core";
+import * as errore from "errore";
 
-import { isUuidv7, type UUIDv7 } from "core/protocol"
-import type { TurnBackendLeaseV1, TurnFenceProbe } from "core/mailbox"
+import type { TurnBackendLeaseV1, TurnFenceProbe } from "core/mailbox";
+import { type UUIDv7, isUuidv7 } from "core/protocol";
 
 /**
  * The per-attempt lease that fences one turn's backend events
@@ -23,7 +23,7 @@ import type { TurnBackendLeaseV1, TurnFenceProbe } from "core/mailbox"
  */
 
 /** §7.2: "Attempts are integers 1 through 4." */
-export const MAX_TURN_ATTEMPTS = 4
+export const MAX_TURN_ATTEMPTS = 4;
 
 /** The turn is out of attempts, or its identity is malformed. */
 export class TurnFenceError extends errore.createTaggedError({
@@ -36,30 +36,30 @@ export interface TurnFence {
    * Mints the next attempt's lease: attempt 1 on the first call, then 2, 3, 4. §7.2 says
    * the first nonce "is minted only when attempt 1 starts", so no lease exists until then.
    */
-  readonly beginAttempt: () => TurnFenceError | TurnBackendLeaseV1
+  readonly beginAttempt: () => TurnFenceError | TurnBackendLeaseV1;
   /** The live lease, or `null` before the first attempt and after retirement. */
-  readonly currentLease: () => TurnBackendLeaseV1 | null
+  readonly currentLease: () => TurnBackendLeaseV1 | null;
   /** True only for the exact live lease — all three fields must match. */
-  readonly accepts: (lease: TurnBackendLeaseV1) => boolean
+  readonly accepts: (lease: TurnBackendLeaseV1) => boolean;
   /**
    * Clears the lease. §12.2 item 5 / TD §6.4 retire the fence BEFORE the candidate is
    * frozen, so an event still in flight has nothing left to match and cannot mutate a
    * turn whose result is already being captured.
    */
-  readonly retire: () => void
+  readonly retire: () => void;
   /** The probe `signal-ingress` reads. Safe to bind before any attempt exists. */
-  readonly probe: TurnFenceProbe
-  readonly leaseAtom: Atom<TurnBackendLeaseV1 | null>
+  readonly probe: TurnFenceProbe;
+  readonly leaseAtom: Atom<TurnBackendLeaseV1 | null>;
 }
 
 /** A cryptographically random 128-bit value, base64url, unpadded (22 chars). */
 function mintLeaseNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
-    .replaceAll("=", "")
+    .replaceAll("=", "");
 }
 
 /**
@@ -68,40 +68,46 @@ function mintLeaseNonce(): string {
  */
 export function createTurnFence(turnId: string): TurnFenceError | TurnFence {
   if (!isUuidv7(turnId)) {
-    return new TurnFenceError({ reason: `turnId "${turnId}" is not a canonical UUIDv7` })
+    return new TurnFenceError({ reason: `turnId "${turnId}" is not a canonical UUIDv7` });
   }
-  const identity: UUIDv7 = turnId
+  const identity: UUIDv7 = turnId;
 
-  const leaseAtom = atom<TurnBackendLeaseV1 | null>(null, "kernel.turn.lease")
-  const attemptAtom = atom(0, "kernel.turn.attempt")
+  const leaseAtom = atom<TurnBackendLeaseV1 | null>(null, "kernel.turn.lease");
+  const attemptAtom = atom(0, "kernel.turn.attempt");
 
   const beginAttempt = action((): TurnFenceError | TurnBackendLeaseV1 => {
-    const next = attemptAtom() + 1
+    const next = attemptAtom() + 1;
     if (next > MAX_TURN_ATTEMPTS) {
       // Refusing leaves the live lease untouched: the caller is out of retries, but the
       // attempt currently running is still the one whose events must be accepted.
-      return new TurnFenceError({ reason: `attempt ${next} exceeds the ${MAX_TURN_ATTEMPTS}-attempt budget` })
+      return new TurnFenceError({
+        reason: `attempt ${next} exceeds the ${MAX_TURN_ATTEMPTS}-attempt budget`,
+      });
     }
-    const lease: TurnBackendLeaseV1 = { turnId: identity, attempt: next, leaseNonce: mintLeaseNonce() }
-    attemptAtom.set(next)
-    leaseAtom.set(lease)
-    return lease
-  }, "kernel.turn.beginAttempt")
+    const lease: TurnBackendLeaseV1 = {
+      turnId: identity,
+      attempt: next,
+      leaseNonce: mintLeaseNonce(),
+    };
+    attemptAtom.set(next);
+    leaseAtom.set(lease);
+    return lease;
+  }, "kernel.turn.beginAttempt");
 
   const retire = action(() => {
     // The attempt counter deliberately does NOT reset: retirement ends the turn's fence,
     // it does not hand back retries.
-    leaseAtom.set(null)
-  }, "kernel.turn.retireFence")
+    leaseAtom.set(null);
+  }, "kernel.turn.retireFence");
 
   function accepts(lease: TurnBackendLeaseV1): boolean {
-    const live = leaseAtom()
-    if (live === null) return false
+    const live = leaseAtom();
+    if (live === null) return false;
     return (
       live.turnId === lease.turnId &&
       live.attempt === lease.attempt &&
       live.leaseNonce === lease.leaseNonce
-    )
+    );
   }
 
   return {
@@ -114,5 +120,5 @@ export function createTurnFence(turnId: string): TurnFenceError | TurnFence {
     // "no lease yet" forever.
     probe: { currentLease: () => leaseAtom() },
     leaseAtom,
-  }
+  };
 }

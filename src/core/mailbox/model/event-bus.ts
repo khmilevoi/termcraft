@@ -1,16 +1,16 @@
-import { action } from "@reatom/core"
-import * as errore from "errore"
-import type { z } from "zod"
+import { action } from "@reatom/core";
+import * as errore from "errore";
+import type { z } from "zod";
 
+import type { KernelCounters } from "core/kernel/model/counters";
 import {
-  eventPayloadV1SchemaByKind,
-  isEventKindV1,
   type EventKindV1,
   type EventPayloadByKindV1,
   type UInt64String,
   type UUIDv7,
-} from "core/protocol"
-import type { KernelCounters } from "core/kernel/model/counters"
+  eventPayloadV1SchemaByKind,
+  isEventKindV1,
+} from "core/protocol";
 
 /**
  * The Kernel's in-process control-event mailbox (kernel-command-contract §9, §13.3).
@@ -34,20 +34,20 @@ import type { KernelCounters } from "core/kernel/model/counters"
  * type and `EventEnvelopeV1` below; nothing in either is mailbox-specific.
  */
 export interface EventCorrelationV1 {
-  readonly commandId?: UUIDv7
-  readonly operationId?: UUIDv7
-  readonly transactionId?: UUIDv7
-  readonly turnId?: UUIDv7
-  readonly pageRemovePlanId?: UUIDv7
-  readonly restorePlanId?: UUIDv7
-  readonly restoreActionId?: UUIDv7
-  readonly commitPlanId?: UUIDv7
-  readonly migrationPlanId?: UUIDv7
-  readonly migrationActionId?: UUIDv7
-  readonly previewSessionId?: UUIDv7
-  readonly frameTokenId?: UUIDv7
-  readonly geometryTokenId?: UUIDv7
-  readonly pinId?: UUIDv7
+  readonly commandId?: UUIDv7;
+  readonly operationId?: UUIDv7;
+  readonly transactionId?: UUIDv7;
+  readonly turnId?: UUIDv7;
+  readonly pageRemovePlanId?: UUIDv7;
+  readonly restorePlanId?: UUIDv7;
+  readonly restoreActionId?: UUIDv7;
+  readonly commitPlanId?: UUIDv7;
+  readonly migrationPlanId?: UUIDv7;
+  readonly migrationActionId?: UUIDv7;
+  readonly previewSessionId?: UUIDv7;
+  readonly frameTokenId?: UUIDv7;
+  readonly geometryTokenId?: UUIDv7;
+  readonly pinId?: UUIDv7;
 }
 
 /**
@@ -58,13 +58,13 @@ export interface EventCorrelationV1 {
  * mirrors that by never accepting either field as input in the first place.
  */
 export interface EventEnvelopeV1<K extends EventKindV1 = EventKindV1> {
-  readonly protocolVersion: 1
-  readonly kernelInstanceId: UUIDv7
-  readonly eventSeq: UInt64String
-  readonly stateRevision: UInt64String
-  readonly kind: K
-  readonly correlation?: EventCorrelationV1
-  readonly payload: EventPayloadByKindV1[K]
+  readonly protocolVersion: 1;
+  readonly kernelInstanceId: UUIDv7;
+  readonly eventSeq: UInt64String;
+  readonly stateRevision: UInt64String;
+  readonly kind: K;
+  readonly correlation?: EventCorrelationV1;
+  readonly payload: EventPayloadByKindV1[K];
 }
 
 /**
@@ -74,9 +74,9 @@ export interface EventEnvelopeV1<K extends EventKindV1 = EventKindV1> {
  * caller-chosen sequence number into the stream.
  */
 export interface PublishableEventV1<K extends EventKindV1 = EventKindV1> {
-  readonly kind: K
-  readonly payload: EventPayloadByKindV1[K]
-  readonly correlation?: EventCorrelationV1
+  readonly kind: K;
+  readonly payload: EventPayloadByKindV1[K];
+  readonly correlation?: EventCorrelationV1;
 }
 
 /**
@@ -112,8 +112,8 @@ export class EventBusSubscriberError extends errore.createTaggedError({
  * to reach into the counters to keep that field honest.
  */
 export interface EventBusDeps {
-  readonly counters: KernelCounters
-  readonly buildSnapshotPayload: () => Omit<EventPayloadByKindV1["kernel.snapshot"], "eventSeq">
+  readonly counters: KernelCounters;
+  readonly buildSnapshotPayload: () => Omit<EventPayloadByKindV1["kernel.snapshot"], "eventSeq">;
 }
 
 export interface EventBus {
@@ -131,7 +131,7 @@ export interface EventBus {
    */
   readonly publishTransition: (
     events: readonly PublishableEventV1[],
-  ) => EventBusPayloadError | readonly EventEnvelopeV1[]
+  ) => EventBusPayloadError | readonly EventEnvelopeV1[];
   /**
    * Registers `handler` and immediately — synchronously, before returning — delivers
    * one `kernel.snapshot` envelope built from the injected provider and the counters'
@@ -144,14 +144,14 @@ export interface EventBus {
    */
   readonly subscribe: (
     handler: (envelope: EventEnvelopeV1) => void,
-  ) => EventBusPayloadError | (() => void)
+  ) => EventBusPayloadError | (() => void);
 }
 
 function firstIssue(error: z.ZodError): string {
-  const issue = error.issues[0]
-  if (issue === undefined) return "invalid payload"
-  const path = issue.path.length > 0 ? issue.path.join(".") : "<root>"
-  return `${path}: ${issue.message}`
+  const issue = error.issues[0];
+  if (issue === undefined) return "invalid payload";
+  const path = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+  return `${path}: ${issue.message}`;
 }
 
 /** Validates every event's payload before ANY of them is stamped — see `publishTransition`'s comment on why this is all-or-nothing. */
@@ -160,15 +160,18 @@ function validateBatch(
 ): EventBusPayloadError | readonly PublishableEventV1[] {
   for (const event of events) {
     if (!isEventKindV1(event.kind)) {
-      return new EventBusPayloadError({ kind: String(event.kind), reason: `unknown event kind "${String(event.kind)}"` })
+      return new EventBusPayloadError({
+        kind: String(event.kind),
+        reason: `unknown event kind "${String(event.kind)}"`,
+      });
     }
-    const schema = eventPayloadV1SchemaByKind[event.kind]
-    const parsed = schema.safeParse(event.payload)
+    const schema = eventPayloadV1SchemaByKind[event.kind];
+    const parsed = schema.safeParse(event.payload);
     if (!parsed.success) {
-      return new EventBusPayloadError({ kind: event.kind, reason: firstIssue(parsed.error) })
+      return new EventBusPayloadError({ kind: event.kind, reason: firstIssue(parsed.error) });
     }
   }
-  return events
+  return events;
 }
 
 function buildEnvelope(
@@ -184,8 +187,10 @@ function buildEnvelope(
     stateRevision,
     kind: event.kind,
     payload: event.payload,
-  }
-  return event.correlation === undefined ? envelope : { ...envelope, correlation: event.correlation }
+  };
+  return event.correlation === undefined
+    ? envelope
+    : { ...envelope, correlation: event.correlation };
 }
 
 /**
@@ -200,7 +205,7 @@ function buildEnvelope(
  * several atoms is ONE named action" rule.
  */
 export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps): EventBus {
-  const subscribers = new Set<(envelope: EventEnvelopeV1) => void>()
+  const subscribers = new Set<(envelope: EventEnvelopeV1) => void>();
 
   // A queue of already-VALIDATED batches, plus a re-entrancy guard. Both exist to
   // satisfy "events produced by one transition are enqueued contiguously": a
@@ -212,8 +217,8 @@ export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps)
   // loop below comes back around for another batch — so the nested transition's
   // events still arrive as one contiguous group, right after the run that triggered
   // it, never spliced into its middle.
-  const pendingBatches: (readonly PublishableEventV1[])[] = []
-  let isDraining = false
+  const pendingBatches: (readonly PublishableEventV1[])[] = [];
+  let isDraining = false;
 
   function notify(envelope: EventEnvelopeV1): void {
     // Iterate a SNAPSHOT of the subscriber set. A handler that subscribes from inside its
@@ -221,7 +226,7 @@ export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps)
     // elements added during iteration — and would receive its snapshot (already reflecting
     // the current event) plus the very same event again, breaking §9's "then subsequent
     // events" and §13.3's strict eventSeq monotonicity for that subscriber's stream.
-    for (const handler of [...subscribers]) deliver(handler, envelope)
+    for (const handler of [...subscribers]) deliver(handler, envelope);
   }
 
   /**
@@ -237,62 +242,72 @@ export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps)
     const failure = errore.try({
       try: () => handler(envelope),
       catch: (cause: Error) => new EventBusSubscriberError({ kind: envelope.kind, cause }),
-    })
+    });
     if (failure instanceof Error) {
-      console.warn(`core/mailbox: subscriber threw on ${envelope.kind}:`, failure.message)
+      console.warn(`core/mailbox: subscriber threw on ${envelope.kind}:`, failure.message);
     }
   }
 
   function drain(): readonly EventEnvelopeV1[] {
-    isDraining = true
+    isDraining = true;
     try {
-      return drainBatches()
+      return drainBatches();
     } finally {
       // `finally`, not a trailing assignment: see the notify() comment — an escaping
       // throw would otherwise leave the bus permanently wedged.
-      isDraining = false
+      isDraining = false;
     }
   }
 
   function drainBatches(): readonly EventEnvelopeV1[] {
-    const emitted: EventEnvelopeV1[] = []
+    const emitted: EventEnvelopeV1[] = [];
     for (let batch = pendingBatches.shift(); batch !== undefined; batch = pendingBatches.shift()) {
       // Read ONCE per batch: "their stateRevision is the revision after that
       // transition" (§9) — every event in this batch shares it. Reading it fresh per
       // batch, rather than once for the whole drain, is what lets a nested
       // transition queued mid-drain (see the comment above) carry a DIFFERENT
       // revision if its caller advanced one in between.
-      const stateRevision = counters.stateRevision()
+      const stateRevision = counters.stateRevision();
       for (const event of batch) {
-        const envelope = buildEnvelope(event, counters.kernelInstanceId, stateRevision, counters.nextEventSeq())
-        emitted.push(envelope)
-        notify(envelope)
+        const envelope = buildEnvelope(
+          event,
+          counters.kernelInstanceId,
+          stateRevision,
+          counters.nextEventSeq(),
+        );
+        emitted.push(envelope);
+        notify(envelope);
       }
     }
-    return emitted
+    return emitted;
   }
 
   const publishTransition = action((events: readonly PublishableEventV1[]) => {
-    const validated = validateBatch(events)
-    if (validated instanceof Error) return validated
+    const validated = validateBatch(events);
+    if (validated instanceof Error) return validated;
 
-    pendingBatches.push(validated)
+    pendingBatches.push(validated);
     // A nested call arriving while `drain()` is already running does not drain
     // itself — see the `pendingBatches` comment above. Its own envelopes are not
     // known yet at this point (the active `drain()` call will produce them once its
     // `while` loop reaches this batch), so it returns an empty array here rather
     // than a promise-like placeholder; subscribers still receive its events, in
     // order, immediately after the currently-draining transition finishes.
-    if (isDraining) return [] as readonly EventEnvelopeV1[]
+    if (isDraining) return [] as readonly EventEnvelopeV1[];
 
-    return drain()
-  }, "mailbox.publishTransition")
+    return drain();
+  }, "mailbox.publishTransition");
 
-  function subscribe(handler: (envelope: EventEnvelopeV1) => void): EventBusPayloadError | (() => void) {
-    const snapshotPayload = { ...buildSnapshotPayload(), eventSeq: counters.eventSeq() }
-    const parsed = eventPayloadV1SchemaByKind["kernel.snapshot"].safeParse(snapshotPayload)
+  function subscribe(
+    handler: (envelope: EventEnvelopeV1) => void,
+  ): EventBusPayloadError | (() => void) {
+    const snapshotPayload = { ...buildSnapshotPayload(), eventSeq: counters.eventSeq() };
+    const parsed = eventPayloadV1SchemaByKind["kernel.snapshot"].safeParse(snapshotPayload);
     if (!parsed.success) {
-      return new EventBusPayloadError({ kind: "kernel.snapshot", reason: firstIssue(parsed.error) })
+      return new EventBusPayloadError({
+        kind: "kernel.snapshot",
+        reason: firstIssue(parsed.error),
+      });
     }
 
     // Delivered through the same protected path as live events. A subscriber that throws
@@ -306,13 +321,13 @@ export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps)
       stateRevision: counters.stateRevision(),
       kind: "kernel.snapshot",
       payload: parsed.data,
-    })
+    });
 
-    subscribers.add(handler)
+    subscribers.add(handler);
     return () => {
-      subscribers.delete(handler)
-    }
+      subscribers.delete(handler);
+    };
   }
 
-  return { publishTransition, subscribe }
+  return { publishTransition, subscribe };
 }

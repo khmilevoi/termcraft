@@ -1,4 +1,4 @@
-import type { ThemeId, ThemeTokens } from "../types"
+import type { ThemeId, ThemeTokens } from "../types";
 
 /**
  * The `dark-default` palette (runtime-api §5.4). These are the design system's
@@ -27,19 +27,19 @@ const DARK_DEFAULT: ThemeTokens = {
   danger: "#dd7b60",
   dangerDim: "#4d2a20",
   statusBg: "#231d12",
-}
+};
 
 const THEMES: Record<ThemeId, ThemeTokens> = {
   "dark-default": DARK_DEFAULT,
-}
+};
 
 /** Resolve a theme id to its token palette (§5.4). Closed to the declared `ThemeId`. */
 export function themeTokens(id: ThemeId): ThemeTokens {
-  return THEMES[id]
+  return THEMES[id];
 }
 
 /** The default theme every MVP page renders against until a theme override lands. */
-export const DEFAULT_THEME_ID: ThemeId = "dark-default"
+export const DEFAULT_THEME_ID: ThemeId = "dark-default";
 
 /**
  * The active theme's tokens for a component to render against. MVP resolves the
@@ -47,5 +47,5 @@ export const DEFAULT_THEME_ID: ThemeId = "dark-default"
  * atom (§6) replaces later, so components never hard-code hues — they call this.
  */
 export function activeTokens(): ThemeTokens {
-  return themeTokens(DEFAULT_THEME_ID)
+  return themeTokens(DEFAULT_THEME_ID);
 }

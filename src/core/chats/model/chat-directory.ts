@@ -1,6 +1,6 @@
-import { action, atom, type Atom } from "@reatom/core"
+import { type Atom, action, atom } from "@reatom/core";
 
-import type { ChatSummaryV1 } from "../types"
+import type { ChatSummaryV1 } from "../types";
 
 /**
  * The Kernel's own newest-first chat directory (this slice's task brief: "newest-first
@@ -18,29 +18,29 @@ import type { ChatSummaryV1 } from "../types"
  * timestamps different lengths at the same wall-clock second. Stable: two chats created at
  * the exact same instant keep their original relative order. */
 export function sortChatsNewestFirst(chats: readonly ChatSummaryV1[]): readonly ChatSummaryV1[] {
-  return [...chats].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+  return [...chats].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
 export interface ChatDirectory {
-  readonly entriesAtom: Atom<ReadonlyMap<string, ChatSummaryV1>>
+  readonly entriesAtom: Atom<ReadonlyMap<string, ChatSummaryV1>>;
   /** Adds a chat, or replaces the existing entry for the same `chatId` — never duplicates. */
-  upsert(summary: ChatSummaryV1): void
-  newestFirst(): readonly ChatSummaryV1[]
+  upsert(summary: ChatSummaryV1): void;
+  newestFirst(): readonly ChatSummaryV1[];
 }
 
 /** A factory, not module-level atoms — two kernels (or two tests) must never share one directory. */
 export function createChatDirectory(): ChatDirectory {
-  const entriesAtom = atom<ReadonlyMap<string, ChatSummaryV1>>(new Map(), "kernel.chats.directory")
+  const entriesAtom = atom<ReadonlyMap<string, ChatSummaryV1>>(new Map(), "kernel.chats.directory");
 
   const upsert = action((summary: ChatSummaryV1) => {
-    const next = new Map(entriesAtom())
-    next.set(summary.chatId, summary)
-    entriesAtom.set(next)
-  }, "kernel.chats.directory.upsert")
+    const next = new Map(entriesAtom());
+    next.set(summary.chatId, summary);
+    entriesAtom.set(next);
+  }, "kernel.chats.directory.upsert");
 
   return {
     entriesAtom,
     upsert,
     newestFirst: () => sortChatsNewestFirst([...entriesAtom().values()]),
-  }
+  };
 }

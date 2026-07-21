@@ -7,4 +7,4 @@ export type {
   PreviewIdentity,
   Size,
   TerminalCapabilities,
-} from "./types"
+} from "./types";

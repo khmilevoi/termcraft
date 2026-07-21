@@ -1,8 +1,8 @@
-import * as errore from "errore"
+import * as errore from "errore";
 
-import type { PinDtoV1 } from "core/protocol"
-import type { PageSlug } from "entities/page"
-import type { PinEvent } from "entities/pin"
+import type { PinDtoV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
+import type { PinEvent } from "entities/pin";
 
 /**
  * Folds a page's raw pin-event log into complete `PinDtoV1`s (kernel-command-contract §9:
@@ -34,26 +34,32 @@ export class PinProjectionError extends errore.createTaggedError({
 }) {}
 
 interface FoldEntry {
-  readonly pinId: string
-  elementId: string
-  fx: number
-  fy: number
-  text: string
-  status: "open" | "resolved"
-  readonly createdRecordId: string
-  latestRecordId: string
-  updatedAt: string
-  readonly order: number
+  readonly pinId: string;
+  elementId: string;
+  fx: number;
+  fy: number;
+  text: string;
+  status: "open" | "resolved";
+  readonly createdRecordId: string;
+  latestRecordId: string;
+  updatedAt: string;
+  readonly order: number;
 }
 
-export function projectPinEvents(pageSlug: PageSlug, events: readonly PinEvent[]): PinProjectionError | readonly PinDtoV1[] {
-  const byId = new Map<string, FoldEntry>()
-  let order = 0
+export function projectPinEvents(
+  pageSlug: PageSlug,
+  events: readonly PinEvent[],
+): PinProjectionError | readonly PinDtoV1[] {
+  const byId = new Map<string, FoldEntry>();
+  let order = 0;
 
   for (const event of events) {
     if (event.kind === "pin:created") {
       if (byId.has(event.pinId)) {
-        return new PinProjectionError({ pageSlug, reason: `duplicate pin:created for pinId ${event.pinId}` })
+        return new PinProjectionError({
+          pageSlug,
+          reason: `duplicate pin:created for pinId ${event.pinId}`,
+        });
       }
       byId.set(event.pinId, {
         pinId: event.pinId,
@@ -66,31 +72,36 @@ export function projectPinEvents(pageSlug: PageSlug, events: readonly PinEvent[]
         latestRecordId: event.recordId,
         updatedAt: event.ts,
         order: order++,
-      })
-      continue
+      });
+      continue;
     }
 
-    const existing = byId.get(event.pinId)
+    const existing = byId.get(event.pinId);
     if (existing === undefined) {
-      return new PinProjectionError({ pageSlug, reason: `pin:status before pin:created for pinId ${event.pinId}` })
+      return new PinProjectionError({
+        pageSlug,
+        reason: `pin:status before pin:created for pinId ${event.pinId}`,
+      });
     }
-    existing.status = event.status
-    existing.latestRecordId = event.recordId
-    existing.updatedAt = event.ts
+    existing.status = event.status;
+    existing.latestRecordId = event.recordId;
+    existing.updatedAt = event.ts;
   }
 
   return [...byId.values()]
     .sort((a, b) => a.order - b.order)
-    .map((entry): PinDtoV1 => ({
-      pinId: entry.pinId,
-      pageSlug,
-      elementId: entry.elementId,
-      fx: entry.fx,
-      fy: entry.fy,
-      text: entry.text,
-      status: entry.status,
-      createdRecordId: entry.createdRecordId,
-      latestRecordId: entry.latestRecordId,
-      updatedAt: entry.updatedAt,
-    }))
+    .map(
+      (entry): PinDtoV1 => ({
+        pinId: entry.pinId,
+        pageSlug,
+        elementId: entry.elementId,
+        fx: entry.fx,
+        fy: entry.fy,
+        text: entry.text,
+        status: entry.status,
+        createdRecordId: entry.createdRecordId,
+        latestRecordId: entry.latestRecordId,
+        updatedAt: entry.updatedAt,
+      }),
+    );
 }

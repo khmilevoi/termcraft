@@ -19,19 +19,42 @@ export type {
   ConflictMarker,
   TransactionState,
   TransactionBoundary,
-} from "./types"
+} from "./types";
 
-export { TRANSACTION_JOURNAL_FORMAT_VERSION, JournalCorruptError, JournalTooNewError, computePlanHash, decodePlan, encodeCanonicalJson, validatePlanPayloads } from "./model/plan"
+export {
+  TRANSACTION_JOURNAL_FORMAT_VERSION,
+  JournalCorruptError,
+  JournalTooNewError,
+  computePlanHash,
+  decodePlan,
+  encodeCanonicalJson,
+  validatePlanPayloads,
+} from "./model/plan";
 
 // The `transactions.local/format.json` journal-format gate (turn-durability §3.1), separate
 // from `plan.ts`'s per-transaction `journalVersion` field: this classifies the whole journal
 // namespace before any transaction directory is even listed (blocker finding #1).
-export { JOURNAL_FORMAT_PATH, ensureJournalFormat, readJournalFormat } from "./model/journal-format"
+export {
+  JOURNAL_FORMAT_PATH,
+  ensureJournalFormat,
+  readJournalFormat,
+} from "./model/journal-format";
 
-export type { WriteMutex, WriteMutexChain, WriteMutexChainResult, WriteMutexDeps } from "./model/write-mutex"
-export { WritePermitInvalidError, assertActivePermit, createWriteMutex, defaultWriteMutexDeps, mintWritePermitId } from "./model/write-mutex"
+export type {
+  WriteMutex,
+  WriteMutexChain,
+  WriteMutexChainResult,
+  WriteMutexDeps,
+} from "./model/write-mutex";
+export {
+  WritePermitInvalidError,
+  assertActivePermit,
+  createWriteMutex,
+  defaultWriteMutexDeps,
+  mintWritePermitId,
+} from "./model/write-mutex";
 
-export type { RollForwardInput, RunTransactionInput, TransactionFsDeps } from "./model/engine"
+export type { RollForwardInput, RunTransactionInput, TransactionFsDeps } from "./model/engine";
 export {
   TRANSACTIONS_LOCAL_DIR,
   TransactionIoError,
@@ -54,21 +77,40 @@ export {
   rollForwardTransaction,
   runTransaction,
   transactionDir,
-} from "./model/engine"
+} from "./model/engine";
 
 // Startup recovery (turn-durability §4.6; storage-identity §10.2): scan
 // `transactions.local/` in stable lexical UUID order, classify each journal directory
 // BEFORE touching any target, and act — discard/roll-forward/recognize-complete/re-present
 // the same conflict.
-export type { ClassifyError, RecoverOneError, RecoveredTransaction, RecoveryOutcome, TransactionClassification } from "./model/recovery"
-export { classifyTransaction, listTransactionIds, nodeRecoveryFsDeps, recoverTransactions } from "./model/recovery"
-export type { RecoveryFsDeps } from "./model/recovery"
+export type {
+  ClassifyError,
+  RecoverOneError,
+  RecoveredTransaction,
+  RecoveryOutcome,
+  TransactionClassification,
+} from "./model/recovery";
+export {
+  classifyTransaction,
+  listTransactionIds,
+  nodeRecoveryFsDeps,
+  recoverTransactions,
+} from "./model/recovery";
+export type { RecoveryFsDeps } from "./model/recovery";
 
 // The mandatory fault-injection harness (turn-durability §14.1): spawns a real `bun` child
 // that performs one transaction and terminates itself — without cleanup — at an injected
 // physical boundary; the caller reopens fresh, runs recovery, and asserts the managed tree
 // landed at exactly the pre-intent old state or the exact committed new state.
-export type { ChildCrashMode, ChildPayload, ChildRunResult, CrashCase, CrashCaseOutcome, PlanTargetsState, RunPlanInChildInput } from "./model/crash-harness"
+export type {
+  ChildCrashMode,
+  ChildPayload,
+  ChildRunResult,
+  CrashCase,
+  CrashCaseOutcome,
+  PlanTargetsState,
+  RunPlanInChildInput,
+} from "./model/crash-harness";
 export {
   CHILD_SETUP_ERROR_EXIT_CODE,
   CHILD_TX_ERROR_EXIT_CODE,
@@ -77,7 +119,7 @@ export {
   observePlanTargetsState,
   runCrashCase,
   runPlanInChildProcess,
-} from "./model/crash-harness"
+} from "./model/crash-harness";
 
 // The domain wrappers (turn-durability §6-§11): `TurnTransaction` (admission/finalization/
 // terminalization), the generic `project-mutation` base-engine wrapper, and the
@@ -100,7 +142,7 @@ export type {
   TurnReadSet,
   TurnTerminalRecord,
   TurnTerminalizeInput,
-} from "./model/wrappers"
+} from "./model/wrappers";
 export {
   ChatMutationLockedError,
   SourceChangedError,
@@ -123,4 +165,4 @@ export {
   pageCommentsPath,
   runProjectMutation,
   terminalizeTurn,
-} from "./model/wrappers"
+} from "./model/wrappers";
