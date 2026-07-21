@@ -18,7 +18,7 @@ flowchart TD
 
 This is the v1 target flow. Individually, several of the building blocks below are real,
 tested code; what does not exist yet is a caller that wires them together into one export —
-no `core`/Kernel or `agent` module exists to own that orchestration, and no `ui` module —
+no `core`/Kernel module exists to own that orchestration, and no `ui` module —
 the UI shell — exists to trigger or report it. Each step below says which half it is.
 
 ## Walkthrough

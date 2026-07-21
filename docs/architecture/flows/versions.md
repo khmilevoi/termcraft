@@ -111,7 +111,7 @@ stateDiagram-v2
 ## Source anchors
 
 No Git-history reader, Restore orchestration, or `/commit-*` command surface
-exists in code yet (no `core`/Kernel, `agent`, or `ui` module has landed) — steps
+exists in code yet (no `core`/Kernel or `ui` module has landed) — steps
 1-3 and 5-7 and 9-14 below remain governed entirely by the design spec and design
 files. Steps 4 and 8 are partial exceptions. Step 4's read-only invariant is
 host-layer reality, not just spec: `HostMode` already carries `"historical"`, a

@@ -7,13 +7,13 @@ isolated preview. Written for a reader who does not read the source language —
 [code-structure.md](code-structure.md) is the deliberate exception, and the only
 document here that addresses how the source tree itself is laid out.
 
-> **Status:** six source modules have landed — `entities/`, `infrastructure/`,
-> `runtime/`, `host/`, `gate/`, and `store/` — and the documents below anchor those
-> to real source files. Of the seven components the design names, that makes four
-> real: the runtime facade, the Gate, the HostSupervisor and design host, and the
-> Project store. Three have not landed: the Kernel (`core/`), the agent backends
-> (`agent/`), and the UI shell (`ui/`), along with the `main.ts` composition root
-> that would wire them together. So nothing yet composes the landed modules into a
+> **Status:** seven source modules have landed — `entities/`, `infrastructure/`,
+> `runtime/`, `host/`, `gate/`, `store/`, and `agent/` — and the documents below
+> anchor those to real source files. Of the seven components the design names, that
+> makes five real: the runtime facade, the Gate, the HostSupervisor and design host,
+> the Project store, and the agent gateway. Two have not landed: the Kernel
+> (`core/`) and the UI shell (`ui/`), along with the `main.ts` composition root that
+> would wire everything together. So nothing yet composes the landed modules into a
 > running program: behavior that crosses component boundaries — a live generation
 > turn, a preview a designer can see, export assembly, Git history — is still
 > described ahead of the code. That is deliberate. Each document states which half
@@ -45,9 +45,10 @@ document here that addresses how the source tree itself is laid out.
 1. [overview.md](overview.md) — system context: the designer, the agent CLIs,
    the project folder, and the export consumer.
 2. [modules.md](modules.md) — the seven components, their boundaries, and the
-   runtime loop; the transport-neutral Kernel boundary, runtime facade, and
-   supervised design-host subprocess where agent-written code runs. Its per-component
-   table marks which four are real code and which three are still contract only.
+   runtime loop; the transport-neutral Kernel boundary, runtime facade, supervised
+   design-host subprocess where agent-written code runs, and the agent gateway's
+   confinement and owned process trees. Its per-component table marks which five are
+   real code and which two are still contract only.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
    The most fully-built area of the system, and the vocabulary the other documents
@@ -66,8 +67,9 @@ One document per user-visible process:
   Workspace: lock check, project discovery, the workspace-trust gate, first-run
   generation, and the optional v1-only first-run wizard.
 - [flows/generation-turn.md](flows/generation-turn.md) — one chat turn: a unique
-  fenced workspace, immutable candidate, Gate retries, compare-and-swap against
-  commit-hook drift, and recoverable roll-forward finalization.
+  fenced workspace, agent confinement and confirmed process-tree exit, immutable
+  candidate, Gate retries, compare-and-swap against commit-hook drift, and
+  recoverable roll-forward finalization.
 - [flows/chats.md](flows/chats.md) — several conversations over one project: the
   slash menu, creating and switching chats, per-chat agent sessions, and the v1
   `/commit-page`, `/commit-infra`, and `/commit-all` triggers.

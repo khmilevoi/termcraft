@@ -1,0 +1,26 @@
+// The mechanism-blind AgentBackend port (master §6.1) plus the production
+// backend. Phase 6 lifts the port types in ./types into core/ports/ and
+// injects the concrete backend from the composition root.
+//
+// Vendor-scoped construction detail (createClaudeBackend, ClaudeBackendDeps,
+// the raw SDK query seam) lives under `agent/claude` — a future Codex backend
+// gets its own sibling module there, and this file stays vendor-neutral: the
+// port, and "the" production backend, nothing more (see docs/architecture
+// and the phase-5 handoff for the shared-vs-vendor split rationale).
+export type {
+  AgentBackend,
+  AgentTask,
+  AgentRun,
+  AgentRunOutcome,
+  AgentInfo,
+  AgentHealthState,
+  BackendCapabilities,
+  ModelCapability,
+  ReasoningEffort,
+  SessionWorkspaceBinding,
+  SessionPlan,
+  SeedRecord,
+  SessionScopeInput,
+  FencedEvent,
+} from "./types"
+export { createProductionClaudeBackend } from "./claude"
