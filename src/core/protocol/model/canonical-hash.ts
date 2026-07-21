@@ -27,9 +27,6 @@ export class CanonicalHashError extends errore.createTaggedError({
   message: "cannot canonicalize $path: $reason",
 }) {}
 
-/** The JSON value space a DTO is allowed to occupy (§8.1). */
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-
 function describePath(path: readonly string[]): string {
   return path.length === 0 ? "<root>" : path.join(".");
 }

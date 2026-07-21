@@ -38,8 +38,12 @@ function query(messages: SDKMessage[]): ClaudeQuery {
 /** A stream that throws before yielding anything — drives `createClaudeDriver`'s catch/`backend-error` path. */
 function throwingQuery(reason: string): ClaudeQuery {
   return {
-    async *[Symbol.asyncIterator]() {
-      throw new Error(reason);
+    [Symbol.asyncIterator]() {
+      return {
+        next(): Promise<IteratorResult<SDKMessage>> {
+          return Promise.reject(new Error(reason));
+        },
+      };
     },
     interrupt: async () => {},
   };

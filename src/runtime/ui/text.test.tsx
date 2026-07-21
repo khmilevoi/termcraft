@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -39,7 +40,7 @@ describe("Text component (design-system §3.2)", () => {
     );
     await handle.render();
     const styled = lineRuns(handle.capture(), 0).find((run) => run.text.includes("x"));
-    expect((styled?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").danger);
+    expect(styled && extractRgb(styled.fg)).toBe<string>(themeTokens("dark-default").danger);
   });
 
   test("bold + dim set the protocol attribute mask (BOLD=1, DIM=2)", async () => {

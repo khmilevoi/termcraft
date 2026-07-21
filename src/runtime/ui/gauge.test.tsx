@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -40,8 +41,8 @@ describe("Gauge component (design-system §3.2)", () => {
     const runs = lineRuns(handle.capture(), 0);
     const filled = runs.find((run) => run.text.includes("█"));
     const empty = runs.find((run) => run.text.includes("╌"));
-    expect((filled?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent);
-    expect((empty?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").border);
+    expect(filled && extractRgb(filled.fg)).toBe<string>(themeTokens("dark-default").accent);
+    expect(empty && extractRgb(empty.fg)).toBe<string>(themeTokens("dark-default").border);
   });
 
   test("an out-of-range value clamps: >1 fills fully, <0 fills nothing", async () => {

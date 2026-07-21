@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { context, wrap } from "@reatom/core";
+import { context } from "@reatom/core";
 
 import { reatomExportStateMachine } from "core/machines";
 import type {

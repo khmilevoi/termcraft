@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  createFakeChatStore,
-  createFakePageStore,
-  createFakePinStore,
-  createFakeProjectStore,
-} from "core/ports/fakes";
+import { createFakeChatStore, createFakeProjectStore } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 
 import { switchChat } from "./switch";

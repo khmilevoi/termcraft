@@ -1,3 +1,5 @@
+import type { StyledRun } from "./protocol";
+
 /** The four supervised host modes (host-supervision §3.1). */
 export type HostMode = "preview" | "historical" | "smoke" | "export";
 
@@ -45,8 +47,6 @@ export interface HostSessionIdentity {
   readonly sessionId: string;
   readonly nonce: string;
 }
-
-import type { StyledRun } from "./protocol";
 
 /**
  * An immutable displayed-frame value handed to the UI (host-supervision §3.2/§5.3).

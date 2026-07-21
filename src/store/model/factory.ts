@@ -107,8 +107,11 @@ import type { TrustStore } from "store/trust";
 
 import type {
   AbsPath,
+  AdvanceSessionCheckpointInput,
+  AppendPinEventInput,
   ChatHandle,
   ChatStore,
+  CreateChatInput,
   CreateProjectInput,
   ManifestStore,
   OpenProject,
@@ -116,24 +119,17 @@ import type {
   PageStore,
   PinStore,
   ProjectionStore,
-  Store,
-  StoreDeps,
-  TransactionEngine,
-  TxOutcome,
-  WorkspaceStateStore,
-} from "../types";
-// `TransactionEngine`'s named-method inputs (phase-6 blocker B3) — kept in their own import
-// so the long list above (already the module's pre-existing surface) stays untouched.
-import type {
-  AdvanceSessionCheckpointInput,
-  AppendPinEventInput,
-  CreateChatInput,
   RemovePageInput,
   RenamePageTitleInput,
   ReorderPagesInput,
   SetActiveChatInput,
   SetActivePageInput,
   SetWorkspaceLocalInput,
+  Store,
+  StoreDeps,
+  TransactionEngine,
+  TxOutcome,
+  WorkspaceStateStore,
 } from "../types";
 
 // `store/model/factory.ts` — the composition-root entry point (T19). Wires every already-

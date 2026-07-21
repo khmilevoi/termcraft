@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -45,7 +46,7 @@ describe("Sparkline component (design-system §3.2)", () => {
     const run = lineRuns(handle.capture(), 0).find((styled) =>
       [...styled.text].some((char) => GLYPHS.includes(char)),
     );
-    expect((run?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").success);
+    expect(run && extractRgb(run.fg)).toBe<string>(themeTokens("dark-default").success);
   });
 
   test("an empty series renders empty without throwing", async () => {

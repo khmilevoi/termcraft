@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -30,7 +31,7 @@ describe("Box low-level primitive (§3.2 escape hatch)", () => {
     const body = allRuns(frame).find((run) => run.text.includes("body"));
     expect(body?.text).toContain("body");
     const filled = allRuns(frame).find((run) => run.bg !== "default");
-    expect((filled?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").surface);
+    expect(filled && extractRgb(filled.bg)).toBe<string>(themeTokens("dark-default").surface);
   });
 
   test("a bordered box paints the token border hue", async () => {

@@ -169,6 +169,11 @@ describe("publishExport", () => {
     if (result.kind !== "stale") return;
     expect(result.failure.code).toBe("EXPORT_SNAPSHOT_STALE");
     expect(readPhase()).toBe("idle");
+    expect(projectWrite.calls.map((c) => c.method)).toEqual([
+      "acquire",
+      "acquire-granted",
+      "release",
+    ]);
   });
 
   test("a page-count mismatch (a page removed since capture) is stale", async () => {

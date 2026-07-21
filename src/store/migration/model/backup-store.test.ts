@@ -198,7 +198,7 @@ describe("createBackupStore — the §12 verified-backup protocol", () => {
   });
 
   test("a create-new collision on the migrationActionId directory fails before any copy", async () => {
-    const { deps, files } = makeFakeDeps();
+    const { deps } = makeFakeDeps();
     const store = createBackupStore(deps);
     const input = baseInput({
       files: [{ relPath: "project.toml", bytes: bytesOf("v1"), sourceFormat: "project.toml@1" }],

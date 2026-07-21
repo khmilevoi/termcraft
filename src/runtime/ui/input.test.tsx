@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -28,8 +29,8 @@ describe("Input component (design-system §3.2)", () => {
     await handle.render();
     const run = findRun(handle.capture(), "alice");
     expect(run?.text).toContain("alice");
-    expect((run?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foreground);
-    expect((run?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").background);
+    expect(run && extractRgb(run.fg)).toBe<string>(themeTokens("dark-default").foreground);
+    expect(run && extractRgb(run.bg)).toBe<string>(themeTokens("dark-default").background);
   });
 
   test("paints the placeholder in the faint token when the value is empty", async () => {
@@ -39,7 +40,7 @@ describe("Input component (design-system §3.2)", () => {
     await handle.render();
     const run = findRun(handle.capture(), "type here");
     expect(run?.text).toContain("type here");
-    expect((run?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foregroundFaint);
+    expect(run && extractRgb(run.fg)).toBe<string>(themeTokens("dark-default").foregroundFaint);
   });
 
   test("mounts and renders a frame when focused (no hang on teardown)", async () => {

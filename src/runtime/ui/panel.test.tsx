@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -27,7 +28,7 @@ describe("Panel bordered container (design-system §3.2)", () => {
     );
     await handle.render();
     const title = allRuns(handle.capture()).find((run) => run.text.includes("Info"));
-    expect((title?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foreground);
+    expect(title && extractRgb(title.fg)).toBe<string>(themeTokens("dark-default").foreground);
   });
 
   test("draws a border in the theme's border hue and wraps its child", async () => {

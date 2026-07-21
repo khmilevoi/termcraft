@@ -88,13 +88,13 @@ describe("captureExportSnapshot", () => {
   });
 
   test("captures ordered pages with fresh bytes/hash, releases the permit, and reaches rendering", async () => {
-    const { call, readPhase, projectWrite, pageReader } = context.start(() => {
+    const { call, readPhase, pageReader } = context.start(() => {
       const { machine, projectWrite, pageReader, clock } = setup();
       const call = captureExportSnapshot(
         { machine, projectWrite, pageReader, clock },
         { pages: [HOME_INPUT, ABOUT_INPUT] },
       );
-      return { call, readPhase: wrap(() => machine.phase()), projectWrite, pageReader };
+      return { call, readPhase: wrap(() => machine.phase()), pageReader };
     });
 
     const result = await call;

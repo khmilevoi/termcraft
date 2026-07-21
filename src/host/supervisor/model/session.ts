@@ -12,9 +12,8 @@ import type {
   FrameEnvelope,
   FrameIdentity,
   ProtocolViolationCode,
-  PublicLimits,
 } from "../../protocol";
-import type { HostSessionIdentity, HostSessionSpec } from "../../types";
+import type { HostSessionSpec, InteractionMode, Size } from "../../types";
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
@@ -23,7 +22,6 @@ import type { InboundMessage } from "./transport";
 // NOTE: session.ts ALREADY imports decodeControlEnvelope + decodeFrameEnvelope from
 // "../../protocol" (top import block, used by awaitReady, retained per §4h) — do NOT
 // re-add them here or tsc fails with TS2300 "Duplicate identifier".
-import type { InteractionMode, PreviewFrame, Size } from "../../types";
 import type {
   ControlMailbox,
   ControlQueue,

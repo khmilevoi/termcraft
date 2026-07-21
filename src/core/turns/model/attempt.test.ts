@@ -9,7 +9,7 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { AgentTask } from "core/ports";
-import { type FakeAgentBackend, createFakeAgentBackend } from "core/ports/fakes";
+import { createFakeAgentBackend } from "core/ports/fakes";
 import type { Clock } from "infrastructure/clock";
 
 import {
@@ -18,7 +18,7 @@ import {
   type TurnAttemptOutcomeV1,
   startTurnAttempt,
 } from "./attempt";
-import { STREAM_SILENCE_MS, type TurnDeadlines, createTurnDeadlines } from "./deadlines";
+import { STREAM_SILENCE_MS, createTurnDeadlines } from "./deadlines";
 import { type TurnFence, createTurnFence } from "./fence";
 
 /**

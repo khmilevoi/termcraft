@@ -9,7 +9,6 @@ import {
   PROJECT_GITIGNORE_FILENAME,
   PROJECT_MANIFEST_FILENAME,
   WORKSPACE_STATE_FILENAME,
-  decodeProjectManifest,
   decodeWorkspaceLocalState,
   defaultWorkspaceLocalState,
   encodeProjectManifest,

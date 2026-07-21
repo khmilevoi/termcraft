@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { ProtocolError } from "../../protocol";
+import { registerRuntimeResolver } from "./resolver";
 import {
   computeSourceHash,
   computeSourceHash as hashBytes,
@@ -76,8 +77,6 @@ export default function P() { return null }`;
     expect(scanPageImports(src)).toBeInstanceOf(ProtocolError);
   });
 });
-
-import { registerRuntimeResolver } from "./resolver";
 
 const fixture = (name: string) => `${import.meta.dir}/../fixtures/${name}`;
 

@@ -9,7 +9,6 @@ import {
   ProtocolError,
   type PublicLimits,
   type RuntimeDeclarationBundleV1,
-  decodeControlEnvelope,
   encodeClientHello,
   encodeControlEnvelope,
 } from "../../protocol";

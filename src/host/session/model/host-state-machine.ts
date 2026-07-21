@@ -12,13 +12,7 @@ import {
 } from "../../protocol";
 import type { RenderHandle } from "../../render";
 import type { HostMode, InteractionMode } from "../../types";
-import type {
-  HostSession,
-  HostSessionDeps,
-  MountRequestBody,
-  OutboundMessage,
-  ReadyBody,
-} from "../types";
+import type { HostSession, HostSessionDeps, MountRequestBody, ReadyBody } from "../types";
 
 type Phase = "awaiting-hello" | "awaiting-mount" | "ready" | "closed";
 
@@ -41,7 +35,6 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
   let mountedMode: HostMode | null = null;
   let frameCounter = 1n;
   let lastFrameSeq = "0";
-  let effectiveMode: InteractionMode = "static";
   // The per-field minimum of client and host caps, fixed at handshake (§6). All
   // requested viewport sizes are bounded by these, so the host never renders a
   // frame the supervisor's decoder would reject. Host caps are the pre-handshake
@@ -203,7 +196,6 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     });
     emitFrame(captured, frameIdentity);
     lastFrameSeq = frameIdentity.frameSeq;
-    effectiveMode = initialMode;
     phase = "ready";
 
     // §11.3/§11.4: smoke and export are one-shot. Both exit 0 after the first
@@ -360,7 +352,6 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       });
       return;
     }
-    effectiveMode = requested;
     sendResponse(envelope.requestId, "set-mode", { ok: true, interactionMode: requested });
   }
 

@@ -18,6 +18,10 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "isExport",
       "themeCapability",
     ] as const) {
+      // `name` is a member of the `as const` list above, so tsc already checks it
+      // against runtime's real export keys — a typo fails the type check, not just
+      // this assertion.
+      // oxlint-disable-next-line import/namespace
       expect(typeof runtime[name]).toBe("function");
     }
     expect(runtime.CURRENT_KIT_API_VERSION).toBe(1);
@@ -37,6 +41,8 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "withConnectHook",
       "reatomComponent",
     ] as const) {
+      // See the rationale on the first loop above: tsc already validates `name`.
+      // oxlint-disable-next-line import/namespace
       expect(typeof runtime[name]).toBe("function");
     }
   });
@@ -65,6 +71,8 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "Sparkline",
       "Box",
     ] as const) {
+      // See the rationale on the first loop above: tsc already validates `name`.
+      // oxlint-disable-next-line import/namespace
       expect(typeof runtime[name]).toBe("function");
     }
   });

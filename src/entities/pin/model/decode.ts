@@ -5,7 +5,7 @@ import { pageSlugSchema } from "entities/page";
 import { rfc3339UtcSchema } from "infrastructure/clock";
 import { canonicalUuidv7Schema } from "infrastructure/uuid";
 
-import type { CommentsHeader, Pin, PinCreatedEvent, PinEvent, PinStatusEvent } from "../types";
+import type { CommentsHeader, Pin, PinEvent } from "../types";
 
 /**
  * A schema, identity, or fold violation in a comments header/event (storage-identity

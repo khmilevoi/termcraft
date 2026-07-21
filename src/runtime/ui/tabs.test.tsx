@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -39,7 +40,7 @@ describe("Tabs component (design-system §3.2)", () => {
     handle.mount(<Tabs id="menu" tabs={TABS} activeId="edit" />);
     await handle.render();
     const active = findRun(handle.capture(), "Edit");
-    expect((active?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent);
+    expect(active && extractRgb(active.fg)).toBe<string>(themeTokens("dark-default").accent);
     expect((active?.attrs ?? 0) & 0b1).toBe(0b1);
   });
 
@@ -49,7 +50,9 @@ describe("Tabs component (design-system §3.2)", () => {
     handle.mount(<Tabs id="menu" tabs={TABS} activeId="edit" />);
     await handle.render();
     const inactive = findRun(handle.capture(), "Files");
-    expect((inactive?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foregroundMuted);
+    expect(inactive && extractRgb(inactive.fg)).toBe<string>(
+      themeTokens("dark-default").foregroundMuted,
+    );
     expect((inactive?.attrs ?? 0) & 0b1).toBe(0);
   });
 });

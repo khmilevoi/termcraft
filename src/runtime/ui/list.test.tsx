@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
+import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
@@ -45,12 +46,14 @@ describe("List component (design-system §3.2)", () => {
     await handle.render();
     const runs = lineRuns(handle.capture(), 1);
     const selected = runs.find((run) => run.text.includes("bravo"));
-    expect((selected?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").selectionFg);
-    expect((selected?.bg as { rgb: string }).rgb).toBe(themeTokens("dark-default").selection);
+    expect(selected && extractRgb(selected.fg)).toBe<string>(
+      themeTokens("dark-default").selectionFg,
+    );
+    expect(selected && extractRgb(selected.bg)).toBe<string>(themeTokens("dark-default").selection);
     expect((selected?.attrs ?? 0) & 0b1).toBe(0b1);
     // the accent ▸ gutter marker precedes the label on the selected row
     const marker = runs.find((run) => run.text.includes("▸"));
-    expect((marker?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").accent);
+    expect(marker && extractRgb(marker.fg)).toBe<string>(themeTokens("dark-default").accent);
   });
 
   test("unselected rows use the foreground hue and no bold", async () => {
@@ -59,7 +62,7 @@ describe("List component (design-system §3.2)", () => {
     handle.mount(<List id="menu" items={ITEMS} selectedId="b" />);
     await handle.render();
     const other = lineRuns(handle.capture(), 0).find((run) => run.text.includes("alpha"));
-    expect((other?.fg as { rgb: string }).rgb).toBe(themeTokens("dark-default").foreground);
+    expect(other && extractRgb(other.fg)).toBe<string>(themeTokens("dark-default").foreground);
     expect((other?.attrs ?? 0) & 0b1).toBe(0);
   });
 });

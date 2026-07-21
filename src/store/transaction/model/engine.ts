@@ -34,7 +34,7 @@ import {
   sha256HexSchema,
   validatePlanPayloads,
 } from "./plan";
-import { type WriteMutex, WritePermitInvalidError, assertActivePermit } from "./write-mutex";
+import { type WriteMutex, assertActivePermit } from "./write-mutex";
 
 // ---- errors ---------------------------------------------------------------------
 

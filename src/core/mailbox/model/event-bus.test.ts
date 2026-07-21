@@ -293,7 +293,9 @@ describe("createEventBus", () => {
       expect(snapshot?.stateRevision).toBe(counters.stateRevision());
       // §13.3: "a snapshot reports the current event sequence and revision" — the DTO
       // payload is what crosses to the mirror, so the envelope field alone is not enough.
-      expect((snapshot?.payload as { eventSeq: string }).eventSeq).toBe(counters.eventSeq());
+      expect(
+        snapshot && (snapshot.payload as EventPayloadByKindV1["kernel.snapshot"]).eventSeq,
+      ).toBe(counters.eventSeq());
     });
   });
 });
