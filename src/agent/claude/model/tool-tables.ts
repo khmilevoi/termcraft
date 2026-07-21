@@ -1,4 +1,4 @@
-import type { ConfinementTables } from "agent/model/confinement"
+import type { ConfinementTables } from "agent/confinement"
 
 /**
  * File tools whose schema REQUIRES a path argument — verified against the

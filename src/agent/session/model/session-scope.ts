@@ -1,4 +1,4 @@
-import type { SessionScopeInput } from "../types"
+import type { SessionScopeInput } from "agent/types"
 
 /**
  * Fallback account discriminator for backends that cannot supply a stable

@@ -2,7 +2,7 @@ import * as errore from "errore"
 import os from "node:os"
 import type { CanUseTool, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
-import { makeConfinementPolicy } from "agent/model/confinement"
+import { createConfinementPolicy } from "agent/confinement"
 import { AgentHealthProbeError } from "agent/model/errors"
 import type { AgentInfo, BackendCapabilities } from "agent/types"
 import type { ClaudeQueryFn } from "../types"
@@ -132,7 +132,7 @@ function defaultWait(ms: number): Promise<void> {
  * fallback still runs the probe instead of reporting a false verdict.
  */
 function buildProbeOptions(deps: ProbeHealthDeps): Options {
-  const policy = makeConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES)
+  const policy = createConfinementPolicy(PROBE_CWD, CLAUDE_CONFINEMENT_TABLES)
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     const decision = policy(toolName, input, options.blockedPath)
     return decision.behavior === "allow" ? { behavior: "allow" } : { behavior: "deny", message: decision.message }

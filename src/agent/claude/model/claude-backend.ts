@@ -1,6 +1,6 @@
 import { ProcessTreeError } from "infrastructure/process"
 import { startAgentRun } from "agent/run"
-import { deriveSessionScope } from "agent/model/session-scope"
+import { buildPrompt, deriveSessionScope } from "agent/session"
 import type {
   AgentBackend,
   AgentInfo,
@@ -16,7 +16,6 @@ import type { ClaudeBackendDeps } from "../types"
 import { CLAUDE_BACKEND_ID } from "./backend-id"
 import { claudeCapabilities, probeHealth } from "./health"
 import { buildQueryOptions } from "./query-fn"
-import { buildPrompt } from "./session-plan"
 
 /** An `AsyncIterable` that yields `event` exactly once, then completes. */
 function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {

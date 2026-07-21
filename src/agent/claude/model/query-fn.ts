@@ -1,7 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ProcessTree } from "infrastructure/process"
-import { makeConfinementPolicy } from "agent/model/confinement"
+import { createConfinementPolicy } from "agent/confinement"
 import type { AgentTask } from "agent/types"
 import type { ClaudeQuery, ClaudeQueryFn } from "../types"
 import { planToSessionOptions } from "./session-plan"
@@ -37,7 +37,7 @@ export interface QueryOptionDeps {
  * spawned by us and adopted into the owned Job Object (Spike I / §6.5).
  */
 export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Options {
-  const policy = makeConfinementPolicy(task.workspacePath, CLAUDE_CONFINEMENT_TABLES, {
+  const policy = createConfinementPolicy(task.workspacePath, CLAUDE_CONFINEMENT_TABLES, {
     hasReparsePoint: deps.hasReparsePoint,
   })
   const sessionOpts = planToSessionOptions(task.session)

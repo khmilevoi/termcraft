@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/model/tool-tables"
-import { makeConfinementPolicy } from "./confinement"
+import { createConfinementPolicy } from "./policy"
 
 const staging = path.resolve("C:\\state\\turns\\019a\\workspace")
-const policy = makeConfinementPolicy(staging, CLAUDE_CONFINEMENT_TABLES)
+const policy = createConfinementPolicy(staging, CLAUDE_CONFINEMENT_TABLES)
 
 test("allows a Write inside staging (Spike H case 1)", () => {
   const r = policy("Write", { file_path: path.join(staging, "pages", "main.tsx"), content: "x" })
@@ -75,7 +75,7 @@ test("[13]/[33] a path-less LS resolves to the staging root and is allowed", () 
 })
 
 test("[13]/[33] a path-less Grep still denies when the staging root itself sits on a reparse point", () => {
-  const guardedPolicy = makeConfinementPolicy(staging, CLAUDE_CONFINEMENT_TABLES, { hasReparsePoint: (p) => p === staging })
+  const guardedPolicy = createConfinementPolicy(staging, CLAUDE_CONFINEMENT_TABLES, { hasReparsePoint: (p) => p === staging })
   const r = guardedPolicy("Grep", { pattern: "gauge" })
   expect(r.behavior).toBe("deny")
 })
@@ -108,7 +108,7 @@ const SYNTHETIC_TABLES = {
   pathFields: ["where", "target_path"] as const,
 }
 
-const synthetic = makeConfinementPolicy(staging, SYNTHETIC_TABLES)
+const synthetic = createConfinementPolicy(staging, SYNTHETIC_TABLES)
 
 test("the rule allows an in-staging file tool named by synthetic tables alone", () => {
   expect(synthetic("Poke", { where: path.join(staging, "a.txt") }).behavior).toBe("allow")
