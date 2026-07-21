@@ -170,12 +170,39 @@ test(
         wait: async () => {},
       })
       const run = backend.startTurn(task)
+      // finding: a deleted assertion covering `task.fence` passthrough was not
+      // a duplicate of degraded-run.test.ts's own shape assertion — that test
+      // only proves createDegradedRun's OWN local fence round-trips, not that
+      // startTurn actually threads `task.fence` through into it.
+      expect(run.fence).toBe(task.fence)
+      const events: FencedEvent[] = []
+      for await (const ev of run.events) events.push(ev)
+      expect(events[0]?.fence).toBe(task.fence)
       expect(await run.outcome).toEqual({
         kind: "backend-error",
         message: "Process-tree failure: no Job Object support",
         sessionId: null,
       })
       expect(warnSpy).toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  },
+  GUARD_MS,
+)
+
+test(
+  "cancel(run) on a degraded run resolves without throwing (it never entered the cancels WeakMap)",
+  async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const backend = createClaudeBackend({
+        queryFn: () => query([success]),
+        processTreeFactory: () => new ProcessTreeError({ reason: "no Job Object support" }),
+        wait: async () => {},
+      })
+      const run = backend.startTurn(task)
+      await expect(backend.cancel(run)).resolves.toBeUndefined()
     } finally {
       warnSpy.mockRestore()
     }
@@ -457,6 +484,41 @@ test(
       const info2 = await backend.healthCheck()
       expect(info2).toEqual({ backendId: CLAUDE_BACKEND_ID, health: { status: "unhealthy-unconfirmed-exit" }, account: null })
       expect(probeCalls).toBe(probeCallsAfterStartTurn)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  },
+  GUARD_MS,
+)
+
+test(
+  "startTurn returns a degraded run carrying the latch message once unhealthy, and does not mint a second tree",
+  async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      let factoryCalls = 0
+      const backend = createClaudeBackend({
+        queryFn: () => query([success]),
+        processTreeFactory: () => {
+          factoryCalls += 1
+          return createFakeProcessTree({ counts: [0] }) // ownership never confirmed
+        },
+        wait: async () => {},
+      })
+      const firstRun = backend.startTurn(task)
+      expect(await firstRun.outcome).toEqual({ kind: "unconfirmed-exit" })
+      expect(factoryCalls).toBe(1)
+
+      const secondRun = backend.startTurn(task)
+      // The point of the lockout: no new tree is minted for a turn that will
+      // be refused outright.
+      expect(factoryCalls).toBe(1)
+      expect(secondRun.fence).toBe(task.fence)
+      expect(await secondRun.outcome).toEqual({
+        kind: "backend-error",
+        message: "backend is unhealthy: a prior run's exit was never confirmed (§6.5)",
+        sessionId: null,
+      })
     } finally {
       warnSpy.mockRestore()
     }

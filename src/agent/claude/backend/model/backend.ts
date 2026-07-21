@@ -79,7 +79,7 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
 
     async cancel(run: AgentRun): Promise<void> {
       const runCancel = cancels.get(run)
-      if (runCancel === undefined) return // not a run this backend created -> safe no-op
+      if (runCancel === undefined) return // not a run this backend created (or already degraded) -> safe no-op
       await runCancel()
     },
 

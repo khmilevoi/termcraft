@@ -1,6 +1,6 @@
 export { createRealQueryFn } from "./model/query-fn"
 export { buildQueryOptions } from "./model/query-options"
-export type { QueryOptionDeps } from "./model/query-options"
+export type { QueryOptionDeps } from "./types"
 export { planToSessionOptions } from "./model/session-options"
 export { createSpawnAndAdopt } from "./model/spawn-adopt"
 export { createCanUseTool } from "./model/can-use-tool"

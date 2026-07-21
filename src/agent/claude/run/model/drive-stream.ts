@@ -1,6 +1,6 @@
 import type { AgentEvent } from "entities/turn"
 import type { RunDriver } from "agent/run"
-import { ClaudeSdkError } from "agent/claude/backend"
+import { ClaudeSdkError } from "agent/claude/errors"
 import type { ClaudeDriverParams } from "../types"
 import { deriveUsage, normalizeMessage } from "./normalize"
 

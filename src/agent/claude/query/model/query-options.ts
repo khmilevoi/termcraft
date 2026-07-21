@@ -1,20 +1,11 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import type { ProcessTree } from "infrastructure/process"
 import { createConfinementPolicy } from "agent/confinement"
 import type { AgentTask } from "agent/types"
 import { createCanUseTool } from "./can-use-tool"
 import { planToSessionOptions } from "./session-options"
 import { createSpawnAndAdopt } from "./spawn-adopt"
 import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools"
-
-export interface QueryOptionDeps {
-  readonly abortController: AbortController
-  readonly processTree: ProcessTree
-  /** Optional override for the CLI path in a compiled binary (Spike H compiled-parity). */
-  readonly pathToClaudeCodeExecutable?: string
-  /** Reparse backstop injected on Windows (Spike F). */
-  readonly hasReparsePoint?: (p: string) => boolean
-}
+import type { QueryOptionDeps } from "../types"
 
 /**
  * Build the SDK `Options` for one fenced attempt. Binds cwd + only-writable-root

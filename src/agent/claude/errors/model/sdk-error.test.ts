@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import * as errore from "errore"
-import { ClaudeSdkError } from "./errors"
+import { ClaudeSdkError } from "./sdk-error"
 
 test("ClaudeSdkError carries a stable code and preserves cause", () => {
   const cause = new Error("spawn ENOENT")
