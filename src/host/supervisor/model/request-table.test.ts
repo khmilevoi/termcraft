@@ -149,11 +149,23 @@ describe("createRequestTable", () => {
   test("a SUPERSEDED on one concurrent request does not disturb another concurrent request's own resolution (§7 replaced hover query)", async () => {
     const clock = createManualClock()
     const table = createRequestTable(clock)
-    const staleHover = table.register("1", "query-hit") // the replaced hover
-    const freshHover = table.register("2", "query-hit") // the replacement
+    const staleHover = table.register("1", "query-hit") // the replaced hover — registered FIRST
+    const freshHover = table.register("2", "query-hit") // the replacement — registered SECOND
 
-    table.supersede("1", "replaced by a newer hover")
+    // Resolve the FRESH hover BEFORE superseding the stale one, so BOTH entries are
+    // still outstanding at the moment resolve() runs. Superseding "1" first (as a
+    // naive ordering would) empties the map down to a single entry before resolve()
+    // is ever called, which makes a `responseTo`-blind "settle whichever entry is
+    // first in the map" resolve() coincidentally correct — see item 2's review note.
+    // Calling resolve() first means a mutated resolve() instead grabs "1" (registered
+    // first) and hands it the reply meant for "2", which the assertions below catch.
     table.resolve("2", reply("2", "query-hit"))
+    table.supersede("1", "replaced by a newer hover")
+
+    // A mutated resolve() leaves "2"'s entry permanently unsettled (its slot was
+    // wrongly consumed while settling "1") — advance past the 2s query deadline
+    // BEFORE awaiting so a mutated run fails deterministically instead of hanging.
+    clock.advance(2_000)
 
     const [staleResult, freshResult] = await Promise.all([staleHover, freshHover])
     expect(staleResult).toBeInstanceOf(SupervisorError)

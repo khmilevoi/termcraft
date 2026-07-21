@@ -25,7 +25,14 @@ const DEFAULT_RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
 
 export type ExportRenderFailableMethod = "renderOne"
 
-export type ExportRenderCall = { readonly method: "renderOne"; readonly manifestIndex: number }
+/**
+ * The WHOLE task is recorded, not just its manifestIndex. Recording only the index makes
+ * the payload unassertable, and a renderer handed the wrong size/theme/sourceHash then
+ * ships a snapshot file NAMED for the requested size but CONTAINING a different render —
+ * i.e. a mislabeled acceptance fixture, which is the one failure the export package exists
+ * to prevent.
+ */
+export type ExportRenderCall = { readonly method: "renderOne"; readonly manifestIndex: number; readonly task: ExportRenderTaskV1 }
 
 export interface FakeExportRenderPort extends ExportRenderPort {
   readonly calls: readonly ExportRenderCall[]
@@ -45,7 +52,7 @@ export function createFakeExportRenderPort(options?: {
   }
 
   async function renderOne(task: ExportRenderTaskV1): Promise<FailureDtoV1 | ExportRenderResultV1> {
-    calls.push({ method: "renderOne", manifestIndex: task.manifestIndex })
+    calls.push({ method: "renderOne", manifestIndex: task.manifestIndex, task })
     const queued = queues.renderOne.shift()
     if (queued !== undefined) return queued
     if (options?.render !== undefined) return options.render(task)

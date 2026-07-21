@@ -58,7 +58,17 @@ interface FakeIncarnation {
  * resolves to a ReadyOutcome. Each incarnation captures its injected onFatal so a
  * test can crash it post-ready.
  */
-function fakeFactory(opts?: { startFor?: (attempt: number) => ProtocolError | SupervisorError | null }) {
+function fakeFactory(opts?: {
+  startFor?: (attempt: number) => ProtocolError | SupervisorError | null
+  /**
+   * Overrides the `interactionMode` a `set-mode` reply echoes back (adversarial review
+   * of slice 6D, item 4). Defaults to echoing the REQUESTED mode. A test scripts a
+   * MISMATCHED echo (§7 "rejection/timeout/stale preserves the prior mode") to prove
+   * `ks.interactionMode` updates ONLY from an accepted (matching) response, never
+   * optimistically from the request alone.
+   */
+  setModeEcho?: (requested: InteractionMode) => InteractionMode
+}) {
   const incarnations: FakeIncarnation[] = []
   let nonceSeq = 0
 
@@ -126,7 +136,8 @@ function fakeFactory(opts?: { startFor?: (attempt: number) => ProtocolError | Su
         },
         async setMode(mode) {
           inc.setModeCalls.push(mode)
-          return { ...ready, kind: "set-mode", body: { interactionMode: mode } }
+          const echoed = opts?.setModeEcho ? opts.setModeEcho(mode) : mode
+          return { ...ready, kind: "set-mode", body: { interactionMode: echoed } }
         },
         async ping() {
           return ready
@@ -488,6 +499,50 @@ describe("createHostSupervisor — composed session delegation + restart rebindi
 
     clock.advance(250)
     await waitUntil(() => handle.state() === "ready", "restarted")
+    await supervisor.stopAll()
+  })
+})
+
+// --- adversarial review of slice 6D, item 4: `sessionFor`'s `setMode` handler carries
+// its own comment promising `interactionMode` is "updated only from an ACCEPTED
+// ready/set-mode response ... never optimistically" — but no test ever scripted a
+// set-mode reply that DISAGREES with the requested mode. Replacing the guarded
+// `if (result.body.interactionMode === next) ks.interactionMode = next` with an
+// unconditional assignment passed the whole suite before this test existed.
+
+describe("createHostSupervisor — interactionMode updates only from an accepted response (adversarial review item 4)", () => {
+  test("a set-mode reply that echoes a MISMATCHED mode does not update interactionMode", async () => {
+    // The fake always echoes back "static" — i.e. every set-mode request is answered
+    // as if rejected/stale, regardless of what was requested (§7).
+    const factory = fakeFactory({ setModeEcho: () => "static" })
+    const { supervisor } = makeSupervisor(factory)
+    const handle = supervisor.preview(specFor({ interactionMode: "static" }))
+    if (handle instanceof Error) throw handle
+    await waitUntil(() => handle.state() === "ready", "ready")
+    const first = factory.incarnations[0]!
+    expect(handle.interactionMode).toBe("static")
+
+    handle.setMode("interactive")
+    await waitUntil(() => first.setModeCalls.length === 1, "setMode reached the incarnation")
+    expect(first.setModeCalls[0]).toBe("interactive") // the REQUEST carried the new mode...
+    // ...but let the fire-and-forget `.then()` settle before asserting the effect —
+    // it runs on a microtask after `current.setMode(next)` resolves.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(handle.interactionMode).toBe("static") // ...the MISMATCHED reply must not adopt it
+    await supervisor.stopAll()
+  })
+
+  test("a set-mode reply that echoes the REQUESTED mode does update interactionMode (control case)", async () => {
+    const factory = fakeFactory() // default: echoes back whatever was requested
+    const { supervisor } = makeSupervisor(factory)
+    const handle = supervisor.preview(specFor({ interactionMode: "static" }))
+    if (handle instanceof Error) throw handle
+    await waitUntil(() => handle.state() === "ready", "ready")
+    expect(handle.interactionMode).toBe("static")
+
+    handle.setMode("interactive")
+    await waitUntil(() => handle.interactionMode === "interactive", "interactionMode updated from the accepted set-mode response")
     await supervisor.stopAll()
   })
 })
