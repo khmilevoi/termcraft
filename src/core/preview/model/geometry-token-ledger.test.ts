@@ -208,6 +208,57 @@ describe("createGeometryTokenLedger", () => {
     });
   });
 
+  describe("restore (reinstates a spent token under its original id)", () => {
+    test("a restored token consumes successfully again under the SAME id", () => {
+      const clock = manualClock(T0);
+      const ledger = createGeometryTokenLedger({ clock });
+      const a = anchor();
+      const token = ledger.mint(a);
+
+      expect(ledger.consume(token, identity())).toEqual({ ok: true, anchor: a });
+      ledger.restore(token, a);
+
+      expect(ledger.consume(token, identity())).toEqual({ ok: true, anchor: a });
+    });
+
+    test("restore grants a fresh TTL from the restore time, not the original mint time", () => {
+      const clock = manualClock(T0);
+      const ledger = createGeometryTokenLedger({ clock });
+      const a = anchor();
+      const token = ledger.mint(a);
+
+      clock.advance(GEOMETRY_TOKEN_TTL_MS - 1);
+      ledger.consume(token, identity());
+      ledger.restore(token, a);
+
+      clock.advance(GEOMETRY_TOKEN_TTL_MS - 1);
+      expect(ledger.consume(token, identity())).toEqual({ ok: true, anchor: a });
+    });
+
+    test("restoring at capacity evicts the oldest entry first, same as mint", () => {
+      const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
+      const tokens: string[] = [];
+      for (let i = 0; i < GEOMETRY_TOKEN_LEDGER_CAPACITY; i += 1) {
+        tokens.push(ledger.mint(anchor({ elementId: `el-${i}` })));
+      }
+      const oldest = tokens[0];
+      if (oldest === undefined) throw new Error("expected a first token");
+
+      const restoredAnchor = anchor({ elementId: "el-restored" });
+      ledger.restore("0192f6f0-0000-7000-8000-0000000000fe", restoredAnchor);
+
+      expect(ledger.size()).toBe(GEOMETRY_TOKEN_LEDGER_CAPACITY);
+      expect(ledger.consume(oldest, identity())).toEqual({
+        ok: false,
+        code: "GEOMETRY_TOKEN_INVALID",
+      });
+      expect(ledger.consume("0192f6f0-0000-7000-8000-0000000000fe", identity())).toEqual({
+        ok: true,
+        anchor: restoredAnchor,
+      });
+    });
+  });
+
   describe("bounded 4,096-entry capacity", () => {
     test("minting past capacity evicts the oldest entry (FIFO), keeping size at the cap", () => {
       const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });

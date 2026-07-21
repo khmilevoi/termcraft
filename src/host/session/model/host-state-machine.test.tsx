@@ -472,18 +472,37 @@ describe("host session — ready-phase geometry queries (design doc §4.2, host-
 });
 
 describe("host session — ready-phase control", () => {
-  test("resize re-renders and emits a new frame with an incremented frameSeq", async () => {
+  test("resize re-renders, emits a new frame with an incremented frameSeq, and sends a correlated ok response", async () => {
     const { h, session } = await readied();
-    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 24, h: 4 } }));
+    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 24, h: 4 } }, "7"));
     const frames = h.out.filter((m) => m.type === "frame") as { payload: FrameEnvelope }[];
     expect(frames).toHaveLength(1);
     expect(frames[0]!.payload.frameSeq).toBe("2");
     expect(frames[0]!.payload.width).toBe(24);
+
+    const control = h.out.filter((m) => m.type === "control") as { payload: ControlEnvelope }[];
+    expect(control).toHaveLength(1);
+    expect(control[0]!.payload.kind).toBe("resize");
+    expect(control[0]!.payload.responseTo).toBe("7");
+    expect((control[0]!.payload.body as { ok: boolean }).ok).toBe(true);
+  });
+
+  test("a resize without a requestId is fatal (MALFORMED_PROTOCOL)", async () => {
+    const { h, session } = await readied();
+    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 24, h: 4 } }));
+    const error = h.out.find(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+    ) as { payload: ControlEnvelope } | undefined;
+    expect(error).toBeDefined();
+    expect((error!.payload.body as { code: string }).code).toBe("MALFORMED_PROTOCOL");
+    expect(h.exits).toHaveLength(1);
   });
 
   test("a resize whose size exceeds the negotiated cell cap is refused with FRAME_TOO_LARGE", async () => {
     const { h, session } = await readied();
-    await session.receiveControlPayload(controlEnvelope("resize", { size: { w: 600, h: 600 } }));
+    await session.receiveControlPayload(
+      controlEnvelope("resize", { size: { w: 600, h: 600 } }, "8"),
+    );
     const error = h.out.find(
       (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
     ) as { payload: ControlEnvelope } | undefined;

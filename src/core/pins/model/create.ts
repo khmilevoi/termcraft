@@ -96,7 +96,15 @@ export async function createPin(
   };
 
   const appended = await deps.pinMutations.appendStandaloneEvent(pageSlug, event);
-  if (appended !== undefined) return appended;
+  if (appended !== undefined) {
+    // The token was already spent by `consume` above, before the append outcome was known.
+    // "successful `pin.create` consumes it once" (geometry-token-ledger.ts's own header) ties
+    // consumption to the WHOLE command succeeding — restoring it here on a failed append lets
+    // the user retry with the SAME still-displayed anchor instead of being forced back through
+    // a fresh geometry query (Codex review finding).
+    deps.geometryTokenLedger.restore(input.geometryToken, consumed.anchor);
+    return appended;
+  }
 
   return {
     kind: "created",

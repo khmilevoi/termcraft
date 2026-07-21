@@ -250,6 +250,31 @@ describe("createPin", () => {
     expect(result).toEqual(FAILURE);
   });
 
+  test("restores the geometry token on a failed append: the SAME token can be retried, without a fresh geometry query", async () => {
+    const pinStore = createFakePinStore();
+    pinStore.failNext("appendStandaloneEvent", FAILURE);
+    const clock = clockAt(NOW);
+    const frameTokenLedger = ackedFrameTokenLedger();
+    const geometryTokenLedger = createGeometryTokenLedger({ clock });
+    const geometryToken = geometryTokenLedger.mint(anchor());
+
+    const failed = await createPin(
+      { pinMutations: pinStore, clock, frameTokenLedger, geometryTokenLedger },
+      { geometryToken, text: "?" },
+    );
+    expect(failed).toEqual(FAILURE);
+
+    // failNext only queues ONE failure — this retry with the identical token hits the fake's
+    // normal success path, proving the token was never permanently spent by the failed attempt.
+    const retried = await createPin(
+      { pinMutations: pinStore, clock, frameTokenLedger, geometryTokenLedger },
+      { geometryToken, text: "retry" },
+    );
+    if ("code" in retried || retried.kind !== "created")
+      throw new Error("expected the retry to succeed once the token was restored");
+    expect(pinStore.calls).toHaveLength(2);
+  });
+
   test("empty pin text is allowed, matching pinDtoV1Schema's own allowance", async () => {
     const pinStore = createFakePinStore();
     const clock = clockAt(NOW);

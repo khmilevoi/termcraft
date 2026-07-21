@@ -62,6 +62,18 @@ export interface GeometryTokenLedger {
     token: GeometryTokenV1,
     currentIdentity: FrameIdentityV1,
   ) => GeometryTokenConsumption;
+  /**
+   * Reinstates a just-consumed token under its ORIGINAL id, for a caller whose downstream
+   * write failed after `consume` already spent it (`core/pins/model/create.ts`'s
+   * `createPin`): "successful `pin.create` consumes it once" (this file's own header) means
+   * consumption is tied to the WHOLE command succeeding, not merely to `consume` matching
+   * the identity. Without this, a persistence failure after a successful `consume` strands
+   * the user — the anchor is still legitimately displayed, but the token that named it is
+   * already gone and a fresh geometry query is the only way back in. Grants a fresh 30s TTL
+   * from the restore, same as a new `mint`; evicts the oldest entry first if at capacity,
+   * exactly like `mint`.
+   */
+  readonly restore: (token: GeometryTokenV1, anchor: GeometryAnchorV1) => void;
   /** The live entry count — for capacity-bound tests, never a public capability signal. */
   readonly size: () => number;
 }
@@ -116,9 +128,17 @@ export function createGeometryTokenLedger(deps: GeometryTokenLedgerDeps): Geomet
     return { ok: true, anchor: entry.anchor };
   }
 
+  function restore(token: GeometryTokenV1, anchor: GeometryAnchorV1): void {
+    if (entries.size >= GEOMETRY_TOKEN_LEDGER_CAPACITY) {
+      const oldestKey = entries.keys().next().value;
+      if (oldestKey !== undefined) entries.delete(oldestKey);
+    }
+    entries.set(token, { anchor, mintedAtMs: deps.clock.now().getTime() });
+  }
+
   function size(): number {
     return entries.size;
   }
 
-  return { mint, consume, size };
+  return { mint, consume, restore, size };
 }

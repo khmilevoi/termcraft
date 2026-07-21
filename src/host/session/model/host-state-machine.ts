@@ -312,6 +312,10 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
   }
 
   async function handleResize(envelope: ControlEnvelope): Promise<void> {
+    if (envelope.requestId === undefined)
+      return fail(
+        new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "resize must carry a requestId" }),
+      );
     if (renderer === null)
       return fail(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason: "resize before mount" }));
     const size = parseSize(envelope.body.size);
@@ -322,6 +326,11 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     const frameIdentity = sealFrameIdentity();
     emitFrame(captured, frameIdentity);
     lastFrameSeq = frameIdentity.frameSeq;
+    // The supervisor sends resize through the SAME correlated `sendRequest` path as
+    // set-mode/ping (supervisor/model/session.ts), registering the requestId in its
+    // request table and awaiting `responseTo` — without this, every resize resolves as
+    // QUERY_TIMEOUT even though the frame rendered and sent successfully.
+    sendResponse(envelope.requestId, "resize", { ok: true });
   }
 
   function handleSetMode(envelope: ControlEnvelope): void {
