@@ -75,12 +75,16 @@ flowchart LR
        types.ts
        index.ts
      agent/             AgentBackend over the vendors' official TypeScript SDKs [landed]
-       model/           SHARED tier — backend-agnostic: session scope, staging
-                         path containment, the deny-by-default confinement RULE
+       confinement/     SHARED tier — the deny-by-default confinement RULE
+       session/         SHARED tier — session-scope derivation, resume/fresh prompt
+       health/          SHARED tier — backend-agnostic health-probe policy
+       run/             SHARED tier — the run loop: terminal latch, event queue,
+                         both exit-confirmation ladders
        claude/          VENDOR tier — the Claude Code backend (a future Codex
-                         backend is a sibling folder here, not a fork of model/)
-         model/  types.ts  index.ts
-       types.ts         the mechanism-blind AgentBackend port both tiers face
+                         backend is a sibling folder here, not a fork of the
+                         shared tiers above)
+         backend/  query/  run/  tools/  errors/  types.ts  index.ts
+       types.ts         the mechanism-blind AgentBackend port every tier faces
        index.ts
      gate/              validation; declares the SmokeRenderer port it consumes [landed]
      host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
@@ -94,15 +98,18 @@ flowchart LR
    mechanism-blind contract (start a fenced attempt, cancel it, health-check,
    report models × efforts, derive a session scope) that names no vendor and
    imports no vendor SDK, so phase 6 can lift it verbatim into `core/ports/`.
-   `agent/model/` is the shared tier every backend may reuse: the opaque
-   session-scope derivation, the staging path-containment test, and the
-   deny-by-default confinement *rule*, which is parameterized over a table of
-   tool names rather than hard-coding any. `agent/claude/` is the one vendor
-   tier that exists — the Claude Code adapter, which supplies its own tool
-   table, its own SDK option building, and its own run loop. A future Codex
-   backend becomes a sibling of `claude/` supplying its own tables, and reuses
-   `agent/model/` unchanged; it never edits the shared tier to make room for
-   itself.
+   Four sibling folders are the shared tier every backend may reuse:
+   `confinement/` (the deny-by-default rule, parameterized over a table of tool
+   names rather than hard-coding any), `session/` (session-scope derivation and
+   the resume/fresh prompt), `health/` (the health-probe policy — deadline,
+   process-tree close, ambiguity classification), and `run/` (the run loop
+   itself — the terminal latch, the event queue, and both exit-confirmation
+   ladders). None of the four imports a vendor SDK. `agent/claude/` is the one
+   vendor tier that exists — the Claude Code adapter, which supplies its own
+   tool table, its own SDK option building, and a driver that feeds the shared
+   run loop, but owns no run loop of its own. A future Codex backend becomes a
+   sibling of `claude/` supplying its own tables and driver, and reuses the
+   four shared folders unchanged; it never edits them to make room for itself.
 
    `store/` groups by concern (`safe-fs`, `lease`, `trust`, `toml`, `jsonl`,
    `transaction`, `sandbox`, `migration`, `projections`) rather than by the
@@ -267,8 +274,9 @@ for what is still contract only.
   `index.ts`) and the atomic-function rule this document builds on
 - `tsconfig.json` (`compilerOptions.paths`) — the alias map item 2 and `CLAUDE.md`'s
   Imports section enforce; the `agent` bare + wildcard pair is now live (the Claude
-  tier reaches the shared tier as `agent/model/...`, never relatively), and `core`
-  and `ui` stay reserved ahead of those two modules landing
+  tier reaches the shared tier as `agent/confinement/...`, `agent/session/...`,
+  `agent/health/...`, `agent/run/...`, never relatively), and `core` and `ui` stay
+  reserved ahead of those two modules landing
 - `src/entities/page/index.ts`, `src/entities/page/types.ts`,
   `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
   `index.ts` shape, with no `ui/` because the module has none
@@ -280,6 +288,17 @@ for what is still contract only.
 
 **`agent/` and the shared-vs-vendor split (items 1, 5, 8)**
 
+`agent/` is now four shared sub-modules (`confinement`, `session`, `health`, `run`)
+plus one vendor sub-module (`claude`, itself split into `backend`/`query`/`run`/
+`tools`/`errors`). None of the four shared sub-modules imports the Claude SDK — a
+second backend (Codex) would add only a sibling of `agent/claude` supplying its own
+stream driver, message classifier, tool vocabulary, and options builder, never a
+change to `confinement`/`session`/`health`/`run`. The run loop itself moved with the
+split: `agent/run/model/engine.ts` now owns the terminal latch, the event queue, and
+both exit-confirmation ladders, and a vendor supplies only a driver that reads its
+stream and calls back into that engine — before the split this all lived inside the
+vendor tier's own pre-split run-loop file.
+
 - `src/agent/types.ts` — the mechanism-blind `AgentBackend` port: `startTurn`,
   `cancel`, `healthCheck`, `capabilities`, `sessionScope`, plus `AgentTask`,
   `AgentRun`, `AgentRunOutcome`, `SessionPlan`, and `BackendCapabilities`. Its own
@@ -288,30 +307,87 @@ for what is still contract only.
 - `src/agent/index.ts` — the module's public entry: the port types plus
   `createProductionClaudeBackend`; deliberately vendor-neutral, with all
   Claude-specific construction re-exported from `agent/claude`
-- `src/agent/model/confinement.ts` — the SHARED deny-by-default rule, parameterized
-  over a `ConfinementTables` record so it holds no vendor tool names itself
-- `src/agent/model/path-containment.ts` — the SHARED staging-containment test
-  (`isInsideStaging`) plus the reparse-point backstop it accepts
-- `src/agent/model/session-scope.ts` — the SHARED opaque `sessionScopeId`
+- `src/agent/confinement/model/policy.ts` — `createConfinementPolicy`, the SHARED
+  deny-by-default rule, parameterized over a `ConfinementTables` record so it holds
+  no vendor tool names itself
+- `src/agent/confinement/model/path-containment.ts` — the SHARED staging-containment
+  test (`isInsideStaging`) plus the reparse-point backstop it accepts
+- `src/agent/session/model/session-scope.ts` — the SHARED opaque `sessionScopeId`
   derivation for the store checkpoint key; effort is deliberately excluded
-- `src/agent/model/errors.ts` — `AgentHealthProbeError`, the one backend-generic
-  error in the shared tier
+- `src/agent/session/model/prompt.ts` — `buildPrompt`, the SHARED resume-delta /
+  fresh-seed prompt assembly; moved out of the vendor tier because nothing about
+  assembling this string is Claude-specific
+- `src/agent/health/model/errors.ts` — `AgentHealthProbeError`, the one
+  backend-generic error in the shared tier
+- `src/agent/health/model/probe.ts` — `runHealthProbe`, the SHARED probe policy: the
+  bounded deadline, closing the adopted process tree on every path, and the
+  never-report-ready-on-ambiguity classification; a backend supplies only a `read`
+  callback typed to its own message vocabulary
+- `src/agent/health/model/deadline.ts` — `withProbeDeadline`, the injectable
+  deadline race and its `ProbeDeadlineAbortError`
+- `src/agent/run/model/engine.ts` — `startAgentRun`, the SHARED run loop: the single
+  terminal latch that decides between natural completion and cancellation, the
+  event-queue wiring, and both exit-confirmation ladders (including the documented,
+  assessed-and-rejected-as-unimplementable §6.5 rung 3 on Windows)
+- `src/agent/run/model/event-queue.ts` — the single-reader async queue bridging a
+  driver to `AgentRun.events`, decoupled so `outcome` settles even if nobody reads
+- `src/agent/run/model/exit-confirm.ts` — `confirmExit`/`escalateAndConfirm`, the
+  process-tree poll and hard-kill escalation shared by both ladders
+- `src/agent/run/model/degraded-run.ts` — `createDegradedRun`, a run that failed
+  before it ever started (no owned process tree obtained) — one error event then a
+  matching `backend-error` outcome, never an unconfined run
+- `src/agent/run/model/unconfirmed-exit-latch.ts` — `createUnconfirmedExitLatch`,
+  the sticky per-backend §6.5 lockout after an unconfirmed exit; previously inline
+  inside the vendor tier's pre-split backend factory, now shared so a second
+  backend gets it for free
+- `src/agent/run/types.ts` — the `RunSink`/`RunDriver` contract the shared engine and
+  a vendor driver meet at; carries no vendor type by design
 - `src/agent/claude/index.ts` — the VENDOR tier's entry and production wiring
   (`createProductionClaudeBackendDeps`: real SDK query, Job Object tree factory,
   real sleep, reparse backstop)
-- `src/agent/claude/model/claude-backend.ts` — `createClaudeBackend`: the factory
-  that satisfies the port; owns the per-run tree lifetime and the sticky
-  unconfirmed-exit health latch
-- `src/agent/claude/model/tool-tables.ts` — `CLAUDE_CONFINEMENT_TABLES`, the vendor
-  half of the split: Claude Code's own tool names fed into the shared rule. A Codex
-  backend supplies its own file here rather than editing `agent/model/`
-- `src/agent/claude/model/query-fn.ts`, `src/agent/claude/model/spawn-adopt.ts` —
-  SDK option building (cwd/writable root, isolated settings, the `canUseTool` veto)
-  and the spawn hook that adopts the CLI into the owned tree
-- `src/agent/claude/model/agent-run.ts`, `src/agent/claude/model/health.ts`,
-  `src/agent/claude/model/normalize.ts`, `src/agent/claude/model/session-plan.ts` —
-  the run loop and exit-confirmation ladder, the health probe, vendor→`AgentEvent`
-  normalization, and the resume/fresh prompt assembly
+- `src/agent/claude/backend/model/backend.ts` — `createClaudeBackend`: the factory
+  that satisfies the port; owns the per-run tree lifetime and wires the shared
+  `createUnconfirmedExitLatch`/`createDegradedRun` policy pieces in
+- `src/agent/claude/backend/model/backend-id.ts` — the single `CLAUDE_BACKEND_ID`
+  constant fed to both the reported `backendId` and the session-scope material, so
+  a second backend cannot desync the two by only updating one call site
+- `src/agent/claude/backend/model/probe.ts` — `probeClaudeHealth`: the vendor half
+  of health — the isolated probe's query options and classification of Claude's own
+  message vocabulary — delegating the deadline/close/ambiguity policy to the shared
+  `agent/health`
+- `src/agent/claude/backend/model/capabilities.ts` — `claudeCapabilities`, the MVP
+  model catalog and the `sessionWorkspaceBinding: "rebindable"` declaration
+- `src/agent/claude/tools/model/vocabulary.ts` — `CLAUDE_TOOLS`, the vendor half of
+  the confinement split: the single table Claude's own tool names, path rules, and
+  denials all now derive from (collapsing the five separate tables its pre-split
+  vendor-only predecessor held). A Codex backend supplies its own file here rather
+  than editing `agent/confinement/`
+- `src/agent/claude/tools/model/tool-op.ts` — `mapToolUse`: an SDK `tool_use` block
+  into the UI's op + target
+- `src/agent/claude/query/model/query-fn.ts` — `createRealQueryFn`: the production
+  seam assigning the SDK's real `query` without a cast, so a future signature drift
+  fails the typecheck instead of being silently absorbed
+- `src/agent/claude/query/model/query-options.ts` — `buildQueryOptions`: the
+  per-attempt SDK options — workspace as cwd and only writable root, no external
+  settings sources, the `canUseTool` veto, and the spawn hook that makes the CLI ours
+- `src/agent/claude/query/model/session-options.ts` — `planToSessionOptions`: the
+  vendor half of session planning, turning a `SessionPlan` into SDK `resume`/
+  `forkSession` options (the prompt half lives in the shared `agent/session/model/prompt.ts`)
+- `src/agent/claude/query/model/can-use-tool.ts` — `createCanUseTool`: adapts the
+  shared confinement policy's `PermissionResultLike` to the SDK's `CanUseTool`
+  callback shape — the one place the vendor permission shape is put back on
+- `src/agent/claude/query/model/spawn-adopt.ts` — `createSpawnAndAdopt`: the spawn
+  hook that adopts the CLI into the owned tree, shared verbatim by a real turn and
+  the health probe
+- `src/agent/claude/run/model/drive-stream.ts` — `createClaudeDriver`: the vendor
+  stream reader — reads `SDKMessage`s, normalizes them, and claims the natural
+  outcome; the terminal latch, queue, and exit confirmation now belong to the shared
+  `agent/run/model/engine.ts`, not this file
+- `src/agent/claude/run/model/normalize.ts` — vendor messages into `AgentEvent`s
+  (reasoning, tool, final, error, usage), dropping anything with no mapping
+- `src/agent/claude/errors/model/sdk-error.ts` — `ClaudeSdkError`, the internal code
+  for a failure at the SDK boundary (spawn/stream), mapped to `AgentRunOutcome`/
+  `AgentEvent` and never rethrown past the adapter's own surface
 
 **`infrastructure/` and the domain-free test (item 6)**
 

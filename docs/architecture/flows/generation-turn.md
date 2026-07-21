@@ -147,30 +147,34 @@ The agent backend, confinement, and process-tree exit:
 
 - `src/agent/types.ts` — the mechanism-blind backend contract of step 4: `startTurn`/`cancel`/`healthCheck`/`capabilities`/`sessionScope`, the `AgentTask` a fenced attempt receives, and the four terminal outcomes (`completed`, `backend-error`, `cancelled` with confirmed exit, `unconfirmed-exit`)
 - `src/agent/index.ts` — the module's public entry: the port types plus `createProductionClaudeBackend`
-- `src/agent/model/confinement.ts` — the shared deny-by-default rule of step 3: denied tools first, unlisted tools next, then the path test; parameterized over a tool table so it names no vendor
-- `src/agent/model/path-containment.ts` — `isInsideStaging`: normalization, the boundary-safe prefix test, relative paths resolved against the workspace, and the reparse-point check applied to every segment from the workspace down to the target
-- `src/agent/claude/model/tool-tables.ts` — Claude Code's tool vocabulary: the path-required file tools, the tools whose path is optional and defaults to the working directory, and the shell/web tools denied outright
-- `src/agent/claude/model/query-fn.ts` — `buildQueryOptions`: workspace as cwd and only writable root, no external settings sources, the `canUseTool` veto, and the spawn hook that makes the CLI ours
-- `src/agent/claude/model/spawn-adopt.ts` — spawn-then-adopt with the membership re-read; records a failed adoption so a later "zero processes" reading can never be mistaken for a confirmed exit
-- `src/agent/claude/model/agent-run.ts` — one attempt end to end: the event queue, the single terminal latch, the natural-completion exit confirmation, and the four-rung cancel ladder of step 10 with its documented missing rung
-- `src/agent/claude/model/claude-backend.ts` — the backend instance: a fresh owned tree per attempt, the refusal to run an attempt with no tree, the tree closed on every terminal outcome, and the sticky unhealthy latch an unconfirmed exit sets
-- `src/agent/claude/model/normalize.ts` — vendor messages into the five `AgentEvent` kinds of step 5, dropping unmapped messages by design
+- `src/agent/confinement/model/policy.ts` — `createConfinementPolicy`, the shared deny-by-default rule of step 3: denied tools first, unlisted tools next, then the path test; parameterized over a tool table so it names no vendor
+- `src/agent/confinement/model/path-containment.ts` — `isInsideStaging`: normalization, the boundary-safe prefix test, relative paths resolved against the workspace, and the reparse-point check applied to every segment from the workspace down to the target
+- `src/agent/claude/tools/model/vocabulary.ts` — Claude Code's tool vocabulary: the path-required file tools, the tools whose path is optional and defaults to the working directory, and the shell/web tools denied outright
+- `src/agent/claude/query/model/query-options.ts` — `buildQueryOptions`: workspace as cwd and only writable root, no external settings sources, the `canUseTool` veto, and the spawn hook that makes the CLI ours
+- `src/agent/claude/query/model/spawn-adopt.ts` — spawn-then-adopt with the membership re-read; records a failed adoption so a later "zero processes" reading can never be mistaken for a confirmed exit
+- `src/agent/run/model/engine.ts` — `startAgentRun`: one attempt end to end — the event queue, the single terminal latch, the natural-completion exit confirmation, and the four-rung cancel ladder of step 10 with its documented missing rung. This is now the SHARED engine, not vendor code: a backend supplies only a driver that reads its own stream and reports into it
+- `src/agent/run/model/degraded-run.ts` — `createDegradedRun`: the shape a run takes when `startTurn` cannot obtain an owned process tree at all — one error event then a matching `backend-error` outcome, never an unconfined run
+- `src/agent/run/model/unconfirmed-exit-latch.ts` — `createUnconfirmedExitLatch`: the sticky per-backend lockout step 10's failure branch sets after an unconfirmed exit, cleared only by restart
+- `src/agent/claude/run/model/drive-stream.ts` — `createClaudeDriver`: the vendor stream reader that reads `SDKMessage`s and claims the natural outcome; hands the terminal latch and exit confirmation off to the shared engine above
+- `src/agent/claude/backend/model/backend.ts` — the backend instance: a fresh owned tree per attempt, the refusal to run an attempt with no tree, the tree closed on every terminal outcome, and the shared unhealthy latch wired in
+- `src/agent/claude/run/model/normalize.ts` — vendor messages into the five `AgentEvent` kinds of step 5, dropping unmapped messages by design
 - `src/infrastructure/process/types.ts`, `src/infrastructure/process/model/job-object.ts` — the owned process tree behind "confirmed process-tree exit": kill-on-close creation, adoption, the OS-read live process count, hard termination, and idempotent invalidating release
 
 Session resume and fencing:
 
 - `src/store/jsonl/model/checkpoint.ts` — the session-resume gate: chat identity, `sessionScopeId`, exact record-count/prefix-hash match, and the bounded fresh-session seed built on any mismatch
 - `src/store/toml/types.ts` — `SessionCheckpoint`'s machine-local shape (`chatId`, `sessionScopeId`, `sessionId`, `recordCount`, `prefixHash`)
-- `src/agent/model/session-scope.ts` — the backend half of the same gate: the opaque scope string keyed on backend, account, model, and workspace identity, with effort excluded and a per-process fallback when no stable account exists
-- `src/agent/claude/model/session-plan.ts` — turning the Kernel's resume-or-fresh decision into vendor options and one prompt string: the delta on resume, the bounded seed transcript prepended on fresh
-- `src/agent/claude/model/health.ts` — `claudeCapabilities`, which declares Claude's sessions rebindable to a new turn workspace (step 2), alongside the health probe of `flows/launch.md`
+- `src/agent/session/model/session-scope.ts` — the backend half of the same gate: the opaque scope string keyed on backend, account, model, and workspace identity, with effort excluded and a per-process fallback when no stable account exists
+- `src/agent/session/model/prompt.ts` — `buildPrompt`: the delta on resume, the bounded seed transcript prepended on fresh — now shared, since nothing about assembling the prompt string is vendor-specific
+- `src/agent/claude/query/model/session-options.ts` — `planToSessionOptions`: turning the Kernel's resume-or-fresh decision into vendor SDK `resume`/`forkSession` options
+- `src/agent/claude/backend/model/capabilities.ts` — `claudeCapabilities`, which declares Claude's sessions rebindable to a new turn workspace (step 2), alongside the health probe of `flows/launch.md`
 - `src/store/lease/model/lease.ts` — `leaseNonce()`, the CSPRNG nonce primitive; today minted once per project-lease acquisition, not yet wired into a per-attempt turn fence
 - `src/entities/turn/types.ts` — `AgentEvent`/`TurnFence`/`TokenUsage`: the normalized event stream and the `{turnId, attempt, leaseNonce}` fencing shape; the backend now produces the events and stamps the fence, and no Kernel consumes either yet
 
 Design-spec anchors kept because no code exists yet for what they describe:
 
 - `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — the whole Kernel: command/event contracts, capabilities, turn-state guards, revisions, typed results; no `core`/Kernel module exists yet
-- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` — §7.3 the run/retry/candidate-handoff loop and §9 Restore, neither of which any code drives; the Kernel-side half of §6.4's late-event rejection (nothing yet checks a received fence). §6.3's backend cwd/confinement and §6.5's cancellation/process-tree-exit handling are now anchored to `src/agent/` above, with §6.5's rung 3 documented in `agent-run.ts` as unimplementable on Windows
+- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` — §7.3 the run/retry/candidate-handoff loop and §9 Restore, neither of which any code drives; the Kernel-side half of §6.4's late-event rejection (nothing yet checks a received fence). §6.3's backend cwd/confinement and §6.5's cancellation/process-tree-exit handling are now anchored to `src/agent/` above, with §6.5's rung 3 documented in `src/agent/run/model/engine.ts` as unimplementable on Windows
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §6.1's Codex half (v1.0; no second backend exists); §3.2 turn-time streaming-status presentation (ephemeral block, reasoning ticker); §3.9 chats and context usage; §9 cancel/hang/sandbox-degradation *presentation* — all UI/Kernel behavior with no code yet. §6.1's backend abstraction and Claude confinement are now anchored to `src/agent/` above
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — §2 the Git path-history controls on page delete/recreate; §11 v1 acceptance criteria — no Git integration exists in the codebase today
 - `design/03-workspace-generating.dc.html` — streaming status presentation (no `ui` module exists yet)
