@@ -251,7 +251,7 @@ test(
 )
 
 test(
-  "healthCheck() delegates to probeHealth",
+  "healthCheck() delegates to probeClaudeHealth",
   async () => {
     const backend = createClaudeBackend({
       queryFn: () => query([initMessage]),
@@ -630,7 +630,7 @@ test(
 )
 
 test(
-  "confirmTimeoutMs absent falls back to startClaudeRun's default 5s budget",
+  "confirmTimeoutMs absent falls back to startAgentRun's default 5s budget",
   async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
     try {
