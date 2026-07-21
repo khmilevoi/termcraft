@@ -10,7 +10,9 @@ import type { ConfinementTables } from "agent/confinement"
  * `access`:
  *  - `path-confined` — schema REQUIRES a path; a call carrying none is
  *    malformed and stays denied.
- *  - `path-optional` — schema documents `path` as optional, defaulting to cwd.
+ *  - `path-optional` — schema documents `path` as optional, defaulting to cwd:
+ *    `GlobInput.path` — "If not specified, the current working directory will
+ *    be used"; `GrepInput.path` — "Defaults to current working directory".
  *    The agent's cwd IS the staging root (`buildQueryOptions`), so a path-less
  *    call means "the staging root itself" and resolves there.
  *  - `denied` — refused outright regardless of arguments (master §6.1).
@@ -23,11 +25,15 @@ interface ClaudeTool {
 
 /**
  * Verified against the installed `@anthropic-ai/claude-agent-sdk`'s
- * `sdk-tools.d.ts`. Two entries are currently INERT — this SDK build has no
- * `MultiEdit` and no `LS` tool, so `canUseTool` will never be called with those
- * names. They are kept defensively, matching their historical schemas, for an
- * older or future SDK build that reintroduces them; re-verify against the
- * schema if that happens.
+ * `sdk-tools.d.ts`. Every `path-confined` entry's path field is non-optional
+ * there: `FileReadInput.file_path`, `FileWriteInput.file_path`,
+ * `FileEditInput.file_path`, `NotebookEditInput.notebook_path`.
+ *
+ * Two entries are currently INERT — this SDK build has no `MultiEdit` and no
+ * `LS` tool, so `canUseTool` will never be called with those names. They are
+ * kept defensively, matching their historical schemas, for an older or
+ * future SDK build that reintroduces them; re-verify against the schema if
+ * that happens.
  */
 const CLAUDE_TOOLS: readonly ClaudeTool[] = [
   { name: "Read", op: "read", access: "path-confined" },
