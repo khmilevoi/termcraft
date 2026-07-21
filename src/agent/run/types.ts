@@ -17,7 +17,8 @@ export type NaturalOutcome =
 /** The engine-owned surface one run's driver writes to. */
 export interface RunSink {
   /**
-   * True once this run has a terminal owner — i.e. `cancel()` won the race.
+   * True once this run has a terminal owner — either `cancel()` won the race,
+   * or the driver's own natural completion already latched via `complete()`.
    * The driver must stop reading and return; nothing it does after this is
    * observable (turn-durability §6.4's late-event drop).
    */

@@ -1,8 +1,7 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { AgentEvent } from "entities/turn"
 import type { RunDriver } from "agent/run"
-import type { ClaudeQueryFn } from "agent/claude/types"
 import { ClaudeSdkError } from "agent/claude/model/errors"
+import type { ClaudeDriverParams } from "../types"
 import { deriveUsage, normalizeMessage } from "./normalize"
 
 function describeThrown(cause: unknown): string {
@@ -11,12 +10,6 @@ function describeThrown(cause: unknown): string {
 
 function asError(cause: unknown): Error | undefined {
   return cause instanceof Error ? cause : undefined
-}
-
-export interface ClaudeDriverParams {
-  readonly queryFn: ClaudeQueryFn
-  readonly prompt: string
-  readonly options: Options
 }
 
 /**

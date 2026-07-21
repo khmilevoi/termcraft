@@ -83,8 +83,14 @@ describe("startAgentRun sink contract", () => {
     expect(seen).toEqual([])
   })
 
-  test("isTerminal() reports true to the driver once cancel has won", async () => {
-    let observed: boolean | null = null
+  test("isTerminal() reports false before cancel and true to the driver once cancel has won", async () => {
+    // Collecting into an array (rather than a single reassigned `let`)
+    // sidesteps the closure-narrowing pitfall: TypeScript would otherwise
+    // narrow a `let observed: boolean | null` read outside the driver
+    // closure to the literal `null` from its synchronous initializer, and
+    // only a cast (`as boolean | null`) restores the wider type. An array
+    // never narrows that way.
+    const observed: boolean[] = []
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -93,8 +99,12 @@ describe("startAgentRun sink contract", () => {
     const { cancel } = startAgentRun(
       fence,
       async (sink: RunSink) => {
+        // `startAgentRun` invokes the driver synchronously up to its first
+        // `await`, so this push always lands before the test below reaches
+        // `cancel()` -- no extra gating needed for the ordering to hold.
+        observed.push(sink.isTerminal())
         await gate
-        observed = sink.isTerminal()
+        observed.push(sink.isTerminal())
       },
       deps(),
     )
@@ -102,11 +112,8 @@ describe("startAgentRun sink contract", () => {
     await cancel()
     release()
     await Bun.sleep(0)
-    // `observed` is mutated from inside the async driver closure above; TS's
-    // control-flow narrowing sees only the synchronous `= null` initializer
-    // and narrows the read below to the literal `null` (a mere type
-    // annotation on a local const does not reset this -- only a cast does).
-    expect(observed as boolean | null).toBe(true)
+
+    expect(observed).toEqual([false, true])
   })
 
   test("a driver that throws past its own boundary becomes a backend-error, not a pending outcome", async () => {

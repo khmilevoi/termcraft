@@ -16,6 +16,13 @@ class TurnAbortError extends errore.createTaggedError({
   extends: errore.AbortError,
 }) {}
 
+/** A driver that threw past its own boundary. The engine's backstop — a driver
+ *  is expected to convert its own boundary throws into `complete()`. */
+class RunDriverError extends errore.createTaggedError({
+  name: "RunDriverError",
+  message: "agent run failed: $reason",
+}) {}
+
 /** Default §6.5 exit-confirmation budget when the caller does not override it. */
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5000
 
@@ -80,7 +87,10 @@ export function startAgentRun(
 
   const sink: RunSink = {
     isTerminal: () => terminalKind !== null,
-    emit: (event) => queue.push(event),
+    emit: (event) => {
+      if (terminalKind !== null) return // late-event drop (§6.4)
+      queue.push(event)
+    },
     complete: (outcome, finalEvents) => {
       if (!latch("natural")) return // cancel already won (late-event drop, §6.4)
       for (const event of finalEvents ?? []) queue.push(event)
@@ -98,10 +108,10 @@ export function startAgentRun(
       // pending forever.
       console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause))
       if (latch("natural")) {
-        const message = `agent run failed: ${describeThrown(cause)}`
-        queue.push({ kind: "error", message })
+        const driverError = new RunDriverError({ reason: describeThrown(cause), cause })
+        queue.push({ kind: "error", message: driverError.message })
         queue.finish()
-        claimed = { kind: "backend-error", message, sessionId: null }
+        claimed = { kind: "backend-error", message: driverError.message, sessionId: null }
       }
     }
 

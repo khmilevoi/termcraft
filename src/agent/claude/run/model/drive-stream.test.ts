@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { createClaudeDriver } from "./drive-stream"
-import type { NaturalOutcome } from "agent/run"
+import type { NaturalOutcome, RunSink } from "agent/run"
 import type { AgentEvent } from "entities/turn"
 
 /** Every test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
@@ -11,18 +11,19 @@ function fakeSink() {
   const emitted: AgentEvent[] = []
   const completions: { outcome: NaturalOutcome; finalEvents: readonly AgentEvent[] }[] = []
   let terminal = false
+  const sink: RunSink = {
+    isTerminal: () => terminal,
+    emit: (e: AgentEvent) => emitted.push(e),
+    complete: (outcome: NaturalOutcome, finalEvents: readonly AgentEvent[] = []) =>
+      completions.push({ outcome, finalEvents }),
+  }
   return {
     emitted,
     completions,
     setTerminal: () => {
       terminal = true
     },
-    sink: {
-      isTerminal: () => terminal,
-      emit: (e: AgentEvent) => emitted.push(e),
-      complete: (outcome: NaturalOutcome, finalEvents: readonly AgentEvent[] = []) =>
-        completions.push({ outcome, finalEvents }),
-    },
+    sink,
   }
 }
 
@@ -89,7 +90,7 @@ describe("createClaudeDriver", () => {
       prompt: "p",
       options: {} as never,
     })
-    await driver(sink as never)
+    await driver(sink)
     expect(completions).toHaveLength(1)
     expect(completions[0]?.outcome).toMatchObject({ kind: "completed", finalText: "hello", sessionId: "s9" })
   })
@@ -97,7 +98,7 @@ describe("createClaudeDriver", () => {
   test("reports a stream that ends without a result as a backend-error", async () => {
     const { sink, completions } = fakeSink()
     const driver = createClaudeDriver({ queryFn: scriptedQuery([]) as never, prompt: "p", options: {} as never })
-    await driver(sink as never)
+    await driver(sink)
     expect(completions[0]?.outcome.kind).toBe("backend-error")
     expect(completions[0]?.finalEvents[0]).toMatchObject({ kind: "error" })
   })
@@ -112,7 +113,7 @@ describe("createClaudeDriver", () => {
       interrupt: async () => {},
     })
     const driver = createClaudeDriver({ queryFn: queryFn as never, prompt: "p", options: {} as never })
-    await driver(sink as never)
+    await driver(sink)
     expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", sessionId: "s3" })
     if (completions[0]?.outcome.kind === "backend-error") {
       expect(completions[0].outcome.message).toContain("stream died")
@@ -129,7 +130,7 @@ describe("createClaudeDriver", () => {
       prompt: "p",
       options: {} as never,
     })
-    await driver(sink as never)
+    await driver(sink)
     expect(emitted).toEqual([])
   })
 
@@ -144,7 +145,7 @@ describe("createClaudeDriver", () => {
         prompt: "p",
         options: {} as never,
       })
-      await driver(sink as never)
+      await driver(sink)
 
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"])
       expect(completions).toHaveLength(1)
@@ -178,7 +179,7 @@ describe("createClaudeDriver", () => {
         prompt: "p",
         options: {} as never,
       })
-      await driver(sink as never)
+      await driver(sink)
       // DEVIATION from the plan's literal test body (carried over from
       // agent-run.test.ts): the plan asserted `["final"]`, silently assuming
       // this fixture's `usage` derives to null. It does not (same fixture as
@@ -206,7 +207,7 @@ describe("createClaudeDriver", () => {
         interrupt: async () => {},
       })
       const driver = createClaudeDriver({ queryFn: queryFn as never, prompt: "p", options: {} as never })
-      await driver(sink as never)
+      await driver(sink)
 
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"])
       expect(completions).toHaveLength(1)
@@ -231,7 +232,7 @@ describe("createClaudeDriver", () => {
         prompt: "p",
         options: {} as never,
       })
-      await driver(sink as never)
+      await driver(sink)
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"])
       expect(completions[0]?.outcome.kind).toBe("backend-error")
     },
@@ -245,7 +246,7 @@ describe("createClaudeDriver", () => {
       const { queryFn, release } = gatedQuery(assistant, success)
       const driver = createClaudeDriver({ queryFn: queryFn as never, prompt: "p", options: {} as never })
 
-      const done = driver(sink as never)
+      const done = driver(sink)
       // Let the driver read+emit the first (assistant) message and block on the gate.
       await Bun.sleep(0)
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"])
