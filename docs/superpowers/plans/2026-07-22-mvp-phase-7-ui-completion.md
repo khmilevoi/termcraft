@@ -37,7 +37,7 @@
 - Produces: `createUiRoot(options): Promise<UiRootError | UiRootHandle>`, where `UiRootHandle.dispose()` is idempotent and unmounts React before destroying the renderer.
 - Preserves: `createUiDeps(port, initialSize, env)` for all existing callers.
 
-- [ ] **Step 1: Write failing displayed-frame and lifetime tests**
+- [x] **Step 1: Write failing displayed-frame and lifetime tests**
 
 Add tests which prove the fake emits the whole `{ frame, frameToken, handle }` bundle, a successful subscription is removed when the runtime atom disconnects, a subscription error is retained in `runtimeError`, and a frame-stream rejection becomes a tagged `UiPreviewStreamError` rather than an unhandled rejection.
 
@@ -49,13 +49,13 @@ expect(next.value?.frameToken).toBe(preview.frameTokenFor(frame))
 expect(next.value?.frame).toBe(frame)
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `bun test src/ui/testing/model/fake-preview.test.ts src/ui/app/model/deps.test.ts src/ui/app/model/root.test.tsx`
 
 Expected: failures for the absent bundled frame stream, runtime error atom, and root factory.
 
-- [ ] **Step 3: Implement the token-bearing stream and safe runtime**
+- [x] **Step 3: Implement the token-bearing stream and safe runtime**
 
 Move frame consumption from `handle.session.frames` to `handle.frames`. In `createUiDeps`, define these named atoms before the connect hook:
 
@@ -75,7 +75,7 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 
 Store the error and `console.error` it because the connection hook cannot return an error value to a caller.
 
-- [ ] **Step 4: Implement and test `createUiRoot`**
+- [x] **Step 4: Implement and test `createUiRoot`**
 
 Use injected adapters in tests and these production defaults:
 
@@ -90,7 +90,7 @@ root.render(<App deps={createUiDeps(options.port, { w: renderer.width, h: render
 
 `dispose()` calls `root.unmount()` once and then `renderer.destroy()` once. A sync mount failure is converted with `errore.try`, destroys the partially acquired renderer, and returns `UiRootError`.
 
-- [ ] **Step 5: Run the focused gate**
+- [x] **Step 5: Run the focused gate**
 
 Run: `bun test src/ui/testing/model/fake-preview.test.ts src/ui/app/model/deps.test.ts src/ui/app/model/root.test.tsx && bun x tsc --noEmit`
 
@@ -282,4 +282,3 @@ git diff --check
 ```
 
 Expected: 0 failures; all commands exit 0; `bun test` returns to the shell; the worktree contains only the phase-7 completion changes.
-
