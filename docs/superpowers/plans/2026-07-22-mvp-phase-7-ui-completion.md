@@ -255,21 +255,21 @@ Expected: all focused tests pass and TypeScript exits 0.
 - Consumes all prior task surfaces without adding another public boundary.
 - Produces one scripted integration walk covering home, workspace, turn progress/completion, slash chat switch, trust decline/read-only, displayed-frame acknowledgement, geometry result, and `pin.create`.
 
-- [ ] **Step 1: Extend the integration test and verify it fails before the final wiring**
+- [x] **Step 1: Extend the integration test and verify it fails before the final wiring**
 
 Drive only real DTO envelopes through `FakeKernel`. Assert visible frame text after each transition and exact recorded command payloads at each user interaction. The final completion sequence must include `turn.completed` and verify that the ephemeral block collapses into a terminal record.
 
-- [ ] **Step 2: Run the app integration test to GREEN**
+- [x] **Step 2: Run the app integration test to GREEN**
 
 Run: `bun test src/ui/app/ui/App.test.tsx`
 
 Expected: the complete scripted walk passes and the test process returns normally.
 
-- [ ] **Step 3: Update completion status and architecture wording**
+- [x] **Step 3: Update completion status and architecture wording**
 
 Mark the phase-7 master plan complete with the test count and list the public root/interaction anchors. Append a concise phase-7 completion entry to `.superpowers/sdd/progress.md`. Keep `main.ts` and production composition explicitly in phase 8; the application-entrypoints design remains the phase-8 design authority.
 
-- [ ] **Step 4: Run the full repository gate**
+- [x] **Step 4: Run the full repository gate**
 
 Run, in order:
 
