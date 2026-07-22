@@ -9,7 +9,7 @@
 
 Date: 2026-07-22
 Branch: `phase-7-ui` (base: `525ed6b`, the phase-6-core merge). Current working tree.
-Status: master index.
+Status: complete — repository gate green at 2559 tests across 265 files.
 
 **Goal:** Ship the termcraft MVP UI — the OpenTUI shell that renders Home,
 Workspace (chat + preview + pins/selection), the action table / slash menu, the
@@ -28,8 +28,10 @@ tests satisfy it with an in-module `FakeKernel`. UI keeps its **own** Reatom gra
 **Tech Stack:** `@opentui/react` 0.4.5 intrinsics (`<box>/<text>/<input>/…`),
 `reatomComponent` from `@reatom/react@1001`, `@reatom/core@1001` atoms/actions,
 `errore` at any fallible boundary, `zod` only where a DTO is re-validated (it is
-not — the Kernel owns validation). Tests mount through the repo's production-path
-headless harness (`host/render`), never `@opentui/react/test-utils`.
+not — the Kernel owns validation). Component tests use the existing headless
+render harness; App integration uses the canonical React/OpenTUI adapter in
+`src/ui/testing/model/react-renderer.ts`, which centralizes `testRender`, React
+`act`, and bounded `waitForFrame` scheduling.
 
 ---
 
@@ -54,8 +56,8 @@ headless harness (`host/render`), never `@opentui/react/test-utils`.
   `core/capabilities`/`core/machines` **internals** — only `core/protocol` DTOs,
   the provisional `EventEnvelopeV1`/`EventCorrelationV1` types (today exported
   from `core/mailbox`'s barrel — see D2), and `core/ports`' `PreviewSession`
-  type. **Tests may** import `host/render`'s harness (established: every
-  `runtime/ui/*.test.tsx` already does).
+  type. Component tests may import `host/render`'s harness; App integration must
+  use `ui/testing`'s React/OpenTUI adapter rather than manual renderer ticks.
 - **Module folder shape** (`CLAUDE.md`): every `ui/` submodule is
   `ui/<feature>/{ui/,model/,types.ts,index.ts}`; code always inside subfolders,
   never loose at a module root; atomic single-purpose functions. Every catalog/
@@ -307,11 +309,11 @@ slice ends green and its own tests are exhaustive over what it introduced.
   lifetime), feed the mirror reducer, mount the screen selected by `screenAtom`
   (home/trust/workspace/read-only/enlarge), install the global keyboard handler
   (action resolver + Esc stack). `ui/index.ts` — public surface (`App`,
-  `KernelPort`, `PreviewSessionHandle`, `createUiRoot(port)` mount helper).
+  `KernelPort`, `PreviewSessionHandle`, `createUiRoot(options)` mount helper).
 - Integration test: a scripted `FakeKernel` walk — snapshot(home) → `project.create`
   → snapshot/events(workspace) → `turn.start` → `turn.progress`×N →
-  `turn.completed` → assert the rendered frames at each step (mounted through the
-  `host/render` harness).
+  `turn.completed` → assert the rendered frames at each step through the canonical
+  React/OpenTUI test adapter.
 - Architecture docs sweep: flip `docs/architecture/modules.md` "ui — no code yet",
   move `code-structure.md`/`overview.md` `ui` Source anchors to real files, update
   the mermaid status; note the documented divergences (junctions, focus, trust,
@@ -338,6 +340,27 @@ slice ends green and its own tests are exhaustive over what it introduced.
 | `Preview`, `errorPanel` | 7E `ui/preview/` | workspace |
 | popups (`ChatListPopup`, `PinInputPopup`, `ExportPopup`, `TrustPrompt`) | 7E `ui/popups/` | app, workspace |
 | `App`, `createUiRoot` | 7F `ui/app/`, `ui/index.ts` | phase-8 root |
+
+## Completion status (2026-07-22)
+
+Phase 7 is complete. The repository suite passes 2559 tests across 265 files. The
+public root and interaction anchors handed to phase 8 are:
+
+- `src/ui/index.ts` — the leaf module surface, including `App`, `createUiDeps`,
+  `createUiRoot`, `KernelPort`, and the root option/handle types.
+- `src/ui/app/model/root.tsx` — the injectable, disposable OpenTUI root boundary;
+  production composition supplies its real `KernelPort` in phase 8.
+- `src/ui/app/ui/App.tsx`, `src/ui/app/model/keymap.ts`, and
+  `src/ui/app/model/intent.ts` — screen composition and keyboard-to-command flow.
+- `src/ui/preview/model/interaction.ts` — displayed-frame acknowledgement,
+  geometry-query ownership, and opaque geometry-token pin flow.
+- `src/ui/app/ui/App.test.tsx` — the complete `FakeKernel` DTO walk covering Home,
+  Workspace, turn progress/completion collapse, slash chat create/switch, frame
+  acknowledgement, geometry, pin creation, and trust decline/read-only.
+
+`src/main.tsx` and all production dependency composition remain phase-8 work.
+`docs/superpowers/specs/2026-07-22-application-entrypoints-design.md` is the
+authority for that entrypoint work; phase 7 does not pre-compose or bypass it.
 
 ## Out of scope (ROADMAP MVP exclusions, mirrored here)
 

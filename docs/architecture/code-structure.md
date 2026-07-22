@@ -4,16 +4,13 @@ where a file goes, which direction its imports may point, and which shapes are
 forbidden. It is the one document in `docs/architecture/` written for a reader who
 *does* read the source language; the others deliberately are not.
 
-Seven source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
-`host/`, `gate/`, `store/`, and `agent/` are real source today. Five of those are
-components the design spec names — [`modules.md`](modules.md) counts the same five
-(runtime facade, Gate, HostSupervisor, Project store, Agent gateway) — while
-`entities/` and `infrastructure/` are additions this convention makes on top of the
-seven. `core/` (the Kernel, phase 6) and `ui/` (the OpenTUI shell, phase 7) have now
-landed; only the `main.ts` composition root remains unbuilt. This document tracked
-their contract as they were built, and every section below marks the parts
-that describe them as not yet built. Source anchors move to real paths as each piece
-lands; see `## Source anchors`.
+Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
+`host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` are real source today.
+Seven of those are components the design spec names — [`modules.md`](modules.md)
+counts the same seven — while `entities/` and `infrastructure/` are additions this
+convention makes on top. Only the `main.ts` production composition root remains
+unbuilt. Source anchors move to real paths as each piece lands; see
+`## Source anchors`.
 
 ```mermaid
 flowchart LR
@@ -28,11 +25,11 @@ flowchart LR
     end
 
     subgraph inner["Inner — knows the domain, imports no adapter"]
-        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes<br/>(not yet built)"]
+        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes"]
         entities["entities/<br/>Page · Chat · Turn · Pin<br/>pure types · no ports"]
     end
 
-    ui["ui/ · OpenTUI shell<br/>(phase 7)"]
+    ui["ui/ · OpenTUI shell<br/>(phase 7 complete)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
     infra["infrastructure/<br/>durability · fs-guard · framing · clock ·<br/>uuid · process (owned Job Object tree)<br/>domain-free"]
 
@@ -65,7 +62,7 @@ flowchart LR
                          (not yet built)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
-     core/              Kernel — the only domain decision-maker         (not yet built)
+     core/              Kernel — the only domain decision-maker         [landed]
        ports/           contracts core consumes: GitHistory, GitCommitter, AgentBackend…
        turns/  versions/  export/  chats/
        types.ts
@@ -89,7 +86,7 @@ flowchart LR
        index.ts
      gate/              validation; declares the SmokeRenderer port it consumes [landed]
      host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
-     ui/                OpenTUI shell; imports core's boundary types only       (phase 7)
+     ui/                OpenTUI shell; imports core's boundary types only       [landed]
      runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
      infrastructure/    domain-free technical capabilities                     [landed]
        clock/  durability/  fs-guard/  framing/  process/  uuid/
@@ -98,7 +95,8 @@ flowchart LR
    `agent/` splits in two on purpose. `agent/types.ts` is the port — the
    mechanism-blind contract (start a fenced attempt, cancel it, health-check,
    report models × efforts, derive a session scope) that names no vendor and
-   imports no vendor SDK, so phase 6 can lift it verbatim into `core/ports/`.
+   imports no vendor SDK; `core/ports/agent-backend.ts` now carries the Kernel-side
+   counterpart consumed by phase-6 orchestration.
    Four sibling folders are the shared tier every backend may reuse:
    `confinement/` (the deny-by-default rule, parameterized over a table of tool
    names rather than hard-coding any), `session/` (session-scope derivation and
@@ -214,13 +212,12 @@ flowchart LR
    still imports no backend, and `AgentBackend` remains a spec-named port while the
    registry around it is this document's shape.
 
-   Landed today: the port itself and one backend behind it. `agent/index.ts`
-   exports the port types plus a single `createProductionClaudeBackend()` that
-   assembles the real wiring (the SDK query, the Job Object tree factory, a real
-   sleep, and the Windows reparse-point backstop). The registry this item
-   describes is not built — with `core` and `main.ts` still absent there is no
-   composition root to hold one and no Kernel to select from it, so today's single
-   production factory stands in for the one-entry case.
+   Landed today: the Kernel-side registry contract and model-selection logic, the
+   backend port, and one backend behind it. `agent/index.ts` exports the port types
+   plus a single `createProductionClaudeBackend()` that assembles the real wiring
+   (the SDK query, the Job Object tree factory, a real sleep, and the Windows
+   reparse-point backstop). `main.ts` remains unbuilt, so phase 8 still owns the
+   production registry instance and composition.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
    `bun build --compile` ships the shell and the design-host entry together (§4.1).
@@ -274,18 +271,28 @@ for what is still contract only.
 - `CLAUDE.md` — Code style: the module shape (`ui/`, `model/`, `types.ts`,
   `index.ts`) and the atomic-function rule this document builds on
 - `tsconfig.json` (`compilerOptions.paths`) — the alias map item 2 and `CLAUDE.md`'s
-  Imports section enforce; the `agent` bare + wildcard pair is now live (the Claude
-  tier reaches the shared tier as `agent/confinement/...`, `agent/session/...`,
-  `agent/health/...`, `agent/run/...`, never relatively), and `core` and `ui` stay
-  reserved ahead of those two modules landing
+  Imports section enforce; the `agent`, `core`, and `ui` bare + wildcard pairs are
+  live, and cross-module imports use those boundaries rather than climbing paths
 - `src/entities/page/index.ts`, `src/entities/page/types.ts`,
   `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
   `index.ts` shape, with no `ui/` because the module has none
 - `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
-  Claude backend now produces both, and the `core` that would consume them (item 8)
-  still does not exist
+  Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
+
+**Kernel and UI boundaries (items 1, 4, 7, 8)**
+
+- `src/core/index.ts`, `src/core/ports/`, `src/core/turns/`, and
+  `src/core/protocol/` — the landed Kernel public boundary, consumed ports, turn
+  orchestration, and closed command/event DTO surface
+- `src/ui/index.ts` — the landed leaf UI public boundary, including `App`,
+  `createUiRoot`, `createUiDeps`, and the UI-declared `KernelPort`
+- `src/ui/app/model/root.tsx`, `src/ui/app/ui/App.tsx` — the disposable OpenTUI
+  root seam and reactive application root that phase 8 composes
+- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`, and
+  `src/ui/preview/model/interaction.ts` — the interaction ownership boundary from
+  terminal input through exact Kernel commands and displayed-frame geometry tokens
 
 **`agent/` and the shared-vs-vendor split (items 1, 5, 8)**
 
@@ -463,9 +470,11 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary (`core/`, `ui/`, and `main.ts` remain unbuilt); §3.6 the
-  runtime-selected agent triple, whose Kernel-owned selection has no code (§6.1's
-  `AgentBackend` contract is now anchored to `src/agent/types.ts` above)
+  Kernel boundary; only production composition in `main.ts` remains unbuilt. §3.6
+  remains the design authority for the runtime-selected agent triple, whose landed
+  Kernel selection code is anchored above
+- `docs/superpowers/specs/2026-07-22-application-entrypoints-design.md` — the
+  phase-8 authority for `src/main.tsx`, demo composition, startup, and shutdown
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet
