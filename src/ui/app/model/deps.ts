@@ -1,4 +1,4 @@
-import { type Atom, type Computed, atom, sleep, withConnectHook, wrap } from "@reatom/core";
+import { bind, type Atom, type Computed, atom, sleep, withConnectHook, wrap } from "@reatom/core";
 import * as errore from "errore";
 
 import {
@@ -13,12 +13,6 @@ import type { FocusTarget, OverlayKind } from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
-
-async function waitForFramePoll(): Promise<void | UiPreviewStreamError> {
-  return (await wrap(sleep(FRAME_POLL_MS)).catch(
-    (cause) => new UiPreviewStreamError({ cause }),
-  )) as void | UiPreviewStreamError;
-}
 
 /**
  * The UI-local Reatom atoms — presentation state that is NOT Kernel state and never crosses
@@ -98,15 +92,28 @@ export function createUiDeps(
 
   const runtime = atom<undefined>(undefined, "ui.app.runtime").extend(
     withConnectHook(() => {
+      // These callbacks are bound while the runtime is connected. The frame consumer runs
+      // after awaits, so creating `wrap` there would instead bind writes to the default context.
+      const setPreviewFrame = bind((frame: UiPreviewFrame) => previewFrame.set(frame));
+      const reportRuntimeError = bind((error: Error, message: string) => {
+        runtimeError.set(error);
+        console.error(message, error);
+      });
+      const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
+      const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
       const unsubscribe = port.subscribe((envelope) => mirror.apply(envelope as AnyEventEnvelope));
       if (unsubscribe instanceof Error) {
-        runtimeError.set(unsubscribe);
-        console.error("UI Kernel subscription failed:", unsubscribe);
+        reportRuntimeError(unsubscribe, "UI Kernel subscription failed:");
       }
       let active = true;
-      const reportRuntimeError = (error: Error) => {
-        wrap(() => runtimeError.set(error))();
-        console.error("UI preview frame stream failed:", error);
+      let frameIterator: AsyncIterator<UiPreviewFrame> | null = null;
+      const stopFrameIterator = () => {
+        const iterator = frameIterator;
+        frameIterator = null;
+        if (iterator?.return === undefined) return;
+        void iterator.return().catch((cause) => {
+          console.error("UI preview frame iterator cleanup failed:", cause);
+        });
       };
       void (async () => {
         // Frames flow through the PreviewSession facade, not the event stream (§7.6). Iterate
@@ -115,29 +122,38 @@ export function createUiDeps(
         while (active) {
           const handle = port.preview();
           if (handle === null) {
-            const delayed = await waitForFramePoll();
+            const delayed = await waitForFramePoll().catch(
+              (cause) => new UiPreviewStreamError({ cause }),
+            );
             if (delayed instanceof Error) {
               if (errore.isAbortError(delayed)) return;
-              reportRuntimeError(delayed);
+              reportRuntimeError(delayed, "UI preview frame stream failed:");
               return;
             }
             continue;
           }
-          try {
-            for await (const frame of handle.frames) {
-              if (!active) break;
-              wrap(() => previewFrame.set(frame))();
+          const iterator = handle.frames[Symbol.asyncIterator]();
+          frameIterator = iterator;
+          while (active) {
+            const next = await nextFrame(iterator).catch(
+              (cause) => new UiPreviewStreamError({ cause }),
+            );
+            if (next instanceof Error) {
+              if (errore.isAbortError(next)) return;
+              reportRuntimeError(next, "UI preview frame stream failed:");
+              return;
             }
-          } catch (cause) {
-            const error = new UiPreviewStreamError({ cause });
-            reportRuntimeError(error);
-            return;
+            if (next.done) break;
+            setPreviewFrame(next.value);
           }
+          if (frameIterator === iterator) frameIterator = null;
           if (active) {
-            const delayed = await waitForFramePoll();
+            const delayed = await waitForFramePoll().catch(
+              (cause) => new UiPreviewStreamError({ cause }),
+            );
             if (delayed instanceof Error) {
               if (errore.isAbortError(delayed)) return;
-              reportRuntimeError(delayed);
+              reportRuntimeError(delayed, "UI preview frame stream failed:");
               return;
             }
           }
@@ -145,6 +161,7 @@ export function createUiDeps(
       })();
       return () => {
         active = false;
+        stopFrameIterator();
         if (typeof unsubscribe === "function") unsubscribe();
       };
     }),

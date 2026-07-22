@@ -24,4 +24,17 @@ describe("createFakePreviewSession", () => {
     expect(next.value?.frame).toBe(frame);
     expect(next.value?.handle).toBe(preview.handle);
   });
+
+  test("returns and releases a blocked display-frame iterator", async () => {
+    const preview = createFakePreviewSession();
+    const iterator = preview.handle.frames[Symbol.asyncIterator]();
+    const pending = iterator.next();
+
+    expect(preview.activeFrameConsumers()).toBe(1);
+    const returned = await iterator.return?.();
+
+    expect(returned?.done).toBeTrue();
+    expect((await pending).done).toBeTrue();
+    expect(preview.activeFrameConsumers()).toBe(0);
+  });
 });

@@ -57,7 +57,7 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
   const root = errore.try(() => adapters.createRoot(renderer));
   if (root instanceof Error) {
     renderer.destroy();
-    return new UiRootError({ operation: "create root", cause: root });
+    return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
 
   const mounted = errore.try(() =>
@@ -69,7 +69,7 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
   );
   if (mounted instanceof Error) {
     renderer.destroy();
-    return new UiRootError({ operation: "mount app", cause: mounted });
+    return new UiRootError({ operation: "mount app", cause: mounted.cause ?? mounted });
   }
 
   let disposed = false;

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { context } from "@reatom/core";
+
 import type { PreviewFrameV1 } from "core/ports";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession } from "ui/testing";
 
@@ -86,5 +88,67 @@ describe("createUiDeps runtime", () => {
     expect(latest?.frame).toBe(displayed);
     expect(latest?.frameToken).toBe(preview.frameTokenFor(displayed));
     expect(latest?.handle).toBe(preview.handle);
+  });
+
+  test("keeps an asynchronously received frame in the runtime's scoped context", async () => {
+    const preview = createFakePreviewSession();
+    const kernel = createFakeKernel();
+    kernel.setPreview(preview.handle);
+    const scoped = context.start();
+    let unsubscribe: (() => void) | null = null;
+
+    const deps = scoped.run(() => {
+      const created = createUiDeps(kernel, { w: 120, h: 36 });
+      unsubscribe = created.runtime.subscribe(() => undefined);
+      return created;
+    });
+    await tick();
+    const displayed = frame(preview.handle.previewSessionId);
+    preview.pushFrame(displayed);
+    await tick();
+
+    expect(scoped.run(() => deps?.previewFrame()?.frame)).toBe(displayed);
+    expect(deps.previewFrame()).toBeNull();
+    scoped.run(() => unsubscribe?.());
+  });
+
+  test("keeps an asynchronously received stream failure in the runtime's scoped context", async () => {
+    const sourceFailure = new Error("scoped stream lost");
+    const preview = createFakePreviewSession();
+    const rejectedFrames: AsyncIterable<never> = {
+      [Symbol.asyncIterator]() {
+        return { next: () => Promise.reject(sourceFailure) };
+      },
+    };
+    const kernel = createFakeKernel();
+    kernel.setPreview({ ...preview.handle, frames: rejectedFrames });
+    const scoped = context.start();
+    let unsubscribe: (() => void) | null = null;
+
+    const deps = scoped.run(() => {
+      const created = createUiDeps(kernel, { w: 120, h: 36 });
+      unsubscribe = created.runtime.subscribe(() => undefined);
+      return created;
+    });
+    await tick();
+
+    expect(scoped.run(() => deps?.runtimeError())).toBeInstanceOf(UiPreviewStreamError);
+    expect(deps.runtimeError()).toBeNull();
+    scoped.run(() => unsubscribe?.());
+  });
+
+  test("disconnect terminates a blocked frame consumer", async () => {
+    const preview = createFakePreviewSession();
+    const kernel = createFakeKernel();
+    kernel.setPreview(preview.handle);
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    expect(preview.activeFrameConsumers()).toBe(1);
+
+    unsubscribe();
+    await tick();
+    expect(preview.activeFrameConsumers()).toBe(0);
   });
 });

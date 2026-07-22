@@ -17,6 +17,8 @@ export interface FakePreviewSession {
   pushFrame(frame: PreviewFrameV1): void;
   /** The deterministic token paired with a frame that was pushed into this fake. */
   frameTokenFor(frame: PreviewFrameV1): FrameTokenV1;
+  /** Number of open display-frame iterators, including a consumer blocked on `next()`. */
+  activeFrameConsumers(): number;
   /** Closes the `frames` stream. */
   end(): void;
   /** Raw geometry-query calls the session received. */
@@ -105,12 +107,20 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     },
   };
 
-  return { handle, pushFrame, frameTokenFor, end, queries };
+  return {
+    handle,
+    pushFrame,
+    frameTokenFor,
+    activeFrameConsumers: displayFrames.activeConsumers,
+    end,
+    queries,
+  };
 }
 
 function createAsyncQueue<T>() {
   const buffer: T[] = [];
   const waiters: ((result: IteratorResult<T>) => void)[] = [];
+  const consumers = new Set<AsyncIterator<T>>();
   let closed = false;
 
   return {
@@ -126,16 +136,51 @@ function createAsyncQueue<T>() {
       closed = true;
       for (const waiter of waiters.splice(0)) waiter({ value: undefined, done: true });
     },
+    activeConsumers(): number {
+      return consumers.size;
+    },
     iterable: {
       [Symbol.asyncIterator]() {
-        return {
+        let waiter: ((result: IteratorResult<T>) => void) | null = null;
+        let resolveNext: ((result: IteratorResult<T>) => void) | null = null;
+        let done = false;
+        const iterator: AsyncIterator<T> = {
           next(): Promise<IteratorResult<T>> {
+            if (done) return Promise.resolve({ value: undefined, done: true });
             const buffered = buffer.shift();
             if (buffered !== undefined) return Promise.resolve({ value: buffered, done: false });
-            if (closed) return Promise.resolve({ value: undefined, done: true });
-            return new Promise((resolve) => waiters.push(resolve));
+            if (closed)
+              return iterator.return?.() ?? Promise.resolve({ value: undefined, done: true });
+            return new Promise((resolve) => {
+              resolveNext = resolve;
+              waiter = (result) => {
+                waiter = null;
+                resolveNext = null;
+                if (result.done) {
+                  done = true;
+                  consumers.delete(iterator);
+                }
+                resolve(result);
+              };
+              waiters.push(waiter);
+            });
+          },
+          return(): Promise<IteratorResult<T>> {
+            if (done) return Promise.resolve({ value: undefined, done: true });
+            done = true;
+            consumers.delete(iterator);
+            if (waiter !== null) {
+              const index = waiters.indexOf(waiter);
+              if (index >= 0) waiters.splice(index, 1);
+              waiter = null;
+              resolveNext?.({ value: undefined, done: true });
+              resolveNext = null;
+            }
+            return Promise.resolve({ value: undefined, done: true });
           },
         };
+        consumers.add(iterator);
+        return iterator;
       },
     } satisfies AsyncIterable<T>,
   };

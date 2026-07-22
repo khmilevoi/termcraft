@@ -42,6 +42,33 @@ describe("createUiRoot", () => {
     expect(result).toMatchObject({ cause });
   });
 
+  test("destroys the renderer when createRoot throws synchronously", async () => {
+    const cause = new Error("root unavailable");
+    let destroyed = 0;
+    const renderer = {
+      width: 120,
+      height: 36,
+      destroy: () => {
+        destroyed++;
+      },
+    };
+    const result = await createUiRoot({
+      port: createFakeKernel(),
+      adapters: {
+        createRenderer: () => Promise.resolve(renderer),
+        createRoot: () => {
+          throw cause;
+        },
+      },
+    });
+
+    expect(result).toBeInstanceOf(UiRootError);
+    if (result instanceof Error === false) throw new Error("expected UiRootError");
+    expect(result).toMatchObject({ operation: "create root" });
+    expect(result.cause).toBe(cause);
+    expect(destroyed).toBe(1);
+  });
+
   test("destroys a renderer when mounting the App fails synchronously", async () => {
     const renderer = { width: 120, height: 36, destroy: () => undefined };
     let destroyed = 0;
