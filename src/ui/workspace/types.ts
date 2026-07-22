@@ -1,7 +1,6 @@
 import type { Atom } from "@reatom/core";
 
-import type { PreviewFrameV1 } from "core/ports";
-import type { Dispatcher } from "ui/kernel";
+import type { Dispatcher, UiPreviewFrame } from "ui/kernel";
 import type { Mirror } from "ui/mirror";
 
 import type { FocusTarget, OverlayKind } from "./model/focus";
@@ -23,6 +22,6 @@ export interface WorkspaceDeps {
   readonly mirror: Mirror;
   readonly dispatcher: Dispatcher;
   readonly terminal: Atom<Readonly<{ w: number; h: number }>>;
-  readonly previewFrame: Atom<PreviewFrameV1 | null>;
+  readonly previewFrame: Atom<UiPreviewFrame | null>;
   readonly local: WorkspaceLocalState;
 }

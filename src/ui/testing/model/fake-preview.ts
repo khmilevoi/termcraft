@@ -2,6 +2,7 @@ import type { PreviewFrameV1, PreviewGeometryQueryResultV1, PreviewSession } fro
 import type { FailureDtoV1, FrameIdentityV1, FrameTokenV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import type { PreviewSessionHandle } from "ui/kernel";
+import type { UiPreviewFrame } from "ui/kernel";
 
 import { TEST_NONCE, TEST_SHA } from "./events";
 
@@ -14,6 +15,8 @@ export interface FakePreviewSession {
   readonly handle: PreviewSessionHandle;
   /** Pushes one frame to the `frames` async-iterable consumers. */
   pushFrame(frame: PreviewFrameV1): void;
+  /** The deterministic token paired with a frame that was pushed into this fake. */
+  frameTokenFor(frame: PreviewFrameV1): FrameTokenV1;
   /** Closes the `frames` stream. */
   end(): void;
   /** Raw geometry-query calls the session received. */
@@ -32,36 +35,27 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
   const pageSlug = options.pageSlug ?? "main";
   const queries: { frameToken: FrameTokenV1; query: unknown }[] = [];
 
-  const buffer: PreviewFrameV1[] = [];
-  const waiters: ((result: IteratorResult<PreviewFrameV1>) => void)[] = [];
-  let closed = false;
+  const sourceFrames = createAsyncQueue<PreviewFrameV1>();
+  const displayFrames = createAsyncQueue<UiPreviewFrame>();
+  const frameTokens = new Map<PreviewFrameV1, FrameTokenV1>();
+
+  function frameTokenFor(frame: PreviewFrameV1): FrameTokenV1 {
+    const token = frameTokens.get(frame);
+    if (token === undefined) throw new Error("frame was not pushed into this fake preview session");
+    return token;
+  }
 
   function pushFrame(frame: PreviewFrameV1): void {
-    const waiter = waiters.shift();
-    if (waiter !== undefined) {
-      waiter({ value: frame, done: false });
-      return;
-    }
-    buffer.push(frame);
+    const frameToken = uuidv7();
+    frameTokens.set(frame, frameToken);
+    sourceFrames.push(frame);
+    displayFrames.push({ frame, frameToken, handle });
   }
 
   function end(): void {
-    closed = true;
-    for (const waiter of waiters.splice(0)) waiter({ value: undefined, done: true });
+    sourceFrames.end();
+    displayFrames.end();
   }
-
-  const frames: AsyncIterable<PreviewFrameV1> = {
-    [Symbol.asyncIterator]() {
-      return {
-        next(): Promise<IteratorResult<PreviewFrameV1>> {
-          const buffered = buffer.shift();
-          if (buffered !== undefined) return Promise.resolve({ value: buffered, done: false });
-          if (closed) return Promise.resolve({ value: undefined, done: true });
-          return new Promise((resolve) => waiters.push(resolve));
-        },
-      };
-    },
-  };
 
   const session: PreviewSession = {
     identity: {
@@ -73,7 +67,7 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     },
     mode: "preview",
     interactionMode: "static",
-    frames,
+    frames: sourceFrames.iterable,
     resize(): Promise<FailureDtoV1 | undefined> {
       return Promise.resolve(undefined);
     },
@@ -99,6 +93,7 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
   const handle: PreviewSessionHandle = {
     previewSessionId,
     session,
+    frames: displayFrames.iterable,
     acknowledgeDisplay(frameToken): Error | FrameIdentityV1 {
       if (options.ackResult !== undefined) return options.ackResult(frameToken);
       return {
@@ -110,5 +105,38 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     },
   };
 
-  return { handle, pushFrame, end, queries };
+  return { handle, pushFrame, frameTokenFor, end, queries };
+}
+
+function createAsyncQueue<T>() {
+  const buffer: T[] = [];
+  const waiters: ((result: IteratorResult<T>) => void)[] = [];
+  let closed = false;
+
+  return {
+    push(value: T): void {
+      const waiter = waiters.shift();
+      if (waiter !== undefined) {
+        waiter({ value, done: false });
+        return;
+      }
+      buffer.push(value);
+    },
+    end(): void {
+      closed = true;
+      for (const waiter of waiters.splice(0)) waiter({ value: undefined, done: true });
+    },
+    iterable: {
+      [Symbol.asyncIterator]() {
+        return {
+          next(): Promise<IteratorResult<T>> {
+            const buffered = buffer.shift();
+            if (buffered !== undefined) return Promise.resolve({ value: buffered, done: false });
+            if (closed) return Promise.resolve({ value: undefined, done: true });
+            return new Promise((resolve) => waiters.push(resolve));
+          },
+        };
+      },
+    } satisfies AsyncIterable<T>,
+  };
 }

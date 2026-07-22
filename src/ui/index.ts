@@ -4,7 +4,7 @@
  * phase-8 composition root satisfies, and keeps its own Reatom read-model ("mirror") fed by
  * the Kernel event stream. This barrel is the module's public surface; it grows per slice.
  */
-export type { KernelPort, PreviewSessionHandle } from "./types";
+export type { KernelPort, PreviewSessionHandle, UiPreviewFrame } from "./kernel";
 
 // Kernel boundary
 export type {
@@ -36,5 +36,5 @@ export type { ShellPalette, ShellTextStyle, ShellToken } from "./theme";
 export { LIGHT_SHELL_PALETTE, SHELL_PALETTE, shellAttrs } from "./theme";
 
 // Composition root surface (phase-8 mounts this)
-export type { UiDeps, UiEnv } from "./app";
-export { App, createUiDeps } from "./app";
+export type { UiDeps, UiEnv, UiRootAdapters, UiRootHandle, UiRootOptions } from "./app";
+export { App, createUiDeps, createUiRoot, UiPreviewStreamError, UiRootError } from "./app";

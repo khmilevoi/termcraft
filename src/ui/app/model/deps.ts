@@ -1,10 +1,11 @@
-import { type Atom, type Computed, atom, sleep, withConnectHook } from "@reatom/core";
+import { type Atom, type Computed, atom, sleep, withConnectHook, wrap } from "@reatom/core";
+import * as errore from "errore";
 
-import type { PreviewFrameV1 } from "core/ports";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
   type KernelPort,
+  type UiPreviewFrame,
   createDispatcher,
 } from "ui/kernel";
 import { type Mirror, type ScreenKind, createMirror, createScreenAtom } from "ui/mirror";
@@ -12,6 +13,12 @@ import type { FocusTarget, OverlayKind } from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
+
+async function waitForFramePoll(): Promise<void | UiPreviewStreamError> {
+  return (await wrap(sleep(FRAME_POLL_MS)).catch(
+    (cause) => new UiPreviewStreamError({ cause }),
+  )) as void | UiPreviewStreamError;
+}
 
 /**
  * The UI-local Reatom atoms — presentation state that is NOT Kernel state and never crosses
@@ -58,7 +65,9 @@ export interface UiDeps {
    * consumer (frames flow through the session facade, not the event stream — §7.6); kept out
    * of the mirror because it is high-frequency, latest-wins display state, not Kernel state.
    */
-  readonly previewFrame: Atom<PreviewFrameV1 | null>;
+  readonly previewFrame: Atom<UiPreviewFrame | null>;
+  /** A non-command runtime failure which cannot be returned from a connect hook. */
+  readonly runtimeError: Atom<Error | null>;
   /**
    * The App reads this to activate the Kernel subscription + preview-frame consumer for its
    * mounted lifetime. Both are owned by this atom's connect hook (RTM-L01/L02) — the
@@ -68,6 +77,11 @@ export interface UiDeps {
   readonly runtime: Atom<undefined>;
   readonly local: UiLocalState;
 }
+
+export class UiPreviewStreamError extends errore.createTaggedError({
+  name: "UiPreviewStreamError",
+  message: "UI preview stream failed",
+}) {}
 
 /** Builds a fresh, self-consistent `UiDeps` around a `KernelPort` and an initial terminal size. */
 export function createUiDeps(
@@ -79,12 +93,21 @@ export function createUiDeps(
   const terminal = atom(initialSize, "ui.app.terminal");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
   const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
-  const previewFrame = atom<PreviewFrameV1 | null>(null, "ui.app.previewFrame");
+  const previewFrame = atom<UiPreviewFrame | null>(null, "ui.app.previewFrame");
+  const runtimeError = atom<Error | null>(null, "ui.app.runtimeError");
 
   const runtime = atom<undefined>(undefined, "ui.app.runtime").extend(
     withConnectHook(() => {
       const unsubscribe = port.subscribe((envelope) => mirror.apply(envelope as AnyEventEnvelope));
+      if (unsubscribe instanceof Error) {
+        runtimeError.set(unsubscribe);
+        console.error("UI Kernel subscription failed:", unsubscribe);
+      }
       let active = true;
+      const reportRuntimeError = (error: Error) => {
+        wrap(() => runtimeError.set(error))();
+        console.error("UI preview frame stream failed:", error);
+      };
       void (async () => {
         // Frames flow through the PreviewSession facade, not the event stream (§7.6). Iterate
         // the current session's frames; when none exists, poll until one appears; when a
@@ -92,14 +115,32 @@ export function createUiDeps(
         while (active) {
           const handle = port.preview();
           if (handle === null) {
-            await sleep(FRAME_POLL_MS);
+            const delayed = await waitForFramePoll();
+            if (delayed instanceof Error) {
+              if (errore.isAbortError(delayed)) return;
+              reportRuntimeError(delayed);
+              return;
+            }
             continue;
           }
-          for await (const frame of handle.session.frames) {
-            if (!active) break;
-            previewFrame.set(frame);
+          try {
+            for await (const frame of handle.frames) {
+              if (!active) break;
+              wrap(() => previewFrame.set(frame))();
+            }
+          } catch (cause) {
+            const error = new UiPreviewStreamError({ cause });
+            reportRuntimeError(error);
+            return;
           }
-          if (active) await sleep(FRAME_POLL_MS);
+          if (active) {
+            const delayed = await waitForFramePoll();
+            if (delayed instanceof Error) {
+              if (errore.isAbortError(delayed)) return;
+              reportRuntimeError(delayed);
+              return;
+            }
+          }
         }
       })();
       return () => {
@@ -116,5 +157,16 @@ export function createUiDeps(
     fullscreen: atom(false, "ui.local.fullscreen"),
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
   };
-  return { port, env, mirror, dispatcher, terminal, screen, previewFrame, runtime, local };
+  return {
+    port,
+    env,
+    mirror,
+    dispatcher,
+    terminal,
+    screen,
+    previewFrame,
+    runtimeError,
+    runtime,
+    local,
+  };
 }

@@ -1,7 +1,14 @@
-import type { PreviewSession } from "core/ports";
+import type { PreviewFrameV1, PreviewSession } from "core/ports";
 import type { CommandResultV1, FrameIdentityV1, FrameTokenV1, UUIDv7 } from "core/protocol";
 
 import type { EventEnvelopeV1 } from "./model/events";
+
+/** One frame exactly as the UI may display it, including its acknowledgement authority. */
+export interface UiPreviewFrame {
+  readonly frame: PreviewFrameV1;
+  readonly frameToken: FrameTokenV1;
+  readonly handle: PreviewSessionHandle;
+}
 
 /**
  * The narrow Kernel boundary `ui` depends on (phase-7 plan D1). Declared by `ui`, faked in
@@ -44,5 +51,10 @@ export interface KernelPort {
 export interface PreviewSessionHandle {
   readonly previewSessionId: UUIDv7;
   readonly session: PreviewSession;
+  /**
+   * Display-ready frames. The phase-8 adapter pairs every Kernel-minted token with the exact
+   * frame and handle that produced it; the UI must not reconstruct that authority itself.
+   */
+  readonly frames: AsyncIterable<UiPreviewFrame>;
   acknowledgeDisplay(frameToken: FrameTokenV1): Error | FrameIdentityV1;
 }

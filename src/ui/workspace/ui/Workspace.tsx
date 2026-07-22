@@ -133,7 +133,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
   const preview = mirror.preview();
   const descriptors = mirror.pageDescriptors();
   const project = mirror.project();
-  const frame = previewFrame();
+  const frame = previewFrame()?.frame ?? null;
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
