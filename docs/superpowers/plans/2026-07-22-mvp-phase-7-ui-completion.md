@@ -199,7 +199,7 @@ Expected: all focused tests pass and TypeScript exits 0.
 - Produces: `requestGeometry(deps, purpose, x, y)`; it dispatches `preview.queryGeometry` only for the currently displayed frame.
 - Consumes: `preview.geometryResult` from the subscription; a non-null pin token opens pin input, a selected hit dispatches `selection.set`, and rect/label data updates overlay atoms after structural narrowing.
 
-- [ ] **Step 1: Write failing token-chain tests**
+- [x] **Step 1: Write failing token-chain tests**
 
 Prove no query is sent before display acknowledgement, acknowledgement uses the exact frame token, a pin request dispatches `preview.queryGeometry` with the same token and local coordinates, a matching result opens `pin-input`, and save dispatches only the opaque token plus text:
 
@@ -209,13 +209,13 @@ expect(command.payload).not.toHaveProperty("pageSlug")
 expect(command.payload).not.toHaveProperty("elementId")
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `bun test src/ui/preview/model/interaction.test.ts src/ui/preview/ui/PreviewOverlays.test.tsx src/ui/app/model/intent.test.ts src/ui/app/ui/App.test.tsx`
 
 Expected: failures for absent acknowledgement/query/pin behavior and overlay components.
 
-- [ ] **Step 3: Implement the interaction model**
+- [x] **Step 3: Implement the interaction model**
 
 Use named atoms for `displayedFrameToken`, `pendingGeometry`, `pinDraft`, `pendingPin`, `hover`, and `selectionRect`. Keep parsing of the currently placeholder geometry `result` in small type guards that return `null` on any wrong field; never cast unknown payload fields directly.
 
@@ -230,11 +230,11 @@ void deps.dispatcher.dispatch("preview.queryGeometry", {
 
 The event handler matches `frameTokenId` and `queryKind` against the pending request before changing local atoms, so a superseded hover result cannot open a stale pin popup.
 
-- [ ] **Step 4: Render exact design overlays and mouse bindings**
+- [x] **Step 4: Render exact design overlays and mouse bindings**
 
 Render numbered open-pin badges at `pinAnchor(fx, fy, frame rect)`, the `⌜⌝⌞⌟` selection glyphs from `selectionCorners`, and the amber-on-line hover label. Bind `onMouseMove` to hover, left mouse-down to selection, and right mouse-down (`MouseButton.RIGHT`) to pin. Convert absolute mouse cells to frame-local coordinates once in `Workspace` and clamp through the pure interaction helper.
 
-- [ ] **Step 5: Run the focused gate**
+- [x] **Step 5: Run the focused gate**
 
 Run: `bun test src/ui/preview src/ui/app src/ui/workspace src/ui/testing && bun x tsc --noEmit`
 
