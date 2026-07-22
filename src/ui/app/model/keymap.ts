@@ -70,6 +70,11 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     return { kind: "none" };
   }
 
+  if (context.screen === "read-only" && context.overlay === "slash-menu") {
+    if (key.name === "escape") return { kind: "overlay-dismiss" };
+    return { kind: "none" };
+  }
+
   if (context.overlay === "slash-menu") {
     if (key.name === "escape") return { kind: "overlay-dismiss" };
     if (RETURN_NAMES.has(key.name)) return { kind: "slash-submit" };

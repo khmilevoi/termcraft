@@ -142,6 +142,24 @@ describe("resolveKey — slash menu", () => {
       kind: "overlay-dismiss",
     });
   });
+
+  test("a stale slash overlay is inert after the workspace becomes read-only", () => {
+    const readOnlySlash = ctx({
+      screen: "read-only",
+      overlay: "slash-menu",
+      composerValue: "/new",
+    });
+    expect(resolveKey(key({ sequence: "x", name: "x" }), readOnlySlash)).toEqual({
+      kind: "none",
+    });
+    expect(resolveKey(key({ name: "backspace" }), readOnlySlash)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "up" }), readOnlySlash)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "down" }), readOnlySlash)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "enter" }), readOnlySlash)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "escape" }), readOnlySlash)).toEqual({
+      kind: "overlay-dismiss",
+    });
+  });
 });
 
 describe("resolveKey — modal controls", () => {

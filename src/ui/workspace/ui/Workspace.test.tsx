@@ -50,3 +50,25 @@ describe("Workspace read-only presentation", () => {
     expect(attach && extractRgb(attach.fg)).toBe(SHELL_PALETTE.red);
   });
 });
+
+describe("Workspace action-derived hotkey hints", () => {
+  test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    for (const label of ["F2", "F3", "F4", "Ctrl+P"]) expect(text).toContain(label);
+
+    const active = findRun(rows, "F2");
+    expect(active && extractRgb(active.fg)).toBe(SHELL_PALETTE.amber);
+    expect((active?.attrs ?? 0) & 1).toBe(1);
+    for (const label of ["F3", "F4", "Ctrl+P"]) {
+      const inert = findRun(rows, label);
+      expect(inert && extractRgb(inert.fg)).toBe(SHELL_PALETTE.faint);
+      expect((inert?.attrs ?? 0) & 1).toBe(0);
+    }
+  });
+});

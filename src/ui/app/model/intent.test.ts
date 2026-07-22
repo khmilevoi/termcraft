@@ -95,6 +95,8 @@ describe("applyIntent — slash menu", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(
       snapshot({
+        projectId: uuidv7(),
+        trust: "trusted",
         capabilities: [
           {
             id: "chat.create",
@@ -121,6 +123,8 @@ describe("applyIntent — slash menu", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(
       snapshot({
+        projectId: uuidv7(),
+        trust: "trusted",
         capabilities: [
           { id: "chat.create", target: {}, state: { available: true } },
           { id: "export.start", target: {}, state: { available: true } },
@@ -140,6 +144,8 @@ describe("applyIntent — slash menu", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(
       snapshot({
+        projectId: uuidv7(),
+        trust: "trusted",
         capabilities: [
           { id: "chat.create", target: {}, state: { available: true } },
           { id: "export.start", target: {}, state: { available: true } },
@@ -162,6 +168,26 @@ describe("applyIntent — slash menu", () => {
     deps.local.slashSelection.set(0);
     applyIntent({ kind: "slash-submit" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["chat.create", "export.start"]);
+  });
+
+  test("an already-resolved slash submit cannot dispatch after transition to read-only", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        trust: "untrusted-read-only",
+        capabilities: [{ id: "chat.create", target: {}, state: { available: true } }],
+      }),
+    );
+    deps.local.composer.set("/new");
+    deps.local.overlay.set("slash-menu");
+    deps.local.slashSelection.set(0);
+
+    applyIntent({ kind: "slash-submit" }, deps);
+
+    expect(kernel.dispatched).toHaveLength(0);
+    expect(deps.local.overlay()).toBeNull();
   });
 });
 

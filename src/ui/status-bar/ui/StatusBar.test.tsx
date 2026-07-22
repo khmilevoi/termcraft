@@ -186,6 +186,33 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     expect(findRun(frame, "fullscreen")).toBeDefined();
   });
 
+  test("inert hint glyphs and labels are visible but faint and not bold", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 1 });
+    open = handle;
+    handle.mount(
+      <StatusBar
+        id="status"
+        width={80}
+        mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
+        hintKeys={[
+          ["F2", "fullscreen"],
+          ["F3", "tweaks", true],
+        ]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const active = findRun(frame, "F2");
+    const inert = findRun(frame, "F3");
+    expect(active && extractRgb(active.fg)).toBe(SHELL_PALETTE.amber);
+    expect((active?.attrs ?? 0) & 1).toBe(1);
+    expect(inert && extractRgb(inert.fg)).toBe(SHELL_PALETTE.faint);
+    expect((inert?.attrs ?? 0) & 1).toBe(0);
+    expect(findRun(frame, "tweaks") && extractRgb(findRun(frame, "tweaks")!.fg)).toBe(
+      SHELL_PALETTE.faint,
+    );
+  });
+
   test("hint keys are trimmed to fit, keeping at least one", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 1 });
     open = handle;

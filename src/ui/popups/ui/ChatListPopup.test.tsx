@@ -35,11 +35,16 @@ const ROWS: readonly ChatListRow[] = [
   { chatId: "chat-3", label: "try a 256-color palette variant", when: "1h ago", active: false },
 ];
 
-test("chat rows retain the exact chatId used by chat.switch", () => {
-  expect(ROWS.map((row) => row.chatId)).toEqual(["chat-1", "chat-2", "chat-3"]);
-});
-
 describe("ChatListPopup component (design 24-chats.dc.html, wsChats)", () => {
+  test("distinct chatId values are preserved on their rendered selectable rows", async () => {
+    const handle = await createHeadlessRenderer({ w: 74, h: 8 });
+    open = handle;
+    handle.mount(<ChatListPopup id="chats" rows={ROWS} selectedIndex={1} />);
+    await handle.render();
+    for (const row of ROWS) expect(handle.describe(`chats-row-${row.chatId}`)).not.toBeNull();
+    expect(handle.rectOf("chats-row-chat-1")).not.toEqual(handle.rectOf("chats-row-chat-2"));
+  });
+
   test('title is "chats"', async () => {
     const handle = await createHeadlessRenderer({ w: 74, h: 8 });
     open = handle;

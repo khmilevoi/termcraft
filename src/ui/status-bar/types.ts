@@ -35,8 +35,8 @@ export interface StatusBarHintBadge {
   readonly bg: ShellToken;
 }
 
-/** One right-aligned key hint: `[glyph, label]` (design `hintKeys`' `[glyph,label,active?]`, minus `active`). */
-export type StatusBarHintKey = readonly [glyph: string, label: string];
+/** One right-aligned key hint: inert entries remain visible but use the faint treatment. */
+export type StatusBarHintKey = readonly [glyph: string, label: string, inert?: boolean];
 
 /** Props for the {@link StatusBar} component. `id` is the mandatory stable id (§3.2). */
 export interface StatusBarProps {

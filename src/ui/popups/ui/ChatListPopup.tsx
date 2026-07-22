@@ -47,38 +47,33 @@ export function ChatListPopup(props: ChatListPopupProps) {
       </text>
       {props.rows.map((row, index) => {
         const selected = index === props.selectedIndex;
+        const rowId = `${props.id}-row-${row.chatId}`;
         return (
           // keyed intrinsic wrapper — the function component itself carries no `key`.
           <box
             key={row.chatId}
-            id={`${props.id}-row-${index}`}
+            id={rowId}
             flexDirection="row"
             backgroundColor={selected ? SHELL_PALETTE.sel : undefined}
           >
             <text
-              id={`${props.id}-row-${index}-marker`}
+              id={`${rowId}-marker`}
               fg={SHELL_PALETTE.amber}
               attributes={shellAttrs({ bold: true })}
             >
               {selected ? "▸ " : "  "}
             </text>
-            <text
-              id={`${props.id}-row-${index}-dot`}
-              fg={selected ? SHELL_PALETTE.amber : SHELL_PALETTE.dim}
-            >
+            <text id={`${rowId}-dot`} fg={selected ? SHELL_PALETTE.amber : SHELL_PALETTE.dim}>
               {row.active ? "● " : "○ "}
             </text>
             <text
-              id={`${props.id}-row-${index}-label`}
+              id={`${rowId}-label`}
               fg={selected ? SHELL_PALETTE.selFg : SHELL_PALETTE.fg}
               attributes={shellAttrs({ bold: selected })}
             >
               {formatLabel(row.label)}
             </text>
-            <text
-              id={`${props.id}-row-${index}-when`}
-              fg={selected ? SHELL_PALETTE.selFg : SHELL_PALETTE.dim}
-            >
+            <text id={`${rowId}-when`} fg={selected ? SHELL_PALETTE.selFg : SHELL_PALETTE.dim}>
               {row.when}
             </text>
           </box>

@@ -141,21 +141,27 @@ export function StatusBar(props: StatusBarProps) {
         </text>
       ))}
       <box id={`${props.id}-spacer`} flexGrow={1} />
-      {fittedKeys.map((key, index) => (
-        <box key={`${key[0]}-${index}`} id={`${props.id}-key-${index}`} flexDirection="row">
-          <text
-            id={`${props.id}-key-${index}-glyph`}
-            fg={SHELL_PALETTE.amber}
-            bg={SHELL_PALETTE.statusBg}
-            attributes={shellAttrs({ bold: true })}
-          >
-            {` ${key[0]} `}
-          </text>
-          <text id={`${props.id}-key-${index}-label`} fg={SHELL_PALETTE.dim}>
-            {` ${key[1]} `}
-          </text>
-        </box>
-      ))}
+      {fittedKeys.map((key, index) => {
+        const inert = key[2] === true;
+        return (
+          <box key={`${key[0]}-${index}`} id={`${props.id}-key-${index}`} flexDirection="row">
+            <text
+              id={`${props.id}-key-${index}-glyph`}
+              fg={inert ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
+              bg={SHELL_PALETTE.statusBg}
+              attributes={shellAttrs({ bold: !inert })}
+            >
+              {` ${key[0]} `}
+            </text>
+            <text
+              id={`${props.id}-key-${index}-label`}
+              fg={inert ? SHELL_PALETTE.faint : SHELL_PALETTE.dim}
+            >
+              {` ${key[1]} `}
+            </text>
+          </box>
+        );
+      })}
     </box>
   );
 }

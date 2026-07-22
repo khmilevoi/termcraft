@@ -1,7 +1,8 @@
 import { reatomComponent } from "@reatom/react";
 
 import type { PreviewFrameV1 } from "core/ports";
-import { filterSlashRows } from "ui/actions";
+import { HOTKEYS, filterSlashRows } from "ui/actions";
+import type { HotkeyAction } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, Composer } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
@@ -25,19 +26,27 @@ function modeChip(turn: TurnMirror, fullscreen: boolean, readOnly: boolean): Sta
   return { text: "STATIC", fg: "amberHi", bg: "line" };
 }
 
+function hotkeyGlyph(key: string): string {
+  if (key === "ctrl+e") return "^E";
+  if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
+  return key.toUpperCase();
+}
+
+function hotkeyHint(action: HotkeyAction, label = action.label): StatusBarHintKey {
+  return [hotkeyGlyph(action.key), label, action.inert === true];
+}
+
+function fullscreenHint(label: string): readonly StatusBarHintKey[] {
+  return HOTKEYS.filter((action) => action.id === "preview.fullscreen").map((action) =>
+    hotkeyHint(action, label),
+  );
+}
+
 /** The right-aligned hint keys for the current state (design `hintKeys` defaults). */
 function hintKeys(turn: TurnMirror, fullscreen: boolean): readonly StatusBarHintKey[] {
-  if (fullscreen) return [["F2", "windowed"]];
-  if (turn.phase === "running")
-    return [
-      ["esc", "cancel"],
-      ["F2", "full"],
-    ];
-  return [
-    ["F2", "fullscreen"],
-    ["F3", "tweaks"],
-    ["F4", "interact"],
-  ];
+  if (fullscreen) return fullscreenHint("windowed");
+  if (turn.phase === "running") return [["esc", "cancel"], ...fullscreenHint("full")];
+  return HOTKEYS.map((action) => hotkeyHint(action));
 }
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */

@@ -64,16 +64,19 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     }
     case "slash-open": {
+      if (deps.screen() !== "workspace") return;
       local.composer.set("/");
       local.overlay.set("slash-menu");
       local.slashSelection.set(firstEnabledIndex(slashRows(deps)));
       return;
     }
     case "slash-input":
+      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       local.composer.set(local.composer() + intent.ch);
       local.slashSelection.set(firstEnabledIndex(slashRows(deps)));
       return;
     case "slash-backspace": {
+      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       const next = local.composer().slice(0, -1);
       local.composer.set(next);
       if (next.length === 0) {
@@ -85,11 +88,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     }
     case "slash-move":
+      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       local.slashSelection.set(
         moveEnabledSelection(slashRows(deps), local.slashSelection(), intent.delta),
       );
       return;
     case "slash-submit": {
+      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       const row = slashRows(deps)[local.slashSelection()];
       if (row === undefined || !row.state.enabled) return;
       const entry = resolveSlashAction(row.command);
@@ -159,6 +164,14 @@ function actionContext(deps: UiDeps): ActionContext {
 
 function slashRows(deps: UiDeps) {
   return filterSlashRows(deps.local.composer(), actionContext(deps));
+}
+
+function slashMenuActive(deps: UiDeps): boolean {
+  return deps.screen() === "workspace" && deps.local.overlay() === "slash-menu";
+}
+
+function closeStaleSlash(deps: UiDeps): void {
+  if (deps.local.overlay() === "slash-menu") deps.local.overlay.set(null);
 }
 
 function wrapIndex(index: number, count: number): number {
