@@ -34,3 +34,7 @@ export { MIN_FRAME, createMirror, createScreenAtom, deriveScreen } from "./mirro
 // Theme
 export type { ShellPalette, ShellTextStyle, ShellToken } from "./theme";
 export { LIGHT_SHELL_PALETTE, SHELL_PALETTE, shellAttrs } from "./theme";
+
+// Composition root surface (phase-8 mounts this)
+export type { UiDeps, UiEnv } from "./app";
+export { App, createUiDeps } from "./app";

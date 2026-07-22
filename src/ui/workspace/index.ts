@@ -7,3 +7,5 @@ export type { EscOutcome, EscState, FocusTarget, OverlayKind } from "./model/foc
 export { nextFocus, resolveEsc, singleCharKeysActive } from "./model/focus";
 export type { TabEntry } from "./model/tabs";
 export { deriveTabs, tabWidth, tabsOverflow } from "./model/tabs";
+export type { WorkspaceDeps, WorkspaceLocalState } from "./types";
+export { Workspace } from "./ui/Workspace";
