@@ -79,7 +79,7 @@ render harness; App integration uses the canonical React/OpenTUI adapter in
 ## The binding model (locked)
 
 Ground truth from the kernel map: **no composed Kernel object exists** (dispatch
-has opaque injected deps, `HandlerRegistry` unimplemented, no `main.ts`). Phase 7
+has opaque injected deps, `HandlerRegistry` unimplemented, no `main.tsx`). Phase 7
 therefore binds to *shapes*, not a running singleton.
 
 ### D1 — `KernelPort` (declared by `ui`, injected by phase 8, faked in tests)

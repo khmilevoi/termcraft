@@ -8,13 +8,13 @@ Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
 `host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` are real source today.
 Seven of those are components the design spec names — [`modules.md`](modules.md)
 counts the same seven — while `entities/` and `infrastructure/` are additions this
-convention makes on top. Only the `main.ts` production composition root remains
+convention makes on top. Only the `main.tsx` production composition root remains
 unbuilt. Source anchors move to real paths as each piece lands; see
 `## Source anchors`.
 
 ```mermaid
 flowchart LR
-    main["main.ts · composition root<br/>(not yet built)<br/>the only file that imports every module"]
+    main["main.tsx · composition root<br/>(not yet built)<br/>the only file that imports every module"]
 
     subgraph adapters["Adapters — implement the ports they are handed"]
         store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
@@ -58,7 +58,7 @@ flowchart LR
 
    ```text
    src/
-     main.ts            composition root — the only file that imports every module
+     main.tsx           composition root — the only file that imports every module
                          (not yet built)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
@@ -191,7 +191,7 @@ flowchart LR
    same test in place, so that is an unextracted candidate, not a violation.
 
 7. **`core` imports no other module.** It imports `entities/` and its own `ports/`,
-   nothing else. `main.ts` constructs the adapters and injects them; the arrows in
+   nothing else. `main.tsx` constructs the adapters and injects them; the arrows in
    [`modules.md`](modules.md) (`kernel --> pstore`, `kernel --> host`, …) are
    runtime calls, not imports. Three things follow: no import cycle between `core`
    and `store` even though each needs the other's names; `core` is testable against
@@ -206,7 +206,7 @@ flowchart LR
    and lets the user switch between turns, and the stored `(agent, model, effort)`
    triple is domain state the Kernel owns. So `core` consumes a registry — enumerate
    the available backends, take one by id — rather than a single `AgentBackend`;
-   `main.ts` supplies the registry with the backends the build knows about, and
+   `main.tsx` supplies the registry with the backends the build knows about, and
    `core` selects from it. The division holds generally: the composition root wires
    *what exists*, the Kernel decides *what is used*. Item 7 is untouched — `core`
    still imports no backend, and `AgentBackend` remains a spec-named port while the
@@ -216,7 +216,7 @@ flowchart LR
    backend port, and one backend behind it. `agent/index.ts` exports the port types
    plus a single `createProductionClaudeBackend()` that assembles the real wiring
    (the SDK query, the Job Object tree factory, a real sleep, and the Windows
-   reparse-point backstop). `main.ts` remains unbuilt, so phase 8 still owns the
+   reparse-point backstop). `main.tsx` remains unbuilt, so phase 8 still owns the
    production registry instance and composition.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
@@ -237,7 +237,7 @@ flowchart LR
    Landed today: the compiler extraction and the three-specifier resolver both
    match this item exactly. The `_host --stdio` argv check and the injectable
    protocol loop it would drive exist too, but nothing wires them to real process
-   stdio yet — no `bun build --compile` binary and no `main.ts` exist, so `termcraft
+   stdio yet — no `bun build --compile` binary and no `main.tsx` exist, so `termcraft
    _host` is not yet a runnable second entry point, only the engine one would drive.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
@@ -262,7 +262,7 @@ flowchart LR
 
 ## Source anchors
 
-`core/` (phase 6) and `ui/` (phase 7) have landed; only `main.ts` has not (item 1). The
+`core/` (phase 6) and `ui/` (phase 7) have landed; only `main.tsx` has not (item 1). The
 anchors below split accordingly: real files for what exists, design-spec sections
 for what is still contract only.
 
@@ -420,7 +420,7 @@ vendor tier's own pre-split run-loop file.
   uses as its port-placement illustration (item 5): `gate` declares it, and `host`
   provides the one-shot session an adapter would wrap (`runOneShotSession`) — but
   no code satisfies the `SmokeRenderer` interface itself, and no composition root
-  wires the two together, because `main.ts` does not exist
+  wires the two together, because `main.tsx` does not exist
 - `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
   real `HostSupervisor`; blocker B4 (phase 6 slice 6D) resolved the former
   restart-aware-`PreviewHandle`-vs-non-restart-aware-`PreviewSession` split —
@@ -470,7 +470,7 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary; only production composition in `main.ts` remains unbuilt. §3.6
+  Kernel boundary; only production composition in `main.tsx` remains unbuilt. §3.6
   remains the design authority for the runtime-selected agent triple, whose landed
   Kernel selection code is anchored above
 - `docs/superpowers/specs/2026-07-22-application-entrypoints-design.md` — the

@@ -68,7 +68,7 @@ Kernel (`core/`) is anchored below; its own doc status is tracked with the Kerne
 boundary DTOs and the `PreviewSession` facade, declares the `KernelPort` the phase-8
 composition root satisfies, and keeps its own Reatom read-model ("mirror") fed by the Kernel
 event stream (design §3.2/§3.3, two graphs). What remains for phase 8: the real Kernel behind
-`KernelPort`, `main.ts` mounting `<App>`, live agent-health derivation, and full preview-frame
+`KernelPort`, `main.tsx` mounting `<App>`, live agent-health derivation, and full preview-frame
 streaming (the consumer exists; session-change re-subscription is minimal).
 
 - `src/ui/index.ts` — the module's public surface: `App`, `createUiDeps`, `KernelPort`, and the boundary types phase 8 injects
