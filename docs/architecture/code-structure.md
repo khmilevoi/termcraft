@@ -9,8 +9,9 @@ Seven source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
 components the design spec names — [`modules.md`](modules.md) counts the same five
 (runtime facade, Gate, HostSupervisor, Project store, Agent gateway) — while
 `entities/` and `infrastructure/` are additions this convention makes on top of the
-seven. `core/` (the Kernel), `ui/`, and the `main.ts` composition root do not exist
-yet — this document is still their contract, and every section below marks the parts
+seven. `core/` (the Kernel, phase 6) and `ui/` (the OpenTUI shell, phase 7) have now
+landed; only the `main.ts` composition root remains unbuilt. This document tracked
+their contract as they were built, and every section below marks the parts
 that describe them as not yet built. Source anchors move to real paths as each piece
 lands; see `## Source anchors`.
 
@@ -31,7 +32,7 @@ flowchart LR
         entities["entities/<br/>Page · Chat · Turn · Pin<br/>pure types · no ports"]
     end
 
-    ui["ui/ · OpenTUI shell<br/>(not yet built)"]
+    ui["ui/ · OpenTUI shell<br/>(phase 7)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
     infra["infrastructure/<br/>durability · fs-guard · framing · clock ·<br/>uuid · process (owned Job Object tree)<br/>domain-free"]
 
@@ -88,7 +89,7 @@ flowchart LR
        index.ts
      gate/              validation; declares the SmokeRenderer port it consumes [landed]
      host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
-     ui/                OpenTUI shell; imports core's boundary types only       (not yet built)
+     ui/                OpenTUI shell; imports core's boundary types only       (phase 7)
      runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
      infrastructure/    domain-free technical capabilities                     [landed]
        clock/  durability/  fs-guard/  framing/  process/  uuid/
@@ -264,7 +265,7 @@ flowchart LR
 
 ## Source anchors
 
-Seven modules landed; `core/`, `ui/`, and `main.ts` have not (item 1). The
+`core/` (phase 6) and `ui/` (phase 7) have landed; only `main.ts` has not (item 1). The
 anchors below split accordingly: real files for what exists, design-spec sections
 for what is still contract only.
 

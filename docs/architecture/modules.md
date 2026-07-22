@@ -60,14 +60,28 @@ flowchart LR
 
 ## Source anchors
 
-Five of the seven components are real, tested code today (Runtime facade, Gate,
-HostSupervisor, Project store, Agent gateway); UI shell and Kernel have no module yet
-(`ui/` and `core/` do not exist under `src/`) and stay anchored to spec only.
+Six of the seven components are real, tested code today (Runtime facade, Gate,
+HostSupervisor, Project store, Agent gateway, and — as of phase 7 — the UI shell). The
+Kernel (`core/`) is anchored below; its own doc status is tracked with the Kernel section.
 
-**UI shell — no code yet:**
+**UI shell — `src/ui/` (phase 7):** a leaf presentation module that imports only `core`'s
+boundary DTOs and the `PreviewSession` facade, declares the `KernelPort` the phase-8
+composition root satisfies, and keeps its own Reatom read-model ("mirror") fed by the Kernel
+event stream (design §3.2/§3.3, two graphs). What remains for phase 8: the real Kernel behind
+`KernelPort`, `main.ts` mounting `<App>`, live agent-health derivation, and full preview-frame
+streaming (the consumer exists; session-change re-subscription is minimal).
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.8 action table and hotkey tiers, §3.10 slash menu
-- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — the commands, results, events, and capabilities the shell will consume
+- `src/ui/index.ts` — the module's public surface: `App`, `createUiDeps`, `KernelPort`, and the boundary types phase 8 injects
+- `src/ui/kernel/` — the ui-declared `KernelPort`/`PreviewSessionHandle`, the single `EventEnvelopeV1` re-export (`model/events.ts`, the one tolerated `core/mailbox` type import) with its distributed `AnyEventEnvelope`, and `createDispatcher` (mints `commandId`, stamps `expectedRevision`)
+- `src/ui/mirror/` — the UI-owned Reatom read-model: named `ui.mirror.*` atoms fed by a pure event reducer seeded from `kernel.snapshot` (`model/mirror.ts`), plus the UI-derived `screenAtom` (`model/screen.ts`, the D6 approximation until the typed snapshot lands)
+- `src/ui/theme/` — `SHELL_PALETTE` (the design `pal` object verbatim) and the `shellAttrs` bitmask helper; the shell carries its own palette because `ui` may not import `runtime`
+- `src/ui/actions/` — the single action table: the slash-command registry, the hotkey registry, and the capability-driven enabled/dimmed/hint computation the status bar and slash menu are views over (design §3.8/§3.10)
+- `src/ui/status-bar/`, `src/ui/slash-menu/`, `src/ui/home/`, `src/ui/chat/`, `src/ui/preview/`, `src/ui/popups/` — the props-driven presentation components (status bar, slash menu, Home, chat parts, preview frame/panels + overlay geometry, and the four popups), each design-faithful with documented flexbox-vs-canvas divergences
+- `src/ui/workspace/` — the reactive Workspace shell (`ui/Workspace.tsx`) plus its pure logic: the layered `Esc` stack + focus model (`model/focus.ts`) and tab-strip derivation (`model/tabs.ts`)
+- `src/ui/app/` — the composition: `createUiDeps` (`model/deps.ts`, with the connect-hook `runtime` atom owning the subscription + frame consumer), the `App` root (`ui/App.tsx`), and the pure keymap + effectful intent layer (`model/keymap.ts`, `model/intent.ts`)
+- `src/ui/testing/` — `FakeKernel`/`FakePreviewSession` and the typed event builders every `ui` test drives
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.x the shell behaviour (action table, slash menu, focus/Esc, status bar) the components implement
+- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — §8/§9/§10 the commands, events, and capabilities the shell consumes
 
 **Kernel — no code yet:**
 
