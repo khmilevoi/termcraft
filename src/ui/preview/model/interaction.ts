@@ -1,4 +1,5 @@
-import { type Atom, atom } from "@reatom/core";
+import { type Atom, atom, wrap } from "@reatom/core";
+import * as errore from "errore";
 
 import type { FrameTokenV1, GeometryTokenV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
@@ -10,12 +11,16 @@ import type { Point, Rect } from "./overlay";
 export type GeometryIntent = "hover" | "select" | "pin";
 type GeometryQueryKind = "hit" | "pin-anchor";
 
-export interface PendingGeometry {
+interface GeometryRequest {
   readonly frameToken: FrameTokenV1;
   readonly purpose: GeometryIntent;
   readonly queryKind: GeometryQueryKind;
   readonly x: number;
   readonly y: number;
+}
+
+export interface PendingGeometry extends GeometryRequest {
+  readonly superseded: boolean;
 }
 
 export interface PendingPin {
@@ -31,6 +36,7 @@ export interface HoverGeometry {
 export interface PreviewInteractionState {
   readonly displayedFrameToken: Atom<FrameTokenV1 | null>;
   readonly pendingGeometry: Atom<PendingGeometry | null>;
+  readonly queuedGeometry: Atom<GeometryRequest | null>;
   readonly pendingPin: Atom<PendingPin | null>;
   readonly hover: Atom<HoverGeometry | null>;
   readonly selectionRect: Atom<Rect | null>;
@@ -52,6 +58,7 @@ export function createPreviewInteractionState(): PreviewInteractionState {
   return {
     displayedFrameToken: atom<FrameTokenV1 | null>(null, "ui.preview.displayedFrameToken"),
     pendingGeometry: atom<PendingGeometry | null>(null, "ui.preview.pendingGeometry"),
+    queuedGeometry: atom<GeometryRequest | null>(null, "ui.preview.queuedGeometry"),
     pendingPin: atom<PendingPin | null>(null, "ui.preview.pendingPin"),
     hover: atom<HoverGeometry | null>(null, "ui.preview.hover"),
     selectionRect: atom<Rect | null>(null, "ui.preview.selectionRect"),
@@ -74,6 +81,7 @@ export function acknowledgeFrame(deps: PreviewInteractionDeps, uiFrame: UiPrevie
 
   deps.interaction.displayedFrameToken.set(uiFrame.frameToken);
   deps.interaction.pendingGeometry.set(null);
+  deps.interaction.queuedGeometry.set(null);
   deps.interaction.pendingPin.set(null);
   deps.interaction.hover.set(null);
   deps.interaction.selectionRect.set(null);
@@ -95,19 +103,20 @@ export function requestGeometry(
   if (current.frameToken !== displayedFrameToken) return;
 
   const queryKind = purpose === "pin" ? "pin-anchor" : "hit";
-  deps.interaction.pendingGeometry.set({
+  const request: GeometryRequest = {
     frameToken: displayedFrameToken,
     purpose,
     queryKind,
     x,
     y,
-  });
-  reportDispatchFailure(
-    deps.dispatcher.dispatch("preview.queryGeometry", {
-      frameToken: displayedFrameToken,
-      query: { kind: queryKind, x, y },
-    }),
-  );
+  };
+  const pending = deps.interaction.pendingGeometry();
+  if (pending !== null) {
+    deps.interaction.pendingGeometry.set({ ...pending, superseded: true });
+    deps.interaction.queuedGeometry.set(request);
+    return;
+  }
+  dispatchGeometryRequest(deps, request);
 }
 
 /** Applies a geometry event only when both of its capability correlation fields still match. */
@@ -125,7 +134,13 @@ export function handleGeometryResult(
   if (current === null || current.frameToken !== pending.frameToken) return;
   if (current.handle.previewSessionId !== payload.previewSessionId) return;
 
+  if (pending.superseded) {
+    promoteQueuedGeometry(deps);
+    return;
+  }
+
   deps.interaction.pendingGeometry.set(null);
+  deps.interaction.queuedGeometry.set(null);
   if (pending.purpose !== "hover" && deps.screen() === "read-only") return;
 
   if (pending.purpose === "pin") {
@@ -201,6 +216,58 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return isNonNegativeInteger(value) && value > 0;
+}
+
+class GeometryQueryRejectedError extends errore.createTaggedError({
+  name: "GeometryQueryRejectedError",
+  message: "geometry query command rejected with $code",
+}) {}
+
+function dispatchGeometryRequest(deps: PreviewInteractionDeps, request: GeometryRequest): void {
+  deps.interaction.pendingGeometry.set({ ...request, superseded: false });
+  const dispatched = deps.dispatcher.dispatch("preview.queryGeometry", {
+    frameToken: request.frameToken,
+    query: { kind: request.queryKind, x: request.x, y: request.y },
+  });
+  void dispatched.then(
+    wrap((result) => {
+      const error =
+        result instanceof Error
+          ? result
+          : result.status === "rejected"
+            ? new GeometryQueryRejectedError({ code: result.code })
+            : null;
+      if (error === null) return;
+      deps.runtimeError.set(error);
+      console.error("UI geometry query dispatch failed:", error);
+      const pending = deps.interaction.pendingGeometry();
+      if (pending === null || !sameGeometryRequest(pending, request)) return;
+      promoteQueuedGeometry(deps);
+    }),
+  );
+}
+
+function promoteQueuedGeometry(deps: PreviewInteractionDeps): void {
+  const queued = deps.interaction.queuedGeometry();
+  deps.interaction.pendingGeometry.set(null);
+  deps.interaction.queuedGeometry.set(null);
+  if (queued === null) return;
+  if (queued.purpose !== "hover" && deps.screen() === "read-only") return;
+  const displayed = deps.interaction.displayedFrameToken();
+  const current = deps.previewFrame();
+  if (displayed !== queued.frameToken || current === null) return;
+  if (current.frameToken !== queued.frameToken) return;
+  dispatchGeometryRequest(deps, queued);
+}
+
+function sameGeometryRequest(left: GeometryRequest, right: GeometryRequest): boolean {
+  return (
+    left.frameToken === right.frameToken &&
+    left.purpose === right.purpose &&
+    left.queryKind === right.queryKind &&
+    left.x === right.x &&
+    left.y === right.y
+  );
 }
 
 function reportDispatchFailure(promise: ReturnType<Dispatcher["dispatch"]>): void {

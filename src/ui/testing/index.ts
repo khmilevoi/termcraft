@@ -17,3 +17,5 @@ export { createFakeKernel } from "./model/fake-kernel";
 export type { FakeKernel, FakeKernelOptions } from "./model/fake-kernel";
 export { createFakePreviewSession } from "./model/fake-preview";
 export type { FakePreviewOptions, FakePreviewSession } from "./model/fake-preview";
+export { createReactTestRenderer } from "./model/react-renderer";
+export type { ReactTestRenderer } from "./model/react-renderer";

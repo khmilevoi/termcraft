@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { MouseButtons, createTestRenderer } from "@opentui/core/testing";
-import { createRoot } from "@opentui/react";
+import { MouseButtons } from "@opentui/core/testing";
 
 import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
-import { createHeadlessRenderer } from "host/render/model/renderer";
-import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
 import { requestGeometry } from "ui/preview";
 import {
+  type ReactTestRenderer,
   TEST_NONCE,
   TEST_SHA,
   TEST_TS,
   createFakeKernel,
   createFakePreviewSession,
+  createReactTestRenderer,
   event,
   resetEventSeq,
   snapshot,
@@ -23,19 +22,12 @@ import {
 import { createUiDeps } from "../model/deps";
 import { App } from "./App";
 
-let open: RenderHandle | null = null;
-afterEach(() => {
-  open?.destroy();
+let open: ReactTestRenderer | null = null;
+afterEach(async () => {
+  await open?.destroy();
   open = null;
 });
 beforeEach(() => resetEventSeq());
-
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-const allText = (rows: { text: string }[][]) =>
-  rows
-    .flat()
-    .map((run) => run.text)
-    .join("");
 
 const readyPage = (): EventPayloadByKindV1["kernel.snapshot"]["pageDescriptors"][number] => ({
   status: "ready",
@@ -72,10 +64,11 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       pageDescriptors: [readyPage()],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
     const rendered: PreviewFrameV1 = {
       sessionId: preview.handle.previewSessionId,
       sourceHash: TEST_SHA,
@@ -84,37 +77,39 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       height: 10,
       rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
     };
-    preview.pushFrame(rendered);
-    await tick();
-    await handle.render();
+    await renderer.act(() => preview.pushFrame(rendered));
     const frameToken = preview.frameTokenFor(rendered);
+    await renderer.waitFor(() => deps.previewFrame()?.frame === rendered);
+    await renderer.waitForFrame((frame) => frame.includes("preview"));
+    await renderer.waitFor(() => preview.acknowledgements.length > 0);
+    expect(deps.previewFrame()?.frame).toBe(rendered);
     expect(preview.acknowledgements).toEqual([frameToken]);
 
-    requestGeometry(deps, "pin", 4, 5);
+    await renderer.act(() => requestGeometry(deps, "pin", 4, 5));
     const geometryToken = uuidv7();
-    kernel.emit(
-      event("preview.geometryResult", {
-        previewSessionId: preview.handle.previewSessionId,
-        frameTokenId: frameToken,
-        frameIdentity: {
+    await renderer.act(() =>
+      kernel.emit(
+        event("preview.geometryResult", {
           previewSessionId: preview.handle.previewSessionId,
-          nonce: TEST_NONCE,
-          sourceHash: TEST_SHA,
-          frameSeq: "1",
-        },
-        queryKind: "pin-anchor",
-        result: {
-          pageSlug: "main",
-          elementId: "network",
-          rect: { x: 3, y: 2, width: 8, height: 3 },
-          label: 'panel "network"',
-        },
-        geometryToken,
-      }),
+          frameTokenId: frameToken,
+          frameIdentity: {
+            previewSessionId: preview.handle.previewSessionId,
+            nonce: TEST_NONCE,
+            sourceHash: TEST_SHA,
+            frameSeq: "1",
+          },
+          queryKind: "pin-anchor",
+          result: {
+            pageSlug: "main",
+            elementId: "network",
+            rect: { x: 3, y: 2, width: 8, height: 3 },
+            label: 'panel "network"',
+          },
+          geometryToken,
+        }),
+      ),
     );
-    await tick();
-    await handle.render();
-    expect(allText(handle.capture().rows)).toContain("new pin");
+    expect(await renderer.waitForFrame((frame) => frame.includes("new pin"))).toContain("new pin");
   });
 
   test("converts absolute preview mouse cells once for hover, selection, and right-click pin", async () => {
@@ -129,59 +124,75 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       pageDescriptors: [readyPage()],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const setup = await createTestRenderer({ width: 120, height: 36, useMouse: true });
-    const root = createRoot(setup.renderer);
-    try {
-      root.render(<App deps={deps} />);
-      await setup.flush();
-      const rendered: PreviewFrameV1 = {
-        sessionId: preview.handle.previewSessionId,
-        sourceHash: TEST_SHA,
-        frameSeq: "1",
-        width: 20,
-        height: 10,
-        rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
-      };
-      preview.pushFrame(rendered);
-      await tick();
-      await setup.flush();
-
-      // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
-      await setup.mockMouse.moveTo(49, 7);
-      await setup.flush();
-      await setup.mockMouse.pressDown(50, 8, MouseButtons.LEFT);
-      await setup.flush();
-      await setup.mockMouse.pressDown(51, 9, MouseButtons.RIGHT);
-      await setup.flush();
-
-      const commands = kernel.dispatched.map(
-        (raw) => raw as { kind: string; payload: { query?: unknown } },
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    const rendered: PreviewFrameV1 = {
+      sessionId: preview.handle.previewSessionId,
+      sourceHash: TEST_SHA,
+      frameSeq: "1",
+      width: 20,
+      height: 10,
+      rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
+    };
+    await renderer.act(() => preview.pushFrame(rendered));
+    await renderer.waitFor(() => deps.previewFrame()?.frame === rendered);
+    await renderer.waitForFrame((frame) => frame.includes("preview"));
+    await renderer.waitFor(() => preview.acknowledgements.length > 0);
+    const frameToken = preview.frameTokenFor(rendered);
+    const emitHit = () =>
+      kernel.emit(
+        event("preview.geometryResult", {
+          previewSessionId: preview.handle.previewSessionId,
+          frameTokenId: frameToken,
+          frameIdentity: {
+            previewSessionId: preview.handle.previewSessionId,
+            nonce: TEST_NONCE,
+            sourceHash: TEST_SHA,
+            frameSeq: "1",
+          },
+          queryKind: "hit",
+          result: {
+            pageSlug: "main",
+            elementId: "network",
+            rect: { x: 3, y: 2, width: 8, height: 3 },
+            label: 'panel "network"',
+          },
+          geometryToken: null,
+        }),
       );
-      expect(commands.map((command) => command.kind)).toEqual([
-        "preview.queryGeometry",
-        "preview.queryGeometry",
-        "preview.queryGeometry",
-      ]);
-      expect(commands.map((command) => command.payload.query)).toEqual([
-        { kind: "hit", x: 4, y: 5 },
-        { kind: "hit", x: 5, y: 6 },
-        { kind: "pin-anchor", x: 6, y: 7 },
-      ]);
-    } finally {
-      root.unmount();
-      setup.renderer.destroy();
-    }
+
+    // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
+    await renderer.act(() => renderer.mockMouse.moveTo(49, 7));
+    await renderer.act(emitHit);
+    await renderer.act(() => renderer.mockMouse.pressDown(50, 8, MouseButtons.LEFT));
+    await renderer.act(emitHit);
+    await renderer.act(() => renderer.mockMouse.pressDown(51, 9, MouseButtons.RIGHT));
+
+    const geometryQueries = kernel.dispatched
+      .map((raw) => raw as { kind: string; payload: { query?: unknown } })
+      .filter((command) => command.kind === "preview.queryGeometry");
+    expect(geometryQueries.map((command) => command.payload.query)).toEqual([
+      { kind: "hit", x: 4, y: 5 },
+      { kind: "hit", x: 5, y: 6 },
+      { kind: "pin-anchor", x: 6, y: 7 },
+    ]);
   });
 
   test("mounts Home when no project is open", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    await handle.render();
-    const text = allText(handle.capture().rows);
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("termcraft") && frame.includes("agent ready"),
+    );
     expect(text).toContain("termcraft");
     expect(text).toContain("agent ready");
   });
@@ -189,28 +200,32 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   test("mounts the enlarge placeholder below the minimum frame", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 60, h: 16 });
-    const handle = await createHeadlessRenderer({ w: 60, h: 16 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    await handle.render();
-    expect(allText(handle.capture().rows)).toContain("terminal too small");
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 60,
+      height: 16,
+    });
+    open = renderer;
+    expect(await renderer.waitForFrame((frame) => frame.includes("terminal too small"))).toContain(
+      "terminal too small",
+    );
   });
 
   test("transitions Home -> Workspace when the Kernel reports an open trusted project", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    await handle.render();
-    expect(allText(handle.capture().rows)).toContain("termcraft");
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    expect(await renderer.waitForFrame((frame) => frame.includes("termcraft"))).toContain(
+      "termcraft",
+    );
 
-    kernel.emit(workspaceSnapshot());
-    await tick();
-    await handle.render();
-    const text = allText(handle.capture().rows);
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("chat") && frame.includes("codex"),
+    );
     expect(text).toContain("chat");
     expect(text).toContain("codex");
   });
@@ -218,28 +233,29 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   test("renders the ephemeral agent status block while a turn runs", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    await handle.render();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
 
-    kernel.emit(workspaceSnapshot());
-    await tick();
-    await handle.render();
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    await renderer.waitForFrame((frame) => frame.includes("chat"));
 
     const turnId = uuidv7();
-    kernel.emit(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
-    kernel.emit(
-      event("turn.progress", {
-        turnId,
-        attempt: 1,
-        content: { kind: "tool", op: "edit", target: "main/page.tsx" },
-      }),
+    await renderer.act(() => {
+      kernel.emit(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
+      kernel.emit(
+        event("turn.progress", {
+          turnId,
+          attempt: 1,
+          content: { kind: "tool", op: "edit", target: "main/page.tsx" },
+        }),
+      );
+    });
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("generating design") && frame.includes("main/page.tsx"),
     );
-    await tick();
-    await handle.render();
-    const text = allText(handle.capture().rows);
     expect(text).toContain("generating design");
     expect(text).toContain("main/page.tsx");
   });
@@ -247,26 +263,24 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   test("renders slash menu non-modally above the workspace composer", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    kernel.emit(workspaceSnapshot());
-    deps.local.composer.set("/");
-    deps.local.overlay.set("slash-menu");
-    await tick();
-    await handle.render();
-    const rows = handle.capture().rows;
-    const text = allText(rows);
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      deps.local.composer.set("/");
+      deps.local.overlay.set("slash-menu");
+    });
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("commands") && frame.includes("/new"),
+    );
+    const rows = text.split("\n");
     expect(text).toContain("commands");
     expect(text).toContain("/new");
-    const commandRow = rows.findIndex((row) => row.some((run) => run.text.includes("/new")));
-    const composerRow = rows.findIndex((row) =>
-      row
-        .map((run) => run.text)
-        .join("")
-        .includes("❯ /"),
-    );
+    const commandRow = rows.findIndex((row) => row.includes("/new"));
+    const composerRow = rows.findIndex((row) => row.includes("❯ /"));
     expect(commandRow).toBeGreaterThanOrEqual(0);
     expect(commandRow).toBeLessThan(composerRow);
   });
@@ -275,24 +289,25 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     const chatId = uuidv7();
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    kernel.emit(workspaceSnapshot());
-    kernel.emit(
-      event("chat.changed", {
-        activeChatId: chatId,
-        added: [{ chatId, createdAt: TEST_TS }],
-        updated: [],
-        removedChatIds: [],
-      }),
-    );
-    deps.local.overlay.set("chat-list");
-    await tick();
-    await handle.render();
-    const rows = handle.capture().rows;
-    const titleRow = rows.findIndex((row) => row.some((run) => run.text.includes("chats")));
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("chat.changed", {
+          activeChatId: chatId,
+          added: [{ chatId, createdAt: TEST_TS }],
+          updated: [],
+          removedChatIds: [],
+        }),
+      );
+      deps.local.overlay.set("chat-list");
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes("chats"));
+    const titleRow = frame.split("\n").findIndex((row) => row.includes("chats"));
     expect(titleRow).toBeGreaterThan(8);
     expect(titleRow).toBeLessThan(25);
   });
@@ -307,12 +322,17 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       pageDescriptors: [readyPage()],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<App deps={deps} />);
-    await tick();
-    await handle.render();
-    const text = allText(handle.capture().rows);
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    const text = await renderer.waitForFrame(
+      (frame) =>
+        frame.includes("READ-ONLY") &&
+        frame.includes("Send · Tweaks · pins disabled") &&
+        frame.includes("read-only — Send disabled"),
+    );
     expect(text).toContain("READ-ONLY");
     expect(text).toContain("Send · Tweaks · pins disabled");
     expect(text).toContain("read-only — Send disabled");

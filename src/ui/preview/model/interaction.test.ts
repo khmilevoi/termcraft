@@ -22,6 +22,8 @@ import {
 
 beforeEach(() => resetEventSeq());
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 const frame = (sessionId: string): PreviewFrameV1 => ({
   sessionId,
   sourceHash: TEST_SHA,
@@ -108,6 +110,145 @@ describe("preview interaction token chain", () => {
       frameToken: uiFrame.frameToken,
       query: { kind: "pin-anchor", x: 4, y: 5 },
     });
+  });
+
+  test("pin to pin keeps one flight and never combines the first token with the second point", () => {
+    const { deps, kernel, uiFrame } = harness();
+    const firstGeometryToken = uuidv7();
+    const secondGeometryToken = uuidv7();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestGeometry(deps, "pin", 2, 3);
+    requestGeometry(deps, "pin", 8, 9);
+
+    expect(kernel.dispatched).toHaveLength(1);
+    handleGeometryResult(
+      deps,
+      geometryEvent(
+        uiFrame.handle.previewSessionId,
+        uiFrame.frameToken,
+        "pin-anchor",
+        firstGeometryToken,
+      ),
+    );
+    expect(deps.local.overlay()).toBeNull();
+    expect(deps.interaction.pendingPin()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(2);
+    expect((kernel.dispatched[1] as { payload: unknown }).payload).toEqual({
+      frameToken: uiFrame.frameToken,
+      query: { kind: "pin-anchor", x: 8, y: 9 },
+    });
+
+    handleGeometryResult(
+      deps,
+      geometryEvent(
+        uiFrame.handle.previewSessionId,
+        uiFrame.frameToken,
+        "pin-anchor",
+        secondGeometryToken,
+      ),
+    );
+    expect(deps.interaction.pendingPin()).toEqual({
+      geometryToken: secondGeometryToken,
+      point: { x: 8, y: 9 },
+    });
+    expect(deps.local.overlay()).toBe("pin-input");
+  });
+
+  test("hover to select ignores the first hit and applies only the promoted latest hit", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestGeometry(deps, "hover", 1, 2);
+    requestGeometry(deps, "select", 7, 8);
+
+    expect(kernel.dispatched).toHaveLength(1);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
+    );
+    expect(deps.interaction.hover()).toBeNull();
+    expect(deps.interaction.selectionRect()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(2);
+    expect((kernel.dispatched[1] as { payload: unknown }).payload).toEqual({
+      frameToken: uiFrame.frameToken,
+      query: { kind: "hit", x: 7, y: 8 },
+    });
+
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
+    );
+    expect(deps.interaction.hover()).toEqual({
+      rect: { x: 3, y: 2, width: 8, height: 3 },
+      label: 'panel "network"',
+    });
+    expect(deps.interaction.selectionRect()).toEqual({ x: 3, y: 2, width: 8, height: 3 });
+    expect((kernel.dispatched[2] as { kind: string }).kind).toBe("selection.set");
+  });
+
+  test("three rapid intents retain only the newest queued geometry request", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestGeometry(deps, "pin", 1, 1);
+    requestGeometry(deps, "hover", 4, 4);
+    requestGeometry(deps, "select", 9, 7);
+
+    expect(kernel.dispatched).toHaveLength(1);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", uuidv7()),
+    );
+    expect(deps.local.overlay()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(2);
+    expect((kernel.dispatched[1] as { payload: unknown }).payload).toEqual({
+      frameToken: uiFrame.frameToken,
+      query: { kind: "hit", x: 9, y: 7 },
+    });
+  });
+
+  test("a dispatch Error releases the flight through runtimeError for a later request", async () => {
+    const { deps, kernel, uiFrame } = harness();
+    const dispatchError = new Error("geometry dispatch failed");
+    acknowledgeFrame(deps, uiFrame);
+    kernel.setDispatchResult(dispatchError);
+
+    requestGeometry(deps, "hover", 1, 2);
+    await tick();
+
+    expect(deps.runtimeError()).toBe(dispatchError);
+    expect(deps.interaction.pendingGeometry()).toBeNull();
+
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      status: "accepted",
+      acceptedRevision: "0",
+      resultingRevision: "0",
+      disposition: "completed",
+    });
+    requestGeometry(deps, "hover", 3, 4);
+    expect(kernel.dispatched).toHaveLength(2);
+  });
+
+  test("a rejected geometry command also releases the flight through runtimeError", async () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      status: "rejected",
+      currentRevision: "1",
+      code: "TURN_RUNNING",
+      reasons: [{ code: "TURN_RUNNING", turnId: uuidv7() }],
+    });
+
+    requestGeometry(deps, "hover", 1, 2);
+    await tick();
+
+    expect(deps.runtimeError()).toBeInstanceOf(Error);
+    expect(deps.interaction.pendingGeometry()).toBeNull();
   });
 
   test("does not reuse an acknowledged token after a newer frame becomes current", () => {

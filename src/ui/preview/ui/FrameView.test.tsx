@@ -7,7 +7,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { TEST_SHA } from "ui/testing";
 
-import { FrameView } from "./FrameView";
+import { FrameView, deferFrameRendered } from "./FrameView";
 
 let open: RenderHandle | null = null;
 afterEach(() => {
@@ -37,6 +37,19 @@ const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((r) => r.text.includes(needle));
 
 describe("FrameView (preview frame compositing)", () => {
+  test("defers the rendered callback out of traversal and schedules it once", async () => {
+    const trace: string[] = [];
+
+    deferFrameRendered(() => trace.push("callback"));
+    trace.push("traversal-complete");
+
+    expect(trace).toEqual(["traversal-complete"]);
+    await Promise.resolve();
+    expect(trace).toEqual(["traversal-complete", "callback"]);
+    await Promise.resolve();
+    expect(trace).toEqual(["traversal-complete", "callback"]);
+  });
+
   test("reports completion through renderAfter", async () => {
     const handle = await createHeadlessRenderer({ w: 10, h: 1 });
     open = handle;

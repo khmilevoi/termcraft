@@ -10,6 +10,11 @@ export interface FrameViewProps {
   readonly onRendered?: () => void;
 }
 
+/** Leaves OpenTUI's synchronous draw-only traversal before acknowledging reactive state. */
+export function deferFrameRendered(onRendered: () => void): void {
+  queueMicrotask(onRendered);
+}
+
 /**
  * Composites one preview frame's styled rows into OpenTUI text (design §3.2 preview region;
  * host-supervision §5.3 `StyledRunV1` rows). Each row is a flex row of `<text>` runs carrying
@@ -21,8 +26,13 @@ export interface FrameViewProps {
  * overlaid by the preview shell (absolute-positioned) above this view.
  */
 export function FrameView(props: FrameViewProps) {
+  const onRendered = props.onRendered;
   return (
-    <box id={props.id} flexDirection="column" renderAfter={props.onRendered}>
+    <box
+      id={props.id}
+      flexDirection="column"
+      renderAfter={onRendered === undefined ? undefined : () => deferFrameRendered(onRendered)}
+    >
       {props.frame.rows.map((row, y) => (
         <box key={`row-${y}`} id={`${props.id}-row-${y}`} flexDirection="row">
           {row.map((run, x) => (
