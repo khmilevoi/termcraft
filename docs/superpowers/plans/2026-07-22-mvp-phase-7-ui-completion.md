@@ -123,7 +123,7 @@ Expected: all focused tests pass and TypeScript exits 0.
 - Produces: key intents for slash editing/navigation/submit, chat navigation/switch, trust/decline, and popup dismissal.
 - Preserves: phase-7 out-of-scope F3/F4/Ctrl+P and `/model`/commit actions as visible but inert/dimmed entries.
 
-- [ ] **Step 1: Write failing registry and key-routing tests**
+- [x] **Step 1: Write failing registry and key-routing tests**
 
 Prove every exported slash/hotkey row originates from `UI_ACTIONS`, `/` opens `slash-menu`, printable characters filter it, arrows move only onto enabled rows, Enter executes the selected row, and Escape closes the menu before any lower Esc layer.
 
@@ -132,13 +132,13 @@ expect(SLASH_COMMANDS).toEqual(UI_ACTIONS.flatMap((entry) => entry.slash ? [entr
 expect(resolveKey(key({ sequence: "/", name: "/" }), ctx({}))).toEqual({ kind: "slash-open" })
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `bun test src/ui/actions/model/registry.test.ts src/ui/app/model/keymap.test.ts src/ui/app/model/intent.test.ts`
 
 Expected: failures for `UI_ACTIONS` and the new intents.
 
-- [ ] **Step 3: Implement the single registry and intent table**
+- [x] **Step 3: Implement the single registry and intent table**
 
 Give each entry an exact local/command execution description:
 
@@ -151,7 +151,7 @@ type UiActionExecution =
 
 Derive views from `UI_ACTIONS`, resolve global hotkeys through `resolveHotkey`, and keep all command issuance in `applyIntent` through `deps.dispatcher`.
 
-- [ ] **Step 4: Implement popup and trust command behavior**
+- [x] **Step 4: Implement popup and trust command behavior**
 
 `ChatListRow` gains `chatId`. Enter in the chat popup dispatches `chat.switch({ chatId })`; `/new` dispatches `chat.create({})`; `/export` dispatches `export.start({})`. Trust Enter and trust Escape dispatch exactly:
 
@@ -162,11 +162,11 @@ Derive views from `UI_ACTIONS`, resolve global hotkeys through `resolveHotkey`, 
 
 Modal popups mount in an absolute, centered overlay layer. Slash menu remains non-modal and anchored above the composer.
 
-- [ ] **Step 5: Implement the read-only workspace presentation**
+- [x] **Step 5: Implement the read-only workspace presentation**
 
 Pass `readOnly` explicitly from `App` to `Workspace`. In read-only state, disable composer input and submit, show the exact `READ-ONLY` mode chip, render `Send · Tweaks · pins disabled`, and use the red attach line/copy from the approved read-only vocabulary. Do not add a new color.
 
-- [ ] **Step 6: Run the focused gate**
+- [x] **Step 6: Run the focused gate**
 
 Run: `bun test src/ui/actions src/ui/app src/ui/popups src/ui/workspace && bun x tsc --noEmit`
 
