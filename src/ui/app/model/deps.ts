@@ -4,6 +4,7 @@ import * as errore from "errore";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
+  type EventEnvelopeV1,
   type KernelPort,
   type UiPreviewFrame,
   createDispatcher,
@@ -101,7 +102,10 @@ export function createUiDeps(
       });
       const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
-      const unsubscribe = port.subscribe((envelope) => mirror.apply(envelope as AnyEventEnvelope));
+      const applyEnvelope = bind((envelope: EventEnvelopeV1) =>
+        mirror.apply(envelope as AnyEventEnvelope),
+      );
+      const unsubscribe = port.subscribe(applyEnvelope);
       if (unsubscribe instanceof Error) {
         reportRuntimeError(unsubscribe, "UI Kernel subscription failed:");
       }

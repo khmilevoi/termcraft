@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context } from "@reatom/core";
 
 import type { PreviewFrameV1 } from "core/ports";
-import { TEST_SHA, createFakeKernel, createFakePreviewSession } from "ui/testing";
+import { TEST_SHA, createFakeKernel, createFakePreviewSession, event } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
 
@@ -134,6 +134,26 @@ describe("createUiDeps runtime", () => {
 
     expect(scoped.run(() => deps?.runtimeError())).toBeInstanceOf(UiPreviewStreamError);
     expect(deps.runtimeError()).toBeNull();
+    scoped.run(() => unsubscribe?.());
+  });
+
+  test("keeps externally delivered Kernel events in the runtime's scoped mirror", async () => {
+    const kernel = createFakeKernel();
+    const scoped = context.start();
+    let unsubscribe: (() => void) | null = null;
+    const deps = scoped.run(() => {
+      const created = createUiDeps(kernel, { w: 120, h: 36 });
+      unsubscribe = created.runtime.subscribe(() => undefined);
+      return created;
+    });
+    await tick();
+
+    kernel.emit(
+      event("selection.changed", { pageSlug: "main", elementId: "cpu", sourceHash: TEST_SHA }),
+    );
+
+    expect(scoped.run(() => deps.mirror.selection()?.elementId)).toBe("cpu");
+    expect(deps.mirror.selection()).toBeNull();
     scoped.run(() => unsubscribe?.());
   });
 
