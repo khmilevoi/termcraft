@@ -1,10 +1,12 @@
 import { reatomComponent } from "@reatom/react";
 
 import type { PreviewFrameV1 } from "core/ports";
+import { filterSlashRows } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, Composer } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
 import { EmptyState, ErrorPanel, FrameView } from "ui/preview";
+import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
@@ -16,7 +18,8 @@ import type { WorkspaceDeps } from "../types";
 const BOLD = shellAttrs({ bold: true });
 
 /** The status-bar mode chip for the current turn/fullscreen state (design mode-chip literals). */
-function modeChip(turn: TurnMirror, fullscreen: boolean): StatusBarModeChip {
+function modeChip(turn: TurnMirror, fullscreen: boolean, readOnly: boolean): StatusBarModeChip {
+  if (readOnly) return { text: "READ-ONLY", fg: "amberHi", bg: "line" };
   if (turn.phase === "running") return { text: "GENERATING", fg: "bg", bg: "amber" };
   if (fullscreen) return { text: "FULLSCREEN", fg: "bg", bg: "amber" };
   return { text: "STATIC", fg: "amberHi", bg: "line" };
@@ -126,7 +129,7 @@ function renderPreviewRegion(
  * GAP decision on frame junctions). Live frame streaming fills `previewFrame` from the App's
  * `PreviewSession` consumer.
  */
-export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
+export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolean }>((props) => {
   const { mirror, terminal, previewFrame, local } = props.deps;
   const size = terminal();
   const turn = mirror.turn();
@@ -137,6 +140,14 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
+  const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
+  const slashRows = slashOpen
+    ? filterSlashRows(composerValue, {
+        capabilities: mirror.capabilities(),
+        turnRunning: turn.phase === "running",
+        screen: "workspace",
+      })
+    : [];
 
   const w = size.w;
   const h = size.h;
@@ -148,8 +159,9 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
   const active = descriptors.find((descriptor) => descriptor.pageSlug === project.activePageSlug);
   const minSize = active !== undefined && active.status === "ready" ? active.minSize : null;
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
-  const composerPlaceholder =
-    turn.phase === "running"
+  const composerPlaceholder = props.readOnly
+    ? "read-only — Send disabled"
+    : turn.phase === "running"
       ? "generating… esc to cancel"
       : composerFocused
         ? "Ask for changes…"
@@ -175,6 +187,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
             borderColor={composerFocused ? SHELL_PALETTE.amber : SHELL_PALETTE.line}
             title={composerFocused ? "❯ chat · codex" : "chat · codex"}
             titleColor={composerFocused ? SHELL_PALETTE.amberHi : SHELL_PALETTE.faint}
+            position="relative"
           >
             <box id="ws-chat-stream" flexGrow={1} flexDirection="column">
               <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
@@ -206,10 +219,21 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
               modelChip="codex · gpt5.5 · high"
               ctx={ctx}
               ctxCaution={ctx !== null && ctx >= 80}
-              disabled={turn.phase === "running" || !composerFocused}
+              disabled={props.readOnly || turn.phase === "running" || !composerFocused}
               placeholder={composerPlaceholder}
               value={composerValue}
+              attach={props.readOnly ? { text: "read-only — Send disabled", fg: "red" } : null}
             />
+            {slashOpen && (
+              <box id="ws-slash-anchor" position="absolute" left={0} right={0} bottom={3}>
+                <SlashMenu
+                  id="ws-slash-menu"
+                  typed={composerValue}
+                  rows={slashRows}
+                  selectedIndex={local.slashSelection()}
+                />
+              </box>
+            )}
           </box>
         )}
         <box
@@ -228,11 +252,14 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps }>((props) => {
       <StatusBar
         id="ws-status"
         width={w}
-        mode={modeChip(turn, fullscreen)}
+        mode={modeChip(turn, fullscreen, props.readOnly)}
         page={project.activePageSlug !== null ? { text: project.activePageSlug, fg: "dim" } : null}
         size={{ w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
+        hint={
+          props.readOnly ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" } : null
+        }
         hintKeys={hintKeys(turn, fullscreen)}
       />
     </box>

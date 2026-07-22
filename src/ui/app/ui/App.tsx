@@ -30,14 +30,17 @@ function renderOverlay(deps: UiDeps) {
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
     const rows = [...chats.summaries.values()].map((summary) => ({
+      chatId: summary.chatId,
       label: summary.chatId.slice(0, 8),
       when: summary.createdAt,
       active: summary.chatId === chats.activeChatId,
     }));
-    return <ChatListPopup id="overlay-chats" rows={rows} selectedIndex={0} />;
+    return (
+      <ChatListPopup id="overlay-chats" rows={rows} selectedIndex={deps.local.chatSelection()} />
+    );
   }
   if (overlay === "pin-input") {
-    return <PinInputPopup id="overlay-pin" value="" />;
+    return <PinInputPopup id="overlay-pin" value={deps.local.pinDraft()} />;
   }
   const exportState = deps.mirror.export();
   if (exportState.phase === "done") {
@@ -84,7 +87,8 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
       resolveKey(key, {
         screen: deps.screen(),
         focus: deps.local.focus(),
-        overlayOpen: deps.local.overlay() !== null,
+        overlay: deps.local.overlay(),
+        composerValue: deps.local.composer(),
       }),
       deps,
     );
@@ -127,6 +131,9 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         width={size.w}
         height={size.h}
         backgroundColor={SHELL_PALETTE.bg}
+        position="absolute"
+        top={0}
+        left={0}
         alignItems="center"
         justifyContent="center"
       >
@@ -135,12 +142,31 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
     );
   }
 
-  // workspace and read-only both mount the Workspace shell (read-only styling is a follow-up).
+  // Workspace owns the non-modal slash anchor; App owns only modal centered overlays.
   const overlay = renderOverlay(deps);
   return (
-    <box id="app-root" width={size.w} height={size.h} backgroundColor={SHELL_PALETTE.bg}>
-      <Workspace deps={deps} />
-      {overlay}
+    <box
+      id="app-root"
+      width={size.w}
+      height={size.h}
+      backgroundColor={SHELL_PALETTE.bg}
+      position="relative"
+    >
+      <Workspace deps={deps} readOnly={screen === "read-only"} />
+      {overlay !== null && (
+        <box
+          id="app-modal-layer"
+          position="absolute"
+          top={0}
+          left={0}
+          width={size.w}
+          height={size.h - 1}
+          alignItems="center"
+          justifyContent="center"
+        >
+          {overlay}
+        </box>
+      )}
     </box>
   );
 }, "ui.App");

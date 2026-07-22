@@ -116,4 +116,78 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(text).toContain("generating design");
     expect(text).toContain("main/page.tsx");
   });
+
+  test("renders slash menu non-modally above the workspace composer", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<App deps={deps} />);
+    await tick();
+    kernel.emit(workspaceSnapshot());
+    deps.local.composer.set("/");
+    deps.local.overlay.set("slash-menu");
+    await tick();
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("commands");
+    expect(text).toContain("/new");
+    const commandRow = rows.findIndex((row) => row.some((run) => run.text.includes("/new")));
+    const composerRow = rows.findIndex((row) =>
+      row
+        .map((run) => run.text)
+        .join("")
+        .includes("❯ /"),
+    );
+    expect(commandRow).toBeGreaterThanOrEqual(0);
+    expect(commandRow).toBeLessThan(composerRow);
+  });
+
+  test("centers the chat-list popup in an absolute modal layer", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const chatId = uuidv7();
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<App deps={deps} />);
+    await tick();
+    kernel.emit(workspaceSnapshot());
+    kernel.emit(
+      event("chat.changed", {
+        activeChatId: chatId,
+        added: [{ chatId, createdAt: TEST_TS }],
+        updated: [],
+        removedChatIds: [],
+      }),
+    );
+    deps.local.overlay.set("chat-list");
+    await tick();
+    await handle.render();
+    const rows = handle.capture().rows;
+    const titleRow = rows.findIndex((row) => row.some((run) => run.text.includes("chats")));
+    expect(titleRow).toBeGreaterThan(8);
+    expect(titleRow).toBeLessThan(25);
+  });
+
+  test("passes read-only state into the workspace presentation", async () => {
+    const kernel = createFakeKernel();
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "untrusted-read-only",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<App deps={deps} />);
+    await tick();
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("READ-ONLY");
+    expect(text).toContain("Send · Tweaks · pins disabled");
+    expect(text).toContain("read-only — Send disabled");
+  });
 });

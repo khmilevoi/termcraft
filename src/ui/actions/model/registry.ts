@@ -8,6 +8,7 @@ import type {
   HotkeyAction,
   ScoredSlashRow,
   SlashCommand,
+  UiActionEntry,
 } from "../types";
 
 /**
@@ -17,53 +18,136 @@ import type {
  * action); the actual switch is a separate `chat.switch` command issued from the popup.
  * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render dimmed.
  */
-export const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { cmd: "/new", desc: "start a new chat", order: 1, capability: "chat.create" },
-  { cmd: "/chats", desc: "switch or list chats", order: 2, capability: null },
-  { cmd: "/export", desc: "write the export package", order: 3, capability: "export.start" },
-  { cmd: "/model", desc: "agent · model · effort", order: 4, capability: "model.select" },
+export const UI_ACTIONS: readonly UiActionEntry[] = [
   {
-    cmd: "/commit-page",
-    desc: "current page · 1 file",
-    order: 5,
-    capability: "commit.plan",
-    dot: true,
+    id: "chat.create",
+    execution: { kind: "command", command: "chat.create" },
+    slash: { cmd: "/new", desc: "start a new chat", order: 1, capability: "chat.create" },
   },
   {
-    cmd: "/commit-infra",
-    desc: "infrastructure · clean",
-    order: 6,
-    capability: "commit.plan",
-    clean: true,
+    id: "chat.open-list",
+    execution: { kind: "local", effect: "open-chats" },
+    slash: { cmd: "/chats", desc: "switch or list chats", order: 2, capability: null },
   },
   {
-    cmd: "/commit-all",
-    desc: "entire project · 7 files",
-    order: 7,
-    capability: "commit.plan",
-    dot: true,
+    id: "preview.fullscreen",
+    execution: { kind: "local", effect: "fullscreen" },
+    hotkey: { id: "preview.fullscreen", key: "f2", label: "fullscreen", capability: null },
+  },
+  {
+    id: "preview.tweaks",
+    execution: { kind: "inert" },
+    hotkey: {
+      id: "preview.tweaks",
+      key: "f3",
+      label: "tweaks",
+      capability: null,
+      inert: true,
+    },
+  },
+  {
+    id: "preview.interact",
+    execution: { kind: "inert" },
+    hotkey: {
+      id: "preview.interact",
+      key: "f4",
+      label: "interact",
+      capability: null,
+      inert: true,
+    },
+  },
+  {
+    id: "export.start",
+    execution: { kind: "command", command: "export.start" },
+    slash: {
+      cmd: "/export",
+      desc: "write the export package",
+      order: 3,
+      capability: "export.start",
+    },
+    hotkey: { id: "export.start", key: "ctrl+e", label: "export", capability: "export.start" },
+  },
+  {
+    id: "model.select",
+    execution: { kind: "inert" },
+    slash: { cmd: "/model", desc: "agent · model · effort", order: 4, capability: "model.select" },
+  },
+  {
+    id: "commit.page",
+    execution: { kind: "inert" },
+    slash: {
+      cmd: "/commit-page",
+      desc: "current page · 1 file",
+      order: 5,
+      capability: "commit.plan",
+      dot: true,
+    },
+  },
+  {
+    id: "commit.infra",
+    execution: { kind: "inert" },
+    slash: {
+      cmd: "/commit-infra",
+      desc: "infrastructure · clean",
+      order: 6,
+      capability: "commit.plan",
+      clean: true,
+    },
+  },
+  {
+    id: "commit.all",
+    execution: { kind: "inert" },
+    slash: {
+      cmd: "/commit-all",
+      desc: "entire project · 7 files",
+      order: 7,
+      capability: "commit.plan",
+      dot: true,
+    },
+  },
+  {
+    id: "preview.controls",
+    execution: { kind: "inert" },
+    hotkey: {
+      id: "preview.controls",
+      key: "ctrl+p",
+      label: "preview",
+      capability: null,
+      inert: true,
+    },
   },
 ];
 
-/**
- * The global/single-char hotkeys (design §3.8). F3/F4/Ctrl+P are MVP-inert (Tweaks and
- * interactive input are out of scope; the keys are still known so the shell does not treat
- * them as text). `ctrl+e` (export) and `/` are deliberately excluded from the status-bar
- * hint row by the renderer — see `ui/status-bar` — matching design's `hintKeys` filter.
- */
-export const HOTKEYS: readonly HotkeyAction[] = [
-  { id: "preview.fullscreen", key: "f2", label: "fullscreen", capability: null },
-  { id: "preview.tweaks", key: "f3", label: "tweaks", capability: null, inert: true },
-  { id: "preview.interact", key: "f4", label: "interact", capability: null, inert: true },
-  { id: "export.start", key: "ctrl+e", label: "export", capability: "export.start" },
-  { id: "preview.controls", key: "ctrl+p", label: "preview", capability: null, inert: true },
-];
+export const SLASH_COMMANDS: readonly SlashCommand[] = UI_ACTIONS.flatMap((entry) =>
+  entry.slash ? [entry.slash] : [],
+);
+
+export const HOTKEYS: readonly HotkeyAction[] = UI_ACTIONS.flatMap((entry) =>
+  entry.hotkey ? [entry.hotkey] : [],
+);
+
+const ACTION_BY_ID: ReadonlyMap<string, UiActionEntry> = new Map(
+  UI_ACTIONS.map((entry) => [entry.id, entry]),
+);
+const ACTION_BY_SLASH: ReadonlyMap<string, UiActionEntry> = new Map(
+  UI_ACTIONS.flatMap((entry) => (entry.slash ? [[entry.slash.cmd, entry] as const] : [])),
+);
 
 const HOTKEY_BY_KEY: ReadonlyMap<string, HotkeyAction> = new Map(HOTKEYS.map((h) => [h.key, h]));
 
 /** Resolves a canonical (lowercase) key spelling to its hotkey action, or `null`. */
 export function resolveHotkey(key: string): HotkeyAction | null {
   return HOTKEY_BY_KEY.get(key.toLowerCase()) ?? null;
+}
+
+/** Resolves a stable action id against the one registry. */
+export function resolveUiAction(id: string): UiActionEntry | null {
+  return ACTION_BY_ID.get(id) ?? null;
+}
+
+/** Resolves a slash row back to the registry entry that owns its execution. */
+export function resolveSlashAction(command: SlashCommand): UiActionEntry | null {
+  return ACTION_BY_SLASH.get(command.cmd) ?? null;
 }
 
 /** The published capability state for a command kind, or `undefined` if the Kernel has not published one. */
@@ -96,6 +180,15 @@ export function capabilityHint(
  * `chat.switch` is turn-locked but which carries no capability of its own.
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
+  const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
+  if (execution?.kind === "inert") {
+    return {
+      visible: true,
+      enabled: false,
+      dimmed: true,
+      hint: command.capability === null ? null : capabilityHint(context, command.capability),
+    };
+  }
   const isCommit = command.cmd.startsWith("/commit");
   const turnLocked = context.turnRunning && !isCommit;
 

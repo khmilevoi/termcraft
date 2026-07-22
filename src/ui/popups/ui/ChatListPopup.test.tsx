@@ -25,10 +25,19 @@ const findRun = (frame: { rows: StyledRun[][] }, needle: string): StyledRun | un
   frame.rows.flat().find((run) => run.text.includes(needle));
 
 const ROWS: readonly ChatListRow[] = [
-  { label: "build a system monitor with cpu / mem gauges", when: "now", active: true },
-  { label: "make the process table sortable", when: "8m ago", active: false },
-  { label: "try a 256-color palette variant", when: "1h ago", active: false },
+  {
+    chatId: "chat-1",
+    label: "build a system monitor with cpu / mem gauges",
+    when: "now",
+    active: true,
+  },
+  { chatId: "chat-2", label: "make the process table sortable", when: "8m ago", active: false },
+  { chatId: "chat-3", label: "try a 256-color palette variant", when: "1h ago", active: false },
 ];
+
+test("chat rows retain the exact chatId used by chat.switch", () => {
+  expect(ROWS.map((row) => row.chatId)).toEqual(["chat-1", "chat-2", "chat-3"]);
+});
 
 describe("ChatListPopup component (design 24-chats.dc.html, wsChats)", () => {
   test('title is "chats"', async () => {

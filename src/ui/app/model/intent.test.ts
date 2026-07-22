@@ -77,15 +77,145 @@ describe("applyIntent — local toggles", () => {
   test("fullscreen toggles the fullscreen atom", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "fullscreen" }, deps);
+    applyIntent({ kind: "action-execute", actionId: "preview.fullscreen" }, deps);
     expect(deps.local.fullscreen()).toBe(true);
   });
 
   test("export dispatches export.start", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "export" }, deps);
+    applyIntent({ kind: "action-execute", actionId: "export.start" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["export.start"]);
+  });
+});
+
+describe("applyIntent — slash menu", () => {
+  test("opening and typing filters rows and selects the first enabled row", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        capabilities: [
+          {
+            id: "chat.create",
+            target: {},
+            state: { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] },
+          },
+          { id: "export.start", target: {}, state: { available: true } },
+        ],
+      }),
+    );
+
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.composer()).toBe("/");
+    expect(deps.local.overlay()).toBe("slash-menu");
+    expect(deps.local.slashSelection()).toBe(1); // skips disabled /new onto /chats
+
+    applyIntent({ kind: "slash-input", ch: "e" }, deps);
+    expect(deps.local.composer()).toBe("/e");
+    expect(deps.local.slashSelection()).toBe(0);
+  });
+
+  test("arrows wrap across enabled rows and never land on inert rows", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        capabilities: [
+          { id: "chat.create", target: {}, state: { available: true } },
+          { id: "export.start", target: {}, state: { available: true } },
+          { id: "model.select", target: {}, state: { available: true } },
+        ],
+      }),
+    );
+    applyIntent({ kind: "slash-open" }, deps);
+    applyIntent({ kind: "slash-move", delta: -1 }, deps);
+    expect(deps.local.slashSelection()).toBe(2); // wraps to /export, not inert /model or commits
+    applyIntent({ kind: "slash-move", delta: 1 }, deps);
+    expect(deps.local.slashSelection()).toBe(0);
+  });
+
+  test("Enter executes /new, /chats, and /export through their action descriptions", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        capabilities: [
+          { id: "chat.create", target: {}, state: { available: true } },
+          { id: "export.start", target: {}, state: { available: true } },
+        ],
+      }),
+    );
+
+    applyIntent({ kind: "slash-open" }, deps);
+    applyIntent({ kind: "slash-submit" }, deps);
+    expect(dispatchedKinds(kernel)).toEqual(["chat.create"]);
+
+    deps.local.composer.set("/chats");
+    deps.local.overlay.set("slash-menu");
+    deps.local.slashSelection.set(0);
+    applyIntent({ kind: "slash-submit" }, deps);
+    expect(deps.local.overlay()).toBe("chat-list");
+
+    deps.local.composer.set("/export");
+    deps.local.overlay.set("slash-menu");
+    deps.local.slashSelection.set(0);
+    applyIntent({ kind: "slash-submit" }, deps);
+    expect(dispatchedKinds(kernel)).toEqual(["chat.create", "export.start"]);
+  });
+});
+
+describe("applyIntent — chats and trust", () => {
+  test("chat navigation wraps and Enter dispatches chat.switch for the selected chatId", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const first = uuidv7();
+    const second = uuidv7();
+    deps.mirror.apply(
+      event("chat.changed", {
+        activeChatId: first,
+        added: [
+          { chatId: first, createdAt: TEST_TS },
+          { chatId: second, createdAt: TEST_TS },
+        ],
+        updated: [],
+        removedChatIds: [],
+      }),
+    );
+    deps.local.overlay.set("chat-list");
+    applyIntent({ kind: "chat-move", delta: -1 }, deps);
+    expect(deps.local.chatSelection()).toBe(1);
+    applyIntent({ kind: "chat-switch" }, deps);
+    expect(dispatchedKinds(kernel)).toEqual(["chat.switch"]);
+    expect((kernel.dispatched[0] as { payload: { chatId: string } }).payload).toEqual({
+      chatId: second,
+    });
+    expect(deps.local.overlay()).toBeNull();
+  });
+
+  test("trust accept and decline dispatch the exact project.setTrust payloads", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id" },
+    );
+    applyIntent({ kind: "trust-accept" }, deps);
+    applyIntent({ kind: "trust-decline" }, deps);
+    expect(kernel.dispatched.map((raw) => (raw as { payload: unknown }).payload)).toEqual([
+      { trust: "trusted", workspaceIdentity: "workspace-id" },
+      { trust: "untrusted-read-only", workspaceIdentity: "workspace-id" },
+    ]);
+  });
+
+  test("popup dismissal closes the overlay without reaching lower Esc layers", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.local.overlay.set("slash-menu");
+    deps.local.focus.set("preview");
+    applyIntent({ kind: "overlay-dismiss" }, deps);
+    expect(deps.local.overlay()).toBeNull();
+    expect(deps.local.focus()).toBe("preview");
   });
 });
 

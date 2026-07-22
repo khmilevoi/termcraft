@@ -1,4 +1,4 @@
-import { bind, type Atom, type Computed, atom, sleep, withConnectHook, wrap } from "@reatom/core";
+import { type Atom, type Computed, atom, bind, sleep, withConnectHook, wrap } from "@reatom/core";
 import * as errore from "errore";
 
 import {
@@ -32,6 +32,12 @@ export interface UiLocalState {
   readonly fullscreen: Atom<boolean>;
   /** The open overlay, or `null`. */
   readonly overlay: Atom<OverlayKind | null>;
+  /** Selected row in the currently filtered slash menu. */
+  readonly slashSelection: Atom<number>;
+  /** Selected row in the chat-list popup. */
+  readonly chatSelection: Atom<number>;
+  /** Draft text for the new-pin popup (phase 7 local state; pin issuance lands in Task 3). */
+  readonly pinDraft: Atom<string>;
 }
 
 /**
@@ -177,6 +183,9 @@ export function createUiDeps(
     focus: atom<FocusTarget>("composer", "ui.local.focus"),
     fullscreen: atom(false, "ui.local.fullscreen"),
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
+    slashSelection: atom(0, "ui.local.slashSelection"),
+    chatSelection: atom(0, "ui.local.chatSelection"),
+    pinDraft: atom("", "ui.local.pinDraft"),
   };
   return {
     port,

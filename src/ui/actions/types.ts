@@ -1,6 +1,19 @@
 import type { CommandKindV1, UnavailableReason } from "core/protocol";
 import type { CapabilityState, ScreenKind } from "ui/mirror";
 
+export type UiActionExecution =
+  | { readonly kind: "local"; readonly effect: "fullscreen" | "open-chats" }
+  | { readonly kind: "command"; readonly command: "chat.create" | "export.start" }
+  | { readonly kind: "inert" };
+
+/** One source row from which slash commands and hotkeys are projected. */
+export interface UiActionEntry {
+  readonly id: string;
+  readonly execution: UiActionExecution;
+  readonly slash?: SlashCommand;
+  readonly hotkey?: HotkeyAction;
+}
+
 /**
  * The action table (phase-7 plan D5): one registry the keyboard resolver, the status-bar
  * hint row, and the slash menu are all views over. An action names the exact

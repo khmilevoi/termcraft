@@ -2,6 +2,7 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 /** A single chat row shown in the `/chats` popup list. */
 export interface ChatListRow {
+  readonly chatId: string;
   readonly label: string;
   readonly when: string;
   readonly active: boolean;
@@ -49,7 +50,7 @@ export function ChatListPopup(props: ChatListPopupProps) {
         return (
           // keyed intrinsic wrapper — the function component itself carries no `key`.
           <box
-            key={`row-${index}`}
+            key={row.chatId}
             id={`${props.id}-row-${index}`}
             flexDirection="row"
             backgroundColor={selected ? SHELL_PALETTE.sel : undefined}

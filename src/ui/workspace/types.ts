@@ -16,6 +16,9 @@ export interface WorkspaceLocalState {
   readonly focus: Atom<FocusTarget>;
   readonly fullscreen: Atom<boolean>;
   readonly overlay: Atom<OverlayKind | null>;
+  readonly slashSelection: Atom<number>;
+  readonly chatSelection: Atom<number>;
+  readonly pinDraft: Atom<string>;
 }
 
 export interface WorkspaceDeps {

@@ -9,16 +9,21 @@ export type {
   HotkeyAction,
   ScoredSlashRow,
   SlashCommand,
+  UiActionEntry,
+  UiActionExecution,
 } from "./types";
 export {
   HOTKEYS,
   SLASH_COMMANDS,
+  UI_ACTIONS,
   capabilityHint,
   capabilityState,
   filterSlashRows,
   firstEnabledIndex,
   isCapabilityAvailable,
   resolveHotkey,
+  resolveSlashAction,
+  resolveUiAction,
   slashRowState,
 } from "./model/registry";
 export { reasonLabel } from "./model/reasons";

@@ -5,7 +5,9 @@ import type { CapabilityState, ScreenKind } from "ui/mirror";
 
 import type { ActionContext } from "../types";
 import {
+  HOTKEYS,
   SLASH_COMMANDS,
+  UI_ACTIONS,
   filterSlashRows,
   firstEnabledIndex,
   resolveHotkey,
@@ -31,6 +33,29 @@ const deferred: CapabilityState = {
 };
 
 describe("SLASH_COMMANDS registry", () => {
+  test("slash and hotkey views are derived from the one UI_ACTIONS table", () => {
+    expect(SLASH_COMMANDS).toEqual(
+      UI_ACTIONS.flatMap((entry) => (entry.slash ? [entry.slash] : [])),
+    );
+    expect(HOTKEYS).toEqual(UI_ACTIONS.flatMap((entry) => (entry.hotkey ? [entry.hotkey] : [])));
+  });
+
+  test("every action declares its exact local, command, or inert execution", () => {
+    expect(UI_ACTIONS.map(({ id, execution }) => [id, execution])).toEqual([
+      ["chat.create", { kind: "command", command: "chat.create" }],
+      ["chat.open-list", { kind: "local", effect: "open-chats" }],
+      ["preview.fullscreen", { kind: "local", effect: "fullscreen" }],
+      ["preview.tweaks", { kind: "inert" }],
+      ["preview.interact", { kind: "inert" }],
+      ["export.start", { kind: "command", command: "export.start" }],
+      ["model.select", { kind: "inert" }],
+      ["commit.page", { kind: "inert" }],
+      ["commit.infra", { kind: "inert" }],
+      ["commit.all", { kind: "inert" }],
+      ["preview.controls", { kind: "inert" }],
+    ]);
+  });
+
   test("matches design's commandRegistry order and mapping", () => {
     expect(SLASH_COMMANDS.map((c) => c.cmd)).toEqual([
       "/new",
@@ -72,6 +97,19 @@ describe("slashRowState", () => {
     );
     expect(s.enabled).toBe(false);
     expect(s.hint).toEqual({ code: "CAPABILITY_UNAVAILABLE" });
+  });
+
+  test("/model and every commit action stay visible but inert even if capability is available", () => {
+    const model = slashRowState(
+      { cmd: "/model", desc: "", order: 4, capability: "model.select" },
+      context([["model.select", available]]),
+    );
+    const commit = slashRowState(
+      { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan" },
+      context([["commit.plan", available]]),
+    );
+    expect(model).toMatchObject({ visible: true, enabled: false, dimmed: true });
+    expect(commit).toMatchObject({ visible: true, enabled: false, dimmed: true });
   });
 
   test("a missing capability is treated as unavailable", () => {

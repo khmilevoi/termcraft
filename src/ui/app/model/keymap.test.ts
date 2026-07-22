@@ -7,7 +7,8 @@ const key = (over: Partial<KeyLike>): KeyLike => ({ name: "", ctrl: false, seque
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
   screen: "workspace",
   focus: "composer",
-  overlayOpen: false,
+  overlay: null,
+  composerValue: "",
   ...over,
 });
 
@@ -19,13 +20,23 @@ describe("resolveKey — global keys (design §3.8)", () => {
 
   test("F2 -> fullscreen even while the composer is focused", () => {
     expect(resolveKey(key({ name: "f2" }), ctx({ focus: "composer" }))).toEqual({
-      kind: "fullscreen",
+      kind: "action-execute",
+      actionId: "preview.fullscreen",
     });
   });
 
   test("Ctrl+E -> export", () => {
     expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\x05" }), ctx({}))).toEqual({
-      kind: "export",
+      kind: "action-execute",
+      actionId: "export.start",
+    });
+  });
+
+  test("F3/F4/Ctrl+P remain known but inert", () => {
+    expect(resolveKey(key({ name: "f3" }), ctx({}))).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "f4" }), ctx({}))).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "p", ctrl: true, sequence: "\x10" }), ctx({}))).toEqual({
+      kind: "none",
     });
   });
 });
@@ -75,12 +86,88 @@ describe("resolveKey — Workspace composer", () => {
   });
 
   test("no composer input while an overlay is open", () => {
-    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({ overlayOpen: true }))).toEqual({
+    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({ overlay: "chat-list" }))).toEqual({
       kind: "none",
     });
   });
 
   test("a control byte is not treated as printable", () => {
     expect(resolveKey(key({ name: "up", sequence: "\x1b[A" }), ctx({}))).toEqual({ kind: "none" });
+  });
+
+  test("read-only never routes composer editing or submit", () => {
+    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({ screen: "read-only" }))).toEqual({
+      kind: "none",
+    });
+    expect(resolveKey(key({ name: "enter" }), ctx({ screen: "read-only" }))).toEqual({
+      kind: "none",
+    });
+  });
+});
+
+describe("resolveKey — slash menu", () => {
+  test("/ opens the menu only from an empty focused workspace composer", () => {
+    expect(resolveKey(key({ sequence: "/", name: "/" }), ctx({}))).toEqual({
+      kind: "slash-open",
+    });
+    expect(resolveKey(key({ sequence: "/", name: "/" }), ctx({ composerValue: "hello" }))).toEqual({
+      kind: "composer-input",
+      ch: "/",
+    });
+  });
+
+  test("printable chars and backspace edit the slash filter", () => {
+    expect(resolveKey(key({ sequence: "c", name: "c" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "slash-input",
+      ch: "c",
+    });
+    expect(resolveKey(key({ name: "backspace" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "slash-backspace",
+    });
+  });
+
+  test("arrows navigate, Enter submits, and Escape dismisses before lower layers", () => {
+    expect(resolveKey(key({ name: "up" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "slash-move",
+      delta: -1,
+    });
+    expect(resolveKey(key({ name: "down" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "slash-move",
+      delta: 1,
+    });
+    expect(resolveKey(key({ name: "return" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "slash-submit",
+    });
+    expect(resolveKey(key({ name: "escape" }), ctx({ overlay: "slash-menu" }))).toEqual({
+      kind: "overlay-dismiss",
+    });
+  });
+});
+
+describe("resolveKey — modal controls", () => {
+  test("chat list arrows, Enter, and Escape route to chat controls", () => {
+    expect(resolveKey(key({ name: "up" }), ctx({ overlay: "chat-list" }))).toEqual({
+      kind: "chat-move",
+      delta: -1,
+    });
+    expect(resolveKey(key({ name: "down" }), ctx({ overlay: "chat-list" }))).toEqual({
+      kind: "chat-move",
+      delta: 1,
+    });
+    expect(resolveKey(key({ name: "enter" }), ctx({ overlay: "chat-list" }))).toEqual({
+      kind: "chat-switch",
+    });
+    expect(resolveKey(key({ name: "escape" }), ctx({ overlay: "chat-list" }))).toEqual({
+      kind: "overlay-dismiss",
+    });
+  });
+
+  test("trust Enter accepts and trust Escape declines into read-only", () => {
+    expect(resolveKey(key({ name: "enter" }), ctx({ screen: "trust-prompt" }))).toEqual({
+      kind: "trust-accept",
+    });
+    expect(resolveKey(key({ name: "escape" }), ctx({ screen: "trust-prompt" }))).toEqual({
+      kind: "trust-decline",
+    });
   });
 });
