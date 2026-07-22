@@ -245,6 +245,47 @@ describe("applyIntent — chats and trust", () => {
   });
 });
 
+describe("applyIntent — pin draft", () => {
+  test("save dispatches only the opaque geometry token plus text", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    const geometryToken = uuidv7();
+    deps.interaction.pendingPin.set({ geometryToken, point: { x: 4, y: 5 } });
+    deps.local.pinDraft.set("why is this always on top?");
+    deps.local.overlay.set("pin-input");
+
+    applyIntent({ kind: "pin-save" }, deps);
+
+    const command = kernel.dispatched[0] as { kind: string; payload: Record<string, unknown> };
+    expect(command.kind).toBe("pin.create");
+    expect(command.payload).toEqual({ geometryToken, text: "why is this always on top?" });
+    expect(command.payload).not.toHaveProperty("pageSlug");
+    expect(command.payload).not.toHaveProperty("elementId");
+    expect(deps.local.overlay()).toBeNull();
+    expect(deps.local.pinDraft()).toBe("");
+  });
+
+  test("save remains inert after transition to read-only", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        trust: "untrusted-read-only",
+      }),
+    );
+    deps.interaction.pendingPin.set({ geometryToken: uuidv7(), point: { x: 1, y: 1 } });
+    deps.local.pinDraft.set("must not save");
+    deps.local.overlay.set("pin-input");
+
+    applyIntent({ kind: "pin-save" }, deps);
+
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+});
+
 describe("applyIntent — Esc layers", () => {
   test("esc closes an open overlay first", () => {
     const kernel = createFakeKernel();

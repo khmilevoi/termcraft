@@ -6,6 +6,8 @@ export interface FrameViewProps {
   readonly id: string;
   /** The latest displayed preview frame (host-supervision §5.3). */
   readonly frame: PreviewFrameV1;
+  /** Called by OpenTUI after this exact frame has painted. */
+  readonly onRendered?: () => void;
 }
 
 /**
@@ -20,7 +22,7 @@ export interface FrameViewProps {
  */
 export function FrameView(props: FrameViewProps) {
   return (
-    <box id={props.id} flexDirection="column">
+    <box id={props.id} flexDirection="column" renderAfter={props.onRendered}>
       {props.frame.rows.map((row, y) => (
         <box key={`row-${y}`} id={`${props.id}-row-${y}`} flexDirection="row">
           {row.map((run, x) => (

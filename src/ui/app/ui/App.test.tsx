@@ -1,10 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { MouseButtons, createTestRenderer } from "@opentui/core/testing";
+import { createRoot } from "@opentui/react";
+
+import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
-import { TEST_SHA, TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
+import { requestGeometry } from "ui/preview";
+import {
+  TEST_NONCE,
+  TEST_SHA,
+  TEST_TS,
+  createFakeKernel,
+  createFakePreviewSession,
+  event,
+  resetEventSeq,
+  snapshot,
+} from "ui/testing";
 
 import { createUiDeps } from "../model/deps";
 import { App } from "./App";
@@ -46,6 +60,119 @@ const workspaceSnapshot = () =>
   });
 
 describe("App (end-to-end, FakeKernel-driven)", () => {
+  test("acknowledges a painted frame and opens pin input from its matching geometry result", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<App deps={deps} />);
+    await tick();
+    const rendered: PreviewFrameV1 = {
+      sessionId: preview.handle.previewSessionId,
+      sourceHash: TEST_SHA,
+      frameSeq: "1",
+      width: 20,
+      height: 10,
+      rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
+    };
+    preview.pushFrame(rendered);
+    await tick();
+    await handle.render();
+    const frameToken = preview.frameTokenFor(rendered);
+    expect(preview.acknowledgements).toEqual([frameToken]);
+
+    requestGeometry(deps, "pin", 4, 5);
+    const geometryToken = uuidv7();
+    kernel.emit(
+      event("preview.geometryResult", {
+        previewSessionId: preview.handle.previewSessionId,
+        frameTokenId: frameToken,
+        frameIdentity: {
+          previewSessionId: preview.handle.previewSessionId,
+          nonce: TEST_NONCE,
+          sourceHash: TEST_SHA,
+          frameSeq: "1",
+        },
+        queryKind: "pin-anchor",
+        result: {
+          pageSlug: "main",
+          elementId: "network",
+          rect: { x: 3, y: 2, width: 8, height: 3 },
+          label: 'panel "network"',
+        },
+        geometryToken,
+      }),
+    );
+    await tick();
+    await handle.render();
+    expect(allText(handle.capture().rows)).toContain("new pin");
+  });
+
+  test("converts absolute preview mouse cells once for hover, selection, and right-click pin", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const setup = await createTestRenderer({ width: 120, height: 36, useMouse: true });
+    const root = createRoot(setup.renderer);
+    try {
+      root.render(<App deps={deps} />);
+      await setup.flush();
+      const rendered: PreviewFrameV1 = {
+        sessionId: preview.handle.previewSessionId,
+        sourceHash: TEST_SHA,
+        frameSeq: "1",
+        width: 20,
+        height: 10,
+        rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
+      };
+      preview.pushFrame(rendered);
+      await tick();
+      await setup.flush();
+
+      // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
+      await setup.mockMouse.moveTo(49, 7);
+      await setup.flush();
+      await setup.mockMouse.pressDown(50, 8, MouseButtons.LEFT);
+      await setup.flush();
+      await setup.mockMouse.pressDown(51, 9, MouseButtons.RIGHT);
+      await setup.flush();
+
+      const commands = kernel.dispatched.map(
+        (raw) => raw as { kind: string; payload: { query?: unknown } },
+      );
+      expect(commands.map((command) => command.kind)).toEqual([
+        "preview.queryGeometry",
+        "preview.queryGeometry",
+        "preview.queryGeometry",
+      ]);
+      expect(commands.map((command) => command.payload.query)).toEqual([
+        { kind: "hit", x: 4, y: 5 },
+        { kind: "hit", x: 5, y: 6 },
+        { kind: "pin-anchor", x: 6, y: 7 },
+      ]);
+    } finally {
+      root.unmount();
+      setup.renderer.destroy();
+    }
+  });
+
   test("mounts Home when no project is open", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });

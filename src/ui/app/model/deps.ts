@@ -10,6 +10,11 @@ import {
   createDispatcher,
 } from "ui/kernel";
 import { type Mirror, type ScreenKind, createMirror, createScreenAtom } from "ui/mirror";
+import {
+  type PreviewInteractionState,
+  createPreviewInteractionState,
+  handleGeometryResult,
+} from "ui/preview";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
@@ -76,6 +81,7 @@ export interface UiDeps {
    * rather than leaking as a bare module-level effect.
    */
   readonly runtime: Atom<undefined>;
+  readonly interaction: PreviewInteractionState;
   readonly local: UiLocalState;
 }
 
@@ -96,6 +102,7 @@ export function createUiDeps(
   const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
   const previewFrame = atom<UiPreviewFrame | null>(null, "ui.app.previewFrame");
   const runtimeError = atom<Error | null>(null, "ui.app.runtimeError");
+  const interaction = createPreviewInteractionState();
 
   const runtime = atom<undefined>(undefined, "ui.app.runtime").extend(
     withConnectHook(() => {
@@ -108,9 +115,13 @@ export function createUiDeps(
       });
       const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
-      const applyEnvelope = bind((envelope: EventEnvelopeV1) =>
-        mirror.apply(envelope as AnyEventEnvelope),
-      );
+      const applyEnvelope = bind((envelope: EventEnvelopeV1) => {
+        const distributed = envelope as AnyEventEnvelope;
+        if (distributed.kind === "preview.geometryResult") {
+          handleGeometryResult(deps, distributed);
+        }
+        mirror.apply(distributed);
+      });
       const unsubscribe = port.subscribe(applyEnvelope);
       if (unsubscribe instanceof Error) {
         reportRuntimeError(unsubscribe, "UI Kernel subscription failed:");
@@ -187,7 +198,7 @@ export function createUiDeps(
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
   };
-  return {
+  const deps: UiDeps = {
     port,
     env,
     mirror,
@@ -197,6 +208,8 @@ export function createUiDeps(
     previewFrame,
     runtimeError,
     runtime,
+    interaction,
     local,
   };
+  return deps;
 }

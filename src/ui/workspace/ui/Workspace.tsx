@@ -1,12 +1,23 @@
-import { reatomComponent } from "@reatom/react";
+import { MouseButton, type MouseEvent } from "@opentui/core";
+import { reatomComponent, useWrap } from "@reatom/react";
 
-import type { PreviewFrameV1 } from "core/ports";
+import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, Composer } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
+import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
-import { EmptyState, ErrorPanel, FrameView } from "ui/preview";
+import {
+  EmptyState,
+  ErrorPanel,
+  FrameView,
+  PreviewOverlays,
+  acknowledgeFrame,
+  frameLocalPoint,
+  requestGeometry,
+} from "ui/preview";
+import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
 import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
@@ -83,10 +94,19 @@ function renderTabs(tabs: readonly TabEntry[]) {
 /** Selects the preview region content: enlarge is handled by the App; here empty/error/frame/ready. */
 function renderPreviewRegion(
   preview: PreviewMirror,
-  frame: PreviewFrameV1 | null,
+  uiFrame: UiPreviewFrame | null,
   hasPages: boolean,
   width: number,
   height: number,
+  interaction: Readonly<{
+    pins: readonly PinDtoV1[];
+    pendingPin: PendingPin | null;
+    selectionRect: Rect | null;
+    hover: HoverGeometry | null;
+    onRendered: (frame: UiPreviewFrame) => void;
+    onMouseMove: (event: MouseEvent) => void;
+    onMouseDown: (event: MouseEvent) => void;
+  }>,
 ) {
   if (preview.phase === "failed") {
     return (
@@ -117,7 +137,33 @@ function renderPreviewRegion(
     );
   }
   if (!hasPages) return <EmptyState id="ws-preview-empty" width={width} height={height} />;
-  if (frame !== null) return <FrameView id="ws-preview-frame" frame={frame} />;
+  if (uiFrame !== null) {
+    const frameRect = { x: 0, y: 0, width: uiFrame.frame.width, height: uiFrame.frame.height };
+    return (
+      <box
+        id="ws-preview-canvas"
+        position="relative"
+        width={uiFrame.frame.width}
+        height={uiFrame.frame.height}
+        onMouseMove={interaction.onMouseMove}
+        onMouseDown={interaction.onMouseDown}
+      >
+        <FrameView
+          id="ws-preview-frame"
+          frame={uiFrame.frame}
+          onRendered={() => interaction.onRendered(uiFrame)}
+        />
+        <PreviewOverlays
+          id="ws-preview-overlays"
+          frameRect={frameRect}
+          pins={interaction.pins}
+          pendingPin={interaction.pendingPin}
+          selectionRect={interaction.selectionRect}
+          hover={interaction.hover}
+        />
+      </box>
+    );
+  }
   return (
     <box id="ws-preview-ready" flexGrow={1} alignItems="center" justifyContent="center">
       <text id="ws-preview-ready-text" fg={SHELL_PALETTE.faint}>
@@ -139,13 +185,13 @@ function renderPreviewRegion(
  * `PreviewSession` consumer.
  */
 export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolean }>((props) => {
-  const { mirror, terminal, previewFrame, local } = props.deps;
+  const { mirror, terminal, previewFrame, local, interaction } = props.deps;
   const size = terminal();
   const turn = mirror.turn();
   const preview = mirror.preview();
   const descriptors = mirror.pageDescriptors();
   const project = mirror.project();
-  const frame = previewFrame()?.frame ?? null;
+  const uiFrame = previewFrame();
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
@@ -168,6 +214,36 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const active = descriptors.find((descriptor) => descriptor.pageSlug === project.activePageSlug);
   const minSize = active !== undefined && active.status === "ready" ? active.minSize : null;
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
+  const pins =
+    project.activePageSlug === null ? [] : (mirror.pinsByPage().get(project.activePageSlug) ?? []);
+  const selectionRect = interaction.selectionRect();
+  const hover = interaction.hover();
+  const pendingPin = interaction.pendingPin();
+  const acknowledgeRenderedFrame = useWrap(
+    (rendered: UiPreviewFrame) => acknowledgeFrame(props.deps, rendered),
+    "ui.Workspace.acknowledgeRenderedFrame",
+  );
+  const requestAtMouse = (purpose: "hover" | "select" | "pin", event: MouseEvent) => {
+    const current = previewFrame();
+    if (current === null) return;
+    const frameRect = {
+      x: (fullscreen ? 0 : chatW) + 1,
+      y: 2,
+      width: current.frame.width,
+      height: current.frame.height,
+    };
+    const point = frameLocalPoint({ absolute: { x: event.x, y: event.y }, frameRect });
+    requestGeometry(props.deps, purpose, point.x, point.y);
+  };
+  const onPreviewMouseMove = useWrap(
+    (event: MouseEvent) => requestAtMouse("hover", event),
+    "ui.Workspace.onPreviewMouseMove",
+  );
+  const onPreviewMouseDown = useWrap((event: MouseEvent) => {
+    if (props.readOnly) return;
+    if (event.button === MouseButton.RIGHT) return requestAtMouse("pin", event);
+    if (event.button === MouseButton.LEFT) requestAtMouse("select", event);
+  }, "ui.Workspace.onPreviewMouseDown");
   const composerPlaceholder = props.readOnly
     ? "read-only — Send disabled"
     : turn.phase === "running"
@@ -255,7 +331,15 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
           {renderTabs(tabs)}
-          {renderPreviewRegion(preview, frame, descriptors.length > 0, w - chatW, frameH - 3)}
+          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, w - chatW, frameH - 3, {
+            pins,
+            pendingPin,
+            selectionRect,
+            hover,
+            onRendered: acknowledgeRenderedFrame,
+            onMouseMove: onPreviewMouseMove,
+            onMouseDown: onPreviewMouseDown,
+          })}
         </box>
       </box>
       <StatusBar

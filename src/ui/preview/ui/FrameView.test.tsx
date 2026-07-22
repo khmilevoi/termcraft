@@ -37,6 +37,23 @@ const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((r) => r.text.includes(needle));
 
 describe("FrameView (preview frame compositing)", () => {
+  test("reports completion through renderAfter", async () => {
+    const handle = await createHeadlessRenderer({ w: 10, h: 1 });
+    open = handle;
+    let renderCount = 0;
+    handle.mount(
+      <FrameView
+        id="fv"
+        frame={frame([[run("ready", "default")]])}
+        onRendered={() => {
+          renderCount += 1;
+        }}
+      />,
+    );
+    await handle.render();
+    expect(renderCount).toBeGreaterThan(0);
+  });
+
   test("renders the frame rows as text in order", async () => {
     const handle = await createHeadlessRenderer({ w: 10, h: 2 });
     open = handle;

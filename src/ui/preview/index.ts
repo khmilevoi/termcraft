@@ -4,11 +4,27 @@
  * the workspace reatom-wraps the shell against the mirror and the live `PreviewSession`.
  */
 export { colorV1ToInput } from "./model/color";
+export type {
+  GeometryIntent,
+  HoverGeometry,
+  PendingGeometry,
+  PendingPin,
+  PreviewInteractionState,
+} from "./model/interaction";
+export {
+  acknowledgeFrame,
+  createPreviewInteractionState,
+  frameLocalPoint,
+  handleGeometryResult,
+  requestGeometry,
+} from "./model/interaction";
 export type { Point, Rect, SelectionCorners } from "./model/overlay";
 export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
 
 export type { FrameViewProps } from "./ui/FrameView";
 export { FrameView } from "./ui/FrameView";
+export type { PreviewOverlaysProps } from "./ui/PreviewOverlays";
+export { PreviewOverlays } from "./ui/PreviewOverlays";
 export type { EmptyStateProps } from "./ui/EmptyState";
 export { EmptyState } from "./ui/EmptyState";
 export type { ErrorPanelProps } from "./ui/ErrorPanel";

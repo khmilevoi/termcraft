@@ -163,6 +163,32 @@ describe("resolveKey — slash menu", () => {
 });
 
 describe("resolveKey — modal controls", () => {
+  test("pin input edits, saves, and dismisses without leaking keys below the modal", () => {
+    expect(resolveKey(key({ sequence: "x", name: "x" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "pin-input",
+      ch: "x",
+    });
+    expect(resolveKey(key({ name: "backspace" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "pin-backspace",
+    });
+    expect(resolveKey(key({ name: "enter" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "pin-save",
+    });
+    expect(resolveKey(key({ name: "escape" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "overlay-dismiss",
+    });
+  });
+
+  test("a stale pin input is mutation-inert after transition to read-only", () => {
+    const readOnlyPin = ctx({ screen: "read-only", overlay: "pin-input" });
+    expect(resolveKey(key({ sequence: "x", name: "x" }), readOnlyPin)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "backspace" }), readOnlyPin)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "enter" }), readOnlyPin)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "escape" }), readOnlyPin)).toEqual({
+      kind: "overlay-dismiss",
+    });
+  });
+
   test("chat list arrows, Enter, and Escape route to chat controls", () => {
     expect(resolveKey(key({ name: "up" }), ctx({ overlay: "chat-list" }))).toEqual({
       kind: "chat-move",

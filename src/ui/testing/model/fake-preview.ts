@@ -1,8 +1,7 @@
 import type { PreviewFrameV1, PreviewGeometryQueryResultV1, PreviewSession } from "core/ports";
 import type { FailureDtoV1, FrameIdentityV1, FrameTokenV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
-import type { PreviewSessionHandle } from "ui/kernel";
-import type { UiPreviewFrame } from "ui/kernel";
+import type { PreviewSessionHandle, UiPreviewFrame } from "ui/kernel";
 
 import { TEST_NONCE, TEST_SHA } from "./events";
 
@@ -23,6 +22,8 @@ export interface FakePreviewSession {
   end(): void;
   /** Raw geometry-query calls the session received. */
   readonly queries: readonly { frameToken: FrameTokenV1; query: unknown }[];
+  /** Exact frame tokens acknowledged by the UI, in call order. */
+  readonly acknowledgements: readonly FrameTokenV1[];
 }
 
 export interface FakePreviewOptions {
@@ -36,6 +37,7 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
   const previewSessionId = options.previewSessionId ?? uuidv7();
   const pageSlug = options.pageSlug ?? "main";
   const queries: { frameToken: FrameTokenV1; query: unknown }[] = [];
+  const acknowledgements: FrameTokenV1[] = [];
 
   const sourceFrames = createAsyncQueue<PreviewFrameV1>();
   const displayFrames = createAsyncQueue<UiPreviewFrame>();
@@ -97,6 +99,7 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     session,
     frames: displayFrames.iterable,
     acknowledgeDisplay(frameToken): Error | FrameIdentityV1 {
+      acknowledgements.push(frameToken);
       if (options.ackResult !== undefined) return options.ackResult(frameToken);
       return {
         previewSessionId,
@@ -114,6 +117,7 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     activeFrameConsumers: displayFrames.activeConsumers,
     end,
     queries,
+    acknowledgements,
   };
 }
 

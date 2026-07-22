@@ -118,6 +118,29 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.overlay.set(null);
       return;
     }
+    case "pin-input":
+      if (deps.screen() === "read-only") return;
+      local.pinDraft.set(local.pinDraft() + intent.ch);
+      return;
+    case "pin-backspace":
+      if (deps.screen() === "read-only") return;
+      local.pinDraft.set(local.pinDraft().slice(0, -1));
+      return;
+    case "pin-save": {
+      if (deps.screen() === "read-only") return;
+      const pendingPin = deps.interaction.pendingPin();
+      if (pendingPin === null) return;
+      dispatchAndReport(
+        dispatcher.dispatch("pin.create", {
+          geometryToken: pendingPin.geometryToken,
+          text: local.pinDraft(),
+        }),
+      );
+      deps.interaction.pendingPin.set(null);
+      local.pinDraft.set("");
+      local.overlay.set(null);
+      return;
+    }
     case "trust-accept":
       dispatchAndReport(
         dispatcher.dispatch("project.setTrust", {
@@ -135,6 +158,10 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       );
       return;
     case "overlay-dismiss":
+      if (local.overlay() === "pin-input") {
+        deps.interaction.pendingPin.set(null);
+        local.pinDraft.set("");
+      }
       local.overlay.set(null);
       return;
     case "tab":

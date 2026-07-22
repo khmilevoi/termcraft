@@ -39,6 +39,9 @@ export type KeyIntent =
   | { readonly kind: "slash-submit" }
   | { readonly kind: "chat-move"; readonly delta: -1 | 1 }
   | { readonly kind: "chat-switch" }
+  | { readonly kind: "pin-input"; readonly ch: string }
+  | { readonly kind: "pin-backspace" }
+  | { readonly kind: "pin-save" }
   | { readonly kind: "trust-accept" }
   | { readonly kind: "trust-decline" }
   | { readonly kind: "overlay-dismiss" }
@@ -91,6 +94,16 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     if (RETURN_NAMES.has(key.name)) return { kind: "chat-switch" };
     if (key.name === "up") return { kind: "chat-move", delta: -1 };
     if (key.name === "down") return { kind: "chat-move", delta: 1 };
+    return { kind: "none" };
+  }
+
+  if (context.overlay === "pin-input") {
+    if (key.name === "escape") return { kind: "overlay-dismiss" };
+    if (context.screen === "read-only") return { kind: "none" };
+    if (RETURN_NAMES.has(key.name)) return { kind: "pin-save" };
+    if (key.name === "backspace") return { kind: "pin-backspace" };
+    const ch = printableChar(key);
+    if (ch !== null) return { kind: "pin-input", ch };
     return { kind: "none" };
   }
 
