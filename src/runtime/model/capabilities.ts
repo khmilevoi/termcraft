@@ -1,5 +1,5 @@
 import type { ThemeId, ThemeTokens } from "../types";
-import { atom, computed } from "./reatom";
+import { action, atom, computed } from "./reatom";
 import { DEFAULT_THEME_ID, themeTokens } from "./tokens";
 
 /**
@@ -50,4 +50,28 @@ export interface ThemeCapability {
  */
 export function themeCapability(): ThemeCapability {
   return { themeId: DEFAULT_THEME_ID, tokens: themeTokens(DEFAULT_THEME_ID) };
+}
+
+/**
+ * The navigation capability's named action (§6; design §5.5: `usePages().goTo(slug)`
+ * "emits a page-navigation event through the host protocol; the shell switches tabs.
+ * A target missing from the project manifest is a no-op with a quiet notice.").
+ * DORMANT in the MVP, like `defineTweaks` above: the host-protocol emission and the
+ * shell's tab switch land in phase 7 (out of WP-8 scope), so calling this action
+ * records/emits nothing observable yet — it is a named no-op the future wiring
+ * replaces in place, never a component-hook side effect (§5.1).
+ */
+const goToPage = action((_slug: string) => {}, "runtime.capability.goTo");
+
+/** The navigation capability (§6): `usePages().goTo(slug)`. */
+export interface PagesCapability {
+  readonly goTo: (slug: string) => void;
+}
+
+/**
+ * Retrieves the navigation capability (design §5.5). A minimal context lookup
+ * (§6) — DORMANT in MVP, see {@link goToPage}.
+ */
+export function usePages(): PagesCapability {
+  return { goTo: goToPage };
 }

@@ -35,7 +35,8 @@ export type {
 // Theme token registry (§5.4)
 export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens";
 
-// Runtime capabilities (§6): dormant tweaks + host-scoped mode/export + theme
+// Runtime capabilities (§6): dormant tweaks + host-scoped mode/export + theme +
+// navigation (M16)
 export {
   defineTweaks,
   isExport,
@@ -43,8 +44,9 @@ export {
   hostModeAtom,
   interactionModeAtom,
   themeCapability,
+  usePages,
 } from "./model/capabilities";
-export type { ThemeCapability } from "./model/capabilities";
+export type { PagesCapability, ThemeCapability } from "./model/capabilities";
 
 // JSX helper surface (§3.2) + the low-level rendering escape hatch
 export { jsx, jsxs, jsxDEV, Fragment } from "./model/jsx";
