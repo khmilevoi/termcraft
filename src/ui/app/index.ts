@@ -8,6 +8,6 @@ export { createUiDeps, UiPreviewStreamError } from "./model/deps";
 export type { UiRootAdapters, UiRootHandle, UiRootOptions } from "./model/root";
 export { createUiRoot, UiRootError } from "./model/root";
 export type { KeyContext, KeyIntent, KeyLike } from "./model/keymap";
-export { resolveKey } from "./model/keymap";
+export { resolveActiveOverlay, resolveKey } from "./model/keymap";
 export { applyIntent } from "./model/intent";
 export { App } from "./ui/App";

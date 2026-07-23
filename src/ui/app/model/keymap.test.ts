@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { KeyContext, KeyLike } from "./keymap";
-import { resolveKey } from "./keymap";
+import { resolveActiveOverlay, resolveKey } from "./keymap";
 
 const key = (over: Partial<KeyLike>): KeyLike => ({ name: "", ctrl: false, sequence: "", ...over });
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
@@ -9,7 +9,6 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   focus: "composer",
   overlay: null,
   composerValue: "",
-  exportPopupOpen: false,
   homeHealthPresent: true,
   ...over,
 });
@@ -236,10 +235,38 @@ describe("resolveKey — modal controls", () => {
   });
 
   test("export popup: Enter and Escape both dismiss, and no other key leaks through", () => {
-    const exportOpen = ctx({ exportPopupOpen: true });
+    const exportOpen = ctx({ overlay: "export" });
     expect(resolveKey(key({ name: "enter" }), exportOpen)).toEqual({ kind: "export-dismiss" });
     expect(resolveKey(key({ name: "return" }), exportOpen)).toEqual({ kind: "export-dismiss" });
     expect(resolveKey(key({ name: "escape" }), exportOpen)).toEqual({ kind: "export-dismiss" });
     expect(resolveKey(key({ name: "x", sequence: "x" }), exportOpen)).toEqual({ kind: "none" });
+  });
+});
+
+describe("resolveActiveOverlay — the one precedence rule renderOverlay and resolveKey both use", () => {
+  test("a stored overlay outranks an undismissed export popup", () => {
+    expect(resolveActiveOverlay("chat-list", true)).toBe("chat-list");
+    expect(resolveActiveOverlay("pin-input", true)).toBe("pin-input");
+    expect(resolveActiveOverlay("slash-menu", true)).toBe("slash-menu");
+  });
+
+  test("the export popup applies only once no overlay is stored", () => {
+    expect(resolveActiveOverlay(null, true)).toBe("export");
+  });
+
+  test("neither a stored overlay nor a showing export popup yields null", () => {
+    expect(resolveActiveOverlay(null, false)).toBeNull();
+  });
+});
+
+describe("resolveKey — export popup vs. another overlay (precedence bug repro)", () => {
+  test("Enter/Escape route to the chat-list, not export-dismiss, while the chat-list outranks the export popup", () => {
+    // Reproduces the bug at the resolveKey boundary: an `overlay` value already
+    // precedence-resolved by `resolveActiveOverlay` (App.tsx folds the export popup in only
+    // when no stored overlay is open) — so `resolveKey` itself can never be handed both a
+    // stored overlay AND export priority at once; only one wins upstream.
+    const chatListWins = ctx({ overlay: resolveActiveOverlay("chat-list", true) });
+    expect(resolveKey(key({ name: "enter" }), chatListWins)).toEqual({ kind: "chat-switch" });
+    expect(resolveKey(key({ name: "escape" }), chatListWins)).toEqual({ kind: "overlay-dismiss" });
   });
 });

@@ -20,16 +20,38 @@ export interface KeyLike {
 export interface KeyContext {
   readonly screen: ScreenKind;
   readonly focus: FocusTarget;
+  /**
+   * The one surface that currently owns the keys, ALREADY precedence-resolved (M14 fix). The
+   * App builds this with {@link resolveActiveOverlay} from the stored UI-local overlay atom and
+   * the export-popup-showing flag — the SAME call `renderOverlay` makes to decide what is drawn
+   * on screen — so `resolveKey`'s branches below and the popup the user sees can never disagree.
+   * There is no separate `exportPopupOpen` flag: `"export"` is a plain `OverlayKind` member the
+   * resolver already folds in only when no stored overlay (`slash-menu`/`chat-list`/`pin-input`)
+   * is open.
+   */
   readonly overlay: OverlayKind | null;
   readonly composerValue: string;
-  /** An undismissed `export.completed`/`export.failed` result is showing (M14). */
-  readonly exportPopupOpen: boolean;
   /**
    * The current Home agent-health reading's `present` flag (M15). Only meaningful on
    * `screen === "home"`: `true` renders the idle prompt (where `r` types into it), `false`
    * renders the missing-agent error panel (where `r` re-checks health instead).
    */
   readonly homeHealthPresent: boolean;
+}
+
+/**
+ * The single precedence rule for "which surface owns the keys / is drawn on top" (fix for the
+ * export-popup key-hijack bug): a stored UI-local overlay always outranks an undismissed export
+ * result. `App.tsx`'s `renderOverlay` and its key-context builder both call this ONE function —
+ * not two independently maintained condition chains that can drift apart — so an export terminal
+ * event arriving while another overlay is open can never steal Enter/Esc from it.
+ */
+export function resolveActiveOverlay(
+  overlay: OverlayKind | null,
+  exportPopupShowing: boolean,
+): OverlayKind | null {
+  if (overlay !== null) return overlay;
+  return exportPopupShowing ? "export" : null;
 }
 
 export type KeyIntent =
@@ -83,9 +105,11 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     return { kind: "none" };
   }
 
-  // The export popup (M14, design/13-export-feedback.dc.html wsExport) is modal — App.tsx only
-  // ever shows it when no other overlay is open, so it takes priority over every layer below.
-  if (context.exportPopupOpen) {
+  // The export popup (M14, design/13-export-feedback.dc.html wsExport) is modal. `context.overlay`
+  // only ever reads "export" here when `resolveActiveOverlay` found no stored overlay ahead of it
+  // (App.tsx), so this branch and every stored-overlay branch below are mutually exclusive by
+  // construction — not by two independently ordered checks.
+  if (context.overlay === "export") {
     if (key.name === "escape" || RETURN_NAMES.has(key.name)) return { kind: "export-dismiss" };
     return { kind: "none" };
   }

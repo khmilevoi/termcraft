@@ -17,7 +17,7 @@ import { Workspace } from "ui/workspace";
 
 import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
-import { resolveKey } from "../model/keymap";
+import { resolveActiveOverlay, resolveKey } from "../model/keymap";
 
 const HOME_COMBO = { agent: "codex", model: "gpt-5.5", effort: "high" } as const;
 
@@ -34,9 +34,17 @@ function exportPopupShowing(deps: UiDeps): boolean {
   return exportState.operationId !== deps.local.exportDismissed();
 }
 
-/** Maps the open-overlay atom / export state to the popup to render over the workspace, or null. */
+/**
+ * Maps the open-overlay atom / export state to the popup to render over the workspace, or null.
+ *
+ * Precedence is resolved by {@link resolveActiveOverlay} — the SAME function the `onKey` handler
+ * below calls to build `resolveKey`'s context — so a stored overlay (chat-list/pin-input/
+ * slash-menu) always outranks an undismissed export result for BOTH what is drawn here and which
+ * surface receives Enter/Esc. `"slash-menu"` is rendered inline by `Workspace` (the non-modal
+ * slash anchor), so it resolves to no modal layer here — it still outranks the export popup.
+ */
 function renderOverlay(deps: UiDeps) {
-  const overlay = deps.local.overlay();
+  const overlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
     // Design 24-chats.dc.html (wsChats): rows list newest-first. `chat-move`/`chat-switch`
@@ -55,7 +63,7 @@ function renderOverlay(deps: UiDeps) {
   if (overlay === "pin-input") {
     return <PinInputPopup id="overlay-pin" value={deps.local.pinDraft()} />;
   }
-  if (!exportPopupShowing(deps)) return null;
+  if (overlay !== "export") return null;
   const exportState = deps.mirror.export();
   if (exportState.phase === "done") {
     return (
@@ -77,7 +85,8 @@ function renderOverlay(deps: UiDeps) {
       />
     );
   }
-  // Unreachable: exportPopupShowing above narrowed the phase to "done" | "failed".
+  // Unreachable: exportPopupShowing (via resolveActiveOverlay) above narrowed the phase to
+  // "done" | "failed".
   return null;
 }
 
@@ -112,9 +121,10 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
       resolveKey(key, {
         screen: deps.screen(),
         focus: deps.local.focus(),
-        overlay: deps.local.overlay(),
+        // The SAME precedence call `renderOverlay` makes above — one source of truth for which
+        // surface owns the keys, not a second independently derived export-popup check (M14 fix).
+        overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
         composerValue: deps.local.composer(),
-        exportPopupOpen: exportPopupShowing(deps),
         homeHealthPresent: deps.local.homeHealth().present,
       }),
       deps,

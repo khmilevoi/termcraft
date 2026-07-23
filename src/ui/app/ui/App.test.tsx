@@ -52,15 +52,25 @@ const workspaceSnapshot = () =>
   });
 
 describe("App (end-to-end, FakeKernel-driven)", () => {
-  test("Home's r key re-runs the agent-health probe and flips from the missing-agent screen to idle (M15)", async () => {
+  test("the startup probe surfaces a missing agent without a manual recheck, and r re-checks it (M15)", async () => {
     const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: true, agent: "codex", version: "0.34", detail: "agent ready" }),
-    );
-    // No Kernel command reports agent health and Home precedes any project, so this test seeds
-    // the "missing agent" reading directly on the UI-local atom (deps.ts) rather than through a
-    // kernel event — matching how the probe itself would report a failed CLI check.
-    deps.local.homeHealth.set({ present: false, agent: "codex", detail: "codex CLI not found" });
+    // The probe itself reports the CLI missing on its first call (the startup probe
+    // `createUiDeps` now fires — no manual `local.homeHealth.set` needed to reach this state,
+    // reproducing a real phase-8 probe's first reading) and recovers on the second call (the
+    // `r` re-check).
+    let calls = 0;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" });
+      }
+      return Promise.resolve({
+        present: true,
+        agent: "codex",
+        version: "0.34",
+        detail: "agent ready",
+      });
+    });
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,
       height: 36,
@@ -387,6 +397,61 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect((kernel.dispatched[0] as { payload: { chatId: string } }).payload).toEqual({
       chatId: newChatId,
     });
+  });
+
+  test("the chat-list overlay outranks an undismissed export popup for both render and keys (precedence bug repro)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const chatId = uuidv7();
+    const operationId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("chat.changed", {
+          activeChatId: chatId,
+          added: [{ chatId, createdAt: TEST_TS }],
+          updated: [],
+          removedChatIds: [],
+        }),
+      );
+      deps.local.overlay.set("chat-list");
+    });
+    await renderer.waitForFrame((frame) => frame.includes("chats"));
+
+    // An export terminal event arrives WHILE the chat-list overlay is open.
+    await renderer.act(() => {
+      kernel.emit(
+        event("export.completed", {
+          operationId,
+          phase: "publishing",
+          destination: ".termcraft/export",
+          generationId: null,
+          failure: null,
+        }),
+      );
+    });
+
+    // The chat-list stays the visible overlay — the export popup must not paint over it.
+    const stillChatList = await renderer.waitForFrame((frame) => frame.includes("chats"));
+    expect(stillChatList).not.toContain("export ^E");
+
+    // Enter must route to the chat-list (chat-switch), not export-dismiss.
+    await renderer.act(() => renderer.mockInput.pressEnter());
+    expect(kernel.dispatched).toHaveLength(1);
+    expect((kernel.dispatched[0] as { kind: string }).kind).toBe("chat.switch");
+
+    // Only now that the overlay above it closed does the export popup show, and Enter dismisses
+    // it — it was never dismissed by the Enter that switched chats.
+    const exportShown = await renderer.waitForFrame((frame) => frame.includes("export ^E"));
+    expect(exportShown).not.toContain("chats");
+    await renderer.act(() => renderer.mockInput.pressEnter());
+    const exportDismissed = await renderer.waitForFrame((frame) => !frame.includes("export ^E"));
+    expect(exportDismissed).not.toContain("export ^E");
   });
 
   test("shows the export popup on export.completed and Enter dismisses it (M14)", async () => {
