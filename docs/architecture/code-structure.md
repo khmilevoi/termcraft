@@ -61,7 +61,7 @@ flowchart LR
 
    ```text
    src/
-     main.tsx           interactive root — import.meta.main guard only    [landed]
+     main.tsx           interactive root + `_host` argv dispatch         [landed]
      demo.tsx           demo root, in-memory kernel                       [landed]
      entrypoint/        shell selection, terminal lifetime, signals       [landed]
                          (the adapter graph these roots will wire is not built)
@@ -241,12 +241,14 @@ flowchart LR
    helper import is emitted by the transform.
 
    Landed today: the compiler extraction and the three-specifier resolver both
-   match this item exactly. The `_host --stdio` argv check and the injectable
-   protocol loop it would drive exist too, but nothing wires them to real process
-   stdio yet. `bun run build` does now produce a `bun build --compile` binary
-   (`dist/termcraft.exe`) from `main.tsx`, and that binary carries the `_host` code —
-   but no argv branch routes to it, so `termcraft _host` is still not a runnable
-   second entry point, only the engine one would drive.
+   match this item exactly. `main.tsx`'s first branch now recognizes a `_host
+   --stdio` argv (`parseHostArgs`) and runs `runHostStdio` against real process
+   stdio before the interactive bootstrap, so `termcraft _host --stdio` — the
+   compiled binary invoking itself via `process.execPath`, or `bun run <srcRoot>
+   _host --stdio` in dev — is a runnable second entry point. `createHostSpawnCommand`
+   (`src/host/supervisor/model/spawn-command.ts`) builds the matching compiled-vs-dev
+   argv, but nothing yet constructs and spawns that command against a real
+   `HostSupervisor` — that composition-root wiring is still phase 8's (WP-4).
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
@@ -456,8 +458,11 @@ vendor tier's own pre-split run-loop file.
   describes (`materializeCompiler`: extracted once to a per-user cache, then
   spawned)
 - `src/host/session/model/entry.ts` — `runHostStdio`/`parseHostArgs`: the injectable
-  engine the `termcraft _host` second composition root (item 9) would drive; not yet
-  wired to real process stdio by any binary entry point
+  engine the `termcraft _host` second composition root (item 9) drives; wired to
+  real process stdio by `src/main.tsx`'s first `import.meta.main` branch
+- `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
+  the compiled-vs-dev argv (item 9) an eventual `HostSupervisor` spawns the
+  `_host --stdio` child with; not yet called from any composition root (WP-4)
 
 **`store` and the Git adapter (items 1, 4, 6, 11)**
 
