@@ -68,16 +68,20 @@ export function lintDeterminism(source: string): GateWarning[] {
  * a capitalized tag is a component reference, and because the import allowlist
  * (§3.1) permits only `@termcraft/runtime`, every such component is a Kit
  * component whose id the page contract and the smoke render's duplicate check
- * already enforce (§5.2) — exempt here. A lowercase tag is a low-level/raw
- * OpenTUI primitive (the runtime's escape hatch, e.g. `<box>`/`<text>`); one with
- * no `id` prop warns, because the designer is expected to be able to point at it.
+ * already enforce (§5.2) — exempt here. A DOTTED tag (`<Kit.Text>`, or an
+ * all-lowercase `<kit.box>`) is exempt the same way, regardless of its first
+ * segment's case: a member-expression tag name is always a reference to some
+ * imported value, never a raw JSX intrinsic, so there is no first character
+ * left to judge. A lowercase, non-dotted tag is a low-level/raw OpenTUI
+ * primitive (the runtime's escape hatch, e.g. `<box>`/`<text>`); one with no
+ * `id` prop warns, because the designer is expected to be able to point at it.
  *
  * Built on `scanJsx` (`./jsx`, WP-6a fix-pass-3) — the same real-scanner JSX
- * reader `import-scan.ts`'s dynamic-code check uses — rather than the earlier
- * `scanOpenTag` code-token heuristic, which this replaces outright: `scanJsx`
+ * reader `import-scan.ts`'s dynamic-code check uses — rather than an earlier
+ * walk over a plain code-token array, which this replaces outright: `scanJsx`
  * requires a genuine matching close tag (or a real `/>`) before it will
- * report an element at all, which incidentally closes both of that
- * heuristic's residual gaps (WP-6a fix-pass-2, Minor 3) rather than needing a
+ * report an element at all, which incidentally closes both of that earlier
+ * walk's residual gaps (WP-6a fix-pass-2, Minor 3) rather than needing a
  * second heuristic layer to chase them —
  *
  * - `a < b\nfoo = "x"\nbar = c > d`: `scanJsx` never even attempts `<b`, since
@@ -94,6 +98,7 @@ export function lintUnpointedElements(source: string): GateWarning[] {
   const warnings: GateWarning[] = [];
   for (const el of elements) {
     if (el.hasId || el.tagName === "") continue;
+    if (el.tagName.includes(".")) continue; // dotted — a component reference, exempt regardless of case
     const firstChar = el.tagName[0]!;
     if (firstChar < "a" || firstChar > "z") continue; // capitalized — a Kit component, exempt
     warnings.push({

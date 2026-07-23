@@ -185,6 +185,20 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
     });
   });
 
+  describe("Finding 5 (fix pass 5) — a dotted tag name is a component reference regardless of case", () => {
+    test("an all-lowercase dotted tag (`<kit.box>`) is exempt, like any dotted tag", () => {
+      expect(lintUnpointedElements(`export default () => <kit.box>raw</kit.box>\n`)).toEqual([]);
+    });
+  });
+
+  describe("Also fix (fix pass 5) — a duplicated `scanJsx` element is not warned twice", () => {
+    test("a nested element read once by a doomed attribute-list attempt and once by the retry produces one warning, not two", () => {
+      const w = lintUnpointedElements(`export default () => <box a={<text>hi</text>} 1>x</box>\n`);
+      expect(w).toHaveLength(1);
+      expect(w[0]?.kind).toBe("unpointed-element");
+    });
+  });
+
   describe("Minor 3 (fix pass 2) residual gaps — closed by the fix-pass-3 real JSX reader", () => {
     test("two bare assignments sandwiched between two comparisons no longer misread a bogus <b> (fix-pass-3)", () => {
       // Contrived: needs two comparisons and two `const`/`let`-free, paren/comma
