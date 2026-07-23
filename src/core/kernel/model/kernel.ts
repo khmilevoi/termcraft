@@ -196,12 +196,10 @@ export function createKernel(deps: KernelDeps): Kernel {
     // handler exists yet" is an explicitly empty, revision-neutral no-op for every kind —
     // never a throw (an unhandled throw here would still convert to a value via
     // `dispatch.ts`'s own `errore.try` wrapper, but the brief is explicit that this
-    // registry itself must not rely on that path).
-    const handle: HandlerRegistry = (envelope) => {
-      console.warn(
-        `core/kernel: no handler registered yet for "${envelope.kind}" (Task 9 replaces this ` +
-          "minimal registry) — accepting as a no-op",
-      );
+    // registry itself must not rely on that path). No `console.warn` either: the well-formed
+    // no-op result is signal enough, and a handler reached by every test exercising dispatch
+    // before Task 9 lands should not also leak stderr noise into all of them.
+    const handle: HandlerRegistry = () => {
       return { disposition: "no-op", events: [] };
     };
 

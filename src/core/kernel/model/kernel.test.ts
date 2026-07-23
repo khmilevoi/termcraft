@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { evaluateCapabilityGuard } from "core/capabilities";
 import type { KernelStateSnapshot } from "core/capabilities";
@@ -195,8 +195,9 @@ describe("createKernel", () => {
     expect(kernel.currentPreview()).toBeNull();
   });
 
-  test("dispatching a fresh command reaches the minimal handler registry without throwing", async () => {
+  test("dispatching a fresh command reaches the minimal handler registry without throwing or warning", async () => {
     const kernel = createKernel(buildDeps());
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     // `project.open` is one of only two commands the initial `closed`/idle state ever lets
     // past every guard (project.create/open are the sole exemptions from PROJECT_NOT_READY
@@ -210,6 +211,13 @@ describe("createKernel", () => {
       kind: "project.open",
       payload: { root: "/test-root" },
     });
+
+    // The well-formed no-op result IS the signal — a handler that has not landed yet must
+    // not also leak stderr noise into every test that happens to reach it. Asserted BEFORE
+    // `mockRestore()`: restoring the spy also clears its recorded call history, so checking
+    // afterward would always read "not called" regardless of what actually happened.
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
 
     if (result instanceof Error) throw result;
     expect(result.status).toBe("accepted");
