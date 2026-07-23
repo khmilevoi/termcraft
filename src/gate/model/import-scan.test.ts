@@ -83,4 +83,22 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     );
     expect(errors.length).toBe(3);
   });
+
+  test("an eval(...) call is rejected as fatal dynamic code (§5.8)", () => {
+    const errors = scanImportAllowlist(`const x = eval("1 + 1")\n`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("EVAL_CALL");
+    expect(errors[0]?.message).toContain("eval");
+  });
+
+  test("a new Function(...) construction is rejected as fatal dynamic code (§5.8)", () => {
+    const errors = scanImportAllowlist(`const f = new Function("a", "return a")\n`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
+    expect(errors[0]?.message).toContain("Function");
+  });
+
+  test("a method named eval on some object is not mistaken for the global eval", () => {
+    expect(scanImportAllowlist(`obj.eval("x")\n`)).toEqual([]);
+  });
 });

@@ -4,9 +4,20 @@ import type { Tok } from "./lexer";
 /** The one legal authored module specifier — the bare runtime root (runtime-api §3.1). */
 const RUNTIME_ROOT = "@termcraft/runtime";
 
-/** A fatal import-allowlist violation the gate rejects the candidate for (§3.1). */
+/**
+ * A fatal import-allowlist violation the gate rejects the candidate for (§3.1),
+ * plus the two dynamic-code forms banned by the same design-code-rules bullet
+ * (design §5.8: "`eval` and `new Function` are also forbidden"). `specifier` is
+ * empty for the dynamic-code codes — they name no module edge.
+ */
 export interface ImportScanError {
-  readonly code: "FORBIDDEN_IMPORT" | "DYNAMIC_IMPORT" | "REEXPORT" | "REQUIRE_CALL";
+  readonly code:
+    | "FORBIDDEN_IMPORT"
+    | "DYNAMIC_IMPORT"
+    | "REEXPORT"
+    | "REQUIRE_CALL"
+    | "EVAL_CALL"
+    | "NEW_FUNCTION_CALL";
   readonly specifier: string;
   readonly message: string;
   readonly line: number;
@@ -52,14 +63,16 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * The AUTHORITATIVE static-import allowlist scan (runtime-api §3.1). Tokenizes the
  * page source with the TypeScript lexer and classifies EVERY module edge the author
  * wrote — value + type-only imports, side-effect imports, `export … from`
- * re-exports, `import(...)` dynamic imports, and CJS `require(...)`. Only a static
- * `import … from "@termcraft/runtime"` (bare root, no subpath) is legal; a dynamic
- * import, a re-export, or a require is rejected even when it names the runtime,
- * because one page is one independently-renderable file with no runtime-selected
- * loading. Because this scans the SOURCE tokens (not the transform output), the
- * compiler-injected JSX-helper edges never appear — no exemption is needed, and an
- * author-written `require("react")` (a real source token) is caught, unlike the
- * host's `Bun.Transpiler.scanImports` (2C residual gap).
+ * re-exports, `import(...)` dynamic imports, and CJS `require(...)` — plus, per the
+ * same design §5.8 rule, a bare `eval(...)` call and a `new Function(...)`
+ * construction, both fatal dynamic-code violations rather than module edges. Only
+ * a static `import … from "@termcraft/runtime"` (bare root, no subpath) is legal; a
+ * dynamic import, a re-export, or a require is rejected even when it names the
+ * runtime, because one page is one independently-renderable file with no
+ * runtime-selected loading. Because this scans the SOURCE tokens (not the
+ * transform output), the compiler-injected JSX-helper edges never appear — no
+ * exemption is needed, and an author-written `require("react")` (a real source
+ * token) is caught, unlike the host's `Bun.Transpiler.scanImports` (2C residual gap).
  */
 export function scanImportAllowlist(source: string): ImportScanError[] {
   const toks = tokenize(source);
@@ -159,6 +172,44 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
           column: where.column,
         });
       }
+      continue;
+    }
+
+    // `eval(...)` (design §5.8). A `.eval(...)` method call on some other object
+    // is not the global — only a bare `eval` identifier not preceded by `.` counts.
+    if (
+      t.kind === SK.Identifier &&
+      t.value === "eval" &&
+      next?.kind === SK.OpenParenToken &&
+      toks[i - 1]?.kind !== SK.DotToken
+    ) {
+      const where = at(t.pos);
+      errors.push({
+        code: "EVAL_CALL",
+        specifier: "",
+        message: "eval(...) is not allowed — a page executes no dynamic code",
+        line: where.line,
+        column: where.column,
+      });
+      continue;
+    }
+
+    // `new Function(...)` (design §5.8) — a dynamic-code construction.
+    if (
+      t.kind === SK.NewKeyword &&
+      next !== undefined &&
+      next.kind === SK.Identifier &&
+      next.value === "Function" &&
+      toks[i + 2]?.kind === SK.OpenParenToken
+    ) {
+      const where = at(t.pos);
+      errors.push({
+        code: "NEW_FUNCTION_CALL",
+        specifier: "",
+        message: "new Function(...) is not allowed — a page executes no dynamic code",
+        line: where.line,
+        column: where.column,
+      });
       continue;
     }
   }
