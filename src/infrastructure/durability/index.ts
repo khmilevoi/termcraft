@@ -14,6 +14,8 @@ export {
 export { flushDir } from "./model/flush-dir";
 export { durableFileWrite } from "./model/durable-write";
 export { assertDurableVolume, getDriveType, isDurableDriveType } from "./model/volume";
+export { probeDurability } from "./model/probe";
+export type { ProbeDurabilityOverrides } from "./model/probe";
 export {
   DRIVE_CDROM,
   DRIVE_FIXED,
