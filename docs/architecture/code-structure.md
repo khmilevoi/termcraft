@@ -8,13 +8,16 @@ Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
 `host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` are real source today.
 Seven of those are components the design spec names — [`modules.md`](modules.md)
 counts the same seven — while `entities/` and `infrastructure/` are additions this
-convention makes on top. Only the `main.tsx` production composition root remains
-unbuilt. Source anchors move to real paths as each piece lands; see
-`## Source anchors`.
+convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
+`entrypoint/` ring that owns their lifecycle have landed; what the composition root
+still lacks is the *production adapter graph* — nothing maps `store`/`agent`/`gate`/
+`host` onto `core/ports/`, and no command handler registry exists, so no real
+`KernelPort` can be constructed yet and both roots run `ui`'s in-memory kernel.
+Source anchors move to real paths as each piece lands; see `## Source anchors`.
 
 ```mermaid
 flowchart LR
-    main["main.tsx · composition root<br/>(not yet built)<br/>the only file that imports every module"]
+    main["main.tsx · demo.tsx · entrypoint/<br/>composition root — roots landed,<br/>adapter graph not yet built"]
 
     subgraph adapters["Adapters — implement the ports they are handed"]
         store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
@@ -58,8 +61,10 @@ flowchart LR
 
    ```text
    src/
-     main.tsx           composition root — the only file that imports every module
-                         (not yet built)
+     main.tsx           interactive root — import.meta.main guard only    [landed]
+     demo.tsx           demo root, in-memory kernel                       [landed]
+     entrypoint/        shell selection, terminal lifetime, signals       [landed]
+                         (the adapter graph these roots will wire is not built)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
      core/              Kernel — the only domain decision-maker         [landed]
@@ -216,8 +221,9 @@ flowchart LR
    backend port, and one backend behind it. `agent/index.ts` exports the port types
    plus a single `createProductionClaudeBackend()` that assembles the real wiring
    (the SDK query, the Job Object tree factory, a real sleep, and the Windows
-   reparse-point backstop). `main.tsx` remains unbuilt, so phase 8 still owns the
-   production registry instance and composition.
+   reparse-point backstop). `main.tsx` now exists as a runnable root, but it wires no
+   adapters yet — the production registry instance and the adapter graph are still
+   phase 8's.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
    `bun build --compile` ships the shell and the design-host entry together (§4.1).
@@ -237,8 +243,10 @@ flowchart LR
    Landed today: the compiler extraction and the three-specifier resolver both
    match this item exactly. The `_host --stdio` argv check and the injectable
    protocol loop it would drive exist too, but nothing wires them to real process
-   stdio yet — no `bun build --compile` binary and no `main.tsx` exist, so `termcraft
-   _host` is not yet a runnable second entry point, only the engine one would drive.
+   stdio yet. `bun run build` does now produce a `bun build --compile` binary
+   (`dist/termcraft.exe`) from `main.tsx`, and that binary carries the `_host` code —
+   but no argv branch routes to it, so `termcraft _host` is still not a runnable
+   second entry point, only the engine one would drive.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
@@ -262,8 +270,9 @@ flowchart LR
 
 ## Source anchors
 
-`core/` (phase 6) and `ui/` (phase 7) have landed; only `main.tsx` has not (item 1). The
-anchors below split accordingly: real files for what exists, design-spec sections
+`core/` (phase 6), `ui/` (phase 7), and the executable roots plus their `entrypoint/`
+ring have landed; the production adapter graph behind those roots has not (item 1).
+The anchors below split accordingly: real files for what exists, design-spec sections
 for what is still contract only.
 
 **Module shape (item 2) and the alias map**
@@ -419,8 +428,8 @@ vendor tier's own pre-split run-loop file.
 - `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
   uses as its port-placement illustration (item 5): `gate` declares it, and `host`
   provides the one-shot session an adapter would wrap (`runOneShotSession`) — but
-  no code satisfies the `SmokeRenderer` interface itself, and no composition root
-  wires the two together, because `main.tsx` does not exist
+  no code satisfies the `SmokeRenderer` interface itself, and nothing wires the two
+  together: `main.tsx` exists but constructs no adapters
 - `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
   real `HostSupervisor`; blocker B4 (phase 6 slice 6D) resolved the former
   restart-aware-`PreviewHandle`-vs-non-restart-aware-`PreviewSession` split —
@@ -470,11 +479,15 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary; only production composition in `main.tsx` remains unbuilt. §3.6
-  remains the design authority for the runtime-selected agent triple, whose landed
-  Kernel selection code is anchored above
-- `docs/superpowers/specs/2026-07-22-application-entrypoints-design.md` — the
-  phase-8 authority for `src/main.tsx`, demo composition, startup, and shutdown
+  Kernel boundary; only the production adapter graph behind `main.tsx` remains
+  unbuilt. §3.6 remains the design authority for the runtime-selected agent triple,
+  whose landed Kernel selection code is anchored above
+- `src/entrypoint/model/run-app.ts`, `src/entrypoint/model/create-shell.ts`,
+  `src/entrypoint/model/bootstrap.ts`, `src/main.tsx`, `src/demo.tsx` — the landed
+  half of `docs/superpowers/specs/2026-07-22-application-entrypoints-design.md`:
+  terminal lifetime, signal-driven shutdown, mode selection, and the commands. That
+  spec remains the authority for the half still owed — the production dependency
+  composition `createShell("interactive", …)` refuses to fake
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet

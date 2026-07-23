@@ -7,16 +7,18 @@ isolated preview. Written for a reader who does not read the source language —
 [code-structure.md](code-structure.md) is the deliberate exception, and the only
 document here that addresses how the source tree itself is laid out.
 
-> **Status:** seven source modules have landed — `entities/`, `infrastructure/`,
-> `runtime/`, `host/`, `gate/`, `store/`, and `agent/` — and the documents below
-> anchor those to real source files. Of the seven components the design names, that
-> makes five real: the runtime facade, the Gate, the HostSupervisor and design host,
-> the Project store, and the agent gateway. Two have not landed: the Kernel
-> (`core/`) and the UI shell (`ui/`), along with the `main.ts` composition root that
-> would wire everything together. So nothing yet composes the landed modules into a
-> running program: behavior that crosses component boundaries — a live generation
-> turn, a preview a designer can see, export assembly, Git history — is still
-> described ahead of the code. That is deliberate. Each document states which half
+> **Status:** nine source modules have landed — `entities/`, `infrastructure/`,
+> `runtime/`, `host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` — and the
+> documents below anchor those to real source files. All seven components the design
+> names are real code today. The executable roots (`src/main.tsx`, `src/demo.tsx`)
+> and the `entrypoint/` ring that owns terminal lifetime and shutdown have landed
+> too, so `bun run demo` starts a running program. What has NOT landed is the
+> production adapter graph inside that composition root: nothing maps
+> `store`/`agent`/`gate`/`host` onto `core/ports/`, and no command handler registry
+> exists, so the Kernel the UI talks to is still `ui`'s in-memory double. Behavior
+> that crosses component boundaries against real adapters — a live generation turn, a
+> host-rendered preview, export assembly, Git history — is therefore still described
+> ahead of the code. That is deliberate. Each document states which half
 > of a claim is built and which is a design target, and anchors the unbuilt half to
 > the governing specification instead of a source file; anchors keep moving to real
 > paths as implementation proceeds (see the architecture-update skill).

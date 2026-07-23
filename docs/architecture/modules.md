@@ -67,9 +67,11 @@ Kernel (`core/`) is anchored below; its own doc status is tracked with the Kerne
 **UI shell — `src/ui/` (phase 7):** a leaf presentation module that imports only `core`'s
 boundary DTOs and the `PreviewSession` facade, declares the `KernelPort` the phase-8
 composition root satisfies, and keeps its own Reatom read-model ("mirror") fed by the Kernel
-event stream (design §3.2/§3.3, two graphs). What remains for phase 8: the real Kernel behind
-`KernelPort`, `main.tsx` mounting `<App>`, live agent-health derivation, and full preview-frame
-streaming (the consumer exists; session-change re-subscription is minimal).
+event stream (design §3.2/§3.3, two graphs). `main.tsx`/`demo.tsx` now mount `<App>` through
+`src/entrypoint/` (terminal lifetime, signal shutdown, mode selection). What remains for
+phase 8: the real Kernel behind `KernelPort` — the adapter graph and handler registry that
+`createShell` currently refuses to fake — plus live agent-health derivation and full
+preview-frame streaming (the consumer exists; session-change re-subscription is minimal).
 
 - `src/ui/index.ts` — the module's public surface: `App`, `createUiDeps`, `KernelPort`, and the boundary types phase 8 injects
 - `src/ui/kernel/` — the ui-declared `KernelPort`/`PreviewSessionHandle`, the single `EventEnvelopeV1` re-export (`model/events.ts`, the one tolerated `core/mailbox` type import) with its distributed `AnyEventEnvelope`, and `createDispatcher` (mints `commandId`, stamps `expectedRevision`)
