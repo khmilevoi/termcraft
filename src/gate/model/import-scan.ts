@@ -1,5 +1,5 @@
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { Tok } from "./lexer";
+import type { SyntaxKind, Tok } from "./lexer";
 
 /** The one legal authored module specifier — the bare runtime root (runtime-api §3.1). */
 const RUNTIME_ROOT = "@termcraft/runtime";
@@ -25,27 +25,23 @@ export interface ImportScanError {
 }
 
 /** The keywords that begin a LOCAL declaration export (never a re-export). */
-const DECLARATION_STARTS = new Set<number>(
-  ([
-    "ConstKeyword",
-    "LetKeyword",
-    "VarKeyword",
-    "FunctionKeyword",
-    "ClassKeyword",
-    "AsyncKeyword",
-    "AbstractKeyword",
-    "EnumKeyword",
-    "InterfaceKeyword",
-    "NamespaceKeyword",
-    "ModuleKeyword",
-    "DefaultKeyword",
-  ] as const)
-    .map((name) => SK[name])
-    .filter((k): k is number => k !== undefined),
-);
+const DECLARATION_STARTS = new Set<SyntaxKind>([
+  SK.ConstKeyword,
+  SK.LetKeyword,
+  SK.VarKeyword,
+  SK.FunctionKeyword,
+  SK.ClassKeyword,
+  SK.AsyncKeyword,
+  SK.AbstractKeyword,
+  SK.EnumKeyword,
+  SK.InterfaceKeyword,
+  SK.NamespaceKeyword,
+  SK.ModuleKeyword,
+  SK.DefaultKeyword,
+]);
 
 /** Tokens that end the search for an import specifier / an export `from` clause. */
-function isEdgeBoundary(kind: number): boolean {
+function isEdgeBoundary(kind: SyntaxKind): boolean {
   return kind === SK.SemicolonToken || kind === SK.ImportKeyword || kind === SK.ExportKeyword;
 }
 

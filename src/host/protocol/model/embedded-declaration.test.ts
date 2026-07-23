@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { validateRuntimeDeclarationBundle } from "./bundle";
-import { ProtocolError } from "./errors";
 import { EMBEDDED_RUNTIME_DECLARATION, SUPPORTED_KIT_API_VERSIONS } from "./embedded-declaration";
+import { ProtocolError } from "./errors";
 
 describe("EMBEDDED_RUNTIME_DECLARATION", () => {
   test("passes the protocol's own schema (sorted/duplicate-free arrays, current version included)", () => {

@@ -1,6 +1,6 @@
+import { bootstrap, createProcessBoundary } from "entrypoint";
 import * as errore from "errore";
 
-import { bootstrap, createProcessBoundary } from "entrypoint";
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
 import { parseHostArgs, runHostStdio } from "host/session";
 

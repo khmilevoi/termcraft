@@ -109,7 +109,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   });
 
   describe("Important 3 — eval/Function evasions the token scanner now catches", () => {
-    test("a bare eval reference smuggled through the comma operator ((0, eval)(\"x\")) is caught", () => {
+    test('a bare eval reference smuggled through the comma operator ((0, eval)("x")) is caught', () => {
       const errors = scanImportAllowlist(`(0, eval)("x")\n`);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
@@ -127,19 +127,19 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
-    test("a computed-string eval access (globalThis[\"eval\"](...)) is caught", () => {
+    test('a computed-string eval access (globalThis["eval"](...)) is caught', () => {
       const errors = scanImportAllowlist(`globalThis["eval"]("x")\n`);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
-    test("a bare Function call without new (Function(\"a\", \"return a\")(1)) is caught", () => {
+    test('a bare Function call without new (Function("a", "return a")(1)) is caught', () => {
       const errors = scanImportAllowlist(`Function("a", "return a")(1)\n`);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
     });
 
-    test("a computed-string Function access (g[\"Function\"](...)) is caught", () => {
+    test('a computed-string Function access (g["Function"](...)) is caught', () => {
       const errors = scanImportAllowlist(`g["Function"]("a", "return a")\n`);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
@@ -173,7 +173,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(scanImportAllowlist(`const F = Function\nnew F("a", "return a")\n`)).toEqual([]);
     });
 
-    test("KNOWN GAP: a variable-mediated computed-member key (`const key = \"eval\"; g[key](...)`)", () => {
+    test('KNOWN GAP: a variable-mediated computed-member key (`const key = "eval"; g[key](...)`)', () => {
       // The computed-string check only matches a literal `"eval"`/`"Function"`
       // StringLiteral directly inside the brackets; once the string is held in
       // a variable first, the bracket contents are an Identifier, not a

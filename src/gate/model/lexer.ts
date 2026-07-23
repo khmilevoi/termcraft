@@ -1,31 +1,21 @@
-import { LanguageVariant, ScriptTarget, SyntaxKind, createScanner } from "typescript/unstable/ast";
+import { LanguageVariant, SyntaxKind, createScanner } from "typescript/unstable/ast";
 
 /**
- * Untyped view of the unstable AST `SyntaxKind` enum — the API ships the members
- * but without stable TS types on this pin; the numeric values are load-bearing.
- * NOTE: the end-of-file member is `EndOfFile` (=1), NOT `EndOfFileToken`.
+ * Short alias for the unstable AST `SyntaxKind` enum, which every gate scan compares
+ * against. NOTE: the end-of-file member is `EndOfFile` (=1), NOT `EndOfFileToken`.
  */
-export const SK = SyntaxKind
+export const SK = SyntaxKind;
+
+/** The token-kind type behind {@link SK}, re-exported so the gate's scans keep the
+ * unstable AST package as a single import seam. */
+export type { SyntaxKind };
 
 /** One lexed token: its kind, its string value (for literals/identifiers), and its start offset. */
 export interface Tok {
-  readonly kind: number;
+  readonly kind: SyntaxKind;
   readonly value: string;
   readonly pos: number;
 }
-
-interface Scanner {
-  setText(text: string): void;
-  scan(): number;
-  getTokenValue(): string;
-  getTokenText(): string;
-  getTokenStart(): number;
-}
-
-// The unstable/ast `createScanner` type on this pin disagrees with the runtime arg
-// order (the classic `(languageVersion, skipTrivia, languageVariant)` call produces
-// correct tokens here). Cast to a permissive callable and use the verified order.
-const makeScanner = createScanner as unknown as (a: unknown, b: unknown, c: unknown) => Scanner;
 
 /**
  * Tokenize a page source with the TypeScript lexer. Shared by the gate's source
@@ -34,7 +24,7 @@ const makeScanner = createScanner as unknown as (a: unknown, b: unknown, c: unkn
  * is a hard backstop against a wrong terminal-token assumption spinning the loop.
  */
 export function tokenize(source: string): Tok[] {
-  const scanner = makeScanner(ScriptTarget.Latest, true, LanguageVariant.Standard);
+  const scanner = createScanner(true, LanguageVariant.Standard);
   scanner.setText(source);
   const toks: Tok[] = [];
   const cap = source.length + 1;

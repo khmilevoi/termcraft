@@ -105,67 +105,63 @@ describe("package entrypoints", () => {
     expect(parseHostArgs(["exe", "_host", "--stdio"])).toBe(true);
   });
 
-  test(
-    "a real spawned `_host --stdio` child negotiates host.hello over real stdio and exits when stdin closes",
-    async () => {
-      // The one guarantee this WP exists to deliver: `main.tsx`'s first `import.meta.main`
-      // branch must route a `_host --stdio` argv into the real protocol loop against REAL
-      // process stdio — never the interactive bootstrap — and the child must not outlive its
-      // stdin closing. A source-position check on `parseHostArgs` vs `bootstrap("interactive"`
-      // (the previous version of this test) would still pass if the dispatch branch were
-      // deleted; only actually spawning the binary and observing the real handshake proves it.
-      // `cmd` matches the dev `SpawnCommand` shape `createHostSpawnCommand` builds (Spike E,
-      // `docs/spikes/05-host-respawn/FINDINGS.md`): `[execPath, srcRoot, "_host", "--stdio"]`.
-      const child = Bun.spawn({
-        cmd: [process.execPath, path.join(repoRoot, "src/main.tsx"), "_host", "--stdio"],
-        cwd: repoRoot,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "ignore",
-      });
+  test("a real spawned `_host --stdio` child negotiates host.hello over real stdio and exits when stdin closes", async () => {
+    // The one guarantee this WP exists to deliver: `main.tsx`'s first `import.meta.main`
+    // branch must route a `_host --stdio` argv into the real protocol loop against REAL
+    // process stdio — never the interactive bootstrap — and the child must not outlive its
+    // stdin closing. A source-position check on `parseHostArgs` vs `bootstrap("interactive"`
+    // (the previous version of this test) would still pass if the dispatch branch were
+    // deleted; only actually spawning the binary and observing the real handshake proves it.
+    // `cmd` matches the dev `SpawnCommand` shape `createHostSpawnCommand` builds (Spike E,
+    // `docs/spikes/05-host-respawn/FINDINGS.md`): `[execPath, srcRoot, "_host", "--stdio"]`.
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(repoRoot, "src/main.tsx"), "_host", "--stdio"],
+      cwd: repoRoot,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "ignore",
+    });
 
-      try {
-        child.stdin.write(clientHelloFrame());
-        await Promise.resolve(child.stdin.flush());
+    try {
+      child.stdin.write(clientHelloFrame());
+      await Promise.resolve(child.stdin.flush());
 
-        const decoder = new FrameDecoder();
-        const frames: WireFrame[] = [];
-        // Bun's real spawned-child `stdout` is a `ReadableStream<Uint8Array>` that supports
-        // `for await` at runtime; the narrower `AsyncIterable` cast matches the same
-        // established pattern `host/supervisor/model/spawn.ts` uses for the injected
-        // `SpawnedChild` port.
-        const stdout = child.stdout as unknown as AsyncIterable<Uint8Array>;
-        await withTimeout(
-          (async () => {
-            for await (const chunk of stdout) {
-              const fed = decoder.feed(chunk);
-              if (fed instanceof Error) throw fed;
-              frames.push(...fed);
-              if (frames.length > 0) return;
-            }
-          })(),
-          8_000,
-          "waiting for a framed host.hello on the child's stdout",
-        );
+      const decoder = new FrameDecoder();
+      const frames: WireFrame[] = [];
+      // Bun's real spawned-child `stdout` is a `ReadableStream<Uint8Array>` that supports
+      // `for await` at runtime; the narrower `AsyncIterable` cast matches the same
+      // established pattern `host/supervisor/model/spawn.ts` uses for the injected
+      // `SpawnedChild` port.
+      const stdout = child.stdout as unknown as AsyncIterable<Uint8Array>;
+      await withTimeout(
+        (async () => {
+          for await (const chunk of stdout) {
+            const fed = decoder.feed(chunk);
+            if (fed instanceof Error) throw fed;
+            frames.push(...fed);
+            if (frames.length > 0) return;
+          }
+        })(),
+        8_000,
+        "waiting for a framed host.hello on the child's stdout",
+      );
 
-        expect(frames.length).toBeGreaterThanOrEqual(1);
-        const hostHello = decodeHostHello(frames[0]!.payload);
-        if (hostHello instanceof Error) throw hostHello;
-        expect(hostHello.kind).toBe("host.hello");
-        expect(hostHello.sessionId).toBe(SESSION_ID);
+      expect(frames.length).toBeGreaterThanOrEqual(1);
+      const hostHello = decodeHostHello(frames[0]!.payload);
+      if (hostHello instanceof Error) throw hostHello;
+      expect(hostHello.kind).toBe("host.hello");
+      expect(hostHello.sessionId).toBe(SESSION_ID);
 
-        // Closing stdin simulates the parent process dying (its pipe going away) — the ONLY
-        // signal the `_host` child ever gets in that case. It must exit itself (Important 3 of
-        // the WP-3 fix pass, `entry.ts`'s "stdin closed" `performExit` path); nothing else is
-        // left to kill it.
-        await Promise.resolve(child.stdin.end());
-        const exitCode = await withTimeout(child.exited, 8_000, "waiting for the child to exit");
-        expect(exitCode).toBe(0);
-      } finally {
-        // Guarantees the child never survives this test, even when an assertion above throws.
-        child.kill();
-      }
-    },
-    20_000,
-  );
+      // Closing stdin simulates the parent process dying (its pipe going away) — the ONLY
+      // signal the `_host` child ever gets in that case. It must exit itself (Important 3 of
+      // the WP-3 fix pass, `entry.ts`'s "stdin closed" `performExit` path); nothing else is
+      // left to kill it.
+      await Promise.resolve(child.stdin.end());
+      const exitCode = await withTimeout(child.exited, 8_000, "waiting for the child to exit");
+      expect(exitCode).toBe(0);
+    } finally {
+      // Guarantees the child never survives this test, even when an assertion above throws.
+      child.kill();
+    }
+  }, 20_000);
 });
