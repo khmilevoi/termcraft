@@ -12,3 +12,5 @@ export type { ComposerProps } from "./ui/Composer";
 export { Composer } from "./ui/Composer";
 export type { ChatRecordProps } from "./ui/ChatRecord";
 export { ChatRecord } from "./ui/ChatRecord";
+export type { PinListProps, PinListRow } from "./ui/PinList";
+export { PinList } from "./ui/PinList";

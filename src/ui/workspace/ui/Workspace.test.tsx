@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import type { PageDescriptorV1 } from "core/protocol";
+import type { PageDescriptorV1, PinDtoV1 } from "core/protocol";
 import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
 import { createUiDeps } from "ui/app";
-import { TEST_SHA, createFakeKernel, snapshot } from "ui/testing";
+import { TEST_SHA, createFakeKernel, event, snapshot } from "ui/testing";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { Workspace } from "./Workspace";
@@ -112,6 +112,53 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     const text = allText(handle.capture().rows);
     expect(text).not.toContain("‹");
     expect(text).not.toContain("›");
+  });
+});
+
+describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
+  const pin = (overrides: Partial<PinDtoV1>): PinDtoV1 => ({
+    pinId: uuidv7(),
+    pageSlug: "main",
+    elementId: "gauge-cpu",
+    fx: 0.5,
+    fy: 0.5,
+    text: "make this gauge red",
+    status: "open",
+    createdRecordId: uuidv7(),
+    latestRecordId: uuidv7(),
+    updatedAt: "2026-07-22T00:00:00.000Z",
+    ...overrides,
+  });
+
+  test("lists the active page's pins in the chat panel, above the composer", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("pins.changed", {
+        pageSlug: "main",
+        affectedPins: [
+          pin({ text: "table · why always top?" }),
+          pin({ status: "resolved", text: "network · add labels · reopen" }),
+        ],
+        affectedRecordIds: [],
+        causeId: uuidv7(),
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("PINS · main");
+    expect(text).toContain("table · why always top?");
+    expect(text).toContain("network · add labels · reopen");
   });
 });
 

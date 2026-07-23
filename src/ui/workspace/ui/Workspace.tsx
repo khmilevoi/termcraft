@@ -4,8 +4,8 @@ import { reatomComponent, useWrap } from "@reatom/react";
 import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
-import { AgentStatusBlock, ChatRecord, Composer } from "ui/chat";
-import type { MarkdownLine } from "ui/chat";
+import { AgentStatusBlock, ChatRecord, Composer, PinList } from "ui/chat";
+import type { MarkdownLine, PinListRow } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
 import {
@@ -344,6 +344,24 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               {turn.phase === "terminal" && (
                 <ChatRecord id="ws-record" role="codex" dim lines={terminalRecordLines(turn)} />
               )}
+              {/*
+               * DIVERGENCE (M12 data-source gap): the mirror carries `PinDtoV1` but no
+               * per-pin anchor-resolution signal — anchor resolution is a host-render
+               * concern (`rectOf`, spec §4.2) and `PreviewOverlays` places every open pin
+               * by fraction without ever marking one an orphan. So `visible` has no kernel
+               * source yet; every open pin is passed `visible: true` here (matching what
+               * the preview always draws) until a render-resolved element-id set reaches
+               * the mirror. The full open/resolved/orphan row structure and the exact
+               * §3.2 "not visible…" marker copy are implemented in `PinList` and stay
+               * dormant for the orphan case, rather than fabricating a resolution signal.
+               */}
+              <PinList
+                id="ws-pins"
+                pageSlug={project.activePageSlug ?? ""}
+                pins={pins.map(
+                  (pinDto, index): PinListRow => ({ pin: pinDto, index, visible: true }),
+                )}
+              />
             </box>
             <Composer
               id="ws-composer"
