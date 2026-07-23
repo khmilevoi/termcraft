@@ -1,0 +1,204 @@
+import type { KernelStateSnapshot } from "core/capabilities";
+import type {
+  CommitAction,
+  CommitState,
+  ExportAction,
+  ExportState,
+  MigrationAction,
+  MigrationState,
+  PreviewAction,
+  PreviewState,
+  ProjectAction,
+  ProjectState,
+  RestoreAction,
+  RestoreState,
+  StateMachine,
+  TurnAction,
+  TurnState,
+} from "core/machines";
+import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
+import type { CommandFamilyV1, CommandKindV1, CommandPayloadByKindV1, UUIDv7 } from "core/protocol";
+
+import type { KernelDeps } from "../../types";
+
+/**
+ * Kernel-assembly WP-1 task 9, STEP A — the shared skeleton every per-family handler
+ * module (Step B) is built against. This file is deliberately the ONLY thing a family
+ * implementer needs to read beyond their own family's command list: the `HandlerContext`
+ * they receive, the function shape their family module must export, and the helpers that
+ * make a malformed `HandlerOutcome` impossible to construct.
+ *
+ * Everything here is derived FROM `core/kernel/model/kernel.ts`'s real internals (read
+ * that file's own comments for the "why" behind each piece):
+ * - `deps: KernelDeps` — the exact port surface `createKernel` was given (§7's ports).
+ * - `machines: KernelMachines` — the same seven `StateMachine` objects `kernel.ts` holds
+ *   in its own closure, so a handler drives a machine the SAME way `kernel.ts` reads its
+ *   phase (`machine.apply(action)` / `machine.phase()` / `machine.canApply(action)`),
+ *   never a second, parallel way to move the same state.
+ * - `readKernelState` — `kernel.ts`'s own `readKernelState`, unchanged: the guard already
+ *   ran this before a handler is ever reached, but §10.2's own line ("Payload-only
+ *   content/schema, freshness, token-ledger, and operation-specific mutex checks run
+ *   AFTER the guard") means a handler legitimately needs a fresh read too, e.g. to decide
+ *   which branch of its own operation-specific logic applies.
+ * - the four named mutators — `kernel.ts`'s own comment names the FOUR Kernel-held facts
+ *   `KernelStateSnapshot` needs beyond the seven bare phases: `project.trust`,
+ *   `turn.activeTurnId`, `turn.commitIntentRecorded`, `preview.sourceKind`. Those are the
+ *   ONLY fields a handler may ever change outside a machine's own `apply()` — one named
+ *   mutator per field, deliberately, NOT a blanket `setState(patch)`: a reviewer reading
+ *   this interface sees the Kernel's ENTIRE non-machine mutation surface in four lines,
+ *   not an open-ended patch shape a handler could use to touch a fact it has no business
+ *   touching (e.g. nothing here lets a `chat.*` handler reach into `preview.sourceKind`).
+ *
+ * `context.deps.clock` is the injected `Clock` (kernel-assembly plan's Task 7) — there is
+ * no separate `clock` field on `HandlerContext` itself; it already lives on `KernelDeps`,
+ * and duplicating it here would just be a second name for the same value.
+ */
+
+// --- The seven machines, grouped ---------------------------------------------------------
+
+/**
+ * The same seven `StateMachine` objects `kernel.ts`'s own `createKernel` constructs and
+ * holds (`reatom*StateMachine()`, one call per domain) — injected here, never rebuilt, so
+ * a handler's `apply()` call lands on the EXACT atom `readKernelState`/the capability
+ * guard/the projector all observe. `chat`/`model`/`page`/`selection`/`pin`/`history` have
+ * no machine of their own among the seven (`core/capabilities/model/guards.ts`'s own
+ * `familySpecificReason` header note) — their handlers only ever touch `context.deps`.
+ */
+export interface KernelMachines {
+  readonly project: StateMachine<ProjectState, ProjectAction>;
+  readonly turn: StateMachine<TurnState, TurnAction>;
+  readonly restore: StateMachine<RestoreState, RestoreAction>;
+  readonly commit: StateMachine<CommitState, CommitAction>;
+  readonly export: StateMachine<ExportState, ExportAction>;
+  readonly preview: StateMachine<PreviewState, PreviewAction>;
+  readonly migration: StateMachine<MigrationState, MigrationAction>;
+}
+
+/** `KernelStateSnapshot["project"]["trust"]` by another name — never re-declared as a fresh literal union. */
+export type ProjectTrustV1 = KernelStateSnapshot["project"]["trust"];
+
+/** `KernelStateSnapshot["preview"]["sourceKind"]` by another name — see {@link ProjectTrustV1}. */
+export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
+
+// --- The handler context -----------------------------------------------------------------
+
+/**
+ * Everything a command handler is given. Every family module (Step B) and the Tier-C
+ * deferred handler (this step) share this ONE shape — no family gets a bespoke context.
+ *
+ * The four mutators are the WHOLE Kernel-held, non-machine mutation surface:
+ * - `setProjectTrust` — `project.setTrust` (and `project.create`'s creation-defaults
+ *   trust) is the only legitimate caller; `kernel.ts`'s `trustAtom`.
+ * - `setActiveTurnId` — `turn.start`'s admission (recording the fresh turn id) and its
+ *   terminal outcomes (clearing it back to `null`) are the only legitimate callers;
+ *   `kernel.ts`'s `activeTurnIdAtom`.
+ * - `setCommitIntentRecorded` — the turn finalize/terminalize path that records or clears
+ *   durable commit intent (§7.2's `finalizing` pre/post-intent split); `kernel.ts`'s
+ *   `commitIntentRecordedAtom`.
+ * - `setPreviewSourceKind` — `preview.selectPage`/`selectHistorical`/`selectCurrent` are
+ *   the only legitimate callers; `kernel.ts`'s `previewSourceKindAtom`.
+ *
+ * No handler may reach a machine's `phaseAtom` or any of these four facts through any
+ * other route — this interface IS the whole surface, so a reviewer checking "what can a
+ * handler change?" only has to read these ten members (six read paths, four write paths),
+ * never grep the whole `handlers/` tree for a stray `.set(...)`.
+ */
+export interface HandlerContext {
+  readonly deps: KernelDeps;
+  readonly machines: KernelMachines;
+  /** `kernel.ts`'s own `readKernelState`, re-exposed verbatim — always a fresh read, never cached. */
+  readonly readKernelState: () => KernelStateSnapshot;
+  readonly setProjectTrust: (trust: ProjectTrustV1) => void;
+  readonly setActiveTurnId: (turnId: UUIDv7 | null) => void;
+  readonly setCommitIntentRecorded: (recorded: boolean) => void;
+  readonly setPreviewSourceKind: (sourceKind: PreviewSourceKindV1) => void;
+}
+
+// --- The well-formed outcome, made hard to get wrong ---------------------------------------
+
+/**
+ * The value every command handler returns — `HandlerOutcome` (`core/mailbox`) by another
+ * name, kept as a local alias so this file's own doc comments have one name to point at.
+ *
+ * "Design so families cannot produce a malformed outcome" (Task 9 brief) is enforced here
+ * by SHAPE, not by a branded/opaque type: a branded type can only ever be constructed by
+ * bouncing an object literal through `unknown` first (TypeScript refuses a direct `as` when
+ * the brand's property is entirely absent from the literal), and this project's own rule
+ * is NO `unknown`/`any`-bounce cast, ever — inventing one just to brand this type would be
+ * exactly the "type-laundering" the rule forbids. Instead, `noOpOutcome`/`completedOutcome`/
+ * `startedOutcome` below are the only THREE outcome shapes `HandlerOutcome` actually has
+ * (§8.3's three dispositions), each hard-coded to the one valid `{disposition, events}`
+ * pairing for it — `noOpOutcome` does not even accept an `events` parameter, so the one
+ * malformed shape `dispatch.ts`'s own `applyTransition` already defends against
+ * ("no-op" with non-empty `events`) is simply not expressible by calling it. A family
+ * author CAN still hand-write a raw object literal instead of calling these — nothing in
+ * the type system forbids that, matching how `HandlerOutcome`'s own doc comment already
+ * documents dispatch trusting (and defensively logging, never silently dropping, a
+ * violation of) whatever a handler returns — but every family module Step A/B ships uses
+ * only these three constructors, so a reviewer checking "did this handler build a valid
+ * outcome?" only has to confirm it called one of them.
+ */
+export type CommandOutcomeV1 = HandlerOutcome;
+
+/** The revision-neutral no-op every Tier-C/not-yet-implemented handler (and some real ones) returns. */
+export function noOpOutcome(): CommandOutcomeV1 {
+  return { disposition: "no-op", events: [] };
+}
+
+/** A completed, revision-advancing outcome — `events` publish, `operationId` is set only when supplied. */
+export function completedOutcome(
+  events: readonly PublishableEventV1[],
+  operationId?: UUIDv7,
+): CommandOutcomeV1 {
+  const base = { disposition: "completed" as const, events };
+  return operationId === undefined ? base : { ...base, operationId };
+}
+
+/** A started (async work kicked off), revision-advancing outcome — same shape rules as {@link completedOutcome}. */
+export function startedOutcome(
+  events: readonly PublishableEventV1[],
+  operationId?: UUIDv7,
+): CommandOutcomeV1 {
+  const base = { disposition: "started" as const, events };
+  return operationId === undefined ? base : { ...base, operationId };
+}
+
+// --- The per-kind handler function, and the maps families export --------------------------
+
+/**
+ * One command kind's handler: the already-decoded, already-guard-checked payload in, a
+ * {@link CommandOutcomeV1} out. Never a rejection — by the time `dispatch.ts` calls a
+ * handler, `core/capabilities`'s guard has already run (§12.1 step 3) and returned
+ * `available`; a handler that finds a payload-only reason to refuse (freshness, a token
+ * ledger miss, an operation-specific mutex — §10.2's own list of what runs "after the
+ * guard") still returns a `CommandOutcomeV1`, just a `"no-op"` one, exactly like a Tier-C
+ * kind's outcome shape. `HandlerOutcome` (`core/mailbox`) has no rejected disposition of
+ * its own — see that type's own doc comment — so there is nothing else this signature
+ * could return.
+ */
+export type CommandHandler<K extends CommandKindV1 = CommandKindV1> = (
+  payload: CommandPayloadByKindV1[K],
+  context: HandlerContext,
+) => CommandOutcomeV1;
+
+/** A handler map over an arbitrary, explicit subset of `CommandKindV1` — e.g. the Tier-C deferred set, which spans four families and only PART of `preview`. */
+export type CommandHandlerMap<K extends CommandKindV1> = Readonly<{
+  [P in K]: CommandHandler<P>;
+}>;
+
+/** Every `CommandKindV1` member whose dot-prefix is `F` — the precise per-family kind subset. */
+export type CommandKindOfFamily<F extends CommandFamilyV1> = Extract<
+  CommandKindV1,
+  `${F}.${string}`
+>;
+
+/**
+ * The shape EVERY per-family module (Step B) exports: a `Readonly` map from its own
+ * family's `CommandKindV1` members to their handlers. Nothing else — no default export, no
+ * side effects, no module-level mutable state (a family module is re-importable and
+ * re-usable across as many `HandlerContext`s/tests as needed).
+ */
+export type FamilyHandlerMap<F extends CommandFamilyV1> = CommandHandlerMap<CommandKindOfFamily<F>>;
+
+/** The complete, 43-kind map `createHandlerRegistry` (`./index.ts`) consumes. */
+export type TotalHandlerMap = CommandHandlerMap<CommandKindV1>;
