@@ -1,6 +1,7 @@
 import * as errore from "errore";
 
 import {
+  type CapabilityTargetByKindV1,
   type CommandKindV1,
   type CommandPayloadByKindV1,
   commandPayloadSchemas,
@@ -43,64 +44,16 @@ type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : fals
 const _capabilityIdIsCommandKind: MutuallyAssignable<CapabilityId, CommandKindV1> = true;
 void _capabilityIdIsCommandKind;
 
-/** The closed recovery discriminator §10.1 copies verbatim for `project.retryOpen`. */
-export type RecoveryTargetV1 = CommandPayloadByKindV1["project.retryOpen"]["recovery"];
-
-/** The closed geometry query discriminator, reduced to its kind (§10.1). */
-export type GeometryQueryKindV1 = "hit" | "rect" | "describe" | "layout" | "pin-anchor";
-
 /**
- * The §10.1 table, transcribed row by row. `null` is a REQUIRED VALUE here, not an omitted
- * target — §10.1: "`null` is a required value, not an omitted target."
+ * The §10.1 target DTO itself — `CapabilityTargetByKindV1` (the 43-row map), its
+ * `capabilityTargetByKindV1Schema` Zod twin, and the companion `RecoveryTargetV1`/
+ * `GeometryQueryKindV1` types — lives in `core/protocol` (`protocol/model/
+ * capability-target.ts`): it is a protocol wire type (it appears inside
+ * `kernel.snapshot`), and `protocol/model/event-payload.ts` needs the runtime Zod value,
+ * which `capabilities -> protocol` (this file's own existing import direction) can supply
+ * without creating a `protocol -> capabilities -> protocol` cycle. Only the extractors
+ * below — which populate that shape from a validated command payload — stay here.
  */
-export interface CapabilityTargetByKindV1 {
-  "project.create": null;
-  "project.open": null;
-  "project.retryOpen": { readonly recovery: RecoveryTargetV1 };
-  "project.close": null;
-  "project.setTrust": { readonly workspaceIdentity: string };
-  "turn.start": null;
-  "turn.cancel": { readonly turnId: string };
-  "chat.create": null;
-  "chat.switch": { readonly chatId: string };
-  "model.select": { readonly backend: string; readonly model: string; readonly effort: string };
-  "page.renameTitle": { readonly pageSlug: string };
-  "page.removePlan": { readonly pageSlug: string };
-  "page.removeConfirm": { readonly pageRemovePlanId: string };
-  "page.removeDiscardPlan": { readonly pageRemovePlanId: string };
-  "page.reorder": null;
-  "history.open": { readonly pageSlug: string };
-  "preview.selectPage": { readonly pageSlug: string };
-  "preview.selectHistorical": { readonly pageSlug: string; readonly sourceCommit: string };
-  "preview.selectCurrent": { readonly pageSlug: string };
-  "preview.resize": { readonly previewSessionId: string };
-  "preview.setThemeCapabilities": { readonly previewSessionId: string; readonly themeId: string };
-  "preview.setMode": { readonly previewSessionId: string; readonly mode: "static" | "interactive" };
-  "preview.forwardInput": { readonly previewSessionId: string };
-  "preview.setTweak": { readonly previewSessionId: string; readonly tweakId: string };
-  "preview.queryGeometry": {
-    readonly frameTokenId: string;
-    readonly queryKind: GeometryQueryKindV1;
-  };
-  "preview.retry": { readonly previewSessionId: string };
-  "preview.close": { readonly previewSessionId: string };
-  "selection.set": { readonly pageSlug: string; readonly elementId: string };
-  "selection.clear": null;
-  "pin.create": { readonly geometryTokenId: string };
-  "pin.setStatus": { readonly pinId: string; readonly status: "open" | "resolved" };
-  "restore.plan": { readonly pageSlug: string; readonly sourceCommit: string };
-  "restore.confirm": { readonly restorePlanId: string };
-  "restore.discardPlan": { readonly restorePlanId: string };
-  "restore.retryRecord": { readonly restoreActionId: string };
-  "commit.plan": { readonly scope: "current-page" | "infrastructure" | "whole-project" };
-  "commit.confirm": { readonly commitPlanId: string };
-  "commit.discardPlan": { readonly commitPlanId: string };
-  "export.start": null;
-  "migration.plan": null;
-  "migration.confirm": { readonly migrationPlanId: string };
-  "migration.discardPlan": { readonly migrationPlanId: string };
-  "migration.retryRecovery": { readonly migrationActionId: string };
-}
 
 /** One kind's extractor: validate the payload, then normalize only the listed fields. */
 export type CapabilityTargetExtractor<K extends CommandKindV1> = (

@@ -5,13 +5,7 @@
  * (§10.2), the §10.4 turn-time lock matrix, and the capability projector (§10.2, §13.2).
  */
 
-export type {
-  CapabilityId,
-  CapabilityTargetByKindV1,
-  CapabilityTargetExtractor,
-  GeometryQueryKindV1,
-  RecoveryTargetV1,
-} from "./model/target";
+export type { CapabilityId, CapabilityTargetExtractor } from "./model/target";
 export {
   CapabilityTargetExtractionError,
   capabilityTargetExtractors,

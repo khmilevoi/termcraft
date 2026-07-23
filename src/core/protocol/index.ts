@@ -72,6 +72,13 @@ export {
 export type { CommandPayloadByKindV1 } from "./model/command-payload";
 export { commandPayloadSchemaFor, commandPayloadSchemas } from "./model/command-payload";
 
+export type {
+  CapabilityTargetByKindV1,
+  GeometryQueryKindV1,
+  RecoveryTargetV1,
+} from "./model/capability-target";
+export { capabilityTargetByKindV1Schema } from "./model/capability-target";
+
 export type { CommandEnvelopeV1 } from "./model/command-envelope";
 export {
   CommandDecodeError,

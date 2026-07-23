@@ -1,8 +1,7 @@
-import { type CommandKindV1, canonicalJson } from "core/protocol";
+import { type CapabilityTargetByKindV1, type CommandKindV1, canonicalJson } from "core/protocol";
 
 import type { CapabilityEntry, CapabilityRecord, KernelStateSnapshot } from "../types";
 import { evaluateCapabilityGuard } from "./guards";
-import type { CapabilityTargetByKindV1 } from "./target";
 
 /**
  * The capability projector (kernel-command-contract §10.2, lines 905-921): "The capability
