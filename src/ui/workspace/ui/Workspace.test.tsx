@@ -226,6 +226,33 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
     expect(chip && extractRgb(chip.fg)).toBe(SHELL_PALETTE.selFg);
   });
 
+  test("a selection on ANOTHER page does not render its chip in this page's composer", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    // The mirror only clears `selection` on a fresh kernel.snapshot, not on a page switch — a
+    // selection made while page "other" was active must not chip the composer for page "main".
+    deps.mirror.apply(
+      event("selection.changed", {
+        pageSlug: "other",
+        elementId: "gauge-cpu",
+        sourceHash: TEST_SHA,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).not.toContain("▣");
+  });
+
   test("open pins with no selection render the 'N open pins attached' line at amberHi", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(

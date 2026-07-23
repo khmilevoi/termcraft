@@ -377,6 +377,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               attach={deriveComposerAttach({
                 readOnly: props.readOnly,
                 selection,
+                activePageSlug: project.activePageSlug,
                 openPins: pins,
               })}
             />
