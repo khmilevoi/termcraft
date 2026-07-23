@@ -129,3 +129,13 @@ export {
 
 export type { EventPayloadByKindV1 } from "./model/event-payload";
 export { eventPayloadV1SchemaByKind } from "./model/event-payload";
+
+// --- M21 closed DTOs (WP-1 task 2): kernel snapshot / state-changed / capability entry --
+export type {
+  AgentIdentityV1,
+  CapabilityEntryV1,
+  CapabilityStateV1,
+  KernelModelsSnapshotV1,
+  KernelStateChangedPayloadV1,
+} from "./model/event-payload";
+export { agentIdentityV1Schema, kernelStateChangedPayloadV1Schema } from "./model/event-payload";

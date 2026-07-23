@@ -46,10 +46,10 @@ describe("mirror.apply — kernel.snapshot seeds project/capabilities/pages/chat
     m.apply(
       snapshot({
         capabilities: [
-          { id: "turn.start", target: {}, state: { available: true } },
+          { id: "turn.start", target: null, state: { available: true } },
           {
             id: "export.start",
-            target: {},
+            target: null,
             state: { available: false, reasons: [{ code: "NO_PAGES" }] },
           },
         ],
@@ -76,17 +76,17 @@ describe("mirror.apply — capabilities changed", () => {
   test("upserts changed entries and deletes removed ids", () => {
     const m = createMirror();
     m.apply(
-      snapshot({ capabilities: [{ id: "turn.start", target: {}, state: { available: true } }] }),
+      snapshot({ capabilities: [{ id: "turn.start", target: null, state: { available: true } }] }),
     );
     m.apply(
       event("kernel.capabilitiesChanged", {
         changed: [
           {
             id: "turn.start",
-            target: {},
+            target: null,
             state: { available: false, reasons: [{ code: "PROJECT_NOT_READY" }] },
           },
-          { id: "chat.create", target: {}, state: { available: true } },
+          { id: "chat.create", target: null, state: { available: true } },
         ],
         removed: [],
       }),
@@ -100,7 +100,7 @@ describe("mirror.apply — capabilities changed", () => {
     m.apply(
       event("kernel.capabilitiesChanged", {
         changed: [],
-        removed: [{ id: "chat.create", target: {} }],
+        removed: [{ id: "chat.create", target: null }],
       }),
     );
     expect(m.capabilities().has("chat.create")).toBe(false);
@@ -443,7 +443,7 @@ describe("mirror.apply — out-of-scope kinds are counter-only no-ops", () => {
     m.apply(
       event("kernel.stateChanged", {
         modelId: "kernel.turn.state",
-        action: "start",
+        action: "kernel.turn.beginAdmission",
         previousTag: "idle",
         nextTag: "admitting",
         metadata: {},

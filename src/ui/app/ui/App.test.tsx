@@ -391,7 +391,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       activePageSlug: "main",
       activeChatId: initialChatId,
       trust: "trusted",
-      capabilities: [{ id: "chat.create", target: {}, state: { available: true } }],
+      capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
       pageDescriptors: [readyPage()],
     });
     await renderer.act(() => kernel.emit(workspace));

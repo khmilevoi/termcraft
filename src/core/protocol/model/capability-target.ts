@@ -15,8 +15,8 @@ import { frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto";
  * This lives in `core/protocol`, not `core/capabilities`, even though `core/capabilities`
  * is the only current caller of the type: `core/capabilities` already imports
  * `core/protocol` (for `CommandKindV1`/`CommandPayloadByKindV1`), and `kernel.snapshot`'s
- * event payload (`./event-payload.ts`, `CapabilityEntryV1Placeholder.target`) needs this
- * same DTO's real Zod schema, not just its type. Having `event-payload.ts` import from
+ * event payload (`./event-payload.ts`, `CapabilityEntryV1.target`, closed in WP-1 task 2)
+ * needs this same DTO's real Zod schema, not just its type. Having `event-payload.ts` import from
  * `core/capabilities` for it would create a `protocol -> capabilities -> protocol` cycle;
  * moving the DTO here keeps the import direction one-way: `capabilities -> protocol`.
  * `core/capabilities/model/target.ts` keeps the 43 extractor functions that populate this

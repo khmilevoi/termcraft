@@ -23,18 +23,19 @@ function unwrap<T>(result: T): Exclude<T, Error> {
 /**
  * A minimal valid `kernel.snapshot` payload MINUS `eventSeq` — the bus owns that field
  * (see `event-bus.ts`'s `EventBusDeps` comment) and stamps it itself. Every other field
- * here is the smallest value that satisfies `kernelSnapshotPayloadV1Schema`.
+ * here is the smallest value that satisfies `kernelSnapshotPayloadV1Schema`; every
+ * model sits at its machine's real initial phase (§7.1-§7.7's `initial`).
  */
 function fakeSnapshotPayload(): Omit<EventPayloadByKindV1["kernel.snapshot"], "eventSeq"> {
   return {
     models: {
-      project: null,
-      turn: null,
-      restore: null,
-      commit: null,
-      export: null,
-      preview: null,
-      migration: null,
+      project: { phase: "closed", trust: null },
+      turn: { phase: "idle", activeTurnId: null, commitIntentRecorded: false },
+      restore: { phase: "idle" },
+      commit: { phase: "idle" },
+      export: { phase: "idle" },
+      preview: { phase: "disabled", sourceKind: null },
+      migration: { phase: "idle" },
     },
     projectId: null,
     activePageSlug: null,
@@ -43,6 +44,7 @@ function fakeSnapshotPayload(): Omit<EventPayloadByKindV1["kernel.snapshot"], "e
     capabilities: [],
     pageDescriptors: [],
     gitStatus: { repositoryId: "repo", head: null, sequencerState: "none", scopes: {} },
+    agentIdentity: null,
   };
 }
 

@@ -1,9 +1,26 @@
 import { z } from "zod";
 
+import type {
+  CommitAction,
+  CommitState,
+  ExportAction,
+  ExportState,
+  MigrationAction,
+  MigrationState,
+  PreviewAction,
+  PreviewState,
+  ProjectAction,
+  ProjectState,
+  RestoreAction,
+  RestoreState,
+  TurnAction,
+  TurnState,
+} from "core/machines";
 import { pageSlugSchema } from "entities/page";
 import type { AgentToolOp } from "entities/turn";
 import { rfc3339UtcSchema } from "infrastructure/clock";
 
+import { type CapabilityTargetByKindV1, capabilityTargetByKindV1Schema } from "./capability-target";
 import { type CommandKindV1, commandKindV1Schema } from "./command-kind";
 import type { EventKindV1 } from "./event-kind";
 import { type FailureDtoV1, failureDtoV1Schema } from "./failure";
@@ -63,14 +80,16 @@ import { type UnavailableReason, unavailableReasonV1Schema } from "./unavailable
  * spec repeats the word "FULL" for exactly these fields, which a bare non-empty
  * string does not enforce.
  *
- * Several fields depend on DTOs slice 6A does not build yet — the seven Reatom state
- * machines and their capability projection (6C), and Git's status projection (no
- * owning slice is named yet). Each such field uses a clearly-named `*Placeholder`
- * type with a `TODO` comment; none of them is presented as the final shape.
- * `FailureDtoV1` is a special case: another file in this same slice (6A) owns
- * `failure.ts` per the task split, so this file declares a local structural alias
- * instead of importing a module that does not exist yet — the controller repoints the
- * import when wiring the module up.
+ * Several fields originally depended on DTOs slice 6A did not build yet: the seven
+ * Reatom state machines and their capability projection (6C), and Git's status
+ * projection (no owning slice is named yet). 6C has since landed (kernel-assembly
+ * plan, WP-1 task 2, 2026-07-23): `kernel.snapshot`'s seven model DTOs,
+ * `kernel.stateChanged`'s `action`/`previousTag`/`nextTag` unions, and the
+ * capability-entry `target` are now closed, real types built from the machines'
+ * own exported phase/action unions (`core/machines`) and Task 1's
+ * `CapabilityTargetByKindV1` (`./capability-target.ts`). Only Git's status
+ * projection remains a `*Placeholder` type with its own `TODO` comment — no owning
+ * slice is named for it yet.
  */
 
 // ---------------------------------------------------------------------------
@@ -128,70 +147,330 @@ export type KernelModelIdV1 = (typeof KERNEL_MODEL_IDS_V1)[number];
 const kernelModelIdV1Schema = z.enum(KERNEL_MODEL_IDS_V1);
 
 /**
- * TODO(6C): `action`, `previousTag`, `nextTag`, and `metadata` become closed unions
- * scoped to each of the seven `reatom*StateMachine` factories once their named
- * transition tables land (§7.1-§7.7). `modelId` is the one part already fixed. This
- * whole payload is a structural placeholder for `kernel.stateChanged`; do not treat
- * `action`/`previousTag`/`nextTag` as plain free-text in the final DTO.
+ * The seven machines' phase unions, transcribed here as literal arrays and checked
+ * against each machine's real exported `*State` type with `satisfies` — the same
+ * technique this file already uses for `AGENT_TOOL_OPS_V1`/`GATE_ERROR_KINDS_V1`
+ * above. `core/protocol` cannot import a RUNTIME array of these from `core/machines`
+ * (none of the seven files exports one, only the type), so each array below is a
+ * verbatim copy of that file's own union, and `satisfies` fails `tsc` if a member is
+ * added, dropped, or misspelled here relative to the real type. Same known limit as
+ * every other transcription of this kind in this file: `satisfies` does NOT catch
+ * the real type gaining a member this array forgets to add — there is no test in
+ * this file (or its established precedent, `AGENT_TOOL_OPS_V1` etc.) that closes
+ * that direction either.
  */
+const KERNEL_PROJECT_STATES_V1 = [
+  "closed",
+  "opening",
+  "recovering",
+  "ready",
+  "blocked",
+  "closing",
+] as const satisfies readonly ProjectState[];
+
+const KERNEL_TURN_STATES_V1 = [
+  "idle",
+  "admitting",
+  "workspace-ready",
+  "running",
+  "stopping",
+  "snapshotting",
+  "validating",
+  "finalizing",
+  "committed",
+  "terminalizing",
+  "terminal",
+  "backend-unhealthy",
+] as const satisfies readonly TurnState[];
+
+const KERNEL_RESTORE_STATES_V1 = [
+  "idle",
+  "planning",
+  "awaiting-confirmation",
+  "executing",
+  "record-pending",
+  "recovering",
+  "blocked",
+] as const satisfies readonly RestoreState[];
+
+const KERNEL_COMMIT_STATES_V1 = [
+  "idle",
+  "planning",
+  "awaiting-confirmation",
+  "executing",
+  "refreshing",
+] as const satisfies readonly CommitState[];
+
+const KERNEL_EXPORT_STATES_V1 = [
+  "idle",
+  "preparing",
+  "rendering",
+  "publishing",
+  "recovering",
+  "blocked",
+] as const satisfies readonly ExportState[];
+
+const KERNEL_PREVIEW_STATES_V1 = [
+  "disabled",
+  "idle",
+  "starting",
+  "live",
+  "switching",
+  "failed",
+  "circuit-open",
+] as const satisfies readonly PreviewState[];
+
+const KERNEL_MIGRATION_STATES_V1 = [
+  "idle",
+  "planning",
+  "awaiting-confirmation",
+  "backing-up",
+  "transforming",
+  "publishing",
+  "recovering",
+  "blocked",
+] as const satisfies readonly MigrationState[];
+
+/**
+ * `kernel.stateChanged`'s `previousTag`/`nextTag` (§9, KCC:794). DESIGN CHOICE (the
+ * task-2 brief explicitly left this open): a FLAT union over all seven machines'
+ * phases, not a `modelId`-discriminated one. `modelId` (fixed above) already keys
+ * which machine fired, so a reader branching on `modelId` narrows the tag itself; a
+ * discriminated union would only re-key the same fact inside the tag type, at the
+ * cost of wrapping every one of the seven phase sets a second time.
+ */
+export type KernelPhaseTagV1 =
+  | ProjectState
+  | TurnState
+  | RestoreState
+  | CommitState
+  | ExportState
+  | PreviewState
+  | MigrationState;
+
+const KERNEL_PHASE_TAGS_V1 = [
+  ...KERNEL_PROJECT_STATES_V1,
+  ...KERNEL_TURN_STATES_V1,
+  ...KERNEL_RESTORE_STATES_V1,
+  ...KERNEL_COMMIT_STATES_V1,
+  ...KERNEL_EXPORT_STATES_V1,
+  ...KERNEL_PREVIEW_STATES_V1,
+  ...KERNEL_MIGRATION_STATES_V1,
+] as const satisfies readonly KernelPhaseTagV1[];
+
+const kernelPhaseTagV1Schema = z.enum(KERNEL_PHASE_TAGS_V1);
+
+/**
+ * `kernel.stateChanged`'s `action` (§9, KCC:794). Project's and Turn's OWN
+ * `ProjectAction`/`TurnAction` types are bare verbs (e.g. `"beginCreate"`) — each
+ * file's own header comment explains its table keys deliberately drop the
+ * `kernel.<domain>.` prefix — while Restore/Commit/Export/Preview/Migration's
+ * `*Action` types are already the full `kernel.<domain>.<verb>` form. The
+ * wire-level action name is always the FULL form (matching `KernelModelIdV1`'s own
+ * `"kernel.turn.state"` style, and `PROJECT_ACTION_FULL_NAME`/`TURN_ACTION_FULL_NAME`'s
+ * own "for traceability" comment in their source files), so Project's and Turn's
+ * members below are the template-literal form over the real verb union, not the
+ * bare verb.
+ */
+type ProjectActionFullNameV1 = `kernel.project.${ProjectAction}`;
+type TurnActionFullNameV1 = `kernel.turn.${TurnAction}`;
+
+const PROJECT_ACTION_FULL_NAMES_V1 = [
+  "kernel.project.beginCreate",
+  "kernel.project.beginOpen",
+  "kernel.project.beginRecovery",
+  "kernel.project.finishOpen",
+  "kernel.project.blockOpen",
+  "kernel.project.setTrust",
+  "kernel.project.renamePageTitle",
+  "kernel.project.reorderPages",
+  "kernel.project.beginPageRemovePlan",
+  "kernel.project.confirmPageRemove",
+  "kernel.project.discardPageRemovePlan",
+  "kernel.project.beginClose",
+  "kernel.project.finishClose",
+  "kernel.project.retryOpen",
+] as const satisfies readonly ProjectActionFullNameV1[];
+
+const TURN_ACTION_FULL_NAMES_V1 = [
+  "kernel.turn.beginAdmission",
+  "kernel.turn.finishAdmission",
+  "kernel.turn.beginAttempt",
+  "kernel.turn.beginStopping",
+  "kernel.turn.beginSnapshot",
+  "kernel.turn.beginTerminalization",
+  "kernel.turn.markBackendUnhealthy",
+  "kernel.turn.candidateCaptured",
+  "kernel.turn.retryAfterGate",
+  "kernel.turn.beginFinalization",
+  "kernel.turn.markCommitted",
+  "kernel.turn.settle",
+  "kernel.turn.finishTerminalization",
+  "kernel.turn.confirmBackendHealthy",
+  "kernel.turn.requestCancel",
+] as const satisfies readonly TurnActionFullNameV1[];
+
+const RESTORE_ACTIONS_V1 = [
+  "kernel.restore.beginPlan",
+  "kernel.restore.planReady",
+  "kernel.restore.planFailed",
+  "kernel.restore.confirm",
+  "kernel.restore.discardPlan",
+  "kernel.restore.markRecordPending",
+  "kernel.restore.complete",
+  "kernel.restore.failBeforeIntent",
+  "kernel.restore.beginRecovery",
+  "kernel.restore.retryRecord",
+  "kernel.restore.blockRecovery",
+  "kernel.restore.retryRecovery",
+] as const satisfies readonly RestoreAction[];
+
+const COMMIT_ACTIONS_V1 = [
+  "kernel.commit.beginPlan",
+  "kernel.commit.planReady",
+  "kernel.commit.planFailed",
+  "kernel.commit.confirm",
+  "kernel.commit.discardPlan",
+  "kernel.commit.beginRefresh",
+  "kernel.commit.finishRefresh",
+] as const satisfies readonly CommitAction[];
+
+const EXPORT_ACTIONS_V1 = [
+  "kernel.export.begin",
+  "kernel.export.beginRendering",
+  "kernel.export.beginPublication",
+  "kernel.export.complete",
+  "kernel.export.fail",
+  "kernel.export.failBeforeIntent",
+  "kernel.export.beginRecovery",
+  "kernel.export.completeRecovery",
+  "kernel.export.blockRecovery",
+  "kernel.export.retryRecovery",
+] as const satisfies readonly ExportAction[];
+
+const PREVIEW_ACTIONS_V1 = [
+  "kernel.preview.enable",
+  "kernel.preview.beginStart",
+  "kernel.preview.beginSwitch",
+  "kernel.preview.sessionReady",
+  "kernel.preview.sessionFailed",
+  "kernel.preview.openCircuit",
+  "kernel.preview.retryCircuit",
+  "kernel.preview.setMode",
+  "kernel.preview.setTweak",
+  "kernel.preview.resize",
+  "kernel.preview.setThemeCapabilities",
+  "kernel.preview.forwardInput",
+  "kernel.preview.queryGeometry",
+  "kernel.preview.disable",
+] as const satisfies readonly PreviewAction[];
+
+const MIGRATION_ACTIONS_V1 = [
+  "kernel.migration.beginPlan",
+  "kernel.migration.planReady",
+  "kernel.migration.planFailed",
+  "kernel.migration.confirm",
+  "kernel.migration.discardPlan",
+  "kernel.migration.backupVerified",
+  "kernel.migration.failBeforeIntent",
+  "kernel.migration.beginPublication",
+  "kernel.migration.complete",
+  "kernel.migration.beginRecovery",
+  "kernel.migration.completeRecovery",
+  "kernel.migration.blockRecovery",
+  "kernel.migration.retryRecovery",
+] as const satisfies readonly MigrationAction[];
+
+export type KernelStateActionV1 =
+  | ProjectActionFullNameV1
+  | TurnActionFullNameV1
+  | RestoreAction
+  | CommitAction
+  | ExportAction
+  | PreviewAction
+  | MigrationAction;
+
+const KERNEL_STATE_ACTIONS_V1 = [
+  ...PROJECT_ACTION_FULL_NAMES_V1,
+  ...TURN_ACTION_FULL_NAMES_V1,
+  ...RESTORE_ACTIONS_V1,
+  ...COMMIT_ACTIONS_V1,
+  ...EXPORT_ACTIONS_V1,
+  ...PREVIEW_ACTIONS_V1,
+  ...MIGRATION_ACTIONS_V1,
+] as const satisfies readonly KernelStateActionV1[];
+
+const kernelStateActionV1Schema = z.enum(KERNEL_STATE_ACTIONS_V1);
+
 export interface KernelStateChangedPayloadV1 {
   readonly modelId: KernelModelIdV1;
-  readonly action: string;
-  readonly previousTag: string;
-  readonly nextTag: string;
+  readonly action: KernelStateActionV1;
+  readonly previousTag: KernelPhaseTagV1;
+  readonly nextTag: KernelPhaseTagV1;
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 export const kernelStateChangedPayloadV1Schema = z.strictObject({
   modelId: kernelModelIdV1Schema,
-  action: z.string().min(1),
-  previousTag: z.string().min(1),
-  nextTag: z.string().min(1),
+  action: kernelStateActionV1Schema,
+  previousTag: kernelPhaseTagV1Schema,
+  nextTag: kernelPhaseTagV1Schema,
   metadata: z.record(z.string(), z.unknown()),
 });
 
 /**
- * TODO(6C): `CapabilityState` (§10.1, KCC:852-857) is
- * `{ available: true } | { available: false, reasons: readonly [UnavailableReason, ...] }`
- * where `reasons` is a discriminated union over §11.1's 31 rejection codes with
- * per-code bounded details. This placeholder fixes only the `available` discriminant
- * and a non-empty bounded-object `reasons` array so callers of this file can compile;
- * it is not the final `UnavailableReason` shape.
+ * §10.1's `CapabilityState` (KCC:852-857), now CLOSED: `core/capabilities/types.ts`'s
+ * own `CapabilityState` has landed with exactly this shape. Echoed here by value
+ * rather than imported — `core/protocol` cannot import `core/capabilities`
+ * (`capabilities` already imports `protocol`; the reverse would cycle) — the same
+ * precedent this file already uses for Gate's error/warning kinds above.
  */
-export type CapabilityStateV1Placeholder =
+export type CapabilityStateV1 =
   | Readonly<{ available: true }>
   | Readonly<{ available: false; reasons: readonly [UnavailableReason, ...UnavailableReason[]] }>;
 
-const capabilityStateV1PlaceholderSchema = z.discriminatedUnion("available", [
+const capabilityStateV1Schema = z.discriminatedUnion("available", [
   z.strictObject({ available: z.literal(true) }),
   z.strictObject({
     available: z.literal(false),
     // §10.1 fixes this as `readonly [UnavailableReason, ...UnavailableReason[]]`, and
-    // `./unavailable-reason` already owns that closed union — only `target` (§10.1's
-    // 43-row table) is still outstanding, and 6C owns it. Accepting a bare record here
-    // would drop the code discrimination the UI branches on.
+    // `./unavailable-reason` already owns that closed union.
     reasons: z.tuple([unavailableReasonV1Schema], unavailableReasonV1Schema).readonly(),
   }),
 ]);
 
 /**
- * TODO(6C): `CapabilityEntry<K>`'s `target` field is `CapabilityTargetByKindV1[K]` —
- * a 43-member discriminated union over `CommandKindV1` (§10.1 table, KCC:875-901)
- * that `core/capabilities` owns (see `command-kind.ts`'s comment: "the identity is
- * enforced as a compile-time check in `core/capabilities`, not restated as a second
- * list"). `target` stays `unknown` here; only `id` (closed `CommandKindV1`) and the
- * `available`/`reasons` discriminant of `state` are fixed.
+ * `CapabilityEntry<K>`'s `target` field (§10.1, KCC:861-865), flattened across all 43
+ * kinds at once for this file's heterogeneous arrays of entries
+ * (`kernel.snapshot`'s `capabilities`, `kernel.capabilitiesChanged`'s
+ * `changed`/`removed`) — the same "loosely-typed sibling" role
+ * `capabilities/types.ts`'s own `CapabilityRecord` plays for its batch/diffing
+ * operations, just with the real union of the 43 target shapes in place of that
+ * type's `unknown`. This does NOT correlate a specific entry's `target` to its own
+ * `id` (that precise per-kind pairing is `capabilities/types.ts`'s `CapabilityEntry<K>`,
+ * which this heterogeneous-array DTO structurally cannot reuse without importing
+ * `core/capabilities`) — it only proves the value is ONE of the 43 known shapes,
+ * which is still a closed, real check in place of the former `z.unknown()`.
  */
-export interface CapabilityEntryV1Placeholder {
+export type CapabilityTargetV1 = CapabilityTargetByKindV1[CommandKindV1];
+
+const capabilityTargetV1Schema = z.union(Object.values(capabilityTargetByKindV1Schema));
+
+/**
+ * §10.1's `CapabilityEntry<K>` (KCC:861-865). `target`'s real schema now comes from
+ * Task 1's `capabilityTargetByKindV1Schema` (`./capability-target.ts`) instead of
+ * `z.unknown()`.
+ */
+export interface CapabilityEntryV1 {
   readonly id: CommandKindV1;
-  readonly target: unknown;
-  readonly state: CapabilityStateV1Placeholder;
+  readonly target: CapabilityTargetV1;
+  readonly state: CapabilityStateV1;
 }
 
-const capabilityEntryV1PlaceholderSchema = z.strictObject({
+const capabilityEntryV1Schema = z.strictObject({
   id: commandKindV1Schema,
-  target: z.unknown(),
-  state: capabilityStateV1PlaceholderSchema,
+  target: capabilityTargetV1Schema,
+  state: capabilityStateV1Schema,
 });
 
 /**
@@ -217,30 +496,86 @@ const gitStatusProjectionV1PlaceholderSchema = z.strictObject({
 });
 
 /**
- * TODO(6C): "all seven tagged model DTOs" (§9 row for `kernel.snapshot`, KCC:793).
- * The seven keys are fixed (mirroring §6's factory table domains); each value is a
- * placeholder for that machine's own tagged-union DTO, which does not exist until
- * the seven `reatom*StateMachine` factories land.
+ * "all seven tagged model DTOs" (§9 row for `kernel.snapshot`, KCC:793), now the
+ * seven machines' real state shapes. Mirrors `capabilities/types.ts`'s
+ * `KernelStateSnapshot` (`capabilities/types.ts:82-103`) field for field — echoed by
+ * value rather than imported, for the same reason `CapabilityStateV1` is above:
+ * `core/protocol` cannot import `core/capabilities` (`capabilities` already imports
+ * `protocol`; the reverse would cycle). Only the phase TYPES themselves
+ * (`ProjectState`, `TurnState`, ...) are imported, from `core/machines` — no cycle
+ * there: `core/machines` does not import `core/protocol` at the value level (its one
+ * `CommandRejectionCode` import in `state-machine.ts` is `import type`, fully erased
+ * at runtime and untraceable by `import/no-cycle`, verified empirically before this
+ * import was added).
+ *
+ * DESIGN DECISION (the task-2 brief left this open): each model carries its PHASE
+ * plus only the extra fields `KernelStateSnapshot` itself names for that domain
+ * (`project.trust`, `turn.activeTurnId`/`commitIntentRecorded`,
+ * `preview.sourceKind`) — not each machine's full internal ledger (page/chat lists,
+ * plan ids, Git projections, ...). `KernelStateSnapshot`'s own comment draws exactly
+ * this line for the CAPABILITY read surface ("deliberately narrower than any one
+ * machine's full model... Payload-only content/schema... are not capability
+ * inputs"), and `kernel.snapshot`'s separate top-level fields already carry the
+ * wider payload (`pageDescriptors`, `activeChatId`, ...) — duplicating it a second
+ * time inside `models` would just be two copies of the same fact able to drift.
  */
-export interface KernelModelsSnapshotV1Placeholder {
-  readonly project: unknown;
-  readonly turn: unknown;
-  readonly restore: unknown;
-  readonly commit: unknown;
-  readonly export: unknown;
-  readonly preview: unknown;
-  readonly migration: unknown;
+export interface KernelModelsSnapshotV1 {
+  readonly project: Readonly<{
+    readonly phase: ProjectState;
+    readonly trust: "trusted" | "untrusted-read-only" | null;
+  }>;
+  readonly turn: Readonly<{
+    readonly phase: TurnState;
+    readonly activeTurnId: UUIDv7 | null;
+    readonly commitIntentRecorded: boolean;
+  }>;
+  readonly restore: Readonly<{ readonly phase: RestoreState }>;
+  readonly commit: Readonly<{ readonly phase: CommitState }>;
+  readonly export: Readonly<{ readonly phase: ExportState }>;
+  readonly preview: Readonly<{
+    readonly phase: PreviewState;
+    readonly sourceKind: "current" | "historical" | null;
+  }>;
+  readonly migration: Readonly<{ readonly phase: MigrationState }>;
 }
 
-const kernelModelsSnapshotV1PlaceholderSchema = z.strictObject({
-  project: z.unknown(),
-  turn: z.unknown(),
-  restore: z.unknown(),
-  commit: z.unknown(),
-  export: z.unknown(),
-  preview: z.unknown(),
-  migration: z.unknown(),
+const kernelModelsSnapshotV1Schema = z.strictObject({
+  project: z.strictObject({
+    phase: z.enum(KERNEL_PROJECT_STATES_V1),
+    trust: z.enum(["trusted", "untrusted-read-only"]).nullable(),
+  }),
+  turn: z.strictObject({
+    phase: z.enum(KERNEL_TURN_STATES_V1),
+    activeTurnId: uuidv7Schema.nullable(),
+    commitIntentRecorded: z.boolean(),
+  }),
+  restore: z.strictObject({ phase: z.enum(KERNEL_RESTORE_STATES_V1) }),
+  commit: z.strictObject({ phase: z.enum(KERNEL_COMMIT_STATES_V1) }),
+  export: z.strictObject({ phase: z.enum(KERNEL_EXPORT_STATES_V1) }),
+  preview: z.strictObject({
+    phase: z.enum(KERNEL_PREVIEW_STATES_V1),
+    sourceKind: z.enum(["current", "historical"]).nullable(),
+  }),
+  migration: z.strictObject({ phase: z.enum(KERNEL_MIGRATION_STATES_V1) }),
 });
+
+/**
+ * M22 (MVP gap-closeout plan, 2026-07-23): the composer chip's agent-identity text
+ * — design's `codex · gpt5.5` sample strings become data-driven (design's own
+ * `Composer.tsx` divergence comment). NOT part of the original KCC §9 row for
+ * `kernel.snapshot` — added here to close that gap alongside the rest of M21's
+ * placeholder closure. Sourced from the selected `AgentRegistry` entry's
+ * `BackendCapabilities` (`core/ports/agent-backend.ts`); `null` before any backend
+ * is selected (e.g. pre-`ready`, or before `model.select` has run).
+ */
+export type AgentIdentityV1 = Readonly<{ backendId: string; modelLabel: string }> | null;
+
+export const agentIdentityV1Schema = z
+  .strictObject({
+    backendId: z.string().min(1),
+    modelLabel: z.string().min(1),
+  })
+  .nullable();
 
 /**
  * `kernel.snapshot`'s payload (§9 row, KCC:793): "`models` ..., `projectId`,
@@ -253,45 +588,53 @@ const kernelModelsSnapshotV1PlaceholderSchema = z.strictObject({
  * window, before project-open has loaded or project-create has minted any chat
  * state. This is deliberately different from `chat.changed.activeChatId` below,
  * which is non-nullable — see that field's own comment for why the two do not
- * drift by accident.
+ * drift by accident. `agentIdentity` is M22's addition, not part of the original
+ * §9 row — see `AgentIdentityV1`'s own comment.
  */
 export interface KernelSnapshotPayloadV1 {
-  readonly models: KernelModelsSnapshotV1Placeholder;
+  readonly models: KernelModelsSnapshotV1;
   readonly projectId: UUIDv7 | null;
   readonly activePageSlug: string | null;
   readonly activeChatId: UUIDv7 | null;
   readonly trust: "trusted" | "untrusted-read-only" | null;
-  readonly capabilities: readonly CapabilityEntryV1Placeholder[];
+  readonly capabilities: readonly CapabilityEntryV1[];
   readonly pageDescriptors: readonly PageDescriptorV1[];
   readonly gitStatus: GitStatusProjectionV1Placeholder;
+  readonly agentIdentity: AgentIdentityV1;
   readonly eventSeq: UInt64String;
 }
 
 export const kernelSnapshotPayloadV1Schema = z.strictObject({
-  models: kernelModelsSnapshotV1PlaceholderSchema,
+  models: kernelModelsSnapshotV1Schema,
   projectId: uuidv7Schema.nullable(),
   activePageSlug: pageSlugSchema.nullable(),
   activeChatId: uuidv7Schema.nullable(),
   trust: z.enum(["trusted", "untrusted-read-only"]).nullable(),
-  capabilities: z.array(capabilityEntryV1PlaceholderSchema).readonly(),
+  capabilities: z.array(capabilityEntryV1Schema).readonly(),
   pageDescriptors: z.array(pageDescriptorV1Schema).readonly(),
   gitStatus: gitStatusProjectionV1PlaceholderSchema,
+  agentIdentity: agentIdentityV1Schema,
   eventSeq: uint64StringSchema,
 });
 
 /**
  * `kernel.capabilitiesChanged`'s payload (§9 row, KCC:795): "Complete replacement
  * `CapabilityEntry` values for every changed `(id,target)` key and `removed` keys
- * for targets no longer published."
+ * for targets no longer published." `removed`'s `target` is closed the same way as
+ * `CapabilityEntryV1.target` above (see `CapabilityTargetV1`'s comment) — it is the
+ * same "which target key is gone" concept, so it gets the same real shape rather
+ * than staying `unknown` next to its now-closed sibling.
  */
 export interface KernelCapabilitiesChangedPayloadV1 {
-  readonly changed: readonly CapabilityEntryV1Placeholder[];
-  readonly removed: readonly Readonly<{ id: CommandKindV1; target: unknown }>[];
+  readonly changed: readonly CapabilityEntryV1[];
+  readonly removed: readonly Readonly<{ id: CommandKindV1; target: CapabilityTargetV1 }>[];
 }
 
 export const kernelCapabilitiesChangedPayloadV1Schema = z.strictObject({
-  changed: z.array(capabilityEntryV1PlaceholderSchema).readonly(),
-  removed: z.array(z.strictObject({ id: commandKindV1Schema, target: z.unknown() })).readonly(),
+  changed: z.array(capabilityEntryV1Schema).readonly(),
+  removed: z
+    .array(z.strictObject({ id: commandKindV1Schema, target: capabilityTargetV1Schema }))
+    .readonly(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +1431,7 @@ export const previewFailurePayloadV1Schema = z.strictObject({
 /**
  * `preview.circuitOpened`'s payload (§9 row, KCC:824): "`previewSessionId`, page
  * slug, source hash, attempts, final failure, and retry capability state." "retry
- * capability state" reuses the same `CapabilityStateV1Placeholder` TODO'd above for
+ * capability state" reuses the same closed `CapabilityStateV1` fixed above for
  * `kernel.capabilitiesChanged` — see that type's comment.
  */
 export interface PreviewCircuitOpenedPayloadV1 {
@@ -1097,7 +1440,7 @@ export interface PreviewCircuitOpenedPayloadV1 {
   readonly sourceHash: Sha256Hex;
   readonly attempts: number;
   readonly finalFailure: FailureDtoV1;
-  readonly retryCapability: CapabilityStateV1Placeholder;
+  readonly retryCapability: CapabilityStateV1;
 }
 
 export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
@@ -1106,7 +1449,7 @@ export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
   sourceHash: sha256HexSchema,
   attempts: positiveIntSchema,
   finalFailure: failureDtoV1Schema,
-  retryCapability: capabilityStateV1PlaceholderSchema,
+  retryCapability: capabilityStateV1Schema,
 });
 
 // ---------------------------------------------------------------------------

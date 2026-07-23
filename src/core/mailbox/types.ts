@@ -34,10 +34,12 @@ export type GuardTarget = unknown;
 export type KernelStateSnapshot = unknown;
 
 /**
- * §10.1's `CapabilityState`, mirrored here rather than imported: `core/protocol` has no
- * exported type for it yet, only the UNEXPORTED `CapabilityStateV1Placeholder` in
- * `core/protocol/model/event-payload.ts` (that file's own `TODO(6C)`). Structurally
- * identical on purpose — when 6C lands the real `CapabilityState`, this alias is the one
+ * §10.1's `CapabilityState`, mirrored here rather than imported. `core/protocol` now
+ * exports the real closed shape as `CapabilityStateV1` (`core/protocol/model/event-
+ * payload.ts`, closed in kernel-assembly WP-1 task 2) — structurally identical to this
+ * alias on purpose. Still not imported here: wiring `core/mailbox` to the real
+ * `capabilities`/`protocol` types is WP-1 task 8's job (building `readKernelState` and
+ * binding the guard/extractor seams), not this file's; until then this alias is the one
  * line that needs to change, not `dispatch.ts`'s branching on it.
  */
 export type GuardDecision =

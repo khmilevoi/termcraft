@@ -8,6 +8,7 @@ import {
   CommandDecodeError,
   type CommandKindV1,
   type CommandResultV1,
+  type EventPayloadByKindV1,
   type UnavailableReason,
 } from "core/protocol";
 import type { Clock } from "infrastructure/clock";
@@ -26,17 +27,21 @@ function makeClock(initialMs: number): Clock {
   return { now: () => new Date(initialMs) };
 }
 
-/** A minimal valid `kernel.snapshot` payload the event bus needs to construct. */
-function fakeSnapshotPayload() {
+/**
+ * A minimal valid `kernel.snapshot` payload the event bus needs to construct. Every
+ * model sits at its machine's real initial phase (§7.1-§7.7's `initial`, transcribed
+ * in each `reatom*StateMachine` factory).
+ */
+function fakeSnapshotPayload(): Omit<EventPayloadByKindV1["kernel.snapshot"], "eventSeq"> {
   return {
     models: {
-      project: null,
-      turn: null,
-      restore: null,
-      commit: null,
-      export: null,
-      preview: null,
-      migration: null,
+      project: { phase: "closed", trust: null },
+      turn: { phase: "idle", activeTurnId: null, commitIntentRecorded: false },
+      restore: { phase: "idle" },
+      commit: { phase: "idle" },
+      export: { phase: "idle" },
+      preview: { phase: "disabled", sourceKind: null },
+      migration: { phase: "idle" },
     },
     projectId: null,
     activePageSlug: null,
@@ -45,6 +50,7 @@ function fakeSnapshotPayload() {
     capabilities: [],
     pageDescriptors: [],
     gitStatus: { repositoryId: "repo", head: null, sequencerState: "none", scopes: {} },
+    agentIdentity: null,
   };
 }
 

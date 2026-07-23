@@ -53,19 +53,22 @@ export function event<K extends EventKindV1>(
   ) as EventOf<K>;
 }
 
-/** Builds a complete `kernel.snapshot` payload; `overrides` merge over an empty-project default. */
+/**
+ * Builds a complete `kernel.snapshot` payload; `overrides` merge over an empty-project
+ * default. Every model sits at its machine's real initial phase (§7.1-§7.7's `initial`).
+ */
 export function snapshotPayload(
   overrides: Partial<EventPayloadByKindV1["kernel.snapshot"]> = {},
 ): EventPayloadByKindV1["kernel.snapshot"] {
   return {
     models: {
-      project: null,
-      turn: null,
-      restore: null,
-      commit: null,
-      export: null,
-      preview: null,
-      migration: null,
+      project: { phase: "closed", trust: null },
+      turn: { phase: "idle", activeTurnId: null, commitIntentRecorded: false },
+      restore: { phase: "idle" },
+      commit: { phase: "idle" },
+      export: { phase: "idle" },
+      preview: { phase: "disabled", sourceKind: null },
+      migration: { phase: "idle" },
     },
     projectId: null,
     activePageSlug: null,
@@ -74,6 +77,7 @@ export function snapshotPayload(
     capabilities: [],
     pageDescriptors: [],
     gitStatus: { repositoryId: "test-repo", head: null, sequencerState: "idle", scopes: {} },
+    agentIdentity: null,
     eventSeq: "0",
     ...overrides,
   };

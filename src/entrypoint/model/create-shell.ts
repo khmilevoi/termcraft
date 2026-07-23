@@ -42,9 +42,9 @@ function demoShell(env: UiEnv): AppShell {
       activeChatId: uuidv7(),
       trust: "trusted",
       capabilities: [
-        { id: "chat.create", target: {}, state: { available: true } },
-        { id: "turn.start", target: {}, state: { available: true } },
-        { id: "export.start", target: {}, state: { available: true } },
+        { id: "chat.create", target: null, state: { available: true } },
+        { id: "turn.start", target: null, state: { available: true } },
+        { id: "export.start", target: null, state: { available: true } },
       ],
       pageDescriptors: [
         {

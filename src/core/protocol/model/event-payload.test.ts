@@ -4,6 +4,7 @@ import { uuidv7 } from "infrastructure/uuid";
 
 import { EVENT_KINDS_V1, EVENT_KIND_COUNT } from "./event-kind";
 import {
+  agentIdentityV1Schema,
   chatChangedPayloadV1Schema,
   commitPlanReadyPayloadV1Schema,
   commitStartedPayloadV1Schema,
@@ -64,16 +65,18 @@ describe("eventPayloadV1SchemaByKind closure", () => {
 });
 
 describe("kernelSnapshotPayloadV1Schema", () => {
+  const validModels = {
+    project: { phase: "ready", trust: "trusted" },
+    turn: { phase: "idle", activeTurnId: null, commitIntentRecorded: false },
+    restore: { phase: "idle" },
+    commit: { phase: "idle" },
+    export: { phase: "idle" },
+    preview: { phase: "disabled", sourceKind: null },
+    migration: { phase: "idle" },
+  };
+
   const valid = {
-    models: {
-      project: { tag: "ready" },
-      turn: { tag: "idle" },
-      restore: { tag: "idle" },
-      commit: { tag: "idle" },
-      export: { tag: "idle" },
-      preview: { tag: "idle" },
-      migration: { tag: "idle" },
-    },
+    models: validModels,
     projectId: uid(),
     activePageSlug: "dashboard",
     activeChatId: uid(),
@@ -81,6 +84,7 @@ describe("kernelSnapshotPayloadV1Schema", () => {
     capabilities: [{ id: "turn.start", target: null, state: { available: true } }],
     pageDescriptors: [],
     gitStatus: { repositoryId: "repo-1", head: SHA, sequencerState: "idle", scopes: {} },
+    agentIdentity: { backendId: "claude", modelLabel: "Claude Sonnet 5" },
     eventSeq: "42",
   };
 
@@ -110,6 +114,81 @@ describe("kernelSnapshotPayloadV1Schema", () => {
 
   test("rejects a non-canonical eventSeq", () => {
     expect(kernelSnapshotPayloadV1Schema.safeParse({ ...valid, eventSeq: "007" }).success).toBe(
+      false,
+    );
+  });
+
+  test("rejects a model whose phase is outside its own machine's closed set", () => {
+    const bad = {
+      ...valid,
+      models: { ...validModels, project: { phase: "not-a-real-phase", trust: null } },
+    };
+    expect(kernelSnapshotPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  test("rejects a phase that is real but belongs to a DIFFERENT machine's model", () => {
+    // "publishing" is a real ExportState/MigrationState member, never a ProjectState one.
+    const bad = {
+      ...valid,
+      models: { ...validModels, project: { phase: "publishing", trust: null } },
+    };
+    expect(kernelSnapshotPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  test("accepts every one of the seven models at their machine's real initial phase", () => {
+    const initial = {
+      project: { phase: "closed", trust: null },
+      turn: { phase: "idle", activeTurnId: null, commitIntentRecorded: false },
+      restore: { phase: "idle" },
+      commit: { phase: "idle" },
+      export: { phase: "idle" },
+      preview: { phase: "disabled", sourceKind: null },
+      migration: { phase: "idle" },
+    };
+    expect(kernelSnapshotPayloadV1Schema.safeParse({ ...valid, models: initial }).success).toBe(
+      true,
+    );
+  });
+
+  test("rejects a turn model missing commitIntentRecorded — no unknown fields allowed dropped either", () => {
+    const { commitIntentRecorded: _dropped, ...turnWithoutIntent } = validModels.turn;
+    const bad = { ...valid, models: { ...validModels, turn: turnWithoutIntent } };
+    expect(kernelSnapshotPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  test("accepts a null agentIdentity before any backend is selected", () => {
+    expect(kernelSnapshotPayloadV1Schema.safeParse({ ...valid, agentIdentity: null }).success).toBe(
+      true,
+    );
+  });
+
+  test("rejects an agentIdentity missing modelLabel", () => {
+    const bad = { ...valid, agentIdentity: { backendId: "claude" } };
+    expect(kernelSnapshotPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("agentIdentityV1Schema", () => {
+  test("accepts null and a complete identity, rejects an unknown key", () => {
+    expect(agentIdentityV1Schema.safeParse(null).success).toBe(true);
+    expect(
+      agentIdentityV1Schema.safeParse({ backendId: "claude", modelLabel: "Claude Sonnet 5" })
+        .success,
+    ).toBe(true);
+    expect(
+      agentIdentityV1Schema.safeParse({
+        backendId: "claude",
+        modelLabel: "Claude Sonnet 5",
+        extra: "x",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects an empty backendId or modelLabel", () => {
+    expect(
+      agentIdentityV1Schema.safeParse({ backendId: "", modelLabel: "Claude Sonnet 5" }).success,
+    ).toBe(false);
+    expect(agentIdentityV1Schema.safeParse({ backendId: "claude", modelLabel: "" }).success).toBe(
       false,
     );
   });
@@ -150,6 +229,55 @@ describe("kernelStateChangedPayloadV1Schema", () => {
       expect(kernelStateChangedPayloadV1Schema.safeParse({ ...valid, modelId }).success).toBe(true);
     }
   });
+
+  test("rejects a tag outside every one of the seven machines' phase unions", () => {
+    expect(
+      kernelStateChangedPayloadV1Schema.safeParse({ ...valid, nextTag: "not-a-real-phase" })
+        .success,
+    ).toBe(false);
+    expect(
+      kernelStateChangedPayloadV1Schema.safeParse({ ...valid, previousTag: "not-a-real-phase" })
+        .success,
+    ).toBe(false);
+  });
+
+  test("accepts a tag from ANY of the seven machines — the union is flat, not modelId-scoped", () => {
+    // "backing-up" is only ever a MigrationState member, yet this is a turn.state row —
+    // the task-2 design choice is a flat union over all seven phases, not one
+    // discriminated per modelId (see event-payload.ts's own comment on the choice).
+    expect(
+      kernelStateChangedPayloadV1Schema.safeParse({ ...valid, nextTag: "backing-up" }).success,
+    ).toBe(true);
+  });
+
+  test("rejects an action outside every one of the seven machines' closed action sets", () => {
+    expect(
+      kernelStateChangedPayloadV1Schema.safeParse({ ...valid, action: "kernel.turn.doSomething" })
+        .success,
+    ).toBe(false);
+  });
+
+  test("accepts a real full-name action from each of the seven machines", () => {
+    const actions = [
+      "kernel.project.beginCreate",
+      "kernel.turn.beginAdmission",
+      "kernel.restore.beginPlan",
+      "kernel.commit.beginPlan",
+      "kernel.export.begin",
+      "kernel.preview.enable",
+      "kernel.migration.beginPlan",
+    ];
+    expect(actions.length).toBe(7);
+    for (const action of actions) {
+      expect(kernelStateChangedPayloadV1Schema.safeParse({ ...valid, action }).success).toBe(true);
+    }
+  });
+
+  test("rejects Project/Turn's bare verb form — the wire action is always the FULL kernel.<domain>.<verb> name", () => {
+    expect(
+      kernelStateChangedPayloadV1Schema.safeParse({ ...valid, action: "beginAdmission" }).success,
+    ).toBe(false);
+  });
 });
 
 describe("kernelCapabilitiesChangedPayloadV1Schema", () => {
@@ -165,6 +293,34 @@ describe("kernelCapabilitiesChangedPayloadV1Schema", () => {
   test("rejects an unavailable state missing its non-empty reasons", () => {
     const bad = {
       changed: [{ id: "turn.start", target: null, state: { available: false, reasons: [] } }],
+      removed: [],
+    };
+    expect(kernelCapabilitiesChangedPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  test("accepts the real per-kind target shape from Task 1's capability-target table", () => {
+    const withRealTarget = {
+      changed: [
+        {
+          id: "preview.setMode",
+          target: { previewSessionId: uid(), mode: "static" },
+          state: { available: true },
+        },
+      ],
+      removed: [],
+    };
+    expect(kernelCapabilitiesChangedPayloadV1Schema.safeParse(withRealTarget).success).toBe(true);
+  });
+
+  test("rejects a target shape that matches none of the 43 real kinds", () => {
+    const bad = {
+      changed: [
+        {
+          id: "turn.start",
+          target: { bogusField: "not a real target shape" },
+          state: { available: true },
+        },
+      ],
       removed: [],
     };
     expect(kernelCapabilitiesChangedPayloadV1Schema.safeParse(bad).success).toBe(false);

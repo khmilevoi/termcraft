@@ -100,10 +100,10 @@ describe("applyIntent — slash menu", () => {
         capabilities: [
           {
             id: "chat.create",
-            target: {},
+            target: null,
             state: { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] },
           },
-          { id: "export.start", target: {}, state: { available: true } },
+          { id: "export.start", target: null, state: { available: true } },
         ],
       }),
     );
@@ -126,9 +126,13 @@ describe("applyIntent — slash menu", () => {
         projectId: uuidv7(),
         trust: "trusted",
         capabilities: [
-          { id: "chat.create", target: {}, state: { available: true } },
-          { id: "export.start", target: {}, state: { available: true } },
-          { id: "model.select", target: {}, state: { available: true } },
+          { id: "chat.create", target: null, state: { available: true } },
+          { id: "export.start", target: null, state: { available: true } },
+          {
+            id: "model.select",
+            target: { backend: "claude", model: "sonnet", effort: "high" },
+            state: { available: true },
+          },
         ],
       }),
     );
@@ -147,8 +151,8 @@ describe("applyIntent — slash menu", () => {
         projectId: uuidv7(),
         trust: "trusted",
         capabilities: [
-          { id: "chat.create", target: {}, state: { available: true } },
-          { id: "export.start", target: {}, state: { available: true } },
+          { id: "chat.create", target: null, state: { available: true } },
+          { id: "export.start", target: null, state: { available: true } },
         ],
       }),
     );
@@ -177,7 +181,7 @@ describe("applyIntent — slash menu", () => {
       snapshot({
         projectId: uuidv7(),
         trust: "untrusted-read-only",
-        capabilities: [{ id: "chat.create", target: {}, state: { available: true } }],
+        capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
       }),
     );
     deps.local.composer.set("/new");
