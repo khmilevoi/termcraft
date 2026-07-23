@@ -10,6 +10,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   overlay: null,
   composerValue: "",
   exportPopupOpen: false,
+  homeHealthPresent: true,
   ...over,
 });
 
@@ -61,6 +62,24 @@ describe("resolveKey — Home", () => {
 
   test("Tab on Home does nothing", () => {
     expect(resolveKey(key({ name: "tab" }), ctx({ screen: "home" }))).toEqual({ kind: "none" });
+  });
+
+  test("r re-checks agent health on the missing-agent error screen (M15)", () => {
+    expect(
+      resolveKey(
+        key({ name: "r", sequence: "r" }),
+        ctx({ screen: "home", homeHealthPresent: false }),
+      ),
+    ).toEqual({ kind: "home-recheck" });
+  });
+
+  test("r still types into the idle Home prompt when the agent is present", () => {
+    expect(
+      resolveKey(
+        key({ name: "r", sequence: "r" }),
+        ctx({ screen: "home", homeHealthPresent: true }),
+      ),
+    ).toEqual({ kind: "home-input", ch: "r" });
   });
 });
 

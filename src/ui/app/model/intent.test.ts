@@ -8,6 +8,8 @@ import { applyIntent } from "./intent";
 
 beforeEach(() => resetEventSeq());
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 function dispatchedKinds(kernel: { dispatched: readonly unknown[] }): string[] {
   return kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
 }
@@ -292,6 +294,37 @@ describe("applyIntent — export popup dismissal (M14)", () => {
     applyIntent({ kind: "export-dismiss" }, deps);
     expect(deps.local.exportDismissed()).toBeNull();
     expect(kernel.dispatched).toHaveLength(0);
+  });
+});
+
+describe("applyIntent — Home agent-health re-check (M15)", () => {
+  test("home-recheck re-runs the injected health probe and updates the health atom", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ present: true, agent: "codex", version: "0.99", detail: "agent ready" }),
+    );
+    applyIntent({ kind: "home-recheck" }, deps);
+    await tick();
+    expect(deps.local.homeHealth()).toEqual({
+      present: true,
+      agent: "codex",
+      version: "0.99",
+      detail: "agent ready",
+    });
+  });
+
+  test("home-recheck reflects a still-missing agent from the probe", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" }),
+    );
+    applyIntent({ kind: "home-recheck" }, deps);
+    await tick();
+    expect(deps.local.homeHealth()).toEqual({
+      present: false,
+      agent: "codex",
+      detail: "codex CLI not found",
+    });
   });
 });
 

@@ -24,12 +24,19 @@ export interface KeyContext {
   readonly composerValue: string;
   /** An undismissed `export.completed`/`export.failed` result is showing (M14). */
   readonly exportPopupOpen: boolean;
+  /**
+   * The current Home agent-health reading's `present` flag (M15). Only meaningful on
+   * `screen === "home"`: `true` renders the idle prompt (where `r` types into it), `false`
+   * renders the missing-agent error panel (where `r` re-checks health instead).
+   */
+  readonly homeHealthPresent: boolean;
 }
 
 export type KeyIntent =
   | { readonly kind: "home-input"; readonly ch: string }
   | { readonly kind: "home-backspace" }
   | { readonly kind: "home-submit" }
+  | { readonly kind: "home-recheck" }
   | { readonly kind: "composer-input"; readonly ch: string }
   | { readonly kind: "composer-backspace" }
   | { readonly kind: "composer-submit" }
@@ -132,6 +139,12 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     context.screen === "workspace" && context.focus === "composer" && context.overlay === null;
 
   if (context.screen === "home") {
+    // design/12-errors-edge-states.dc.html (homeErr): the missing-agent error panel has no
+    // prompt input, and its status bar reads "r  re-check" — but the idle screen's prompt is
+    // free text, so a literal "r" there must still type, not re-check (M15).
+    if (context.homeHealthPresent === false && key.sequence === "r") {
+      return { kind: "home-recheck" };
+    }
     if (RETURN_NAMES.has(key.name)) return { kind: "home-submit" };
     if (key.name === "backspace") return { kind: "home-backspace" };
     const ch = printableChar(key);

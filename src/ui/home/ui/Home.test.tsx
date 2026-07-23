@@ -134,4 +134,28 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     await handle.render();
     expect(findRun(handle.capture(), "describe")).toBeUndefined();
   });
+
+  test("renders the r re-check hint in the faint hue (M15)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 14 });
+    open = handle;
+    handle.mount(<Home {...errorProps} />);
+    await handle.render();
+    const run = findRun(handle.capture(), "then reopen, or press r to re-check");
+    expect(run).toBeDefined();
+    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
+  });
+
+  test("a re-check that flips present:true renders the idle health line instead (M15)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 20 });
+    open = handle;
+    handle.mount(<Home {...errorProps} width={80} height={20} />);
+    await handle.render();
+    expect(findRun(handle.capture(), "✗ codex CLI not found")).toBeDefined();
+
+    handle.mount(<Home {...baseProps} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "✗ codex CLI not found")).toBeUndefined();
+    expect(findRun(frame, "● codex 0.34 · agent ready")).toBeDefined();
+  });
 });

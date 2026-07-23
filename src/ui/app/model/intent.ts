@@ -27,6 +27,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "home-backspace":
       local.prompt.set(local.prompt().slice(0, -1));
       return;
+    case "home-recheck":
+      // No Kernel command reports agent health, and Home precedes any project/kernel.snapshot
+      // (App.tsx's comment at HOME_HEALTH's former definition states this) — re-run the
+      // injected probe instead (M15). Fire-and-forget, like every other dispatch here: the
+      // result lands in local.homeHealth, which Home re-reads reactively.
+      void deps.refreshHomeHealth();
+      return;
     case "home-submit": {
       const text = local.prompt();
       if (text.length === 0) return;

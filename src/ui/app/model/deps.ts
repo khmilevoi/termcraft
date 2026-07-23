@@ -1,12 +1,14 @@
 import {
   type Atom,
   type Computed,
+  action,
   atom,
   bind,
   computed,
   isInit,
   peek,
   sleep,
+  withAsync,
   withComputed,
   withConnectHook,
   wrap,
@@ -16,6 +18,7 @@ import * as errore from "errore";
 import type { UUIDv7 } from "core/protocol";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
+import type { HomeAgentHealth } from "ui/home";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
@@ -65,6 +68,13 @@ export interface UiLocalState {
    * `operationId` and hides once it matches this atom.
    */
   readonly exportDismissed: Atom<UUIDv7 | null>;
+  /**
+   * The Home agent-health reading (M15) — Home's `health` prop reads this instead of a
+   * hardcoded literal. There is no Kernel command that reports agent health (Home is shown
+   * *before* any project opens, so there is no `kernel.snapshot` to read either), so this is
+   * seeded from — and refreshed by — the {@link UiDeps.refreshHomeHealth} probe.
+   */
+  readonly homeHealth: Atom<HomeAgentHealth>;
 }
 
 /**
@@ -111,6 +121,13 @@ export interface UiDeps {
   readonly runtime: Atom<undefined>;
   readonly interaction: PreviewInteractionState;
   readonly local: UiLocalState;
+  /**
+   * Re-runs the agent-health probe and updates {@link UiLocalState.homeHealth} (M15's
+   * `home-recheck` intent calls this). Named and `withAsync`-extended per RTM-A02/A03; a fresh
+   * probe result always replaces the previous one, matching a manual user-triggered re-check
+   * rather than a cached/derived read.
+   */
+  readonly refreshHomeHealth: () => Promise<void>;
 }
 
 export class UiPreviewStreamError extends errore.createTaggedError({
@@ -118,11 +135,27 @@ export class UiPreviewStreamError extends errore.createTaggedError({
   message: "UI preview stream failed",
 }) {}
 
+/**
+ * The MVP default Home agent-health reading (M15): no CLI-checking probe is wired yet — that
+ * binding is a phase-8 composition-root concern (the `agentHealthProbe` parameter below is its
+ * named injection point) — so this preserves the "agent ready" idle layout Home showed before
+ * this task, rather than inventing a different default.
+ */
+const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
+  present: true,
+  agent: "codex",
+  version: "0.34",
+  detail: "agent ready",
+};
+
 /** Builds a fresh, self-consistent `UiDeps` around a `KernelPort` and an initial terminal size. */
 export function createUiDeps(
   port: KernelPort,
   initialSize: Readonly<{ w: number; h: number }>,
   env: UiEnv = { root: ".", workspaceIdentity: "local" },
+  // The named M15 injection point: the phase-8 composition root supplies a probe that actually
+  // checks the agent CLI on PATH; tests inject a fake. The default keeps today's MVP reading.
+  agentHealthProbe: () => Promise<HomeAgentHealth> = () => Promise.resolve(DEFAULT_HOME_HEALTH),
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
@@ -255,7 +288,14 @@ export function createUiDeps(
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
+    homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
   };
+
+  const refreshHomeHealth = action(async () => {
+    const result = await wrap(agentHealthProbe());
+    local.homeHealth.set(result);
+  }, "ui.app.refreshHomeHealth").extend(withAsync());
+
   const deps: UiDeps = {
     port,
     env,
@@ -269,6 +309,7 @@ export function createUiDeps(
     runtime,
     interaction,
     local,
+    refreshHomeHealth,
   };
   return deps;
 }

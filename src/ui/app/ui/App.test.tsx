@@ -52,6 +52,27 @@ const workspaceSnapshot = () =>
   });
 
 describe("App (end-to-end, FakeKernel-driven)", () => {
+  test("Home's r key re-runs the agent-health probe and flips from the missing-agent screen to idle (M15)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ present: true, agent: "codex", version: "0.34", detail: "agent ready" }),
+    );
+    // No Kernel command reports agent health and Home precedes any project, so this test seeds
+    // the "missing agent" reading directly on the UI-local atom (deps.ts) rather than through a
+    // kernel event — matching how the probe itself would report a failed CLI check.
+    deps.local.homeHealth.set({ present: false, agent: "codex", detail: "codex CLI not found" });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitForFrame((frame) => frame.includes("codex CLI not found"));
+    await renderer.act(() => renderer.mockInput.typeText("r"));
+    const frame = await renderer.waitForFrame((output) => output.includes("agent ready"));
+    expect(frame).toContain("agent ready");
+    expect(frame).not.toContain("codex CLI not found");
+  });
+
   test("acknowledges a painted frame and opens pin input from its matching geometry result", async () => {
     const kernel = createFakeKernel();
     const preview = createFakePreviewSession();

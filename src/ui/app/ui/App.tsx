@@ -20,15 +20,6 @@ import { applyIntent } from "../model/intent";
 import { resolveKey } from "../model/keymap";
 
 const HOME_COMBO = { agent: "codex", model: "gpt-5.5", effort: "high" } as const;
-// Real agent-health wiring is a phase-8 concern (no Kernel command reports health directly);
-// the MVP shows "agent ready" so Home renders its idle layout. The error variant is reachable
-// once health derivation lands.
-const HOME_HEALTH = {
-  present: true,
-  agent: "codex",
-  version: "0.34",
-  detail: "agent ready",
-} as const;
 
 /**
  * True while an undismissed `export.completed`/`export.failed` result is showing (M14): the
@@ -124,6 +115,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         overlay: deps.local.overlay(),
         composerValue: deps.local.composer(),
         exportPopupOpen: exportPopupShowing(deps),
+        homeHealthPresent: deps.local.homeHealth().present,
       }),
       deps,
     );
@@ -152,7 +144,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         id="app-home"
         width={size.w}
         height={size.h}
-        health={HOME_HEALTH}
+        health={deps.local.homeHealth()}
         prompt={deps.local.prompt()}
         combo={HOME_COMBO}
       />
