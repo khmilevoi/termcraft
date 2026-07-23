@@ -7,6 +7,7 @@ export type { ComposerAttachInput } from "./model/attach";
 export { deriveComposerAttach } from "./model/attach";
 export type { EscOutcome, EscState, FocusTarget, OverlayKind } from "./model/focus";
 export { nextFocus, resolveEsc, singleCharKeysActive } from "./model/focus";
+export { derivePinListRows } from "./model/pins";
 export type { TabEntry } from "./model/tabs";
 export { deriveTabs, tabWidth, tabsOverflow } from "./model/tabs";
 export type { WorkspaceDeps, WorkspaceLocalState } from "./types";

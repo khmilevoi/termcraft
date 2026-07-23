@@ -5,7 +5,7 @@ import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, Composer, PinList } from "ui/chat";
-import type { MarkdownLine, PinListRow } from "ui/chat";
+import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
 import {
@@ -24,6 +24,7 @@ import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { deriveComposerAttach } from "../model/attach";
+import { derivePinListRows } from "../model/pins";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
@@ -351,18 +352,18 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                * per-pin anchor-resolution signal — anchor resolution is a host-render
                * concern (`rectOf`, spec §4.2) and `PreviewOverlays` places every open pin
                * by fraction without ever marking one an orphan. So `visible` has no kernel
-               * source yet; every open pin is passed `visible: true` here (matching what
-               * the preview always draws) until a render-resolved element-id set reaches
-               * the mirror. The full open/resolved/orphan row structure and the exact
-               * §3.2 "not visible…" marker copy are implemented in `PinList` and stay
-               * dormant for the orphan case, rather than fabricating a resolution signal.
+               * source yet; `derivePinListRows` passes `visible: true` for every pin
+               * (matching what the preview always draws) until a render-resolved
+               * element-id set reaches the mirror. The full open/resolved/orphan row
+               * structure and the exact §3.2 "not visible…" marker copy are implemented in
+               * `PinList` and stay dormant for the orphan case, rather than fabricating a
+               * resolution signal. `derivePinListRows` also numbers each open pin's badge
+               * among open pins only, matching `PreviewOverlays`' own numbering.
                */}
               <PinList
                 id="ws-pins"
                 pageSlug={project.activePageSlug ?? ""}
-                pins={pins.map(
-                  (pinDto, index): PinListRow => ({ pin: pinDto, index, visible: true }),
-                )}
+                pins={derivePinListRows(pins)}
               />
             </box>
             <Composer

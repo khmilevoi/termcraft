@@ -160,6 +160,42 @@ describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
     expect(text).toContain("table · why always top?");
     expect(text).toContain("network · add labels · reopen");
   });
+
+  test("numbers the open pin's badge among open pins only, matching PreviewOverlays' numbering", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("pins.changed", {
+        pageSlug: "main",
+        // A resolved pin precedes the (only) open pin in the mirror's array order.
+        affectedPins: [
+          pin({ status: "resolved", text: "resolved first" }),
+          pin({ text: "open second" }),
+        ],
+        affectedRecordIds: [],
+        causeId: uuidv7(),
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // The open pin is the FIRST (and only) open pin, so its badge must read "1" — never "2",
+    // which numbering by position in the full (open+resolved) array would produce, and which
+    // PreviewOverlays (numbering among open pins only) would never draw for this scenario.
+    const badge = rows
+      .flat()
+      .find((run) => run.text === "1" && extractRgb(run.bg) === SHELL_PALETTE.amber);
+    expect(badge).toBeDefined();
+  });
 });
 
 describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08-pin-comments.dc.html, M13)", () => {
