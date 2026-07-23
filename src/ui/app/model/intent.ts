@@ -1,6 +1,7 @@
 import type { CommandResultV1 } from "core/protocol";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
+import { sortChatSummariesNewestFirst } from "ui/mirror";
 import { nextFocus, resolveEsc } from "ui/workspace";
 
 import type { UiDeps } from "./deps";
@@ -104,7 +105,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     }
     case "chat-switch": {
-      const selected = [...deps.mirror.chats().summaries.values()][local.chatSelection()];
+      // Sort through the same helper the popup's rendered rows use (App.tsx renderOverlay) so
+      // the index `chatSelection` holds always targets the row the user sees selected.
+      const selected = sortChatSummariesNewestFirst(deps.mirror.chats().summaries.values())[
+        local.chatSelection()
+      ];
       if (selected === undefined) return;
       dispatchAndReport(dispatcher.dispatch("chat.switch", { chatId: selected.chatId }));
       local.overlay.set(null);
@@ -217,7 +222,7 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     return;
   }
   const chats = deps.mirror.chats();
-  const activeIndex = [...chats.summaries.values()].findIndex(
+  const activeIndex = sortChatSummariesNewestFirst(chats.summaries.values()).findIndex(
     (summary) => summary.chatId === chats.activeChatId,
   );
   deps.local.chatSelection.set(activeIndex < 0 ? 0 : activeIndex);

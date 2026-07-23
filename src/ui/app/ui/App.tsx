@@ -3,7 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import { Home } from "ui/home";
-import { MIN_FRAME } from "ui/mirror";
+import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
 import { ChatListPopup, ExportPopup, PinInputPopup, TrustPrompt } from "ui/popups";
 import { EnlargePlaceholder } from "ui/preview";
 import { SHELL_PALETTE } from "ui/theme";
@@ -29,7 +29,10 @@ function renderOverlay(deps: UiDeps) {
   const overlay = deps.local.overlay();
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
-    const rows = [...chats.summaries.values()].map((summary) => ({
+    // Design 24-chats.dc.html (wsChats): rows list newest-first. `chat-move`/`chat-switch`
+    // (intent.ts) sort the very same summaries through the same helper, so the rendered row
+    // order and the selection index they resolve always agree.
+    const rows = sortChatSummariesNewestFirst(chats.summaries.values()).map((summary) => ({
       chatId: summary.chatId,
       label: summary.chatId.slice(0, 8),
       when: summary.createdAt,

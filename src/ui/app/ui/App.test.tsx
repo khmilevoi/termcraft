@@ -312,6 +312,62 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(titleRow).toBeLessThan(25);
   });
 
+  test("sorts the chat-list popup newest-first and keeps ↑/↓/⏎ selection in agreement (design 24-chats.dc.html, wsChats)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const oldChatId = uuidv7();
+    const midChatId = uuidv7();
+    const newChatId = uuidv7();
+    // uuidv7 embeds a millisecond timestamp, so three ids minted back-to-back in one test can
+    // share their first 8 hex chars (the row `label`) — identify rows by `createdAt` instead,
+    // which this test controls directly and keeps distinct.
+    const OLD_TS = "2026-07-20T00:00:00.000Z";
+    const MID_TS = "2026-07-21T00:00:00.000Z";
+    const NEW_TS = "2026-07-22T00:00:00.000Z";
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("chat.changed", {
+          activeChatId: oldChatId,
+          added: [
+            { chatId: oldChatId, createdAt: OLD_TS },
+            { chatId: midChatId, createdAt: MID_TS },
+            { chatId: newChatId, createdAt: NEW_TS },
+          ],
+          updated: [],
+          removedChatIds: [],
+        }),
+      );
+      deps.local.overlay.set("chat-list");
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes(NEW_TS));
+    const dataRows = frame
+      .split("\n")
+      .filter((row) => row.includes(OLD_TS) || row.includes(MID_TS) || row.includes(NEW_TS));
+    expect(dataRows).toHaveLength(3);
+    expect(dataRows[0]).toContain(NEW_TS);
+    expect(dataRows[1]).toContain(MID_TS);
+    expect(dataRows[2]).toContain(OLD_TS);
+
+    // Default selection (index 0) already targets the top/newest row; round-trip ↓↓ then ↑↑ and
+    // confirm ⏎ still switches to the newest chat — the rendered order and the selection index
+    // the `chat-move`/`chat-switch` intents resolve must agree (both sort through the same helper).
+    await renderer.act(() => renderer.mockInput.pressArrow("down"));
+    await renderer.act(() => renderer.mockInput.pressArrow("down"));
+    await renderer.act(() => renderer.mockInput.pressArrow("up"));
+    await renderer.act(() => renderer.mockInput.pressArrow("up"));
+    await renderer.act(() => renderer.mockInput.pressEnter());
+    expect(kernel.dispatched).toHaveLength(1);
+    expect((kernel.dispatched[0] as { payload: { chatId: string } }).payload).toEqual({
+      chatId: newChatId,
+    });
+  });
+
   test("passes read-only state into the workspace presentation", async () => {
     const kernel = createFakeKernel();
     kernel.setSnapshot({

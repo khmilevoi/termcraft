@@ -21,6 +21,7 @@ export type {
 } from "./types";
 export type { Mirror } from "./model/mirror";
 export { createMirror } from "./model/mirror";
+export { sortChatSummariesNewestFirst } from "./model/chats";
 export { capabilitiesFromSnapshot, projectFromSnapshot } from "./model/seed";
 export type { ScreenInput } from "./model/screen";
 export { MIN_FRAME, createScreenAtom, deriveScreen } from "./model/screen";
