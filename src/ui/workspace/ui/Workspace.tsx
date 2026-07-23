@@ -23,6 +23,7 @@ import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
+import { deriveComposerAttach } from "../model/attach";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
@@ -262,6 +263,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
   const pins =
     project.activePageSlug === null ? [] : (mirror.pinsByPage().get(project.activePageSlug) ?? []);
+  const selection = mirror.selection();
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
   const pendingPin = interaction.pendingPin();
@@ -371,7 +373,11 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               disabled={props.readOnly || turn.phase === "running" || !composerFocused}
               placeholder={composerPlaceholder}
               value={composerValue}
-              attach={props.readOnly ? { text: "read-only — Send disabled", fg: "red" } : null}
+              attach={deriveComposerAttach({
+                readOnly: props.readOnly,
+                selection,
+                openPins: pins,
+              })}
             />
             {slashOpen && (
               <box id="ws-slash-anchor" position="absolute" left={0} right={0} bottom={3}>

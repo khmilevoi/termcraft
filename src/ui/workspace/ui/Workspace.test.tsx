@@ -162,6 +162,76 @@ describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
   });
 });
 
+describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08-pin-comments.dc.html, M13)", () => {
+  test("a live selection renders the ▣ chip line in the composer, at selFg", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("selection.changed", {
+        pageSlug: "main",
+        elementId: "gauge-cpu",
+        sourceHash: TEST_SHA,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const chip = findRun(rows, "▣ gauge-cpu");
+    expect(chip).toBeDefined();
+    expect(chip && extractRgb(chip.fg)).toBe(SHELL_PALETTE.selFg);
+  });
+
+  test("open pins with no selection render the 'N open pins attached' line at amberHi", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    const pin = (overrides: Partial<PinDtoV1>): PinDtoV1 => ({
+      pinId: uuidv7(),
+      pageSlug: "main",
+      elementId: "gauge-cpu",
+      fx: 0.5,
+      fy: 0.5,
+      text: "make this gauge red",
+      status: "open",
+      createdRecordId: uuidv7(),
+      latestRecordId: uuidv7(),
+      updatedAt: "2026-07-22T00:00:00.000Z",
+      ...overrides,
+    });
+    deps.mirror.apply(
+      event("pins.changed", {
+        pageSlug: "main",
+        affectedPins: [pin({}), pin({})],
+        affectedRecordIds: [],
+        causeId: uuidv7(),
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const attach = findRun(rows, "2 open pins attached · sent next");
+    expect(attach).toBeDefined();
+    expect(attach && extractRgb(attach.fg)).toBe(SHELL_PALETTE.amberHi);
+  });
+});
+
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
