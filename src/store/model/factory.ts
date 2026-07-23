@@ -1120,9 +1120,16 @@ async function openProject(deps: StoreDeps, root: AbsPath): Promise<Error | Open
 
   // 0. durability pre-flight (M5, storage-identity S4 / turn-durability S1/S13): refuse a
   // volume that cannot demonstrate durable writes BEFORE the lease acquire below performs the
-  // first write. `.termcraft` already exists for a real project, so the flush probe targets it
-  // directly rather than a directory that has to be created first.
-  const durabilityError = probeDurability(termcraftDir, { flush: deps.flushDir });
+  // first write. The probe targets `root` — the directory the caller pointed at, which is
+  // guaranteed to exist here — rather than `termcraftDir`. A healthy volume whose `root` simply
+  // isn't a project yet (no `.termcraft`) must fall through to the real "not a project" error
+  // below, not get misreported as a durability failure: `flushDir` opens its target with
+  // Win32 `OPEN_EXISTING`, so probing the maybe-absent `termcraftDir` would return
+  // `DirectoryFlushError{lastError: ERROR_PATH_NOT_FOUND}` for a merely-missing directory,
+  // indistinguishable from `lastError: ERROR_INVALID_FUNCTION` (the real no-write-through
+  // signal). `root` is on the same volume as `termcraftDir` (its parent), so the durability
+  // signal itself is unchanged.
+  const durabilityError = probeDurability(root, { flush: deps.flushDir });
   if (durabilityError instanceof Error) return durabilityError;
 
   // 1. lease
