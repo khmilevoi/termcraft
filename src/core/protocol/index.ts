@@ -139,3 +139,6 @@ export type {
   KernelStateChangedPayloadV1,
 } from "./model/event-payload";
 export { agentIdentityV1Schema, kernelStateChangedPayloadV1Schema } from "./model/event-payload";
+
+// --- M21 closed DTOs (WP-1 task 3): preview.geometryResult's closed §4.2 result union --
+export type { GeometryQueryResultV1, LayoutNodeV1 } from "./model/event-payload";

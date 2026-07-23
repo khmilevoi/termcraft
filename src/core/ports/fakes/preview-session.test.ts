@@ -74,7 +74,7 @@ describe("createFakePreviewSession", () => {
   test("queueQueryResult() scripts a resolved anchor for the next query(), one shot", async () => {
     const session = createFakePreviewSession(identity);
     session.queueQueryResult({
-      result: {},
+      result: { kind: "checkHit", hit: null },
       resolvedAnchor: { pageSlug: "home", elementId: "btn-1", fx: 0.5, fy: 0.5 },
     });
     const first = await session.query("token-1", { kind: "hit", x: 1, y: 1 });

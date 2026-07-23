@@ -99,12 +99,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
             frameSeq: "1",
           },
           queryKind: "pin-anchor",
-          result: {
-            pageSlug: "main",
-            elementId: "network",
-            rect: { x: 3, y: 2, width: 8, height: 3 },
-            label: 'panel "network"',
-          },
+          // M21's closed `GeometryQueryResultV1` (`core/protocol`): a bare `checkHit`
+          // carries only an element id — no `pageSlug`/`rect`/`label` — but neither
+          // this integration test's pin flow (which gates on `geometryToken` alone,
+          // `ui/preview/model/interaction.ts`'s `handleGeometryResult`) nor its hover/
+          // select flow inspects `result`'s content, so its exact shape is inert here.
+          result: { kind: "checkHit", hit: { id: "network" } },
           geometryToken,
         }),
       ),
@@ -155,12 +155,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
             frameSeq: "1",
           },
           queryKind: "hit",
-          result: {
-            pageSlug: "main",
-            elementId: "network",
-            rect: { x: 3, y: 2, width: 8, height: 3 },
-            label: 'panel "network"',
-          },
+          // M21's closed `GeometryQueryResultV1` (`core/protocol`): a bare `checkHit`
+          // carries only an element id — no `pageSlug`/`rect`/`label` — but neither
+          // this integration test's pin flow (which gates on `geometryToken` alone,
+          // `ui/preview/model/interaction.ts`'s `handleGeometryResult`) nor its hover/
+          // select flow inspects `result`'s content, so its exact shape is inert here.
+          result: { kind: "checkHit", hit: { id: "network" } },
           geometryToken: null,
         }),
       );
@@ -527,12 +527,10 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
         frameSeq: "1",
       },
       queryKind: "pin-anchor",
-      result: {
-        pageSlug: "main",
-        elementId: "network",
-        rect: { x: 3, y: 2, width: 8, height: 3 },
-        label: 'panel "network"',
-      },
+      // M21's closed `GeometryQueryResultV1` (`core/protocol`): the pin flow gates
+      // only on `geometryToken` (`handleGeometryResult`'s `purpose === "pin"`
+      // branch never reads `result`), so a bare resolved `checkHit` is enough here.
+      result: { kind: "checkHit", hit: { id: "network" } },
       geometryToken,
     });
     await renderer.act(() => kernel.emit(geometryResult));

@@ -1356,11 +1356,102 @@ const PREVIEW_QUERY_KINDS_V1 = ["hit", "rect", "describe", "layout", "pin-anchor
 export type PreviewQueryKindV1 = (typeof PREVIEW_QUERY_KINDS_V1)[number];
 
 /**
- * TODO: "closed geometry result" (§9 row for `preview.geometryResult`, KCC:821) is
- * defined by the host-supervision-protocol design, not this document. Structural
- * placeholder only.
+ * An absolute screen-space rectangle (design doc §4.2's `rectOf(id) → Rect`).
+ * Field names taken verbatim from the real producer, `host/render/types.ts`'s own
+ * `Rect` — `width`/`height`, NOT this package's WP-1 task brief's originally
+ * suggested `w`/`h` — because that host type is backed by OpenTUI's own
+ * `screenX`/`screenY`/`width`/`height` getters (`host/render/model/geometry.ts`'s
+ * `rectOfRenderable`), and CLAUDE.md forbids inventing field names once a real
+ * source fixes them.
  */
-const previewGeometryResultV1PlaceholderSchema = z.record(z.string(), z.unknown());
+export interface RectV1 {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+const rectV1Schema = z.strictObject({
+  x: nonNegativeIntSchema,
+  y: nonNegativeIntSchema,
+  width: nonNegativeIntSchema,
+  height: nonNegativeIntSchema,
+});
+
+/**
+ * `describe(id) → component kind + label` (design doc §4.2/§3.2). `host/render/
+ * types.ts`'s own `DescribedElement` has only `id`/`kind` today: `label` is a
+ * documented gap there ("not yet populated ... requires the runtime catalog's own
+ * per-component knowledge"), and the task brief's originally suggested extra
+ * `rect` field is not part of that host type either — this DTO mirrors the real
+ * producer exactly rather than inventing either field, and will grow `label`
+ * when the host does.
+ */
+export interface DescribedElementV1 {
+  readonly id: string;
+  readonly kind: string;
+}
+
+const describedElementV1Schema = z.strictObject({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+});
+
+/**
+ * One node of `layoutTree() → the resolved node tree` (design doc §4.2/§3.7:
+ * "id, kind, box, text, children"). Shape and field names taken verbatim from
+ * `host/render/types.ts`'s own `LayoutNode`/`host/render/model/geometry.ts`'s
+ * `layoutNodeOf`, diverging from the task brief's originally suggested shape in
+ * two ways the real producer fixes: the box is named `box` (not the brief's
+ * `rect`), and `id` is REQUIRED — not the brief's suggested `id?` — because
+ * `layoutNodeOf` always reads `renderable.id` unconditionally. `text` is omitted
+ * entirely, matching `LayoutNode`'s own documented gap ("omitted ... for the
+ * same reason `describe`'s `label` is").
+ */
+export interface LayoutNodeV1 {
+  readonly id: string;
+  readonly kind: string;
+  readonly box: RectV1;
+  readonly children: readonly LayoutNodeV1[];
+}
+
+const layoutNodeV1Schema: z.ZodType<LayoutNodeV1> = z.lazy(() =>
+  z.strictObject({
+    id: z.string().min(1),
+    kind: z.string().min(1),
+    box: rectV1Schema,
+    children: z.array(layoutNodeV1Schema).readonly(),
+  }),
+);
+
+/**
+ * `preview.geometryResult`'s closed "result" body (§9 row for `preview.
+ * geometryResult`, KCC:821: "closed geometry result"), keyed by design doc §4.2's
+ * own four query-FUNCTION names (`checkHit`/`rectOf`/`describe`/`layoutTree`) —
+ * a DIFFERENT vocabulary from this file's own wire-level `PreviewQueryKindV1`
+ * (`hit`/`rect`/`describe`/`layout`/`pin-anchor`, §10.1's `queryKind` enum
+ * naming the REQUEST family). A resolving `pin-anchor` request (wire
+ * `queryKind: "pin-anchor"`) always carries a `checkHit`-shaped result — §7.1 of
+ * the host-supervision-protocol design: "the Kernel-level `pin-anchor`
+ * refinement travels AS `query-hit` on the wire" — so this union has no separate
+ * fifth member, matching `host/supervisor/types.ts`'s own `GeometryQuery` (which
+ * likewise folds `pin-anchor` into `hit`).
+ */
+export type GeometryQueryResultV1 =
+  | Readonly<{ kind: "checkHit"; hit: Readonly<{ id: string }> | null }>
+  | Readonly<{ kind: "rectOf"; rect: RectV1 | null }>
+  | Readonly<{ kind: "describe"; element: DescribedElementV1 | null }>
+  | Readonly<{ kind: "layoutTree"; tree: LayoutNodeV1 }>;
+
+export const geometryQueryResultV1Schema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("checkHit"),
+    hit: z.strictObject({ id: z.string().min(1) }).nullable(),
+  }),
+  z.strictObject({ kind: z.literal("rectOf"), rect: rectV1Schema.nullable() }),
+  z.strictObject({ kind: z.literal("describe"), element: describedElementV1Schema.nullable() }),
+  z.strictObject({ kind: z.literal("layoutTree"), tree: layoutNodeV1Schema }),
+]);
 
 /**
  * `preview.geometryResult`'s payload (§9 row, KCC:821): "`previewSessionId`,
@@ -1375,7 +1466,7 @@ export interface PreviewGeometryResultPayloadV1 {
   readonly frameTokenId: FrameTokenV1;
   readonly frameIdentity: FrameIdentityV1;
   readonly queryKind: PreviewQueryKindV1;
-  readonly result: Readonly<Record<string, unknown>>;
+  readonly result: GeometryQueryResultV1;
   readonly geometryToken: GeometryTokenV1 | null;
 }
 
@@ -1384,7 +1475,7 @@ export const previewGeometryResultPayloadV1Schema = z.strictObject({
   frameTokenId: frameTokenV1Schema,
   frameIdentity: frameIdentityV1Schema,
   queryKind: z.enum(PREVIEW_QUERY_KINDS_V1),
-  result: previewGeometryResultV1PlaceholderSchema,
+  result: geometryQueryResultV1Schema,
   geometryToken: geometryTokenV1Schema.nullable(),
 });
 

@@ -90,7 +90,11 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
     },
     query(frameToken, query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
       queries.push({ frameToken, query });
-      return Promise.resolve(options.geometryResult ?? { result: {}, resolvedAnchor: null });
+      // Default "nothing resolved" answer: an unresolved `checkHit` (M21's closed
+      // `GeometryQueryResultV1`, `core/protocol`) — `options.geometryResult` overrides it.
+      return Promise.resolve(
+        options.geometryResult ?? { result: { kind: "checkHit", hit: null }, resolvedAnchor: null },
+      );
     },
   };
 

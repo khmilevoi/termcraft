@@ -14,6 +14,7 @@ import {
   exportProgressPayloadV1Schema,
   exportStartedPayloadV1Schema,
   exportTerminalPayloadV1Schema,
+  geometryQueryResultV1Schema,
   gitStatusChangedPayloadV1Schema,
   kernelCapabilitiesChangedPayloadV1Schema,
   kernelSnapshotPayloadV1Schema,
@@ -1032,7 +1033,7 @@ describe("previewGeometryResultPayloadV1Schema", () => {
     frameTokenId: uid(),
     frameIdentity,
     queryKind: "hit",
-    result: {},
+    result: { kind: "checkHit", hit: null },
     geometryToken: uid(),
   };
 
@@ -1064,6 +1065,71 @@ describe("previewGeometryResultPayloadV1Schema", () => {
         true,
       );
     }
+  });
+});
+
+describe("geometryQueryResultV1Schema (§4.2's checkHit/rectOf/describe/layoutTree, M21)", () => {
+  const rect = { x: 2, y: 3, width: 10, height: 4 };
+
+  test("checkHit: accepts a resolving hit and a null (nothing mounted at the point)", () => {
+    expect(
+      geometryQueryResultV1Schema.safeParse({ kind: "checkHit", hit: { id: "btn-1" } }).success,
+    ).toBe(true);
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "checkHit", hit: null }).success).toBe(
+      true,
+    );
+  });
+
+  test("rectOf: accepts a resolved rect and a null (unknown id)", () => {
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "rectOf", rect }).success).toBe(true);
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "rectOf", rect: null }).success).toBe(
+      true,
+    );
+  });
+
+  test("describe: accepts a resolved element (id + kind only — no label yet) and a null", () => {
+    expect(
+      geometryQueryResultV1Schema.safeParse({
+        kind: "describe",
+        element: { id: "btn-1", kind: "BoxRenderable" },
+      }).success,
+    ).toBe(true);
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "describe", element: null }).success).toBe(
+      true,
+    );
+  });
+
+  test("layoutTree: accepts a tree at depth >= 2 (root -> child -> grandchild)", () => {
+    const grandchild = { id: "leaf-1", kind: "TextRenderable", box: rect, children: [] };
+    const child = { id: "child-1", kind: "BoxRenderable", box: rect, children: [grandchild] };
+    const root = { id: "root", kind: "BoxRenderable", box: rect, children: [child] };
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "layoutTree", tree: root }).success).toBe(
+      true,
+    );
+  });
+
+  test("layoutTree: rejects a tree whose grandchild is missing its required 'kind'", () => {
+    const malformedGrandchild = { id: "leaf-1", box: rect, children: [] };
+    const child = {
+      id: "child-1",
+      kind: "BoxRenderable",
+      box: rect,
+      children: [malformedGrandchild],
+    };
+    const root = { id: "root", kind: "BoxRenderable", box: rect, children: [child] };
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "layoutTree", tree: root }).success).toBe(
+      false,
+    );
+  });
+
+  test("rejects a kind outside the closed four-member union", () => {
+    expect(geometryQueryResultV1Schema.safeParse({ kind: "hit", hit: null }).success).toBe(false);
+  });
+
+  test("rejects an unexpected extra field on a variant (strict objects)", () => {
+    expect(
+      geometryQueryResultV1Schema.safeParse({ kind: "checkHit", hit: null, extra: "x" }).success,
+    ).toBe(false);
   });
 });
 

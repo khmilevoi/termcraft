@@ -72,12 +72,11 @@ function geometryEvent(
       frameSeq: "1",
     },
     queryKind,
-    result: {
-      pageSlug: "main",
-      elementId: "network",
-      rect: { x: 3, y: 2, width: 8, height: 3 },
-      label: 'panel "network"',
-    },
+    // M21's closed `GeometryQueryResultV1` (`core/protocol`): a bare `checkHit`
+    // carries only a resolved element id — no `pageSlug`/`rect`/`label` the way
+    // this module's own `parseHitGeometry` still checks for (see the two tests
+    // below that document the resulting hover/selection gap explicitly).
+    result: { kind: "checkHit", hit: { id: "network" } },
     geometryToken,
   });
 }
@@ -155,7 +154,7 @@ describe("preview interaction token chain", () => {
     expect(deps.local.overlay()).toBe("pin-input");
   });
 
-  test("hover to select ignores the first hit and applies only the promoted latest hit", () => {
+  test("hover to select ignores the first hit's result and applies only the promoted latest hit's result", () => {
     const { deps, kernel, uiFrame } = harness();
     acknowledgeFrame(deps, uiFrame);
 
@@ -175,16 +174,19 @@ describe("preview interaction token chain", () => {
       query: { kind: "hit", x: 7, y: 8 },
     });
 
+    // The promoted (second) query's own result IS applied here — but a bare
+    // `checkHit` result (M21's closed `GeometryQueryResultV1`) carries no
+    // rect/label/pageSlug, so `parseHitGeometry` still can't resolve a
+    // selection from it; only the token/queryKind promotion itself is
+    // observable (no third dispatch fires). See the "structural narrowing"
+    // test below for the same gap, documented in full.
     handleGeometryResult(
       deps,
       geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
     );
-    expect(deps.interaction.hover()).toEqual({
-      rect: { x: 3, y: 2, width: 8, height: 3 },
-      label: 'panel "network"',
-    });
-    expect(deps.interaction.selectionRect()).toEqual({ x: 3, y: 2, width: 8, height: 3 });
-    expect((kernel.dispatched[2] as { kind: string }).kind).toBe("selection.set");
+    expect(deps.interaction.hover()).toBeNull();
+    expect(deps.interaction.selectionRect()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(2);
   });
 
   test("three rapid intents retain only the newest queued geometry request", () => {
@@ -317,33 +319,50 @@ describe("preview interaction token chain", () => {
     expect(deps.local.overlay()).toBe("pin-input");
   });
 
-  test("a selected hit dispatches selection.set only after structural narrowing", () => {
+  /**
+   * DISCOVERED GAP (M21, WP-1 task 3): this test used to prove `parseHitGeometry`
+   * rejects a malformed `result` bag and accepts a well-formed one, dispatching
+   * `selection.set` only for the latter. Now that `preview.geometryResult`'s
+   * `result` is CLOSED to design §4.2's real per-query shapes
+   * (`GeometryQueryResultV1`, `core/protocol`), a bare `checkHit` is
+   * `{ kind: "checkHit"; hit: { id: string } | null }` — it never carries
+   * `pageSlug`/`rect`/`label`, the fields `parseHitGeometry` still checks for.
+   * Neither an unresolved nor a resolved `checkHit` can complete a
+   * `selection.set` today, so this test now proves exactly that (both a
+   * non-resolving and a resolving `checkHit` are inert) rather than proving a
+   * structural-narrowing distinction that the closed DTO no longer admits.
+   * Restoring the hover-highlight/selection-chip feature needs a follow-up task
+   * that chains `rectOf`/`describe` after a resolving `checkHit` — out of scope
+   * for the DTO closure itself.
+   */
+  test("a selected hit never dispatches selection.set: a bare checkHit carries no page/element context (M21)", () => {
     const { deps, kernel, uiFrame } = harness();
     acknowledgeFrame(deps, uiFrame);
     requestGeometry(deps, "select", 4, 5);
 
-    const malformed = geometryEvent(
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
+    );
+    expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
+      "preview.queryGeometry",
+    ]);
+
+    requestGeometry(deps, "select", 4, 5);
+    const resolved = geometryEvent(
       uiFrame.handle.previewSessionId,
       uiFrame.frameToken,
       "hit",
       null,
     );
     handleGeometryResult(deps, {
-      ...malformed,
-      payload: { ...malformed.payload, result: { rect: "not-a-rect" } },
+      ...resolved,
+      payload: { ...resolved.payload, result: { kind: "checkHit", hit: { id: "network" } } },
     });
     expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
       "preview.queryGeometry",
+      "preview.queryGeometry",
     ]);
-
-    requestGeometry(deps, "select", 4, 5);
-    handleGeometryResult(
-      deps,
-      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
-    );
-    const selection = kernel.dispatched[2] as { kind: string; payload: unknown };
-    expect(selection.kind).toBe("selection.set");
-    expect(selection.payload).toEqual({ pageSlug: "main", elementId: "network" });
   });
 
   test("a superseded pin result cannot open a popup after hover becomes latest", () => {
