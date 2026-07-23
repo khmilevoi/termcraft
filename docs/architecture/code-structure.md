@@ -445,7 +445,11 @@ vendor tier's own pre-split run-loop file.
   records why `supervisor.ts` follows the same interactionMode/resize/setMode/query
   pattern rather than reusing this function directly
 - `src/gate/model/import-scan.ts` — the saved-page import allowlist (item 11's last
-  forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal
+  forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal;
+  the same scan also fatally rejects dynamic-code use (`eval`, `new Function`, and
+  their common evasions), skipping identifier/bracket tokens `./jsx`'s `scanJsx`
+  confirms are genuine JSX children text so a page's own display copy is never
+  mistaken for a live reference
 - `src/host/session/model/resolver.ts` — the runtime resolver plugin item 9
   describes; registers three specifiers (`@termcraft/runtime`, `react/jsx-runtime`,
   `react/jsx-dev-runtime`), not yet the single `@termcraft/runtime/jsx-runtime`
