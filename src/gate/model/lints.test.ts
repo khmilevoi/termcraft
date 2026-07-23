@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { lintDeterminism } from "./lints";
+import { lintDeterminism, lintDroppedIds } from "./lints";
 
 describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("a deterministic page produces no warnings", () => {
@@ -34,5 +34,38 @@ describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("warnings carry a source position", () => {
     const w = lintDeterminism(`\nconst r = Math.random()\n`);
     expect(w[0]?.line).toBe(2);
+  });
+});
+
+describe("lintDroppedIds (§6.3 dropped-id warning)", () => {
+  test("absent referencedIds skips the lint entirely (gate stays runnable standalone)", () => {
+    const src = `export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)\n`;
+    expect(lintDroppedIds(src)).toEqual([]);
+  });
+
+  test("a referenced id still present in the candidate produces no warning", () => {
+    const src = `export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)\n`;
+    expect(lintDroppedIds(src, ["p", "t"])).toEqual([]);
+  });
+
+  test("a referenced id absent from the candidate's ids warns dropped-id", () => {
+    const src = `export default reatomComponent(() => <Panel id="p">hi</Panel>)\n`;
+    const w = lintDroppedIds(src, ["p", "cpu-gauge"]);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("dropped-id");
+    expect(w[0]?.message).toContain("cpu-gauge");
+  });
+
+  test("every dropped id is reported, not just the first", () => {
+    const w = lintDroppedIds(`export default reatomComponent(() => <Panel id="p" />)\n`, [
+      "a",
+      "b",
+    ]);
+    expect(w).toHaveLength(2);
+  });
+
+  test("an id bound via object-property form (`id: \"x\"`) also counts as present", () => {
+    const src = `const props = { id: "cpu-gauge" }\n`;
+    expect(lintDroppedIds(src, ["cpu-gauge"])).toEqual([]);
   });
 });

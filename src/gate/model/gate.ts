@@ -3,7 +3,7 @@ import type { PageSlug } from "entities/page";
 import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
 import { makeGateResult } from "./gate-result";
 import { scanImportAllowlist } from "./import-scan";
-import { lintDeterminism } from "./lints";
+import { lintDeterminism, lintDroppedIds } from "./lints";
 import { checkPageContract } from "./page-contract";
 
 /**
@@ -26,11 +26,18 @@ export interface GatePorts {
   ) => GateError[] | Promise<GateError[]>;
 }
 
-/** One candidate page to validate: its source, its slug, and its scratch file name. */
+/**
+ * One candidate page to validate: its source, its slug, and its scratch file name.
+ * `referencedIds` and `listedSlugs` feed the `dropped-id` and `unlisted-navigation`
+ * warning lints (§6.3 step 3); both are optional and, absent, skip their lint so
+ * the gate stays runnable standalone (e.g. in a fixture with no kernel/manifest).
+ */
 export interface GateInput {
   readonly source: string;
   readonly slug: PageSlug;
   readonly fileName?: string;
+  /** Ids the caller's current selection or open pins reference (`dropped-id`). */
+  readonly referencedIds?: readonly string[];
 }
 
 /**
@@ -69,6 +76,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
     });
   }
   warnings.push(...lintDeterminism(input.source));
+  warnings.push(...lintDroppedIds(input.source, input.referencedIds));
 
   if (ports.typeCheck !== undefined) {
     errors.push(...(await ports.typeCheck(input.source, fileName)));

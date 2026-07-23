@@ -51,6 +51,22 @@ describe("runGate (§6.3 pipeline)", () => {
     expect(result.warnings.some((w) => w.kind === "unguarded-randomness")).toBe(true);
   });
 
+  test("absent referencedIds skips the dropped-id lint", async () => {
+    const result = await runGate({ source: cleanSource, slug: SLUG });
+    expect(result.warnings.some((w) => w.kind === "dropped-id")).toBe(false);
+  });
+
+  test("a referencedIds entry missing from the candidate warns dropped-id without failing it", async () => {
+    const result = await runGate({
+      source: cleanSource,
+      slug: SLUG,
+      referencedIds: ["t", "cpu-gauge"],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.kind === "dropped-id" && w.message.includes("cpu-gauge")))
+      .toBe(true);
+  });
+
   test("an injected type-check stage contributes fatal errors", async () => {
     const typeError: GateError = {
       kind: "type",
