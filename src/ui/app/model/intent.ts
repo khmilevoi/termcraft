@@ -161,6 +161,16 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       }
       local.overlay.set(null);
       return;
+    case "export-dismiss": {
+      // No kernel export-ack command exists (core/protocol's CommandKindV1 has no such
+      // member) — record the dismissal UI-locally, keyed by operationId, so the popup shows
+      // once per export and a later export.started re-shows it (M14).
+      const exportState = deps.mirror.export();
+      if (exportState.phase === "done" || exportState.phase === "failed") {
+        local.exportDismissed.set(exportState.operationId);
+      }
+      return;
+    }
     case "tab":
       local.focus.set(nextFocus(local.focus()));
       return;

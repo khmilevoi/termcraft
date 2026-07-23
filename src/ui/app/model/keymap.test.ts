@@ -9,6 +9,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   focus: "composer",
   overlay: null,
   composerValue: "",
+  exportPopupOpen: false,
   ...over,
 });
 
@@ -213,5 +214,13 @@ describe("resolveKey — modal controls", () => {
     expect(resolveKey(key({ name: "escape" }), ctx({ screen: "trust-prompt" }))).toEqual({
       kind: "trust-decline",
     });
+  });
+
+  test("export popup: Enter and Escape both dismiss, and no other key leaks through", () => {
+    const exportOpen = ctx({ exportPopupOpen: true });
+    expect(resolveKey(key({ name: "enter" }), exportOpen)).toEqual({ kind: "export-dismiss" });
+    expect(resolveKey(key({ name: "return" }), exportOpen)).toEqual({ kind: "export-dismiss" });
+    expect(resolveKey(key({ name: "escape" }), exportOpen)).toEqual({ kind: "export-dismiss" });
+    expect(resolveKey(key({ name: "x", sequence: "x" }), exportOpen)).toEqual({ kind: "none" });
   });
 });

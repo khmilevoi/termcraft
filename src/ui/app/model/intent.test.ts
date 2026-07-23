@@ -249,6 +249,52 @@ describe("applyIntent — chats and trust", () => {
   });
 });
 
+describe("applyIntent — export popup dismissal (M14)", () => {
+  test("export-dismiss records the done export's operationId, dispatching nothing", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const operationId = uuidv7();
+    deps.mirror.apply(
+      event("export.completed", {
+        operationId,
+        phase: "publishing",
+        destination: ".termcraft/export",
+        generationId: null,
+        failure: null,
+      }),
+    );
+    expect(deps.local.exportDismissed()).toBeNull();
+    applyIntent({ kind: "export-dismiss" }, deps);
+    expect(deps.local.exportDismissed()).toBe(operationId);
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("export-dismiss records the failed export's operationId", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const operationId = uuidv7();
+    deps.mirror.apply(
+      event("export.failed", {
+        operationId,
+        phase: "rendering",
+        destination: ".termcraft/export",
+        generationId: null,
+        failure: null,
+      }),
+    );
+    applyIntent({ kind: "export-dismiss" }, deps);
+    expect(deps.local.exportDismissed()).toBe(operationId);
+  });
+
+  test("export-dismiss is a no-op while no export result is showing", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    applyIntent({ kind: "export-dismiss" }, deps);
+    expect(deps.local.exportDismissed()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+});
+
 describe("applyIntent — pin draft", () => {
   test("save dispatches only the opaque geometry token plus text", () => {
     const kernel = createFakeKernel();

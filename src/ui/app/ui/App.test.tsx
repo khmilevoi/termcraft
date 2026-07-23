@@ -368,6 +368,33 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     });
   });
 
+  test("shows the export popup on export.completed and Enter dismisses it (M14)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const operationId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("export.completed", {
+          operationId,
+          phase: "publishing",
+          destination: ".termcraft/export",
+          generationId: null,
+          failure: null,
+        }),
+      );
+    });
+    await renderer.waitForFrame((frame) => frame.includes("export ^E"));
+    await renderer.act(() => renderer.mockInput.pressEnter());
+    const dismissed = await renderer.waitForFrame((frame) => !frame.includes("export ^E"));
+    expect(dismissed).not.toContain("export ^E");
+  });
+
   test("passes read-only state into the workspace presentation", async () => {
     const kernel = createFakeKernel();
     kernel.setSnapshot({

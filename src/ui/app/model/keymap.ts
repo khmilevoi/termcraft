@@ -22,6 +22,8 @@ export interface KeyContext {
   readonly focus: FocusTarget;
   readonly overlay: OverlayKind | null;
   readonly composerValue: string;
+  /** An undismissed `export.completed`/`export.failed` result is showing (M14). */
+  readonly exportPopupOpen: boolean;
 }
 
 export type KeyIntent =
@@ -45,6 +47,7 @@ export type KeyIntent =
   | { readonly kind: "trust-accept" }
   | { readonly kind: "trust-decline" }
   | { readonly kind: "overlay-dismiss" }
+  | { readonly kind: "export-dismiss" }
   | { readonly kind: "esc" }
   | { readonly kind: "tab" }
   | { readonly kind: "none" };
@@ -70,6 +73,13 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   if (context.screen === "trust-prompt") {
     if (RETURN_NAMES.has(key.name)) return { kind: "trust-accept" };
     if (key.name === "escape") return { kind: "trust-decline" };
+    return { kind: "none" };
+  }
+
+  // The export popup (M14, design/13-export-feedback.dc.html wsExport) is modal — App.tsx only
+  // ever shows it when no other overlay is open, so it takes priority over every layer below.
+  if (context.exportPopupOpen) {
+    if (key.name === "escape" || RETURN_NAMES.has(key.name)) return { kind: "export-dismiss" };
     return { kind: "none" };
   }
 

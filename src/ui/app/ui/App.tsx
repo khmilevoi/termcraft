@@ -24,6 +24,19 @@ const HOME_HEALTH = {
   detail: "agent ready",
 } as const;
 
+/**
+ * True while an undismissed `export.completed`/`export.failed` result is showing (M14): the
+ * popup shows once per `operationId` and hides once `local.exportDismissed` matches it. There
+ * is no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member), so
+ * dismissal lives entirely in this UI-local flag — both `renderOverlay` and the key-context
+ * builder below read it, so the rendered popup and the keys that can dismiss it always agree.
+ */
+function exportPopupShowing(deps: UiDeps): boolean {
+  const exportState = deps.mirror.export();
+  if (exportState.phase !== "done" && exportState.phase !== "failed") return false;
+  return exportState.operationId !== deps.local.exportDismissed();
+}
+
 /** Maps the open-overlay atom / export state to the popup to render over the workspace, or null. */
 function renderOverlay(deps: UiDeps) {
   const overlay = deps.local.overlay();
@@ -45,6 +58,7 @@ function renderOverlay(deps: UiDeps) {
   if (overlay === "pin-input") {
     return <PinInputPopup id="overlay-pin" value={deps.local.pinDraft()} />;
   }
+  if (!exportPopupShowing(deps)) return null;
   const exportState = deps.mirror.export();
   if (exportState.phase === "done") {
     return (
@@ -56,6 +70,8 @@ function renderOverlay(deps: UiDeps) {
       />
     );
   }
+  // exportState.phase === "failed" here (M14's failure popup lands in the next commit; the
+  // dismissal mechanism above already applies to it once that lands).
   return null;
 }
 
@@ -92,6 +108,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         focus: deps.local.focus(),
         overlay: deps.local.overlay(),
         composerValue: deps.local.composer(),
+        exportPopupOpen: exportPopupShowing(deps),
       }),
       deps,
     );

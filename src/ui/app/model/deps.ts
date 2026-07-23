@@ -13,6 +13,7 @@ import {
 } from "@reatom/core";
 import * as errore from "errore";
 
+import type { UUIDv7 } from "core/protocol";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
 import {
@@ -57,6 +58,13 @@ export interface UiLocalState {
   readonly chatSelection: Atom<number>;
   /** Draft text for the new-pin popup (phase 7 local state; pin issuance lands in Task 3). */
   readonly pinDraft: Atom<string>;
+  /**
+   * The `operationId` of the last export result the user dismissed (M14), or `null`. There is
+   * no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member — export
+   * is fire-and-forget), so dismissal is this UI-local flag: the popup shows once per
+   * `operationId` and hides once it matches this atom.
+   */
+  readonly exportDismissed: Atom<UUIDv7 | null>;
 }
 
 /**
@@ -246,6 +254,7 @@ export function createUiDeps(
     slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
+    exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
   };
   const deps: UiDeps = {
     port,
