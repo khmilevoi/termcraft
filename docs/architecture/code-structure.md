@@ -416,6 +416,10 @@ vendor tier's own pre-split run-loop file.
 - `src/infrastructure/durability/index.ts`, `src/infrastructure/fs-guard/index.ts` —
   the two submodules that stand in for the single `fs/` folder this document
   sketches
+- `src/infrastructure/durability/model/probe.ts` — `probeDurability`: composes the
+  cheap `assertDurableVolume` gate with a real `flushDir` write-through probe into
+  the one pre-flight check `store/model/factory.ts`'s `openProject`/`createProject`
+  run before any mutation of the target volume
 - `src/infrastructure/process/types.ts`, `src/infrastructure/process/index.ts` —
   the `ProcessTree`/`ProcessTreeFactory` contract and public entry: the newest
   domain-free member, five process-level operations and no domain vocabulary

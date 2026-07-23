@@ -41,6 +41,10 @@ flowchart TD
    acquires its lease. PID, process start time, hostname, and nonce are
    diagnostic only; no lock is reclaimed from any of them. If ownership cannot be
    proved or the filesystem has unreliable lock semantics, writable startup refuses.
+   Before either the lease acquire or the create-new `.termcraft/`, a durability
+   pre-flight (the cheap volume-type gate composed with a real directory-flush
+   probe) refuses a volume that cannot demonstrate durable writes — a network
+   drive or a volume with no write-through — before any mutation is attempted.
 2. Project discovery has three outcomes: a missing `.termcraft/` opens Home; a
    current project acquires its lease, finishes transaction recovery, and proceeds
    through trust; an older project performs the same journal recovery, then after
@@ -101,7 +105,8 @@ flowchart TD
 ## Source anchors
 
 - `src/store/lease/model/lease.ts` — `ProjectLease`: the non-blocking Windows OS lock held for the process lifetime, and the bounded advisory record (pid, process start time, hostname, nonce) that is always diagnostic, never proof of ownership; refuses acquisition when another instance already holds the lock.
-- `src/store/model/factory.ts` — `openProject`'s existing-project launch sequence (lease → `SafeProjectFs` → journal-format gate → recover transactions → format-too-new gate → read `project.toml`/`workspace.local.toml` → orphan-turn scan → open) and `createProject`'s single project-creation transaction (mints `project.toml`, `.gitignore`, `workspace.local.toml`, and the first chat header), followed by the implicit trust grant.
+- `src/store/model/factory.ts` — `openProject`'s existing-project launch sequence (durability pre-flight → lease → `SafeProjectFs` → journal-format gate → recover transactions → format-too-new gate → read `project.toml`/`workspace.local.toml` → orphan-turn scan → open) and `createProject`'s single project-creation transaction (durability pre-flight → create-new `.termcraft/` → mints `project.toml`, `.gitignore`, `workspace.local.toml`, and the first chat header), followed by the implicit trust grant.
+- `src/infrastructure/durability/model/probe.ts` — `probeDurability`: the durability pre-flight both sequences above run before any mutation of the target volume; composes the cheap `assertDurableVolume` gate with a real `flushDir` probe, refusing a network drive or a volume with no write-through.
 - `src/store/transaction/model/journal-format.ts` — the separate `transactions.local/format.json` gate, read before any transaction directory is even listed; a newer journal format blocks the Workspace, a missing one is treated as version 1.
 - `src/store/transaction/model/recovery.ts` — the startup scan: classifies each prepared transaction directory as discard / roll-forward / already-complete / conflict, in stable lexical order, before any project state is exposed.
 - `src/store/transaction/model/engine.ts` — the old/new-image comparison applied during roll-forward: a target matching neither its planned old nor new image writes a conflict marker and is never overwritten.

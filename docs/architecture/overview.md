@@ -41,7 +41,7 @@ flowchart LR
 
 ## Source anchors
 
-- `src/store/model/factory.ts` — the launch sequence a designer's `.termcraft/` open triggers (lease → durability adapter + `SafeProjectFs` → journal format → transaction recovery → migrations → schemas → orphan-turn scan → open sub-stores) and the project-create sequence
+- `src/store/model/factory.ts` — the launch sequence a designer's `.termcraft/` open triggers (durability pre-flight → lease → durability adapter + `SafeProjectFs` → journal format → transaction recovery → migrations → schemas → orphan-turn scan → open sub-stores) and the project-create sequence (durability pre-flight → create-new `.termcraft/` → lease → ...); the pre-flight refuses a volume that cannot demonstrate durable writes before either sequence mutates anything
 - `src/store/lease/model/lease.ts` — the exclusive per-project OS-held lease backing "single-user and single-instance" (step 8)
 - `src/store/trust/model/trust-store.ts`, `src/store/trust/model/subject.ts` — composite workspace trust: a grant keyed to canonical path + filesystem identity + project id + optional Git repository identity
 - `src/store/sandbox/model/staging-store.ts` — the unique fenced per-turn workspace a backend confines an agent to (step 3); the store creates it, and nothing yet hands one to a live turn

@@ -6,7 +6,7 @@ import * as errore from "errore";
 import type { ChatHeader, ChatSystemErrorRecord } from "entities/chat";
 import { foldPins } from "entities/pin";
 import { systemClock } from "infrastructure/clock";
-import { durableFileWrite, flushDir } from "infrastructure/durability";
+import { durableFileWrite, flushDir, probeDurability } from "infrastructure/durability";
 import { formatFsIdentity, isReparsePoint } from "infrastructure/fs-guard";
 import { uuidv7 } from "infrastructure/uuid";
 import {
@@ -1118,6 +1118,13 @@ function assembleOpenProject(input: {
 async function openProject(deps: StoreDeps, root: AbsPath): Promise<Error | OpenProject> {
   const termcraftDir = path.join(root, ".termcraft");
 
+  // 0. durability pre-flight (M5, storage-identity S4 / turn-durability S1/S13): refuse a
+  // volume that cannot demonstrate durable writes BEFORE the lease acquire below performs the
+  // first write. `.termcraft` already exists for a real project, so the flush probe targets it
+  // directly rather than a directory that has to be created first.
+  const durabilityError = probeDurability(termcraftDir, { flush: deps.flushDir });
+  if (durabilityError instanceof Error) return durabilityError;
+
   // 1. lease
   const lease = await makeLeaseStore(deps).acquire(root);
   if (lease instanceof Error) return lease;
@@ -1225,6 +1232,14 @@ async function createProject(
 ): Promise<Error | OpenProject> {
   const termcraftDir = path.join(input.root, ".termcraft");
   if (fs.existsSync(termcraftDir)) return new ProjectAlreadyExistsError({ root: input.root });
+
+  // durability pre-flight (M5, storage-identity S4 / turn-durability S1/S13): refuse a volume
+  // that cannot demonstrate durable writes BEFORE `mkdirSync` below performs the first mutation.
+  // `.termcraft` does not exist yet, so the flush probe targets the already-existing parent
+  // `input.root` instead — probing a directory the create-new step is about to make itself would
+  // be a mutation on a volume this gate might still refuse.
+  const durabilityError = probeDurability(input.root, { flush: deps.flushDir });
+  if (durabilityError instanceof Error) return durabilityError;
 
   const created = errore.try({
     try: () => {

@@ -163,7 +163,7 @@ preview-frame streaming (the consumer exists; session-change re-subscription is 
 **Project store — `src/store/`:**
 
 - `src/store/index.ts`, `src/store/types.ts` — the Store port contract; the shape phase 6 lifts verbatim into `core/ports/`
-- `src/store/model/factory.ts` — `createStore`/`openProject`/`createProject`: the launch sequence (lease → `SafeProjectFs` → journal format → recover transactions → migrations → schemas → orphan-turn scan → open) and the creation sequence
+- `src/store/model/factory.ts` — `createStore`/`openProject`/`createProject`: the launch sequence (durability pre-flight → lease → `SafeProjectFs` → journal format → recover transactions → migrations → schemas → orphan-turn scan → open) and the creation sequence (durability pre-flight → create-new `.termcraft/` → ...)
 - `src/store/safe-fs/model/` — `SafeProjectFs`: the no-follow path walk (`no-follow.ts`), managed-path grammar (`path-rules.ts`), file-type/hardlink checks (`leaf-identity.ts`), per-namespace size limits (`limits.ts`), hashed candidate snapshots (`candidate.ts`)
 - `src/store/lease/model/lease.ts` — the Windows OS-held `ProjectLease`: advisory-only metadata, never force-broken
 - `src/store/trust/model/trust-store.ts`, `subject.ts` — the machine-local `TrustStore`, keyed by canonical path + filesystem identity + `projectId` + Git identity

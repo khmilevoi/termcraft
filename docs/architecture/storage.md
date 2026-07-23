@@ -178,10 +178,13 @@ flowchart TB
 
 ## Source anchors
 
-- `src/store/model/factory.ts` — the composition root: wires the lease, safe
-  filesystem, journal-format gate, crash recovery, the migration too-new gate,
-  schema decoders, the orphan-turn sweep, and every sub-store behind the `Store`
-  port (`openProject`/`createProject`)
+- `src/store/model/factory.ts` — the composition root: wires the durability
+  pre-flight, the lease, safe filesystem, journal-format gate, crash recovery,
+  the migration too-new gate, schema decoders, the orphan-turn sweep, and every
+  sub-store behind the `Store` port (`openProject`/`createProject`)
+- `src/infrastructure/durability/model/probe.ts` — `probeDurability`: refuses a
+  volume that cannot demonstrate durable writes (storage-identity §4) before
+  `openProject`/`createProject` mutate anything
 - `src/store/toml/model/project-toml.ts` — item 1: `project.toml`'s five
   portable fields, deterministic TOML encode/decode, and the `format_version`
   too-new gate
