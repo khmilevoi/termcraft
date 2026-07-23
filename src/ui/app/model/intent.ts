@@ -1,11 +1,6 @@
 import type { CommandResultV1 } from "core/protocol";
-import {
-  filterSlashRows,
-  firstEnabledIndex,
-  resolveSlashAction,
-  resolveUiAction,
-} from "ui/actions";
-import type { ActionContext, UiActionEntry } from "ui/actions";
+import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
+import type { UiActionEntry } from "ui/actions";
 import { nextFocus, resolveEsc } from "ui/workspace";
 
 import type { UiDeps } from "./deps";
@@ -67,13 +62,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (deps.screen() !== "workspace") return;
       local.composer.set("/");
       local.overlay.set("slash-menu");
-      local.slashSelection.set(firstEnabledIndex(slashRows(deps)));
       return;
     }
     case "slash-input":
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       local.composer.set(local.composer() + intent.ch);
-      local.slashSelection.set(firstEnabledIndex(slashRows(deps)));
       return;
     case "slash-backspace": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
@@ -84,7 +77,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         local.slashSelection.set(0);
         return;
       }
-      local.slashSelection.set(firstEnabledIndex(slashRows(deps)));
       return;
     }
     case "slash-move":
@@ -181,16 +173,8 @@ function dispatchAndReport(promise: Promise<CommandResultV1 | Error>): void {
   });
 }
 
-function actionContext(deps: UiDeps): ActionContext {
-  return {
-    capabilities: deps.mirror.capabilities(),
-    turnRunning: deps.mirror.turn().phase === "running",
-    screen: deps.screen(),
-  };
-}
-
 function slashRows(deps: UiDeps) {
-  return filterSlashRows(deps.local.composer(), actionContext(deps));
+  return filterSlashRows(deps.local.composer(), deps.actionContext());
 }
 
 function slashMenuActive(deps: UiDeps): boolean {

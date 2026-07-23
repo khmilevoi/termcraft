@@ -1,6 +1,20 @@
-import { type Atom, type Computed, atom, bind, sleep, withConnectHook, wrap } from "@reatom/core";
+import {
+  type Atom,
+  type Computed,
+  atom,
+  bind,
+  computed,
+  isInit,
+  peek,
+  sleep,
+  withComputed,
+  withConnectHook,
+  wrap,
+} from "@reatom/core";
 import * as errore from "errore";
 
+import type { ActionContext } from "ui/actions";
+import { filterSlashRows, firstEnabledIndex } from "ui/actions";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
@@ -67,6 +81,12 @@ export interface UiDeps {
   /** The derived screen the App root mounts. */
   readonly screen: Computed<ScreenKind>;
   /**
+   * The action registry's view of the world (capabilities, turn lock, screen) — one named
+   * computed so the slash-menu selection, the key-intent layer, and any future action
+   * consumer all score rows against the same context.
+   */
+  readonly actionContext: Computed<ActionContext>;
+  /**
    * The latest preview frame to display, or `null`. Fed by the App's `PreviewSession` frame
    * consumer (frames flow through the session facade, not the event stream — §7.6); kept out
    * of the mirror because it is high-frequency, latest-wins display state, not Kernel state.
@@ -100,6 +120,14 @@ export function createUiDeps(
   const terminal = atom(initialSize, "ui.app.terminal");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
   const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
+  const actionContext = computed<ActionContext>(
+    () => ({
+      capabilities: mirror.capabilities(),
+      turnRunning: mirror.turn().phase === "running",
+      screen: screen(),
+    }),
+    "ui.app.actionContext",
+  );
   const previewFrame = atom<UiPreviewFrame | null>(null, "ui.app.previewFrame");
   const runtimeError = atom<Error | null>(null, "ui.app.runtimeError");
   const interaction = createPreviewInteractionState();
@@ -188,13 +216,34 @@ export function createUiDeps(
     }),
   );
 
+  const composer = atom("", "ui.local.composer");
+  // The slash selection is state DERIVED from the typed prefix: every composer edit lands it
+  // back on the first enabled row. Owned by the atom (RTM-S02) rather than re-set by hand in
+  // each composer-writing key handler. `slash-move` still writes it directly — that is the
+  // point of `withComputed` over a plain `computed`. The action context is PEEKED, not
+  // tracked, so a capability flip or a turn starting mid-navigation never moves the user's
+  // cursor; only what they type does.
+  const slashSelection = atom(0, "ui.local.slashSelection").extend(
+    withComputed((state) => {
+      // Read the dependency BEFORE the init branch, per the upstream `page`/`search` example:
+      // returning early without reading `composer` would register no dependency at all and the
+      // atom would never recompute again.
+      const typed = composer();
+      return isInit() ? state : firstEnabledIndex(filterSlashRows(typed, peek(actionContext)));
+    }),
+  );
+  // Prime the init computation here, while the composer is still empty. The init branch keeps
+  // the stored value and only REGISTERS the dependency, so whoever reads the atom first would
+  // otherwise consume it — and the composer edit that opened the menu would not re-derive.
+  void slashSelection();
+
   const local: UiLocalState = {
     prompt: atom("", "ui.local.prompt"),
-    composer: atom("", "ui.local.composer"),
+    composer,
     focus: atom<FocusTarget>("composer", "ui.local.focus"),
     fullscreen: atom(false, "ui.local.fullscreen"),
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
-    slashSelection: atom(0, "ui.local.slashSelection"),
+    slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
   };
@@ -205,6 +254,7 @@ export function createUiDeps(
     dispatcher,
     terminal,
     screen,
+    actionContext,
     previewFrame,
     runtimeError,
     runtime,
