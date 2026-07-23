@@ -1,4 +1,4 @@
-import type { ThemeId, ThemeTokens } from "../types";
+import type { Size, ThemeId, ThemeTokens } from "../types";
 import { action, atom, computed } from "./reatom";
 import { DEFAULT_THEME_ID, themeTokens } from "./tokens";
 
@@ -75,3 +75,30 @@ export interface PagesCapability {
 export function usePages(): PagesCapability {
   return { goTo: goToPage };
 }
+
+/**
+ * The host-scoped viewport/terminal capability (§6): "reactive size and
+ * color-capability values supplied by the host." Modeled like `hostModeAtom`/
+ * `interactionModeAtom` above — named HOST-INPUT atoms a page reads and must not
+ * write; a future host handshake seeds them from the negotiated terminal
+ * capabilities (`host/types.ts`'s `TerminalCapabilities`, whose own comment names
+ * this exact model as its target). DORMANT in MVP: the host doesn't wire real
+ * viewport/color negotiation yet, so both atoms carry fixed defaults.
+ *
+ * `viewportSizeAtom` defaults to 80x24 (columns x rows): the classic terminal size,
+ * the first entry in the design's own preview-size preset list (design §8.1 item
+ * 10: "80×24, 120×40, custom..., auto"), and the size used by every `minSize`
+ * example in the runtime-api spec itself. Neither spec fixes this as the
+ * *capability*'s default value, though — this MVP default is this task's own
+ * choice, documented here rather than silently invented.
+ */
+export const viewportSizeAtom = atom<Size>({ w: 80, h: 24 }, "runtime.capability.viewportSize");
+
+/**
+ * `colorDepthAtom` mirrors `host/types.ts`'s own `colorDepth: number` vocabulary
+ * ("MVP carries the color depth only (4/8/24-bit)"). 24 (truecolor) is this
+ * task's own MVP default: the design's palette tokens are full `#rrggbb` values
+ * (§5.4) and OpenTUI targets truecolor terminals, but no spec section fixes a
+ * default numeric value for this capability — flagged here rather than assumed.
+ */
+export const colorDepthAtom = atom<number>(24, "runtime.capability.colorDepth");

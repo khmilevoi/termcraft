@@ -36,8 +36,9 @@ export type {
 export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens";
 
 // Runtime capabilities (§6): dormant tweaks + host-scoped mode/export + theme +
-// navigation (M16)
+// navigation (M16) + viewport/terminal-color (M17)
 export {
+  colorDepthAtom,
   defineTweaks,
   isExport,
   isExportAtom,
@@ -45,6 +46,7 @@ export {
   interactionModeAtom,
   themeCapability,
   usePages,
+  viewportSizeAtom,
 } from "./model/capabilities";
 export type { PagesCapability, ThemeCapability } from "./model/capabilities";
 
