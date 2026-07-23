@@ -71,8 +71,11 @@ export interface UiLocalState {
   /**
    * The Home agent-health reading (M15) — Home's `health` prop reads this instead of a
    * hardcoded literal. There is no Kernel command that reports agent health (Home is shown
-   * *before* any project opens, so there is no `kernel.snapshot` to read either), so this is
-   * seeded from — and refreshed by — the {@link UiDeps.refreshHomeHealth} probe.
+   * *before* any project opens, so there is no `kernel.snapshot` to read either), so this atom's
+   * lifecycle is: seeded with {@link DEFAULT_HOME_HEALTH} as a synchronous pre-probe placeholder
+   * (Home's very first paint cannot await a Promise), then `createUiDeps` fires
+   * {@link UiDeps.refreshHomeHealth} once at startup to replace it with the injected probe's
+   * real reading, and again on every `home-recheck` — the SAME probe path, not a duplicated one.
    */
   readonly homeHealth: Atom<HomeAgentHealth>;
 }
@@ -136,10 +139,13 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 }) {}
 
 /**
- * The MVP default Home agent-health reading (M15): no CLI-checking probe is wired yet — that
- * binding is a phase-8 composition-root concern (the `agentHealthProbe` parameter below is its
- * named injection point) — so this preserves the "agent ready" idle layout Home showed before
- * this task, rather than inventing a different default.
+ * The Home agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
+ * probe once at startup (see `refreshHomeHealth()` below), but Home's very first render happens
+ * synchronously, before that probe's Promise can resolve — a component render cannot await one.
+ * This value only ever shows for that first frame; it preserves the "agent ready" idle layout
+ * Home showed before this task, rather than inventing a different placeholder. No CLI-checking
+ * probe is wired yet by default — that binding is a phase-8 composition-root concern (the
+ * `agentHealthProbe` parameter below is its named injection point).
  */
 const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
   present: true,
@@ -295,6 +301,14 @@ export function createUiDeps(
     const result = await wrap(agentHealthProbe());
     local.homeHealth.set(result);
   }, "ui.app.refreshHomeHealth").extend(withAsync());
+
+  // M15 lifecycle fix: fire the SAME probe path `home-recheck` uses once here, at startup,
+  // instead of only seeding `homeHealth` from the placeholder above. A real phase-8 probe
+  // reporting a missing agent now surfaces as soon as it resolves — not only after a manual
+  // `r` re-check. Fire-and-forget like every other dispatch in this module (`void slashSelection`
+  // above primes a computed the same way): the result lands in `local.homeHealth`, which Home
+  // re-reads reactively.
+  void refreshHomeHealth();
 
   const deps: UiDeps = {
     port,

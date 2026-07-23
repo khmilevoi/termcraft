@@ -172,3 +172,40 @@ describe("createUiDeps runtime", () => {
     expect(preview.activeFrameConsumers()).toBe(0);
   });
 });
+
+describe("createUiDeps Home health probe (M15)", () => {
+  test("runs the injected probe once at startup, through the same path home-recheck uses", async () => {
+    const kernel = createFakeKernel();
+    let calls = 0;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () => {
+      calls += 1;
+      return Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" });
+    });
+
+    await tick();
+
+    // A real probe reporting a missing agent surfaces without a manual `r` re-check.
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(deps.local.homeHealth()).toEqual({
+      present: false,
+      agent: "codex",
+      detail: "codex CLI not found",
+    });
+  });
+
+  test("a startup probe reporting the agent present overwrites the pre-probe placeholder", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ present: true, agent: "claude", version: "1.2", detail: "agent ready" }),
+    );
+
+    await tick();
+
+    expect(deps.local.homeHealth()).toEqual({
+      present: true,
+      agent: "claude",
+      version: "1.2",
+      detail: "agent ready",
+    });
+  });
+});
