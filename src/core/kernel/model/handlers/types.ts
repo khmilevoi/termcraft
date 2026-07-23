@@ -34,7 +34,10 @@ import type { KernelDeps } from "../../types";
  * - `machines: KernelMachines` — the same seven `StateMachine` objects `kernel.ts` holds
  *   in its own closure, so a handler drives a machine the SAME way `kernel.ts` reads its
  *   phase (`machine.apply(action)` / `machine.phase()` / `machine.canApply(action)`),
- *   never a second, parallel way to move the same state.
+ *   never a second, parallel way to move the same state. Each machine is typed as
+ *   {@link HandlerMachine}, a `Pick` that deliberately drops `phaseAtom` — the directly
+ *   settable atom is not part of the type a handler can reach, so `apply()`'s
+ *   transition-table legality check cannot be bypassed by a stray `.set(...)`.
  * - `readKernelState` — `kernel.ts`'s own `readKernelState`, unchanged: the guard already
  *   ran this before a handler is ever reached, but §10.2's own line ("Payload-only
  *   content/schema, freshness, token-ledger, and operation-specific mutex checks run
@@ -57,21 +60,41 @@ import type { KernelDeps } from "../../types";
 // --- The seven machines, grouped ---------------------------------------------------------
 
 /**
+ * The view of a `StateMachine` a handler is given — `phase`/`apply`/`canApply` only, NEVER
+ * `phaseAtom`. `StateMachine` (`core/machines`) exposes `phaseAtom` as a directly settable
+ * `Atom` because `state-machine.ts`'s own `apply()` needs `phaseAtom.set(edge.to)`
+ * internally (`state-machine.ts:98`) — but that is an implementation detail of the factory,
+ * not something a family handler may ever touch. `context.machines.<domain>.phaseAtom.set(...)`
+ * would move a machine's phase WITHOUT going through `apply()`'s transition-table legality
+ * check — exactly the "stray `.set(...)`" bypass `HandlerContext`'s own doc comment below
+ * promises does not exist. Picking only the read/legal-transition members here is what makes
+ * that promise true at the type level: a handler typed against `HandlerContext` cannot even
+ * NAME `context.machines.<domain>.phaseAtom`, let alone call `.set()` on it, without first
+ * writing a separate, independently-flagged unsafe cast (itself forbidden project-wide).
+ */
+export type HandlerMachine<Phase extends string, Action extends string> = Pick<
+  StateMachine<Phase, Action>,
+  "phase" | "apply" | "canApply"
+>;
+
+/**
  * The same seven `StateMachine` objects `kernel.ts`'s own `createKernel` constructs and
  * holds (`reatom*StateMachine()`, one call per domain) — injected here, never rebuilt, so
  * a handler's `apply()` call lands on the EXACT atom `readKernelState`/the capability
- * guard/the projector all observe. `chat`/`model`/`page`/`selection`/`pin`/`history` have
- * no machine of their own among the seven (`core/capabilities/model/guards.ts`'s own
- * `familySpecificReason` header note) — their handlers only ever touch `context.deps`.
+ * guard/the projector all observe. Typed as {@link HandlerMachine}, not the full
+ * `StateMachine`, so `phaseAtom` is excluded from the surface a handler can reach (see that
+ * type's own comment). `chat`/`model`/`page`/`selection`/`pin`/`history` have no machine of
+ * their own among the seven (`core/capabilities/model/guards.ts`'s own `familySpecificReason`
+ * header note) — their handlers only ever touch `context.deps`.
  */
 export interface KernelMachines {
-  readonly project: StateMachine<ProjectState, ProjectAction>;
-  readonly turn: StateMachine<TurnState, TurnAction>;
-  readonly restore: StateMachine<RestoreState, RestoreAction>;
-  readonly commit: StateMachine<CommitState, CommitAction>;
-  readonly export: StateMachine<ExportState, ExportAction>;
-  readonly preview: StateMachine<PreviewState, PreviewAction>;
-  readonly migration: StateMachine<MigrationState, MigrationAction>;
+  readonly project: HandlerMachine<ProjectState, ProjectAction>;
+  readonly turn: HandlerMachine<TurnState, TurnAction>;
+  readonly restore: HandlerMachine<RestoreState, RestoreAction>;
+  readonly commit: HandlerMachine<CommitState, CommitAction>;
+  readonly export: HandlerMachine<ExportState, ExportAction>;
+  readonly preview: HandlerMachine<PreviewState, PreviewAction>;
+  readonly migration: HandlerMachine<MigrationState, MigrationAction>;
 }
 
 /** `KernelStateSnapshot["project"]["trust"]` by another name — never re-declared as a fresh literal union. */
@@ -101,7 +124,10 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  * No handler may reach a machine's `phaseAtom` or any of these four facts through any
  * other route — this interface IS the whole surface, so a reviewer checking "what can a
  * handler change?" only has to read these ten members (six read paths, four write paths),
- * never grep the whole `handlers/` tree for a stray `.set(...)`.
+ * never grep the whole `handlers/` tree for a stray `.set(...)`. This is enforced by the
+ * type, not just by this comment: `KernelMachines`'s per-machine type is
+ * {@link HandlerMachine}, a `Pick` that omits `phaseAtom` entirely, so
+ * `context.machines.<domain>.phaseAtom` does not type-check — see that type's own comment.
  */
 export interface HandlerContext {
   readonly deps: KernelDeps;

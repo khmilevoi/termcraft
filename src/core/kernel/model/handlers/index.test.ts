@@ -233,3 +233,23 @@ describe("createHandlerRegistry", () => {
     expect(outcome).toEqual({ disposition: "no-op", events: [] });
   });
 });
+
+describe("KernelMachines closed surface", () => {
+  test("a handler cannot reach a machine's phaseAtom — only phase/apply/canApply are typed", () => {
+    // This function is deliberately never called: the assertion under test is that the line
+    // below FAILS TO COMPILE, not anything it returns at runtime. `KernelMachines` (`./types`)
+    // types every machine as `HandlerMachine<Phase, Action>` (a `Pick` of `phase`/`apply`/
+    // `canApply`), never the full `StateMachine`, so `phaseAtom` — the directly settable atom
+    // `state-machine.ts` uses internally — is not a member a handler can even name. Before
+    // that narrowing existed, `KernelMachines` typed every machine as the full `StateMachine`,
+    // this line compiled cleanly, and the `@ts-expect-error` directive below was itself a
+    // compile error ("Unused '@ts-expect-error' directive", TS2578) — proving red before green.
+    const reachPhaseAtom = (context: HandlerContext) => {
+      // @ts-expect-error — `phaseAtom` is not part of `KernelMachines`'s per-machine type; a
+      // handler bypassing `apply()`'s transition-table legality check this way must not
+      // type-check.
+      return context.machines.project.phaseAtom;
+    };
+    expect(typeof reachPhaseAtom).toBe("function");
+  });
+});
