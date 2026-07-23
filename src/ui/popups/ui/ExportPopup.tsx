@@ -81,6 +81,12 @@ export interface ExportFailurePopupProps {
  * faithful mapping: the same "export ^E" popup frame as {@link ExportPopup}, using the red
  * error-band vocabulary already established for failures (`ErrorPanel`, `SHELL_PALETTE.red`)
  * instead of inventing a new pattern, and the same "⏎ ok" dismiss line.
+ *
+ * divergence: no `design/*.dc.html` screen renders a byte count at all — `wsExport` lists only
+ * output paths, never a size figure — so the retained `sizeBytes` line's "bytes" unit word is
+ * an invented label, not a design-sourced one. It is kept (rather than a bare number) as the
+ * clearest bounded description available; revisit this word if a design size convention
+ * (e.g. `78×22` for terminal dimensions) turns out to extend to file sizes.
  */
 export function ExportFailurePopup(props: ExportFailurePopupProps) {
   const headline =
@@ -101,6 +107,8 @@ export function ExportFailurePopup(props: ExportFailurePopupProps) {
         {headline}
       </text>
       {props.sizeBytes !== null && (
+        // "bytes" is an invented unit label — see the design-gap divergence note above this
+        // component: no export screen renders a size figure to match.
         <text id={`${props.id}-size`} fg={SHELL_PALETTE.dim}>
           {`${props.sizeBytes} bytes`}
         </text>
