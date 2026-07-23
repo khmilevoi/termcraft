@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
-import { action, atom, computed, reatomComponent, wrap } from "./reatom";
+import { action, atom, computed, reatomComponent, withConnectHook, wrap } from "./reatom";
 
 let open: RenderHandle | null = null;
 afterEach(() => {
@@ -50,5 +50,42 @@ describe("@termcraft/runtime Reatom facade re-exports", () => {
     await tick();
     await handle.render();
     expect(lineText(handle.capture(), 0)).toContain("visits=7");
+  });
+});
+
+describe("withConnectHook narrowing + cleanup contract (§3.2, §11.1, m1/m2)", () => {
+  test("the narrowed callback parameter type rejects a value outside ConnectionHookResult (m1)", () => {
+    const resource = atom(0, "reatom-facade.connectHook.narrowing");
+    // @ts-expect-error — a plain object is `MaybeUnsubscribe`-shaped under Reatom's
+    // raw (pre-m1) signature but is NOT a `ConnectionHookResult`; the facade's
+    // narrowed callback type must reject it at compile time.
+    resource.extend(withConnectHook(() => ({ notACleanup: true })));
+  });
+
+  test("connecting an atom with a withConnectHook cleanup and then disconnecting runs the cleanup exactly once (m2)", async () => {
+    let cleanupCalls = 0;
+    const resource = atom(0, "reatom-facade.connectHook.resource").extend(
+      withConnectHook(() => () => {
+        cleanupCalls += 1;
+      }),
+    );
+
+    // Two overlapping subscribers share ONE connection lifetime (§5.4: "the
+    // callback runs when the target receives its FIRST consumer" / "disconnect
+    // ... invokes the returned cleanup at most once"), so the cleanup must not
+    // fire until the LAST subscriber disconnects, and must fire exactly once
+    // then — not once per unsubscribe call.
+    const unsubscribeA = resource.subscribe(() => {});
+    const unsubscribeB = resource.subscribe(() => {});
+    await tick();
+    expect(cleanupCalls).toBe(0);
+
+    unsubscribeA();
+    await tick();
+    expect(cleanupCalls).toBe(0);
+
+    unsubscribeB();
+    await tick();
+    expect(cleanupCalls).toBe(1);
   });
 });
