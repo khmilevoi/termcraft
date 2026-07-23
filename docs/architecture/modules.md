@@ -118,12 +118,12 @@ preview-frame streaming (the consumer exists; session-change re-subscription is 
 
 - `src/runtime/index.ts`, `src/runtime/types.ts` — the public facade entry point and shared page-contract types (`ThemeId`, `Size`, `ThemeTokens`, `PageMeta`)
 - `src/runtime/model/define-page.ts` — `definePage`, read by the Gate from the AST without executing the page
-- `src/runtime/model/reatom.ts` — Reatom v1001 re-exports (`atom`, `computed`, `action`, `wrap`, the `withAsync*` family, `reatomComponent`) under the facade's own names
+- `src/runtime/model/reatom.ts` — Reatom v1001 re-exports (`atom`, `computed`, `action`, `wrap`, the `withAsync*` family, `reatomComponent`) under the facade's own names, plus a thin `withConnectHook` wrapper narrowing Reatom's raw `MaybeUnsubscribe` callback return to the facade's own `ConnectionHookResult` (§3.2) with no cast
 - `src/runtime/model/tokens.ts` — the `dark-default` palette taken 1:1 from `design/termcraft-engine.js`; `light-default` is declared as v1.0 scope but not built
-- `src/runtime/model/capabilities.ts` — `defineTweaks` (dormant declaration-only stub), `hostModeAtom`/`interactionModeAtom` (host-writable, but nothing writes them yet), `isExport`, `themeCapability` (resolves `dark-default` only)
+- `src/runtime/model/capabilities.ts` — `defineTweaks` (dormant declaration-only stub), `hostModeAtom`/`interactionModeAtom` (host-writable, but nothing writes them yet), `isExport`, `themeCapability` (resolves `dark-default` only), `usePages` (design §5.5's `usePages().goTo(slug)`, backed by a named dormant no-op action — the host-protocol emission and shell tab switch land in phase 7), `viewportSizeAtom`/`colorDepthAtom` (host-input atoms carrying fixed MVP defaults — 80x24 and 24-bit/truecolor — until a real host handshake seeds them)
 - `src/runtime/model/jsx.ts` — the JSX helper re-exports a page compiles against; the module's own comment records that the `@termcraft/runtime`-qualified jsx-runtime specifier isn't wired end to end yet (see `src/host/session/model/resolver.ts` below)
 - `src/runtime/ui/` (14 components — primitive, row, column, panel, separator, spacer, text, button, input, tabs, list, table, gauge, sparkline) — the themed component catalog; every component is real, but `Button.onPress`/`Input.onChange`/`Tabs.onSelect`/`List.onSelect` are wired to the correct OpenTUI handler and stay inert in the current static render, and `Separator` renders a plain color band where the design specifies glyph rules with weld tees (documented in-file as a divergence pending the phase-7 UI pass)
-- `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — the target navigation API and the v1 preview theme-override path, neither of which exists in code yet
+- `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` — the v1 preview theme-override path, which does not exist in code yet (`usePages` above now carries the dormant navigation shape this spec fixes)
 
 **Gate — `src/gate/`:**
 
