@@ -4,7 +4,13 @@ import { reatomComponent, useWrap } from "@reatom/react";
 
 import { Home } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
-import { ChatListPopup, ExportPopup, PinInputPopup, TrustPrompt } from "ui/popups";
+import {
+  ChatListPopup,
+  ExportFailurePopup,
+  ExportPopup,
+  PinInputPopup,
+  TrustPrompt,
+} from "ui/popups";
 import { EnlargePlaceholder } from "ui/preview";
 import { SHELL_PALETTE } from "ui/theme";
 import { Workspace } from "ui/workspace";
@@ -70,8 +76,17 @@ function renderOverlay(deps: UiDeps) {
       />
     );
   }
-  // exportState.phase === "failed" here (M14's failure popup lands in the next commit; the
-  // dismissal mechanism above already applies to it once that lands).
+  if (exportState.phase === "failed") {
+    return (
+      <ExportFailurePopup
+        id="overlay-export"
+        pageSlug={exportState.pageSlug}
+        sizeBytes={exportState.sizeBytes}
+        safeMessage={exportState.failure?.safeMessage ?? "export failed"}
+      />
+    );
+  }
+  // Unreachable: exportPopupShowing above narrowed the phase to "done" | "failed".
   return null;
 }
 

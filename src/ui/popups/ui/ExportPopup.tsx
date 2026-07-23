@@ -61,3 +61,56 @@ export function ExportPopup(props: ExportPopupProps) {
     </box>
   );
 }
+
+/** Props for the {@link ExportFailurePopup} export-failure popup. */
+export interface ExportFailurePopupProps {
+  /** Stable id the host selects and answers geometry on. */
+  readonly id: string;
+  /** The page the export was working on when it failed, or `null` if none was reached yet. */
+  readonly pageSlug: string | null;
+  /** Bytes written so far, or `null` if none was reached yet (both retained from the last
+   * `export.progress` — the terminal payload itself carries neither, ui/mirror `ExportMirror`). */
+  readonly sizeBytes: number | null;
+  /** The failure's bounded `FailureDtoV1.safeMessage`. */
+  readonly safeMessage: string;
+}
+
+/**
+ * The export-failure popup — a design gap: `design/13-export-feedback.dc.html` (`wsExport`)
+ * only mocks the success confirmation, no failed-export screen exists. This is the closest
+ * faithful mapping: the same "export ^E" popup frame as {@link ExportPopup}, using the red
+ * error-band vocabulary already established for failures (`ErrorPanel`, `SHELL_PALETTE.red`)
+ * instead of inventing a new pattern, and the same "⏎ ok" dismiss line.
+ */
+export function ExportFailurePopup(props: ExportFailurePopupProps) {
+  const headline =
+    props.pageSlug === null ? "✗ export failed" : `✗ export failed ${props.pageSlug}`;
+  return (
+    <box
+      id={props.id}
+      border
+      borderStyle="rounded"
+      borderColor={SHELL_PALETTE.amber}
+      title="export ^E"
+      titleColor={SHELL_PALETTE.amberHi}
+      backgroundColor={SHELL_PALETTE.bg}
+      flexDirection="column"
+      padding={0}
+    >
+      <text id={`${props.id}-headline`} fg={SHELL_PALETTE.red} attributes={BOLD}>
+        {headline}
+      </text>
+      {props.sizeBytes !== null && (
+        <text id={`${props.id}-size`} fg={SHELL_PALETTE.dim}>
+          {`${props.sizeBytes} bytes`}
+        </text>
+      )}
+      <text id={`${props.id}-message`} fg={SHELL_PALETTE.faint}>
+        {props.safeMessage}
+      </text>
+      <text id={`${props.id}-dismiss`} fg={SHELL_PALETTE.amber} attributes={BOLD}>
+        {"⏎ ok"}
+      </text>
+    </box>
+  );
+}

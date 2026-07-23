@@ -291,6 +291,7 @@ export function createMirror(): Mirror {
           completedJobs: 0,
           totalJobs: p.renderJobCount,
           pageSlug: null,
+          sizeBytes: null,
         });
         return;
       }
@@ -304,6 +305,7 @@ export function createMirror(): Mirror {
           completedJobs: envelope.payload.completedJobs,
           totalJobs: envelope.payload.totalJobs,
           pageSlug: envelope.payload.pageSlug,
+          sizeBytes: envelope.payload.sizeBytes,
         });
         return;
       }
@@ -318,10 +320,19 @@ export function createMirror(): Mirror {
         return;
       }
       case "export.failed": {
+        // ExportTerminalPayloadV1 (export.completed/export.failed's shared payload) carries
+        // neither pageSlug nor sizeBytes — retain them from the last `running` state (M14), the
+        // same "retain across the terminal transition" pattern M11 uses for finalText.
+        const current = exportAtom();
+        const carried =
+          current.phase === "running"
+            ? { pageSlug: current.pageSlug, sizeBytes: current.sizeBytes }
+            : { pageSlug: null, sizeBytes: null };
         exportAtom.set({
           phase: "failed",
           operationId: envelope.payload.operationId,
           failure: envelope.payload.failure,
+          ...carried,
         });
         return;
       }

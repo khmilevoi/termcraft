@@ -6,7 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { SHELL_PALETTE } from "ui/theme";
 
-import { ExportPopup } from "./ExportPopup";
+import { ExportFailurePopup, ExportPopup } from "./ExportPopup";
 
 let open: RenderHandle | null = null;
 afterEach(() => {
@@ -87,6 +87,93 @@ describe("ExportPopup component (design wsExport, 13-export-feedback.dc.html)", 
     open = handle;
     handle.mount(
       <ExportPopup id="export" projectName={PROJECT_NAME} paths={PATHS} caveat={CAVEAT} />,
+    );
+    await handle.render();
+    const run = findRun(handle.capture(), "⏎ ok");
+    expect(run).toBeDefined();
+    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amber);
+    expect((run?.attrs ?? 0) & 1).toBe(1);
+  });
+});
+
+describe("ExportFailurePopup component (M14 — no design failure mock; closest faithful mapping onto the ErrorPanel red band)", () => {
+  test('renders the "export ^E" titled box', async () => {
+    const handle = await createHeadlessRenderer({ w: 62, h: 11 });
+    open = handle;
+    handle.mount(
+      <ExportFailurePopup
+        id="export-fail"
+        pageSlug="main"
+        sizeBytes={4096}
+        safeMessage="disk full"
+      />,
+    );
+    await handle.render();
+    expect(lineText(handle.capture(), 0)).toContain("export ^E");
+  });
+
+  test("renders the bold red ✗ headline naming the page slug", async () => {
+    const handle = await createHeadlessRenderer({ w: 62, h: 11 });
+    open = handle;
+    handle.mount(
+      <ExportFailurePopup
+        id="export-fail"
+        pageSlug="main"
+        sizeBytes={4096}
+        safeMessage="disk full"
+      />,
+    );
+    await handle.render();
+    const run = findRun(handle.capture(), "✗ export failed main");
+    expect(run).toBeDefined();
+    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.red);
+    expect((run?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("renders a generic headline when no page slug was retained", async () => {
+    const handle = await createHeadlessRenderer({ w: 62, h: 11 });
+    open = handle;
+    handle.mount(
+      <ExportFailurePopup
+        id="export-fail"
+        pageSlug={null}
+        sizeBytes={null}
+        safeMessage="disk full"
+      />,
+    );
+    await handle.render();
+    const run = findRun(handle.capture(), "✗ export failed");
+    expect(run).toBeDefined();
+    expect(run?.text).not.toContain("null");
+  });
+
+  test("renders the retained size and the failure's safeMessage", async () => {
+    const handle = await createHeadlessRenderer({ w: 62, h: 11 });
+    open = handle;
+    handle.mount(
+      <ExportFailurePopup
+        id="export-fail"
+        pageSlug="main"
+        sizeBytes={4096}
+        safeMessage="disk full"
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "4096")).toBeDefined();
+    expect(findRun(frame, "disk full")).toBeDefined();
+  });
+
+  test('renders the "⏎ ok" dismiss line in bold amber', async () => {
+    const handle = await createHeadlessRenderer({ w: 62, h: 11 });
+    open = handle;
+    handle.mount(
+      <ExportFailurePopup
+        id="export-fail"
+        pageSlug="main"
+        sizeBytes={4096}
+        safeMessage="disk full"
+      />,
     );
     await handle.render();
     const run = findRun(handle.capture(), "⏎ ok");

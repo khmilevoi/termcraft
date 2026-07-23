@@ -433,6 +433,106 @@ describe("mirror.apply — chats / selection / pins / diagnostics / export", () 
     );
     expect(m.export().phase).toBe("done");
   });
+
+  test("export.progress carries sizeBytes onto the running phase (M14)", () => {
+    const m = createMirror();
+    const operationId = uuidv7();
+    m.apply(
+      event("export.started", {
+        operationId,
+        sourceSnapshotDigest: TEST_SHA,
+        pageCount: 2,
+        renderJobCount: 6,
+        destination: ".termcraft/export",
+      }),
+    );
+    m.apply(
+      event("export.progress", {
+        operationId,
+        phase: "rendering",
+        completedJobs: 3,
+        totalJobs: 6,
+        pageSlug: "main",
+        sizeBytes: 4096,
+      }),
+    );
+    const ex = m.export();
+    if (ex.phase !== "running") throw new Error("unreachable");
+    expect(ex.pageSlug).toBe("main");
+    expect(ex.sizeBytes).toBe(4096);
+  });
+
+  test("export.failed retains the last progress's pageSlug/sizeBytes (M14 — the terminal payload itself carries neither)", () => {
+    const m = createMirror();
+    const operationId = uuidv7();
+    m.apply(
+      event("export.started", {
+        operationId,
+        sourceSnapshotDigest: TEST_SHA,
+        pageCount: 2,
+        renderJobCount: 6,
+        destination: ".termcraft/export",
+      }),
+    );
+    m.apply(
+      event("export.progress", {
+        operationId,
+        phase: "rendering",
+        completedJobs: 3,
+        totalJobs: 6,
+        pageSlug: "main",
+        sizeBytes: 4096,
+      }),
+    );
+    const failure = {
+      code: "EXPORT_PUBLICATION_FAILED",
+      retryable: false,
+      safeMessage: "disk full",
+      details: {},
+    } as const;
+    m.apply(
+      event("export.failed", {
+        operationId,
+        phase: "rendering",
+        destination: ".termcraft/export",
+        generationId: null,
+        failure,
+      }),
+    );
+    const ex = m.export();
+    expect(ex.phase).toBe("failed");
+    if (ex.phase !== "failed") throw new Error("unreachable");
+    expect(ex.pageSlug).toBe("main");
+    expect(ex.sizeBytes).toBe(4096);
+    expect(ex.failure).toEqual(failure);
+  });
+
+  test("export.failed with no prior progress retains null pageSlug/sizeBytes", () => {
+    const m = createMirror();
+    const operationId = uuidv7();
+    m.apply(
+      event("export.started", {
+        operationId,
+        sourceSnapshotDigest: TEST_SHA,
+        pageCount: 2,
+        renderJobCount: 6,
+        destination: ".termcraft/export",
+      }),
+    );
+    m.apply(
+      event("export.failed", {
+        operationId,
+        phase: "rendering",
+        destination: ".termcraft/export",
+        generationId: null,
+        failure: null,
+      }),
+    );
+    const ex = m.export();
+    if (ex.phase !== "failed") throw new Error("unreachable");
+    expect(ex.pageSlug).toBeNull();
+    expect(ex.sizeBytes).toBeNull();
+  });
 });
 
 describe("mirror.apply — out-of-scope kinds are counter-only no-ops", () => {

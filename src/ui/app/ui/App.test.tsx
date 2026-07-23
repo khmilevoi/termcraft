@@ -395,6 +395,61 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(dismissed).not.toContain("export ^E");
   });
 
+  test("shows the export failure popup on export.failed, naming the retained page/size, and Escape dismisses it (M14)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const operationId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      kittyKeyboard: true,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("export.started", {
+          operationId,
+          sourceSnapshotDigest: TEST_SHA,
+          pageCount: 1,
+          renderJobCount: 2,
+          destination: ".termcraft/export",
+        }),
+      );
+      kernel.emit(
+        event("export.progress", {
+          operationId,
+          phase: "rendering",
+          completedJobs: 1,
+          totalJobs: 2,
+          pageSlug: "main",
+          sizeBytes: 2048,
+        }),
+      );
+      kernel.emit(
+        event("export.failed", {
+          operationId,
+          phase: "rendering",
+          destination: ".termcraft/export",
+          generationId: null,
+          failure: {
+            code: "EXPORT_RENDER_FAILED",
+            retryable: false,
+            safeMessage: "disk full",
+            details: {},
+          },
+        }),
+      );
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes("export failed"));
+    expect(frame).toContain("export failed main");
+    expect(frame).toContain("2048");
+    expect(frame).toContain("disk full");
+    await renderer.act(() => renderer.mockInput.pressEscape());
+    const dismissed = await renderer.waitForFrame((output) => !output.includes("export failed"));
+    expect(dismissed).not.toContain("export failed");
+  });
+
   test("passes read-only state into the workspace presentation", async () => {
     const kernel = createFakeKernel();
     kernel.setSnapshot({

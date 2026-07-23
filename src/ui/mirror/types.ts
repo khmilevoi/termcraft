@@ -113,7 +113,12 @@ export interface ChatsMirror {
 /** The selection slice — the `selection.changed` DTO or null. */
 export type SelectionMirror = EventPayloadByKindV1["selection.changed"];
 
-/** The export slice — the export-feedback popup and status refusal read this. */
+/**
+ * The export slice — the export-feedback popup and status refusal read this. The `failed`
+ * variant retains the `pageSlug`/`sizeBytes` from the last `export.progress` before the
+ * terminal transition (M14): `export.failed`'s own payload (`ExportTerminalPayloadV1`) carries
+ * neither, so without retention the failure popup could not name the page it failed on.
+ */
 export type ExportMirror =
   | Readonly<{ phase: "idle" }>
   | Readonly<{
@@ -123,6 +128,7 @@ export type ExportMirror =
       completedJobs: number;
       totalJobs: number;
       pageSlug: string | null;
+      sizeBytes: number | null;
     }>
   | Readonly<{
       phase: "done";
@@ -130,7 +136,13 @@ export type ExportMirror =
       destination: string;
       generationId: UUIDv7 | null;
     }>
-  | Readonly<{ phase: "failed"; operationId: UUIDv7; failure: FailureDtoV1 | null }>;
+  | Readonly<{
+      phase: "failed";
+      operationId: UUIDv7;
+      failure: FailureDtoV1 | null;
+      pageSlug: string | null;
+      sizeBytes: number | null;
+    }>;
 
 /** The screen the app root mounts (phase-7 plan D6 — UI-derived until the typed snapshot lands). */
 export type ScreenKind = "home" | "trust-prompt" | "workspace" | "read-only" | "enlarge";
