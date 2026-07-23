@@ -5,9 +5,11 @@ import { context, wrap } from "@reatom/core";
 import type { ExportAction, ExportState, StateMachine } from "core/machines";
 import { reatomExportStateMachine } from "core/machines";
 import {
+  type FakeCallSequence,
   createFakeExportPublish,
   createFakePageStore,
   createFakeProjectWriteCoordinator,
+  createSequence,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
@@ -70,12 +72,12 @@ function currentPageInput(overrides: Partial<ExportPageInputV1> = {}): ExportPag
   };
 }
 
-function setup(options?: { readonly currentHash?: string }) {
+function setup(options?: { readonly currentHash?: string; readonly sequence?: FakeCallSequence }) {
   const rawMachine = reatomExportStateMachine();
   rawMachine.apply("kernel.export.begin");
   rawMachine.apply("kernel.export.beginRendering"); // now "rendering", the legal source for beginPublication
   const { machine, actions } = spyMachine(rawMachine);
-  const projectWrite = createFakeProjectWriteCoordinator();
+  const projectWrite = createFakeProjectWriteCoordinator({ sequence: options?.sequence });
   const pageReader = createFakePageStore({
     order: [HOME.pageSlug],
     sources: new Map([
@@ -83,7 +85,7 @@ function setup(options?: { readonly currentHash?: string }) {
     ]),
   });
   const clock = manualClock(1_700_000_000_000);
-  const exportPublish = createFakeExportPublish();
+  const exportPublish = createFakeExportPublish({ sequence: options?.sequence });
   return { machine, actions, projectWrite, pageReader, clock, exportPublish };
 }
 
@@ -257,8 +259,15 @@ describe("publishExport", () => {
   });
 
   test("writes the publication through the export-publish port exactly once, under the permit, and completes to idle", async () => {
+    // One SHARED sequence across both fakes: `projectWrite.calls` and `exportPublish.calls`
+    // are two independent arrays, so checking each one's own method order separately cannot
+    // prove `publish()` happened WHILE the permit was still held — a regression that
+    // released the permit before calling `publish()` would leave each array's own order
+    // unchanged. Merging both logs by `seq` and asserting the combined order is what
+    // actually catches a release-before-publish regression.
+    const sequence = createSequence();
     const { call, readPhase, projectWrite, exportPublish } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup({ sequence });
       const call = publishExport(
         { machine, projectWrite, pageReader, clock, exportPublish },
         baseInput(),
@@ -275,10 +284,18 @@ describe("publishExport", () => {
     expect(exportPublish.calls[0]?.plan.pageCount).toBe(result.intent.pageCount);
     expect(exportPublish.calls[0]?.plan.createdAt).toBe(result.intent.recordedAt);
     expect(readPhase()).toBe("idle");
-    // The permit is released exactly once — after the port call, not before it.
     expect(projectWrite.calls.map((c) => c.method)).toEqual([
       "acquire",
       "acquire-granted",
+      "release",
+    ]);
+    // The permit is released exactly once — after the port call, not before it. Proved by
+    // merging both fakes' own ordered logs and reading the combined method sequence.
+    const combined = [...projectWrite.calls, ...exportPublish.calls].sort((a, b) => a.seq - b.seq);
+    expect(combined.map((entry) => entry.method)).toEqual([
+      "acquire",
+      "acquire-granted",
+      "publish",
       "release",
     ]);
   });
