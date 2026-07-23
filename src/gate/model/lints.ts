@@ -1,6 +1,7 @@
 import type { PageSlug } from "entities/page";
 
 import type { GateWarning } from "../types";
+import { readHyphenatedName, scanOpenTag } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { Tok } from "./lexer";
 
@@ -61,121 +62,6 @@ export function lintDeterminism(source: string): GateWarning[] {
   return warnings;
 }
 
-/** One scanned JSX opening tag: its full (possibly hyphenated) name and whether it carries an `id` prop. */
-interface OpenTagScan {
-  readonly tagName: string;
-  readonly hasId: boolean;
-}
-
-/**
- * Read a (possibly hyphenated) name starting at `start`: `id`, but also
- * `data-id`, `aria-label`, `my-widget`, etc. — the lexer sees each hyphen as
- * its own `MinusToken`, so a tag/prop name spanning one is only complete once
- * the merge stops (§6.3 Also-fix: this is what keeps `data-id`/`aria-id` from
- * being counted as the `id` prop below — the merged name is compared for
- * equality as a whole, never a single identifier segment in isolation).
- * Returns `null` when `start` isn't an Identifier at all. `next` is the token
- * index right after the merged name.
- */
-function readHyphenatedName(
-  toks: readonly Tok[],
-  start: number,
-): { readonly name: string; readonly next: number } | null {
-  const first = toks[start];
-  if (first === undefined || first.kind !== SK.Identifier) return null;
-  let name = first.value;
-  let j = start + 1;
-  while (toks[j]?.kind === SK.MinusToken && toks[j + 1]?.kind === SK.Identifier) {
-    name += `-${toks[j + 1]!.value}`;
-    j += 2;
-  }
-  return { name, next: j };
-}
-
-/**
- * Scan one JSX opening tag starting at its `<` token (`start`): the (possibly
- * hyphenated) tag name, then its prop list up to the tag's own closing `>`/`/>` —
- * tracking brace depth so an expression-container prop value (e.g.
- * `color={x > y ? "a" : "b"}`) never terminates the scan early on the `>` inside
- * it. Returns `null` when `start` is not a real element's opening tag:
- *
- * - a closing `</...>` or a bare `<>` Fragment start, neither of which names
- *   an element (`first` isn't an Identifier);
- * - the tag name doesn't sit directly against `<` — no line break between them
- *   (Important 1) — so a `<` used as a relational operator with its right-hand
- *   operand pushed to a later line is never mistaken for a tag start;
- * - the walk hits a token that can never appear at depth 0 inside a JSX
- *   attribute list — `;`, a depth-0 `)`/`,`, another `<`, any keyword, a bare
- *   number, … (Important 1) — before it ever finds a closing `>`. The lexer is
- *   `LanguageVariant.Standard` (`lexer.ts`), so `<` is indistinguishable from
- *   `LessThanToken`-the-operator; without this abort the walk would happily
- *   cross statement/expression boundaries (`a < b`, `i < len` in a `for`
- *   condition) hunting for *some* later `>`, however unrelated;
- * - the walk runs off the end of the token stream without ever finding a
- *   closing `>` at all (Important 1) — the exact shape `a < b` and
- *   `rows.length < max` leave behind: a tag name with nothing after it that
- *   could possibly close a tag;
- * - the found closing `>` is immediately followed by a call's `(` (Important
- *   1) — `Identifier<Type>(...)` (a generic type-argument list, e.g.
- *   `useRef<T>()`) is lexically identical to a childless open tag up to this
- *   point, and the one shape a *real* element's `>` is never followed by is a
- *   call paren (you cannot invoke a rendered element), so that shape is
- *   rejected here instead of trying to tell "generic call" from "JSX" earlier.
- *
- * A generic type-argument list with no following call (`Array<Foo>`) is not
- * separately special-cased: an uppercase argument is already exempt as a Kit
- * component by `lintUnpointedElements`, and a lowercase one violates
- * TypeScript's near-universal PascalCase type-naming convention — an
- * accepted, narrow residual gap (see the Important-1 route note in the fix
- * report) rather than one worth an extra guard.
- */
-function scanOpenTag(toks: readonly Tok[], start: number, source: string): OpenTagScan | null {
-  const first = toks[start + 1];
-  if (first === undefined || first.kind !== SK.Identifier) return null;
-
-  const openTok = toks[start]!;
-  if (source.slice(openTok.pos + 1, first.pos).includes("\n")) return null;
-
-  const tagRead = readHyphenatedName(toks, start + 1)!;
-  const tagName = tagRead.name;
-
-  let hasId = false;
-  let depth = 0;
-  let foundTerminator = false;
-  let j = tagRead.next;
-  for (; j < toks.length; j += 1) {
-    const t = toks[j]!;
-    if (t.kind === SK.OpenBraceToken) {
-      depth += 1;
-      continue;
-    }
-    if (t.kind === SK.CloseBraceToken) {
-      depth -= 1;
-      continue;
-    }
-    if (depth > 0) continue;
-    if (t.kind === SK.GreaterThanToken) {
-      foundTerminator = true;
-      break;
-    }
-    if (t.kind === SK.SlashToken) continue; // the self-closing `/>` marker
-    if (t.kind === SK.EqualsToken || t.kind === SK.StringLiteral) continue;
-    if (t.kind === SK.Identifier) {
-      const prop = readHyphenatedName(toks, j)!;
-      if (prop.name === "id") hasId = true;
-      j = prop.next - 1; // the loop's own `j += 1` lands exactly on `prop.next`
-      continue;
-    }
-    // Impossible inside a JSX attribute list at depth 0 — this `<` was never
-    // a real tag start. See the exit-condition list in the doc comment above.
-    return null;
-  }
-  if (!foundTerminator) return null;
-  if (toks[j + 1]?.kind === SK.OpenParenToken) return null; // `Identifier<Type>(...)` generic call
-
-  return { tagName, hasId };
-}
-
 /**
  * The `unpointed-element` warning (§6.3 step 3; §5.2's escape hatch: "the Gate
  * reminds, not rejects"). A JSX tag's capitalization is the load-bearing signal:
@@ -185,6 +71,22 @@ function scanOpenTag(toks: readonly Tok[], start: number, source: string): OpenT
  * already enforce (§5.2) — exempt here. A lowercase tag is a low-level/raw
  * OpenTUI primitive (the runtime's escape hatch, e.g. `<box>`/`<text>`); one with
  * no `id` prop warns, because the designer is expected to be able to point at it.
+ * `scanOpenTag`/`readHyphenatedName` now live in `./jsx` — shared with
+ * `import-scan.ts`'s dynamic-code check (WP-6a fix-pass-2, Important 1) — but
+ * this lint keeps consuming plain `scanOpenTag` per `<` token, unchanged.
+ *
+ * Two further residual gaps, both pinned by tests below and left as-is
+ * (WP-6a fix-pass-2, Minor 3 — fixing either would need a second heuristic
+ * layer `scanOpenTag`'s own doc comment argues against):
+ *
+ * - two bare, semicolon-free assignments sandwiched between two comparisons
+ *   with no `const`/`let`/parens/commas (`a < b\nfoo = "x"\nbar = c > d`)
+ *   still misreads the first comparison's operands as a tag+props and warns
+ *   a bogus `<b>` — contrived, but not previously named here.
+ * - `<box>(hi)</box>`: a text child starting with `(` is real, unpointed
+ *   markup, but the "closing `>` immediately followed by `(`" generic-call
+ *   guard (needed to reject `Identifier<Type>(...)`) also silences this case,
+ *   because it cannot tell the two apart from the tag header alone.
  */
 export function lintUnpointedElements(source: string): GateWarning[] {
   const toks = tokenize(source);
@@ -227,21 +129,32 @@ export function lintUnpointedElements(source: string): GateWarning[] {
  * shape that convention is warning against — the lint has no way to know a
  * `rowId` expression still evaluates to the same referenced id turn over
  * turn, so it treats it as dropped rather than silently trusting it.
+ *
+ * Uses the same `readHyphenatedName` merge `scanOpenTag` uses (WP-6a
+ * fix-pass-2, Minor 4): without it, a bare `Identifier` check for the token
+ * text `"id"` matches the second half of `data-id="cpu"` too, since the lexer
+ * hands back `data`, `-`, `id` as three separate tokens — that made
+ * `lintDroppedIds('<box data-id="cpu">x</box>', ["cpu"])` report no warning
+ * at all, silently treating a `data-id` as if it declared `id="cpu"`.
  */
 function extractDeclaredIds(toks: readonly Tok[]): Set<string> {
   const ids = new Set<string>();
   for (let i = 0; i < toks.length; i += 1) {
-    const t = toks[i]!;
-    if (t.kind !== SK.Identifier || t.value !== "id") continue;
-    const sep = toks[i + 1];
-    const value = toks[i + 2];
-    if (sep === undefined || value === undefined) continue;
-    if (
-      (sep.kind === SK.EqualsToken || sep.kind === SK.ColonToken) &&
-      value.kind === SK.StringLiteral
-    ) {
-      ids.add(value.value);
+    if (toks[i]!.kind !== SK.Identifier) continue;
+    const nameRead = readHyphenatedName(toks, i)!; // kind already checked Identifier, never null
+    if (nameRead.name === "id") {
+      const sep = toks[nameRead.next];
+      const value = toks[nameRead.next + 1];
+      if (
+        sep !== undefined &&
+        value !== undefined &&
+        (sep.kind === SK.EqualsToken || sep.kind === SK.ColonToken) &&
+        value.kind === SK.StringLiteral
+      ) {
+        ids.add(value.value);
+      }
     }
+    i = nameRead.next - 1; // the loop's own `i += 1` lands exactly on `nameRead.next`
   }
   return ids;
 }

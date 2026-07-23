@@ -75,6 +75,16 @@ describe("lintDroppedIds (§6.3 dropped-id warning)", () => {
     const src = `const props = { id: "cpu-gauge" }\n`;
     expect(lintDroppedIds(src, ["cpu-gauge"])).toEqual([]);
   });
+
+  test("a `data-id` prop is NOT mistaken for a declared `id` (Minor 4)", () => {
+    // Before the fix, `extractDeclaredIds` matched the bare token text "id" —
+    // the second half of the hyphenated `data-id` — and silently counted
+    // "cpu" as if the candidate had declared `id="cpu"`.
+    const w = lintDroppedIds(`export default () => <box data-id="cpu">x</box>\n`, ["cpu"]);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("dropped-id");
+    expect(w[0]?.message).toContain("cpu");
+  });
 });
 
 describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
@@ -156,6 +166,26 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
     expect(
       lintUnpointedElements(`export default () => <my-widget id="w">raw</my-widget>\n`),
     ).toEqual([]);
+  });
+
+  describe("Minor 3 (fix pass 2) — residual gaps, pinned as current behavior, not fixed here", () => {
+    test("KNOWN GAP: two bare assignments sandwiched between two comparisons still misreads a bogus <b>", () => {
+      // Contrived: needs two comparisons and two `const`/`let`-free, paren/comma
+      // /semicolon-free assignments in between. `scanOpenTag` reads "b" as a tag
+      // name, "foo"/"bar"/"c" as its props, and the second comparison's `>` as
+      // the tag's own terminator.
+      const w = lintUnpointedElements(`a < b\nfoo = "x"\nbar = c > d\n`);
+      expect(w).toHaveLength(1);
+      expect(w[0]?.message).toContain("<b>");
+    });
+
+    test('KNOWN GAP: a text child starting with "(" is silenced by the generic-call guard (`<box>(hi)</box>`)', () => {
+      // The "closing `>` immediately followed by `(`" guard exists to reject
+      // `Identifier<Type>(...)` generic calls; it cannot tell that shape apart
+      // from a real, unpointed element whose text child happens to start with
+      // a parenthesis, so this one produces no warning at all.
+      expect(lintUnpointedElements(`export default () => <box>(hi)</box>\n`)).toEqual([]);
+    });
   });
 });
 
