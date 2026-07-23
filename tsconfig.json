@@ -30,7 +30,9 @@
       "runtime": ["./src/runtime"],
       "runtime/*": ["./src/runtime/*"],
       "infrastructure": ["./src/infrastructure"],
-      "infrastructure/*": ["./src/infrastructure/*"]
+      "infrastructure/*": ["./src/infrastructure/*"],
+      "entrypoint": ["./src/entrypoint"],
+      "entrypoint/*": ["./src/entrypoint/*"]
     }
   },
   "include": ["src"],

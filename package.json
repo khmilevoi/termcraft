@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "bun run src/main.tsx",
+    "dev": "bun --watch run src/main.tsx",
+    "demo": "bun run src/demo.tsx",
+    "build": "bun build --compile --outfile dist/termcraft.exe src/main.tsx",
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
