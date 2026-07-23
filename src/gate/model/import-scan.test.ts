@@ -221,6 +221,58 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     });
   });
 
+  describe("Important 2 (fix pass 5) — the `<`/`}` regex-predecessor gap is reachable too, not just `)`", () => {
+    // `./jsx`'s `scanCode` reads `/` as division after `)`, `<`, OR `}` — a
+    // prior pass's comments claimed only `)` could actually hide a call. Both
+    // of these hide a real `eval("1")` exactly the way the `)` KNOWN GAP test
+    // above does; see `scanCode`'s own KNOWN GAP doc comment in `./jsx`.
+    test("KNOWN GAP: a regex literal right after `<` closes an expression container early, hiding a real eval(...) call", () => {
+      const src = `export default () => <box id="b">{x < /[}]/.test(s) && eval("1")}</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("KNOWN GAP: a regex literal right after `}` closes an expression container early, hiding a real eval(...) call", () => {
+      const src = `export default () => <box id="b">{ {} /[}]/.test(s) && eval("1")}</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+  });
+
+  describe("Important 1 (fix pass 5) — braces inside a regex body defeat tokenize()'s own template tracking", () => {
+    // A DIFFERENT, more fundamental layer than the two describe blocks above:
+    // these gaps live in `./lexer`'s `tokenize` itself, the WHOLE-FILE token
+    // stream `scanImportAllowlist` scans directly — no JSX involved at all in
+    // the first two. `tokenize` never re-scans `/` as a regex (see
+    // `scanCodeToken`'s own doc comment), so a brace inside a regex character
+    // class desyncs its `{`/template brace-tracking stack.
+    test("KNOWN GAP: a `}` inside a regex character class is misread as the enclosing template's own closing brace", () => {
+      // The class's own `}` resumes the template's tail right there, so the
+      // tail's literal text absorbs everything up to the next backtick —
+      // including the real call.
+      const src = 'const s = `${/[}]/ && eval("x")}`\n';
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("KNOWN GAP: a `{` inside a regex character class is pushed as a phantom brace, and the template's own closing backtick then opens a fresh, unterminated literal", () => {
+      // The class's `{` is treated as an ordinary brace open; the
+      // interpolation's real closing `}` only pops that phantom, so the
+      // template's own genuine closing backtick right after it is re-lexed
+      // from scratch as a brand-new literal with no matching close anywhere
+      // else in the file — swallowing every later statement, including the
+      // real `eval("2")`.
+      const src = 'const s = `${/[{]/.test(a)}`\nconst z = eval("2")\n';
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("KNOWN GAP: the same desync through a genuinely unterminated template swallows the rest of the file, JSX included", () => {
+      // No closing backtick exists anywhere in this source (it does not
+      // compile) — the resumed tail scan runs straight through EOF, absorbing
+      // everything after the opening backtick, the real `eval` call included,
+      // into one token that is never split back apart.
+      const src = '<box id="b">{`${0}\nconst z = eval("2")\n';
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+  });
+
   describe("Important 1 (fix pass 2) — JSX children text is not scanned as code", () => {
     test("prose containing the bare word `eval` as a JSX text child is not fatally rejected", () => {
       const src = `export default () => <Text id="t">Never use eval here</Text>\n`;

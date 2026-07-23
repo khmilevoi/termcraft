@@ -98,11 +98,37 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * 4. indirect access that never writes the token `eval`/`Function` at all,
  *    e.g. the classic `[].constructor.constructor("return this")()`
  *    sandbox-escape chain;
- * 5. a real call sitting after a statement-position regular-expression literal
- *    inside a JSX expression container — `./jsx`'s reader reads that `/` as
- *    division (see `scanCode`'s own KNOWN GAP note there), its `}` closes the
- *    container early, and everything after it in the container is recorded as
- *    children text and therefore skipped below.
+ * 5. a real call sitting after a regular-expression literal whose immediately
+ *    preceding token is `)` (in STATEMENT position), `<`, or `}`, inside a JSX
+ *    expression container — `./jsx`'s reader reads that `/` as division in
+ *    all three cases (see `scanCode`'s own KNOWN GAP note there), so the
+ *    regex's own `}` closes the container early, and everything after it in
+ *    the container is recorded as children text and therefore skipped below.
+ *    All three predecessors are reachable this way, not only `)`;
+ * 6. a `}` inside a regular-expression CHARACTER CLASS defeats `./lexer`'s
+ *    `{`/template brace-tracking directly in `tokenize` below — a different,
+ *    more fundamental layer than gap 5 above (that gap is `./jsx`'s reader
+ *    misjudging where a JSX expression container ends; this one is the
+ *    WHOLE-FILE token stream itself losing a real token, independent of JSX
+ *    entirely, because `tokenize` never re-scans `/` as a regex AT ALL — see
+ *    `scanCodeToken`'s own doc comment in `./lexer`). Two shapes, both
+ *    swallowing a later `eval(...)`/`Function(...)` into unparsed template
+ *    text: the class's own `}` is misread as the enclosing template
+ *    interpolation's closing brace, so the literal's tail resumes right there
+ *    and absorbs everything up to the next backtick
+ *    (`` const s = `${/[}]/ && eval("x")}` ``); or the class's `{` is pushed
+ *    as a phantom ordinary brace, so the interpolation's real closing `}`
+ *    only pops that phantom, and the template's own genuine closing backtick
+ *    right after it is then re-lexed from scratch as a brand-new literal that
+ *    swallows every later statement up to the next backtick or EOF
+ *    (`` const s = `${/[{]/.test(a)}` `` followed by a later `eval("2")`);
+ * 7. the same `tokenize`-level desync, but the source's own template literal
+ *    is genuinely unterminated (no closing backtick anywhere in the file) —
+ *    the resumed tail then runs straight through EOF and swallows the entire
+ *    rest of the file as one token, JSX included
+ *    (`` <box id="b">{`${0} `` followed on the next line by `const z =
+ *    eval("2")`; this source does not compile, but the scan still owes it a
+ *    documented outcome rather than a silent one).
  *
  * Accepted OVER-approximations, pinned the same way: a page that merely
  * defines a property/method literally named `eval` (`{ eval() { return 1 } }`)
@@ -133,9 +159,12 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * errors at all. `scanJsx` reads real JSX structure instead (`scanJsxToken`,
  * matching close tags, `{}` expression containers, template literals and
  * regular expressions), which closes both of those shapes; gap 5 above is the
- * one boundary-moving shape that survives, and it is pinned rather than
- * assumed away. See `scanJsx`'s doc comment for the reader's own fail-closed
- * discipline.
+ * boundary-moving shape that survives INSIDE `scanJsx`'s own read, and it is
+ * pinned rather than assumed away. See `scanJsx`'s doc comment for the
+ * reader's own fail-closed discipline. Gaps 6 and 7 are not inside `scanJsx`
+ * at all — they are `tokenize`'s own token stream losing a token before
+ * `scanJsx` is ever consulted, so no amount of JSX-awareness in `scanJsx`
+ * could have closed them.
  */
 export function scanImportAllowlist(source: string): ImportScanError[] {
   const toks = tokenize(source);

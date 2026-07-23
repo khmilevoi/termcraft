@@ -113,11 +113,11 @@ interface OpenTag {
  *
  * The `<` half is what closes the fix-pass-3 "dangling `</Foo>`" gap
  * (`Array<Foo>` is never even attempted as a tag, so nothing hunts for a
- * matching close for it) and, as a side effect, replaces every purpose the
- * old `scanOpenTag` heuristic's dedicated "closing `>` followed by a call
- * paren" guard served (`useRef<T>(...)` is rejected because `useRef` — the
- * identifier right before `<` — already ends an expression, independent of
- * whatever follows the generic's own `>`).
+ * matching close for it) and, as a side effect, replaces the dedicated
+ * "closing `>` followed by a call paren" guard an earlier, plain code-token
+ * walk needed to reject the same shape (`useRef<T>(...)` is rejected because
+ * `useRef` — the identifier right before `<` — already ends an expression,
+ * independent of whatever follows the generic's own `>`).
  */
 function endsExpression(kind: SyntaxKind): boolean {
   switch (kind) {
@@ -154,22 +154,26 @@ function endsExpression(kind: SyntaxKind): boolean {
  *
  * KNOWN GAP — three predecessors are read as division even though a regular
  * expression could legally follow them, so a `}` in such a regex DOES close
- * the enclosing container early:
+ * the enclosing container early. All three are reachable: each can leave a
+ * real `eval(...)`/`Function(...)` call sitting in what the reader then calls
+ * children text, unguarded by the fatal dynamic-code check.
  *
  * - `)` (via `endsExpression`): correct in every expression position, wrong in
  *   STATEMENT position (`if (x) /re/.test(s)` inside an arrow-function body).
  *   Telling the two apart needs the statement/expression distinction only a
- *   parser has. This is the reachable one — it can leave a real `eval(...)`
- *   call sitting in what the reader then calls children text — and it is
- *   pinned by the "regex literal in STATEMENT position after `)`" KNOWN GAP
- *   test in `import-scan.test.ts`.
- * - `<` and `}`: legal regex predecessors in plain code, but this reader
+ *   parser has. Pinned by the "regex literal in STATEMENT position after `)`"
+ *   KNOWN GAP test in `import-scan.test.ts`.
+ * - `<` and `}`: legal regex predecessors in plain code too, but this reader
  *   re-lexes a FAILED element attempt's own JSX punctuation as code (see
  *   `attemptElement`), where `</tag>` and `{expr} />` put a `/` right after
  *   exactly those two tokens. Re-scanning there would swallow the rest of the
  *   line into a bogus regex literal and hide the well-formed elements behind
- *   it, so division wins. Pinned by the "regex literal right after `<` or `}`"
- *   KNOWN GAP test in `jsx.test.ts`.
+ *   it, so division wins there on purpose — the same trade as `)`, not a free
+ *   one: `x < /[}]/.test(s) && eval(...)` and `{} /[}]/.test(s) && eval(...)`
+ *   both hide the call just as `)` does. Pinned at the reader level by the
+ *   "regex literal right after `<` or `}`" KNOWN GAP test in `jsx.test.ts`,
+ *   and at the reachable-call level by the matching KNOWN GAP tests in
+ *   `import-scan.test.ts`.
  */
 function scanCode(scanner: Scanner, braces: BraceContext[], previous: SyntaxKind): SyntaxKind {
   const kind = scanCodeToken(scanner, braces);
@@ -419,9 +423,9 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * scanner in its JSX language variant (`node_modules/typescript/dist/ast/
  * scanner.d.ts`: `scanJsxToken`, `scanJsxIdentifier`, `scanJsxAttributeValue`,
  * `resetTokenState`, and `LanguageVariant.JSX` via `createScanner`'s own
- * `languageVariant` parameter) — replacing the earlier code-token heuristic
- * (`scanOpenTag`/`consumeJsxElement`) whose premise was unsound: walking
- * CODE-mode tokens to guess where JSX text lives means an apostrophe or `//`
+ * `languageVariant` parameter) — replacing an earlier walk over a plain
+ * CODE-mode token array whose premise was unsound: guessing where JSX text
+ * lives by walking CODE-mode tokens means an apostrophe or `//`
  * inside ordinary prose opens a real string literal or line comment that can
  * swallow a closing tag, silently curdling a page's own display copy into what
  * looks like live code (or, the mirror image, laundering real code into what
@@ -442,9 +446,9 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  *
  * What is NOT claimed: that a text/code boundary can never land in the wrong
  * place. The reader is a scanner, not a parser, and `scanCode`'s doc comment
- * records the one shape that still moves a boundary — a regular-expression
- * literal in statement position, whose `}` closes an expression container
- * early — with its pinning tests.
+ * records the shapes that still move a boundary — a regular-expression
+ * literal right after `)`, `<`, or `}`, whose `}` closes an expression
+ * container early — with their pinning tests.
  *
  * Two callers build on this single result: `computeJsxTextTokenIndices`
  * (`import-scan.ts`'s dynamic-code check needs to skip identifier/bracket
@@ -485,9 +489,9 @@ export function scanJsx(source: string): JsxScan {
  *
  * An `eval(...)`/`Function(...)` reference written as real code stays out of
  * every `textRanges` span, because `scanJsx` reads a `{...}` expression
- * container as code and records no text for it — with the single pinned
- * exception in `scanCode`'s KNOWN GAP note, where a statement-position regular
- * expression closes a container early and what follows it inside that
+ * container as code and records no text for it — with the pinned exceptions
+ * in `scanCode`'s KNOWN GAP note, where a regular expression right after `)`,
+ * `<`, or `}` closes a container early and what follows it inside that
  * container is recorded as text after all.
  */
 export function computeJsxTextTokenIndices(

@@ -253,17 +253,24 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
       expect(textValuesOf(`<Kit.Text id="t">hello</Kit.Other>\nconst z = eval("2")\n`)).toEqual([]);
     });
 
-    test("KNOWN GAP: a regex literal right after `<` or `}` is read as division", () => {
+    test("KNOWN GAP: a regex literal right after `<` or `}` is read as division, hiding a real call just like `)` does", () => {
       // `scanCode` refuses to re-scan `/` as a regex after `<` or `}` because
       // this reader re-lexes a FAILED element attempt's own JSX punctuation as
       // code, where `</tag>` and `{expr} />` put a `/` right after exactly
       // those tokens. The cost is these two shapes: the `}` inside the
       // character class closes the container early, and the rest of the
-      // container is recorded as children text. (`)` — the third such
-      // predecessor, and the reachable one — is pinned in `import-scan.test.ts`
-      // as the case that hides a real `eval` call.)
-      expect(textRunsOf('<box id="b">a{x < /[}]/.source}b</box>')).toEqual(["a", "]/.source}b"]);
-      expect(textRunsOf('<box id="b">a{ {} /[}]/.source }b</box>')).toEqual(["a", "]/.source }b"]);
+      // container — including a REAL call, not just a harmless `.source`
+      // access — is recorded as children text. All three predecessors (`)`,
+      // `<`, `}`) are reachable this way; `)` is pinned at the reachable-call
+      // level in `import-scan.test.ts`, alongside these same two.
+      expect(textRunsOf('<box id="b">a{x < /[}]/.test(s) && eval("1")}b</box>')).toEqual([
+        "a",
+        ']/.test(s) && eval("1")}b',
+      ]);
+      expect(textRunsOf('<box id="b">a{ {} /[}]/.test(s) && eval("1")}b</box>')).toEqual([
+        "a",
+        ']/.test(s) && eval("1")}b',
+      ]);
     });
   });
 });

@@ -64,8 +64,15 @@ export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxK
   }
   // `}…${` (TemplateMiddle) keeps the interpolation context open for the next
   // span; `}…` ` (TemplateTail) ends the literal. An UNTERMINATED literal also
-  // comes back as a tail, with the scanner parked at EOF, so the caller's own
-  // end-of-file handling fails closed without a special case here.
+  // comes back as a tail, with the scanner parked at EOF. That is a real
+  // fail-closed guarantee for `./jsx`'s reader — its own caller
+  // (`attemptElement`) treats hitting EOF before a matching `}` as a failed
+  // read and falls back to ordinary code, never to text — but it is NOT one
+  // for {@link tokenize} below: an unterminated template literal has no such
+  // fallback there, so the swallowed span (everything from the unmatched
+  // opening backtick to EOF) simply never produces the separate tokens a real
+  // `eval`/`Function` reference inside it would need to be caught by (KNOWN
+  // GAP, pinned in `import-scan.test.ts`).
   const resumed = scanner.reScanTemplateToken(false);
   if (resumed !== SK.TemplateMiddle) braces.pop();
   return resumed;
@@ -79,6 +86,14 @@ export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxK
  * spans of `` `a${x}b` `` stay literal tokens and the code between them stays
  * code. The `source.length + 1` cap is a hard backstop against a wrong terminal-
  * token assumption spinning the loop.
+ *
+ * Not followed correctly: a `}` inside a regular-expression body (never
+ * re-scanned as one here, by design — see {@link scanCodeToken}'s own doc
+ * comment) can desync this same brace/template tracking and swallow real code
+ * — including an unterminated template's tail running straight through EOF
+ * with no failure signal at all. `import-scan.ts`'s own KNOWN GAP inventory is
+ * where every reproduced shape of this is named and pinned; this function
+ * does not special-case any of them.
  */
 export function tokenize(source: string): Tok[] {
   const scanner = createScanner(true, LanguageVariant.Standard);
