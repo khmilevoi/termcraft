@@ -61,6 +61,14 @@ const INITIAL_MODELS_SNAPSHOT: KernelStateSnapshot = {
   migration: { phase: "idle" },
 };
 
+/** `kernel.ts`'s own retained `PLACEHOLDER_GIT_STATUS`, transcribed — no Git port is wired into `KernelDeps` (out of MVP scope). */
+const EXPECTED_GIT_STATUS_PLACEHOLDER: EventPayloadByKindV1["kernel.snapshot"]["gitStatus"] = {
+  repositoryId: "unknown",
+  head: null,
+  sequencerState: "none",
+  scopes: {},
+};
+
 function makeClock(nowMs: number): Clock {
   return { now: () => new Date(nowMs) };
 }
@@ -140,6 +148,9 @@ describe("createKernel", () => {
     expect(payload.activePageSlug).toBeNull();
     expect(payload.activeChatId).toBeNull();
     expect(payload.pageDescriptors).toEqual([]);
+    // The retained M21 placeholder — asserted by value, not only implicitly via the event
+    // bus's own schema validation, so a future accidental edit to the literal is caught here.
+    expect(payload.gitStatus).toEqual(EXPECTED_GIT_STATUS_PLACEHOLDER);
     // No backend has ever been selected (no `model.select` handler exists yet).
     expect(payload.agentIdentity).toBeNull();
 
