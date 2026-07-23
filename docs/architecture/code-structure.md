@@ -463,6 +463,14 @@ vendor tier's own pre-split run-loop file.
 - `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
   the compiled-vs-dev argv (item 9) an eventual `HostSupervisor` spawns the
   `_host --stdio` child with; not yet called from any composition root (WP-4)
+- `src/host/protocol/model/embedded-declaration.ts` — `EMBEDDED_RUNTIME_DECLARATION`
+  / `SUPPORTED_KIT_API_VERSIONS`: this binary's ONE embedded runtime-declaration
+  bundle, read by `src/main.tsx`'s `_host` branch today and by
+  `HostSupervisorDeps.runtimeDeclaration` (WP-4) once it lands, so the exact-equality
+  handshake check (`handshake.ts`'s `declarationsEqual`) can never diverge from a
+  retyped copy; lives in `host/protocol` (which owns the
+  `RuntimeDeclarationBundleV1` type and validator) rather than in `runtime`, so
+  `runtime` stays the leaf item 10 requires
 
 **`store` and the Git adapter (items 1, 4, 6, 11)**
 
