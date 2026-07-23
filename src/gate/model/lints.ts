@@ -111,8 +111,8 @@ export function lintUnpointedElements(source: string): GateWarning[] {
  * bound to an `id` attribute (`id="p"`, the JSX form) or an `id` property
  * (`id: "p"`, the object-literal form). Used by `lintDroppedIds` (below), which
  * needs the literal id VALUES to match against `referencedIds` — unlike
- * `unpointed-element`'s `scanOpenTag`, which only needs to know a tag carries
- * *some* `id` prop, literal or not.
+ * `unpointed-element` above, which only needs to know a tag carries *some* `id`
+ * prop, literal or not (`scanJsx`'s `hasId`).
  *
  * Deliberately literal-only (§6.3 Also-fix): `<box id={rowId}>` does not add
  * anything here, because `rowId` isn't a `StringLiteral`. That means a
@@ -126,9 +126,10 @@ export function lintUnpointedElements(source: string): GateWarning[] {
  * `rowId` expression still evaluates to the same referenced id turn over
  * turn, so it treats it as dropped rather than silently trusting it.
  *
- * Uses the same `readHyphenatedName` merge `scanOpenTag` uses (WP-6a
- * fix-pass-2, Minor 4): without it, a bare `Identifier` check for the token
- * text `"id"` matches the second half of `data-id="cpu"` too, since the lexer
+ * Merges hyphenated names with `readHyphenatedName` (`./jsx`), the CODE-token
+ * counterpart of the `scanJsxIdentifier()` merge the real JSX reader uses:
+ * without it, a bare `Identifier` check for the token text `"id"` matches the
+ * second half of `data-id="cpu"` too, since the lexer
  * hands back `data`, `-`, `id` as three separate tokens — that made
  * `lintDroppedIds('<box data-id="cpu">x</box>', ["cpu"])` report no warning
  * at all, silently treating a `data-id` as if it declared `id="cpu"`.

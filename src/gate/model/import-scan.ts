@@ -84,43 +84,58 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * because `Function` is also TypeScript's built-in callback type and a bare
  * reference is common, legitimate authored code); and a computed-member
  * access whose bracket holds exactly the literal string `"eval"`/`"Function"`
- * (`globalThis["eval"]`, `g["Function"]`). Forms it knowingly does NOT catch,
- * each pinned by a "KNOWN GAP" test in `import-scan.test.ts`: a bare
- * `Function` reference aliased to another name and invoked through that
- * alias later; a computed-member key held in a variable rather than written
- * as a literal (`const key = "eval"; g[key](...)`); and indirect access that
- * never writes the token `eval`/`Function` at all, e.g. the classic
- * `[].constructor.constructor("return this")()` sandbox-escape chain. A page
- * that merely defines a property/method literally named `eval` (e.g.
- * `{ eval() { return 1 } }`) is flagged too — an accepted over-approximation:
- * a page naming something `eval` is unusual enough that it is not worth
- * carving out an exemption for.
+ * (`globalThis["eval"]`, `g["Function"]`).
+ *
+ * Forms it knowingly does NOT catch, each pinned by a "KNOWN GAP" test in
+ * `import-scan.test.ts`:
+ *
+ * 1. a bare `Function` reference aliased to another name and invoked through
+ *    that alias later (`const F = Function; new F(...)`);
+ * 2. a computed-member key held in a variable rather than written as a literal
+ *    (`const key = "eval"; g[key](...)`);
+ * 3. a computed-member key built by concatenation (`g["ev" + "al"](...)`) —
+ *    same reason one step earlier: this scan folds no constants;
+ * 4. indirect access that never writes the token `eval`/`Function` at all,
+ *    e.g. the classic `[].constructor.constructor("return this")()`
+ *    sandbox-escape chain;
+ * 5. a real call sitting after a statement-position regular-expression literal
+ *    inside a JSX expression container — `./jsx`'s reader reads that `/` as
+ *    division (see `scanCode`'s own KNOWN GAP note there), its `}` closes the
+ *    container early, and everything after it in the container is recorded as
+ *    children text and therefore skipped below.
+ *
+ * Accepted OVER-approximations, pinned the same way: a page that merely
+ * defines a property/method literally named `eval` (`{ eval() { return 1 } }`)
+ * is flagged, and so is a regular-expression literal whose body spells the word
+ * (`/eval/`), because `./lexer`'s CODE-mode `tokenize` deliberately does not
+ * re-scan `/` as a regex. Both are unusual enough in a page that carving out an
+ * exemption is not worth the catch it would cost.
  *
  * The three dynamic-code checks below skip any identifier/bracket token
- * `computeJsxTextTokenIndices` (`./jsx`) marks as JSX children TEXT (WP-6a
- * fix-pass-2, Important 1): without that guard, a page's own display copy —
- * `<Text id="t">Never use eval here</Text>`, `<Text id="t">Function (beta)</Text>`
- * — tripped a FATAL rejection on ordinary prose, which is worse than the gap
- * this check was written to close. A real `eval(...)`/`Function(...)`
- * reference inside a JSX expression container (`{eval("1")}`) is never marked
- * as text, so it stays caught. The other checks in this scan (import/export/
- * require) are not guarded the same way: each requires a `StringLiteral`
- * specifier immediately in scope, a shape prose essentially never produces,
- * and Important 1 named only `eval`/`Function` as observed false rejections.
+ * `computeJsxTextTokenIndices` (`./jsx`) marks as JSX children TEXT: without
+ * that guard, a page's own display copy — `<Text id="t">Never use eval
+ * here</Text>`, `<Text id="t">Function (beta)</Text>` — tripped a FATAL
+ * rejection on ordinary prose, which is worse than the gap this check was
+ * written to close. The other checks in this scan (import/export/require) are
+ * not guarded the same way: each requires a `StringLiteral` specifier
+ * immediately in scope, a shape prose essentially never produces, and only
+ * `eval`/`Function` were ever observed as false rejections.
  *
- * `computeJsxTextTokenIndices` itself is built on `scanJsx` (`./jsx`, WP-6a
- * fix-pass-3), a real recursive-descent reader over the TypeScript scanner's
- * own JSX mode — not the fix-pass-2 code-token heuristic it replaced. That
- * heuristic's premise (walking CODE-mode tokens to guess where JSX text
- * lives) was unsound: an apostrophe or `//` inside ordinary prose opened a
- * real string literal or line comment that could swallow a page's own
- * closing tag, fatally rejecting its display copy — and, the mirror image, a
- * dangling close tag left over from an unrelated, uncalled generic type
- * argument (`Array<Foo>` … `</Foo>`) could launder a real `eval(...)`
- * in between into "text", silently returning no errors at all. `scanJsx`
- * reads real JSX structure instead (`scanJsxToken`, matching close tags,
- * `{}` expression containers), so neither failure mode can occur here; see
- * its doc comment for the reader's own fail-closed discipline.
+ * `computeJsxTextTokenIndices` itself is built on `scanJsx` (`./jsx`), a real
+ * recursive-descent reader over the TypeScript scanner's own JSX mode — not
+ * the code-token heuristic it replaced. That heuristic's premise (walking
+ * CODE-mode tokens to guess where JSX text lives) was unsound: an apostrophe
+ * or `//` inside ordinary prose opened a real string literal or line comment
+ * that could swallow a page's own closing tag, fatally rejecting its display
+ * copy — and, the mirror image, a dangling close tag left over from an
+ * unrelated, uncalled generic type argument (`Array<Foo>` … `</Foo>`) could
+ * launder a real `eval(...)` in between into "text", silently returning no
+ * errors at all. `scanJsx` reads real JSX structure instead (`scanJsxToken`,
+ * matching close tags, `{}` expression containers, template literals and
+ * regular expressions), which closes both of those shapes; gap 5 above is the
+ * one boundary-moving shape that survives, and it is pinned rather than
+ * assumed away. See `scanJsx`'s doc comment for the reader's own fail-closed
+ * discipline.
  */
 export function scanImportAllowlist(source: string): ImportScanError[] {
   const toks = tokenize(source);

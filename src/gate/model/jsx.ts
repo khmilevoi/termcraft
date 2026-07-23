@@ -427,8 +427,9 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * looks like live code (or, the mirror image, laundering real code into what
  * looks like harmless text — the "dangling `</Foo>`" gap, see
  * `endsExpression`'s doc comment). `scanJsxToken` never lexes strings or
- * comments in JSX children — text is just text — so no amount of prose
- * punctuation moves a text/code boundary here.
+ * comments in JSX children — text is just text — so an apostrophe, a `//` or
+ * an em dash in a page's own display copy can no longer swallow its closing
+ * tag.
  *
  * The driver walks the WHOLE source with the plain scanner, trying
  * `attemptElement` at every `<` not immediately preceded by an
