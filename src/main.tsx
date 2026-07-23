@@ -14,8 +14,8 @@ import { CURRENT_KIT_API_VERSION, DEFAULT_THEME_ID } from "runtime";
 if (import.meta.main) {
   // The design host is this same binary, re-invoked as `_host --stdio` (Spike E,
   // `createHostSpawnCommand` in `host/supervisor` builds that argv). Recognizing it
-  // is the FIRST branch — a `_host` argv never reaches the interactive bootstrap
-  // below, it only ever runs the stdio protocol loop.
+  // is the FIRST branch, ahead of the interactive bootstrap in the `else` below —
+  // a `_host` argv only ever runs the stdio protocol loop.
   if (parseHostArgs(process.argv)) {
     await runHostStdio({
       argv: process.argv,

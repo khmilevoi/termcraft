@@ -55,8 +55,8 @@ describe("package entrypoints", () => {
     expect(parseHostArgs(["exe", "_host", "--stdio"])).toBe(true);
 
     // The interactive bootstrap must never run for a `_host` argv (Spike E): the
-    // dispatch branch has to appear, and return, before `bootstrap("interactive"...`
-    // is reached in source order.
+    // dispatch branch has to appear before `bootstrap("interactive"...` in source
+    // order, so the interactive path only ever sits in its `else`.
     const mainSource = fs.readFileSync(path.join(repoRoot, "src/main.tsx"), "utf8");
     const dispatchIndex = mainSource.indexOf("parseHostArgs");
     const bootstrapIndex = mainSource.indexOf('bootstrap("interactive"');
