@@ -23,7 +23,7 @@ import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
-import { deriveTabs } from "../model/tabs";
+import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
 
@@ -71,10 +71,44 @@ function terminalRecordLines(
   return [{ spans: [{ text: `✗ ${turn.outcome}` }] }];
 }
 
-/** Renders the ordered tab strip (design `drawTabs`): ▸ active amber-bold, dim inactive, faint ghost. */
-function renderTabs(tabs: readonly TabEntry[]) {
+/**
+ * Renders the ordered tab strip (design `drawTabs`, `design/18-tab-management.dc.html`):
+ * ▸ active amber-bold, dim inactive, faint ghost. When the summed tab widths exceed `width`
+ * (`tabsOverflow`), paints the leading/trailing `‹`/`›` scroll indicators (design `o.scroll`
+ * branch, `termcraft-engine.js:385,389`).
+ *
+ * DIVERGENCE (plan prose vs. engine source): WP-9's task text describes the indicators as
+ * "faint"; the engine's actual `o.scroll` branch paints them
+ * `this.text(b,x,y,'‹',{fg:P.amber,bold:true})` / the matching `›` — amber, bold, not faint.
+ * The engine source is the design's ground truth (CLAUDE.md "design is a source of truth"), so
+ * this renders `SHELL_PALETTE.amber` bold, matching the drawn glyph exactly.
+ *
+ * `width` is the preview column's outer width (matching `tabsOverflow`'s own best-effort
+ * estimate, `../model/tabs.ts`); the strip box is bounded to `width - 2` — the parent
+ * `ws-preview` box's own left/right `border` — so `overflow="hidden"` clips the tab content
+ * the way the engine's fixed-width character buffer naturally would, and the trailing `›`
+ * (pinned with `position="absolute" right={0}`) always lands at the strip's true right edge
+ * instead of after however much tab content the row would otherwise emit (which, since the
+ * preview column is flush against the terminal's own right edge, would render past the
+ * canvas and never appear at all).
+ */
+function renderTabs(tabs: readonly TabEntry[], width: number) {
+  const overflow = tabsOverflow(tabs, width);
+  const stripWidth = Math.max(0, width - 2);
   return (
-    <box id="ws-tabs" flexDirection="row">
+    <box
+      id="ws-tabs"
+      flexDirection="row"
+      position="relative"
+      width={stripWidth}
+      height={1}
+      overflow="hidden"
+    >
+      {overflow && (
+        <text id="ws-tabs-scroll-left" fg={SHELL_PALETTE.amber} attributes={BOLD}>
+          {"‹ "}
+        </text>
+      )}
       {tabs.map((tab) => (
         <text
           key={tab.pageSlug}
@@ -87,6 +121,18 @@ function renderTabs(tabs: readonly TabEntry[]) {
           {tab.active ? `▸ ${tab.title}  ` : `  ${tab.title} `}
         </text>
       ))}
+      {overflow && (
+        <text
+          id="ws-tabs-scroll-right"
+          position="absolute"
+          right={0}
+          top={0}
+          fg={SHELL_PALETTE.amber}
+          attributes={BOLD}
+        >
+          {"›"}
+        </text>
+      )}
     </box>
   );
 }
@@ -330,7 +376,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderStyle="rounded"
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
-          {renderTabs(tabs)}
+          {renderTabs(tabs, w - chatW)}
           {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, w - chatW, frameH - 3, {
             pins,
             pendingPin,

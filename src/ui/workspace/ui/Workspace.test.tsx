@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import type { PageDescriptorV1 } from "core/protocol";
 import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
 import { createUiDeps } from "ui/app";
-import { createFakeKernel, snapshot } from "ui/testing";
+import { TEST_SHA, createFakeKernel, snapshot } from "ui/testing";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { Workspace } from "./Workspace";
@@ -48,6 +49,69 @@ describe("Workspace read-only presentation", () => {
     expect(text).not.toContain("█");
     const attach = findRun(rows, "read-only — Send disabled");
     expect(attach && extractRgb(attach.fg)).toBe(SHELL_PALETTE.red);
+  });
+});
+
+describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.html, drawTabs o.scroll)", () => {
+  const ready = (slug: string, title: string): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: slug,
+    sourceHash: TEST_SHA,
+    title,
+    minSize: { w: 80, h: 24 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  test("paints ‹ › in amber-bold when the tab strip overflows the available width", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 40, h: 10 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "a",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [
+          ready("a", "Alpha"),
+          ready("b", "Bravo"),
+          ready("c", "Charlie"),
+          ready("d", "Delta"),
+        ],
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 40, h: 10 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const left = findRun(rows, "‹");
+    const right = findRun(rows, "›");
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    expect(left && extractRgb(left.fg)).toBe(SHELL_PALETTE.amber);
+    expect(right && extractRgb(right.fg)).toBe(SHELL_PALETTE.amber);
+    expect((left?.attrs ?? 0) & 1).toBe(1);
+    expect((right?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("omits the scroll indicators when the tab strip fits", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "a",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [ready("a", "Alpha"), ready("b", "Bravo")],
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).not.toContain("‹");
+    expect(text).not.toContain("›");
   });
 });
 
