@@ -46,7 +46,13 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { KernelDeps } from "../../types";
 import { DEFERRED_HANDLER_KINDS } from "./deferred";
 import { createHandlerRegistry, totalHandlers } from "./index";
-import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+import {
+  type FamilyHandlerMap,
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  noOpOutcome,
+} from "./types";
 
 function slug(value: string) {
   const parsed = parsePageSlug(value);
@@ -251,5 +257,60 @@ describe("KernelMachines closed surface", () => {
       return context.machines.project.phaseAtom;
     };
     expect(typeof reachPhaseAtom).toBe("function");
+  });
+});
+
+describe("FamilyHandlerMap excludes Tier-C deferred kinds (fix round 2)", () => {
+  /** Zero-arg stand-in, assignable to any `CommandHandler<K>` for any `K` — same shape as `./index.ts`'s own `notYetImplementedHandler`. */
+  const stubHandler = (): ReturnType<typeof noOpOutcome> => noOpOutcome();
+
+  test('the 9 non-deferred preview kinds alone satisfy FamilyHandlerMap<"preview">', () => {
+    // `CommandKindOfFamily<"preview">` has 11 members; 2 of them (`preview.forwardInput`,
+    // `preview.setTweak`) are Tier-C deferred (`deferredHandlers` owns them). This literal
+    // supplies exactly the OTHER 9 and type-checks as `FamilyHandlerMap<"preview">` with no
+    // gaps and no excess keys — proving the type is precisely the 9-kind Step-B contract,
+    // not all 11.
+    const previewFamily: FamilyHandlerMap<"preview"> = {
+      "preview.selectPage": stubHandler,
+      "preview.selectHistorical": stubHandler,
+      "preview.selectCurrent": stubHandler,
+      "preview.resize": stubHandler,
+      "preview.setThemeCapabilities": stubHandler,
+      "preview.setMode": stubHandler,
+      "preview.queryGeometry": stubHandler,
+      "preview.retry": stubHandler,
+      "preview.close": stubHandler,
+    };
+
+    expect(Object.keys(previewFamily)).toHaveLength(9);
+  });
+
+  test('a FamilyHandlerMap<"preview"> literal cannot name a Tier-C deferred preview kind', () => {
+    // This function is deliberately never called — the assertion under test is that the
+    // extra `preview.forwardInput` key below FAILS TO COMPILE, not anything returned at
+    // runtime. Before fix round 2, `FamilyHandlerMap<F>` was `CommandHandlerMap<
+    // CommandKindOfFamily<F>>` with no `Exclude`, so `FamilyHandlerMap<"preview">` had all
+    // 11 preview kinds as known keys, this object literal type-checked cleanly, and the
+    // `@ts-expect-error` directive below was itself a compile error ("Unused
+    // '@ts-expect-error' directive", TS2578) — proving red before green.
+    const buildOverreachingPreviewFamily = (): FamilyHandlerMap<"preview"> => {
+      return {
+        "preview.selectPage": stubHandler,
+        "preview.selectHistorical": stubHandler,
+        "preview.selectCurrent": stubHandler,
+        "preview.resize": stubHandler,
+        "preview.setThemeCapabilities": stubHandler,
+        "preview.setMode": stubHandler,
+        "preview.queryGeometry": stubHandler,
+        "preview.retry": stubHandler,
+        "preview.close": stubHandler,
+        // @ts-expect-error — `preview.forwardInput` is Tier-C deferred; `FamilyHandlerMap<
+        // "preview">` must not admit it as a known key, so a Step-B preview module cannot
+        // un-defer it through its own object literal.
+        "preview.forwardInput": stubHandler,
+      };
+    };
+
+    expect(typeof buildOverreachingPreviewFamily).toBe("function");
   });
 });

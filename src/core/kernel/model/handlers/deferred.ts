@@ -1,6 +1,6 @@
 import { DEFERRED_CAPABILITY_KINDS } from "core/versions";
 
-import { type CommandHandlerMap, noOpOutcome } from "./types";
+import { type CommandHandlerMap, type DeferredHandlerKind, noOpOutcome } from "./types";
 
 /**
  * The Tier-C deferred family's rejection handler (kernel-assembly WP-1 task 9, STEP A).
@@ -59,17 +59,16 @@ import { type CommandHandlerMap, noOpOutcome } from "./types";
  * for whoever picks up `migration` next, not a silent guess.
  */
 
-export type DeferredHandlerKind =
-  | "restore.plan"
-  | "restore.confirm"
-  | "restore.discardPlan"
-  | "restore.retryRecord"
-  | "commit.plan"
-  | "commit.confirm"
-  | "commit.discardPlan"
-  | "history.open"
-  | "preview.forwardInput"
-  | "preview.setTweak";
+/**
+ * Re-exported from `./types` (fix round 2) — `DeferredHandlerKind` now has exactly ONE
+ * declaration site (`types.ts`), so `FamilyHandlerMap` (`./types.ts`) can `Exclude` it from
+ * every family's contract without `types.ts` importing FROM this file (see that type's own
+ * comment for why the direction matters — this file already imports `CommandHandlerMap`/
+ * `noOpOutcome` from `./types`, so a reverse import back into `./types` would be circular).
+ * This file still owns the runtime tuple below and the `migration.*` investigation in the
+ * header comment above; only the bare literal-union type moved.
+ */
+export type { DeferredHandlerKind };
 
 /** The literal tuple this file's own test cross-checks against `core/versions`'s runtime list. */
 export const DEFERRED_HANDLER_KINDS = [

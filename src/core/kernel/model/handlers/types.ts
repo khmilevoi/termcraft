@@ -219,12 +219,64 @@ export type CommandKindOfFamily<F extends CommandFamilyV1> = Extract<
 >;
 
 /**
- * The shape EVERY per-family module (Step B) exports: a `Readonly` map from its own
- * family's `CommandKindV1` members to their handlers. Nothing else — no default export, no
- * side effects, no module-level mutable state (a family module is re-importable and
- * re-usable across as many `HandlerContext`s/tests as needed).
+ * The 10 Tier-C deferred kinds — `4 restore.* + 3 commit.* + history.open + 2 preview.*`
+ * (`restore.plan/confirm/discardPlan/retryRecord`, `commit.plan/confirm/discardPlan`,
+ * `history.open`, `preview.forwardInput`, `preview.setTweak`) — declared here, not in
+ * `./deferred.ts`, purely so {@link FamilyHandlerMap} below can `Exclude` them without
+ * `types.ts` importing FROM `./deferred.ts` (that file already imports `CommandHandlerMap`/
+ * `noOpOutcome` from here; the reverse direction would make the two files circularly
+ * dependent). `./deferred.ts` imports this exact type and re-exports it unchanged, so
+ * `import { type DeferredHandlerKind } from "./deferred"` (`./index.ts`'s existing call
+ * site) keeps resolving to the same type — `types.ts` is just its one declaration site now,
+ * shared with `FamilyHandlerMap`'s own use below. See `./deferred.ts`'s own header comment
+ * for the full "why exactly these 10, why not `migration.*`" investigation.
  */
-export type FamilyHandlerMap<F extends CommandFamilyV1> = CommandHandlerMap<CommandKindOfFamily<F>>;
+export type DeferredHandlerKind =
+  | "restore.plan"
+  | "restore.confirm"
+  | "restore.discardPlan"
+  | "restore.retryRecord"
+  | "commit.plan"
+  | "commit.confirm"
+  | "commit.discardPlan"
+  | "history.open"
+  | "preview.forwardInput"
+  | "preview.setTweak";
+
+/**
+ * The shape EVERY per-family module (Step B) exports: a `Readonly` map from its own
+ * family's `CommandKindV1` members to their handlers — MINUS whichever of those members
+ * are already Tier-C deferred ({@link DeferredHandlerKind}, owned by `./deferred.ts`'s
+ * `deferredHandlers`, never by a family module). For most families `CommandKindOfFamily<F>`
+ * and `DeferredHandlerKind` don't overlap at all, so the `Exclude` is a no-op and
+ * `FamilyHandlerMap<F>` is exactly what it looks like it should be.
+ *
+ * `"preview"` is the one family where it DOES overlap: `CommandKindOfFamily<"preview">` has
+ * 11 members, 2 of which (`preview.forwardInput`, `preview.setTweak`) are Tier-C deferred —
+ * so `FamilyHandlerMap<"preview">` is exactly the OTHER 9. A preview module typed against
+ * it cannot even NAME the 2 deferred kinds in its own object literal (excess-property
+ * checking on a literal assigned to this type rejects unknown keys), let alone accidentally
+ * un-defer one by supplying a real handler for it — closing the "spread-order decides which
+ * handler wins" trap that a wider `FamilyHandlerMap<"preview">` would otherwise leave open
+ * at Step-B assembly (`{...deferredHandlers, ...previewFamily}`): with this narrower type
+ * the two maps share zero keys, so there is nothing left for spread order to decide.
+ *
+ * `"restore"`/`"commit"`/`"history"` are the opposite extreme: EVERY one of their kinds is
+ * Tier-C deferred, so `FamilyHandlerMap<"restore">` etc. resolve to the empty map —
+ * correctly, since none of them has a Step-B family module (the task brief: "Tier-C
+ * families (restore, commit, migration) ... get a single deferred-rejection handler
+ * each"). `"migration"` has no member in `DeferredHandlerKind` at all (see `./deferred.ts`'s
+ * header comment for why), so `FamilyHandlerMap<"migration">` is unaffected, still its full
+ * 4-kind map — matching the task report's flagged not-yet-implemented (not Tier-C) status
+ * for it.
+ *
+ * Nothing else about the shape changes — still no default export, no side effects, no
+ * module-level mutable state (a family module is re-importable and re-usable across as
+ * many `HandlerContext`s/tests as needed).
+ */
+export type FamilyHandlerMap<F extends CommandFamilyV1> = CommandHandlerMap<
+  Exclude<CommandKindOfFamily<F>, DeferredHandlerKind>
+>;
 
 /** The complete, 43-kind map `createHandlerRegistry` (`./index.ts`) consumes. */
 export type TotalHandlerMap = CommandHandlerMap<CommandKindV1>;
