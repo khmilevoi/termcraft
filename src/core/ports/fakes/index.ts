@@ -60,6 +60,9 @@ export type {
 } from "./project-write";
 export { createFakeProjectWriteCoordinator } from "./project-write";
 
+export type { ExportPublishCall, FakeExportPublish } from "./export-publish";
+export { createFakeExportPublish } from "./export-publish";
+
 export type { StagingCall, StagingFailableMethod, FakeStagingService } from "./staging";
 export { createFakeStagingService } from "./staging";
 

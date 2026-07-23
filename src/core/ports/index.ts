@@ -78,6 +78,15 @@ export type {
 } from "./turn-transactions";
 export type { ProjectWriteCoordinator, ProjectWritePermit } from "./project-write";
 
+// ---- export publication ----------------------------------------------------------------
+export type {
+  ExportPublicationV1,
+  ExportPublishOperationModeV1,
+  ExportPublishOperationV1,
+  ExportPublishPlanV1,
+  ExportPublishPort,
+} from "./export-publish";
+
 // ---- staging, trust, projections, session checkpoint, recovery --------------------------
 export type {
   CandidatePageSetV1,
