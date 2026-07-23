@@ -58,7 +58,10 @@ export interface JsxTextRange {
 }
 
 /** Both outputs of one whole-source JSX read: every element `scanJsx` could
- * confirm real, and every children-text range found inside them. */
+ * confirm real — each listed once, even when an abandoned attribute-list
+ * attempt (see `readElement`'s doc comment) recorded a nested element before
+ * a later, independent retry confirmed the very same element again — and
+ * every children-text range found inside them. */
 export interface JsxScan {
   readonly elements: readonly JsxElement[];
   readonly textRanges: readonly JsxTextRange[];
@@ -254,15 +257,26 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
  *
  * The open tag is read with the plain code scanner: a name via `readTagName`
  * (dotted, and hyphen-merging), then an attribute list whose entries are a
- * name with an optional value — either a string (`scanJsxAttributeValue()` —
- * the JSX grammar's own attribute-string scan, which does not require the
- * surrounding quotes to also be valid CODE-mode string syntax) or a `{...}`
- * expression container (`skipExpressionContainer`) — or a spread `{...expr}`.
+ * name — plain, hyphenated, or namespaced (`xml:lang`, one colon-joined pair,
+ * matching the JSX grammar's own `JsxNamespacedName`, never a chain) — with an
+ * optional value: either a string (`scanJsxAttributeValue()` — the JSX
+ * grammar's own attribute-string scan, which does not require the surrounding
+ * quotes to also be valid CODE-mode string syntax) or a `{...}` expression
+ * container (`skipExpressionContainer`) — or a spread `{...expr}`.
  * Anything else in attribute position fails the whole element: that is what
  * rejects `<b>`-shaped false positives like `foo\nbar = c > d` sitting in what
  * looked like an attribute list (a bare, unquoted, non-`{` value is not legal
  * JSX), and it is why the spread branch insists on a literal `...` rather than
  * accepting any `{`-opened attribute.
+ *
+ * A FAILED attribute list has no rollback of its own here — unlike
+ * `readChildren`, which truncates `collector` back to where it started on
+ * failure, a `{...}` value already read successfully by `skipExpressionContainer`
+ * earlier in the SAME attribute list stays in `collector` even though the
+ * element around it is later abandoned. If the top-level driver then reaches
+ * the very same nested element again independently and confirms it for real,
+ * it is recorded twice; `scanJsx`'s `normalizeElements` is what de-duplicates
+ * that, not this function.
  */
 function readElement(scanner: Scanner, collector: Collector): boolean {
   const pos = scanner.getTokenStart(); // this element's own `<`
@@ -283,6 +297,17 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
       kind = scanner.scanJsxIdentifier();
       if (scanner.getTokenText() === "id") hasId = true;
       kind = scanner.scan();
+      if (kind === SK.ColonToken) {
+        // A namespaced attribute name (`xml:lang="en"`) — legal JSX the
+        // scanner has no dedicated call for. Read the local part the same
+        // way the name itself was read, then fall through to the ordinary
+        // value handling below; `hasId` was already decided on the namespace
+        // segment above, matching only a bare `id`, never `xml:id`.
+        kind = scanner.scan();
+        if (!tokenIsIdentifierOrKeyword(kind)) return false;
+        scanner.scanJsxIdentifier();
+        kind = scanner.scan();
+      }
       if (kind !== SK.EqualsToken) continue; // a value-less (boolean) attribute
       kind = scanner.scanJsxAttributeValue();
       if (kind === SK.StringLiteral) {
@@ -472,7 +497,7 @@ export function scanJsx(source: string): JsxScan {
     previous = kind;
   }
 
-  return collector;
+  return { elements: normalizeElements(collector.elements), textRanges: collector.textRanges };
 }
 
 /**
@@ -537,4 +562,29 @@ function normalizeRanges(ranges: readonly JsxTextRange[]): JsxTextRange[] {
     if (range.end > last.end) merged[merged.length - 1] = { pos: last.pos, end: range.end };
   }
   return merged;
+}
+
+/**
+ * `collector.elements` with any duplicate dropped, keyed by each element's own
+ * `<` position — the one thing that uniquely identifies which physical open
+ * tag produced it, so two entries sharing a `pos` can never disagree on the
+ * rest of their shape. The same failed-attempt backtracking that motivates
+ * `normalizeRanges` above produces this duplicate too, but through a different
+ * path: `readElement`'s attribute-list loop has no rollback of its own (see
+ * its doc comment), so a nested element read once inside an attribute value
+ * that USED to be well-formed — until a later, unrelated token in the SAME
+ * attribute list fails the whole enclosing element — stays in `collector`
+ * even though the enclosing element never commits; if the top-level driver
+ * then reaches that nested element's `<` again on its own and confirms it for
+ * real, it is recorded a second time.
+ */
+function normalizeElements(elements: readonly JsxElement[]): JsxElement[] {
+  const seen = new Set<number>();
+  const result: JsxElement[] = [];
+  for (const el of elements) {
+    if (seen.has(el.pos)) continue;
+    seen.add(el.pos);
+    result.push(el);
+  }
+  return result;
 }

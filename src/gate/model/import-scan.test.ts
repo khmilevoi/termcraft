@@ -273,6 +273,13 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     });
   });
 
+  describe("Finding 4 (fix pass 5) — a namespaced attribute name no longer fatally rejects the element's own text", () => {
+    test('`<box xml:lang="en" id="b">eval is banned</box>` is legal JSX and is not fatally rejected', () => {
+      const src = `export default () => <box xml:lang="en" id="b">eval is banned</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+  });
+
   describe("Important 1 (fix pass 2) — JSX children text is not scanned as code", () => {
     test("prose containing the bare word `eval` as a JSX text child is not fatally rejected", () => {
       const src = `export default () => <Text id="t">Never use eval here</Text>\n`;

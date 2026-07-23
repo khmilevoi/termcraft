@@ -87,6 +87,35 @@ describe("scanJsx (real recursive-descent JSX reader over the TypeScript scanner
       expect(elements).toEqual([{ tagName: "box", hasId: false, pos: 0 }]);
     });
   });
+
+  describe("Also fix (fix pass 5) — a namespaced attribute name no longer abandons the element", () => {
+    test("a namespaced attribute (`xml:lang`) is read, not fatal to the element", () => {
+      const { elements } = scanJsx(`<box xml:lang="en" id="b">hi</box>`);
+      expect(elements).toEqual([{ tagName: "box", hasId: true, pos: 0 }]);
+    });
+
+    test("a namespaced attribute alone (no `id`) still parses; `hasId` stays false", () => {
+      const { elements } = scanJsx(`<box xml:lang="en">hi</box>`);
+      expect(elements).toEqual([{ tagName: "box", hasId: false, pos: 0 }]);
+    });
+
+    test("a namespaced attribute name missing its local part fails closed, like any other malformed attribute", () => {
+      expect(scanJsx(`<box xml:="en">hi</box>`).elements).toEqual([]);
+    });
+  });
+
+  describe("Also fix (fix pass 5) — a nested element read once by a doomed attempt and once by a later retry is reported only once", () => {
+    test("a failed attribute list's own nested element is not double-counted once the retry confirms it for real", () => {
+      // `<box a={<text>hi</text>} 1>x</box>`: `skipExpressionContainer` reads
+      // `<text>hi</text>` successfully while parsing `a`'s value, but the bare
+      // `1` right after it is illegal in attribute position, so the whole
+      // `<box>` attempt fails and is rewound. The top-level driver then reaches
+      // `<text>hi</text>` again on its own and confirms it independently — the
+      // same element, recorded twice, without `normalizeElements`.
+      const { elements } = scanJsx(`<box a={<text>hi</text>} 1>x</box>`);
+      expect(elements).toEqual([{ tagName: "text", hasId: false, pos: 8 }]);
+    });
+  });
 });
 
 describe("readHyphenatedName", () => {
