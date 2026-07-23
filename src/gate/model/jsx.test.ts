@@ -42,6 +42,51 @@ describe("scanJsx (real recursive-descent JSX reader over the TypeScript scanner
   test("an unterminated open tag (no matching close, runs to EOF) reports nothing", () => {
     expect(scanJsx(`<box>hi\n`).elements).toEqual([]);
   });
+
+  describe("everyday JSX forms the reader now lexes (fix pass 4)", () => {
+    test("a spread attribute is read as an attribute, not a give-up", () => {
+      const { elements } = scanJsx(`<box {...rest}>raw</box>`);
+      expect(elements).toEqual([{ tagName: "box", hasId: false, pos: 0 }]);
+    });
+
+    test("a spread attribute alongside a literal `id` still reports the id", () => {
+      const { elements } = scanJsx(`<Text id="t" {...rest}>hi</Text>`);
+      expect(elements).toEqual([{ tagName: "Text", hasId: true, pos: 0 }]);
+    });
+
+    test("a bare `{expr}` in attribute position is NOT JSX — the element fails closed", () => {
+      // Only `{...expr}` is a legal attribute-position container; `{rest}` is
+      // not JSX at all, so the reader must keep refusing it.
+      expect(scanJsx(`<box {rest}>raw</box>`).elements).toEqual([]);
+    });
+
+    test("a dotted (member-expression) tag name is read whole", () => {
+      const { elements } = scanJsx(`<Kit.Text id="t">hi</Kit.Text>`);
+      expect(elements).toEqual([{ tagName: "Kit.Text", hasId: true, pos: 0 }]);
+    });
+
+    test("a three-segment dotted tag name is read whole too", () => {
+      const { elements } = scanJsx(`<A.B.C>hi</A.B.C>`);
+      expect(elements).toEqual([{ tagName: "A.B.C", hasId: false, pos: 0 }]);
+    });
+
+    test("a close tag naming a different member of the same object is not a match", () => {
+      expect(scanJsx(`<Kit.Text id="t">hi</Kit.Other>`).elements).toEqual([]);
+    });
+
+    test("a close tag dropping the dotted qualifier is not a match either", () => {
+      expect(scanJsx(`<Kit.Text id="t">hi</Text>`).elements).toEqual([]);
+    });
+
+    test("a dotted tag with a trailing `.` and no member fails closed", () => {
+      expect(scanJsx(`<Kit.>hi</Kit.>`).elements).toEqual([]);
+    });
+
+    test("an attribute value holding a template literal keeps the element readable", () => {
+      const { elements } = scanJsx("<box label={`R${n}`}>raw</box>");
+      expect(elements).toEqual([{ tagName: "box", hasId: false, pos: 0 }]);
+    });
+  });
 });
 
 describe("readHyphenatedName", () => {
@@ -61,6 +106,12 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
     const toks = tokenize(source);
     const idx = computeJsxTextTokenIndices(toks, source);
     return [...idx].sort((a, b) => a - b).map((i) => toks[i]!.value || `<${toks[i]!.kind}>`);
+  }
+
+  /** The children-text runs themselves, as source slices — the clearest way to
+   * show WHERE a text/code boundary landed, rather than which tokens fell in. */
+  function textRunsOf(source: string): string[] {
+    return scanJsx(source).textRanges.map((range) => source.slice(range.pos, range.end));
   }
 
   test("children text between a tag's `>` and its closing tag is marked", () => {
@@ -119,17 +170,100 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
 
   describe("prose containing code-mode punctuation still closes the tag correctly (fix-pass-3)", () => {
     test("an apostrophe (`isn't`) does not open a code-mode string that swallows the closing tag", () => {
-      const idx = computeJsxTextTokenIndices(
-        tokenize(`<Text id="t">eval isn't allowed here</Text>`),
-        `<Text id="t">eval isn't allowed here</Text>`,
-      );
-      expect(idx.size).toBeGreaterThan(0);
+      // The apostrophe still opens a CODE-mode string literal that runs past
+      // `</Text>` — the code stream is lexed independently — but the whole
+      // mis-lexed token starts inside the text range, so every token here is
+      // skipped and nothing outside the range is marked.
+      expect(textValuesOf(`<Text id="t">eval isn't allowed here</Text>`)).toEqual([
+        "eval",
+        "isn",
+        "t allowed here</Text>",
+      ]);
     });
 
     test("`//` does not open a code-mode line comment that swallows the closing tag", () => {
-      const src = `<Text id="t">eval // never</Text>`;
-      const idx = computeJsxTextTokenIndices(tokenize(src), src);
-      expect(idx.size).toBeGreaterThan(0);
+      // `// never</Text>` is code-mode trivia, so `eval` is the only code token
+      // left inside the text range — and it is marked, not read as a reference.
+      expect(textValuesOf(`<Text id="t">eval // never</Text>`)).toEqual(["eval"]);
+    });
+  });
+
+  describe("an expression container lexes the code that is actually there (fix pass 4)", () => {
+    test("a template literal's interpolation `}` does not close the container early", () => {
+      expect(textValuesOf('<box id="b">a{`${0}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("a template literal with several interpolations is followed to its own tail", () => {
+      expect(textValuesOf('<box id="b">a{`${0}m${1}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("a nested template literal inside an interpolation is tracked to its own tail", () => {
+      expect(textValuesOf('<box id="b">a{`${`${x}`}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("a regex literal's `}` does not close the container early", () => {
+      expect(textValuesOf('<box id="b">a{/[}]/.test(s) ? eval("1") : 0}b</box>')).toEqual([
+        "a",
+        "b",
+      ]);
+    });
+
+    test("division is not mistaken for a regex literal", () => {
+      expect(textValuesOf('<box id="b">a{w / h / 2}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("an object literal in a container still balances", () => {
+      expect(textValuesOf('<box id="b">a{fn({ k: 1 })}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("an arrow-function body in a container still balances", () => {
+      expect(textValuesOf('<box id="b">a{xs.map((i) => { return i })}b</box>')).toEqual(["a", "b"]);
+    });
+
+    test("a nested container inside a nested element still balances", () => {
+      expect(textValuesOf('<box id="b">a{c && <text id="t">n{`${v}`}m</text>}b</box>')).toEqual([
+        "a",
+        "n",
+        "m",
+        "b",
+      ]);
+    });
+
+    test("an unterminated template literal in a container fails closed — nothing is text", () => {
+      expect(textValuesOf('<box id="b">a{`${0}b</box>')).toEqual([]);
+    });
+
+    test("an attribute value holding a template literal leaves the children text readable", () => {
+      expect(textValuesOf("<box label={`R${n}`}>raw</box>")).toEqual(["raw"]);
+    });
+
+    test("a spread attribute leaves the children text readable", () => {
+      expect(textValuesOf("<box {...rest}>raw</box>")).toEqual(["raw"]);
+    });
+
+    test("a spread attribute's own expression is code, never text", () => {
+      expect(textValuesOf("<box {...{ e: eval }}>raw</box>")).toEqual(["raw"]);
+    });
+
+    test("a dotted tag's children text is marked, the close tag is not", () => {
+      expect(textValuesOf(`<Kit.Text id="t">hello world</Kit.Text>`)).toEqual(["hello", "world"]);
+    });
+
+    test("a mismatched dotted close tag marks nothing at all", () => {
+      expect(textValuesOf(`<Kit.Text id="t">hello</Kit.Other>\nconst z = eval("2")\n`)).toEqual([]);
+    });
+
+    test("KNOWN GAP: a regex literal right after `<` or `}` is read as division", () => {
+      // `scanCode` refuses to re-scan `/` as a regex after `<` or `}` because
+      // this reader re-lexes a FAILED element attempt's own JSX punctuation as
+      // code, where `</tag>` and `{expr} />` put a `/` right after exactly
+      // those tokens. The cost is these two shapes: the `}` inside the
+      // character class closes the container early, and the rest of the
+      // container is recorded as children text. (`)` — the third such
+      // predecessor, and the reachable one — is pinned in `import-scan.test.ts`
+      // as the case that hides a real `eval` call.)
+      expect(textRunsOf('<box id="b">a{x < /[}]/.source}b</box>')).toEqual(["a", "]/.source}b"]);
+      expect(textRunsOf('<box id="b">a{ {} /[}]/.source }b</box>')).toEqual(["a", "]/.source }b"]);
     });
   });
 });

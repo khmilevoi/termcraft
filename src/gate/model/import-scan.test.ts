@@ -162,6 +162,17 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
+
+    test("a regex literal whose BODY spells `eval` is flagged too — accepted over-approximation", () => {
+      // `./lexer`'s CODE-mode `tokenize` deliberately does not re-scan `/` as a
+      // regular expression (it lexes JSX punctuation as code, where `</Text>`
+      // and `{expr} />` would both be misread as regex openers), so a regex
+      // body is lexed as ordinary tokens and the word inside it reads as a
+      // bare `eval` reference.
+      const errors = scanImportAllowlist(`const re = /eval/\n`);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
   });
 
   describe("Important 3 — evasions the token scanner knowingly cannot catch (pinned, not silently incomplete)", () => {
@@ -179,6 +190,24 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // a variable first, the bracket contents are an Identifier, not a
       // literal, and the check does not follow the reference.
       expect(scanImportAllowlist(`const key = "eval"\nglobalThis[key]("x")\n`)).toEqual([]);
+    });
+
+    test('KNOWN GAP: a concatenation-built computed-member key (`g["ev" + "al"](...)`)', () => {
+      // Same reason as the variable-mediated key above, one step earlier: the
+      // bracket holds two StringLiterals and a `+`, so neither one equals
+      // "eval", and this scan folds no constants.
+      expect(scanImportAllowlist(`globalThis["ev" + "al"]("x")\n`)).toEqual([]);
+    });
+
+    test("KNOWN GAP: a regex literal in STATEMENT position after `)` closes an expression container early", () => {
+      // `./jsx`'s reader decides regex-vs-division from the preceding token
+      // (`endsExpression`): a `)` ends a primary expression, so `/` after it is
+      // division everywhere an EXPRESSION can appear. Inside an arrow-function
+      // body a statement-position regex is legal there anyway, and the `}` in
+      // its character class then closes the container early, so everything
+      // after it — here the real `eval("2")` — is mis-read as JSX children text.
+      const src = `export default () => <box id="b">{(() => { if (x) /[}]/.test(s) })() + eval("2")}</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
     });
 
     test("KNOWN GAP: the classic constructor-chain sandbox escape names neither `eval` nor `Function`", () => {
@@ -245,11 +274,10 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     });
 
     test("an uncalled generic type-argument list (`Array<Foo>`) does not mask a later real eval(...) call as JSX text", () => {
-      // `scanOpenTag` alone treats `Array<Foo>` as a childless-looking open tag
-      // (an accepted, narrow residual gap for `lintUnpointedElements`); this
-      // pins that `computeJsxTextTokenIndices` does NOT inherit that gap, by
-      // requiring a genuine matching close tag before trusting anything as
-      // text — since no `</Foo>` ever appears, nothing here is masked.
+      // `Array` — the identifier immediately before `<` — already ends a
+      // primary expression (`endsExpression` in `./jsx`), so the reader never
+      // even attempts `Foo` as a tag name and nothing here can be masked as
+      // JSX text.
       const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n`;
       const errors = scanImportAllowlist(src);
       expect(errors).toHaveLength(1);
@@ -279,13 +307,104 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     });
 
     test("a dangling close tag after an uncalled generic type argument does not launder a real eval(...) call as JSX text", () => {
-      // A second, smaller hole from the same premise: `Array<Foo>` reads as a
-      // plausible childless open tag (the same accepted `scanOpenTag` gap as
-      // the test above), and a LATER, unrelated `</Foo>` — dangling, matching
-      // no real open tag — used to be accepted as this fake tag's matching
-      // close, laundering everything in between (including the real
-      // `eval("2")`) into "JSX text" and returning no errors at all.
+      // A second, smaller hole from the same premise: the old heuristic read
+      // `Array<Foo>` as a plausible childless open tag, and this LATER,
+      // unrelated `</Foo>` — dangling, matching no real open tag — was accepted
+      // as its matching close, laundering everything in between (including the
+      // real `eval("2")`) into "JSX text" and returning no errors at all. The
+      // reader closes it at the source: `endsExpression` (see the test above)
+      // means `Foo` is never attempted as a tag, so nothing ever hunts for a
+      // close tag to pair it with.
       const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n</Foo>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+  });
+
+  describe("Critical 1 (fix pass 4) — a template literal or regex no longer hides dynamic code", () => {
+    test("eval(...) after a template literal in a JSX expression container is caught", () => {
+      const src = `export default () => <box id="b">{\`\${0}\`+eval("x")}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("new Function(...) after a template literal in an expression container is caught", () => {
+      const src = `export default () => <box id="b">{\`\${0}\`+new Function("return 1")}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("FUNCTION_CALL");
+    });
+
+    test('globalThis["eval"](...) after a template literal in an expression container is caught', () => {
+      const src = `export default () => <box id="b">{\`\${0}\`+globalThis["eval"]("x")}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("eval(...) after a regex literal holding a `}` in an expression container is caught", () => {
+      const src = `export default () => <box id="b">{/[}]/.test(s) ? eval("1") : 0}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("eval(...) inside a template interpolation itself is caught", () => {
+      const src = `export default () => <box id="b">{\`v=\${eval("1")}\`}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("the mirror image: ordinary prose in a template literal's TAIL is not fatally rejected", () => {
+      // Same root cause, opposite direction: before this pass the tail
+      // `} eval is not allowed\`` was re-lexed as code, so a page describing
+      // `eval` in an interpolated string was fatally rejected.
+      expect(scanImportAllowlist("const s = `n=${1} eval is not allowed`\n")).toEqual([]);
+    });
+  });
+
+  describe("Important 2 (fix pass 4) — spread attributes and dotted tag names keep prose readable", () => {
+    test("prose in an element carrying a spread attribute is not fatally rejected", () => {
+      const src = `export default () => <Text id="t" {...rest}>eval isn't allowed on this page</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose in a member-expression tag (`<Kit.Text>`) is not fatally rejected", () => {
+      const src = `export default () => <Kit.Text id="t">eval isn't allowed</Kit.Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose in an element whose attribute value is a template literal is not fatally rejected", () => {
+      const src = `export default () => <box label={\`R\${n}\`}>eval isn't allowed</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("a real eval(...) inside a spread-attribute element's container is still caught", () => {
+      const src = `export default () => <Text id="t" {...rest}>{eval("1")}</Text>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("a real eval(...) inside a dotted-tag element's container is still caught", () => {
+      const src = `export default () => <Kit.Text id="t">{eval("1")}</Kit.Text>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("a real eval(...) inside the spread attribute's OWN expression is still caught", () => {
+      const src = `export default () => <Text id="t" {...{ e: eval }}>prose</Text>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("a mismatched dotted close tag does not launder a real eval(...) call as JSX text", () => {
+      const src = `export default () => <Kit.Text id="t">x</Kit.Other>\nconst z = eval("2")\n`;
       const errors = scanImportAllowlist(src);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");

@@ -5,8 +5,8 @@ import {
 } from "typescript/unstable/ast";
 import type { Scanner } from "typescript/unstable/ast";
 
-import { SK } from "./lexer";
-import type { SyntaxKind, Tok } from "./lexer";
+import { SK, scanCodeToken } from "./lexer";
+import type { BraceContext, SyntaxKind, Tok } from "./lexer";
 
 /**
  * Read a (possibly hyphenated) name starting at `start`: `id`, but also
@@ -89,18 +89,29 @@ interface OpenTag {
 /**
  * Token kinds that end a PRIMARY expression: an identifier reference, a
  * literal, a closing `)`/`]`, `this`/`super`/`true`/`false`/`null`, or a
- * postfix `++`/`--`. A `<` immediately following one of these can only be a
- * relational operator or a generic type-argument list opener (`Array<Foo>`,
- * `useRef<T>()`, `a < b`) — never a JSX element start, because JSX is itself a
- * primary expression and the grammar never allows one to begin where the
- * previous one has just finished (no operator in between). The real
- * TypeScript parser gets this for free from its own recursive-descent
- * structure — it only ever calls into JSX-element parsing from a position
- * already expecting a new expression; this reader has no such call graph to
- * inherit it from, so it checks explicitly, once, for both the driver over
- * the whole source and the driver over one `{}` expression container's code.
+ * postfix `++`/`--`. This is the classic JavaScript-lexer predicate, and this
+ * reader needs it for both of the ambiguities a context-free scan cannot
+ * settle on its own:
  *
- * This one check is what closes the fix-pass-3 "dangling `</Foo>`" gap
+ * - **`<` — JSX element or relational/generic?** A `<` immediately following
+ *   one of these can only be a relational operator or a generic type-argument
+ *   list opener (`Array<Foo>`, `useRef<T>()`, `a < b`) — never a JSX element
+ *   start, because JSX is itself a primary expression and the grammar never
+ *   allows one to begin where the previous one has just finished (no operator
+ *   in between).
+ * - **`/` — regular expression or division?** Symmetrically, a `/` after an
+ *   expression-ending token is division; anywhere else a regular-expression
+ *   literal may start, and `reScanSlashToken` must lex it as one so that a `}`
+ *   inside a character class (`/[}]/`) is literal text rather than a brace.
+ *
+ * The real TypeScript parser gets both for free from its own recursive-descent
+ * structure — it only ever calls into JSX-element or regex scanning from a
+ * position already expecting a new expression; this reader has no such call
+ * graph to inherit it from, so it checks explicitly, once, for the driver over
+ * the whole source and the driver over one `{}` expression container's code
+ * alike.
+ *
+ * The `<` half is what closes the fix-pass-3 "dangling `</Foo>`" gap
  * (`Array<Foo>` is never even attempted as a tag, so nothing hunts for a
  * matching close for it) and, as a side effect, replaces every purpose the
  * old `scanOpenTag` heuristic's dedicated "closing `>` followed by a call
@@ -118,6 +129,7 @@ function endsExpression(kind: SyntaxKind): boolean {
     case SK.StringLiteral:
     case SK.NoSubstitutionTemplateLiteral:
     case SK.TemplateTail:
+    case SK.RegularExpressionLiteral:
     case SK.ThisKeyword:
     case SK.SuperKeyword:
     case SK.TrueKeyword:
@@ -132,76 +144,100 @@ function endsExpression(kind: SyntaxKind): boolean {
 }
 
 /**
- * Try reading one JSX element at the scanner's CURRENT token, which must
- * already be a `LessThanToken` fetched by the caller's own `scan()`. On
- * success, `collector` gains whatever `readElement` found and the scanner
- * sits right after the consumed element. On failure — malformed or
- * unterminated JSX, read JSX must fail closed — nothing is trusted: the
- * scanner is rewound to just past the failed `<` (`resetTokenState`) so the
- * caller resumes scanning the SAME code from there, and the caller's own
- * "try every position independently" loop (the whole point of a shared
- * helper here) still reaches whatever the failed attempt walked over,
- * including a well-formed nested element the failed attempt gave up around.
+ * Scan the next CODE token for either of this reader's two code drivers: the
+ * whole-source one in `scanJsx` and the per-container one in
+ * `skipExpressionContainer`. Template literals are followed across their
+ * interpolations by `./lexer`'s shared `scanCodeToken` (which owns the
+ * `braces` stack), and a `/` that cannot be division is re-scanned here as a
+ * regular-expression literal, so neither construct's `}`-looking characters
+ * are ever mistaken for a brace.
+ *
+ * KNOWN GAP — three predecessors are read as division even though a regular
+ * expression could legally follow them, so a `}` in such a regex DOES close
+ * the enclosing container early:
+ *
+ * - `)` (via `endsExpression`): correct in every expression position, wrong in
+ *   STATEMENT position (`if (x) /re/.test(s)` inside an arrow-function body).
+ *   Telling the two apart needs the statement/expression distinction only a
+ *   parser has. This is the reachable one — it can leave a real `eval(...)`
+ *   call sitting in what the reader then calls children text — and it is
+ *   pinned by the "regex literal in STATEMENT position after `)`" KNOWN GAP
+ *   test in `import-scan.test.ts`.
+ * - `<` and `}`: legal regex predecessors in plain code, but this reader
+ *   re-lexes a FAILED element attempt's own JSX punctuation as code (see
+ *   `attemptElement`), where `</tag>` and `{expr} />` put a `/` right after
+ *   exactly those two tokens. Re-scanning there would swallow the rest of the
+ *   line into a bogus regex literal and hide the well-formed elements behind
+ *   it, so division wins. Pinned by the "regex literal right after `<` or `}`"
+ *   KNOWN GAP test in `jsx.test.ts`.
  */
-function attemptElement(
-  scanner: Scanner,
-  collector: Collector,
-): { readonly consumed: boolean; readonly next: SyntaxKind } {
-  const start = scanner.getTokenStart();
-  if (readElement(scanner, collector)) {
-    return { consumed: true, next: scanner.scan() };
-  }
-  scanner.resetTokenState(start + 1);
-  return { consumed: false, next: scanner.scan() };
+function scanCode(scanner: Scanner, braces: BraceContext[], previous: SyntaxKind): SyntaxKind {
+  const kind = scanCodeToken(scanner, braces);
+  if (kind !== SK.SlashToken && kind !== SK.SlashEqualsToken) return kind;
+  if (endsExpression(previous)) return kind;
+  if (previous === SK.LessThanToken || previous === SK.CloseBraceToken) return kind;
+  return scanner.reScanSlashToken();
 }
 
 /**
- * Read one JSX attribute list's `{...}` value, or one JSX children `{...}`
- * expression container — the scanner is already past the opening `{`. Tracks
- * brace depth with the plain code scanner (`scan()`, never `scanJsxToken()`:
- * this IS code) until the matching `}`, trying every `<` it meets along the
- * way as a nested element (`endsExpression` guards against `a < b`-shaped
- * code inside the expression the same way the outer driver does). A string or
- * template literal's own `{`/`}`-looking characters never confuse the depth
- * count, because the real scanner returns them as part of one literal token,
- * never as separate brace tokens. Returns false only on an unterminated `{`
- * (EOF before the matching `}`) — fail closed, per `scanJsx`'s doc comment.
+ * Try reading one JSX element at the scanner's CURRENT token, which must
+ * already be a `LessThanToken` fetched by the caller's own scan. On success,
+ * `collector` gains whatever `readElement` found and the scanner sits on the
+ * element's last token, ready for the caller's next scan. On failure —
+ * malformed or unterminated JSX, read JSX must fail closed — nothing is
+ * trusted: the scanner is rewound to just past the failed `<`
+ * (`resetTokenState`) so the caller resumes scanning the SAME code from there,
+ * and the caller's own "try every position independently" loop (the whole
+ * point of a shared helper here) still reaches whatever the failed attempt
+ * walked over, including a well-formed nested element the failed attempt gave
+ * up around. Either way the caller advances with its own `scanCode` call, so
+ * the brace/template stack it threads stays the one authority on `}`.
+ */
+function attemptElement(scanner: Scanner, collector: Collector): boolean {
+  const start = scanner.getTokenStart();
+  if (readElement(scanner, collector)) return true;
+  scanner.resetTokenState(start + 1);
+  return false;
+}
+
+/**
+ * Read one JSX attribute list's `{...}` value, one spread attribute's
+ * `{...expr}` tail, or one JSX children `{...}` expression container — the
+ * scanner is already past the opening `{`. Walks the contents with the plain
+ * code scanner (`scanCode`, never `scanJsxToken()`: this IS code) until the
+ * `{` this call started on is closed, trying every `<` it meets along the way
+ * as a nested element (`endsExpression` guards against `a < b`-shaped code
+ * inside the expression the same way the outer driver does).
+ *
+ * `braces` is what makes the "until the matching `}`" part true rather than
+ * merely plausible: an ordinary string literal's braces were already safe (the
+ * scanner returns the whole literal as one token), but a template literal's
+ * `` ${…} `` and a regular expression's `/[}]/` are not — `scanCode` resolves
+ * both, and the stack records which construct each open `{` belongs to, so the
+ * `}` that ends an interpolation is never mistaken for this container's own.
+ *
+ * Returns false only on an unterminated `{` (EOF before the matching `}`) —
+ * fail closed, per `scanJsx`'s doc comment.
  */
 function skipExpressionContainer(scanner: Scanner, collector: Collector): boolean {
-  let depth = 1;
+  const braces: BraceContext[] = ["brace"]; // the `{` the caller already consumed
   let previous: SyntaxKind = SK.EndOfFile;
-  let kind = scanner.scan();
-  while (depth > 0) {
+  for (;;) {
+    const kind = scanCode(scanner, braces, previous);
     if (kind === SK.EndOfFile) return false;
-    if (kind === SK.OpenBraceToken) {
-      depth += 1;
-      previous = kind;
-      kind = scanner.scan();
-      continue;
-    }
-    if (kind === SK.CloseBraceToken) {
-      depth -= 1;
-      // Stop right here on the container's OWN matching `}` — do not consume
-      // one more token past it: the caller (an attribute value, or JSX
-      // children) expects the scanner positioned exactly after this `}`, and
-      // an unconditional extra `scan()` here would silently eat whatever
-      // comes next (the self-closing `/`, or the first character of the next
-      // JSX text run) before the caller ever sees it.
-      if (depth === 0) return true;
-      previous = kind;
-      kind = scanner.scan();
-      continue;
-    }
+    // Stop right on the container's OWN matching `}` — do not consume one more
+    // token past it: the caller (an attribute value, or JSX children) expects
+    // the scanner positioned exactly after this `}`, and an unconditional extra
+    // scan here would silently eat whatever comes next (the self-closing `/`,
+    // or the first character of the next JSX text run) before the caller ever
+    // sees it.
+    if (kind === SK.CloseBraceToken && braces.length === 0) return true;
     if (kind === SK.LessThanToken && !endsExpression(previous)) {
-      const attempt = attemptElement(scanner, collector);
-      previous = attempt.consumed ? SK.GreaterThanToken : SK.LessThanToken;
-      kind = attempt.next;
+      previous = attemptElement(scanner, collector) ? SK.GreaterThanToken : SK.LessThanToken;
       continue;
     }
     previous = kind;
-    kind = scanner.scan();
   }
-  return true;
 }
 
 /**
@@ -212,16 +248,17 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
  * false — leaving the scanner wherever the failed read gave up, for the
  * caller to rewind — on any malformed or unterminated shape.
  *
- * The open tag is read with the plain code scanner: a name via
- * `scanJsxIdentifier()` (merges `data-id`-shaped hyphens into one token, the
- * JSX-specific counterpart to `readHyphenatedName` above), then an attribute
- * list whose value is either a string (`scanJsxAttributeValue()` — the JSX
- * grammar's own attribute-string scan, which does not require the surrounding
- * quotes to also be valid CODE-mode string syntax) or a `{...}` expression
- * container (`skipExpressionContainer`); anything else in attribute position
- * fails the whole element (this is what rejects `<b>`-shaped false positives
- * like `foo\nbar = c > d` sitting in what looked like an attribute list — a
- * bare, unquoted, non-`{` value is not legal JSX).
+ * The open tag is read with the plain code scanner: a name via `readTagName`
+ * (dotted, and hyphen-merging), then an attribute list whose entries are a
+ * name with an optional value — either a string (`scanJsxAttributeValue()` —
+ * the JSX grammar's own attribute-string scan, which does not require the
+ * surrounding quotes to also be valid CODE-mode string syntax) or a `{...}`
+ * expression container (`skipExpressionContainer`) — or a spread `{...expr}`.
+ * Anything else in attribute position fails the whole element: that is what
+ * rejects `<b>`-shaped false positives like `foo\nbar = c > d` sitting in what
+ * looked like an attribute list (a bare, unquoted, non-`{` value is not legal
+ * JSX), and it is why the spread branch insists on a literal `...` rather than
+ * accepting any `{`-opened attribute.
  */
 function readElement(scanner: Scanner, collector: Collector): boolean {
   const pos = scanner.getTokenStart(); // this element's own `<`
@@ -231,12 +268,12 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
     // A bare Fragment: `<>` — never carries attributes, so never an `id`.
     return readChildren(scanner, { tagName: "", pos, hasId: false, selfClosing: false }, collector);
   }
-  if (!tokenIsIdentifierOrKeyword(kind)) return false;
-  kind = scanner.scanJsxIdentifier();
-  const tagName = scanner.getTokenText();
+  const name = readTagName(scanner, kind);
+  if (name === null) return false;
+  const tagName = name.name;
 
   let hasId = false;
-  kind = scanner.scan();
+  kind = name.next;
   for (;;) {
     if (tokenIsIdentifierOrKeyword(kind)) {
       kind = scanner.scanJsxIdentifier();
@@ -249,6 +286,14 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
         continue;
       }
       if (kind !== SK.OpenBraceToken) return false; // neither a string nor `{...}`
+      if (!skipExpressionContainer(scanner, collector)) return false;
+      kind = scanner.scan();
+      continue;
+    }
+    if (kind === SK.OpenBraceToken) {
+      // A spread attribute — `{...rest}`. The `...` is required: it is the
+      // only shape the JSX grammar allows a `{` to open in attribute position.
+      if (scanner.scan() !== SK.DotDotDotToken) return false;
       if (!skipExpressionContainer(scanner, collector)) return false;
       kind = scanner.scan();
       continue;
@@ -325,16 +370,48 @@ function readChildren(scanner: Scanner, open: OpenTag, collector: Collector): bo
   return false;
 }
 
+/**
+ * Read one JSX tag name — the scanner's current token is the name's first
+ * token, whose kind the caller passes as `first`. Two shapes, both spelled out
+ * by the JSX grammar and both ordinary page code here:
+ *
+ * - a plain name, via `scanJsxIdentifier()`, which merges `data-id`-shaped
+ *   hyphens into one token (the JSX-specific counterpart to
+ *   `readHyphenatedName` above) — `box`, `my-widget`;
+ * - a member expression, `<Kit.Text>` / `<A.B.C>`, which a namespace import of
+ *   the runtime (`import * as Kit from "@termcraft/runtime"`) makes the natural
+ *   way to reference a Kit component. The dotted name is returned joined, so
+ *   `closesTag` can require the close tag to spell exactly the same one.
+ *
+ * Returns null — the caller then fails the element closed — when the first
+ * token is not a name at all, or when a `.` is not followed by one.
+ * `next` is the token after the name, already scanned.
+ */
+function readTagName(
+  scanner: Scanner,
+  first: SyntaxKind,
+): { readonly name: string; readonly next: SyntaxKind } | null {
+  if (!tokenIsIdentifierOrKeyword(first)) return null;
+  scanner.scanJsxIdentifier();
+  let name = scanner.getTokenText();
+  let kind = scanner.scan();
+  while (kind === SK.DotToken) {
+    if (!tokenIsIdentifierOrKeyword(scanner.scan())) return null;
+    scanner.scanJsxIdentifier();
+    name += `.${scanner.getTokenText()}`;
+    kind = scanner.scan();
+  }
+  return { name, next: kind };
+}
+
 /** Having just scanned a `LessThanSlashToken`, confirm it is THIS element's
- * own close: a bare `</>` when `tagName` is `""` (a Fragment), else a matching
- * (possibly hyphenated) name followed by `>`. */
+ * own close: a bare `</>` when `tagName` is `""` (a Fragment), else the very
+ * same (possibly hyphenated, possibly dotted) name followed by `>`. */
 function closesTag(scanner: Scanner, tagName: string): boolean {
   if (tagName === "") return scanner.scan() === SK.GreaterThanToken;
-  const nameKind = scanner.scan();
-  if (!tokenIsIdentifierOrKeyword(nameKind)) return false;
-  scanner.scanJsxIdentifier();
-  if (scanner.getTokenText() !== tagName) return false;
-  return scanner.scan() === SK.GreaterThanToken;
+  const name = readTagName(scanner, scanner.scan());
+  if (name === null) return false;
+  return name.name === tagName && name.next === SK.GreaterThanToken;
 }
 
 /**
@@ -342,16 +419,16 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * scanner in its JSX language variant (`node_modules/typescript/dist/ast/
  * scanner.d.ts`: `scanJsxToken`, `scanJsxIdentifier`, `scanJsxAttributeValue`,
  * `resetTokenState`, and `LanguageVariant.JSX` via `createScanner`'s own
- * `languageVariant` parameter) — WP-6a fix-pass-3, replacing the earlier
- * code-token heuristic (`scanOpenTag`/`consumeJsxElement`) whose premise was
- * unsound: walking CODE-mode tokens to guess where JSX text lives means an
- * apostrophe or `//` inside ordinary prose opens a real string literal or line
- * comment that can swallow a closing tag, silently curdling a page's own
- * display copy into what looks like live code (or, the mirror image,
- * laundering real code into what looks like harmless text — the "dangling
- * `</Foo>`" gap, see `endsExpression`'s doc comment). `scanJsxToken` never
- * lexes strings or comments in JSX children — text is just text — so neither
- * failure mode can occur here.
+ * `languageVariant` parameter) — replacing the earlier code-token heuristic
+ * (`scanOpenTag`/`consumeJsxElement`) whose premise was unsound: walking
+ * CODE-mode tokens to guess where JSX text lives means an apostrophe or `//`
+ * inside ordinary prose opens a real string literal or line comment that can
+ * swallow a closing tag, silently curdling a page's own display copy into what
+ * looks like live code (or, the mirror image, laundering real code into what
+ * looks like harmless text — the "dangling `</Foo>`" gap, see
+ * `endsExpression`'s doc comment). `scanJsxToken` never lexes strings or
+ * comments in JSX children — text is just text — so no amount of prose
+ * punctuation moves a text/code boundary here.
  *
  * The driver walks the WHOLE source with the plain scanner, trying
  * `attemptElement` at every `<` not immediately preceded by an
@@ -362,6 +439,12 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * leaving that source region visible to the callers below as ordinary code,
  * never as exempted text.
  *
+ * What is NOT claimed: that a text/code boundary can never land in the wrong
+ * place. The reader is a scanner, not a parser, and `scanCode`'s doc comment
+ * records the one shape that still moves a boundary — a regular-expression
+ * literal in statement position, whose `}` closes an expression container
+ * early — with its pinning tests.
+ *
  * Two callers build on this single result: `computeJsxTextTokenIndices`
  * (`import-scan.ts`'s dynamic-code check needs to skip identifier/bracket
  * tokens that are JSX prose) and `lintUnpointedElements` (`lints.ts` needs
@@ -371,18 +454,17 @@ export function scanJsx(source: string): JsxScan {
   const scanner = createScanner(true, LanguageVariant.JSX);
   scanner.setText(source);
   const collector: Collector = { elements: [], textRanges: [] };
+  const braces: BraceContext[] = [];
 
   let previous: SyntaxKind = SK.EndOfFile;
-  let kind = scanner.scan();
-  while (kind !== SK.EndOfFile) {
+  for (;;) {
+    const kind = scanCode(scanner, braces, previous);
+    if (kind === SK.EndOfFile) break;
     if (kind === SK.LessThanToken && !endsExpression(previous)) {
-      const attempt = attemptElement(scanner, collector);
-      previous = attempt.consumed ? SK.GreaterThanToken : SK.LessThanToken;
-      kind = attempt.next;
+      previous = attemptElement(scanner, collector) ? SK.GreaterThanToken : SK.LessThanToken;
       continue;
     }
     previous = kind;
-    kind = scanner.scan();
   }
 
   return collector;
@@ -396,23 +478,58 @@ export function scanJsx(source: string): JsxScan {
  * separately tokenized stream: `toks` and `scanJsx`'s own JSX-variant scan
  * read the same source characters, so a given offset means the same thing to
  * both regardless of where either scanner happened to draw a token boundary
- * there. A real `eval(...)`/`Function(...)` reference is never inside a
- * `textRanges` span (expression containers are excluded there already), while
- * a code-mode token born from mis-lexing prose (e.g. the STRING literal an
- * apostrophe opens) still starts inside the text range and is correctly
+ * there. A code-mode token born from mis-lexing prose (e.g. the STRING literal
+ * an apostrophe opens) still STARTS inside the text range and is correctly
  * skipped regardless of how far its own span runs past the range's end.
+ *
+ * An `eval(...)`/`Function(...)` reference written as real code stays out of
+ * every `textRanges` span, because `scanJsx` reads a `{...}` expression
+ * container as code and records no text for it — with the single pinned
+ * exception in `scanCode`'s KNOWN GAP note, where a statement-position regular
+ * expression closes a container early and what follows it inside that
+ * container is recorded as text after all.
  */
 export function computeJsxTextTokenIndices(
   toks: readonly Tok[],
   source: string,
 ): ReadonlySet<number> {
-  const { textRanges } = scanJsx(source);
-  if (textRanges.length === 0) return new Set();
+  const ranges = normalizeRanges(scanJsx(source).textRanges);
+  if (ranges.length === 0) return new Set();
 
+  // One merge walk over two lists already in source order (`toks` by
+  // construction, `ranges` by `normalizeRanges`), instead of re-scanning every
+  // range for every token: `r` only ever moves forward, so the whole mapping
+  // is linear in tokens + ranges rather than their product.
   const textIdx = new Set<number>();
+  let r = 0;
   for (let i = 0; i < toks.length; i += 1) {
     const pos = toks[i]!.pos;
-    if (textRanges.some((range) => pos >= range.pos && pos < range.end)) textIdx.add(i);
+    while (r < ranges.length && ranges[r]!.end <= pos) r += 1;
+    if (r === ranges.length) break;
+    if (pos >= ranges[r]!.pos) textIdx.add(i);
   }
   return textIdx;
+}
+
+/**
+ * The same text ranges, sorted by start and with any touching or overlapping
+ * pair fused into one — the shape `computeJsxTextTokenIndices`'s merge walk
+ * needs. `scanJsx` emits its ranges in source order and disjoint already
+ * (the scanner only moves forward within one successful read), but a failed
+ * element attempt can leave a range behind that the retry then records a
+ * second time, so this pass is what makes the walk's precondition a fact
+ * rather than an assumption about the reader's backtracking.
+ */
+function normalizeRanges(ranges: readonly JsxTextRange[]): JsxTextRange[] {
+  const sorted = [...ranges].sort((a, b) => a.pos - b.pos);
+  const merged: JsxTextRange[] = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last === undefined || range.pos > last.end) {
+      merged.push(range);
+      continue;
+    }
+    if (range.end > last.end) merged[merged.length - 1] = { pos: last.pos, end: range.end };
+  }
+  return merged;
 }

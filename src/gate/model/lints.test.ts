@@ -168,6 +168,23 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
     ).toEqual([]);
   });
 
+  describe("Important 2 (fix pass 4) — everyday JSX forms no longer lose the element", () => {
+    test("a raw element carrying only a spread attribute still warns (it declares no `id`)", () => {
+      const w = lintUnpointedElements(`export default () => <box {...rest}>raw</box>\n`);
+      expect(w).toHaveLength(1);
+      expect(w[0]?.kind).toBe("unpointed-element");
+    });
+
+    test("a raw element whose attribute value is a template literal still warns", () => {
+      const w = lintUnpointedElements("export default () => <box label={`R${n}`}>raw</box>\n");
+      expect(w).toHaveLength(1);
+    });
+
+    test("a member-expression tag is a component reference — exempt, like any capitalized tag", () => {
+      expect(lintUnpointedElements(`export default () => <Kit.Text>hi</Kit.Text>\n`)).toEqual([]);
+    });
+  });
+
   describe("Minor 3 (fix pass 2) residual gaps — closed by the fix-pass-3 real JSX reader", () => {
     test("two bare assignments sandwiched between two comparisons no longer misread a bogus <b> (fix-pass-3)", () => {
       // Contrived: needs two comparisons and two `const`/`let`-free, paren/comma
