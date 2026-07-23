@@ -94,7 +94,7 @@ function parseObject(toks: Tok[], i: number): { value: Literal; next: number } |
 }
 
 const BINDING_KEYWORDS = new Set<number>(
-  ["ConstKeyword", "LetKeyword", "VarKeyword"]
+  (["ConstKeyword", "LetKeyword", "VarKeyword"] as const)
     .map((name) => SK[name])
     .filter((k): k is number => k !== undefined),
 );

@@ -5,7 +5,7 @@ import { LanguageVariant, ScriptTarget, SyntaxKind, createScanner } from "typesc
  * but without stable TS types on this pin; the numeric values are load-bearing.
  * NOTE: the end-of-file member is `EndOfFile` (=1), NOT `EndOfFileToken`.
  */
-export const SK = SyntaxKind as unknown as Record<string, number>;
+export const SK = SyntaxKind
 
 /** One lexed token: its kind, its string value (for literals/identifiers), and its start offset. */
 export interface Tok {
