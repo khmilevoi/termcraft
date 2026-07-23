@@ -124,6 +124,39 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
   test("a Fragment shorthand does not itself warn", () => {
     expect(lintUnpointedElements(`export default () => <><Text id="t">hi</Text></>\n`)).toEqual([]);
   });
+
+  test("a `<` used as a plain comparison operator (`a < b`) does not warn (Important 1)", () => {
+    expect(lintUnpointedElements(`const z = a < b\n`)).toEqual([]);
+  });
+
+  test("a `<` comparison against a member access (`rows.length < max`) does not warn (Important 1)", () => {
+    expect(lintUnpointedElements(`const overflow = rows.length < max\n`)).toEqual([]);
+  });
+
+  test("a `<` inside a for-loop condition (`i < len`) does not warn (Important 1)", () => {
+    expect(lintUnpointedElements(`for (let i = 0; i < len; i += 1) {}\n`)).toEqual([]);
+  });
+
+  test("a generic type argument on a call (`useRef<lowerType>(null)`) does not warn (Important 1)", () => {
+    expect(lintUnpointedElements(`const ref = useRef<lowerType>(null)\n`)).toEqual([]);
+  });
+
+  test("a hyphenated prop (`data-id`) is NOT mistaken for the `id` prop — the element still warns (Also fix)", () => {
+    const w = lintUnpointedElements(`export default () => <box data-id="x">raw</box>\n`);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("unpointed-element");
+  });
+
+  test("a hyphenated prop (`aria-id`) is NOT mistaken for the `id` prop — the element still warns (Also fix)", () => {
+    const w = lintUnpointedElements(`export default () => <box aria-id="x">raw</box>\n`);
+    expect(w).toHaveLength(1);
+  });
+
+  test("a genuinely hyphenated tag name is still scanned correctly (no false negative from the merge fix)", () => {
+    expect(
+      lintUnpointedElements(`export default () => <my-widget id="w">raw</my-widget>\n`),
+    ).toEqual([]);
+  });
 });
 
 describe("lintUnlistedNavigation (§6.3 unlisted-navigation warning)", () => {

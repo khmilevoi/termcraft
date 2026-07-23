@@ -68,26 +68,81 @@ interface OpenTagScan {
 }
 
 /**
+ * Read a (possibly hyphenated) name starting at `start`: `id`, but also
+ * `data-id`, `aria-label`, `my-widget`, etc. — the lexer sees each hyphen as
+ * its own `MinusToken`, so a tag/prop name spanning one is only complete once
+ * the merge stops (§6.3 Also-fix: this is what keeps `data-id`/`aria-id` from
+ * being counted as the `id` prop below — the merged name is compared for
+ * equality as a whole, never a single identifier segment in isolation).
+ * Returns `null` when `start` isn't an Identifier at all. `next` is the token
+ * index right after the merged name.
+ */
+function readHyphenatedName(
+  toks: readonly Tok[],
+  start: number,
+): { readonly name: string; readonly next: number } | null {
+  const first = toks[start];
+  if (first === undefined || first.kind !== SK.Identifier) return null;
+  let name = first.value;
+  let j = start + 1;
+  while (toks[j]?.kind === SK.MinusToken && toks[j + 1]?.kind === SK.Identifier) {
+    name += `-${toks[j + 1]!.value}`;
+    j += 2;
+  }
+  return { name, next: j };
+}
+
+/**
  * Scan one JSX opening tag starting at its `<` token (`start`): the (possibly
- * hyphenated) tag name, then its prop list up to the tag's own closing `>` —
+ * hyphenated) tag name, then its prop list up to the tag's own closing `>`/`/>` —
  * tracking brace depth so an expression-container prop value (e.g.
  * `color={x > y ? "a" : "b"}`) never terminates the scan early on the `>` inside
- * it. Returns `null` when `start` is not an element's opening tag: a closing
- * `</...>` or a bare `<>` Fragment start, neither of which names an element.
+ * it. Returns `null` when `start` is not a real element's opening tag:
+ *
+ * - a closing `</...>` or a bare `<>` Fragment start, neither of which names
+ *   an element (`first` isn't an Identifier);
+ * - the tag name doesn't sit directly against `<` — no line break between them
+ *   (Important 1) — so a `<` used as a relational operator with its right-hand
+ *   operand pushed to a later line is never mistaken for a tag start;
+ * - the walk hits a token that can never appear at depth 0 inside a JSX
+ *   attribute list — `;`, a depth-0 `)`/`,`, another `<`, any keyword, a bare
+ *   number, … (Important 1) — before it ever finds a closing `>`. The lexer is
+ *   `LanguageVariant.Standard` (`lexer.ts`), so `<` is indistinguishable from
+ *   `LessThanToken`-the-operator; without this abort the walk would happily
+ *   cross statement/expression boundaries (`a < b`, `i < len` in a `for`
+ *   condition) hunting for *some* later `>`, however unrelated;
+ * - the walk runs off the end of the token stream without ever finding a
+ *   closing `>` at all (Important 1) — the exact shape `a < b` and
+ *   `rows.length < max` leave behind: a tag name with nothing after it that
+ *   could possibly close a tag;
+ * - the found closing `>` is immediately followed by a call's `(` (Important
+ *   1) — `Identifier<Type>(...)` (a generic type-argument list, e.g.
+ *   `useRef<T>()`) is lexically identical to a childless open tag up to this
+ *   point, and the one shape a *real* element's `>` is never followed by is a
+ *   call paren (you cannot invoke a rendered element), so that shape is
+ *   rejected here instead of trying to tell "generic call" from "JSX" earlier.
+ *
+ * A generic type-argument list with no following call (`Array<Foo>`) is not
+ * separately special-cased: an uppercase argument is already exempt as a Kit
+ * component by `lintUnpointedElements`, and a lowercase one violates
+ * TypeScript's near-universal PascalCase type-naming convention — an
+ * accepted, narrow residual gap (see the Important-1 route note in the fix
+ * report) rather than one worth an extra guard.
  */
-function scanOpenTag(toks: readonly Tok[], start: number): OpenTagScan | null {
+function scanOpenTag(toks: readonly Tok[], start: number, source: string): OpenTagScan | null {
   const first = toks[start + 1];
   if (first === undefined || first.kind !== SK.Identifier) return null;
 
-  let tagName = first.value;
-  let j = start + 2;
-  while (toks[j]?.kind === SK.MinusToken && toks[j + 1]?.kind === SK.Identifier) {
-    tagName += `-${toks[j + 1]!.value}`;
-    j += 2;
-  }
+  const openTok = toks[start]!;
+  if (source.slice(openTok.pos + 1, first.pos).includes("\n")) return null;
+
+  const tagRead = readHyphenatedName(toks, start + 1)!;
+  const tagName = tagRead.name;
 
   let hasId = false;
   let depth = 0;
+  let foundTerminator = false;
+  let j = tagRead.next;
   for (; j < toks.length; j += 1) {
     const t = toks[j]!;
     if (t.kind === SK.OpenBraceToken) {
@@ -99,9 +154,24 @@ function scanOpenTag(toks: readonly Tok[], start: number): OpenTagScan | null {
       continue;
     }
     if (depth > 0) continue;
-    if (t.kind === SK.GreaterThanToken) break;
-    if (t.kind === SK.Identifier && t.value === "id") hasId = true;
+    if (t.kind === SK.GreaterThanToken) {
+      foundTerminator = true;
+      break;
+    }
+    if (t.kind === SK.SlashToken) continue; // the self-closing `/>` marker
+    if (t.kind === SK.EqualsToken || t.kind === SK.StringLiteral) continue;
+    if (t.kind === SK.Identifier) {
+      const prop = readHyphenatedName(toks, j)!;
+      if (prop.name === "id") hasId = true;
+      j = prop.next - 1; // the loop's own `j += 1` lands exactly on `prop.next`
+      continue;
+    }
+    // Impossible inside a JSX attribute list at depth 0 — this `<` was never
+    // a real tag start. See the exit-condition list in the doc comment above.
+    return null;
   }
+  if (!foundTerminator) return null;
+  if (toks[j + 1]?.kind === SK.OpenParenToken) return null; // `Identifier<Type>(...)` generic call
 
   return { tagName, hasId };
 }
@@ -124,7 +194,7 @@ export function lintUnpointedElements(source: string): GateWarning[] {
   for (let i = 0; i < toks.length; i += 1) {
     const t = toks[i]!;
     if (t.kind !== SK.LessThanToken) continue;
-    const scan = scanOpenTag(toks, i);
+    const scan = scanOpenTag(toks, i, source);
     if (scan === null || scan.hasId) continue;
     const firstChar = scan.tagName[0]!;
     if (firstChar < "a" || firstChar > "z") continue; // capitalized — a Kit component, exempt
@@ -145,6 +215,18 @@ export function lintUnpointedElements(source: string): GateWarning[] {
  * needs the literal id VALUES to match against `referencedIds` — unlike
  * `unpointed-element`'s `scanOpenTag`, which only needs to know a tag carries
  * *some* `id` prop, literal or not.
+ *
+ * Deliberately literal-only (§6.3 Also-fix): `<box id={rowId}>` does not add
+ * anything here, because `rowId` isn't a `StringLiteral`. That means a
+ * list-rendered page whose row ids come from a variable/expression looks, to
+ * this function, like it declares no ids at all — every id referenced by
+ * selection/pins on such a page will warn `dropped-id` on every candidate,
+ * looking like a permanent regression rather than a one-off. This is the
+ * conventions warning taken literally, not a bug: §6.3 step 3 asks for
+ * "stable ids across iterations", and a dynamically-bound id is exactly the
+ * shape that convention is warning against — the lint has no way to know a
+ * `rowId` expression still evaluates to the same referenced id turn over
+ * turn, so it treats it as dropped rather than silently trusting it.
  */
 function extractDeclaredIds(toks: readonly Tok[]): Set<string> {
   const ids = new Set<string>();
