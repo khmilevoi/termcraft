@@ -141,8 +141,10 @@ export function lintUnpointedElements(source: string): GateWarning[] {
 /**
  * The set of ids the candidate declares anywhere in its source: a string literal
  * bound to an `id` attribute (`id="p"`, the JSX form) or an `id` property
- * (`id: "p"`, the object-literal form). Shared by `lintDroppedIds` (below) and
- * `unpointed-element`'s open-tag scan.
+ * (`id: "p"`, the object-literal form). Used by `lintDroppedIds` (below), which
+ * needs the literal id VALUES to match against `referencedIds` — unlike
+ * `unpointed-element`'s `scanOpenTag`, which only needs to know a tag carries
+ * *some* `id` prop, literal or not.
  */
 function extractDeclaredIds(toks: readonly Tok[]): Set<string> {
   const ids = new Set<string>();
