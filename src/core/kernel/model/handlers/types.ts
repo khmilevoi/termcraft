@@ -17,6 +17,7 @@ import type {
   TurnState,
 } from "core/machines";
 import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
+import type { PreviewSession } from "core/ports";
 import type { CommandFamilyV1, CommandKindV1, CommandPayloadByKindV1, UUIDv7 } from "core/protocol";
 
 import type { KernelDeps } from "../../types";
@@ -43,14 +44,22 @@ import type { KernelDeps } from "../../types";
  *   content/schema, freshness, token-ledger, and operation-specific mutex checks run
  *   AFTER the guard") means a handler legitimately needs a fresh read too, e.g. to decide
  *   which branch of its own operation-specific logic applies.
- * - the four named mutators — `kernel.ts`'s own comment names the FOUR Kernel-held facts
- *   `KernelStateSnapshot` needs beyond the seven bare phases: `project.trust`,
- *   `turn.activeTurnId`, `turn.commitIntentRecorded`, `preview.sourceKind`. Those are the
- *   ONLY fields a handler may ever change outside a machine's own `apply()` — one named
- *   mutator per field, deliberately, NOT a blanket `setState(patch)`: a reviewer reading
- *   this interface sees the Kernel's ENTIRE non-machine mutation surface in four lines,
- *   not an open-ended patch shape a handler could use to touch a fact it has no business
- *   touching (e.g. nothing here lets a `chat.*` handler reach into `preview.sourceKind`).
+ * - the five named mutators — four cover the Kernel-held facts `KernelStateSnapshot` needs
+ *   beyond the seven bare phases (`kernel.ts`'s own comment names them: `project.trust`,
+ *   `turn.activeTurnId`, `turn.commitIntentRecorded`, `preview.sourceKind`); the fifth,
+ *   `setActivePreviewSession`, covers the one piece of Kernel-held state that is NOT part
+ *   of `KernelStateSnapshot` at all — `kernel.ts`'s own `activePreview` closure variable
+ *   (see {@link HandlerContext}'s own comment on it). Those five are the ONLY fields a
+ *   handler may ever change outside a machine's own `apply()` — one named mutator per
+ *   field, deliberately, NOT a blanket `setState(patch)`: a reviewer reading this
+ *   interface sees the Kernel's ENTIRE non-machine mutation surface in five lines, not an
+ *   open-ended patch shape a handler could use to touch a fact it has no business touching
+ *   (e.g. nothing here lets a `chat.*` handler reach into `preview.sourceKind`).
+ * - `launchOperation` — the ONE way a handler may start async work (`runTurn`, the export
+ *   capture/render/package/publish chain, `core/project`'s open-sequence,
+ *   `hostSupervisor.preview`) and have its TERMINAL events reach subscribers once that
+ *   work settles. See {@link HandlerContext}'s own comment on it for why this is declared
+ *   now (Step A) even though no handler calls it yet (Step B/C do).
  *
  * `context.deps.clock` is the injected `Clock` (kernel-assembly plan's Task 7) — there is
  * no separate `clock` field on `HandlerContext` itself; it already lives on `KernelDeps`,
@@ -109,7 +118,7 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  * Everything a command handler is given. Every family module (Step B) and the Tier-C
  * deferred handler (this step) share this ONE shape — no family gets a bespoke context.
  *
- * The four mutators are the WHOLE Kernel-held, non-machine mutation surface:
+ * The five mutators are the WHOLE Kernel-held, non-machine mutation surface:
  * - `setProjectTrust` — `project.setTrust` (and `project.create`'s creation-defaults
  *   trust) is the only legitimate caller; `kernel.ts`'s `trustAtom`.
  * - `setActiveTurnId` — `turn.start`'s admission (recording the fresh turn id) and its
@@ -120,14 +129,66 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  *   `commitIntentRecordedAtom`.
  * - `setPreviewSourceKind` — `preview.selectPage`/`selectHistorical`/`selectCurrent` are
  *   the only legitimate callers; `kernel.ts`'s `previewSourceKindAtom`.
+ * - `setActivePreviewSession` — `kernel.ts`'s own `activePreview` closure variable (its
+ *   `currentPreview()` accessor already reads it; today's `close()` is the only writer,
+ *   setting it `null`). NOT part of `KernelStateSnapshot`/`readKernelState` — a live
+ *   `PreviewSession` is a host-facing handle (frames iterable, `resize`/`setMode`/...
+ *   methods), never a DTO fact the seven machines' phases describe — so it gets its own
+ *   mutator rather than being folded into `setPreviewSourceKind` (which only ever carries
+ *   the closed `"current" | "historical" | null` DTO fact, §10.2). Once Step B's preview
+ *   family lands: `preview.selectPage`/`selectHistorical`/`selectCurrent` are the only
+ *   legitimate callers that ESTABLISH a session (via `deps.hostSupervisor.preview(...)`,
+ *   `core/ports`), `preview.close` is the only legitimate caller that clears one (`null`,
+ *   mirroring `kernel.ts`'s own `close()`), and `preview.retry` is the only legitimate
+ *   caller that REPLACES a failed one in place. No other family may call this.
  *
- * No handler may reach a machine's `phaseAtom` or any of these four facts through any
- * other route — this interface IS the whole surface, so a reviewer checking "what can a
- * handler change?" only has to read these ten members (six read paths, four write paths),
- * never grep the whole `handlers/` tree for a stray `.set(...)`. This is enforced by the
- * type, not just by this comment: `KernelMachines`'s per-machine type is
- * {@link HandlerMachine}, a `Pick` that omits `phaseAtom` entirely, so
- * `context.machines.<domain>.phaseAtom` does not type-check — see that type's own comment.
+ * `launchOperation` is the ONE way a handler may start async work and have its outcome
+ * reach subscribers once it settles — declared now (Step A) so Step B's five async
+ * families (`turn.start` composing `runTurn`; `export.start` composing the capture/
+ * render/package/publish chain; `project.open`/`project.create` composing
+ * `core/project`'s open-sequence; the preview family's `hostSupervisor.preview` call)
+ * share ONE pattern instead of each inventing its own async-completion plumbing:
+ *
+ * ```ts
+ * readonly launchOperation: (
+ *   label: string,
+ *   run: () => Promise<readonly PublishableEventV1[]>,
+ * ) => void;
+ * ```
+ *
+ * A handler that starts async work still returns synchronously, exactly like every other
+ * handler — `startedOutcome(admissionEvents, operationId)` for whatever ADMISSION events
+ * fire immediately (e.g. `turn.started`), then calls `context.launchOperation(label, run)`
+ * once, in the same synchronous call, to kick the async chain off. `label` is a
+ * Reatom-style trace name (this project's "name every atom, computed, action" rule,
+ * `kernel.ts`'s own `"kernel.project.trust"`/`"mailbox.publishTransition"` style) — e.g.
+ * `"kernel.turn.run"` — NOT the `operationId`; correlating a specific run's terminal
+ * events back to the command that started it is `run`'s own job, via each event's
+ * `correlation.operationId` (`core/mailbox`'s `EventCorrelationV1`, already carries
+ * `operationId`), not a second identifier `launchOperation` invents. `run` itself must
+ * NEVER reject: whatever the async composition decides — success or failure — it
+ * converts to the operation's TERMINAL events itself (see {@link CommandHandler}'s own
+ * doc comment on why a ran-and-failed operation still publishes events, never a bare
+ * rejection) and resolves with them; Step C's implementation is a defensive backstop for
+ * an unexpected throw anyway (matching `core/mailbox/model/dispatch.ts`'s own handling of
+ * a misbehaving 6C dependency), never the primary contract.
+ *
+ * Step C's own implementation (not this step) is expected to: build one `launchOperation`
+ * closure per `createKernel` call, `wrap`-capture it against the SAME Reatom frame
+ * `kernel.ts` already builds everything else in (matching its own "wrap/bind captured
+ * once at construction" discipline), call `run()`, and — once it resolves — publish the
+ * returned events through the SAME `EventBus.publishTransition` `dispatch.ts` itself
+ * calls, so a terminal async event advances `stateRevision`/`eventSeq` through the exact
+ * one mechanism every other event already does, never a second, parallel publish path.
+ *
+ * No handler may reach a machine's `phaseAtom`, any of the five facts above, or start
+ * async work through any other route — this interface IS the whole surface, so a
+ * reviewer checking "what can a handler change or launch?" only has to read this
+ * interface's members, never grep the whole `handlers/` tree for a stray `.set(...)` or a
+ * fire-and-forget async call. This is enforced by the type, not just by this comment:
+ * `KernelMachines`'s per-machine type is {@link HandlerMachine}, a `Pick` that omits
+ * `phaseAtom` entirely, so `context.machines.<domain>.phaseAtom` does not type-check —
+ * see that type's own comment.
  */
 export interface HandlerContext {
   readonly deps: KernelDeps;
@@ -138,6 +199,13 @@ export interface HandlerContext {
   readonly setActiveTurnId: (turnId: UUIDv7 | null) => void;
   readonly setCommitIntentRecorded: (recorded: boolean) => void;
   readonly setPreviewSourceKind: (sourceKind: PreviewSourceKindV1) => void;
+  /** `kernel.ts`'s own `activePreview` — see this interface's own comment above. */
+  readonly setActivePreviewSession: (session: PreviewSession | null) => void;
+  /** The one sanctioned async-launch primitive — see this interface's own comment above. */
+  readonly launchOperation: (
+    label: string,
+    run: () => Promise<readonly PublishableEventV1[]>,
+  ) => void;
 }
 
 // --- The well-formed outcome, made hard to get wrong ---------------------------------------
@@ -193,14 +261,42 @@ export function startedOutcome(
 
 /**
  * One command kind's handler: the already-decoded, already-guard-checked payload in, a
- * {@link CommandOutcomeV1} out. Never a rejection — by the time `dispatch.ts` calls a
+ * {@link CommandOutcomeV1} out. Never a REJECTION — by the time `dispatch.ts` calls a
  * handler, `core/capabilities`'s guard has already run (§12.1 step 3) and returned
- * `available`; a handler that finds a payload-only reason to refuse (freshness, a token
- * ledger miss, an operation-specific mutex — §10.2's own list of what runs "after the
- * guard") still returns a `CommandOutcomeV1`, just a `"no-op"` one, exactly like a Tier-C
- * kind's outcome shape. `HandlerOutcome` (`core/mailbox`) has no rejected disposition of
- * its own — see that type's own doc comment — so there is nothing else this signature
- * could return.
+ * `available` — and `HandlerOutcome` (`core/mailbox`) has no rejected disposition of its
+ * own (see that type's own doc comment). But "the guard already said yes" does not mean a
+ * handler always has something to do, or that what it does always succeeds — §10.2's own
+ * line ("Payload-only content/schema, freshness, token-ledger, and operation-specific
+ * mutex checks run AFTER the guard") means a handler has exactly TWO outcomes to choose
+ * between, never a third "failed" shape of its own:
+ *
+ * - An IDEMPOTENT REFUSAL — the handler itself finds a payload-only reason not to act (a
+ *   stale freshness token, a mutex already held, a repeat of an already-applied intent)
+ *   and returns {@link noOpOutcome}. Nothing ran: no machine transitioned, no Kernel-held
+ *   fact changed, no event fires — the exact same shape a Tier-C deferred kind's backstop
+ *   returns (`./deferred.ts`'s `rejectDeferred`).
+ * - RAN AND FAILED — the handler (directly, or via {@link HandlerContext.launchOperation}'s
+ *   async chain) DID act — called a machine's `apply()`, changed a Kernel-held fact, or ran
+ *   an operation through to its terminal state — and that action's OWN result was a
+ *   failure (e.g. a turn's workspace failed to provision, an export's publish step
+ *   rejected). This is STILL `"completed"`/`"started"`, never `"no-op"`: something
+ *   happened, so the revision advances and a domain event publishes exactly like a
+ *   success would (`dispatch.ts`'s `applyTransition` ties `"no-op"` to no transition at
+ *   all; `core/mailbox`'s own §9 ties every domain event to something that DID happen).
+ *   The failure is carried entirely BY the published event's own payload (a
+ *   `*.failed`-shaped DTO, not a distinct disposition and never a bare exception) —
+ *   {@link HandlerContext.launchOperation}'s own doc comment says the same thing about the
+ *   async chain it launches: `run` must never reject, it converts success OR failure into
+ *   terminal events itself.
+ *
+ * Collapsing a ran-and-failed operation into a `"no-op"` just because nothing the user
+ * asked for ultimately happened would be wrong: the machine DID transition (e.g.
+ * `running` → `failed`), and publishing that transition is the whole point — a caller
+ * watching `events` needs to see it, which a `"no-op"`'s always-empty `events` array
+ * cannot carry (see {@link noOpOutcome}'s own doc comment). Choosing between these two
+ * shapes is the ONE place this distinction is made — nothing downstream (dispatch, the
+ * event bus) can recover "did it really run?" from `disposition` alone without also
+ * inspecting `events`.
  */
 export type CommandHandler<K extends CommandKindV1 = CommandKindV1> = (
   payload: CommandPayloadByKindV1[K],

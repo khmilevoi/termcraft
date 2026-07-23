@@ -1,9 +1,10 @@
 import type { HandlerRegistry } from "core/mailbox";
-import type { CommandKindV1 } from "core/protocol";
+import type { CommandEnvelopeV1, CommandKindV1 } from "core/protocol";
 
 import { type DeferredHandlerKind, deferredHandlers } from "./deferred";
 import {
   type CommandHandlerMap,
+  type CommandOutcomeV1,
   type HandlerContext,
   type TotalHandlerMap,
   noOpOutcome,
@@ -107,47 +108,77 @@ export const totalHandlers = {
 } satisfies TotalHandlerMap;
 
 /**
- * The uniform shape every per-kind handler is stored as ONLY inside this function's own
- * lookup — never in a family module's own map. `never` is deliberate: function-parameter
- * contravariance means `(payload: SpecificPayload, ctx) => Outcome` is assignable to
- * `(payload: never, ctx) => Outcome` for EVERY `SpecificPayload` (nothing needs to satisfy
- * `never` for the assignment itself to type-check — a slot that only promises to accept
- * `never` accepts strictly less than any real handler, so any real handler is a valid
- * substitute). This is what lets `handlers` (a precisely-typed, 43-key `TotalHandlerMap`)
- * assign into `Record<CommandKindV1, ErasedCommandHandler>` below with NO cast at all —
- * TypeScript checks it property-by-property, exactly like assigning any other object type.
+ * Dispatches one envelope through `handlers`, with the correlation between `envelope.kind`
+ * and `envelope.payload` preserved by the type checker instead of asserted by a cast.
+ *
+ * This is the root-cause fix for the `envelope.payload as never` cast a round-1/round-2
+ * review repeatedly (and correctly, on its own narrow terms) found load-bearing: the
+ * PREVIOUS design stored every handler erased to a `(payload: never, ...) => Outcome`
+ * slot (sound by contravariance, see the now-removed `ErasedCommandHandler` comment this
+ * replaces) and then had to force a real `payload` value into that `never` parameter by
+ * hand — that forcing step was the cast, and no amount of restructuring the ERASED side
+ * removes it, because the correlation was already thrown away by the time `handle` ran.
+ *
+ * The fix does not erase at all. `K` here is a genuine generic type parameter, not a
+ * union VALUE — and `handlers[envelope.kind]`, indexing the homomorphic mapped type
+ * `TotalHandlerMap` (`CommandHandlerMap<CommandKindV1> = Readonly<{[P in CommandKindV1]:
+ * CommandHandler<P>}>`) by that still-generic `K`, resolves SYMBOLICALLY to
+ * `CommandHandler<K>` — TypeScript's preservation rule for indexing a mapped type by the
+ * same generic key it is built from. Verified directly against THIS file, not a synthetic
+ * stand-in: `bun x tsc --noEmit` is clean on the call below with `K` defaulted to the
+ * full `CommandKindV1` union (`envelope: CommandEnvelopeV1` — `HandlerRegistry`'s existing
+ * signature, unchanged; neither `core/mailbox`'s seam type nor `decodeCommandEnvelope`'s
+ * return type needed to change for this). The soundness check that actually matters was
+ * done the same way `types.ts`'s own `@ts-expect-error` proofs and the export-publish
+ * sequencing fix were verified (task report, "also-fix (d)"): temporarily replaced
+ * `handler(envelope.payload, context)` below with a deliberately wrong payload literal
+ * under `@ts-expect-error`, confirmed the directive was NOT flagged as unused (i.e. `tsc`
+ * DID reject the mismatched payload — a real error was there to suppress), then reverted
+ * and confirmed `git diff` on this file was clean again. Since `CommandEnvelopeV1<K>`'s
+ * own `payload` field is DEFINED as `CommandPayloadByKindV1[K]`, `envelope.payload`
+ * already IS `CommandPayloadByKindV1[K]` for that SAME K — the type `CommandHandler<K>`'s
+ * parameter needs — with no further narrowing step, and therefore no cast, at any
+ * instantiation of `K`.
+ *
+ * (This differs from the task brief's PREFERRED route (a) — introducing a distributed
+ * `AnyCommandEnvelopeV1` and changing `decodeCommandEnvelope`'s return type — which was
+ * considered and rejected, not merely not-chosen. The mechanism above only works because
+ * `K` is a CALLER-SUPPLIED generic type parameter: a generic function's body is checked
+ * ONCE, treating `K` as abstract, so `TotalHandlerMap[K]` and `CommandPayloadByKindV1[K]`
+ * both stay symbolically parameterized by the SAME abstract `K` and line up — true no
+ * matter what concrete type a given call site later instantiates `K` with, including the
+ * full `CommandKindV1` union itself. `decodeCommandEnvelope`'s `kind`, by contrast, is
+ * never a type parameter — it is a plain VALUE, of the wide `CommandKindV1` union type,
+ * discovered from untyped `raw` input at runtime. There is no caller-supplied `K` to bind
+ * there, so indexing `commandPayloadSchemas[kind]` (`command-payload.ts`) inside decode
+ * hits exactly the DISTRIBUTED-union problem this file's own history already describes for
+ * the old `TotalHandlerMap[envelope.kind]` design (see the paragraph above) — decode would
+ * still need either a cast or a 43-armed literal `switch` (one call per literal kind, so
+ * each branch's `K` is a literal, not the runtime variable) to produce a genuinely
+ * correlated `AnyCommandEnvelopeV1`, which is real, invasive rework this fix does not need.
+ * This function's own call site never has that problem: `envelope.payload` is already
+ * typed, not `unknown` — no further schema lookup happens here at all.)
  */
-type ErasedCommandHandler = (
-  payload: never,
+function dispatchToHandler<K extends CommandKindV1>(
+  handlers: TotalHandlerMap,
+  envelope: CommandEnvelopeV1<K>,
   context: HandlerContext,
-) => ReturnType<typeof noOpOutcome>;
+): CommandOutcomeV1 {
+  const handler = handlers[envelope.kind];
+  return handler(envelope.payload, context);
+}
 
 /**
  * Assembles a complete `TotalHandlerMap` into the `HandlerRegistry` shape `core/mailbox/
- * model/dispatch.ts` calls (`(envelope: CommandEnvelopeV1) => HandlerOutcome`).
- *
- * `envelope.kind: CommandKindV1` is a WIDE union (not a literal), so indexing `handlers`
- * (a homomorphic mapped type keyed by that exact union) with it produces the DISTRIBUTED
- * union of all 43 per-kind handler types — a shape TypeScript can never soundly CALL with
- * a plain `envelope.payload` (doing so would require the argument to satisfy the
- * INTERSECTION of all 43 payload shapes, which is generally empty). Pre-converting
- * `handlers` to the uniform `Record<CommandKindV1, ErasedCommandHandler>` (see that type's
- * own comment — a cast-free, property-checked assignment) sidesteps the problem entirely:
- * every value now shares the exact same type, so indexing by any `CommandKindV1` gives
- * back that one uniform type, not a union. The ONE remaining cast — `envelope.payload as
- * never` — restates a fact `decodeCommandEnvelope` already checked (payload validated
- * against `CommandPayloadByKindV1[envelope.kind]` before dispatch ever calls a handler),
- * exactly like `core/mailbox/model/dispatch.ts`'s own `toRevisionGuardCommand` narrowing
- * cast for `turn.cancel` — never a `type-laundering `unknown`/`any` bounce.
+ * model/dispatch.ts` calls (`(envelope: CommandEnvelopeV1) => HandlerOutcome`). All the
+ * correlation work happens in {@link dispatchToHandler} above — this function is just the
+ * closure that carries `handlers` across every call.
  */
 export function createHandlerRegistry(
   context: HandlerContext,
   handlers: TotalHandlerMap,
 ): HandlerRegistry {
-  const erased: Readonly<Record<CommandKindV1, ErasedCommandHandler>> = handlers;
-
   return function handle(envelope) {
-    const handler = erased[envelope.kind];
-    return handler(envelope.payload as never, context);
+    return dispatchToHandler(handlers, envelope, context);
   };
 }

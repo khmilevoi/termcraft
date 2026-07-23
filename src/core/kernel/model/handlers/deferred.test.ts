@@ -83,15 +83,18 @@ function buildDeps(): KernelDeps {
 
 /**
  * A real `HandlerContext` — real machines built inside one Reatom frame (matching
- * `kernel.ts`'s own construction), real fake ports, and mutators that count their own
- * calls so a test can prove `rejectDeferred` never reaches any of them.
+ * `kernel.ts`'s own construction), real fake ports, and mutators/`launchOperation` that
+ * count their own calls so a test can prove `rejectDeferred` never reaches any of them
+ * (a Tier-C deferred handler must never mutate Kernel-held state OR launch async work).
  */
 function buildTestContext(): {
   readonly handlerContext: HandlerContext;
   readonly getMutatorCalls: () => number;
+  readonly getLaunchOperationCalls: () => number;
 } {
   return context.start(() => {
     let mutatorCalls = 0;
+    let launchOperationCalls = 0;
     let trust: ProjectTrustV1 = null;
     let activeTurnId: UUIDv7 | null = null;
     let commitIntentRecorded = false;
@@ -139,9 +142,19 @@ function buildTestContext(): {
         mutatorCalls += 1;
         previewSourceKind = next;
       },
+      setActivePreviewSession: () => {
+        mutatorCalls += 1;
+      },
+      launchOperation: () => {
+        launchOperationCalls += 1;
+      },
     };
 
-    return { handlerContext, getMutatorCalls: () => mutatorCalls };
+    return {
+      handlerContext,
+      getMutatorCalls: () => mutatorCalls,
+      getLaunchOperationCalls: () => launchOperationCalls,
+    };
   });
 }
 
@@ -182,13 +195,14 @@ describe("deferredHandlers", () => {
 
   for (const kind of DEFERRED_HANDLER_KINDS) {
     test(`"${kind}" returns the well-formed no-op and never touches the context`, () => {
-      const { handlerContext, getMutatorCalls } = buildTestContext();
+      const { handlerContext, getMutatorCalls, getLaunchOperationCalls } = buildTestContext();
       const payload = SAMPLE_PAYLOADS[kind];
 
       const outcome = deferredHandlers[kind](payload as never, handlerContext);
 
       expect(outcome).toEqual({ disposition: "no-op", events: [] });
       expect(getMutatorCalls()).toBe(0);
+      expect(getLaunchOperationCalls()).toBe(0);
     });
   }
 });

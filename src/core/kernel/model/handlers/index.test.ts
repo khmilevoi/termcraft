@@ -44,7 +44,7 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
-import { DEFERRED_HANDLER_KINDS } from "./deferred";
+import { DEFERRED_HANDLER_KINDS, deferredHandlers } from "./deferred";
 import { createHandlerRegistry, totalHandlers } from "./index";
 import {
   type FamilyHandlerMap,
@@ -134,6 +134,11 @@ function buildTestContext(): HandlerContext {
       setPreviewSourceKind: (next) => {
         previewSourceKind = next;
       },
+      // Step A/B placeholder — no handler under test here calls either yet (both are
+      // `notYetImplementedHandler`/`deferredHandlers` today); a real fake that runs `run()`
+      // and captures a session is Step C's/the preview family's own test concern.
+      setActivePreviewSession: () => {},
+      launchOperation: () => {},
     };
   });
 }
@@ -220,13 +225,17 @@ describe("createHandlerRegistry", () => {
     }
   });
 
-  test("the deferred kinds route through deferredHandlers, not the not-yet-implemented stand-in", () => {
-    const registry = createHandlerRegistry(buildTestContext(), totalHandlers);
-    const payloads = samplePayloads();
-
+  test("the 10 deferred kinds resolve to deferredHandlers' own function in totalHandlers — not merely an equal-looking stand-in", () => {
+    // Output equality alone (`registry(...)` returning `{disposition: "no-op", events: []}`)
+    // cannot prove ROUTING: `notYetImplementedHandler` (this file's stand-in for every
+    // not-yet-built family) returns the exact same well-formed no-op via the same
+    // `noOpOutcome()` call, so a test asserting only the OUTCOME would pass identically
+    // whether `totalHandlers` wired a deferred kind to `deferredHandlers` or accidentally
+    // left it on the stand-in. Function-reference identity is differential: it fails the
+    // moment `./index.ts`'s `totalHandlers = {...deferredHandlers, ...notYetImplementedHandlers}`
+    // spread ever stops giving a deferred kind `deferredHandlers`'s own handler.
     for (const kind of DEFERRED_HANDLER_KINDS) {
-      const outcome = registry(envelopeFor(kind, payloads[kind]));
-      expect(outcome).toEqual({ disposition: "no-op", events: [] });
+      expect(totalHandlers[kind]).toBe(deferredHandlers[kind]);
     }
   });
 
