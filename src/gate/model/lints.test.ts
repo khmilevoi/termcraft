@@ -168,23 +168,29 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
     ).toEqual([]);
   });
 
-  describe("Minor 3 (fix pass 2) — residual gaps, pinned as current behavior, not fixed here", () => {
-    test("KNOWN GAP: two bare assignments sandwiched between two comparisons still misreads a bogus <b>", () => {
+  describe("Minor 3 (fix pass 2) residual gaps — closed by the fix-pass-3 real JSX reader", () => {
+    test("two bare assignments sandwiched between two comparisons no longer misread a bogus <b> (fix-pass-3)", () => {
       // Contrived: needs two comparisons and two `const`/`let`-free, paren/comma
-      // /semicolon-free assignments in between. `scanOpenTag` reads "b" as a tag
-      // name, "foo"/"bar"/"c" as its props, and the second comparison's `>` as
-      // the tag's own terminator.
-      const w = lintUnpointedElements(`a < b\nfoo = "x"\nbar = c > d\n`);
-      expect(w).toHaveLength(1);
-      expect(w[0]?.message).toContain("<b>");
+      // /semicolon-free assignments in between. The old `scanOpenTag` heuristic
+      // read "b" as a tag name, "foo"/"bar"/"c" as its props, and the second
+      // comparison's `>` as the tag's own terminator. `scanJsx` never attempts
+      // `<b` at all: the identifier `a` right before it already ends a primary
+      // expression (`endsExpression` in `./jsx`), so there is nothing here to
+      // misread as an unpointed element.
+      expect(lintUnpointedElements(`a < b\nfoo = "x"\nbar = c > d\n`)).toEqual([]);
     });
 
-    test('KNOWN GAP: a text child starting with "(" is silenced by the generic-call guard (`<box>(hi)</box>`)', () => {
-      // The "closing `>` immediately followed by `(`" guard exists to reject
-      // `Identifier<Type>(...)` generic calls; it cannot tell that shape apart
-      // from a real, unpointed element whose text child happens to start with
-      // a parenthesis, so this one produces no warning at all.
-      expect(lintUnpointedElements(`export default () => <box>(hi)</box>\n`)).toEqual([]);
+    test('a text child starting with "(" now correctly warns (`<box>(hi)</box>`) (fix-pass-3)', () => {
+      // The old heuristic's "closing `>` immediately followed by `(`" guard
+      // (needed to reject `Identifier<Type>(...)` generic calls) could not
+      // tell that shape apart from a real, unpointed element whose text child
+      // happens to start with a parenthesis, so it silenced this case
+      // entirely. `scanJsx`'s children reader has no such guard to confuse —
+      // `(` inside JSX children is just ordinary text — so this is now
+      // correctly recognized as a real, unpointed element.
+      const w = lintUnpointedElements(`export default () => <box>(hi)</box>\n`);
+      expect(w).toHaveLength(1);
+      expect(w[0]?.kind).toBe("unpointed-element");
     });
   });
 });

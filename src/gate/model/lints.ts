@@ -1,7 +1,7 @@
 import type { PageSlug } from "entities/page";
 
 import type { GateWarning } from "../types";
-import { readHyphenatedName, scanOpenTag } from "./jsx";
+import { readHyphenatedName, scanJsx } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { Tok } from "./lexer";
 
@@ -71,39 +71,35 @@ export function lintDeterminism(source: string): GateWarning[] {
  * already enforce (§5.2) — exempt here. A lowercase tag is a low-level/raw
  * OpenTUI primitive (the runtime's escape hatch, e.g. `<box>`/`<text>`); one with
  * no `id` prop warns, because the designer is expected to be able to point at it.
- * `scanOpenTag`/`readHyphenatedName` now live in `./jsx` — shared with
- * `import-scan.ts`'s dynamic-code check (WP-6a fix-pass-2, Important 1) — but
- * this lint keeps consuming plain `scanOpenTag` per `<` token, unchanged.
  *
- * Two further residual gaps, both pinned by tests below and left as-is
- * (WP-6a fix-pass-2, Minor 3 — fixing either would need a second heuristic
- * layer `scanOpenTag`'s own doc comment argues against):
+ * Built on `scanJsx` (`./jsx`, WP-6a fix-pass-3) — the same real-scanner JSX
+ * reader `import-scan.ts`'s dynamic-code check uses — rather than the earlier
+ * `scanOpenTag` code-token heuristic, which this replaces outright: `scanJsx`
+ * requires a genuine matching close tag (or a real `/>`) before it will
+ * report an element at all, which incidentally closes both of that
+ * heuristic's residual gaps (WP-6a fix-pass-2, Minor 3) rather than needing a
+ * second heuristic layer to chase them —
  *
- * - two bare, semicolon-free assignments sandwiched between two comparisons
- *   with no `const`/`let`/parens/commas (`a < b\nfoo = "x"\nbar = c > d`)
- *   still misreads the first comparison's operands as a tag+props and warns
- *   a bogus `<b>` — contrived, but not previously named here.
- * - `<box>(hi)</box>`: a text child starting with `(` is real, unpointed
- *   markup, but the "closing `>` immediately followed by `(`" generic-call
- *   guard (needed to reject `Identifier<Type>(...)`) also silences this case,
- *   because it cannot tell the two apart from the tag header alone.
+ * - `a < b\nfoo = "x"\nbar = c > d`: `scanJsx` never even attempts `<b`, since
+ *   the identifier `a` right before it already ends an expression
+ *   (`endsExpression` in `./jsx`) — no bogus `<b>` warning.
+ * - `<box>(hi)</box>`: a text child starting with `(` is read as ordinary JSX
+ *   text (`scanJsxToken` doesn't lex `(` specially), so this now correctly
+ *   warns as a real, unpointed element instead of being silently dropped.
  */
 export function lintUnpointedElements(source: string): GateWarning[] {
-  const toks = tokenize(source);
-  const warnings: GateWarning[] = [];
+  const { elements } = scanJsx(source);
   const at = (pos: number) => lineColOf(source, pos);
 
-  for (let i = 0; i < toks.length; i += 1) {
-    const t = toks[i]!;
-    if (t.kind !== SK.LessThanToken) continue;
-    const scan = scanOpenTag(toks, i, source);
-    if (scan === null || scan.hasId) continue;
-    const firstChar = scan.tagName[0]!;
+  const warnings: GateWarning[] = [];
+  for (const el of elements) {
+    if (el.hasId || el.tagName === "") continue;
+    const firstChar = el.tagName[0]!;
     if (firstChar < "a" || firstChar > "z") continue; // capitalized — a Kit component, exempt
     warnings.push({
       kind: "unpointed-element",
-      message: `<${scan.tagName}> is a raw element with no \`id\` — pointing (selection/pins) needs one`,
-      ...at(t.pos),
+      message: `<${el.tagName}> is a raw element with no \`id\` — pointing (selection/pins) needs one`,
+      ...at(el.pos),
     });
   }
 
