@@ -281,6 +281,18 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     }
 
     // outcome.kind === "completed"
+    // Re-checked here, not only at the loop top: an attempt that finishes past the
+    // deadline must terminalize immediately rather than pay for a freeze + full Gate
+    // validation whose candidate `finalizeTurn`'s own internal check would reject anyway.
+    // The machine is already "stopping" (attempt.ts's own `beginStopping` on natural
+    // completion), so `beginTerminalization` is the legal bridge — the same one the
+    // "failed"/"backend-unhealthy" branches just above use from this exact phase.
+    const postAttemptDeadline = deps.deadlines.check();
+    if (postAttemptDeadline.kind === "expired") {
+      bridge("beginTerminalization");
+      return terminalize("failed", deadlineExceededText(postAttemptDeadline.bound));
+    }
+
     bridge("beginSnapshot");
     const freezeDeps: FreezeTurnCandidateDeps = { machine: deps.machine, staging: deps.staging };
     const freeze = await wrap(freezeTurnCandidate(freezeDeps, { workspace: context.workspace }));

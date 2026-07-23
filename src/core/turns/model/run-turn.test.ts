@@ -15,11 +15,12 @@ import {
   createFakeStagingService,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import type { FailureDtoV1 } from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
 import type { AdmissionInputV1 } from "../types";
-import { createTurnDeadlines } from "./deadlines";
+import { type TurnDeadlineCheckV1, type TurnDeadlines, createTurnDeadlines } from "./deadlines";
 import { type TurnGateFoldInputV1, foldGateDiagnosticsIntoPrompt } from "./prompt";
 import { type RunTurnDeps, type RunTurnInputV1, runTurn } from "./run-turn";
 
@@ -45,6 +46,30 @@ const T0 = 1_700_000_000_000;
 
 function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
+}
+
+/**
+ * A `TurnDeadlines` fake that reports a scripted sequence of `check()` results by call
+ * order — the last entry repeats once the queue is exhausted. Only the hardening tests
+ * below use this; every other test keeps the default `createTurnDeadlines` + `manualClock`
+ * pairing `harness()` already builds. `noteEvent`/`noteAttemptStarted`/`noteSessionFallback`
+ * are no-ops: these tests drive `check()`'s return value directly rather than through
+ * elapsed clock time.
+ */
+function scriptedDeadlines(sequence: readonly TurnDeadlineCheckV1[]): TurnDeadlines {
+  let index = 0;
+  function check(): TurnDeadlineCheckV1 {
+    const result = sequence[index] ?? sequence[sequence.length - 1];
+    index++;
+    return result ?? { kind: "ok" };
+  }
+  return {
+    noteEvent: () => {},
+    noteAttemptStarted: () => {},
+    noteSessionFallback: () => {},
+    check,
+    absoluteDeadlineAt: () => T0 + 30 * 60 * 1000,
+  };
 }
 
 function baseReadSet(): StagedTurnReadSetV1 {
@@ -133,15 +158,22 @@ interface Harness {
   readonly foldCalls: readonly TurnGateFoldInputV1[];
 }
 
-/** Fresh fakes + a fresh turn machine per test — never shared across tests (matching every sibling harness in this directory). */
-function harness(clock: Clock = manualClock(T0)): Harness {
+/**
+ * Fresh fakes + a fresh turn machine per test — never shared across tests (matching every
+ * sibling harness in this directory). `deadlines` defaults to the real `createTurnDeadlines`
+ * bound to `clock`; the hardening tests below override it with `scriptedDeadlines` to drive
+ * `check()` directly instead of through elapsed clock time.
+ */
+function harness(
+  clock: Clock = manualClock(T0),
+  deadlines: TurnDeadlines = createTurnDeadlines({ clock }),
+): Harness {
   const machine = reatomTurnStateMachine();
   const pinReader = createFakePinStore();
   const turnTransactions = createFakeTurnTransactionService();
   const staging = createFakeStagingService();
   const agentBackend = createFakeAgentBackend();
   const gateRunner = createFakeGateRunner();
-  const deadlines = createTurnDeadlines({ clock });
   const published: unknown[] = [];
 
   // Traces the exact task each attempt started with (the fake's own call log only records
@@ -331,6 +363,194 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       expect(h.staging.calls.map((c) => c.method)).toEqual(["createTurnWorkspace"]);
       expect(h.gateRunner.calls).toEqual([]);
       expect(h.turnTransactions.calls.map((c) => c.method)).toEqual(["admit", "terminalize"]);
+    });
+  });
+
+  test("(e) attempt completes past the absolute deadline: terminalizes before freeze/validate", async () => {
+    // Pins the finding-1 hardening: without the post-attempt-outcome recheck this attempt
+    // would freeze the candidate and run it fully through Gate before `finalizeTurn`'s own
+    // internal deadline check rejected it — wasted Gate work. RED before that fix: the
+    // driver reached freeze/validate/finalize and returned `finalized`, not `terminalized`.
+    await context.start(async () => {
+      const deadlines = scriptedDeadlines([
+        { kind: "ok" }, // loop-top check before attempt 1 starts
+        { kind: "expired", bound: "absolute" }, // the new post-attempt-outcome check
+      ]);
+      const h = harness(manualClock(T0), deadlines);
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.outcome).toBe("error");
+      expect(terminalizeCall.input.record.text).toBe(
+        "the turn's absolute deadline expired before the next attempt could start",
+      );
+
+      // Never froze or validated the completed attempt's candidate.
+      expect(h.staging.calls.map((c) => c.method)).toEqual(["createTurnWorkspace"]);
+      expect(h.gateRunner.calls).toEqual([]);
+    });
+  });
+
+  test('(f) attempt outcome "failed": terminalizeTurn with the failed record', async () => {
+    await context.start(async () => {
+      const h = harness();
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, {
+        kind: "backend-error",
+        message: "the backend crashed",
+        sessionId: null,
+      });
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.outcome).toBe("error");
+      expect(terminalizeCall.input.record.text).toBe("the backend crashed");
+      expect(terminalizeCall.input.record.reason).toBeUndefined();
+
+      // Never reached freeze/validation/finalize.
+      expect(h.staging.calls.map((c) => c.method)).toEqual(["createTurnWorkspace"]);
+      expect(h.gateRunner.calls).toEqual([]);
+    });
+  });
+
+  test('(g) attempt outcome "backend-unhealthy": folds into a failed terminal record (documented divergence)', async () => {
+    // See run-turn.ts's own header, "BACKEND-UNHEALTHY DIVERGENCE": the real quarantine/
+    // health-check supervisor is out of this task's scope, so an unconfirmed process exit
+    // folds into an ordinary terminal `failed` record rather than the spec's own
+    // `backend-unhealthy` phase. This test asserts exactly that documented behavior.
+    await context.start(async () => {
+      const h = harness();
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, { kind: "unconfirmed-exit" });
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.outcome).toBe("error");
+      expect(terminalizeCall.input.record.text).toBe("the backend could not confirm a clean exit");
+      expect(terminalizeCall.input.record.reason).toBe("unhealthy_unconfirmed_exit");
+
+      // Never reached freeze/validation/finalize.
+      expect(h.staging.calls.map((c) => c.method)).toEqual(["createTurnWorkspace"]);
+      expect(h.gateRunner.calls).toEqual([]);
+    });
+  });
+
+  test("(h) deadline expires between attempts: terminalizes at the loop top without starting attempt 2", async () => {
+    await context.start(async () => {
+      const deadlines = scriptedDeadlines([
+        { kind: "ok" }, // loop-top check before attempt 1 starts
+        { kind: "ok" }, // the post-attempt-outcome check, right after attempt 1 completes
+        { kind: "expired", bound: "absolute" }, // loop-top check before attempt 2 would start
+      ]);
+      const h = harness(manualClock(T0), deadlines);
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT); // forces attempt 1's Gate retry
+
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.text).toBe(
+        "the turn's absolute deadline expired before the next attempt could start",
+      );
+
+      // Attempt 1 ran and was Gate-rejected (one fold, one retry decision), but attempt 2
+      // never started — the loop-top deadline check terminalized first.
+      expect(h.foldCalls.length).toBe(1);
+      expect(h.startedTasks.length).toBe(1);
+    });
+  });
+
+  // NOTE on finding 3's second half: `run-turn.ts`'s own `attempt > MAX_TURN_ATTEMPTS`
+  // defensive branch (its own comment: "unreachable via this driver's own sequencing... but
+  // never silently trusted either") is not exercised by a test here. `TurnFence.beginAttempt`
+  // (fence.ts) independently enforces the identical MAX_TURN_ATTEMPTS budget and is the ONLY
+  // place the fence's own attempt counter advances; `runTurnValidation`'s `nextAttemptAfter`
+  // (validation.ts) never returns a `nextAttempt` past 4 because `canRetryAfterGate` gates
+  // every "retry" decision on `attempt < MAX_TURN_ATTEMPT` first. Driving the local `attempt`
+  // variable past 4 through this module's public `runTurn` entry point with fakes would
+  // require that lockstep between the driver and the fence to already be broken — i.e. a
+  // separate bug, not a reachable input. Left untested rather than contrived, per the
+  // review's own instruction for a genuinely unreachable defensive branch.
+
+  test("(i) freeze failure: a failing snapshotToCandidate terminalizes without reaching Gate", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const failure: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "candidate snapshot failed",
+        details: {},
+      };
+      h.staging.failNext("snapshotToCandidate", failure);
+
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.text).toBe("candidate snapshot failed");
+      expect(terminalizeCall.input.record.reason).toBe("PERSISTENCE_FAILED");
+
+      // Gate never ran — the candidate never froze.
+      expect(h.gateRunner.calls).toEqual([]);
     });
   });
 });
