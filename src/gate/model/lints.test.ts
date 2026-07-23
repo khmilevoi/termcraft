@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { lintDeterminism, lintDroppedIds } from "./lints";
+import { lintDeterminism, lintDroppedIds, lintUnpointedElements } from "./lints";
 
 describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("a deterministic page produces no warnings", () => {
@@ -67,5 +67,56 @@ describe("lintDroppedIds (§6.3 dropped-id warning)", () => {
   test("an id bound via object-property form (`id: \"x\"`) also counts as present", () => {
     const src = `const props = { id: "cpu-gauge" }\n`;
     expect(lintDroppedIds(src, ["cpu-gauge"])).toEqual([]);
+  });
+});
+
+describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
+  test("kit components (capitalized tag) with ids produce no warning", () => {
+    const src = `export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)\n`;
+    expect(lintUnpointedElements(src)).toEqual([]);
+  });
+
+  test("a raw low-level element (lowercase tag) without an id warns", () => {
+    const w = lintUnpointedElements(`export default () => <box>raw</box>\n`);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("unpointed-element");
+  });
+
+  test("a raw element WITH an id does not warn", () => {
+    expect(lintUnpointedElements(`export default () => <box id="raw-1">raw</box>\n`)).toEqual([]);
+  });
+
+  test("a self-closing raw element without an id warns", () => {
+    const w = lintUnpointedElements(`export default () => <box />\n`);
+    expect(w).toHaveLength(1);
+  });
+
+  test("every unpointed raw element is reported, not just the first", () => {
+    const w = lintUnpointedElements(`export default () => <box><text>hi</text></box>\n`);
+    expect(w).toHaveLength(2);
+  });
+
+  test("kit components are exempt even without an id (enforced elsewhere)", () => {
+    expect(lintUnpointedElements(`export default () => <Panel><Text>hi</Text></Panel>\n`)).toEqual(
+      [],
+    );
+  });
+
+  test("a raw element nested inside a pointed kit component still warns", () => {
+    const w = lintUnpointedElements(`export default () => <Panel id="p"><box>raw</box></Panel>\n`);
+    expect(w).toHaveLength(1);
+  });
+
+  test("a brace expression inside a tag (e.g. a ternary using `>`) does not confuse the tag scan", () => {
+    const w = lintUnpointedElements(
+      `export default () => <box id="b" color={x > y ? "a" : "b"} />\n`,
+    );
+    expect(w).toEqual([]);
+  });
+
+  test("a Fragment shorthand does not itself warn", () => {
+    expect(lintUnpointedElements(`export default () => <><Text id="t">hi</Text></>\n`)).toEqual(
+      [],
+    );
   });
 });

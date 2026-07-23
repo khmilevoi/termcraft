@@ -17,10 +17,9 @@ const NOW_OBJECTS = new Set<string>(["Date", "performance"]);
  * smoke/export at logical `t = 0` must not depend on wall-clock time or randomness;
  * these produce NON-FATAL warnings (the gate reminds, not rejects). A raw
  * `setTimeout`/`setInterval`, a `Date.now()`/`performance.now()`, or a `Math.random()`
- * each surfaces one warning at its source position. (`unpointed-element` needs a
- * JSX open-tag scan and `unlisted-navigation` needs the manifest's listed slugs —
- * both still deferred to their stages. `dropped-id` is below: it only needs the
- * caller-supplied `referencedIds`, not the whole prior source.)
+ * each surfaces one warning at its source position. (`unlisted-navigation` needs
+ * the manifest's listed slugs — still deferred to its stage. `dropped-id` and
+ * `unpointed-element` are below.)
  */
 export function lintDeterminism(source: string): GateWarning[] {
   const toks = tokenize(source);
@@ -56,6 +55,83 @@ export function lintDeterminism(source: string): GateWarning[] {
         });
       }
     }
+  }
+
+  return warnings;
+}
+
+/** One scanned JSX opening tag: its full (possibly hyphenated) name and whether it carries an `id` prop. */
+interface OpenTagScan {
+  readonly tagName: string;
+  readonly hasId: boolean;
+}
+
+/**
+ * Scan one JSX opening tag starting at its `<` token (`start`): the (possibly
+ * hyphenated) tag name, then its prop list up to the tag's own closing `>` —
+ * tracking brace depth so an expression-container prop value (e.g.
+ * `color={x > y ? "a" : "b"}`) never terminates the scan early on the `>` inside
+ * it. Returns `null` when `start` is not an element's opening tag: a closing
+ * `</...>` or a bare `<>` Fragment start, neither of which names an element.
+ */
+function scanOpenTag(toks: readonly Tok[], start: number): OpenTagScan | null {
+  const first = toks[start + 1];
+  if (first === undefined || first.kind !== SK.Identifier) return null;
+
+  let tagName = first.value;
+  let j = start + 2;
+  while (toks[j]?.kind === SK.MinusToken && toks[j + 1]?.kind === SK.Identifier) {
+    tagName += `-${toks[j + 1]!.value}`;
+    j += 2;
+  }
+
+  let hasId = false;
+  let depth = 0;
+  for (; j < toks.length; j += 1) {
+    const t = toks[j]!;
+    if (t.kind === SK.OpenBraceToken) {
+      depth += 1;
+      continue;
+    }
+    if (t.kind === SK.CloseBraceToken) {
+      depth -= 1;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (t.kind === SK.GreaterThanToken) break;
+    if (t.kind === SK.Identifier && t.value === "id") hasId = true;
+  }
+
+  return { tagName, hasId };
+}
+
+/**
+ * The `unpointed-element` warning (§6.3 step 3; §5.2's escape hatch: "the Gate
+ * reminds, not rejects"). A JSX tag's capitalization is the load-bearing signal:
+ * a capitalized tag is a component reference, and because the import allowlist
+ * (§3.1) permits only `@termcraft/runtime`, every such component is a Kit
+ * component whose id the page contract and the smoke render's duplicate check
+ * already enforce (§5.2) — exempt here. A lowercase tag is a low-level/raw
+ * OpenTUI primitive (the runtime's escape hatch, e.g. `<box>`/`<text>`); one with
+ * no `id` prop warns, because the designer is expected to be able to point at it.
+ */
+export function lintUnpointedElements(source: string): GateWarning[] {
+  const toks = tokenize(source);
+  const warnings: GateWarning[] = [];
+  const at = (pos: number) => lineColOf(source, pos);
+
+  for (let i = 0; i < toks.length; i += 1) {
+    const t = toks[i]!;
+    if (t.kind !== SK.LessThanToken) continue;
+    const scan = scanOpenTag(toks, i);
+    if (scan === null || scan.hasId) continue;
+    const firstChar = scan.tagName[0]!;
+    if (firstChar < "a" || firstChar > "z") continue; // capitalized — a Kit component, exempt
+    warnings.push({
+      kind: "unpointed-element",
+      message: `<${scan.tagName}> is a raw element with no \`id\` — pointing (selection/pins) needs one`,
+      ...at(t.pos),
+    });
   }
 
   return warnings;

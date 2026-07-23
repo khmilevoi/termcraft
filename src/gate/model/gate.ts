@@ -3,7 +3,7 @@ import type { PageSlug } from "entities/page";
 import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
 import { makeGateResult } from "./gate-result";
 import { scanImportAllowlist } from "./import-scan";
-import { lintDeterminism, lintDroppedIds } from "./lints";
+import { lintDeterminism, lintDroppedIds, lintUnpointedElements } from "./lints";
 import { checkPageContract } from "./page-contract";
 
 /**
@@ -77,6 +77,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   }
   warnings.push(...lintDeterminism(input.source));
   warnings.push(...lintDroppedIds(input.source, input.referencedIds));
+  warnings.push(...lintUnpointedElements(input.source));
 
   if (ports.typeCheck !== undefined) {
     errors.push(...(await ports.typeCheck(input.source, fileName)));

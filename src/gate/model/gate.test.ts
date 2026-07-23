@@ -67,6 +67,13 @@ describe("runGate (§6.3 pipeline)", () => {
       .toBe(true);
   });
 
+  test("a raw low-level element without an id warns unpointed-element without failing the candidate", async () => {
+    const src = cleanSource.replace("<Text id=\"t\">hi</Text>", "<box>hi</box>");
+    const result = await runGate({ source: src, slug: SLUG });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.kind === "unpointed-element")).toBe(true);
+  });
+
   test("an injected type-check stage contributes fatal errors", async () => {
     const typeError: GateError = {
       kind: "type",
