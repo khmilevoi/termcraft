@@ -256,4 +256,39 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
   });
+
+  describe("WP-6a fix-pass-3 — the code-token heuristic's unsound premise (§ finding)", () => {
+    test("prose containing an apostrophe (`isn't`) does not swallow the closing tag and fatally reject the page", () => {
+      // Before fix-pass-3: the apostrophe opens a code-mode string literal that
+      // swallows the rest of the line INCLUDING `</Text>`, so the closing tag
+      // never confirms and `eval` is read as a live reference again.
+      const src = `export default () => <Text id="t">eval isn't allowed on this page</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose containing an em dash and an apostrophe (`eval — don't`) does not fatally reject the page", () => {
+      const src = `export default () => <Text id="t">eval — don't</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose containing `//` does not open a code-mode line comment that swallows the closing tag", () => {
+      // Before fix-pass-3: `//` opens a code-mode line comment that eats
+      // `</Text>` the same way the apostrophe case eats it via a string.
+      const src = `export default () => <Text id="t">eval // never</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("a dangling close tag after an uncalled generic type argument does not launder a real eval(...) call as JSX text", () => {
+      // A second, smaller hole from the same premise: `Array<Foo>` reads as a
+      // plausible childless open tag (the same accepted `scanOpenTag` gap as
+      // the test above), and a LATER, unrelated `</Foo>` — dangling, matching
+      // no real open tag — used to be accepted as this fake tag's matching
+      // close, laundering everything in between (including the real
+      // `eval("2")`) into "JSX text" and returning no errors at all.
+      const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n</Foo>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+  });
 });

@@ -107,6 +107,20 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * require) are not guarded the same way: each requires a `StringLiteral`
  * specifier immediately in scope, a shape prose essentially never produces,
  * and Important 1 named only `eval`/`Function` as observed false rejections.
+ *
+ * `computeJsxTextTokenIndices` itself is built on `scanJsx` (`./jsx`, WP-6a
+ * fix-pass-3), a real recursive-descent reader over the TypeScript scanner's
+ * own JSX mode — not the fix-pass-2 code-token heuristic it replaced. That
+ * heuristic's premise (walking CODE-mode tokens to guess where JSX text
+ * lives) was unsound: an apostrophe or `//` inside ordinary prose opened a
+ * real string literal or line comment that could swallow a page's own
+ * closing tag, fatally rejecting its display copy — and, the mirror image, a
+ * dangling close tag left over from an unrelated, uncalled generic type
+ * argument (`Array<Foo>` … `</Foo>`) could launder a real `eval(...)`
+ * in between into "text", silently returning no errors at all. `scanJsx`
+ * reads real JSX structure instead (`scanJsxToken`, matching close tags,
+ * `{}` expression containers), so neither failure mode can occur here; see
+ * its doc comment for the reader's own fail-closed discipline.
  */
 export function scanImportAllowlist(source: string): ImportScanError[] {
   const toks = tokenize(source);
