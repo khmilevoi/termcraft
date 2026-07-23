@@ -55,11 +55,13 @@ describe("@termcraft/runtime Reatom facade re-exports", () => {
 
 describe("withConnectHook narrowing + cleanup contract (§3.2, §11.1, m1/m2)", () => {
   test("the narrowed callback parameter type rejects a value outside ConnectionHookResult (m1)", () => {
-    const resource = atom(0, "reatom-facade.connectHook.narrowing");
-    // @ts-expect-error — a plain object is `MaybeUnsubscribe`-shaped under Reatom's
-    // raw (pre-m1) signature but is NOT a `ConnectionHookResult`; the facade's
-    // narrowed callback type must reject it at compile time.
-    resource.extend(withConnectHook(() => ({ notACleanup: true })));
+    const resource = atom(0, "reatom-facade.connectHook.narrowing").extend(
+      // @ts-expect-error — a plain object is `MaybeUnsubscribe`-shaped under Reatom's
+      // raw (pre-m1) signature but is NOT a `ConnectionHookResult`; the facade's
+      // narrowed callback type must reject it at compile time.
+      withConnectHook(() => ({ notACleanup: true })),
+    );
+    expect(resource()).toBe(0);
   });
 
   test("connecting an atom with a withConnectHook cleanup and then disconnecting runs the cleanup exactly once (m2)", async () => {
