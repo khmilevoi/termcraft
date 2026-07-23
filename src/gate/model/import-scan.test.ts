@@ -94,7 +94,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   test("a new Function(...) construction is rejected as fatal dynamic code (§5.8)", () => {
     const errors = scanImportAllowlist(`const f = new Function("a", "return a")\n`);
     expect(errors).toHaveLength(1);
-    expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
+    expect(errors[0]?.code).toBe("FUNCTION_CALL");
     expect(errors[0]?.message).toContain("Function");
   });
 
@@ -136,13 +136,13 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     test('a bare Function call without new (Function("a", "return a")(1)) is caught', () => {
       const errors = scanImportAllowlist(`Function("a", "return a")(1)\n`);
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
+      expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test('a computed-string Function access (g["Function"](...)) is caught', () => {
       const errors = scanImportAllowlist(`g["Function"]("a", "return a")\n`);
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.code).toBe("NEW_FUNCTION_CALL");
+      expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test("a method named Function on some object is not mistaken for the global Function", () => {
@@ -189,6 +189,71 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(scanImportAllowlist(`[]["constructor"]["constructor"]("return this")()\n`)).toEqual(
         [],
       );
+    });
+  });
+
+  describe("Important 1 (fix pass 2) — JSX children text is not scanned as code", () => {
+    test("prose containing the bare word `eval` as a JSX text child is not fatally rejected", () => {
+      const src = `export default () => <Text id="t">Never use eval here</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose containing `Function (` as a JSX text child is not fatally rejected", () => {
+      const src = `export default () => <Text id="t">Function (beta)</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("the bare word `eval` as the WHOLE JSX text child is not fatally rejected", () => {
+      const src = `export default () => <Text id="t">eval</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test('a computed-access-shaped sentence (`globalThis["eval"]`) as JSX text is not fatally rejected', () => {
+      const src = `export default () => <Text id="t">try globalThis["eval"]</Text>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("a real eval(...) call inside a JSX expression container is still rejected", () => {
+      const src = `export default () => <Text id="t">{eval("1")}</Text>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("a real Function(...) call inside a JSX expression container is still rejected", () => {
+      const src = `export default () => <Text id="t">{Function("a", "return a")}</Text>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("FUNCTION_CALL");
+    });
+
+    test("a real eval(...) call inside a JSX element nested within an expression container is still rejected", () => {
+      const src = `export default () => <box>{cond && <text id="t">{eval("1")}</text>}</box>\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("prose in a JSX element nested inside an expression container is not fatally rejected", () => {
+      const src = `export default () => <box>{cond && <text id="t">eval here</text>}</box>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("prose containing `eval` inside a bare Fragment (`<>...</>`) is not fatally rejected", () => {
+      const src = `export default () => <>Never use eval here</>\n`;
+      expect(scanImportAllowlist(src)).toEqual([]);
+    });
+
+    test("an uncalled generic type-argument list (`Array<Foo>`) does not mask a later real eval(...) call as JSX text", () => {
+      // `scanOpenTag` alone treats `Array<Foo>` as a childless-looking open tag
+      // (an accepted, narrow residual gap for `lintUnpointedElements`); this
+      // pins that `computeJsxTextTokenIndices` does NOT inherit that gap, by
+      // requiring a genuine matching close tag before trusting anything as
+      // text — since no `</Foo>` ever appears, nothing here is masked.
+      const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n`;
+      const errors = scanImportAllowlist(src);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
     });
   });
 });

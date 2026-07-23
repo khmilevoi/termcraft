@@ -1,3 +1,4 @@
+import { computeJsxTextTokenIndices } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { SyntaxKind, Tok } from "./lexer";
 
@@ -17,7 +18,7 @@ export interface ImportScanError {
     | "REEXPORT"
     | "REQUIRE_CALL"
     | "EVAL_CALL"
-    | "NEW_FUNCTION_CALL";
+    | "FUNCTION_CALL";
   readonly specifier: string;
   readonly message: string;
   readonly line: number;
@@ -94,9 +95,22 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * `{ eval() { return 1 } }`) is flagged too — an accepted over-approximation:
  * a page naming something `eval` is unusual enough that it is not worth
  * carving out an exemption for.
+ *
+ * The three dynamic-code checks below skip any identifier/bracket token
+ * `computeJsxTextTokenIndices` (`./jsx`) marks as JSX children TEXT (WP-6a
+ * fix-pass-2, Important 1): without that guard, a page's own display copy —
+ * `<Text id="t">Never use eval here</Text>`, `<Text id="t">Function (beta)</Text>`
+ * — tripped a FATAL rejection on ordinary prose, which is worse than the gap
+ * this check was written to close. A real `eval(...)`/`Function(...)`
+ * reference inside a JSX expression container (`{eval("1")}`) is never marked
+ * as text, so it stays caught. The other checks in this scan (import/export/
+ * require) are not guarded the same way: each requires a `StringLiteral`
+ * specifier immediately in scope, a shape prose essentially never produces,
+ * and Important 1 named only `eval`/`Function` as observed false rejections.
  */
 export function scanImportAllowlist(source: string): ImportScanError[] {
   const toks = tokenize(source);
+  const jsxText = computeJsxTextTokenIndices(toks, source);
   const errors: ImportScanError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
 
@@ -205,10 +219,12 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
     // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
     // flags a page that merely defines a property/method literally named
     // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
-    // (see the module doc comment above).
+    // (see the module doc comment above). `!jsxText.has(i)` (Important 1) skips
+    // this word when it is JSX children TEXT, not a reference.
     if (
       t.kind === SK.Identifier &&
       t.value === "eval" &&
+      !jsxText.has(i) &&
       toks[i - 1]?.kind !== SK.DotToken &&
       toks[i - 1]?.kind !== SK.QuestionDotToken
     ) {
@@ -233,16 +249,22 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
     // object exactly like `new Function(...)` does per the spec), so one
     // check covers both forms; a `.Function(...)`/`?.Function(...)` method
     // call on some other object is, symmetrically with `eval`, not the global.
+    // `!jsxText.has(i)` (Important 1) skips this word when it is JSX children
+    // TEXT — e.g. `<Text id="t">Function (beta)</Text>` — rather than a call;
+    // note the space in "Function (beta)" still lexes as adjacent tokens
+    // (`Function`, `(`, `beta`, `)`), so without the guard this shape would
+    // still match `next?.kind === SK.OpenParenToken` and fatally reject prose.
     if (
       t.kind === SK.Identifier &&
       t.value === "Function" &&
       next?.kind === SK.OpenParenToken &&
+      !jsxText.has(i) &&
       toks[i - 1]?.kind !== SK.DotToken &&
       toks[i - 1]?.kind !== SK.QuestionDotToken
     ) {
       const where = at(t.pos);
       errors.push({
-        code: "NEW_FUNCTION_CALL",
+        code: "FUNCTION_CALL",
         specifier: "",
         message: "Function(...) is not allowed — a page executes no dynamic code",
         line: where.line,
@@ -260,9 +282,11 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
     // built through concatenation or held in a variable first
     // (`"ev" + "al"`, `const k = "eval"; g[k]`) is NOT caught — this is a
     // token-level scan, not a constant-folding evaluator (see the module doc
-    // comment's pinned "KNOWN GAP" list).
+    // comment's pinned "KNOWN GAP" list). `!jsxText.has(i)` (Important 1)
+    // skips this shape inside JSX children text too, for the same reason.
     if (
       t.kind === SK.OpenBracketToken &&
+      !jsxText.has(i) &&
       (toks[i - 1]?.kind === SK.Identifier ||
         toks[i - 1]?.kind === SK.CloseParenToken ||
         toks[i - 1]?.kind === SK.CloseBracketToken ||
@@ -274,7 +298,7 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
     ) {
       const where = at(t.pos);
       errors.push({
-        code: next.value === "eval" ? "EVAL_CALL" : "NEW_FUNCTION_CALL",
+        code: next.value === "eval" ? "EVAL_CALL" : "FUNCTION_CALL",
         specifier: "",
         message: `computed access to "${next.value}" is not allowed — a page executes no dynamic code`,
         line: where.line,
