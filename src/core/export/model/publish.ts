@@ -1,7 +1,13 @@
 import { wrap } from "@reatom/core";
 
 import type { ExportAction, ExportState, StateMachine } from "core/machines";
-import type { ExportRenderResultV1, PageReader, ProjectWriteCoordinator } from "core/ports";
+import type {
+  ExportPublishPlanV1,
+  ExportPublishPort,
+  ExportRenderResultV1,
+  PageReader,
+  ProjectWriteCoordinator,
+} from "core/ports";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -35,6 +41,17 @@ import type { ExportPageInputV1, ExportSnapshotV1 } from "../types";
  * Either mismatch is staleness, never a distinct code — §12.5 names exactly one failure
  * for this whole precondition class, `EXPORT_SNAPSHOT_STALE`.
  *
+ * PUBLICATION ITSELF, STILL UNDER THE SAME PERMIT: once revalidation passes, this function
+ * builds the durable intent, wraps it in an {@link ExportPublishPlanV1}, and calls
+ * `ExportPublishPort.publish` before the permit is released — the transaction's own
+ * commit/recovery boundary (`turn-durability` §10 steps 4-6) is what actually makes the
+ * generation durable, not this function. A `FailureDtoV1` back from the port is
+ * `failBeforeIntent` exactly like a revalidation failure — its own `EXPORT_SNAPSHOT_STALE`
+ * (the store engine's lower-level precondition re-check) maps to `stale`, every other code
+ * (e.g. `EXPORT_PUBLICATION_FAILED`) maps to `failed` — only on success does the machine
+ * `complete`. `plan.operations`/`plan.payloads` are empty here: wiring `assembleExportPackage`'s
+ * real file list into them is WP-5's job, out of this slice's scope (B6 part 2).
+ *
  * REATOM NOTE: every port call is `await wrap(...)`-ed, matching `snapshot.ts`'s /
  * `finalize.ts`'s identical rule.
  */
@@ -49,6 +66,7 @@ export interface PublishExportDeps {
   readonly projectWrite: ProjectWriteCoordinator;
   readonly pageReader: PageReader;
   readonly clock: Clock;
+  readonly exportPublish: ExportPublishPort;
 }
 
 export interface PublishExportInputV1 {
@@ -140,13 +158,34 @@ export async function publishExport(
     }
   }
 
-  deps.projectWrite.release(permit);
-
   const intent: ExportPublicationIntentV1 = {
     generationId: uuidv7(),
     pageCount: input.snapshot.pages.length,
     recordedAt: deps.clock.now().toISOString(),
   };
+
+  // WP-5 wires `assembleExportPackage`'s real file list into `operations`/`payloads` — this
+  // slice's scope (B6 part 2) is only the port call itself under the reacquired permit, so
+  // the plan carries the durability facts the intent already computed plus an empty
+  // operation set until that later slice supplies the actual transaction content.
+  const plan: ExportPublishPlanV1 = {
+    generationId: intent.generationId,
+    pageCount: intent.pageCount,
+    createdAt: intent.recordedAt,
+    operations: [],
+    payloads: new Map(),
+  };
+
+  const publication = await wrap(deps.exportPublish.publish(plan));
+
+  deps.projectWrite.release(permit);
+
+  if ("code" in publication) {
+    deps.machine.apply("kernel.export.failBeforeIntent");
+    if (publication.code === "EXPORT_SNAPSHOT_STALE")
+      return { kind: "stale", failure: publication };
+    return { kind: "failed", failure: publication };
+  }
 
   const completed = deps.machine.apply("kernel.export.complete");
   if (completed.kind === "illegal") {

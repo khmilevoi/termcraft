@@ -2,8 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import { context, wrap } from "@reatom/core";
 
+import type { ExportAction, ExportState, StateMachine } from "core/machines";
 import { reatomExportStateMachine } from "core/machines";
-import { createFakePageStore, createFakeProjectWriteCoordinator } from "core/ports/fakes";
+import {
+  createFakeExportPublish,
+  createFakePageStore,
+  createFakeProjectWriteCoordinator,
+} from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
@@ -20,6 +25,24 @@ function slug(value: string): PageSlug {
 
 function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
+}
+
+/** Records every action applied to `inner`, so a test can assert exactly which edges fired — not just the final phase, since two different edges (`complete` and `failBeforeIntent`) both land on `idle`. */
+function spyMachine(inner: StateMachine<ExportState, ExportAction>): {
+  readonly machine: StateMachine<ExportState, ExportAction>;
+  readonly actions: readonly ExportAction[];
+} {
+  const actions: ExportAction[] = [];
+  const machine: StateMachine<ExportState, ExportAction> = {
+    phase: inner.phase,
+    phaseAtom: inner.phaseAtom,
+    canApply: inner.canApply,
+    apply: (action) => {
+      actions.push(action);
+      return inner.apply(action);
+    },
+  };
+  return { machine, actions };
 }
 
 const HOME: ExportPageSnapshotV1 = {
@@ -48,9 +71,10 @@ function currentPageInput(overrides: Partial<ExportPageInputV1> = {}): ExportPag
 }
 
 function setup(options?: { readonly currentHash?: string }) {
-  const machine = reatomExportStateMachine();
-  machine.apply("kernel.export.begin");
-  machine.apply("kernel.export.beginRendering"); // now "rendering", the legal source for beginPublication
+  const rawMachine = reatomExportStateMachine();
+  rawMachine.apply("kernel.export.begin");
+  rawMachine.apply("kernel.export.beginRendering"); // now "rendering", the legal source for beginPublication
+  const { machine, actions } = spyMachine(rawMachine);
   const projectWrite = createFakeProjectWriteCoordinator();
   const pageReader = createFakePageStore({
     order: [HOME.pageSlug],
@@ -59,7 +83,8 @@ function setup(options?: { readonly currentHash?: string }) {
     ]),
   });
   const clock = manualClock(1_700_000_000_000);
-  return { machine, projectWrite, pageReader, clock };
+  const exportPublish = createFakeExportPublish();
+  return { machine, actions, projectWrite, pageReader, clock, exportPublish };
 }
 
 function baseInput(overrides: Partial<PublishExportInputV1> = {}): PublishExportInputV1 {
@@ -74,8 +99,11 @@ function baseInput(overrides: Partial<PublishExportInputV1> = {}): PublishExport
 describe("publishExport", () => {
   test("on a matching snapshot it reacquires, revalidates, records intent, and completes to idle", async () => {
     const { call, readPhase, projectWrite, pageReader } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
-      const call = publishExport({ machine, projectWrite, pageReader, clock }, baseInput());
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite, pageReader };
     });
 
@@ -100,7 +128,11 @@ describe("publishExport", () => {
       const projectWrite = createFakeProjectWriteCoordinator();
       const pageReader = createFakePageStore({ order: [], sources: new Map() });
       const clock = manualClock(1_700_000_000_000);
-      const call = publishExport({ machine, projectWrite, pageReader, clock }, baseInput());
+      const exportPublish = createFakeExportPublish();
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
       return { call, projectWrite, pageReader };
     });
 
@@ -119,9 +151,9 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, pageReader, clock, exportPublish },
         baseInput({ renders: [{ pageSlug: HOME.pageSlug, outcome: FAILURE }] }),
       );
       return { call, projectWrite };
@@ -135,9 +167,9 @@ describe("publishExport", () => {
 
   test("a page-list/settings mismatch is stale: releases, fails before intent, and reports EXPORT_SNAPSHOT_STALE", async () => {
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, pageReader, clock, exportPublish },
         baseInput({ currentPages: [currentPageInput({ theme: "dark" })] }), // theme drifted since capture
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
@@ -158,8 +190,13 @@ describe("publishExport", () => {
 
   test("a live source-hash drift since capture is stale: releases, fails before intent, and reports EXPORT_SNAPSHOT_STALE", async () => {
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup({ currentHash: "c".repeat(64) }); // page edited after capture
-      const call = publishExport({ machine, projectWrite, pageReader, clock }, baseInput());
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup({
+        currentHash: "c".repeat(64),
+      }); // page edited after capture
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
     });
 
@@ -178,9 +215,9 @@ describe("publishExport", () => {
 
   test("a page-count mismatch (a page removed since capture) is stale", async () => {
     const { call } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, pageReader, clock, exportPublish },
         baseInput({ currentPages: [] }),
       );
       return { call };
@@ -199,9 +236,12 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
       pageReader.failNext("readSource", FAILURE);
-      const call = publishExport({ machine, projectWrite, pageReader, clock }, baseInput());
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
     });
 
@@ -214,5 +254,85 @@ describe("publishExport", () => {
       "acquire-granted",
       "release",
     ]);
+  });
+
+  test("writes the publication through the export-publish port exactly once, under the permit, and completes to idle", async () => {
+    const { call, readPhase, projectWrite, exportPublish } = context.start(() => {
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
+      return { call, readPhase: wrap(() => machine.phase()), projectWrite, exportPublish };
+    });
+
+    const result = await call;
+
+    expect(result.kind).toBe("published");
+    if (result.kind !== "published") return;
+    expect(exportPublish.calls.length).toBe(1);
+    expect(exportPublish.calls[0]?.plan.generationId).toBe(result.intent.generationId);
+    expect(exportPublish.calls[0]?.plan.pageCount).toBe(result.intent.pageCount);
+    expect(exportPublish.calls[0]?.plan.createdAt).toBe(result.intent.recordedAt);
+    expect(readPhase()).toBe("idle");
+    // The permit is released exactly once — after the port call, not before it.
+    expect(projectWrite.calls.map((c) => c.method)).toEqual([
+      "acquire",
+      "acquire-granted",
+      "release",
+    ]);
+  });
+
+  test("does not complete the machine when the export-publish port fails; releases, fails before intent, and returns the failure", async () => {
+    const FAILURE: FailureDtoV1 = {
+      code: "EXPORT_PUBLICATION_FAILED",
+      retryable: false,
+      safeMessage: "transaction journal write failed",
+      details: {},
+    };
+    const { call, readPhase, projectWrite, actions } = context.start(() => {
+      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      exportPublish.failNext(FAILURE);
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
+      return { call, readPhase: wrap(() => machine.phase()), projectWrite, actions };
+    });
+
+    const result = await call;
+
+    expect(result).toEqual({ kind: "failed", failure: FAILURE });
+    expect(readPhase()).toBe("idle");
+    expect(actions).not.toContain("kernel.export.complete");
+    expect(actions).toContain("kernel.export.failBeforeIntent");
+    expect(projectWrite.calls.map((c) => c.method)).toEqual([
+      "acquire",
+      "acquire-granted",
+      "release",
+    ]);
+  });
+
+  test("classifies an EXPORT_SNAPSHOT_STALE failure from the port as stale, not failed", async () => {
+    const FAILURE: FailureDtoV1 = {
+      code: "EXPORT_SNAPSHOT_STALE",
+      retryable: true,
+      safeMessage: "store-side precondition drifted before commit",
+      details: {},
+    };
+    const { call, actions } = context.start(() => {
+      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      exportPublish.failNext(FAILURE);
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
+      return { call, actions };
+    });
+
+    const result = await call;
+
+    expect(result).toEqual({ kind: "stale", failure: FAILURE });
+    expect(actions).not.toContain("kernel.export.complete");
   });
 });
