@@ -1,3 +1,5 @@
+import type { PageSlug } from "entities/page";
+
 import type { GateWarning } from "../types";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { Tok } from "./lexer";
@@ -17,9 +19,8 @@ const NOW_OBJECTS = new Set<string>(["Date", "performance"]);
  * smoke/export at logical `t = 0` must not depend on wall-clock time or randomness;
  * these produce NON-FATAL warnings (the gate reminds, not rejects). A raw
  * `setTimeout`/`setInterval`, a `Date.now()`/`performance.now()`, or a `Math.random()`
- * each surfaces one warning at its source position. (`unlisted-navigation` needs
- * the manifest's listed slugs — still deferred to its stage. `dropped-id` and
- * `unpointed-element` are below.)
+ * each surfaces one warning at its source position. (`dropped-id`,
+ * `unpointed-element`, and `unlisted-navigation` are below.)
  */
 export function lintDeterminism(source: string): GateWarning[] {
   const toks = tokenize(source);
@@ -181,6 +182,55 @@ export function lintDroppedIds(source: string, referencedIds?: readonly string[]
     warnings.push({
       kind: "dropped-id",
       message: `id "${id}" is referenced by selection or an open pin but is no longer present in this candidate`,
+    });
+  }
+
+  return warnings;
+}
+
+/**
+ * The `unlisted-navigation` warning (§6.3 step 3): "navigation to unlisted
+ * pages." Targets the runtime navigation capability's specced call form
+ * (design §5.5: `usePages().goTo("settings")`; runtime-api §6 names
+ * "navigation" as the capability family — not yet implemented, WP-8) — a direct
+ * `usePages()` call chained straight into `.goTo("<slug>")`. `listedSlugs` is
+ * the staged manifest slice's page list (`checkManifestSlice`); absent, this
+ * lint skips entirely (the gate stays runnable standalone). One warning per
+ * navigation call whose literal target isn't in the list.
+ */
+export function lintUnlistedNavigation(
+  source: string,
+  listedSlugs?: readonly PageSlug[],
+): GateWarning[] {
+  if (listedSlugs === undefined) return [];
+
+  const listed = new Set<string>(listedSlugs);
+  const toks = tokenize(source);
+  const warnings: GateWarning[] = [];
+  const at = (pos: number) => lineColOf(source, pos);
+
+  for (let i = 0; i < toks.length; i += 1) {
+    const t = toks[i]!;
+    if (t.kind !== SK.Identifier || t.value !== "usePages") continue;
+    const goTo = toks[i + 4];
+    const target = toks[i + 6];
+    if (
+      toks[i + 1]?.kind !== SK.OpenParenToken ||
+      toks[i + 2]?.kind !== SK.CloseParenToken ||
+      toks[i + 3]?.kind !== SK.DotToken ||
+      goTo === undefined ||
+      goTo.kind !== SK.Identifier ||
+      goTo.value !== "goTo" ||
+      toks[i + 5]?.kind !== SK.OpenParenToken ||
+      target === undefined ||
+      target.kind !== SK.StringLiteral
+    )
+      continue;
+    if (listed.has(target.value)) continue;
+    warnings.push({
+      kind: "unlisted-navigation",
+      message: `usePages().goTo("${target.value}") targets a page not listed in pages.json`,
+      ...at(t.pos),
     });
   }
 

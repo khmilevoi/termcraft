@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { lintDeterminism, lintDroppedIds, lintUnpointedElements } from "./lints";
+import type { PageSlug } from "entities/page";
+
+import {
+  lintDeterminism,
+  lintDroppedIds,
+  lintUnlistedNavigation,
+  lintUnpointedElements,
+} from "./lints";
 
 describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("a deterministic page produces no warnings", () => {
@@ -64,7 +71,7 @@ describe("lintDroppedIds (§6.3 dropped-id warning)", () => {
     expect(w).toHaveLength(2);
   });
 
-  test("an id bound via object-property form (`id: \"x\"`) also counts as present", () => {
+  test('an id bound via object-property form (`id: "x"`) also counts as present', () => {
     const src = `const props = { id: "cpu-gauge" }\n`;
     expect(lintDroppedIds(src, ["cpu-gauge"])).toEqual([]);
   });
@@ -115,8 +122,36 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
   });
 
   test("a Fragment shorthand does not itself warn", () => {
-    expect(lintUnpointedElements(`export default () => <><Text id="t">hi</Text></>\n`)).toEqual(
-      [],
-    );
+    expect(lintUnpointedElements(`export default () => <><Text id="t">hi</Text></>\n`)).toEqual([]);
+  });
+});
+
+describe("lintUnlistedNavigation (§6.3 unlisted-navigation warning)", () => {
+  const DASH = "dash" as PageSlug;
+  const SETTINGS = "settings" as PageSlug;
+
+  test("absent listedSlugs skips the lint entirely (gate stays runnable standalone)", () => {
+    expect(lintUnlistedNavigation(`usePages().goTo("nowhere")\n`)).toEqual([]);
+  });
+
+  test("navigation to a listed slug produces no warning", () => {
+    const w = lintUnlistedNavigation(`usePages().goTo("settings")\n`, [DASH, SETTINGS]);
+    expect(w).toEqual([]);
+  });
+
+  test("navigation to a slug absent from the list warns unlisted-navigation", () => {
+    const w = lintUnlistedNavigation(`usePages().goTo("missing")\n`, [DASH]);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("unlisted-navigation");
+    expect(w[0]?.message).toContain("missing");
+  });
+
+  test("every unlisted navigation call is reported, not just the first", () => {
+    const w = lintUnlistedNavigation(`usePages().goTo("a")\nusePages().goTo("b")\n`, [DASH]);
+    expect(w).toHaveLength(2);
+  });
+
+  test("a .goTo call not chained off usePages() is not mistaken for navigation", () => {
+    expect(lintUnlistedNavigation(`foo.goTo("missing")\n`, [DASH])).toEqual([]);
   });
 });

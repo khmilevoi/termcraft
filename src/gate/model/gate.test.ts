@@ -63,15 +63,33 @@ describe("runGate (§6.3 pipeline)", () => {
       referencedIds: ["t", "cpu-gauge"],
     });
     expect(result.ok).toBe(true);
-    expect(result.warnings.some((w) => w.kind === "dropped-id" && w.message.includes("cpu-gauge")))
-      .toBe(true);
+    expect(
+      result.warnings.some((w) => w.kind === "dropped-id" && w.message.includes("cpu-gauge")),
+    ).toBe(true);
   });
 
   test("a raw low-level element without an id warns unpointed-element without failing the candidate", async () => {
-    const src = cleanSource.replace("<Text id=\"t\">hi</Text>", "<box>hi</box>");
+    const src = cleanSource.replace('<Text id="t">hi</Text>', "<box>hi</box>");
     const result = await runGate({ source: src, slug: SLUG });
     expect(result.ok).toBe(true);
     expect(result.warnings.some((w) => w.kind === "unpointed-element")).toBe(true);
+  });
+
+  test("absent listedSlugs skips the unlisted-navigation lint", async () => {
+    const src = cleanSource.replace("hi", '${(() => { usePages().goTo("nowhere"); return "" })()}');
+    const result = await runGate({ source: src, slug: SLUG });
+    expect(result.warnings.some((w) => w.kind === "unlisted-navigation")).toBe(false);
+  });
+
+  test("navigation to a page absent from listedSlugs warns unlisted-navigation without failing it", async () => {
+    const src = cleanSource.replace("hi", '${(() => { usePages().goTo("nowhere"); return "" })()}');
+    const result = await runGate({ source: src, slug: SLUG, listedSlugs: [SLUG] });
+    expect(result.ok).toBe(true);
+    expect(
+      result.warnings.some(
+        (w) => w.kind === "unlisted-navigation" && w.message.includes("nowhere"),
+      ),
+    ).toBe(true);
   });
 
   test("an injected type-check stage contributes fatal errors", async () => {
