@@ -109,10 +109,16 @@ function buildDeps(): KernelDeps {
  * Every assertion below calls a `Kernel` method OUTSIDE the `createKernel(...)` call that
  * built it — exactly the shape `dispatch.test.ts`'s own `setup()` comment requires ("every
  * call below reaches `dispatch()` from OUTSIDE this function, after `context.start(...)`
- * has already returned"). This is the only way a test can actually prove `createKernel`'s
- * own `bind`/`wrap` usage re-enters the Kernel's one Reatom frame correctly, rather than
- * silently reading a fresh, different frame's untouched atom state (see this module's own
- * `__scratch_context_lifetime` investigation notes in the task report).
+ * has already returned"). That matches the shape a real caller uses, but these tests only
+ * demonstrate that reading from outside the frame does not throw and observes the
+ * machines' unchanged INITIAL state (construction, the bootstrap `kernel.snapshot`,
+ * `close()`, and a dispatch that lands on the still-minimal no-op handler) — nothing here
+ * mutates state inside the frame and then reads the mutation back from outside, so this
+ * suite alone cannot distinguish correct frame re-entry from a broken binding that silently
+ * reads a second, untouched frame (both would look identical when nothing ever writes).
+ * The task 11 Kernel integration test is the one that actually drives a mutating dispatch
+ * and asserts the resulting state/events are visible from outside the frame — that is the
+ * real proof `bind`/`wrap` re-enter the Kernel's one Reatom frame correctly, not this file.
  */
 describe("createKernel", () => {
   test("construction succeeds and returns the four-method Kernel surface", () => {
