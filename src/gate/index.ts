@@ -23,5 +23,8 @@ export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
 export type { ManifestSlice, ManifestScanInput, ManifestScanResult } from "./model/manifest";
 export { lintDeterminism } from "./model/lints";
+export { createSmokeRender } from "./model/smoke";
+export { smokeResultToErrors } from "./ports/smoke-renderer";
+export type { SmokeRenderer, SmokeRequest, SmokeResult } from "./ports/smoke-renderer";
 export { runGate } from "./model/gate";
 export type { GateInput, GatePorts } from "./model/gate";
