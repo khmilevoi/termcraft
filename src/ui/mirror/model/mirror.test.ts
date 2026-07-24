@@ -72,6 +72,28 @@ describe("mirror.apply — kernel.snapshot seeds project/capabilities/pages/chat
   });
 });
 
+describe("mirror.apply — agentIdentity (M22)", () => {
+  test("seeds a non-null agentIdentity from the snapshot", () => {
+    const m = createMirror();
+    m.apply(snapshot({ agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" } }));
+    expect(m.agentIdentity()).toEqual({ backendId: "claude", modelLabel: "sonnet-4.5" });
+  });
+
+  test("a snapshot with agentIdentity null yields null (no backend selected yet)", () => {
+    const m = createMirror();
+    m.apply(snapshot({ agentIdentity: null }));
+    expect(m.agentIdentity()).toBeNull();
+  });
+
+  test("a later snapshot re-seeds agentIdentity, like the other transient slices", () => {
+    const m = createMirror();
+    m.apply(snapshot({ agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" } }));
+    expect(m.agentIdentity()).not.toBeNull();
+    m.apply(snapshot({ agentIdentity: null }));
+    expect(m.agentIdentity()).toBeNull();
+  });
+});
+
 describe("mirror.apply — capabilities changed", () => {
   test("upserts changed entries and deletes removed ids", () => {
     const m = createMirror();

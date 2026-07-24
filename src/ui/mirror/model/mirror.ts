@@ -11,6 +11,7 @@ import type {
 import type { AnyEventEnvelope } from "ui/kernel";
 
 import type {
+  AgentIdentity,
   CapabilityState,
   ChatsMirror,
   ExportMirror,
@@ -19,7 +20,7 @@ import type {
   SelectionMirror,
   TurnMirror,
 } from "../types";
-import { capabilitiesFromSnapshot, projectFromSnapshot } from "./seed";
+import { agentIdentityFromSnapshot, capabilitiesFromSnapshot, projectFromSnapshot } from "./seed";
 
 /**
  * The UI mirror — a UI-owned Reatom graph of named atoms fed by the Kernel event stream
@@ -41,6 +42,10 @@ export interface Mirror {
   readonly selection: Atom<SelectionMirror>;
   readonly diagnostics: Atom<ReadonlyMap<UUIDv7, DiagnosticDtoV1>>;
   readonly export: Atom<ExportMirror>;
+  /** The agent-identity slice (M22) — `{ backendId, modelLabel } | null`, seeded from the
+   * snapshot's `agentIdentity` field. `Workspace` reads this to drive every rendered identity
+   * text (chip, presence, title, record header, status block) instead of a hardcoded literal. */
+  readonly agentIdentity: Atom<AgentIdentity>;
   /** Applies one Kernel event, advancing every affected atom. */
   readonly apply: (envelope: AnyEventEnvelope) => void;
 }
@@ -84,6 +89,7 @@ export function createMirror(): Mirror {
     "ui.mirror.diagnostics",
   );
   const exportAtom = atom<ExportMirror>(IDLE_EXPORT, "ui.mirror.export");
+  const agentIdentity = atom<AgentIdentity>(null, "ui.mirror.agentIdentity");
 
   /** Merges gate-progress content into the running turn; a no-op when no turn matches. */
   function applyTurnProgress(envelope: Extract<AnyEventEnvelope, { kind: "turn.progress" }>): void {
@@ -115,6 +121,7 @@ export function createMirror(): Mirror {
         capabilities.set(capabilitiesFromSnapshot(payload));
         pageDescriptors.set(payload.pageDescriptors);
         chats.set({ activeChatId: payload.activeChatId, summaries: new Map() });
+        agentIdentity.set(agentIdentityFromSnapshot(payload));
         // A fresh snapshot is the authoritative reset point; transient slices (turn, preview,
         // selection, export, pins, diagnostics) are rebuilt from the events that follow it —
         // there is no replay (§9), so a subscription started mid-turn simply starts idle.
@@ -357,6 +364,7 @@ export function createMirror(): Mirror {
     selection,
     diagnostics,
     export: exportAtom,
+    agentIdentity,
     apply,
   };
 }

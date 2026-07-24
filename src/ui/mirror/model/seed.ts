@@ -1,6 +1,6 @@
 import type { CommandKindV1, EventPayloadByKindV1 } from "core/protocol";
 
-import type { CapabilityState, ProjectMirror } from "../types";
+import type { AgentIdentity, CapabilityState, ProjectMirror } from "../types";
 
 type SnapshotPayload = EventPayloadByKindV1["kernel.snapshot"];
 
@@ -12,6 +12,15 @@ export function projectFromSnapshot(payload: SnapshotPayload): ProjectMirror {
     activeChatId: payload.activeChatId,
     trust: payload.trust,
   };
+}
+
+/**
+ * The agent-identity slice a `kernel.snapshot` establishes (M22) — a structural passthrough of
+ * `payload.agentIdentity`, kept as its own named seed function (matching `projectFromSnapshot`/
+ * `capabilitiesFromSnapshot`) so `mirror.ts`'s `kernel.snapshot` case reads uniformly.
+ */
+export function agentIdentityFromSnapshot(payload: SnapshotPayload): AgentIdentity {
+  return payload.agentIdentity;
 }
 
 /**

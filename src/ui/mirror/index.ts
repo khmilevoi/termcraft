@@ -3,6 +3,7 @@
  * Kernel `EventEnvelopeV1` stream (design §3.2/§3.3); every screen reads from it.
  */
 export type {
+  AgentIdentity,
   CapabilityEntry,
   CapabilityState,
   ChatsMirror,
@@ -22,6 +23,10 @@ export type {
 export type { Mirror } from "./model/mirror";
 export { createMirror } from "./model/mirror";
 export { sortChatSummariesNewestFirst } from "./model/chats";
-export { capabilitiesFromSnapshot, projectFromSnapshot } from "./model/seed";
+export {
+  agentIdentityFromSnapshot,
+  capabilitiesFromSnapshot,
+  projectFromSnapshot,
+} from "./model/seed";
 export type { ScreenInput } from "./model/screen";
 export { MIN_FRAME, createScreenAtom, deriveScreen } from "./model/screen";

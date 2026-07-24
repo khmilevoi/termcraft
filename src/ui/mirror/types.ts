@@ -147,4 +147,13 @@ export type ExportMirror =
 /** The screen the app root mounts (phase-7 plan D6 — UI-derived until the typed snapshot lands). */
 export type ScreenKind = "home" | "trust-prompt" | "workspace" | "read-only" | "enlarge";
 
+/**
+ * The agent-identity slice a `kernel.snapshot` carries (M22) — `{ backendId, modelLabel } |
+ * null`, derived structurally from the snapshot payload (no cast). `null` means no backend is
+ * selected yet (e.g. pre-`ready`, or before `model.select` has run); the UI renders that as the
+ * design-sourced neutral empty text, never an invented fallback identity (see `Workspace`'s
+ * divergence comment).
+ */
+export type AgentIdentity = EventPayloadByKindV1["kernel.snapshot"]["agentIdentity"];
+
 export type { CommandKindV1, DiagnosticDtoV1, PageDescriptorV1, PinDtoV1 };
