@@ -700,19 +700,6 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     ];
   }
 
-  context.publishOperationEvent({
-    kind: "export.progress",
-    payload: {
-      operationId,
-      phase: "publishing",
-      completedJobs: ladder.length,
-      totalJobs: ladder.length,
-      pageSlug: null,
-      sizeBytes: null,
-    },
-    correlation,
-  });
-
   const currentPages = await wrap(resolveExportPageInputs(context));
   if ("code" in currentPages) {
     console.warn(
@@ -733,6 +720,23 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
       },
     ];
   }
+
+  // Publishing is genuinely about to begin — the re-resolve above already succeeded, so
+  // this progress event can never be followed by a terminal failure for a phase never
+  // entered (the bug this ordering fixes: emitting it before the re-resolve let a client
+  // see progress("publishing") followed by a "rendering"-phase export.failed).
+  context.publishOperationEvent({
+    kind: "export.progress",
+    payload: {
+      operationId,
+      phase: "publishing",
+      completedJobs: ladder.length,
+      totalJobs: ladder.length,
+      pageSlug: null,
+      sizeBytes: null,
+    },
+    correlation,
+  });
 
   const publishDeps: PublishExportDeps = {
     machine: context.exportRunner.machine,

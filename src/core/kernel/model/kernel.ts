@@ -473,6 +473,11 @@ export function createKernel(deps: KernelDeps): Kernel {
     // exactly that direct call, just given a name a handler can call without reaching the
     // atom itself), plus `setActivePreviewSession` for the plain `activePreview` closure
     // variable.
+    // RTM-S01 exception, reviewed: these four are deliberate identity-forwarding
+    // functions, not Reatom setter sugar — the atoms are closure-private to this frame,
+    // and the named mutators are the reviewed `HandlerContext` access boundary onto them.
+    // The `phaseAtom` escape hatch (`ed1d208`) was removed by review for bypassing exactly
+    // this same surface.
     function setProjectTrust(trust: "trusted" | "untrusted-read-only" | null): void {
       trustAtom.set(trust);
     }

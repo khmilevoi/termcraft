@@ -12,7 +12,7 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { PreviewSession } from "core/ports";
+import type { PageReader, PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentRegistry,
@@ -642,5 +642,53 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     // never a `"publishing"`-phase progress event, since publish is never reached.
     const published = harness.getPublishedEvents();
     expect(published.map((e) => e.kind)).toEqual(["export.started", "export.progress"]);
+  });
+
+  test('pre-publish re-resolve failure: never emits a publishing progress event, the terminal export.failed carries phase "rendering", and publish is never called', async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+
+    // The initial `resolveExportPageInputs` (before capture) must succeed — only the
+    // SECOND call (the pre-publish re-resolve) fails, exactly the failure this test pins.
+    let listSlugsCalls = 0;
+    const flakyPageReader: PageReader = {
+      readSource: (pageSlug) => deps.pageReader.readSource(pageSlug),
+      listSlugs: async () => {
+        listSlugsCalls += 1;
+        if (listSlugsCalls < 2) return deps.pageReader.listSlugs();
+        return {
+          code: "PERSISTENCE_FAILED",
+          retryable: false,
+          safeMessage: "listSlugs failed on the pre-publish re-resolve",
+          details: {},
+        };
+      },
+    };
+    const harness = buildTestContext({ ...deps, pageReader: flakyPageReader });
+
+    exportHandlers["export.start"]({}, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    expect(harness.handlerContext.machines.export.phase()).toBe("idle");
+
+    const exportPublish = deps.exportPublish as ReturnType<typeof createFakeExportPublish>;
+    expect(exportPublish.calls).toHaveLength(0);
+
+    expect(events).toHaveLength(1);
+    const failed = events[0] as { kind: string; payload: unknown };
+    expect(failed.kind).toBe("export.failed");
+    const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
+    expect(parsedFailed.phase).toBe("rendering");
+    expect(parsedFailed.generationId).toBeNull();
+    expect(parsedFailed.failure?.code).toBe("PERSISTENCE_FAILED");
+
+    // The re-resolve fails BEFORE publishing genuinely begins — a client must never see a
+    // "publishing" progress event for a phase the operation never entered.
+    const published = harness.getPublishedEvents();
+    expect(published.map((e) => e.kind)).toEqual(["export.started", "export.progress"]);
+    const renderingProgress = eventPayloadV1SchemaByKind["export.progress"].parse(
+      published[1]!.payload,
+    );
+    expect(renderingProgress.phase).toBe("rendering");
   });
 });

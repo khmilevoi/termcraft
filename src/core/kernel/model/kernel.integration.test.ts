@@ -494,7 +494,9 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     // stateRevision never decreases across the stream — several events legitimately
     // share one revision (§4), but the sequence itself is monotonic non-decreasing, and
     // it ends strictly higher than the bootstrap snapshot's own "0" (every accepted
-    // mutation above but the trailing no-op advanced it at least once).
+    // mutation above advanced it at least once — including the trailing export.start,
+    // which is no longer a no-op: it now advances the revision through
+    // begin/beginRendering/beginPublication/complete).
     const revisions = envelopes.map((e) => BigInt(e.stateRevision));
     for (let i = 1; i < revisions.length; i++) {
       const prev = revisions[i - 1];
