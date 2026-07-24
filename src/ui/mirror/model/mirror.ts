@@ -1,12 +1,13 @@
 import { type Atom, atom } from "@reatom/core";
 
-import type {
-  CommandKindV1,
-  DiagnosticDtoV1,
-  PageDescriptorV1,
-  PinDtoV1,
-  UInt64String,
-  UUIDv7,
+import {
+  type CommandKindV1,
+  type DiagnosticDtoV1,
+  type PageDescriptorV1,
+  type PinDtoV1,
+  type UInt64String,
+  type UUIDv7,
+  isUuidv7,
 } from "core/protocol";
 import type { AnyEventEnvelope } from "ui/kernel";
 
@@ -74,6 +75,29 @@ function withEntry<K, V>(source: ReadonlyMap<K, V>, key: K, value: V): ReadonlyM
   const next = new Map(source);
   next.set(key, value);
   return next;
+}
+
+/**
+ * Safely reads `metadata.projectId` as an honest `UUIDv7`, never a cast — `metadata` is an
+ * untyped `Readonly<Record<string, unknown>>` (kernel-command-contract §9's own table
+ * describes it as a "closed bounded metadata union" per action, but the protocol type
+ * itself is an open bag), so a missing/malformed value is a genuine possibility this
+ * reader must handle rather than assume away. `undefined` means "not a valid UUIDv7" —
+ * the caller logs and leaves the mirror's own prior value unchanged rather than fabricate
+ * one (`handlers/project.ts`'s own `runProjectReadySequence`, "the fix", is this field's
+ * one legitimate producer).
+ */
+function readMetadataProjectId(metadata: Readonly<Record<string, unknown>>): UUIDv7 | undefined {
+  const raw = metadata.projectId;
+  return typeof raw === "string" && isUuidv7(raw) ? raw : undefined;
+}
+
+/** Safely reads `metadata.trust` as one of the two known decisions, never a cast — see {@link readMetadataProjectId}'s identical rationale. */
+function readMetadataTrust(
+  metadata: Readonly<Record<string, unknown>>,
+): "trusted" | "untrusted-read-only" | undefined {
+  const raw = metadata.trust;
+  return raw === "trusted" || raw === "untrusted-read-only" ? raw : undefined;
 }
 
 export function createMirror(): Mirror {
@@ -149,6 +173,53 @@ export function createMirror(): Mirror {
         for (const entry of envelope.payload.changed) next.set(entry.id, entry.state);
         for (const removed of envelope.payload.removed) next.delete(removed.id);
         capabilities.set(next);
+        return;
+      }
+      case "kernel.stateChanged": {
+        // NARROW, TARGETED EXCEPTION to this switch's own `default` comment ("kernel.stateChanged
+        // is advisory until the typed snapshot lands — plan D6"): a fresh `kernel.snapshot` is
+        // NEVER re-sent to an already-subscribed client (kernel-command-contract §9: "no
+        // event-resume token, replay buffer, or reconnect promise"), so `project.projectId`/
+        // `project.trust` — the two facts `deriveScreen` (`./screen.ts`) gates the whole
+        // Home -> Workspace transition on — would otherwise never advance for a live
+        // subscriber once a project genuinely opens/closes or its trust is decided
+        // (§10 smoke closeout, bug 2: "deriveScreen's projectId !== null condition can never
+        // become true for a live subscriber"). This does NOT become the general
+        // `kernel.stateChanged` handler plan D6 describes — only these three named
+        // `kernel.project.state` actions, whose real facts `handlers/project.ts` now
+        // publishes as this event's own `metadata` (that file's own header has the full
+        // rationale) for exactly this reason.
+        const p = envelope.payload;
+        if (p.modelId !== "kernel.project.state") return;
+        if (p.action === "kernel.project.finishOpen") {
+          const projectId = readMetadataProjectId(p.metadata);
+          if (projectId === undefined) {
+            console.warn(
+              "ui/mirror: kernel.project.finishOpen's metadata.projectId was not a valid UUIDv7 — project.projectId left unchanged",
+            );
+            return;
+          }
+          const trust = readMetadataTrust(p.metadata);
+          project.set({ ...project(), projectId, ...(trust !== undefined ? { trust } : {}) });
+          return;
+        }
+        if (p.action === "kernel.project.setTrust") {
+          const trust = readMetadataTrust(p.metadata);
+          if (trust === undefined) {
+            console.warn(
+              'ui/mirror: kernel.project.setTrust\'s metadata.trust was neither "trusted" nor "untrusted-read-only" — project.trust left unchanged',
+            );
+            return;
+          }
+          project.set({ ...project(), trust });
+          return;
+        }
+        if (p.action === "kernel.project.finishClose") {
+          // A project-scoped identity must not outlive the project it belongs to — mirrors
+          // `kernel.ts`'s own `noteEventForCapabilityGrowth` clearing its growable
+          // identities on this exact same action.
+          project.set(EMPTY_PROJECT);
+        }
         return;
       }
       case "page.descriptorsChanged": {
@@ -368,9 +439,11 @@ export function createMirror(): Mirror {
         });
         return;
       }
-      // Out-of-MVP-scope kinds (kernel.stateChanged is advisory until the typed snapshot lands
-      // — plan D6; restore/commit/migration are deferred; git/backpressure/geometry/removePlan
-      // /applyStarted have no mirror slice yet). The two counters were already advanced above.
+      // Out-of-MVP-scope kinds (kernel.stateChanged is handled above for its own narrow
+      // `kernel.project.state` exception ONLY — every other model/action stays advisory
+      // until the typed snapshot lands, plan D6; restore/commit/migration are deferred;
+      // git/backpressure/geometry/removePlan/applyStarted have no mirror slice yet). The
+      // two counters were already advanced above.
       default:
         return;
     }

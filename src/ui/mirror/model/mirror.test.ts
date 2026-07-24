@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import type { FailureDtoV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import { TEST_NONCE, TEST_SHA, TEST_TS, event, resetEventSeq, snapshot } from "ui/testing";
 
 import { createMirror } from "./mirror";
+import { deriveScreen } from "./screen";
 
 const failure = (code: FailureDtoV1["code"] = "HOST_START_FAILED"): FailureDtoV1 => ({
   code,
@@ -69,6 +70,196 @@ describe("mirror.apply — kernel.snapshot seeds project/capabilities/pages/chat
     expect(m.turn().phase).toBe("running");
     m.apply(snapshot());
     expect(m.turn().phase).toBe("idle");
+  });
+});
+
+describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke closeout bug 2)", () => {
+  // Home never reached Workspace through a live subscription: `deriveScreen`'s own
+  // `projectId !== null` gate could never become true, because the mirror only ever set
+  // `project.projectId` from `kernel.snapshot` — which is never sent a second time
+  // (kernel-command-contract §9). `handlers/project.ts` now carries the real identity on
+  // `kernel.stateChanged`'s own `metadata` instead; these tests prove the mirror actually
+  // reads it, and that `deriveScreen` genuinely leaves `"home"` once it does.
+
+  const TERMINAL = { w: 120, h: 40 };
+
+  test('kernel.project.finishOpen sets projectId + trust from metadata, and deriveScreen leaves "home"', () => {
+    const m = createMirror();
+    m.apply(snapshot()); // the bootstrap snapshot — still "home" (projectId null)
+    expect(
+      deriveScreen({
+        projectId: m.project().projectId,
+        trust: m.project().trust,
+        terminal: TERMINAL,
+      }),
+    ).toBe("home");
+
+    const projectId = uuidv7();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId, trust: "untrusted-read-only" },
+      }),
+    );
+
+    expect(m.project().projectId).toBe(projectId);
+    expect(m.project().trust).toBe("untrusted-read-only");
+    // The transition genuinely left "home" (to "read-only", since trust is not yet granted)
+    // — the exact condition the bug report named as "can never become true for a live
+    // subscriber".
+    expect(
+      deriveScreen({
+        projectId: m.project().projectId,
+        trust: m.project().trust,
+        terminal: TERMINAL,
+      }),
+    ).toBe("read-only");
+  });
+
+  test("kernel.project.setTrust moves the screen the rest of the way to workspace", () => {
+    const m = createMirror();
+    const projectId = uuidv7();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId, trust: "untrusted-read-only" },
+      }),
+    );
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+        metadata: { workspaceIdentity: "ws-1", trust: "trusted" },
+      }),
+    );
+
+    expect(m.project()).toEqual({
+      projectId,
+      activePageSlug: null,
+      activeChatId: null,
+      trust: "trusted",
+    });
+    expect(
+      deriveScreen({
+        projectId: m.project().projectId,
+        trust: m.project().trust,
+        terminal: TERMINAL,
+      }),
+    ).toBe("workspace");
+  });
+
+  test("kernel.project.finishClose resets the project slice to empty (a project-scoped identity must not outlive the project)", () => {
+    const m = createMirror();
+    const projectId = uuidv7();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId, trust: "trusted" },
+      }),
+    );
+    expect(m.project().projectId).toBe(projectId);
+
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+        metadata: { projectId: null },
+      }),
+    );
+
+    expect(m.project()).toEqual({
+      projectId: null,
+      activePageSlug: null,
+      activeChatId: null,
+      trust: null,
+    });
+    expect(
+      deriveScreen({
+        projectId: m.project().projectId,
+        trust: m.project().trust,
+        terminal: TERMINAL,
+      }),
+    ).toBe("home");
+  });
+
+  test("a malformed metadata.projectId is logged and dropped — never fabricated, prior value untouched", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = createMirror();
+      m.apply(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.finishOpen",
+          previousTag: "opening",
+          nextTag: "ready",
+          metadata: { projectId: "not-a-uuid", trust: "trusted" },
+        }),
+      );
+      expect(m.project().projectId).toBeNull();
+      expect(m.project().trust).toBeNull();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a malformed metadata.trust on setTrust is logged and dropped", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = createMirror();
+      const projectId = uuidv7();
+      m.apply(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.finishOpen",
+          previousTag: "opening",
+          nextTag: "ready",
+          metadata: { projectId, trust: "trusted" },
+        }),
+      );
+      m.apply(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.setTrust",
+          previousTag: "ready",
+          nextTag: "ready",
+          metadata: { workspaceIdentity: "ws-1", trust: "not-a-real-decision" },
+        }),
+      );
+      expect(m.project().trust).toBe("trusted");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a kernel.stateChanged for a different model (e.g. kernel.turn.state) is ignored — narrow, targeted scope only", () => {
+    const m = createMirror();
+    m.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
+    const before = m.project();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.turn.state",
+        action: "kernel.turn.beginAdmission",
+        previousTag: "idle",
+        nextTag: "admitting",
+        metadata: {},
+      }),
+    );
+    expect(m.project()).toEqual(before);
   });
 });
 
