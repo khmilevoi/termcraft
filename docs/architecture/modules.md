@@ -121,8 +121,11 @@ executable roots still run `ui`'s in-memory kernel double.
   `selection`+`model`, plus the Tier-C `deferred` backstop) — every `CommandKindV1`
   resolves to a real handler, a Tier-C deferred rejection, or a documented
   not-yet-built no-op; `turn.start` composes `core/turns`'s `runTurn` for real
-  (admission → attempt → Gate retry → finalize); `export.start` is still a documented,
-  unconditional no-op (its own header names the exact type-contract gap blocking it)
+  (admission → attempt → Gate retry → finalize); `export.start` composes
+  `core/export`'s capture → render → assemble → publish chain for real (MVP gap
+  closeout, Gap B), driving `HandlerContext.exportRunner.machine` (the full export
+  `StateMachine`, mirroring `turnRunner`'s own precedent) and streaming
+  `export.started`/`export.progress`/`export.completed`/`export.failed` live
 - `src/core/turns/index.ts` — the turn lifecycle `runTurn` composes: admission, attempt,
   candidate freeze, Gate validation, finalize/terminalize
 - `src/core/protocol/index.ts` — the closed Command/Event DTO surface, per-kind payload
