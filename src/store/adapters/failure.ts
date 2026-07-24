@@ -11,6 +11,7 @@ import {
   PathRuleError,
   ReparsePointRejectedError,
   StorageLimitExceededError,
+  UnknownNamespaceError,
   UnsafeHardlinkError,
   WorkspaceChangedDuringSnapshotError,
 } from "store/safe-fs";
@@ -27,11 +28,10 @@ import { TrustLedgerError, TrustSubjectError } from "store/trust";
 
 // The one `FailureDtoV1` mapper every adapter in this ring uses (Task 1, "shared error map").
 // Every store tagged error narrows via `instanceof`, per the plan's mapping table
-// (2026-07-24-adapter-ring.md, Task 1). `UnknownNamespaceError` is imported type-only above:
-// it composes `SafeFsError`/`StagingError` but this mapper never needs to distinguish it from
-// its siblings — every one of them lands on the same `PERSISTENCE_FAILED` branch below, so no
-// runtime `instanceof` check against it is required (only the type shows up in a caller's
-// declared union).
+// (2026-07-24-adapter-ring.md, Task 1). Every recognized class gets its own `instanceof`
+// check — an error that falls through to the final "unclassified" branch prints a
+// `console.warn` (errore rule 21), so a KNOWN store error must never reach it, or an
+// ordinary, expected failure path would add new stderr noise to every test that exercises it.
 
 function safeMessageOf(error: Error): string {
   // Bounded, path-free display text (kernel-command-contract §11.2's "safe display message").
@@ -76,18 +76,16 @@ function normalizeStalePart(raw: string | number): {
 }
 
 /**
- * `PathRuleError | NameCollisionError | LeafRejectedError | UnsafeHardlinkError |
- * IdentityChangedError | ReparsePointRejectedError | PathEscapeError |
- * WorkspaceChangedDuringSnapshotError | FsAccessError` — every `SafeFsError`/`StagingError`
- * member EXCEPT `StorageLimitExceededError` (which gets its own `RESOURCE_LIMIT_EXCEEDED`
- * code, checked separately) and `UnknownNamespaceError` (folded in here too — a namespace
- * classification fault is the same "generic durable-read/write fault" as every sibling on
- * this list, so it needs no separate branch, only the type import above).
+ * Every `SafeFsError`/`StagingError` member EXCEPT `StorageLimitExceededError` (which gets
+ * its own `RESOURCE_LIMIT_EXCEEDED` code, checked separately) — a namespace classification
+ * fault (`UnknownNamespaceError`) is the same "generic durable-read/write fault" as every
+ * sibling on this list.
  */
 function isGenericFsFamilyError(error: Error): boolean {
   return (
     error instanceof PathRuleError ||
     error instanceof NameCollisionError ||
+    error instanceof UnknownNamespaceError ||
     error instanceof LeafRejectedError ||
     error instanceof UnsafeHardlinkError ||
     error instanceof IdentityChangedError ||
