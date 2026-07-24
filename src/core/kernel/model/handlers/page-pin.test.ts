@@ -202,6 +202,7 @@ function buildTestContext(options?: {
         setActiveAttempt: () => {},
         activeAttempt: () => null,
       },
+      exportRunner: { machine: machines.export },
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => null,

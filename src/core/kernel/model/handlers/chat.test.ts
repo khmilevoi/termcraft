@@ -216,6 +216,7 @@ function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }
         setActiveAttempt: () => {},
         activeAttempt: () => null,
       },
+      exportRunner: { machine: machines.export },
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => null,

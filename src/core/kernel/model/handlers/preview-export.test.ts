@@ -181,6 +181,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
         setActiveAttempt: () => {},
         activeAttempt: () => null,
       },
+      exportRunner: { machine: machines.export },
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => activePreviewSession,

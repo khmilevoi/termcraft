@@ -519,6 +519,12 @@ export function createKernel(deps: KernelDeps): Kernel {
     }
     const turnRunner = { machine: turnMachine, setActiveAttempt, activeAttempt };
 
+    // The export family's own extra surface (`handlers/types.ts`'s `ExportRunnerContext`,
+    // Gap B closure) — `machine` is the SAME `exportMachine` object above, exposed FULL
+    // (never a second instance, never a cast). Mirrors `turnRunner`'s own precedent, kept
+    // even narrower: `export.start` has no sibling command needing a live-handle registry.
+    const exportRunner = { machine: exportMachine };
+
     /**
      * The one sanctioned async-launch primitive (`handlers/types.ts`'s own doc comment
      * documents the contract in full; this is Step C's implementation of it). `run` never
@@ -625,6 +631,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       launchOperation,
       publishOperationEvent,
       turnRunner,
+      exportRunner,
       setSelection,
       selection,
       currentPreviewSession,

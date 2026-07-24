@@ -234,6 +234,34 @@ export interface TurnCancelHandle {
   readonly requestCancel: () => Promise<void>;
 }
 
+// --- The export family's own extra surface (Gap B closure) --------------------------------
+
+/**
+ * Everything ONLY `export.start` needs beyond the ordinary `KernelMachines.export`
+ * (`HandlerMachine`, `phaseAtom` excluded) — mirrors {@link TurnRunnerContext}'s own
+ * precedent exactly (the same "a landed composition requires the full machine" class of
+ * need Step C1 closed for `turn`, reviewed and approved there). `core/export`'s four
+ * already-landed composition functions this family is instructed to reuse
+ * (`captureExportSnapshot`, `runExportRendering`, `assembleExportPackage`, `publishExport`)
+ * — specifically `CaptureExportSnapshotDeps.machine`/`PublishExportDeps.machine` — require
+ * the FULL `StateMachine<ExportState, ExportAction>` (`phaseAtom` included), even though
+ * neither ever reads or writes `phaseAtom` itself (verified: both call sites only ever use
+ * `.apply()`). Narrowing `core/export`'s own two `Deps` fields would touch a landed module
+ * outside this family's file scope; widening `KernelMachines.export` for every family would
+ * reopen the exact `phaseAtom` escape hatch Step A's fix round 1 closed on purpose. This
+ * field is the surgical alternative, kept AS NARROW as the turn family's own precedent —
+ * just the one field `StateMachine` itself exposes, no additional collaborator: unlike
+ * `turn`'s own Gap 2 (a live-process cancel-handle registry `turn.cancel` needs alongside
+ * `turn.start`), `export.start` has no sibling command (`CommandKindOfFamily<"export">` has
+ * exactly one member) needing anything beyond the machine itself. ONLY `export.start`'s
+ * `launchOperation` closure (`./preview-export.ts`) may ever read it — every other
+ * export-touching code path (none exist today) must still go through
+ * `context.machines.export`.
+ */
+export interface ExportRunnerContext {
+  readonly machine: StateMachine<ExportState, ExportAction>;
+}
+
 // --- The selection surface (Step C1) -------------------------------------------------------
 
 /** `EventPayloadByKindV1["selection.changed"]`'s non-null member, by another name — matches `selection-model.ts`'s own local `SelectionDtoV1` alias, declared independently here so `types.ts` never imports FROM a family module. */
@@ -376,6 +404,8 @@ export interface HandlerContext {
   readonly publishOperationEvent: (event: PublishableEventV1) => void;
   /** The turn family's own extra surface (Step C1) — see {@link TurnRunnerContext}'s own comment. */
   readonly turnRunner: TurnRunnerContext;
+  /** The export family's own extra surface (Gap B closure) — see {@link ExportRunnerContext}'s own comment. */
+  readonly exportRunner: ExportRunnerContext;
   /** The Kernel-held "current selection" fact (Step C1) — see this interface's own comment above. */
   readonly setSelection: (selection: SelectionSnapshotV1 | null) => void;
   readonly selection: () => SelectionSnapshotV1 | null;

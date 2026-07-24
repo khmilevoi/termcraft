@@ -203,6 +203,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
         },
         activeAttempt: (turnId) => (activeTurnId === turnId ? activeAttempt : null),
       },
+      exportRunner: { machine: machines.export },
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => null,
