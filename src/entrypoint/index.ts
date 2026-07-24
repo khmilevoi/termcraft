@@ -12,10 +12,11 @@ export type {
   ShutdownSignal,
 } from "./types";
 
-export { createShell } from "./model/create-shell";
+export { ShellCompositionError, createShell } from "./model/create-shell";
+export type { ShellDeps } from "./model/create-shell";
 export { AppShutdownError, AppStartupError, runApp } from "./model/run-app";
 export type { RunAppOptions } from "./model/run-app";
-export { KernelCompositionPendingError, PREVIEW_SHELL_FLAG, bootstrap } from "./model/bootstrap";
+export { bootstrap } from "./model/bootstrap";
 export type { BootstrapDeps } from "./model/bootstrap";
 export { createProcessBoundary } from "./model/process-boundary";
-export type { SignalTarget } from "./model/process-boundary";
+export type { PanicEvent, SignalTarget, TerminalControl } from "./model/process-boundary";

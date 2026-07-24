@@ -1,29 +1,11 @@
 import path from "node:path";
 
-import * as errore from "errore";
-
 import type { UiEnv, UiRootAdapters } from "ui";
 
 import type { EntrypointMode, ProcessBoundary, RunningApp } from "../types";
-import { createShell } from "./create-shell";
+import { ShellCompositionError, createShell } from "./create-shell";
+import type { ShellDeps } from "./create-shell";
 import { AppStartupError, runApp } from "./run-app";
-
-/** Opt-in flag that runs the real UI against the in-memory kernel while composition is pending. */
-export const PREVIEW_SHELL_FLAG = "--preview-shell";
-
-/**
- * The interactive entrypoint's honest refusal: the production Kernel composition (the
- * `store`/`agent`/`gate`/`host` adapter ring plus the command handler registry) has not landed,
- * so there is nothing real to start. Falling back to the demo kernel silently is exactly what
- * the entrypoints design forbids, so the run stops here with the two commands that do work.
- */
-export class KernelCompositionPendingError extends errore.createTaggedError({
-  name: "KernelCompositionPendingError",
-  message:
-    "the production Kernel is not composed yet, so there is no real project to open. " +
-    `Run \`bun run demo\` for the in-memory demo, or \`bun start ${PREVIEW_SHELL_FLAG}\` ` +
-    "to open the real UI against that same in-memory kernel.",
-}) {}
 
 export interface BootstrapDeps {
   /** Arguments after the executable and script — `process.argv.slice(2)`. */
@@ -31,6 +13,8 @@ export interface BootstrapDeps {
   readonly cwd: () => string;
   readonly process: ProcessBoundary;
   readonly adapters?: UiRootAdapters;
+  /** Injected only for tests — production always uses `createShell`'s own real defaults. */
+  readonly shell?: ShellDeps;
 }
 
 /**
@@ -41,13 +25,12 @@ export interface BootstrapDeps {
 export async function bootstrap(
   mode: EntrypointMode,
   deps: BootstrapDeps,
-): Promise<AppStartupError | KernelCompositionPendingError | RunningApp> {
-  if (mode === "interactive" && !deps.argv.includes(PREVIEW_SHELL_FLAG)) {
-    return new KernelCompositionPendingError();
-  }
+): Promise<AppStartupError | ShellCompositionError | RunningApp> {
+  const shell = await createShell(mode, resolveEnv(mode, deps), deps.shell);
+  if (shell instanceof Error) return shell;
 
   return runApp({
-    shell: createShell(mode, resolveEnv(mode, deps)),
+    shell,
     process: deps.process,
     adapters: deps.adapters,
   });

@@ -9,19 +9,20 @@ Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
 Seven of those are components the design spec names — [`modules.md`](modules.md)
 counts the same seven — while `entities/` and `infrastructure/` are additions this
 convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
-`entrypoint/` ring that owns their lifecycle have landed, and `core`'s own Kernel is
-now fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
+`entrypoint/` ring that owns their lifecycle have landed, `core`'s own Kernel is
+fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
 WP-1) — `createKernel`, the seven-machine/mailbox/capability wiring, and a real
-command handler registry answering all 43 command kinds all land in phase 6. What
-the composition root still lacks is the *production adapter graph* — nothing maps
-`store`/`agent`/`gate`/`host` onto `core/ports/` to build a real `KernelDeps`, so no
-real `KernelPort` can be constructed yet and both roots still run `ui`'s in-memory
-kernel. Source anchors move to real paths as each piece lands; see `## Source
-anchors`.
+command handler registry answering all 43 command kinds — and the production
+adapter graph mapping `store`/`agent`/`gate`/`host` onto `core/ports/` has landed
+too (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) is the
+composition root that builds a real `KernelDeps` from that graph and constructs a
+real `KernelPort` for interactive mode; `demo` mode alone still runs `ui`'s
+in-memory kernel. Source anchors move to real paths as each piece lands; see
+`## Source anchors`.
 
 ```mermaid
 flowchart LR
-    main["main.tsx · demo.tsx · entrypoint/<br/>composition root — roots landed,<br/>adapter graph not yet built"]
+    main["main.tsx · demo.tsx · entrypoint/<br/>composition root — real adapter graph<br/>wired for interactive mode (WP-4)"]
 
     subgraph adapters["Adapters — implement the ports they are handed"]
         store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
@@ -68,7 +69,7 @@ flowchart LR
      main.tsx           interactive root + `_host` argv dispatch         [landed]
      demo.tsx           demo root, in-memory kernel                       [landed]
      entrypoint/        shell selection, terminal lifetime, signals       [landed]
-                         (the adapter graph these roots will wire is not built)
+                         (interactive mode wires the real adapter graph, WP-4)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
      core/              Kernel — the only domain decision-maker         [landed]
@@ -225,9 +226,12 @@ flowchart LR
    backend port, and one backend behind it. `agent/index.ts` exports the port types
    plus a single `createProductionClaudeBackend()` that assembles the real wiring
    (the SDK query, the Job Object tree factory, a real sleep, and the Windows
-   reparse-point backstop). `main.tsx` now exists as a runnable root, but it wires no
-   adapters yet — the production registry instance and the adapter graph are still
-   phase 8's.
+   reparse-point backstop), and `agent/adapters/agent-registry.ts`'s
+   `createProductionAgentRegistry()` is the one-entry `AgentRegistry` over it
+   (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) now
+   constructs that registry and every other adapter, and injects the whole graph
+   into `createKernel` for interactive mode — the composition root this item
+   describes is real, not merely a runnable root.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
    `bun build --compile` ships the shell and the design-host entry together (§4.1).
@@ -251,8 +255,13 @@ flowchart LR
    compiled binary invoking itself via `process.execPath`, or `bun run <srcRoot>
    _host --stdio` in dev — is a runnable second entry point. `createHostSpawnCommand`
    (`src/host/supervisor/model/spawn-command.ts`) builds the matching compiled-vs-dev
-   argv, but nothing yet constructs and spawns that command against a real
-   `HostSupervisor` — that composition-root wiring is still phase 8's (WP-4).
+   argv, and `src/entrypoint/model/create-shell.ts` (WP-4) now constructs it and
+   spawns it against a real `HostSupervisor` for interactive mode — the composition-
+   root wiring this item names has landed. The compiled-vs-dev `isCompiled` flag
+   itself is detected by comparing `process.execPath`'s basename against the Bun
+   runtime's own executable names (`bun`/`bun.exe`): the installed `bun-types`
+   pin does not yet declare `Bun.isStandaloneExecutable`, the newer, more direct API
+   for this — revisit once it does.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
@@ -448,10 +457,10 @@ vendor tier's own pre-split run-loop file.
 **Ports and the composition boundary (items 4, 5, 7, 9, 10)**
 
 - `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
-  uses as its port-placement illustration (item 5): `gate` declares it, and `host`
-  provides the one-shot session an adapter would wrap (`runOneShotSession`) — but
-  no code satisfies the `SmokeRenderer` interface itself, and nothing wires the two
-  together: `main.tsx` exists but constructs no adapters
+  uses as its port-placement illustration (item 5): `gate` declares it, `host`'s
+  `src/host/adapters/smoke-renderer.ts` satisfies it over `runOneShotSession`
+  (MVP gap closeout WP-2), and `src/entrypoint/model/create-shell.ts` (WP-4)
+  constructs and wires the two together for interactive mode
 - `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
   real `HostSupervisor`; blocker B4 (phase 6 slice 6D) resolved the former
   restart-aware-`PreviewHandle`-vs-non-restart-aware-`PreviewSession` split —
@@ -485,12 +494,13 @@ vendor tier's own pre-split run-loop file.
   engine the `termcraft _host` second composition root (item 9) drives; wired to
   real process stdio by `src/main.tsx`'s first `import.meta.main` branch
 - `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
-  the compiled-vs-dev argv (item 9) an eventual `HostSupervisor` spawns the
-  `_host --stdio` child with; not yet called from any composition root (WP-4)
+  the compiled-vs-dev argv (item 9) `HostSupervisor` spawns the `_host --stdio`
+  child with; called by `src/entrypoint/model/create-shell.ts` (WP-4)
 - `src/host/protocol/model/embedded-declaration.ts` — `EMBEDDED_RUNTIME_DECLARATION`
   / `SUPPORTED_KIT_API_VERSIONS`: this binary's ONE embedded runtime-declaration
-  bundle, read by `src/main.tsx`'s `_host` branch today and by
-  `HostSupervisorDeps.runtimeDeclaration` (WP-4) once it lands, so the exact-equality
+  bundle, read by `src/main.tsx`'s `_host` branch and by every
+  `HostSupervisorDeps`/`SmokeRendererAdapterDeps`/`ExportRenderAdapterDeps.
+  runtimeDeclaration` the composition root builds (WP-4), so the exact-equality
   handshake check (`handshake.ts`'s `declarationsEqual`) can never diverge from a
   retyped copy; lives in `host/protocol` (which owns the
   `RuntimeDeclarationBundleV1` type and validator) rather than in `runtime`, so
@@ -516,15 +526,18 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary; only the production adapter graph behind `main.tsx` remains
-  unbuilt. §3.6 remains the design authority for the runtime-selected agent triple,
-  whose landed Kernel selection code is anchored above
+  Kernel boundary, now including the production adapter graph behind `main.tsx`
+  (MVP gap closeout WP-2/WP-4). §3.6 remains the design authority for the
+  runtime-selected agent triple, whose landed Kernel selection code is anchored
+  above
 - `src/entrypoint/model/run-app.ts`, `src/entrypoint/model/create-shell.ts`,
-  `src/entrypoint/model/bootstrap.ts`, `src/main.tsx`, `src/demo.tsx` — the landed
-  half of `docs/superpowers/specs/2026-07-22-application-entrypoints-design.md`:
-  terminal lifetime, signal-driven shutdown, mode selection, and the commands. That
-  spec remains the authority for the half still owed — the production dependency
-  composition `createShell("interactive", …)` refuses to fake
+  `src/entrypoint/model/bootstrap.ts`, `src/entrypoint/model/process-boundary.ts`,
+  `src/main.tsx`, `src/demo.tsx` — `docs/superpowers/specs/2026-07-22-application-
+  entrypoints-design.md`'s terminal lifetime, signal-driven shutdown, mode
+  selection, and the commands, now including the production dependency
+  composition `createShell("interactive", …)` builds (WP-4) and the
+  `uncaughtException`/`unhandledRejection` panic-recovery boundary M9 asked for
+  (`process-boundary.ts`'s `restoreTerminal()`)
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet
