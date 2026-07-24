@@ -13,10 +13,13 @@ export interface ChatRecordProps {
   /**
    * The agent's display name for the `● <agentLabel>` header (M22). `role: "agent"` no longer
    * hardcodes which agent — `Workspace` feeds this from the kernel snapshot's `agentIdentity`,
-   * e.g. `"claude"`; an empty string renders the neutral `●` header, never an invented fallback
-   * like the design's `codex` sample data. Unused when `role` is `"you"`.
+   * e.g. `"claude"`; an empty string (or an omitted prop) renders the neutral `●` header, never
+   * an invented fallback like the design's `codex` sample data. Optional and unused when `role`
+   * is `"you"` — `recordToChatRecordProps` (`ChatScrollback.tsx`) only supplies it for
+   * `role: "agent"` (review finding Minor, WP-10 fix wave: no unused value riding the props
+   * object for a `user` record).
    */
-  readonly agentLabel: string;
+  readonly agentLabel?: string;
   readonly lines: readonly import("../model/markdown-lite").MarkdownLine[];
   /** Collapsed/persisted records render dim (design: finished records are P.dim, not green). */
   readonly dim?: boolean;
@@ -57,7 +60,7 @@ function spanStyle(span: MarkdownSpan, baseFg: `#${string}`): SpanStyle {
  * glyph (`●`) and green/bold styling stay exactly as designed.
  */
 export function ChatRecord(props: ChatRecordProps) {
-  const headerText = props.role === "you" ? "❯ you" : `● ${props.agentLabel}`;
+  const headerText = props.role === "you" ? "❯ you" : `● ${props.agentLabel ?? ""}`;
   const headerFg = props.role === "you" ? SHELL_PALETTE.amber : SHELL_PALETTE.green;
   const baseFg = props.dim === true ? SHELL_PALETTE.dim : SHELL_PALETTE.fg;
 

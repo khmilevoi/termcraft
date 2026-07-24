@@ -3,6 +3,9 @@ import type { ChatRecord as ChatRecordDto } from "ui/mirror";
 import { flattenMarkdownLite } from "../model/markdown-lite";
 import { ChatRecord, type ChatRecordProps } from "./ChatRecord";
 
+/** The design engine's own restore-record sample data (`design/termcraft-engine.js:995`, `wsRestoreApplied`: `"⟲ restored main from a1b2c3d"`) uses a 7-char short hash, not the full commit id — the one display convention the engine actually defines for this field. */
+const RESTORE_SOURCE_COMMIT_DISPLAY_LENGTH = 7;
+
 /**
  * Design-sourced display text for one persisted record (design §3.2). `user`/`agent`/
  * `system:error`/`system:cancelled` records already carry their own display `text`.
@@ -11,9 +14,10 @@ import { ChatRecord, type ChatRecordProps } from "./ChatRecord";
  * code path writes this record, so it cannot legitimately appear in an MVP-created chat");
  * this branch is therefore unreachable with any real MVP data. It composes the design's own
  * literal restore-record format (`⟲ restored <page> from <commit>`,
- * `design/termcraft-engine.js:995`, `wsRestoreApplied`) from the record's real fields, using
- * the full `sourceCommit` id as-is — no spec or engine source defines a short-hash display
- * convention, so one is not invented here.
+ * `design/termcraft-engine.js:995`, `wsRestoreApplied`) from the record's real fields,
+ * truncating `sourceCommit` to the engine's own 7-char short-hash sample (`"a1b2c3d"`) —
+ * the full id is never displayed, matching the one hash-display convention the engine
+ * source actually shows (review finding Minor, WP-10 fix wave).
  */
 function recordText(record: ChatRecordDto): string {
   switch (record.kind) {
@@ -23,7 +27,7 @@ function recordText(record: ChatRecordDto): string {
     case "system:cancelled":
       return record.text;
     case "system:restore":
-      return `⟲ restored ${record.pageSlug} from ${record.sourceCommit}`;
+      return `⟲ restored ${record.pageSlug} from ${record.sourceCommit.slice(0, RESTORE_SOURCE_COMMIT_DISPLAY_LENGTH)}`;
   }
 }
 
@@ -42,15 +46,22 @@ function recordText(record: ChatRecordDto): string {
  * (`ChatRecord.tsx:21-22`). `id` is derived from `recordId` so the same record always maps to
  * the same component id, which is what lets WP-9 Task 8's interim record and this package's
  * real persisted record agree once they converge.
+ *
+ * `agentLabel` is included ONLY for `role: "agent"` (review finding Minor, WP-10 fix wave):
+ * `ChatRecord`'s own header render ignores it entirely for `role: "you"`
+ * (`ChatRecord.tsx`'s `headerText`), so carrying it through for a `user` record would just be
+ * an unused value riding the props object — omitting it there is a shape tightening, not a
+ * behavior change.
  */
 export function recordToChatRecordProps(
   record: ChatRecordDto,
   agentLabel: string,
 ): ChatRecordProps {
+  const role = record.kind === "user" ? "you" : "agent";
   return {
     id: `chat-record-${record.recordId}`,
-    role: record.kind === "user" ? "you" : "agent",
-    agentLabel,
+    role,
+    ...(role === "agent" ? { agentLabel } : {}),
     lines: flattenMarkdownLite(recordText(record)),
     dim: true,
   };

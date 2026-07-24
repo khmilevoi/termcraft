@@ -48,14 +48,21 @@ describe("recordToChatRecordProps (WP-10 Task 8 — the M11 handoff mapping)", (
     const props = recordToChatRecordProps(record, "claude");
     expect(props.role).toBe("you");
     expect(props.dim).toBe(true);
-    expect(props.agentLabel).toBe("claude");
     expect(props.lines).toEqual([{ spans: [{ text: "plain user text" }] }]);
   });
 
-  test("an agent record maps to role 'agent' and keeps markdown-lite bold spans", () => {
+  test("a user record omits agentLabel entirely — it is unused for role 'you' (review finding Minor)", () => {
+    const record = userRecord();
+    const props = recordToChatRecordProps(record, "claude");
+    expect(props.agentLabel).toBeUndefined();
+    expect(Object.hasOwn(props, "agentLabel")).toBe(false);
+  });
+
+  test("an agent record maps to role 'agent', keeps markdown-lite bold spans, and carries agentLabel", () => {
     const record = agentRecord({ text: "created **page main**" });
     const props = recordToChatRecordProps(record, "claude");
     expect(props.role).toBe("agent");
+    expect(props.agentLabel).toBe("claude");
     expect(props.lines).toEqual([
       { spans: [{ text: "created " }, { text: "page main", bold: true }] },
     ]);
@@ -88,6 +95,20 @@ describe("recordToChatRecordProps (WP-10 Task 8 — the M11 handoff mapping)", (
     expect(recordToChatRecordProps(cancelledRecord, "claude").lines).toEqual([
       { spans: [{ text: "✗ cancelled" }] },
     ]);
+  });
+
+  test("system:restore renders the design's 7-char short hash, not the full sourceCommit (review finding Minor)", () => {
+    const restoreRecord: ChatRecordDto = {
+      kind: "system:restore",
+      recordId: uuidv7(),
+      restoreActionId: uuidv7(),
+      pageSlug: "main",
+      sourceCommit: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      ts: "2026-07-22T00:00:04.000Z",
+    };
+    const props = recordToChatRecordProps(restoreRecord, "claude");
+    expect(props.role).toBe("agent");
+    expect(props.lines).toEqual([{ spans: [{ text: "⟲ restored main from a1b2c3d" }] }]);
   });
 
   test("two records with the same recordId map to the same id — the M11 handoff needs a stable, derived id", () => {
