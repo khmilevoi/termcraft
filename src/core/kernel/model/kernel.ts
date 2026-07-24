@@ -1,4 +1,5 @@
 import { atom, bind, context, wrap } from "@reatom/core";
+import type { z } from "zod";
 
 import {
   type KernelStateSnapshot as CapabilityKernelStateSnapshot,
@@ -45,7 +46,13 @@ import {
 // `core/project/index.ts` does not exist yet (kernel-assembly Task 10) — the same
 // documented deep-import stopgap `handlers/project.ts`'s own header already uses.
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import type { CapabilityEntryV1, CommandKindV1, EventPayloadByKindV1, UUIDv7 } from "core/protocol";
+import {
+  type CommandKindV1,
+  type EventKindV1,
+  type EventPayloadByKindV1,
+  type UUIDv7,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
 import type { TurnAttemptHandle } from "core/turns";
 
 import type { Kernel, KernelDeps } from "../types";
@@ -278,42 +285,65 @@ export function createKernel(deps: KernelDeps): Kernel {
     }
 
     /**
+     * Logs (never throws, never propagates) a growth-tracking payload that failed the exact
+     * schema its own `kind` already guarantees. This branch is provably dead in practice — see
+     * `noteEventForCapabilityGrowth`'s own comment — but errore's own "never silently swallow"
+     * rule (rule 21) still applies to the branch that would fire if that invariant were ever
+     * violated by a future change.
+     */
+    function warnOnGrowthPayloadMismatch(kind: EventKindV1, error: z.ZodError): void {
+      console.error(
+        `core/kernel: ${kind} payload failed its own schema during capability-growth tracking — ${error.message}`,
+      );
+    }
+
+    /**
      * The ONLY place this module inspects an already-published event's payload for
-     * capability-growth purposes — a narrowing cast per branch, never a blanket one,
-     * matching `core/mailbox/model/dispatch.ts`'s own precedented `toRevisionGuardCommand`
-     * cast (`envelope.payload as CommandPayloadByKindV1["turn.cancel"]`): `PublishableEventV1`
-     * is one generic object type, not a distributed union, so checking `event.kind` against
-     * a literal does not itself narrow `event.payload`'s type — a cast is required at this
-     * exact narrowing point regardless, and each one here asserts a shape the event's own
-     * kind ALREADY guarantees at runtime (validated by `eventPayloadV1SchemaByKind` before
-     * this function ever sees the event, since it only ever receives ALREADY-`publishTransition`d
-     * envelopes — see `publishAndTrackCapabilities`, below). Never a blanket `unknown` bounce.
+     * capability-growth purposes. `PublishableEventV1` is one generic object type, not a
+     * distributed union, so checking `event.kind` against a literal does not itself narrow
+     * `event.payload`'s type — a plain `as` cast would need to assert past that gap, the same
+     * way `core/mailbox/model/dispatch.ts`'s `toRevisionGuardCommand` already does for
+     * `CommandEnvelopeV1`. This function avoids that cast entirely instead: each branch
+     * re-validates `event.payload` through `eventPayloadV1SchemaByKind`'s OWN schema for that
+     * literal `kind` (`eventPayloadV1SchemaByKind["chat.changed"].safeParse(...)`, etc.), which
+     * narrows the payload for real, at the type level, with no assertion anywhere. The
+     * re-validation is provably redundant at runtime — every event `noteEventForCapabilityGrowth`
+     * ever receives already passed this EXACT schema inside `rawEventBus.publishTransition`'s
+     * own `validateBatch` before `publishAndTrackCapabilities` (below) ever calls this function —
+     * so the `safeParse` failure branch below is defensive only, never expected to run; see
+     * `warnOnGrowthPayloadMismatch`.
      */
     function noteEventForCapabilityGrowth(event: PublishableEventV1): void {
       if (event.kind === "chat.changed") {
-        const payload = event.payload as EventPayloadByKindV1["chat.changed"];
-        growableActiveChatId = payload.activeChatId;
+        const parsed = eventPayloadV1SchemaByKind["chat.changed"].safeParse(event.payload);
+        if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
+        growableActiveChatId = parsed.data.activeChatId;
         return;
       }
       if (event.kind === "page.descriptorsChanged") {
-        const payload = event.payload as EventPayloadByKindV1["page.descriptorsChanged"];
-        growableActivePageSlug = payload.activePageSlug;
+        const parsed = eventPayloadV1SchemaByKind["page.descriptorsChanged"].safeParse(
+          event.payload,
+        );
+        if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
+        growableActivePageSlug = parsed.data.activePageSlug;
         return;
       }
       if (event.kind === "preview.sourceChanged") {
-        const payload = event.payload as EventPayloadByKindV1["preview.sourceChanged"];
-        growableLivePreviewSessionId = payload.previewSessionId;
+        const parsed = eventPayloadV1SchemaByKind["preview.sourceChanged"].safeParse(event.payload);
+        if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
+        growableLivePreviewSessionId = parsed.data.previewSessionId;
         return;
       }
       if (event.kind === "kernel.stateChanged") {
-        const payload = event.payload as EventPayloadByKindV1["kernel.stateChanged"];
+        const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].safeParse(event.payload);
+        if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
         // `project.close`'s own `finishClose` transition is the one point every growable
         // identity must not outlive (mirrors `projectClose`'s own `setActivePreviewSession
         // (null)` call — a project-scoped resource must not outlive the project it belongs
         // to, `handlers/project.ts`'s own header note).
         if (
-          payload.modelId === "kernel.project.state" &&
-          payload.action === "kernel.project.finishClose"
+          parsed.data.modelId === "kernel.project.state" &&
+          parsed.data.action === "kernel.project.finishClose"
         ) {
           growableActiveChatId = null;
           growableActivePageSlug = null;
@@ -353,12 +383,14 @@ export function createKernel(deps: KernelDeps): Kernel {
      *
      * `diffCapabilities`'s own `CapabilityRecord`/`{id, target: unknown}` shapes are the
      * documented "loosely-typed sibling" of `CapabilityEntryV1`/`CapabilityTargetV1`
-     * (`core/capabilities/types.ts`'s own comment) — a single narrowing cast per field,
-     * right here, at the one boundary converting the heterogeneous diff result back into the
-     * closed wire DTO, mirrors the SAME precedented category of cast as
-     * `noteEventForCapabilityGrowth`'s own (never an incompatible-type bounce: every value on
-     * the `unknown` side was ALREADY built by `projectCapability`/`evaluateCapabilityGuard`
-     * with the real, correctly-shaped target for its own `id`).
+     * (`core/capabilities/types.ts`'s own comment) — converting the heterogeneous diff result
+     * back into the closed wire DTO used to be a single narrowing cast per field; it is now a
+     * `safeParse` through `eventPayloadV1SchemaByKind["kernel.capabilitiesChanged"]` (the SAME
+     * schema `rawEventBus.publishTransition` re-validates the published event against a few
+     * lines below), for the same reason `noteEventForCapabilityGrowth` re-validates instead of
+     * casting: every value on the `unknown` side was ALREADY built by
+     * `projectCapability`/`evaluateCapabilityGuard` with the real, correctly-shaped target for
+     * its own `id`, so the failure branch below is defensive only, never expected to run.
      */
     function publishAndTrackCapabilities(
       events: readonly PublishableEventV1[],
@@ -375,15 +407,20 @@ export function createKernel(deps: KernelDeps): Kernel {
 
       if (diff.changed.length === 0 && diff.removed.length === 0) return published;
 
+      const parsedGrowthPayload = eventPayloadV1SchemaByKind[
+        "kernel.capabilitiesChanged"
+      ].safeParse({
+        changed: diff.changed,
+        removed: diff.removed,
+      });
+      if (!parsedGrowthPayload.success) {
+        warnOnGrowthPayloadMismatch("kernel.capabilitiesChanged", parsedGrowthPayload.error);
+        return published;
+      }
+
       const growthEvent: PublishableEventV1<"kernel.capabilitiesChanged"> = {
         kind: "kernel.capabilitiesChanged",
-        payload: {
-          changed: diff.changed as readonly CapabilityEntryV1[],
-          removed: diff.removed as readonly Readonly<{
-            id: CommandKindV1;
-            target: CapabilityEntryV1["target"];
-          }>[],
-        },
+        payload: parsedGrowthPayload.data,
       };
       const growthPublished = rawEventBus.publishTransition([growthEvent]);
       if (growthPublished instanceof Error) {
