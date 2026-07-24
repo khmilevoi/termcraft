@@ -6,6 +6,7 @@ import { EVENT_KINDS_V1, EVENT_KIND_COUNT } from "./event-kind";
 import {
   agentIdentityV1Schema,
   chatChangedPayloadV1Schema,
+  chatRecordsPayloadV1Schema,
   commitPlanReadyPayloadV1Schema,
   commitStartedPayloadV1Schema,
   commitTerminalPayloadV1Schema,
@@ -1211,6 +1212,65 @@ describe("chatChangedPayloadV1Schema", () => {
 
   test("accepts a valid diff and rejects an unknown key", () => {
     expectStrict(chatChangedPayloadV1Schema, valid);
+  });
+});
+
+describe("chatRecordsPayloadV1Schema (chat.records, WP-10 Task 3)", () => {
+  const userRecord = {
+    kind: "user",
+    recordId: uid(),
+    turnId: uid(),
+    text: "Add a dark theme toggle",
+    selection: null,
+    pins: [],
+    ts: DEADLINE,
+  };
+
+  const agentRecord = {
+    kind: "agent",
+    recordId: uid(),
+    turnId: uid(),
+    text: "Done — added a theme toggle.",
+    changedPages: ["dashboard"],
+    warnings: [],
+    ts: DEADLINE,
+  };
+
+  const valid = {
+    chatId: uid(),
+    records: [userRecord, agentRecord],
+    prevCursor: null,
+  };
+
+  test("accepts a tail with mixed record kinds and rejects an unknown key", () => {
+    expectStrict(chatRecordsPayloadV1Schema, valid);
+  });
+
+  test("accepts an empty tail", () => {
+    expect(chatRecordsPayloadV1Schema.safeParse({ ...valid, records: [] }).success).toBe(true);
+  });
+
+  test("accepts a non-null prevCursor", () => {
+    expect(
+      chatRecordsPayloadV1Schema.safeParse({
+        ...valid,
+        prevCursor: { generation: 1, beforeOffset: 512 },
+      }).success,
+    ).toBe(true);
+  });
+
+  test("rejects a wrong-shape record inside the tail", () => {
+    const badRecord = { ...userRecord, selection: "not-an-object-or-null" };
+    expect(chatRecordsPayloadV1Schema.safeParse({ ...valid, records: [badRecord] }).success).toBe(
+      false,
+    );
+  });
+
+  test("rejects a record whose kind is outside the closed five-member union", () => {
+    const badRecord = { ...userRecord, kind: "system:info" };
+    expect(chatRecordsPayloadV1Schema.safeParse({ ...valid, records: [badRecord] }).success).toBe(
+      false,
+    );
   });
 });
 

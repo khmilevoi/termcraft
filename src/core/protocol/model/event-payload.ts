@@ -21,6 +21,7 @@ import type { AgentToolOp } from "entities/turn";
 import { rfc3339UtcSchema } from "infrastructure/clock";
 
 import { type CapabilityTargetByKindV1, capabilityTargetByKindV1Schema } from "./capability-target";
+import { type ChatRecordDtoV1, chatRecordDtoV1Schema } from "./chat-record";
 import { type CommandKindV1, commandKindV1Schema } from "./command-kind";
 import type { EventKindV1 } from "./event-kind";
 import { type FailureDtoV1, failureDtoV1Schema } from "./failure";
@@ -1587,6 +1588,45 @@ export const chatChangedPayloadV1Schema = z.strictObject({
   removedChatIds: z.array(uuidv7Schema).readonly(),
 });
 
+/**
+ * `chat.records`'s pagination cursor (WP-10 Task 3), mirroring `ChatReader`'s own
+ * `ChatPageCursorV1` (`core/ports/chat-store.ts:40-43`: a generation plus a byte
+ * offset) — redrawn here per code-structure Decision C1, the same "narrow,
+ * core-owned redraw" precedent this file already follows throughout (e.g.
+ * `GitStatusProjectionV1Placeholder`, `ChatRecordDtoV1`).
+ */
+export interface ChatPageCursorDtoV1 {
+  readonly generation: number;
+  readonly beforeOffset: number;
+}
+
+export const chatPageCursorDtoV1Schema = z.strictObject({
+  generation: nonNegativeIntSchema,
+  beforeOffset: nonNegativeIntSchema,
+});
+
+/**
+ * `chat.records`'s payload (WP-10 Task 3, new event kind 43 -> 44): the bounded page
+ * of persisted records for ONE chat, delivered command-time by `chat.switch`,
+ * `chat.create`, and `project.open` (see `docs/superpowers/plans/
+ * 2026-07-24-chat-transport.md`'s Decision section for why this must be an event and
+ * not a command-result or snapshot field). `records` is the exact page `ChatReader.
+ * loadTail`/`loadBefore` returned (`ChatLoadResultV1.records`, `chat-store.ts:45-48`),
+ * mapped through `core/chats`'s `chatRecordToDtoV1`; `prevCursor` mirrors `ChatLoadResultV1.
+ * prevCursor` — `null` once no earlier page exists.
+ */
+export interface ChatRecordsPayloadV1 {
+  readonly chatId: UUIDv7;
+  readonly records: readonly ChatRecordDtoV1[];
+  readonly prevCursor: ChatPageCursorDtoV1 | null;
+}
+
+export const chatRecordsPayloadV1Schema = z.strictObject({
+  chatId: uuidv7Schema,
+  records: z.array(chatRecordDtoV1Schema).readonly(),
+  prevCursor: chatPageCursorDtoV1Schema.nullable(),
+});
+
 /** The selection DTO `selection.changed` carries when a selection exists (§9 row, KCC:826). */
 export interface SelectionDtoV1 {
   readonly pageSlug: string;
@@ -1687,6 +1727,7 @@ export type EventPayloadByKindV1 = Readonly<{
   "preview.failed": PreviewFailurePayloadV1;
   "preview.circuitOpened": PreviewCircuitOpenedPayloadV1;
   "chat.changed": ChatChangedPayloadV1;
+  "chat.records": ChatRecordsPayloadV1;
   "selection.changed": SelectionChangedPayloadV1;
   "pins.changed": PinsChangedPayloadV1;
   "git.statusChanged": GitStatusChangedPayloadV1;
@@ -1759,6 +1800,7 @@ export const eventPayloadV1SchemaByKind = {
   "preview.failed": previewFailurePayloadV1Schema,
   "preview.circuitOpened": previewCircuitOpenedPayloadV1Schema,
   "chat.changed": chatChangedPayloadV1Schema,
+  "chat.records": chatRecordsPayloadV1Schema,
   "selection.changed": selectionChangedPayloadV1Schema,
   "pins.changed": pinsChangedPayloadV1Schema,
   "git.statusChanged": gitStatusChangedPayloadV1Schema,

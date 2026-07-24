@@ -51,6 +51,7 @@ export const EVENT_KINDS_V1 = [
   "preview.failed",
   "preview.circuitOpened",
   "chat.changed",
+  "chat.records",
   "selection.changed",
   "pins.changed",
   "git.statusChanged",
@@ -59,8 +60,17 @@ export const EVENT_KINDS_V1 = [
 
 export type EventKindV1 = (typeof EVENT_KINDS_V1)[number];
 
-/** The exact member count §9 fixes. */
-export const EVENT_KIND_COUNT = 43;
+/**
+ * The exact member count §9 fixes. 43 -> 44 (WP-10 Task 3): `chat.records` is a new
+ * event kind — the persisted chat tail travels as a follow-on event correlated by
+ * `commandId`, not a command-result field (`AcceptedCommandV1` is a closed
+ * `z.strictObject` with no payload slot, `command-result.ts:49-67`), and not a
+ * `kernel.snapshot` field either (the active chat and its tail are not known at the
+ * first snapshot, see `KernelSnapshotPayloadV1`'s own `activeChatId` nullability
+ * comment). See `docs/superpowers/plans/2026-07-24-chat-transport.md`'s Decision
+ * section for the full settled record.
+ */
+export const EVENT_KIND_COUNT = 44;
 
 const EVENT_KIND_SET: ReadonlySet<string> = new Set(EVENT_KINDS_V1);
 

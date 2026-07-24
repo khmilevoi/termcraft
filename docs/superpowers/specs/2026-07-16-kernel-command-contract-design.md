@@ -709,7 +709,7 @@ type EventKindV1 =
   | "preview.sourceChanged" | "preview.sessionReady"
   | "preview.geometryResult" | "preview.backpressured"
   | "preview.writable" | "preview.failed" | "preview.circuitOpened"
-  | "chat.changed" | "selection.changed" | "pins.changed"
+  | "chat.changed" | "chat.records" | "selection.changed" | "pins.changed"
   | "git.statusChanged" | "diagnostics.changed"
 
 type EventPayloadByKindV1 = Readonly<{
@@ -752,6 +752,7 @@ type EventPayloadByKindV1 = Readonly<{
   "preview.failed": PreviewFailurePayloadV1
   "preview.circuitOpened": PreviewCircuitOpenedPayloadV1
   "chat.changed": ChatChangedPayloadV1
+  "chat.records": ChatRecordsPayloadV1
   "selection.changed": SelectionChangedPayloadV1
   "pins.changed": PinsChangedPayloadV1
   "git.statusChanged": GitStatusChangedPayloadV1
@@ -823,6 +824,7 @@ omission. Unknown payload keys are invalid.
 | `preview.failed` | `previewSessionId`, current nonce, page slug, source hash, lifecycle phase, and closed host failure. |
 | `preview.circuitOpened` | `previewSessionId`, page slug, source hash, attempts, final failure, and retry capability state. This exact lower-camel discriminator is the only circuit-open event kind. |
 | `chat.changed` | complete active chat identity plus the exact added/updated chat summaries and removed chat ids. |
+| `chat.records` | (WP-10 addition, 2026-07-24) one chat's bounded persisted tail: `chatId`, the ordered `ChatRecordDtoV1[]` page, and a nullable pagination cursor. Delivered command-time by `chat.switch`, `chat.create`, and `project.open` — correlated to the triggering `commandId`, never carried on `kernel.snapshot` (the active chat and its tail are not known at the first snapshot) or on the command result (`AcceptedCommandV1` has no payload slot). |
 | `selection.changed` | nullable selection DTO containing page slug, element id, and source hash. |
 | `pins.changed` | page slug, `affectedPins: PinDtoV1[]`, affected record ids, and the transaction/action identity that caused each persisted change. Every created or changed pin therefore returns its stable `pinId`. |
 | `git.statusChanged` | repository identity, `HEAD`, sequencer state, and complete three-scope status summaries. |
