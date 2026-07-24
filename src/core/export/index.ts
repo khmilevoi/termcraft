@@ -36,6 +36,13 @@ export type {
 } from "./model/package";
 export { assembleExportPackage } from "./model/package";
 
+// --- Publish-plan builder (D-Q2/D-Q5) -------------------------------------------------------
+export type {
+  BuildExportPublishOperationsInputV1,
+  BuildExportPublishOperationsResultV1,
+} from "./model/publish-plan";
+export { buildExportPublishOperations, serializeExportPointer } from "./model/publish-plan";
+
 // --- Publication (rendering -> publishing -> idle) -------------------------------------------
 export type {
   ExportPublicationIntentV1,
