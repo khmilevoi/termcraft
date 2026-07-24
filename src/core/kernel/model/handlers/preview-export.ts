@@ -1,5 +1,18 @@
 import { wrap } from "@reatom/core";
 
+import {
+  type CaptureExportSnapshotDeps,
+  type ExportPageInputV1,
+  type ExportRenderJobDeps,
+  type ExportSnapshotV1,
+  type PublishExportDeps,
+  type PublishExportInputV1,
+  assembleExportPackage,
+  captureExportSnapshot,
+  computeExportSizeLadder,
+  publishExport,
+  runExportRendering,
+} from "core/export";
 import type { PreviewAction, PreviewState, TransitionOutcome } from "core/machines";
 import type { EventCorrelationV1, PublishableEventV1 } from "core/mailbox";
 import type {
@@ -8,7 +21,13 @@ import type {
   PreviewSizePresetV1,
   WorkspaceStateV1,
 } from "core/ports";
-import type { FailureDtoV1, Sha256Hex, UUIDv7 } from "core/protocol";
+import {
+  type CommandPayloadByKindV1,
+  type FailureDtoV1,
+  type Sha256Hex,
+  type UUIDv7,
+  canonicalHash,
+} from "core/protocol";
 import type { PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
@@ -20,11 +39,12 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * non-deferred kinds (`preview.forwardInput`/`preview.setTweak` are Tier-C deferred,
  * `./deferred.ts` owns them) plus the `export` family's one kind, `export.start`.
  *
- * TWO GENUINE, INDEPENDENTLY-VERIFIED CONTRACT GAPS bound what this file can honestly do —
- * both are reported in the family's own report (`.superpowers/sdd/
- * task9-family-preview-export-report.md`), not silently guessed around. Read this header
- * before touching either family's handlers below; each blocked handler's own doc comment
- * points back here rather than re-deriving the same investigation nine times.
+ * TWO GENUINE, INDEPENDENTLY-VERIFIED CONTRACT GAPS originally bounded what this file could
+ * honestly do — both reported in the family's own report (`.superpowers/sdd/
+ * task9-family-preview-export-report.md`). Gap A (below) is still open. Gap B — CLOSED (MVP
+ * gap closeout, `export.start` is core MVP per the maintainer decision recorded in
+ * `.superpowers/sdd/task-9-report.md`'s "Gap 4 closure"/"Tasks 10-11" sections) — see
+ * `handleExportStart`'s own header for the real recipe.
  *
  * GAP A — no way to read back the Kernel's own live `PreviewSession`. `HandlerContext`
  * declares `setActivePreviewSession(session): void` (a SETTER for `kernel.ts`'s own
@@ -46,22 +66,7 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * `queryGeometry`, `retry`) or release its host resources (`close`) — Gap A blocks the
  * first five outright and leaves `close` only able to do its Kernel-side half (below).
  *
- * GAP B — `HandlerContext.machines.export` is typed `HandlerMachine<ExportState,
- * ExportAction>` (`./types.ts`'s deliberate `Pick` excluding `phaseAtom`), but every one of
- * `core/export`'s already-landed functions this family is instructed to compose
- * (`CaptureExportSnapshotDeps.machine`, `PublishExportDeps.machine`) requires the FULL
- * `StateMachine<ExportState, ExportAction>` (`phaseAtom` included). VERIFIED, not assumed:
- * a scratch probe assigning `context.machines.export` into a `CaptureExportSnapshotDeps`
- * literal was compiled with `bun x tsc --noEmit` and failed with `TS2741: Property
- * 'phaseAtom' is missing in type 'HandlerMachine<ExportState, ExportAction>' but required
- * in type 'StateMachine<ExportState, ExportAction>'` — then reverted. There is no
- * cast-free way to close this gap from this file: fabricating a stand-in `phaseAtom` would
- * be inventing Kernel state outside the contract (forbidden), and casting past the missing
- * property is exactly the type-laundering this project's rules forbid. So `export.start`
- * cannot call `captureExportSnapshot`/`runExportRendering`/`assembleExportPackage`/
- * `publishExport` at all today — see `handleExportStart`'s own comment.
- *
- * WHAT THIS FILE STILL DOES REAL WORK ON, DESPITE BOTH GAPS:
+ * WHAT THIS FILE DOES REAL WORK ON:
  * - `preview.selectPage`/`preview.selectCurrent` (identical routing, exactly mirroring
  *   `core/preview/model/session-commands.ts`'s own `selectPage: selectSource, selectCurrent:
  *   selectSource`): establish/switch a live session for the CURRENT source of a page,
@@ -75,9 +80,11 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   `HandlerContext`'s own tracked session reference — the Kernel-side half of closing that
  *   Gap A does not block. The host-side half (calling the actual session's own `close()`
  *   to release its resources) is exactly what Gap A blocks; documented on the handler.
- * - Every other blocked kind returns the sanctioned `noOpOutcome()` (an idempotent
+ * - Every other Gap-A-blocked kind returns the sanctioned `noOpOutcome()` (an idempotent
  *   refusal — nothing ran, matching this project's own "two outcomes only" rule) with a
  *   doc comment naming precisely which gap blocks it and why.
+ * - `export.start` composes `core/export`'s full capture/render/assemble/publish chain for
+ *   real — see `handleExportStart`'s own header.
  */
 
 // -------------------------------------------------------------------------------------
@@ -462,40 +469,332 @@ function handleClose(
 }
 
 // -------------------------------------------------------------------------------------
-// export.start — Gap B (verified type mismatch): documented no-op
+// export.start — real, end to end (Gap B closure)
 // -------------------------------------------------------------------------------------
 
+/** The project-relative export destination directory — the `.termcraft/export` convention already established by `ui/app`'s own export-popup fixtures (`App.test.tsx`, `intent.test.ts`) and the gap-closeout plan's own M6 citation (`.termcraft/export/current.json`), reused verbatim rather than invented a second time. This Kernel slice never varies it — `publishExport`'s own `plan.operations`/`plan.payloads` stay empty (that file's own header: "WP-5's job"). */
+const EXPORT_DESTINATION = ".termcraft/export";
+
 /**
- * `export.start` is instructed to compose `core/export`'s already-landed
- * `captureExportSnapshot -> runExportRendering -> assembleExportPackage -> publishExport`
- * chain, driving the export machine through them. It cannot: every one of those functions'
- * own `Deps` types (`CaptureExportSnapshotDeps.machine`, `PublishExportDeps.machine`)
- * requires the FULL `StateMachine<ExportState, ExportAction>` (`phase`/`phaseAtom`/`apply`/
- * `canApply`), while `HandlerContext.machines.export` is `HandlerMachine<ExportState,
- * ExportAction>` — `./types.ts`'s own deliberate `Pick` that excludes `phaseAtom` so a
- * handler can never bypass `apply()`'s transition-table legality check. This file's own
- * header documents the empirical verification (a scratch `tsc --noEmit` probe, reverted
- * after confirming the exact `TS2741` failure).
- *
- * There is no cast-free fix available from THIS file: `core/export`'s functions are not
- * this family's file to change (out of this task's declared scope — "Do NOT edit ...  any
- * other family's file", and `core/export/model/*.ts` is squarely another package's
- * deliverable, not `core/kernel/model/handlers`), and reimplementing their
- * begin/beginRendering/beginPublication/complete/fail sequencing inline here — bypassing
- * the ALREADY-LANDED, ALREADY-TESTED functions this family is explicitly told to reuse —
- * would violate the kernel-assembly plan's own "do not duplicate" constraint far more than
- * leaving this as a documented gap does. So `export.start` never begins the machine at
- * all (an untouched `idle` phase is always safe to leave, unlike a `preparing` phase this
- * file could start but never legally finish without duplicating `core/export`'s own
- * internal transitions) and returns the sanctioned idempotent no-op.
- *
- * A second, narrower, compounding gap applies too: even were Gap B closed, resolving the
- * ordered `ExportPageInputV1[]` `captureExportSnapshot` needs hits the exact same
- * page-settings-resolution gap `resolvePageSettings` documents above (`sourcePath`/
- * `theme`/`minSize`/`kitApiVersion` for EVERY project page, not just one).
+ * `ExportRenderJobDeps.rendererVersion` (`core/export/model/render-jobs.ts`'s own header):
+ * "an injected string ... a caller-chosen build/renderer identity" — no `core/ports`/
+ * `KernelDeps` surface owns a renderer build-version string today (checked: neither
+ * `ExportRenderPort` nor any other `KernelDeps` field carries one). Mirrors
+ * `PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER` above: a documented placeholder, used only as a
+ * render-cache key component (`buildExportRenderKey`), never fabricated render OUTPUT —
+ * once a real owner assigns a canonical renderer-build identity, this is the one line to
+ * replace.
  */
-function handleExportStart(): CommandOutcomeV1 {
-  return noOpOutcome();
+export const EXPORT_RENDERER_VERSION_PLACEHOLDER = "1";
+
+interface ExportSnapshotDigestEntryV1 {
+  readonly pageSlug: string;
+  readonly sourceHash: string;
+  readonly manifestIndex: number;
+}
+
+/**
+ * The "immutable source-snapshot digest" `export.started`'s own payload names (§9, KCC:811)
+ * — a canonical hash over the captured snapshot's own page identity/order/content-hash
+ * facts (`pageSlug`, `sourceHash`, `manifestIndex`), mirroring `core/project/model/
+ * page-remove-plan.ts`'s own `computePageOrderHash` precedent (`canonicalHash(...)` over an
+ * ordered projection of the real facts, never the raw bytes themselves — `canonicalHash` has
+ * no defined encoding for `Uint8Array`, and `sourceHash` already IS the canonical content
+ * hash those bytes were read under). `capturedAt` (a timestamp) is deliberately excluded:
+ * this digest names WHAT was captured, not WHEN.
+ */
+function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
+  const entries: ExportSnapshotDigestEntryV1[] = snapshot.pages.map((page) => ({
+    pageSlug: page.pageSlug,
+    sourceHash: page.sourceHash,
+    manifestIndex: page.manifestIndex,
+  }));
+  const digest = canonicalHash(entries);
+  if (digest instanceof Error) {
+    // Defensive only: every field above is a plain string/finite number, which
+    // `canonicalHash` always accepts — unreachable in practice, kept explicit per errore's
+    // rule against silently assuming success. Falls back to the same "64 zero hex
+    // characters" placeholder `failSession` above already uses for an honestly-unavailable
+    // digest, never a fabricated-looking real one.
+    console.warn(
+      `core/kernel/handlers/preview-export: could not canonicalize the export snapshot digest (defensive, should be unreachable): ${digest.message}`,
+    );
+    return "0".repeat(64);
+  }
+  return digest;
+}
+
+/**
+ * Every project page's `ExportPageInputV1` (§7.5/§12.5: "the exact ordered page list ... and
+ * resolved settings"), in manifest order — `manifestIndex` is each page's own position in
+ * `PageReader.listSlugs()`'s own returned order, the project's real page order (§11.4's
+ * "project page order (manifest order)"). Reuses `resolvePageSettings` above VERBATIM for
+ * every page — this file's own header used to name this exact extension as export.start's
+ * "second, narrower, compounding gap"; it closes the same way `resolvePageSettings`'s own
+ * single-page call site already does: no new port, no fabricated value, an honest
+ * `FailureDtoV1` refusal on the first page whose settings cannot be resolved.
+ */
+async function resolveExportPageInputs(
+  context: HandlerContext,
+): Promise<FailureDtoV1 | readonly ExportPageInputV1[]> {
+  const slugs = await context.deps.pageReader.listSlugs();
+  if ("code" in slugs) return slugs;
+
+  const pages: ExportPageInputV1[] = [];
+  for (const [manifestIndex, pageSlug] of slugs.entries()) {
+    const settings = await resolvePageSettings(context.deps, pageSlug);
+    if ("code" in settings) return settings;
+    pages.push({
+      pageSlug,
+      sourcePath: settings.sourcePath,
+      manifestIndex,
+      minSize: settings.minSize,
+      theme: settings.theme,
+      kitApiVersion: settings.kitApiVersion,
+    });
+  }
+  return pages;
+}
+
+/** Applies `kernel.export.fail` (`rendering -> idle`) directly — the one transition neither `assembleExportPackage` nor `publishExport` ever applies for a failure THEY detect before touching the machine (see `runExportStart`'s own header, "MACHINE OWNERSHIP"). Defensive-only illegality is logged, never silently assumed. */
+function forceExportFail(context: HandlerContext, reason: string): void {
+  const outcome = context.exportRunner.machine.apply("kernel.export.fail");
+  if (outcome.kind === "illegal") {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start's post-render fail transition was illegal while handling "${reason}" — defensive, should be unreachable from "rendering"`,
+    );
+  }
+}
+
+/**
+ * The whole `export.start` composition (Gap B, CLOSED), run inside `launchOperation`'s own
+ * async closure — mirrors `turn.ts`'s own `runTurnStart` recipe: `handleExportStart` returns
+ * `startedOutcome([])` synchronously (no admission event; `kernel.export.begin` itself is
+ * applied INSIDE `captureExportSnapshot`, not by this handler directly — matching how
+ * `runTurn`'s own internal admission moves `RunTurnDeps.machine` without a `turn.ts`-built
+ * `kernel.stateChanged` of its own), then drives `captureExportSnapshot -> runExportRendering
+ * -> assembleExportPackage -> publishExport` in that fixed order, never around them.
+ *
+ * MACHINE OWNERSHIP, PHASE BY PHASE:
+ * - `idle -> preparing -> rendering` (or `-> idle` on a capture failure): entirely owned by
+ *   `captureExportSnapshot` itself (`CaptureExportSnapshotDeps.machine` — the real, full
+ *   `context.exportRunner.machine`, Gap B's own fix).
+ * - `rendering`: `runExportRendering`/`assembleExportPackage` never touch the machine at all
+ *   (§13.4's own structural proof — neither Deps carries `machine`). A FAILED render is
+ *   caught by `assembleExportPackage`'s own wholesale refusal; since neither it nor
+ *   `publishExport` (whose own identical check runs BEFORE ever touching the machine) will
+ *   ever apply `kernel.export.fail` for this case ("the caller decides what happens next ...
+ *   typically: never call publishExport at all" — `package.ts`'s own header), this function
+ *   applies it directly via {@link forceExportFail} — the one place in this whole chain a
+ *   transition is applied outside a composed function.
+ * - `rendering -> publishing -> idle` (or `-> idle` via `failBeforeIntent`): entirely owned
+ *   by `publishExport` itself.
+ *
+ * LIVE EVENTS (`context.publishOperationEvent`, matching `turn.ts`'s own `RunTurnDeps.publish`
+ * mapping): `export.started` fires once the snapshot is captured (the earliest point
+ * `sourceSnapshotDigest`/`pageCount`/`renderJobCount` are honestly known); `export.progress`
+ * fires at each of the two phase boundaries this batched composition can actually observe —
+ * once ALL renders have settled (`phase: "rendering"`) and again once publication begins
+ * (`phase: "publishing"`). `completedJobs`/`totalJobs` are real counts, but `pageSlug`/
+ * `sizeBytes` are always `null`: neither `runExportRendering` nor `publishExport` exposes a
+ * PER-JOB completion hook (both are landed, already-tested BATCH compositions — see each
+ * file's own header), so finer-grained live progress is not obtainable without altering a
+ * landed module this task must compose, never reimplement — flagged here, not smoothed over
+ * with a fabricated per-job breakdown.
+ *
+ * THE TERMINAL EVENT: exactly one of `export.completed`/`export.failed`, matching
+ * `ExportTerminalPayloadV1`'s own closed shape (`operationId`, `phase`, `destination`,
+ * `generationId`, `failure`). `destination` is `EXPORT_DESTINATION` throughout. `generationId`
+ * is non-null ONLY on `export.completed`, taken verbatim from `PublishExportResultV1`'s own
+ * `"published"` intent — never fabricated for a failure.
+ */
+async function runExportStart(context: HandlerContext): Promise<readonly PublishableEventV1[]> {
+  const pages = await wrap(resolveExportPageInputs(context));
+  if ("code" in pages) {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start refused — could not resolve the project's page settings: ${pages.safeMessage}`,
+    );
+    return [];
+  }
+
+  const captureDeps: CaptureExportSnapshotDeps = {
+    machine: context.exportRunner.machine,
+    projectWrite: context.deps.projectWrite,
+    pageReader: context.deps.pageReader,
+    clock: context.deps.clock,
+  };
+  const captured = await wrap(captureExportSnapshot(captureDeps, { pages }));
+  if (captured.kind === "illegal") {
+    // Either a genuine `NO_PAGES` refusal or a defensive-only illegal `begin` (the guard
+    // already confirmed `idle -> preparing` legality before dispatch ever reached this
+    // handler) — both share this shape; nothing ran, so nothing to recover.
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start's captureExportSnapshot was illegal (${captured.code})`,
+    );
+    return [];
+  }
+  if (captured.kind === "failed") {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start's snapshot capture failed: ${captured.failure.safeMessage}`,
+    );
+    return [];
+  }
+
+  const { snapshot } = captured;
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { operationId };
+  const ladder = computeExportSizeLadder(snapshot.pages);
+
+  context.publishOperationEvent({
+    kind: "export.started",
+    payload: {
+      operationId,
+      sourceSnapshotDigest: exportSnapshotDigest(snapshot),
+      pageCount: snapshot.pages.length,
+      renderJobCount: ladder.length,
+      destination: EXPORT_DESTINATION,
+    },
+    correlation,
+  });
+
+  const renderDeps: ExportRenderJobDeps = {
+    renderPort: context.deps.exportRender,
+    renderCache: context.deps.renderCache,
+    rendererVersion: EXPORT_RENDERER_VERSION_PLACEHOLDER,
+  };
+  const renders = await wrap(runExportRendering(renderDeps, snapshot));
+
+  context.publishOperationEvent({
+    kind: "export.progress",
+    payload: {
+      operationId,
+      phase: "rendering",
+      completedJobs: renders.length,
+      totalJobs: ladder.length,
+      pageSlug: null,
+      sizeBytes: null,
+    },
+    correlation,
+  });
+
+  const assembled = assembleExportPackage({
+    snapshot,
+    renders,
+    runtimeDeclaration: context.deps.exportRender.runtimeDeclaration,
+  });
+
+  if (assembled.kind === "failed") {
+    forceExportFail(context, "a render failed");
+    return [
+      {
+        kind: "export.failed",
+        payload: {
+          operationId,
+          phase: "rendering",
+          destination: EXPORT_DESTINATION,
+          generationId: null,
+          failure: assembled.failure,
+        },
+        correlation,
+      },
+    ];
+  }
+
+  context.publishOperationEvent({
+    kind: "export.progress",
+    payload: {
+      operationId,
+      phase: "publishing",
+      completedJobs: ladder.length,
+      totalJobs: ladder.length,
+      pageSlug: null,
+      sizeBytes: null,
+    },
+    correlation,
+  });
+
+  const currentPages = await wrap(resolveExportPageInputs(context));
+  if ("code" in currentPages) {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start refused to publish — could not re-resolve current page settings: ${currentPages.safeMessage}`,
+    );
+    forceExportFail(context, "could not re-resolve current page settings before publish");
+    return [
+      {
+        kind: "export.failed",
+        payload: {
+          operationId,
+          phase: "rendering",
+          destination: EXPORT_DESTINATION,
+          generationId: null,
+          failure: currentPages,
+        },
+        correlation,
+      },
+    ];
+  }
+
+  const publishDeps: PublishExportDeps = {
+    machine: context.exportRunner.machine,
+    projectWrite: context.deps.projectWrite,
+    pageReader: context.deps.pageReader,
+    clock: context.deps.clock,
+    exportPublish: context.deps.exportPublish,
+  };
+  const publishInput: PublishExportInputV1 = {
+    snapshot,
+    currentPages,
+    renders: renders.map((render) => ({ pageSlug: render.pageSlug, outcome: render.outcome })),
+  };
+  const published = await wrap(publishExport(publishDeps, publishInput));
+
+  if (published.kind === "illegal") {
+    // Defensive only: `rendering` is always a legal source for `kernel.export.
+    // beginPublication` at this point — export is a single-slot operation, so nothing else
+    // could have moved this machine concurrently in a correctly-wired Kernel.
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start's beginPublication was illegal (${published.code})`,
+    );
+    return [];
+  }
+
+  if (published.kind === "failed" || published.kind === "stale") {
+    return [
+      {
+        kind: "export.failed",
+        payload: {
+          operationId,
+          phase: "publishing",
+          destination: EXPORT_DESTINATION,
+          generationId: null,
+          failure: published.failure,
+        },
+        correlation,
+      },
+    ];
+  }
+
+  return [
+    {
+      kind: "export.completed",
+      payload: {
+        operationId,
+        phase: "publishing",
+        destination: EXPORT_DESTINATION,
+        generationId: published.intent.generationId,
+        failure: null,
+      },
+      correlation,
+    },
+  ];
+}
+
+function handleExportStart(
+  _payload: CommandPayloadByKindV1["export.start"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  context.launchOperation("kernel.export.run", () => runExportStart(context));
+  return startedOutcome([]);
 }
 
 // -------------------------------------------------------------------------------------

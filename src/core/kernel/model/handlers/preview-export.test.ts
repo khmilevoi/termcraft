@@ -11,6 +11,7 @@ import {
   reatomRestoreStateMachine,
   reatomTurnStateMachine,
 } from "core/machines";
+import type { PublishableEventV1 } from "core/mailbox";
 import type { PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
@@ -116,6 +117,8 @@ interface TestHarness {
     readonly run: () => Promise<readonly unknown[]>;
   }[];
   readonly getActivePreviewSession: () => PreviewSession | null;
+  /** Every `publishOperationEvent(event)` call, in order — the export family's own live-progress events land here. */
+  readonly getPublishedEvents: () => readonly PublishableEventV1[];
 }
 
 function buildTestContext(deps: KernelDeps): TestHarness {
@@ -127,6 +130,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
     let previewSourceKind: PreviewSourceKindV1 = null;
     let activePreviewSession: PreviewSession | null = null;
     const launched: { label: string; run: () => Promise<readonly unknown[]> }[] = [];
+    const publishedEvents: PublishableEventV1[] = [];
 
     const machines = {
       project: reatomProjectStateMachine(),
@@ -175,7 +179,9 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       launchOperation: (label, run) => {
         launched.push({ label, run: run as () => Promise<readonly unknown[]> });
       },
-      publishOperationEvent: () => {},
+      publishOperationEvent: (event) => {
+        publishedEvents.push(event);
+      },
       turnRunner: {
         machine: machines.turn,
         setActiveAttempt: () => {},
@@ -203,6 +209,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       getMutatorCalls: () => mutatorCalls,
       launched,
       getActivePreviewSession: () => activePreviewSession,
+      getPublishedEvents: () => publishedEvents,
     };
   });
 }
@@ -532,15 +539,108 @@ describe("previewHandlers.close — real, partial (Kernel-side half only)", () =
   });
 });
 
-describe("exportHandlers.start — blocked by Gap B (verified HandlerMachine/StateMachine mismatch)", () => {
-  test("returns the sanctioned no-op and never moves the export machine out of idle", () => {
-    const harness = buildTestContext(buildDeps());
+describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
+  test("admission: returns a zero-event started outcome synchronously and launches the operation without moving the machine yet", () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
 
     const outcome = exportHandlers["export.start"]({}, harness.handlerContext);
 
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    // Mirrors `turn.start`'s own admission shape: `kernel.export.begin` itself is applied
+    // INSIDE `captureExportSnapshot`, not by this handler directly, so the synchronous
+    // return carries no admission event and the machine has not moved yet.
+    expect(outcome).toEqual({ disposition: "started", events: [] });
     expect(harness.handlerContext.machines.export.phase()).toBe("idle");
-    expect(harness.getMutatorCalls()).toBe(0);
-    expect(harness.launched).toHaveLength(0);
+    expect(harness.launched).toHaveLength(1);
+    expect(harness.launched[0]!.label).toBe("kernel.export.run");
+  });
+
+  test("success path: captures a snapshot, renders, assembles, publishes exactly one plan, and returns the machine to idle", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+
+    exportHandlers["export.start"]({}, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    expect(harness.handlerContext.machines.export.phase()).toBe("idle");
+
+    const exportPublish = deps.exportPublish as ReturnType<typeof createFakeExportPublish>;
+    expect(exportPublish.calls).toHaveLength(1);
+
+    // The terminal batch: exactly one `export.completed`.
+    expect(events).toHaveLength(1);
+    const completed = events[0] as { kind: string; payload: unknown };
+    expect(completed.kind).toBe("export.completed");
+    const parsedCompleted = eventPayloadV1SchemaByKind["export.completed"].parse(completed.payload);
+    expect(parsedCompleted.destination).toBe(".termcraft/export");
+    expect(parsedCompleted.phase).toBe("publishing");
+    expect(parsedCompleted.failure).toBeNull();
+    expect(parsedCompleted.generationId).not.toBeNull();
+
+    // Live progress, in order: `export.started` once the snapshot is captured, then one
+    // `export.progress` per phase boundary this batched composition can actually observe.
+    const published = harness.getPublishedEvents();
+    expect(published.map((e) => e.kind)).toEqual([
+      "export.started",
+      "export.progress",
+      "export.progress",
+    ]);
+
+    const started = eventPayloadV1SchemaByKind["export.started"].parse(published[0]!.payload);
+    expect(started.pageCount).toBe(1);
+    expect(started.renderJobCount).toBeGreaterThan(0);
+    expect(started.destination).toBe(".termcraft/export");
+    expect(parsedCompleted.operationId).toBe(started.operationId);
+
+    const renderingProgress = eventPayloadV1SchemaByKind["export.progress"].parse(
+      published[1]!.payload,
+    );
+    expect(renderingProgress.phase).toBe("rendering");
+    expect(renderingProgress.completedJobs).toBe(started.renderJobCount);
+    expect(renderingProgress.totalJobs).toBe(started.renderJobCount);
+
+    const publishingProgress = eventPayloadV1SchemaByKind["export.progress"].parse(
+      published[2]!.payload,
+    );
+    expect(publishingProgress.phase).toBe("publishing");
+  });
+
+  test("a render failure drives the machine's failure arc without ever calling publish", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const renderFailure: FailureDtoV1 = {
+      code: "EXPORT_RENDER_FAILED",
+      retryable: true,
+      safeMessage: "the renderer crashed",
+      details: {},
+    };
+    (deps.exportRender as ReturnType<typeof createFakeExportRenderPort>).failNext(
+      "renderOne",
+      renderFailure,
+    );
+    const harness = buildTestContext(deps);
+
+    exportHandlers["export.start"]({}, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    expect(harness.handlerContext.machines.export.phase()).toBe("idle");
+
+    const exportPublish = deps.exportPublish as ReturnType<typeof createFakeExportPublish>;
+    expect(exportPublish.calls).toHaveLength(0);
+
+    expect(events).toHaveLength(1);
+    const failed = events[0] as { kind: string; payload: unknown };
+    expect(failed.kind).toBe("export.failed");
+    const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
+    expect(parsedFailed.phase).toBe("rendering");
+    expect(parsedFailed.generationId).toBeNull();
+    expect(parsedFailed.failure?.code).toBe("EXPORT_RENDER_FAILED");
+
+    // Only the two events this composition can honestly publish before a render failure —
+    // never a `"publishing"`-phase progress event, since publish is never reached.
+    const published = harness.getPublishedEvents();
+    expect(published.map((e) => e.kind)).toEqual(["export.started", "export.progress"]);
   });
 });
