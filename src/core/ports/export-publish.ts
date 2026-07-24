@@ -1,4 +1,7 @@
-import type { FailureDtoV1 } from "core/protocol";
+import { z } from "zod";
+
+import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import { sha256HexSchema } from "core/protocol";
 
 import type { FileImageV1 } from "./turn-transactions";
 
@@ -30,6 +33,13 @@ import type { FileImageV1 } from "./turn-transactions";
  * (`TurnAdmissionInputV1` etc. never carry one either): the adapter mints it when it calls
  * `buildExportPublishTransaction`, and only the confirmed {@link ExportPublicationV1} echoes
  * it back, as an opaque id for tracing/diagnostics, never a value the caller branches on.
+ *
+ * READ SIDE (WP-5 Phase C, task C1): {@link ExportPublishPort.readPointer} plus
+ * {@link ExportPointerV1}/{@link exportPointerV1Schema} close the M6 gap
+ * `core/project/model/open-sequence.ts`'s header used to flag — "no port exposes
+ * `.termcraft/export/current.json`". D-Q2 fixes this port method's return shape as the
+ * SAME schema the write side (Phase B) serializes, so a reader and a writer built in
+ * parallel cannot silently diverge on the pointer's shape.
  */
 
 /**
@@ -84,7 +94,62 @@ export interface ExportPublicationV1 {
   readonly recordedAt: string;
 }
 
+/**
+ * Managed path (relative to `.termcraft`, turn-durability §3.3) of the durable export
+ * pointer — the literal every {@link ExportPublishOperationV1.target} for the pointer
+ * file itself uses, matching the fixture convention already established at
+ * `store/model/launch.test.ts:1186`.
+ */
+export const EXPORT_POINTER_TARGET = "export/current.json";
+
+/** One file's manifest entry inside an {@link ExportPointerV1} (turn-durability §12 :964-966's "a SHA-256 manifest of every file in the generation"). */
+export interface ExportPointerFileV1 {
+  readonly sha256: Sha256Hex;
+  readonly size: number;
+}
+
+/**
+ * The durable `export/current.json` contents (D-Q2, turn-durability §12 :964-966
+ * verbatim): a schema version, the generation it points at, and a SHA-256 manifest of
+ * every file that generation holds — keyed by the file's managed-relative path (the same
+ * convention {@link ExportPublishOperationV1.target} uses). Both the write side
+ * (`core/export/model/publish-plan.ts`, Phase B) and the read side
+ * ({@link ExportPublishPort.readPointer}) decode/encode through the SAME
+ * {@link exportPointerV1Schema} so the two sides, built in parallel, cannot silently
+ * disagree about the shape.
+ */
+export interface ExportPointerV1 {
+  readonly schemaVersion: 1;
+  readonly generationId: string;
+  readonly files: Readonly<Record<string, ExportPointerFileV1>>;
+}
+
+const exportPointerFileV1Schema = z.strictObject({
+  sha256: sha256HexSchema,
+  size: z.number().int().nonnegative(),
+});
+
+/** D-Q2's shared decode/encode target for {@link ExportPointerV1} — the one place `export/current.json` bytes are parsed or serialized, on both the write side and this read side. */
+export const exportPointerV1Schema = z.strictObject({
+  schemaVersion: z.literal(1),
+  generationId: z.string().min(1),
+  files: z.record(z.string().min(1), exportPointerFileV1Schema),
+});
+
 export interface ExportPublishPort {
   /** Runs the export-publish transaction (turn-durability §10 steps 4-6) to completion. */
   publish(plan: ExportPublishPlanV1): Promise<FailureDtoV1 | ExportPublicationV1>;
+
+  /**
+   * Reads and validates the durable export pointer, {@link EXPORT_POINTER_TARGET}
+   * (turn-durability §12 step 9: "...export pointer..."). `null` means the project has
+   * never published an export — ABSENT IS VALID, never a failure (a fresh project has no
+   * `export/current.json`; `store/adapters/export-publish.test.ts` proves this). A
+   * `FailureDtoV1` reports an unparseable/schema-invalid pointer, or one whose referenced
+   * generation directory does not exist. Depth is intentionally shallow (D-Q4): a
+   * structural parse plus confirming the referenced generation directory exists — never a
+   * full re-hash of every file the manifest lists, a cost TD §12 step 9 does not ask a
+   * fresh project open to pay.
+   */
+  readPointer(): Promise<FailureDtoV1 | ExportPointerV1 | null>;
 }

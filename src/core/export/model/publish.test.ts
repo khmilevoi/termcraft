@@ -280,9 +280,11 @@ describe("publishExport", () => {
     expect(result.kind).toBe("published");
     if (result.kind !== "published") return;
     expect(exportPublish.calls.length).toBe(1);
-    expect(exportPublish.calls[0]?.plan.generationId).toBe(result.intent.generationId);
-    expect(exportPublish.calls[0]?.plan.pageCount).toBe(result.intent.pageCount);
-    expect(exportPublish.calls[0]?.plan.createdAt).toBe(result.intent.recordedAt);
+    const publishCall = exportPublish.calls[0];
+    if (publishCall?.method !== "publish") throw new Error("fixture bug: expected a publish call");
+    expect(publishCall.plan.generationId).toBe(result.intent.generationId);
+    expect(publishCall.plan.pageCount).toBe(result.intent.pageCount);
+    expect(publishCall.plan.createdAt).toBe(result.intent.recordedAt);
     expect(readPhase()).toBe("idle");
     expect(projectWrite.calls.map((c) => c.method)).toEqual([
       "acquire",

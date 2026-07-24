@@ -81,7 +81,56 @@ describe("createFakeExportPublish", () => {
     const port = createFakeExportPublish();
     await port.publish(plan());
     expect(port.calls).toHaveLength(1);
-    expect(port.calls[0]?.plan.generationId).toBe("gen-1");
-    expect(port.calls[0]?.plan.operations).toHaveLength(3);
+    const call = port.calls[0];
+    if (call?.method !== "publish") throw new Error("fixture bug: expected a publish call");
+    expect(call.plan.generationId).toBe("gen-1");
+    expect(call.plan.operations).toHaveLength(3);
+  });
+});
+
+describe("createFakeExportPublish — readPointer()", () => {
+  test("returns null for a fresh project (no publish() has ever run)", async () => {
+    const port = createFakeExportPublish();
+    const result = await port.readPointer();
+    expect(result).toBeNull();
+  });
+
+  test("returns the ExportPointerV1 derived from the plan after a successful publish()", async () => {
+    const port = createFakeExportPublish();
+    await port.publish(plan());
+    const result = await port.readPointer();
+    if (result === null || "code" in result) throw new Error("fixture bug: expected a pointer");
+    expect(result.schemaVersion).toBe(1);
+    expect(result.generationId).toBe("gen-1");
+    // The pointer's own target and the old-generation delete op are excluded — only the
+    // new generation's replaced files belong in the manifest (D-Q2).
+    expect(result.files).toEqual({
+      "export/generations/gen-1/pages/home.tsx": { sha256: "a".repeat(64), size: 10 },
+    });
+  });
+
+  test("a publish() failure (via failNext) never updates the current pointer", async () => {
+    const port = createFakeExportPublish();
+    port.failNext(FAILURE);
+    const failed = await port.publish(plan());
+    expect(failed).toEqual(FAILURE);
+    const result = await port.readPointer();
+    expect(result).toBeNull();
+  });
+
+  test("failNextRead() queues a typed failure for the next readPointer() call only", async () => {
+    const port = createFakeExportPublish();
+    port.failNextRead(FAILURE);
+    const first = await port.readPointer();
+    expect(first).toEqual(FAILURE);
+    const second = await port.readPointer();
+    expect(second).toBeNull();
+  });
+
+  test("records every readPointer() call", async () => {
+    const port = createFakeExportPublish();
+    await port.readPointer();
+    expect(port.calls).toHaveLength(1);
+    expect(port.calls[0]?.method).toBe("readPointer");
   });
 });
