@@ -3,9 +3,11 @@ import type { CommandEnvelopeV1, CommandKindV1 } from "core/protocol";
 
 import { chatHandlers } from "./chat";
 import { type DeferredHandlerKind, deferredHandlers } from "./deferred";
+import { pageHandlers, pinHandlers } from "./page-pin";
 import { exportHandlers, previewHandlers } from "./preview-export";
 import { projectHandlers } from "./project";
 import { modelHandlers, selectionHandlers } from "./selection-model";
+import { turnHandlers } from "./turn";
 import {
   type CommandHandlerMap,
   type CommandOutcomeV1,
@@ -33,26 +35,37 @@ import {
  */
 
 /**
- * Kernel-assembly WP-1 task 9, STEP C1: four of the nine named families (`chat`,
- * `selection`+`model`, `project`, `preview`+`export`) have real, tested `FamilyHandlerMap`s
- * now (`./chat.ts`, `./selection-model.ts`, `./project.ts`, `./preview-export.ts`) and are
- * spread into {@link totalHandlers} below, replacing their `notYetImplementedHandler`
- * stand-ins. `turn` and `page`/`pin` stay on the stand-in — both returned NEEDS_CONTEXT
- * investigations during Step B (`.superpowers/sdd/task9-family-turn-report.md`,
- * `task9-family-page-pin-report.md`); Step C1 closed the contract gaps those two reports
- * proved (`./types.ts`'s `HandlerContext` — see its own "STEP C1 ADDITIONS" comment), so
- * Step C2 can write both families without touching `types.ts`/`kernel.ts` again.
+ * Kernel-assembly WP-1 task 9. STEP C1 wired four of the nine named families (`chat`,
+ * `selection`+`model`, `project`, `preview`+`export`) — real, tested `FamilyHandlerMap`s
+ * (`./chat.ts`, `./selection-model.ts`, `./project.ts`, `./preview-export.ts`) spread into
+ * {@link totalHandlers} below, replacing their `notYetImplementedHandler` stand-ins. STEP
+ * C3 wires the remaining two built families, `turn` (`./turn.ts`) and `page`+`pin`
+ * (`./page-pin.ts`) — both returned NEEDS_CONTEXT investigations during Step B
+ * (`.superpowers/sdd/task9-family-turn-report.md`, `task9-family-page-pin-report.md`);
+ * Step C1 closed the contract gaps those two reports proved (`./types.ts`'s `HandlerContext`
+ * — see its own "STEP C1 ADDITIONS" comment), and Step C2/C3 wrote both families without
+ * touching `types.ts`/`kernel.ts` for either family's own command routing (Step C3 DID
+ * extend `HandlerContext`/`kernel.ts` for the turn family's live-publish primitive — see
+ * `./types.ts`'s own doc comment on `publishOperationEvent`).
  *
- * `migration.*` stays on the stand-in too, for the reason `./deferred.ts`'s header
- * documents at length: `core/versions`'s `DEFERRED_CAPABILITY_KINDS` does not include any
- * `migration.*` kind, and the real guard (`capabilities/model/guards.ts`'s
- * `migrationFamilyReason`) evaluates ACTUAL phase legality rather than rejecting
- * unconditionally — so `migration.*` commands can legitimately pass the guard today, and
- * routing them through `deferredHandlers` would silently no-op a guard-accepted command
- * while pretending it was never reachable. Until a `migration` family module lands (or a
- * deliberate decision extends `core/versions` to cover it), its four kinds get the exact
- * same well-formed no-op every other unbuilt family gets — flagged here, not silently
- * guessed; see the task report for the full writeup.
+ * `turn.start` itself is STILL the sanctioned no-op inside `turnHandlers` (`./turn.ts`'s own
+ * header names the exact `core/ports` gap — reading a frozen turn candidate's send-time
+ * read-set append-bases — that blocks composing `runTurn` end to end); `turn.cancel` is
+ * real and tested. Wiring `turnHandlers` here needs neither kind to be "fully real" — it
+ * only requires `turnHandlers` to be the REAL family map (real `turn.cancel`, a documented
+ * `turn.start` no-op) instead of the generic `notYetImplementedHandler` stand-in, which is
+ * exactly what changed.
+ *
+ * `migration.*` stays on the stand-in, for the reason `./deferred.ts`'s header documents at
+ * length: `core/versions`'s `DEFERRED_CAPABILITY_KINDS` does not include any `migration.*`
+ * kind, and the real guard (`capabilities/model/guards.ts`'s `migrationFamilyReason`)
+ * evaluates ACTUAL phase legality rather than rejecting unconditionally — so `migration.*`
+ * commands can legitimately pass the guard today, and routing them through
+ * `deferredHandlers` would silently no-op a guard-accepted command while pretending it was
+ * never reachable. Until a `migration` family module lands (or a deliberate decision extends
+ * `core/versions` to cover it), its four kinds get the exact same well-formed no-op every
+ * other unbuilt family gets — flagged here, not silently guessed; see the task report for
+ * the full writeup.
  */
 type NotYetImplementedKind = Exclude<
   CommandKindV1,
@@ -77,6 +90,15 @@ type NotYetImplementedKind = Exclude<
   | "preview.retry"
   | "preview.close"
   | "export.start"
+  | "turn.start"
+  | "turn.cancel"
+  | "page.renameTitle"
+  | "page.removePlan"
+  | "page.removeConfirm"
+  | "page.removeDiscardPlan"
+  | "page.reorder"
+  | "pin.create"
+  | "pin.setStatus"
 >;
 
 /**
@@ -91,15 +113,6 @@ function notYetImplementedHandler(): ReturnType<typeof noOpOutcome> {
 }
 
 const notYetImplementedHandlers: CommandHandlerMap<NotYetImplementedKind> = {
-  "turn.start": notYetImplementedHandler,
-  "turn.cancel": notYetImplementedHandler,
-  "page.renameTitle": notYetImplementedHandler,
-  "page.removePlan": notYetImplementedHandler,
-  "page.removeConfirm": notYetImplementedHandler,
-  "page.removeDiscardPlan": notYetImplementedHandler,
-  "page.reorder": notYetImplementedHandler,
-  "pin.create": notYetImplementedHandler,
-  "pin.setStatus": notYetImplementedHandler,
   "migration.plan": notYetImplementedHandler,
   "migration.confirm": notYetImplementedHandler,
   "migration.discardPlan": notYetImplementedHandler,
@@ -107,13 +120,13 @@ const notYetImplementedHandlers: CommandHandlerMap<NotYetImplementedKind> = {
 };
 
 /**
- * The complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the four landed
- * families' maps (20: `chatHandlers` 2, `selectionHandlers` 2, `modelHandlers` 1,
- * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1) + `notYetImplementedHandlers`
- * (13, stand-in: `turn.*` 2, `page.*` 5, `pin.*` 2, `migration.*` 4). The `satisfies` clause
- * below is the compile-time exhaustiveness check the task brief requires — remove, rename,
- * or add a `CommandKindV1` member without updating one of these maps and this line stops
- * compiling; it is never a runtime surprise.
+ * The complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the six landed
+ * families' maps (29: `chatHandlers` 2, `selectionHandlers` 2, `modelHandlers` 1,
+ * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1, `turnHandlers` 2,
+ * `pageHandlers` 5, `pinHandlers` 2) + `notYetImplementedHandlers` (4, stand-in:
+ * `migration.*`). The `satisfies` clause below is the compile-time exhaustiveness check the
+ * task brief requires — remove, rename, or add a `CommandKindV1` member without updating one
+ * of these maps and this line stops compiling; it is never a runtime surprise.
  */
 export const totalHandlers = {
   ...deferredHandlers,
@@ -123,6 +136,9 @@ export const totalHandlers = {
   ...projectHandlers,
   ...previewHandlers,
   ...exportHandlers,
+  ...turnHandlers,
+  ...pageHandlers,
+  ...pinHandlers,
   ...notYetImplementedHandlers,
 } satisfies TotalHandlerMap;
 
