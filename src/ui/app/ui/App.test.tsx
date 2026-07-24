@@ -39,6 +39,11 @@ const readyPage = (): EventPayloadByKindV1["kernel.snapshot"]["pageDescriptors"]
   kitApiVersion: 1,
 });
 
+// M22 fixture: the kernel snapshot's agentIdentity, exercised through the mirror the same way
+// production data would arrive — not a hardcoded "codex" literal in Workspace (user decision
+// 2026-07-23: the design frames' identity strings are sample data, not layout).
+const AGENT_IDENTITY = { backendId: "claude", modelLabel: "sonnet-4.5" } as const;
+
 // The fake re-emits a full kernel.snapshot to model the Kernel re-broadcasting project/trust
 // state after project.create — a stand-in for the typed state events that land with the phase-8
 // wiring (plan D6). The mirror handles kernel.snapshot as a re-seed whether at subscribe or later.
@@ -49,6 +54,7 @@ const workspaceSnapshot = () =>
     activeChatId: uuidv7(),
     trust: "trusted",
     pageDescriptors: [readyPage()],
+    agentIdentity: AGENT_IDENTITY,
   });
 
 describe("App (end-to-end, FakeKernel-driven)", () => {
@@ -62,11 +68,15 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () => {
       calls += 1;
       if (calls === 1) {
-        return Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" });
+        return Promise.resolve({
+          present: false,
+          agent: "claude",
+          detail: "claude CLI not found",
+        });
       }
       return Promise.resolve({
         present: true,
-        agent: "codex",
+        agent: "claude",
         version: "0.34",
         detail: "agent ready",
       });
@@ -76,11 +86,11 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       height: 36,
     });
     open = renderer;
-    await renderer.waitForFrame((frame) => frame.includes("codex CLI not found"));
+    await renderer.waitForFrame((frame) => frame.includes("claude CLI not found"));
     await renderer.act(() => renderer.mockInput.typeText("r"));
     const frame = await renderer.waitForFrame((output) => output.includes("agent ready"));
     expect(frame).toContain("agent ready");
-    expect(frame).not.toContain("codex CLI not found");
+    expect(frame).not.toContain("claude CLI not found");
   });
 
   test("acknowledges a painted frame and opens pin input from its matching geometry result", async () => {
@@ -255,10 +265,10 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
     await renderer.act(() => kernel.emit(workspaceSnapshot()));
     const text = await renderer.waitForFrame(
-      (frame) => frame.includes("chat") && frame.includes("codex"),
+      (frame) => frame.includes("chat") && frame.includes("claude"),
     );
     expect(text).toContain("chat");
-    expect(text).toContain("codex");
+    expect(text).toContain("claude");
   });
 
   test("renders the ephemeral agent status block while a turn runs", async () => {
@@ -617,10 +627,11 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       trust: "trusted",
       capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
       pageDescriptors: [readyPage()],
+      agentIdentity: AGENT_IDENTITY,
     });
     await renderer.act(() => kernel.emit(workspace));
     const workspaceFrame = await renderer.waitForFrame(
-      (frame) => frame.includes("chat · codex") && frame.includes("preparing preview"),
+      (frame) => frame.includes("chat · claude") && frame.includes("preparing preview"),
     );
     expect(workspaceFrame).toContain("Ask for changes");
 

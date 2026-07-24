@@ -25,14 +25,14 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value=""
       />,
     );
     await handle.render();
-    const chip = findRun(handle.capture(), "codex · gpt5.5 · high");
+    const chip = findRun(handle.capture(), "claude · sonnet-4.5");
     expect(chip).toBeDefined();
     expect(chip && extractRgb(chip.fg)).toBe<string>(SHELL_PALETTE.amberHi);
     expect((chip?.attrs ?? 0) & 1).toBe(1);
@@ -44,7 +44,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value=""
@@ -60,7 +60,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={42}
         placeholder="Ask for changes…"
         value=""
@@ -79,7 +79,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={87}
         ctxCaution
         placeholder="Ask for changes…"
@@ -99,7 +99,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={42}
         placeholder="Ask for changes…"
         value=""
@@ -116,7 +116,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         disabled
         placeholder="generating… esc to cancel"
@@ -137,7 +137,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value=""
@@ -162,7 +162,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value="add a gauge"
@@ -182,7 +182,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value=""
@@ -200,7 +200,7 @@ describe("Composer component (design chatSeq composer block)", () => {
     handle.mount(
       <Composer
         id="composer"
-        modelChip="codex · gpt5.5 · high"
+        modelChip="claude · sonnet-4.5"
         ctx={null}
         placeholder="Ask for changes…"
         value=""

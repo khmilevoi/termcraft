@@ -9,7 +9,14 @@ import type { MarkdownLine, MarkdownSpan } from "../model/markdown-lite";
  */
 export interface ChatRecordProps {
   readonly id: string;
-  readonly role: "you" | "codex";
+  readonly role: "you" | "agent";
+  /**
+   * The agent's display name for the `● <agentLabel>` header (M22). `role: "agent"` no longer
+   * hardcodes which agent — `Workspace` feeds this from the kernel snapshot's `agentIdentity`,
+   * e.g. `"claude"`; an empty string renders the neutral `●` header, never an invented fallback
+   * like the design's `codex` sample data. Unused when `role` is `"you"`.
+   */
+  readonly agentLabel: string;
   readonly lines: readonly import("../model/markdown-lite").MarkdownLine[];
   /** Collapsed/persisted records render dim (design: finished records are P.dim, not green). */
   readonly dim?: boolean;
@@ -38,13 +45,19 @@ function spanStyle(span: MarkdownSpan, baseFg: `#${string}`): SpanStyle {
 
 /**
  * A collapsed, persisted chat record (design §3.2 markdown-lite chat record).
- * Renders the role header — `❯ you` amber bold, or `● codex` green bold — followed
+ * Renders the role header — `❯ you` amber bold, or `● <agentLabel>` green bold — followed
  * by one row per already-parsed {@link MarkdownLine}, each row a sequence of styled
  * span runs. Finished records render `dim` (design: `P.dim`, distinct from the
  * ephemeral in-turn record's `P.green`/`P.fg`/`P.faint`, see the phase-7 chat map §2).
+ *
+ * DIVERGENCE (design sample data, not layout): the design's chat frames (`design/02-workspace-
+ * idle.dc.html`, `design/03-workspace-generating.dc.html`) hardcode the agent header as the
+ * literal `● codex` — sample data, not layout (user decision 2026-07-23). MVP ships Claude only,
+ * so the header text is `agentLabel`, sourced from the kernel snapshot's `agentIdentity` — the
+ * glyph (`●`) and green/bold styling stay exactly as designed.
  */
 export function ChatRecord(props: ChatRecordProps) {
-  const headerText = props.role === "you" ? "❯ you" : "● codex";
+  const headerText = props.role === "you" ? "❯ you" : `● ${props.agentLabel}`;
   const headerFg = props.role === "you" ? SHELL_PALETTE.amber : SHELL_PALETTE.green;
   const baseFg = props.dim === true ? SHELL_PALETTE.dim : SHELL_PALETTE.fg;
 

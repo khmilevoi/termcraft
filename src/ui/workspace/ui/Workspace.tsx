@@ -252,6 +252,20 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       })
     : [];
 
+  const identity = mirror.agentIdentity();
+  // DIVERGENCE (design sample data, not layout): design/02-workspace-idle.dc.html and
+  // design/03-workspace-generating.dc.html hardcode the composer chip (`codex · gpt5.5 · high`),
+  // the `● codex` presence line, and the `chat · codex` chat-panel title as literal sample data
+  // (user decision 2026-07-23). MVP ships Claude only; every one of those identity texts below
+  // is now sourced from the kernel snapshot's `agentIdentity` (via the mirror), never a
+  // hardcoded literal — the glyphs (`●`), placement, and colors stay exactly as designed.
+  // `AgentIdentityV1` carries no effort field, so the design's `· high` segment is dropped from
+  // the composer chip (effort/model-picker selection is out of MVP scope). `identity === null`
+  // (no backend selected yet / kernel not yet emitting identity) renders the neutral empty
+  // text below — never an invented fallback like "agent".
+  const agentLabel = identity?.backendId ?? "";
+  const modelChip = identity === null ? "" : `${identity.backendId} · ${identity.modelLabel}`;
+
   const w = size.w;
   const h = size.h;
   const chatW = Math.round(w * 0.37);
@@ -319,18 +333,18 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             border
             borderStyle="rounded"
             borderColor={composerFocused ? SHELL_PALETTE.amber : SHELL_PALETTE.line}
-            title={composerFocused ? "❯ chat · codex" : "chat · codex"}
+            title={composerFocused ? `❯ chat · ${agentLabel}` : `chat · ${agentLabel}`}
             titleColor={composerFocused ? SHELL_PALETTE.amberHi : SHELL_PALETTE.faint}
             position="relative"
           >
             <box id="ws-chat-stream" flexGrow={1} flexDirection="column">
               <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
-                ● codex
+                {`● ${agentLabel}`}
               </text>
               {turn.phase === "running" && (
                 <AgentStatusBlock
                   id="ws-agent"
-                  agentName="codex"
+                  agentName={agentLabel}
                   connection="working"
                   spinner="⠹"
                   steps={turn.steps.map((step, index) => ({
@@ -345,7 +359,13 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 />
               )}
               {turn.phase === "terminal" && (
-                <ChatRecord id="ws-record" role="codex" dim lines={terminalRecordLines(turn)} />
+                <ChatRecord
+                  id="ws-record"
+                  role="agent"
+                  agentLabel={agentLabel}
+                  dim
+                  lines={terminalRecordLines(turn)}
+                />
               )}
               {/*
                * DIVERGENCE (M12 data-source gap): the mirror carries `PinDtoV1` but no
@@ -368,7 +388,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             </box>
             <Composer
               id="ws-composer"
-              modelChip="codex · gpt5.5 · high"
+              modelChip={modelChip}
               ctx={ctx}
               ctxCaution={ctx !== null && ctx >= 80}
               disabled={props.readOnly || turn.phase === "running" || !composerFocused}

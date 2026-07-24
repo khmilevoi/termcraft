@@ -15,7 +15,10 @@ export interface AgentGateRetry {
 /** Props for `AgentStatusBlock`. `id` is the mandatory stable id (§3.2). */
 export interface AgentStatusBlockProps {
   readonly id: string;
-  /** The agent's display name, e.g. `"codex"`. */
+  /**
+   * The agent's display name, e.g. `"claude"` (M22: sourced from the kernel snapshot's
+   * `agentIdentity`, never a hardcoded literal like the design's `codex` sample data).
+   */
   readonly agentName: string;
   /** The connection meta line, e.g. `"ratatui · connected"`. */
   readonly connection: string;

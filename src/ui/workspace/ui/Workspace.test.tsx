@@ -316,3 +316,58 @@ describe("Workspace action-derived hotkey hints", () => {
     }
   });
 });
+
+describe("Workspace agent identity (M22 — data-driven, not the design's codex/gpt5.5 sample)", () => {
+  test("renders the kernel-snapshot identity in the chat title, presence, chip, and terminal record", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" },
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.completed", {
+        turnId: uuidv7(),
+        outcome: "completed",
+        changedPages: [{ pageSlug: "main", sourceHash: TEST_SHA }],
+        warnings: [],
+        failure: null,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("chat · claude");
+    expect(text).toContain("● claude");
+    expect(text).toContain("claude · sonnet-4.5");
+    expect(text).not.toContain("codex");
+    expect(text).not.toContain("gpt5");
+  });
+
+  test("a null identity (no backend selected yet) renders the neutral empty text, never an invented fallback", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        agentIdentity: null,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("chat ·");
+    expect(text).not.toContain("codex");
+    expect(text).not.toContain("claude");
+  });
+});

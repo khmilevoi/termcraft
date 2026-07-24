@@ -4,7 +4,7 @@ import type { ShellToken } from "ui/theme";
 /** Props for the chat composer (design `chatSeq` composer block, `design/termcraft-engine.js:442-452`). */
 export interface ComposerProps {
   readonly id: string;
-  readonly modelChip: string; // "codex · gpt5.5 · high"
+  readonly modelChip: string; // e.g. "claude · sonnet-4.5" — M22: sourced from agentIdentity
   readonly ctx: number | null; // ctx%; null hides the ctx tag
   readonly ctxCaution?: boolean; // ctx>=80 -> value flips to amberHi bold
   readonly disabled?: boolean; // generating/read-only: caret faint, no cursor

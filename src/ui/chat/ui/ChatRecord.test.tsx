@@ -21,7 +21,7 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
   test("a 'you' record header renders '❯ you' in amber bold", async () => {
     const handle = await createHeadlessRenderer({ w: 30, h: 2 });
     open = handle;
-    handle.mount(<ChatRecord id="rec" role="you" lines={[]} />);
+    handle.mount(<ChatRecord id="rec" role="you" agentLabel="" lines={[]} />);
     await handle.render();
     const frame = handle.capture();
     const header = findRun(frame, "❯ you");
@@ -30,16 +30,37 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     expect((header?.attrs ?? 0) & 1).toBe(1);
   });
 
-  test("a 'codex' record header renders '● codex' in green bold", async () => {
+  test("an 'agent' record header renders '● <agentLabel>' in green bold, driven by data", async () => {
     const handle = await createHeadlessRenderer({ w: 30, h: 2 });
     open = handle;
-    handle.mount(<ChatRecord id="rec" role="codex" lines={[]} />);
+    handle.mount(<ChatRecord id="rec" role="agent" agentLabel="claude" lines={[]} />);
     await handle.render();
     const frame = handle.capture();
-    const header = findRun(frame, "● codex");
+    const header = findRun(frame, "● claude");
     expect(header).toBeDefined();
     expect(header && extractRgb(header.fg)).toBe<string>(SHELL_PALETTE.green);
     expect((header?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("a different agentLabel renders that exact name — nothing hardcoded", async () => {
+    const handle = await createHeadlessRenderer({ w: 30, h: 2 });
+    open = handle;
+    handle.mount(<ChatRecord id="rec" role="agent" agentLabel="sonnet" lines={[]} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "● sonnet")).toBeDefined();
+    expect(findRun(frame, "● claude")).toBeUndefined();
+  });
+
+  test("an empty agentLabel renders the neutral '●' header, never an invented fallback", async () => {
+    const handle = await createHeadlessRenderer({ w: 30, h: 2 });
+    open = handle;
+    handle.mount(<ChatRecord id="rec" role="agent" agentLabel="" lines={[]} />);
+    await handle.render();
+    const frame = handle.capture();
+    const header = findRun(frame, "●");
+    expect(header).toBeDefined();
+    expect(header?.text).toBe("● ");
   });
 
   test("a bold span carries the bold attribute", async () => {
@@ -48,7 +69,8 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     handle.mount(
       <ChatRecord
         id="rec"
-        role="codex"
+        role="agent"
+        agentLabel="claude"
         lines={[{ spans: [{ text: "created page main", bold: true }] }]}
       />,
     );
@@ -65,7 +87,8 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     handle.mount(
       <ChatRecord
         id="rec"
-        role="codex"
+        role="agent"
+        agentLabel="claude"
         lines={[{ spans: [{ text: "main/page.tsx", code: true, bold: true }] }]}
       />,
     );
@@ -83,7 +106,8 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     handle.mount(
       <ChatRecord
         id="rec"
-        role="codex"
+        role="agent"
+        agentLabel="claude"
         dim
         lines={[{ spans: [{ text: "resources + processes" }] }]}
       />,
@@ -99,7 +123,12 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     const handle = await createHeadlessRenderer({ w: 30, h: 3 });
     open = handle;
     handle.mount(
-      <ChatRecord id="rec" role="codex" lines={[{ spans: [{ text: "resources + processes" }] }]} />,
+      <ChatRecord
+        id="rec"
+        role="agent"
+        agentLabel="claude"
+        lines={[{ spans: [{ text: "resources + processes" }] }]}
+      />,
     );
     await handle.render();
     const frame = handle.capture();

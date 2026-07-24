@@ -26,7 +26,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -37,7 +37,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     await handle.render();
     const frame = handle.capture();
 
-    const agent = findRun(frame, "● codex");
+    const agent = findRun(frame, "● claude");
     expect(agent).toBeDefined();
     expect(agent && extractRgb(agent.fg)).toBe<string>(SHELL_PALETTE.green);
     expect((agent?.attrs ?? 0) & 1).toBe(1);
@@ -53,7 +53,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -76,7 +76,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[
@@ -106,7 +106,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -129,7 +129,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -151,7 +151,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -173,7 +173,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
@@ -195,7 +195,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="turn-status"
-        agentName="codex"
+        agentName="claude"
         connection="ratatui · connected"
         spinner="⠹"
         steps={[]}
