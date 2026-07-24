@@ -25,12 +25,34 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
-import type { EventPayloadByKindV1 } from "core/protocol";
+import { type EventPayloadByKindV1, eventPayloadV1SchemaByKind } from "core/protocol";
+import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../types";
 import { createKernel } from "./kernel";
+
+function slug(value: string): PageSlug {
+  const parsed = parsePageSlug(value);
+  if (parsed instanceof Error) throw parsed;
+  return parsed;
+}
+
+/** Resolves with the first delivered envelope matching `predicate`, subscribed BEFORE the caller dispatches anything so nothing racing ahead of the `await` is ever missed. Shared by both integration-style describe blocks below. */
+function waitForEvent(
+  kernel: ReturnType<typeof createKernel>,
+  predicate: (envelope: EventEnvelopeV1) => boolean,
+): Promise<EventEnvelopeV1> {
+  return new Promise((resolve, reject) => {
+    const unsubscribe = kernel.events((envelope) => {
+      if (!predicate(envelope)) return;
+      if (typeof unsubscribe === "function") unsubscribe();
+      resolve(envelope);
+    });
+    if (unsubscribe instanceof Error) reject(unsubscribe);
+  });
+}
 
 /**
  * Every one of §10.1's nine literal-`null`-target kinds (`capabilities/model/target.ts`'s
@@ -268,21 +290,6 @@ describe("createKernel", () => {
  * the task brief's own named example.
  */
 describe("kernel.capabilitiesChanged growth (Step C1)", () => {
-  /** Resolves with the first delivered envelope matching `predicate`, subscribed BEFORE the caller dispatches anything so nothing racing ahead of the `await` is ever missed. */
-  function waitForEvent(
-    kernel: ReturnType<typeof createKernel>,
-    predicate: (envelope: EventEnvelopeV1) => boolean,
-  ): Promise<EventEnvelopeV1> {
-    return new Promise((resolve, reject) => {
-      const unsubscribe = kernel.events((envelope) => {
-        if (!predicate(envelope)) return;
-        if (typeof unsubscribe === "function") unsubscribe();
-        resolve(envelope);
-      });
-      if (unsubscribe instanceof Error) reject(unsubscribe);
-    });
-  }
-
   test("chat.switch's capability appears with a real chatId once a chat exists, and disappears is never asserted (no chat.* removal path exists yet)", async () => {
     const kernel = createKernel(buildDeps({ chatMutations: createChatMutationsStub() }));
 
@@ -354,5 +361,153 @@ describe("kernel.capabilitiesChanged growth (Step C1)", () => {
       chatId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     expect(chatSwitchEntry?.state).toEqual({ available: true });
+  });
+});
+
+/**
+ * Kernel-assembly WP-1 task 9, Step C3 — the §11 real-registry spine deliverable. The
+ * brief's own named scenario ("admission -> attempt -> gate retry -> finalize" through a
+ * dispatched `turn.start`) is currently BLOCKED: `handlers/turn.ts`'s own header ("Gap 4")
+ * documents that `AdmissionInputV1.workspace.readSet`'s required chat-append-base/manifest
+ * facts have no honest `core/ports` source yet, so `turn.start` stays a sanctioned no-op and
+ * the turn machine can never leave `idle` through the REAL, wired Kernel — confirmed
+ * directly against the real guard (`capabilities/model/guards.ts`'s `turnCancelReason`:
+ * `phase === "idle"` always rejects `turn.cancel` with `TURN_NOT_ACTIVE`), not merely
+ * asserted. The composition itself is proven correct in isolation — against fakes, but
+ * exhaustively, including a genuine Gate-retry-then-pass case — by `core/turns/model/
+ * run-turn.test.ts`'s own suite; the ONE turn kind that IS wired for real, `turn.cancel`, is
+ * proven end to end (including its own genuinely-driven cancel handle) by `handlers/
+ * turn.test.ts`.
+ *
+ * This suite proves the SAME two properties the brief's own spine test asks for — a
+ * streamed, schema-valid event sequence and strictly monotonic `stateRevision` — through a
+ * DIFFERENT, currently-real multi-step, multi-family spine (`project` -> `chat` -> `page`),
+ * driven through the REAL `createHandlerRegistry`/`createKernel`, not an isolated family
+ * fixture. This is the spine Task 11 can generalize the SAME assertions onto once Gap 4
+ * closes and a genuine `turn.start` sequence becomes dispatchable the same way.
+ */
+describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () => {
+  test("project.open -> project.setTrust -> chat.create -> page.removePlan -> page.removeDiscardPlan: every non-snapshot event parses against its own schema, eventSeq strictly increases, and stateRevision never decreases", async () => {
+    const home = slug("home");
+    const pageStore = createFakePageStore({
+      order: [home],
+      sources: new Map([[home, { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }]]),
+    });
+    const deps = buildDeps({ chatMutations: createChatMutationsStub() });
+    const kernel = createKernel({
+      ...deps,
+      projectStore: createFakeProjectStore({ root: "/test-root", manifest: { pages: [home] } }),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+    });
+
+    const envelopes: EventEnvelopeV1[] = [];
+    const unsubscribe = kernel.events((envelope) => envelopes.push(envelope));
+    if (unsubscribe instanceof Error) throw unsubscribe;
+
+    const projectReady = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.finishOpen",
+    );
+    const openResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: "0",
+      kind: "project.open",
+      payload: { root: "/test-root" },
+    });
+    if (openResult instanceof Error) throw openResult;
+    const readyEnvelope = await projectReady;
+
+    const trustResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: readyEnvelope.stateRevision,
+      kind: "project.setTrust",
+      payload: { trust: "trusted", workspaceIdentity: "ws-1" },
+    });
+    if (trustResult instanceof Error) throw trustResult;
+    if (trustResult.status !== "accepted") {
+      throw new Error(`project.setTrust was rejected: ${JSON.stringify(trustResult)}`);
+    }
+
+    const chatChanged = waitForEvent(kernel, (envelope) => envelope.kind === "chat.changed");
+    const createResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: trustResult.resultingRevision,
+      kind: "chat.create",
+      payload: {},
+    });
+    if (createResult instanceof Error) throw createResult;
+    if (createResult.status !== "accepted") {
+      throw new Error(`chat.create was rejected: ${JSON.stringify(createResult)}`);
+    }
+    const chatEnvelope = await chatChanged;
+
+    const planReady = waitForEvent(kernel, (envelope) => envelope.kind === "page.removePlanReady");
+    const removePlanResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: chatEnvelope.stateRevision,
+      kind: "page.removePlan",
+      payload: { pageSlug: home },
+    });
+    if (removePlanResult instanceof Error) throw removePlanResult;
+    if (removePlanResult.status !== "accepted") {
+      throw new Error(`page.removePlan was rejected: ${JSON.stringify(removePlanResult)}`);
+    }
+    const planEnvelope = await planReady;
+    const planPayload = planEnvelope.payload as EventPayloadByKindV1["page.removePlanReady"];
+
+    const discardResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: planEnvelope.stateRevision,
+      kind: "page.removeDiscardPlan",
+      payload: { pageRemovePlanId: planPayload.pageRemovePlanId },
+    });
+    if (discardResult instanceof Error) throw discardResult;
+    if (discardResult.status !== "accepted") {
+      throw new Error(`page.removeDiscardPlan was rejected: ${JSON.stringify(discardResult)}`);
+    }
+
+    unsubscribe();
+
+    // eventSeq is stamped once per delivered envelope, including the bootstrap snapshot —
+    // strictly increasing across the WHOLE captured stream (§4/§13.3).
+    const eventSeqs = envelopes.map((e) => BigInt(e.eventSeq));
+    for (let i = 1; i < eventSeqs.length; i++) {
+      const prev = eventSeqs[i - 1];
+      const cur = eventSeqs[i];
+      if (prev === undefined || cur === undefined) throw new Error("unreachable");
+      expect(cur > prev).toBe(true);
+    }
+
+    // stateRevision never decreases across the stream — several events legitimately share
+    // one revision (§4), but the sequence itself is monotonic non-decreasing, and it ends
+    // strictly higher than the bootstrap snapshot's own "0".
+    const revisions = envelopes.map((e) => BigInt(e.stateRevision));
+    for (let i = 1; i < revisions.length; i++) {
+      const prev = revisions[i - 1];
+      const cur = revisions[i];
+      if (prev === undefined || cur === undefined) throw new Error("unreachable");
+      expect(cur >= prev).toBe(true);
+    }
+    expect(revisions[0]).toBe(0n);
+    expect(revisions[revisions.length - 1]).toBeGreaterThan(0n);
+
+    // Every event's own payload — not merely the ones this test happened to wait on —
+    // parses against the exact schema its own `kind` names, proving the whole streamed
+    // sequence is schema-valid end to end, not just the four envelopes explicitly awaited.
+    for (const envelope of envelopes) {
+      const schema =
+        eventPayloadV1SchemaByKind[envelope.kind as keyof typeof eventPayloadV1SchemaByKind];
+      const parsed = schema.safeParse(envelope.payload);
+      expect(parsed.success).toBe(true);
+    }
   });
 });
