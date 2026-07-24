@@ -96,4 +96,20 @@ export interface StagingService {
   snapshotToCandidate(workspace: TurnWorkspaceV1): Promise<FailureDtoV1 | CandidatePageSetV1>;
   /** Release the machine-local workspace once the candidate is frozen or the turn is abandoned. */
   retireWorkspace(workspace: TurnWorkspaceV1): Promise<FailureDtoV1 | undefined>;
+  /**
+   * Reads one frozen candidate file's own bytes back by its `relPath` (§5.4/§7.3) — closes
+   * "Gap 3" (`core/kernel/model/handlers/turn.ts`'s own header, kernel-assembly Task 9 Step
+   * C3): `TurnCandidateV1` (`core/turns/model/candidate.ts`) carries only each file's
+   * `sha256`/`size`, never its bytes ("the diff never touches content" — that file's own
+   * header) — so `runTurn`'s `RunTurnInputV1.buildValidationInput`/`buildFinalizeInput` have
+   * no way to turn a frozen candidate back into Gate's `manifestText`/page `source` RAW TEXT
+   * (`core/ports/gate-runner.ts`) or finalize's changed-page byte content without this
+   * method. `root` is `CandidatePageSetV1.root` (the SAME candidate `snapshotToCandidate`
+   * just froze); `relPath` must be one of that candidate's own `StagedFileV1.relPath`
+   * entries — reading any other path, or a candidate that was never frozen (or has since
+   * been released), is out of contract and returns a `FailureDtoV1`, never fabricated bytes.
+   * Port + fake only here — the real adapter is WP-2's job (mirrors the identical division
+   * this file's own header already states for `retireWorkspace`).
+   */
+  readCandidateFile(root: string, relPath: string): Promise<FailureDtoV1 | Uint8Array>;
 }
