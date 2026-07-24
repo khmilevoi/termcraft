@@ -602,15 +602,40 @@ function forceExportFail(context: HandlerContext, reason: string): void {
  * landed module this task must compose, never reimplement — flagged here, not smoothed over
  * with a fabricated per-job breakdown.
  *
- * THE TERMINAL EVENT: exactly one of `export.completed`/`export.failed`, matching
- * `ExportTerminalPayloadV1`'s own closed shape (`operationId`, `phase`, `destination`,
- * `generationId`, `failure`). `destination` is `EXPORT_DESTINATION` throughout. `generationId`
- * is non-null ONLY on `export.completed`, taken verbatim from `PublishExportResultV1`'s own
- * `"published"` intent — never fabricated for a failure.
+ * THE TERMINAL EVENT: exactly one of `export.completed`/`export.failed` from the moment
+ * `captureExportSnapshot` reports `"captured"` onward, matching `ExportTerminalPayloadV1`'s
+ * own closed shape (`operationId`, `phase`, `destination`, `generationId`, `failure`).
+ * `destination` is `EXPORT_DESTINATION` throughout. `generationId` is non-null ONLY on
+ * `export.completed`, taken verbatim from `PublishExportResultV1`'s own `"published"` intent
+ * — never fabricated for a failure.
+ *
+ * NOT COVERED BY THAT INVARIANT — the three failure branches below `resolveExportPageInputs`
+ * hits BEFORE a snapshot is ever captured (`resolveExportPageInputs` itself failing;
+ * `captureExportSnapshot` returning `"illegal"`; `captureExportSnapshot` returning `"failed"`):
+ * each returns `[]`, so a client that already saw `disposition: "started"` gets neither
+ * `export.started` nor a terminal event, only a `console.warn`. This is a DOCUMENTED PROTOCOL
+ * GAP, not an oversight this file can close on its own: `EXPORT_PHASES_V1`
+ * (`core/protocol/model/event-payload.ts`) is the closed tuple `["rendering", "publishing"]`
+ * — `ExportTerminalPayloadV1.phase` cannot legally hold anything else. At each of these three
+ * branches the export machine is either still `"idle"` (never touched — `resolveExportPageInputs`
+ * runs before `captureExportSnapshot` ever applies `kernel.export.begin`; a `NO_PAGES`/
+ * defensive-illegal `began` never leaves `"idle"` either) or was forced back to `"idle"` from
+ * `"preparing"` (`snapshot.ts`'s own `kernel.export.fail` on a page-read failure) — `"rendering"`
+ * was never entered, so labeling either failure `phase: "rendering"` (the value the two later,
+ * covered branches use honestly, because THEY fail from a machine genuinely `"rendering"`)
+ * would be a fabricated phase, exactly what this project's anti-fabrication rule forbids.
+ * Closing this for real needs a protocol-level change (e.g. a `"preparing"` member added to
+ * `EXPORT_PHASES_V1`, or a new event kind for a pre-capture refusal) that this handler's own
+ * lane is not authorized to make — flagged here rather than silently smoothed over with an
+ * invented phase.
  */
 async function runExportStart(context: HandlerContext): Promise<readonly PublishableEventV1[]> {
   const pages = await wrap(resolveExportPageInputs(context));
   if ("code" in pages) {
+    // NO TERMINAL EVENT HERE — documented protocol gap, see `runExportStart`'s own header
+    // ("NOT COVERED BY THAT INVARIANT"): the export machine is still `"idle"` (this runs
+    // before `captureExportSnapshot` ever applies `kernel.export.begin`), and
+    // `EXPORT_PHASES_V1` has no member an honest `export.failed` could report here.
     console.warn(
       `core/kernel/handlers/preview-export: export.start refused — could not resolve the project's page settings: ${pages.safeMessage}`,
     );
@@ -627,13 +652,20 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
   if (captured.kind === "illegal") {
     // Either a genuine `NO_PAGES` refusal or a defensive-only illegal `begin` (the guard
     // already confirmed `idle -> preparing` legality before dispatch ever reached this
-    // handler) — both share this shape; nothing ran, so nothing to recover.
+    // handler) — both share this shape; nothing ran, so nothing to recover. NO TERMINAL
+    // EVENT HERE either, for the same documented reason as the branch above: the machine
+    // never left `"idle"`, and `EXPORT_PHASES_V1` has no `"idle"` member to report it under
+    // (`runExportStart`'s own header, "NOT COVERED BY THAT INVARIANT").
     console.warn(
       `core/kernel/handlers/preview-export: export.start's captureExportSnapshot was illegal (${captured.code})`,
     );
     return [];
   }
   if (captured.kind === "failed") {
+    // NO TERMINAL EVENT HERE either — `captureExportSnapshot` already forced the machine
+    // back `"preparing" -> "idle"` (`snapshot.ts`'s own `kernel.export.fail` on a page-read
+    // failure) before returning this; `"rendering"` was never entered, so `EXPORT_PHASES_V1`
+    // again has no honest member for it (`runExportStart`'s own header).
     console.warn(
       `core/kernel/handlers/preview-export: export.start's snapshot capture failed: ${captured.failure.safeMessage}`,
     );
