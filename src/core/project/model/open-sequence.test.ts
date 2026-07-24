@@ -11,6 +11,7 @@ import {
 import type { ProjectStore } from "core/ports";
 import {
   createFakeChatStore,
+  createFakeExportPublish,
   createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
@@ -99,6 +100,7 @@ function baseDeps(
     pageReader: createFakePageStore({ order: [] }),
     pinReader: createFakePinStore(),
     chatReader: createFakeChatStore(),
+    exportPublish: createFakeExportPublish(),
     trustGate: createFakeTrustGate(),
     promptTrustDecision: async () => "grant",
     machines: m,
@@ -332,6 +334,39 @@ describe("runOpenSequence — step ordering", () => {
     });
   });
 
+  test("step 9 (content validation: a corrupt export pointer, TD §12 step 9) blocks before trust is ever resolved", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const exportPublish = createFakeExportPublish();
+      exportPublish.failNextRead(FAILURE);
+      const trustGate = createFakeTrustGate();
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), exportPublish, trustGate };
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`);
+      expect(outcome.step).toBe("content-validation");
+      expect(outcome.failure).toEqual(FAILURE);
+      expect(trustGate.calls).toEqual([]); // trust step never reached
+    });
+  });
+
+  test("step 9: a null export pointer (no export published yet) never blocks — absent is valid", async () => {
+    await context.start(async () => {
+      const log: string[] = [];
+      const store = createFakeProjectStore({ root: "/fake" });
+      const m = machines();
+      const exportPublish = createFakeExportPublish(); // readPointer() defaults to null
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), exportPublish };
+
+      const outcome = await wrap(runOpenSequence(deps));
+
+      expect(outcome).toEqual({ kind: "opened", store, trust: "trusted" });
+    });
+  });
+
   test("happy path with nothing to recover: opened, trusted, every step ran in order", async () => {
     await context.start(async () => {
       const log: string[] = [];
@@ -429,8 +464,10 @@ describe("runOpenSequence — trust (KCC §7.1/§12.8)", () => {
       expect(outcome).toEqual({ kind: "opened", store, trust: "untrusted-read-only" });
       expect(m.project.phase()).toBe("ready");
       // KCC §12.8's negative: refusal never calls TrustGate.grant, and this module's own
-      // Deps type names no Gate/HostSupervisor/migration-transform/export dependency at
-      // all — a refusal path cannot start what it was never given a reference to.
+      // Deps type names no Gate/HostSupervisor/migration-transform dependency, and its one
+      // export dependency is READ-ONLY (`readPointer`, never `publish`) — a refusal path
+      // cannot start what it was never given a reference to, or write access it was never
+      // granted.
       expect(trustGate.calls.map((c) => c.method)).toEqual(["buildSubject", "isGranted"]);
     });
   });
