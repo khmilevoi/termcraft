@@ -423,7 +423,7 @@ export interface StoreDeps {
   readonly uuidv7: () => string;
   /** The durable atomic file install (`infrastructure/durability`'s `durableFileWrite`, injected so tests can fail/observe it). Typed `DurabilityError` (not bare `Error`) because `store/transaction`'s `TransactionFsDeps` requires exactly that return type. */
   readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => DurabilityError | undefined;
-  /** The directory-flush write-through equivalent of `fsync(dirfd)` (`infrastructure/durability`'s `flushDir`). */
+  /** The directory-flush write-through equivalent of `fsync(dirfd)` (`infrastructure/durability`'s `flushDir`). Also the injection point `openProject`/`createProject` pass to `probeDurability`'s pre-flight check (M5), so a test can simulate a refused volume without one. */
   readonly flushDir: (absDir: AbsPath) => DurabilityError | undefined;
   /** The OS-lock primitive `store/lease` needs (`windowsLeaseLockApi` in production). */
   readonly lock: LeaseLockApi;

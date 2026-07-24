@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import type {
   ChatReader,
+  ExportPublishPort,
   GitIdentityV1,
   PageReader,
   PinReader,
@@ -42,10 +43,11 @@ import { buildTrustStatus, grantImplicitTrust, resolveTrustDecision } from "./tr
  * fabricated port import — the composition root supplies the real implementation once
  * `store` grows the corresponding named method.
  *
- * EXPORT POINTER VALIDATION (TD step 9's "...and export pointer...") has no port either
- * — no `core/ports` file exposes `.termcraft/export/current.json`. This function's
- * `validateProjectContents` therefore validates manifest/pages/chats/pins only; the gap
- * is documented here rather than silently skipped without a trace.
+ * EXPORT POINTER VALIDATION (TD step 9's "...and export pointer...", WP-5 Phase C task C3):
+ * `validateProjectContents` calls `ExportPublishPort.readPointer()` last, after the active
+ * chat — a `null` result (the project never published an export) never blocks; a
+ * `FailureDtoV1` (an unparseable/schema-invalid pointer, or one whose referenced generation
+ * directory is missing, D-Q4) blocks exactly like every other content-validation failure.
  *
  * CHAT ENUMERATION is likewise partial: TD step 9 says "chats" plural, but `ChatReader`
  * exposes only `open(chatId)` with no enumeration, so only the ACTIVE chat is validated.
@@ -77,6 +79,8 @@ export interface OpenSequenceDeps {
   readonly pageReader: PageReader;
   readonly pinReader: PinReader;
   readonly chatReader: ChatReader;
+  /** TD §12 step 9's "...export pointer..." (WP-5 Phase C task C3) — only `readPointer()` is ever called here, never `publish()`. */
+  readonly exportPublish: ExportPublishPort;
 
   readonly trustGate: TrustGate;
   /** The UI-level trust prompt round trip; never called when a prior grant already covers this exact subject, or on `mode: "create"`'s implicit grant. */
@@ -102,7 +106,7 @@ function blocked(
   return { kind: "blocked", step, failure };
 }
 
-/** TD step 9 minus the export-pointer gap this file's header documents. */
+/** TD step 9: manifest, canonical pages, pins, the active chat, then the export pointer. */
 async function validateProjectContents(
   deps: OpenSequenceDeps,
   store: ProjectStore,
@@ -132,6 +136,11 @@ async function validateProjectContents(
     const chat = await deps.chatReader.open(workspaceState.state.activeChatId);
     if ("code" in chat) return chat;
   }
+
+  // TD §12 step 9's "...export pointer..." (WP-5 Phase C, D-Q3/D-Q4): `null` means the
+  // project has never published an export — ABSENT IS VALID, never a block.
+  const pointer = await deps.exportPublish.readPointer();
+  if (pointer !== null && "code" in pointer) return pointer;
 
   return undefined;
 }

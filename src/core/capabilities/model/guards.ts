@@ -6,11 +6,10 @@ import {
   PROJECT_TRANSITION_TABLE,
   type TransitionTable,
 } from "core/machines";
-import type { CommandKindV1, UnavailableReason } from "core/protocol";
+import type { CapabilityTargetByKindV1, CommandKindV1, UnavailableReason } from "core/protocol";
 import { deferredCapabilityReason } from "core/versions";
 
 import type { CapabilityState, KernelStateSnapshot } from "../types";
-import type { CapabilityTargetByKindV1 } from "./target";
 import { turnLockedReason } from "./turn-lock";
 
 /**

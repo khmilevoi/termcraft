@@ -6,6 +6,7 @@ import type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
 } from "../protocol";
+import type { LayoutNode } from "../render";
 import type {
   HostSessionIdentity,
   HostSessionSpec,
@@ -394,10 +395,14 @@ export interface OneShotDeps {
 
 /**
  * The typed result of a one-shot `smoke`/`export` session (§4): the single sealed
- * stand-in frame (nonce-free), the `ready` metadata envelope, and the child's exit
- * code. A one-shot NEVER restarts — a failure is itself the result. NOTE: `frame`
- * is the documented non-conformant MVP stand-in; the conformant correlated
- * `capture` + layout-tree reply is deferred until the 2A bulk schema lands.
+ * stand-in frame (nonce-free), the `ready` metadata envelope, the resolved layout tree
+ * sealed alongside it, and the child's exit code. A one-shot NEVER restarts — a failure
+ * is itself the result. NOTE: `frame` is the documented non-conformant MVP stand-in (a
+ * styled snapshot, not the design's bulk frame schema) and must NOT be routed to any
+ * preview stream. `layout` (WP-5 Task A2) is the REAL resolved tree, decoded from the
+ * `ready` body's `layout` field — embedded there because the one-shot child exits before
+ * any correlated `query-layout` request could ever reach it
+ * (`host-state-machine.ts`'s `handleMount`, `:205-208`).
  */
 export interface OneShotResult {
   readonly identity: PreviewIdentity;
@@ -405,6 +410,7 @@ export interface OneShotResult {
   readonly ready: ControlEnvelope;
   readonly negotiatedLimits: PublicLimits;
   readonly exitCode: number | null;
+  readonly layout: LayoutNode;
 }
 
 /** One export task: a captured source at one requested size (§11.4), ordered by manifest then (w,h). */

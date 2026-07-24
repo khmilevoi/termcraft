@@ -23,7 +23,7 @@ flowchart TB
             lease["lock — OS-held ProjectLease metadata"]
         end
         subgraph ex["export/ — derived published package"]
-            exptr["current.json — active generation + manifest hash"]
+            exptr["current.json — active generation + per-file SHA-256 manifest"]
             prompt["generations/{id}/design-prompt.md"]
             runtimeapi["generations/{id}/runtime-api.json"]
             pages["generations/{id}/pages/*.tsx — canonical-source copies"]
@@ -147,9 +147,14 @@ flowchart TB
     `generations/<generationId>/`, including `runtime-api.json`, then replaces
     `current.json` only after every
     package file exists. Capture or assembly failure leaves the previous pointer
-    active. Internal scratch and cache entries are local and excluded. (The
-    publish-transaction mechanism is implemented and tested; no caller yet renders a
-    generation or assembles its operations, so export has no live producer today.)
+    active. Internal scratch and cache entries are local and excluded. Real end to
+    end now (MVP gap closeout WP-5): `export.start` renders and assembles a real
+    generation, `buildExportPublishOperations` builds its real create-generation
+    → replace-pointer → delete-old-generation operations, and the production
+    `ExportPublishPort` adapter durably publishes them; startup also validates
+    `current.json` before a project reopens (`null` — no export yet — never
+    blocks), and the headless `termcraft export` CLI drives the whole sequence
+    with no renderer.
 17. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
     independent format counter. `page.tsx` instead declares `kitApiVersion`.
     Planning mints `migrationPlanId`; confirmation mints `migrationActionId`, and the
@@ -173,15 +178,19 @@ flowchart TB
     formats — implemented across `entities/`, `store/`, and `infrastructure/` and
     exercised by their own test suites. No migration from the abandoned
     numbered-page design exists, and the (empty) migration chain has never had to
-    run one. The components that would consume this storage — the Kernel, the
-    Agent gateway's backends, and the UI shell — have not landed yet.
+    run one. The components that consume this storage have now landed: the
+    assembled Kernel (`core`) reaches it through the `store/adapters` ring behind
+    `core/ports`, and the composed UI shell drives that graph under `bun start`.
 
 ## Source anchors
 
-- `src/store/model/factory.ts` — the composition root: wires the lease, safe
-  filesystem, journal-format gate, crash recovery, the migration too-new gate,
-  schema decoders, the orphan-turn sweep, and every sub-store behind the `Store`
-  port (`openProject`/`createProject`)
+- `src/store/model/factory.ts` — the composition root: wires the durability
+  pre-flight, the lease, safe filesystem, journal-format gate, crash recovery,
+  the migration too-new gate, schema decoders, the orphan-turn sweep, and every
+  sub-store behind the `Store` port (`openProject`/`createProject`)
+- `src/infrastructure/durability/model/probe.ts` — `probeDurability`: refuses a
+  volume that cannot demonstrate durable writes (storage-identity §4) before
+  `openProject`/`createProject` mutate anything
 - `src/store/toml/model/project-toml.ts` — item 1: `project.toml`'s five
   portable fields, deterministic TOML encode/decode, and the `format_version`
   too-new gate
@@ -284,14 +293,32 @@ flowchart TB
   and `turn.json` persistence
 - `src/store/sandbox/model/project-key.ts` — item 15: `computeProjectKey`, the
   SHA-256 sandbox-parent-directory derivation
-- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` —
-  item 16: the export generation's file substructure (`design-prompt.md`,
-  `runtime-api.json`, per-page copies, `snapshots/`, `layout/`) and the render
-  pool that would produce them — no code assembles a generation yet; only the
-  publish-transaction mechanism (`wrappers.ts`, above) exists
-- `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` —
-  item 16: `runtime-api.json`'s content and the `kitApiVersion` compatibility
-  contract it encodes — no producer exists yet
+- `src/core/export/model/package.ts` — item 16: `assembleExportPackage`, the
+  in-memory export file list — `design-prompt.md`, `runtime-api.json`, per-page
+  `pages/<slug>/page.tsx` copies, `snapshots/<slug>/<w>x<h>.txt`, and the real,
+  non-empty, size-keyed `layout/<slug>.json` per page; the one remaining
+  divergence is that a `LayoutNode` carries no `text` field yet, pending the
+  runtime element catalog
+- `src/core/export/model/publish-plan.ts` — item 16:
+  `buildExportPublishOperations` and `serializeExportPointer` — the real
+  create-generation → replace-`current.json` → delete-old-generation operations
+  and the canonical `export/current.json` bytes
+- `src/core/export/model/publish.ts` — item 16: `publishExport`, the
+  reacquire-revalidate-then-intent publication window that reads the previous
+  pointer under the write permit, builds the plan, and publishes before releasing
+- `src/core/ports/export-publish.ts` — item 16:
+  `ExportPointerV1`/`exportPointerV1Schema`/`EXPORT_POINTER_TARGET` — the durable
+  `export/current.json` shape (schema version, generation id, per-file SHA-256
+  manifest) shared by writer and reader, plus the runtime-api declaration types
+- `src/host/protocol/model/embedded-declaration.ts` — item 16:
+  `EMBEDDED_RUNTIME_DECLARATION`, the `runtime-api.json` content source (module
+  name plus current/supported `kitApiVersion`) — a real producer now exists,
+  closing the earlier gap
+- `src/store/adapters/export-publish.ts` — item 16: the production
+  `ExportPublishPort` — durably publishes a generation through
+  `buildExportPublishTransaction`, and `readPointer` validates `current.json` on
+  both open paths (shallow structural parse plus a referenced-generation-dir
+  existence check; `null` — never published — never blocks)
 - `src/store/migration/model/registry.ts` — item 17: the format-counter
   too-new gate shared by every durable-file kind, and `MIGRATION_CHAIN` —
   deliberately empty; no migration has shipped

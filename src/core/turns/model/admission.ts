@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import type { StateMachine, TurnAction, TurnState } from "core/machines";
 import type {
+  ChatReader,
   CreateTurnWorkspaceInputV1,
   PinReader,
   StagingService,
@@ -35,8 +36,25 @@ import { toFinalizeReadSet } from "./read-set";
  * 1. `turnTransactions.admit(...)` commits the user record BEFORE anything else — a
  *    workspace for a turn whose user record never committed is an orphan (turn-durability
  *    §7.7 is the cleanup path for exactly that), so this call is always first.
+ * 1b. `chatReader.readAppendBase(input.targetChatId)` — read IMMEDIATELY after step 1
+ *    commits, never before. This IS the "complete read-set hashes" precondition's chat
+ *    fact (part of item 3 below, called out as its own numbered step because it is the
+ *    fix for a real production bug: reading this append base BEFORE `admit()` — as an
+ *    earlier version of this composition did, one level up in `core/kernel/model/
+ *    handlers/turn.ts` — captures the chat's state one record too early. `finalizeTurn`'s
+ *    own CAS precondition (`store/transaction/model/wrappers.ts`'s
+ *    `buildFinalizeCasPrecondition`) re-observes the chat's CURRENT state at finalize
+ *    time, which by then already includes this exact turn's own just-admitted user
+ *    record — so a baseline captured before `admit()` is stale by construction on EVERY
+ *    turn, not a corner case, and `finalize()` always fails `APPLY_STALE`/`chat`. Reading
+ *    it here, right after `admit()` durably lands, is the only point in this whole
+ *    composition where the "send-time" chat fact turn-durability §7.5 re-checks can be
+ *    captured honestly. A failure here blocks phase `"chat-append-base"` — the workspace
+ *    is never created for a turn whose read-set cannot be completed.
  * 2. `staging.createTurnWorkspace(...)` returns the verified unique per-turn workspace —
- *    called only after step 1 committed.
+ *    called only after steps 1 and 1b succeeded, with the freshly-read `chat` append base
+ *    folded into its `readSet` (never the caller's own `input.workspace.readSet`, which
+ *    carries no `chat` field at all per `AdmissionWorkspaceMaterialV1`'s own header).
  * 3. `toFinalizeReadSet(workspace.readSet)` (already landed in this slice) translates the
  *    staged read set into the finalize-time shape without loss — a `ReadSetTranslationError`
  *    here means the read-set hashes are not "complete" and finalization must not proceed.
@@ -57,6 +75,8 @@ export interface AdmissionDeps {
   readonly pinReader: PinReader;
   readonly turnTransactions: TurnTransactionService;
   readonly staging: StagingService;
+  /** Only `readAppendBase` is needed — see this file's header, step 1b, for why this must be read here, after `admit()`, never earlier. */
+  readonly chatReader: Pick<ChatReader, "readAppendBase">;
 }
 
 /**
@@ -136,13 +156,19 @@ export async function runAdmission(
   if ("code" in admissionCommit)
     return { kind: "blocked", phase: "admit", failure: admissionCommit };
 
+  // Read the chat's append base ONLY NOW, right after the commit above lands — see this
+  // file's header, step 1b, for why any earlier read is stale by construction.
+  const chatAppendBase = await wrap(deps.chatReader.readAppendBase(input.targetChatId));
+  if ("code" in chatAppendBase)
+    return { kind: "blocked", phase: "chat-append-base", failure: chatAppendBase };
+
   const workspaceInput: CreateTurnWorkspaceInputV1 = {
     turnId,
     targetChatId: input.targetChatId,
     pages: input.workspace.pages,
     manifestSlice: input.workspace.manifestSlice,
     runtimeDocs: input.workspace.runtimeDocs,
-    readSet: input.workspace.readSet,
+    readSet: { ...input.workspace.readSet, chat: chatAppendBase },
   };
   const workspace = await wrap(deps.staging.createTurnWorkspace(workspaceInput));
   if ("code" in workspace) return { kind: "blocked", phase: "workspace", failure: workspace };

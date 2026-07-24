@@ -36,6 +36,10 @@ export {
 
 export { CanonicalHashError, canonicalHash, canonicalJson } from "./model/canonical-hash";
 
+// --- Chat record wire union (WP-10 Task 2) ---------------------------------------
+export type { ChatRecordDtoV1 } from "./model/chat-record";
+export { chatRecordDtoV1Schema } from "./model/chat-record";
+
 // --- Shared DTOs ----------------------------------------------------------------
 export type {
   DiagnosticDtoV1,
@@ -71,6 +75,13 @@ export {
 
 export type { CommandPayloadByKindV1 } from "./model/command-payload";
 export { commandPayloadSchemaFor, commandPayloadSchemas } from "./model/command-payload";
+
+export type {
+  CapabilityTargetByKindV1,
+  GeometryQueryKindV1,
+  RecoveryTargetV1,
+} from "./model/capability-target";
+export { capabilityTargetByKindV1Schema } from "./model/capability-target";
 
 export type { CommandEnvelopeV1 } from "./model/command-envelope";
 export {
@@ -122,3 +133,16 @@ export {
 
 export type { EventPayloadByKindV1 } from "./model/event-payload";
 export { eventPayloadV1SchemaByKind } from "./model/event-payload";
+
+// --- M21 closed DTOs (WP-1 task 2): kernel snapshot / state-changed / capability entry --
+export type {
+  AgentIdentityV1,
+  CapabilityEntryV1,
+  CapabilityStateV1,
+  KernelModelsSnapshotV1,
+  KernelStateChangedPayloadV1,
+} from "./model/event-payload";
+export { agentIdentityV1Schema, kernelStateChangedPayloadV1Schema } from "./model/event-payload";
+
+// --- M21 closed DTOs (WP-1 task 3): preview.geometryResult's closed §4.2 result union --
+export type { GeometryQueryResultV1, LayoutNodeV1 } from "./model/event-payload";

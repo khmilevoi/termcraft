@@ -136,7 +136,7 @@ function stubSession(overrides: Partial<PreviewSession> = {}): PreviewSession {
     setTheme: async () => undefined,
     retry: async () => undefined,
     close: async () => undefined,
-    query: async () => ({ result: {}, resolvedAnchor: null }),
+    query: async () => ({ result: { kind: "checkHit", hit: null }, resolvedAnchor: null }),
     ...overrides,
   };
 }
@@ -472,7 +472,7 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
         stubSession({
           query: async () => {
             queried = true;
-            return { result: {}, resolvedAnchor: null };
+            return { result: { kind: "checkHit", hit: null }, resolvedAnchor: null };
           },
         }),
       );
@@ -517,7 +517,7 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
       const supervisor = stubHostSupervisor(() =>
         stubSession({
           query: async () => ({
-            result: {},
+            result: { kind: "checkHit", hit: null },
             resolvedAnchor: { pageSlug: "home", elementId: "btn-1", fx: 0.25, fy: 0.75 },
           }),
         }),
@@ -549,7 +549,7 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
       const supervisor = stubHostSupervisor(() =>
         stubSession({
           query: async () => ({
-            result: {},
+            result: { kind: "checkHit", hit: null },
             resolvedAnchor: { pageSlug: "home", elementId: "btn-2", fx: 0.1, fy: 0.2 },
           }),
         }),
@@ -573,7 +573,7 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
       const supervisor = stubHostSupervisor(() =>
         stubSession({
           query: async () => ({
-            result: {},
+            result: { kind: "checkHit", hit: null },
             resolvedAnchor: { pageSlug: "home", elementId: "btn-3", fx: 0.4, fy: 0.6 },
           }),
         }),
@@ -644,7 +644,10 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
                 resolvers.push(resolve);
               });
             }
-            return Promise.resolve({ result: {}, resolvedAnchor: null });
+            return Promise.resolve({
+              result: { kind: "checkHit", hit: null },
+              resolvedAnchor: null,
+            });
           },
         }),
       );
@@ -665,7 +668,7 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
       const firstPending = pending[0];
       if (firstResolver === undefined || firstPending === undefined)
         throw new Error("expected a held query");
-      firstResolver({ result: {}, resolvedAnchor: null });
+      firstResolver({ result: { kind: "checkHit", hit: null }, resolvedAnchor: null });
       // A plain `await firstPending` would resume outside this `context.start` frame (RTM-A04
       // — the same reason `admission.ts`'s own header documents): `firstPending`'s
       // continuation resumes from an externally-called resolver, so it must be re-bound.

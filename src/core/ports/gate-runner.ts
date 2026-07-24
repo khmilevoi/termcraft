@@ -77,5 +77,17 @@ export interface GateRunner {
     readonly source: string;
     readonly slug: PageSlug;
     readonly fileName?: string;
+    /**
+     * The staged candidate's ABSOLUTE on-disk file path, needed only by the smoke stage
+     * (`gate/adapters/gate-runner.ts`'s `createSmokeRender(renderer, sourcePath)`) — the real
+     * host `SmokeRenderer` resolves this path via `Bun.file` in a fresh child process cwd, so
+     * a bare `${slug}.tsx` never resolves there. Deliberately separate from `fileName` (which
+     * stays the SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics) —
+     * conflating the two would leak an absolute filesystem path into user-facing Gate error
+     * messages. Optional and additive: a caller that never staged a candidate to a real path
+     * (e.g. the canonical-page validation `project.ts`/`page-pin.ts` run) omits it and keeps
+     * today's `fileName`-or-bare-slug smoke default.
+     */
+    readonly sourcePath?: string;
   }): Promise<GateRunResultV1>;
 }

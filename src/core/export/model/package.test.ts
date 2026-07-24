@@ -39,6 +39,17 @@ const RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   publicCapabilityIds: ["cap.a"],
 };
 
+function layoutTreeBytes(box: { w: number; h: number }): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      id: "root",
+      kind: "BoxRenderable",
+      box: { x: 0, y: 0, width: box.w, height: box.h },
+      children: [],
+    }),
+  );
+}
+
 function renderResult(overrides: Partial<ExportRenderJobResultV1> = {}): ExportRenderJobResultV1 {
   return {
     manifestIndex: 0,
@@ -48,7 +59,7 @@ function renderResult(overrides: Partial<ExportRenderJobResultV1> = {}): ExportR
       manifestIndex: 0,
       styledFrame: new Uint8Array([1]),
       textFrame: new TextEncoder().encode("HOME @ 80x24"),
-      layout: new Uint8Array([9]),
+      layout: layoutTreeBytes({ w: 80, h: 24 }),
     },
     cacheHit: false,
     ...overrides,
@@ -62,7 +73,7 @@ function fileMap(
 }
 
 describe("assembleExportPackage", () => {
-  test("assembles design-prompt.md, runtime-api.json, one page copy, one layout stub, and one snapshot per render", () => {
+  test("assembles design-prompt.md, runtime-api.json, one page copy, one layout file, and one snapshot per render", () => {
     const result = assembleExportPackage({
       snapshot: SNAPSHOT,
       renders: [renderResult()],
@@ -106,11 +117,21 @@ describe("assembleExportPackage", () => {
     expect(files.get("snapshots/home/80x24.txt")).toEqual(new TextEncoder().encode("HOME @ 80x24"));
   });
 
-  test("layout/<slug>.json ships UNPOPULATED ({}) — never the render's own layout bytes", () => {
-    // KCC known-divergence: the conformant correlated capture awaits the 2A bulk schema.
+  test("layout/<slug>.json is a size-keyed object carrying every rendered size's real tree (D-Q1)", () => {
     const result = assembleExportPackage({
       snapshot: SNAPSHOT,
-      renders: [renderResult()],
+      renders: [
+        renderResult(),
+        renderResult({
+          size: { w: 120, h: 40 },
+          outcome: {
+            manifestIndex: 0,
+            styledFrame: new Uint8Array(),
+            textFrame: new TextEncoder().encode("HOME @ 120x40"),
+            layout: layoutTreeBytes({ w: 120, h: 40 }),
+          },
+        }),
+      ],
       runtimeDeclaration: RUNTIME_DECLARATION,
     });
     if (result.kind !== "assembled") throw new Error("expected assembled");
@@ -118,7 +139,73 @@ describe("assembleExportPackage", () => {
     const files = fileMap(result.files);
     const layoutBytes = files.get("layout/home.json");
     expect(layoutBytes).toBeDefined();
-    expect(new TextDecoder().decode(layoutBytes)).toBe("{}");
+    expect(layoutBytes?.byteLength).toBeGreaterThan(0);
+
+    const parsed = JSON.parse(new TextDecoder().decode(layoutBytes)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(["120x40", "80x24"]);
+    expect(parsed["80x24"]).toEqual({
+      id: "root",
+      kind: "BoxRenderable",
+      box: { x: 0, y: 0, width: 80, height: 24 },
+      children: [],
+    });
+    expect(parsed["120x40"]).toEqual({
+      id: "root",
+      kind: "BoxRenderable",
+      box: { x: 0, y: 0, width: 120, height: 40 },
+      children: [],
+    });
+  });
+
+  test("layout/<slug>.json is byte-identical across two fresh assemblies of the same inputs (determinism)", () => {
+    const build = () =>
+      assembleExportPackage({
+        snapshot: SNAPSHOT,
+        renders: [renderResult()],
+        runtimeDeclaration: RUNTIME_DECLARATION,
+      });
+    const first = build();
+    const second = build();
+    if (first.kind !== "assembled" || second.kind !== "assembled") {
+      throw new Error("expected assembled");
+    }
+
+    expect(fileMap(first.files).get("layout/home.json")).toEqual(
+      fileMap(second.files).get("layout/home.json"),
+    );
+  });
+
+  test("a page with zero rendered sizes gets the honest {} stub, never a fabricated tree", () => {
+    const result = assembleExportPackage({
+      snapshot: SNAPSHOT,
+      renders: [],
+      runtimeDeclaration: RUNTIME_DECLARATION,
+    });
+    if (result.kind !== "assembled") throw new Error("expected assembled");
+
+    const files = fileMap(result.files);
+    expect(new TextDecoder().decode(files.get("layout/home.json"))).toBe("{}");
+  });
+
+  test("a render whose layout bytes are not valid JSON is refused wholesale, not silently dropped", () => {
+    const result = assembleExportPackage({
+      snapshot: SNAPSHOT,
+      renders: [
+        renderResult({
+          outcome: {
+            manifestIndex: 0,
+            styledFrame: new Uint8Array(),
+            textFrame: new Uint8Array(),
+            layout: new TextEncoder().encode("not json{"),
+          },
+        }),
+      ],
+      runtimeDeclaration: RUNTIME_DECLARATION,
+    });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind !== "failed") return;
+    expect(result.failure.code).toBe("EXPORT_RENDER_FAILED");
   });
 
   test("runtime-api.json round-trips the exact RuntimeDeclarationBundleV1", () => {
@@ -178,7 +265,7 @@ describe("assembleExportPackage", () => {
             manifestIndex: 0,
             styledFrame: new Uint8Array(),
             textFrame: new TextEncoder().encode("HOME @ 120x40"),
-            layout: new Uint8Array(),
+            layout: layoutTreeBytes({ w: 120, h: 40 }),
           },
         }),
       ],

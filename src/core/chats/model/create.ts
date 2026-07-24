@@ -39,7 +39,9 @@ export async function createChat(
   );
   if (written !== undefined) return written;
 
-  const summary = { chatId: header.chatId, createdAt: header.createdAt };
+  // A freshly created chat has no records yet, so its derived display name (design
+  // §3.9, `core/chats/model/display-name.ts`) is null until a `user` record lands.
+  const summary = { chatId: header.chatId, createdAt: header.createdAt, displayName: null };
   deps.directory.upsert(summary);
 
   return buildChatChangedPayload({ activeChatId: header.chatId, added: [summary] });

@@ -24,7 +24,8 @@ export interface FakeCallSequence {
   next(): number;
 }
 
-function createSequence(): FakeCallSequence {
+/** Exported so a test — or another fake's own default — can mint one to share across ports. */
+export function createSequence(): FakeCallSequence {
   let n = 0;
   return { next: () => n++ };
 }

@@ -1,6 +1,8 @@
 import type { FailureDtoV1, Sha256Hex } from "core/protocol";
 import type { PageSlug } from "entities/page";
 
+import type { ReadSetFileSnapshotV1 } from "./staging";
+
 /**
  * The open-project facade `core` needs at startup (turn-durability §12 / storage-identity
  * §14.1): lease identity, the portable manifest, and the machine-local workspace state.
@@ -17,6 +19,11 @@ import type { PageSlug } from "entities/page";
  * itself. `store`'s tagged errors (`SafeFsError`, `ManifestCorruptError`,
  * `ManifestTooNewError`, …) map to `FailureDtoV1` at the adapter boundary the composition
  * root wires in phase 8; this port never names a store error class.
+ *
+ * `ReadSetFileSnapshotV1` is reused verbatim from `./staging` (the same cross-port-file
+ * import precedent `chat-store.ts`'s own `readAppendBase` and `export-publish.ts`'s
+ * `FileImageV1` import already establish) rather than a second, structurally-identical
+ * `{sha256, size}` type declared here.
  */
 
 /** The portable `target_stack` values (storage-identity §5.1), redrawn locally per C1. */
@@ -111,6 +118,17 @@ export interface ProjectStore {
   readonly root: string;
   readonly lease: ProjectLeaseIdentityV1;
   readManifest(): Promise<FailureDtoV1 | ProjectManifestV1>;
+  /**
+   * `.termcraft/project.toml`'s own raw hash+size ({@link ReadSetFileSnapshotV1}) — closes
+   * "Gap 4" (`core/kernel/model/handlers/turn.ts`'s own header, kernel-assembly Task 9):
+   * `readManifest()` returns the PARSED `ProjectManifestV1` DTO, never the raw bytes/hash
+   * `turn.start` needs for `AdmissionWorkspaceMaterialV1.readSet.manifest`
+   * (turn-durability §7.5's own CAS baseline) — no other method on this port, `StagingService`,
+   * or anywhere else in `KernelDeps` can build one honestly. Port + fake only here — the real
+   * adapter (WP-2) reads `project.toml`'s own bytes directly off disk, mirroring
+   * `StagingService.readCandidateFile`'s identical division (`core/ports/staging.ts`).
+   */
+  readManifestSnapshot(): Promise<FailureDtoV1 | ReadSetFileSnapshotV1>;
   readWorkspaceState(): Promise<FailureDtoV1 | WorkspaceStateReadV1>;
   /**
    * `model.select` (kernel-command-contract §8.2: "Validate backend capability and store

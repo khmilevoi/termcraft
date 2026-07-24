@@ -7,9 +7,12 @@ import type {
   RestoreState,
   TurnState,
 } from "core/machines";
-import type { CommandKindV1, UUIDv7, UnavailableReason } from "core/protocol";
-
-import type { CapabilityTargetByKindV1 } from "./model/target";
+import type {
+  CapabilityTargetByKindV1,
+  CommandKindV1,
+  UUIDv7,
+  UnavailableReason,
+} from "core/protocol";
 
 /**
  * `core/capabilities`'s shared vocabulary: §10.1's `CapabilityState`/`CapabilityEntry`

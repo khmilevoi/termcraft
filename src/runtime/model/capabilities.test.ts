@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  colorDepthAtom,
   defineTweaks,
   hostModeAtom,
   isExport,
   isExportAtom,
   themeCapability,
+  usePages,
+  viewportSizeAtom,
 } from "./capabilities";
 import { themeTokens } from "./tokens";
 
@@ -29,5 +32,23 @@ describe("runtime capabilities (§6)", () => {
     const cap = themeCapability();
     expect(cap.themeId).toBe("dark-default");
     expect(cap.tokens).toBe(themeTokens("dark-default"));
+  });
+});
+
+describe("navigation capability (§6, design §5.5)", () => {
+  test("usePages().goTo is a callable, dormant no-op in MVP (M16)", () => {
+    const pages = usePages();
+    expect(typeof pages.goTo).toBe("function");
+    // DORMANT: the host-protocol emission and shell tab switch land in phase 7 —
+    // calling it now records/emits nothing observable, so the only current
+    // contract is that it is callable and returns nothing.
+    expect(pages.goTo("settings")).toBeUndefined();
+  });
+});
+
+describe("viewport/terminal capability (§6, M17)", () => {
+  test("viewportSizeAtom and colorDepthAtom expose fixed MVP defaults", () => {
+    expect(viewportSizeAtom()).toEqual({ w: 80, h: 24 });
+    expect(colorDepthAtom()).toBe(24);
   });
 });

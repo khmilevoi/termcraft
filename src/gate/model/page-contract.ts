@@ -1,7 +1,7 @@
 import type { PageMeta } from "entities/page";
 
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { Tok } from "./lexer";
+import type { SyntaxKind, Tok } from "./lexer";
 
 /** kit API versions this gate accepts (runtime-api §7.1). MVP ships version 1 only. */
 const SUPPORTED_KIT_API_VERSIONS = new Set<number>([1]);
@@ -93,11 +93,7 @@ function parseObject(toks: Tok[], i: number): { value: Literal; next: number } |
   return "invalid";
 }
 
-const BINDING_KEYWORDS = new Set<number>(
-  ["ConstKeyword", "LetKeyword", "VarKeyword"]
-    .map((name) => SK[name])
-    .filter((k): k is number => k !== undefined),
-);
+const BINDING_KEYWORDS = new Set<SyntaxKind>([SK.ConstKeyword, SK.LetKeyword, SK.VarKeyword]);
 
 /**
  * Validate the page contract from the source WITHOUT executing it (runtime-api §4):

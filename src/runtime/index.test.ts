@@ -17,6 +17,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "defineTweaks",
       "isExport",
       "themeCapability",
+      "usePages",
     ] as const) {
       // `name` is a member of the `as const` list above, so tsc already checks it
       // against runtime's real export keys — a typo fails the type check, not just

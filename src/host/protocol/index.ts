@@ -19,6 +19,10 @@ export {
   validateRuntimeDeclarationBundle,
 } from "./model/bundle";
 export {
+  EMBEDDED_RUNTIME_DECLARATION,
+  SUPPORTED_KIT_API_VERSIONS,
+} from "./model/embedded-declaration";
+export {
   decodeClientHello,
   decodeHostHello,
   encodeClientHello,

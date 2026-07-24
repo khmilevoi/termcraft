@@ -8,6 +8,7 @@ import type {
   WorkspaceStateReadV1,
   WorkspaceStateV1,
 } from "../project-store";
+import type { ReadSetFileSnapshotV1 } from "../staging";
 
 /**
  * In-memory {@link ProjectStore} fake (6D task brief). Backed by a mutable manifest and a
@@ -35,13 +36,28 @@ const DEFAULT_WORKSPACE_STATE: WorkspaceStateV1 = {
   resourceLimits: {},
 };
 
+/**
+ * A deterministic, valid-looking 64-hex-char digest derived from a seed — no real crypto,
+ * no randomness. Mirrors `fakes/staging.ts`'s own identical `fakeSha256Hex` helper
+ * verbatim: two independent, narrow fakes each get their own tiny copy rather than a new
+ * shared fakes-utility module this task's scope does not authorize.
+ */
+function fakeSha256Hex(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) | 0;
+  const base = (h >>> 0).toString(16).padStart(8, "0");
+  return base.repeat(8).slice(0, 64);
+}
+
 export type ProjectStoreFailableMethod =
   | "readManifest"
+  | "readManifestSnapshot"
   | "readWorkspaceState"
   | "writeWorkspaceState";
 
 export type ProjectStoreCall =
   | { readonly method: "readManifest" }
+  | { readonly method: "readManifestSnapshot" }
   | { readonly method: "readWorkspaceState" }
   | { readonly method: "writeWorkspaceState"; readonly patch: Partial<WorkspaceStateV1> }
   | { readonly method: "close" };
@@ -59,7 +75,15 @@ export function createFakeProjectStore(options: {
 }): FakeProjectStore {
   const lease: ProjectLeaseIdentityV1 = { root: options.root };
   const manifest: ProjectManifestV1 = {
-    projectId: "fake-project-1",
+    // A fixed, valid-looking UUIDv7 (no real crypto/randomness, matching `fakeSha256Hex`'s
+    // own convention above) — not the earlier `"fake-project-1"`, which was a genuine
+    // fake-fidelity gap (`ProjectManifestV1.projectId` is typed a loose `string` at THIS
+    // port, but the real store always mints it via `uuidv7()`, and the wire protocol's own
+    // `kernelSnapshotPayloadV1Schema`/`kernelStateChangedPayloadV1Schema` require a real
+    // UUIDv7 wherever `projectId` crosses that boundary — `handlers/project.ts`'s
+    // `kernel.project.finishOpen` metadata, closed in the §10 smoke closeout, is exactly
+    // such a crossing).
+    projectId: "0192f000-0000-7000-8000-000000000001",
     name: "Fake Project",
     createdAt: "2024-01-01T00:00:00.000Z",
     targetStack: "generic",
@@ -73,6 +97,7 @@ export function createFakeProjectStore(options: {
   const calls: ProjectStoreCall[] = [];
   const queues: Record<ProjectStoreFailableMethod, FailureDtoV1[]> = {
     readManifest: [],
+    readManifestSnapshot: [],
     readWorkspaceState: [],
     writeWorkspaceState: [],
   };
@@ -86,6 +111,20 @@ export function createFakeProjectStore(options: {
     const queued = queues.readManifest.shift();
     if (queued !== undefined) return queued;
     return manifest;
+  }
+
+  async function readManifestSnapshot(): Promise<FailureDtoV1 | ReadSetFileSnapshotV1> {
+    calls.push({ method: "readManifestSnapshot" });
+    const queued = queues.readManifestSnapshot.shift();
+    if (queued !== undefined) return queued;
+    // An honest, deterministic hash+size derived from the CONSTRUCTED manifest — never a
+    // fixed placeholder — so it changes whenever a test builds a differently-shaped
+    // manifest, and stays stable across repeated reads of the same one.
+    const serialized = JSON.stringify(manifest);
+    return {
+      size: new TextEncoder().encode(serialized).byteLength,
+      sha256: fakeSha256Hex(serialized),
+    };
   }
 
   async function readWorkspaceState(): Promise<FailureDtoV1 | WorkspaceStateReadV1> {
@@ -115,6 +154,7 @@ export function createFakeProjectStore(options: {
     root: options.root,
     lease,
     readManifest,
+    readManifestSnapshot,
     readWorkspaceState,
     writeWorkspaceState,
     close,

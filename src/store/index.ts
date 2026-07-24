@@ -114,3 +114,21 @@ export {
   evaluateSessionResume,
   selectSeedRecords,
 } from "store/jsonl";
+
+// ---- adapter ring (WP-2): one production adapter per `core/ports` contract this module
+// owns, each wrapping the real `OpenProject` facade above -------------------------------
+export type { StoreAdapterDeps } from "./adapters/types";
+export { toFailureDto } from "./adapters/failure";
+export { createProjectStoreAdapter } from "./adapters/project-store";
+export { createChatStoreAdapter } from "./adapters/chat-store";
+export { createPageStoreAdapter } from "./adapters/page-store";
+export { createPinStoreAdapter } from "./adapters/pin-store";
+export { createStagingAdapter } from "./adapters/staging";
+export { createTurnTransactionsAdapter } from "./adapters/turn-transactions";
+export { createProjectWriteAdapter } from "./adapters/project-write";
+export type { ProjectionsAdapter } from "./adapters/projections";
+export { createProjectionsAdapter } from "./adapters/projections";
+export { createTrustAdapter } from "./adapters/trust";
+export { createRecoveryAdapter } from "./adapters/recovery";
+export { createSessionCheckpointAdapter } from "./adapters/session-checkpoint";
+export { ExportSnapshotStaleError, createExportPublishAdapter } from "./adapters/export-publish";

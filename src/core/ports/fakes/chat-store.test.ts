@@ -75,4 +75,56 @@ describe("createFakeChatStore", () => {
     await store.switchActive(header.chatId);
     expect(store.calls.map((c) => c.method)).toEqual(["create", "open", "switchActive"]);
   });
+
+  // Gap 4 closure (kernel-assembly Task 9): `turn.start` needs the chat's send-time
+  // append-base (`{length, prefixSha256}`) — a raw byte-level fact `open()`/`ChatHandleV1`
+  // never expose (they decode records, never raw bytes). See `chat-store.ts`'s own doc
+  // comment on `readAppendBase` for the full citation.
+  describe("readAppendBase()", () => {
+    test("on an unknown chat id returns an intrinsic not-found failure", async () => {
+      const store = createFakeChatStore();
+      const result = await store.readAppendBase("missing-chat");
+      expect("code" in result).toBe(true);
+    });
+
+    test("on a chat with no records returns a stable, deterministic base", async () => {
+      const store = createFakeChatStore();
+      const header = await store.create();
+      if ("code" in header) throw new Error("unexpected failure");
+      const first = await store.readAppendBase(header.chatId);
+      const second = await store.readAppendBase(header.chatId);
+      if ("code" in first) throw new Error("unexpected failure");
+      if ("code" in second) throw new Error("unexpected failure");
+      // Deterministic: reading twice with nothing appended in between yields the SAME
+      // length/hash — never a value that changes just because it was read again.
+      expect(first).toEqual(second);
+      expect(first.prefixSha256).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    test("changes once a record is appended — never a fabricated, unchanging baseline", async () => {
+      const store = createFakeChatStore();
+      const header = await store.create();
+      if ("code" in header) throw new Error("unexpected failure");
+      const before = await store.readAppendBase(header.chatId);
+      if ("code" in before) throw new Error("unexpected failure");
+
+      store.seedRecords(header.chatId, [userRecord("r1")]);
+      const after = await store.readAppendBase(header.chatId);
+      if ("code" in after) throw new Error("unexpected failure");
+
+      expect(after.length).not.toBe(before.length);
+      expect(after.prefixSha256).not.toBe(before.prefixSha256);
+    });
+
+    test("failNext() overrides the next call with the queued failure", async () => {
+      const store = createFakeChatStore();
+      const header = await store.create();
+      if ("code" in header) throw new Error("unexpected failure");
+      store.failNext("readAppendBase", FAILURE);
+      const first = await store.readAppendBase(header.chatId);
+      expect(first).toEqual(FAILURE);
+      const second = await store.readAppendBase(header.chatId);
+      expect("code" in second).toBe(false);
+    });
+  });
 });

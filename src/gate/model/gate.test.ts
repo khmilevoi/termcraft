@@ -51,6 +51,47 @@ describe("runGate (§6.3 pipeline)", () => {
     expect(result.warnings.some((w) => w.kind === "unguarded-randomness")).toBe(true);
   });
 
+  test("absent referencedIds skips the dropped-id lint", async () => {
+    const result = await runGate({ source: cleanSource, slug: SLUG });
+    expect(result.warnings.some((w) => w.kind === "dropped-id")).toBe(false);
+  });
+
+  test("a referencedIds entry missing from the candidate warns dropped-id without failing it", async () => {
+    const result = await runGate({
+      source: cleanSource,
+      slug: SLUG,
+      referencedIds: ["t", "cpu-gauge"],
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      result.warnings.some((w) => w.kind === "dropped-id" && w.message.includes("cpu-gauge")),
+    ).toBe(true);
+  });
+
+  test("a raw low-level element without an id warns unpointed-element without failing the candidate", async () => {
+    const src = cleanSource.replace('<Text id="t">hi</Text>', "<box>hi</box>");
+    const result = await runGate({ source: src, slug: SLUG });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((w) => w.kind === "unpointed-element")).toBe(true);
+  });
+
+  test("absent listedSlugs skips the unlisted-navigation lint", async () => {
+    const src = cleanSource.replace("hi", '${(() => { usePages().goTo("nowhere"); return "" })()}');
+    const result = await runGate({ source: src, slug: SLUG });
+    expect(result.warnings.some((w) => w.kind === "unlisted-navigation")).toBe(false);
+  });
+
+  test("navigation to a page absent from listedSlugs warns unlisted-navigation without failing it", async () => {
+    const src = cleanSource.replace("hi", '${(() => { usePages().goTo("nowhere"); return "" })()}');
+    const result = await runGate({ source: src, slug: SLUG, listedSlugs: [SLUG] });
+    expect(result.ok).toBe(true);
+    expect(
+      result.warnings.some(
+        (w) => w.kind === "unlisted-navigation" && w.message.includes("nowhere"),
+      ),
+    ).toBe(true);
+  });
+
   test("an injected type-check stage contributes fatal errors", async () => {
     const typeError: GateError = {
       kind: "type",

@@ -1,9 +1,12 @@
 // Domain-free Windows durability primitives (Spike G,
 // `docs/spikes/07-durability-primitive/FINDINGS.md`): the directory-flush
 // write-through equivalent of `fsync(dirfd)`, the atomic six-step file install,
-// and the pre-flight volume gate. The ProjectStore transaction engine
-// (storage-identity §10, turn-durability §4) composes these into recoverable
-// multi-file operations; this ring knows nothing about pages, chats, or journals.
+// the pre-flight volume gate, and `probeDurability`'s composition of the two
+// gates into the single check the ProjectStore runs before mutating a volume
+// (storage-identity §4, turn-durability §1/§13). The ProjectStore transaction
+// engine (storage-identity §10, turn-durability §4) also composes these into
+// recoverable multi-file operations; this ring knows nothing about pages,
+// chats, or journals.
 export type { DurabilityError } from "./types";
 export {
   DirectoryFlushError,
@@ -14,6 +17,8 @@ export {
 export { flushDir } from "./model/flush-dir";
 export { durableFileWrite } from "./model/durable-write";
 export { assertDurableVolume, getDriveType, isDurableDriveType } from "./model/volume";
+export { probeDurability } from "./model/probe";
+export type { ProbeDurabilityOverrides } from "./model/probe";
 export {
   DRIVE_CDROM,
   DRIVE_FIXED,

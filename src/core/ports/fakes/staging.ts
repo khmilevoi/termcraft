@@ -27,12 +27,14 @@ function fakeSha256Hex(seed: string): Sha256Hex {
 export type StagingFailableMethod =
   | "createTurnWorkspace"
   | "snapshotToCandidate"
-  | "retireWorkspace";
+  | "retireWorkspace"
+  | "readCandidateFile";
 
 export type StagingCall =
   | { readonly method: "createTurnWorkspace"; readonly input: CreateTurnWorkspaceInputV1 }
   | { readonly method: "snapshotToCandidate"; readonly turnId: string }
-  | { readonly method: "retireWorkspace"; readonly turnId: string; readonly effective: boolean };
+  | { readonly method: "retireWorkspace"; readonly turnId: string; readonly effective: boolean }
+  | { readonly method: "readCandidateFile"; readonly root: string; readonly relPath: string };
 
 export interface FakeStagingService extends StagingService {
   readonly calls: readonly StagingCall[];
@@ -47,7 +49,19 @@ export function createFakeStagingService(): FakeStagingService {
     createTurnWorkspace: [],
     snapshotToCandidate: [],
     retireWorkspace: [],
+    readCandidateFile: [],
   };
+
+  // Per-workspace synthetic content, keyed by `turnId` — built once, at `createTurnWorkspace`
+  // time, from the ONE real byte payload this fake ever actually receives (`manifestSlice`)
+  // plus deterministic (never random) synthetic bytes for every other staged file, since
+  // `StagingPageSourceV1`/`StagingRuntimeDocV1` carry only a `sourcePath` STRING, never real
+  // bytes, for this fake to copy. Copied into `contentByCandidateRoot` (keyed by the frozen
+  // candidate's own root) once `snapshotToCandidate` runs, so `readCandidateFile` can look a
+  // relPath up by the SAME root a caller actually holds after freezing — never by `turnId`,
+  // which `readCandidateFile`'s own port signature never takes.
+  const contentByTurnId = new Map<string, ReadonlyMap<string, Uint8Array>>();
+  const contentByCandidateRoot = new Map<string, ReadonlyMap<string, Uint8Array>>();
 
   function failNext(method: StagingFailableMethod, failure: FailureDtoV1): void {
     queues[method].push(failure);
@@ -61,7 +75,7 @@ export function createFakeStagingService(): FakeStagingService {
     if (queued !== undefined) return queued;
 
     const pageFiles: StagedFileV1[] = input.pages.map((page) => ({
-      relPath: `pages/${page.pageSlug}/index.tsx`,
+      relPath: `pages/${page.pageSlug}.tsx`,
       sha256: fakeSha256Hex(page.sourcePath),
       size: 0,
     }));
@@ -76,6 +90,22 @@ export function createFakeStagingService(): FakeStagingService {
       size: input.manifestSlice.byteLength,
     };
     const files = [manifestFile, ...pageFiles, ...runtimeFiles];
+
+    // The one real byte payload this fake ever receives (`manifestSlice`) is stored
+    // verbatim; every other staged file gets deterministic synthetic content derived from
+    // its own `sourcePath` — see this function's own header comment on `contentByTurnId`.
+    const content = new Map<string, Uint8Array>();
+    content.set(manifestFile.relPath, input.manifestSlice);
+    for (const page of input.pages) {
+      content.set(
+        `pages/${page.pageSlug}.tsx`,
+        new TextEncoder().encode(`fake-page-source:${page.sourcePath}`),
+      );
+    }
+    for (const doc of input.runtimeDocs) {
+      content.set(doc.relPath, new TextEncoder().encode(`fake-runtime-doc:${doc.sourcePath}`));
+    }
+    contentByTurnId.set(input.turnId, content);
 
     live.add(input.turnId);
     return {
@@ -93,11 +123,34 @@ export function createFakeStagingService(): FakeStagingService {
     calls.push({ method: "snapshotToCandidate", turnId: workspace.turnId });
     const queued = queues.snapshotToCandidate.shift();
     if (queued !== undefined) return queued;
+    const root = `/fake-candidate/${workspace.turnId}`;
+    // Copied from `contentByTurnId` (never re-keyed by `turnId` again after this point) —
+    // `readCandidateFile` only ever receives the CANDIDATE's own root, matching the real
+    // port's contract (a candidate is the one thing `runTurn` still holds a reference to
+    // once the workspace itself has been retired).
+    contentByCandidateRoot.set(root, contentByTurnId.get(workspace.turnId) ?? new Map());
+    return { root, files: workspace.files, totalBytes: workspace.totalBytes };
+  }
+
+  function candidateFileNotFound(root: string, relPath: string): FailureDtoV1 {
     return {
-      root: `/fake-candidate/${workspace.turnId}`,
-      files: workspace.files,
-      totalBytes: workspace.totalBytes,
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: `no candidate file "${relPath}" under "${root}"`,
+      details: { root, relPath },
     };
+  }
+
+  async function readCandidateFile(
+    root: string,
+    relPath: string,
+  ): Promise<FailureDtoV1 | Uint8Array> {
+    calls.push({ method: "readCandidateFile", root, relPath });
+    const queued = queues.readCandidateFile.shift();
+    if (queued !== undefined) return queued;
+    const bytes = contentByCandidateRoot.get(root)?.get(relPath);
+    if (bytes === undefined) return candidateFileNotFound(root, relPath);
+    return bytes;
   }
 
   async function retireWorkspace(workspace: TurnWorkspaceV1): Promise<FailureDtoV1 | undefined> {
@@ -109,7 +162,14 @@ export function createFakeStagingService(): FakeStagingService {
     return undefined;
   }
 
-  return { createTurnWorkspace, snapshotToCandidate, retireWorkspace, calls, failNext };
+  return {
+    createTurnWorkspace,
+    snapshotToCandidate,
+    retireWorkspace,
+    readCandidateFile,
+    calls,
+    failNext,
+  };
 }
 
 type _Conforms = AssertConforms<StagingService, FakeStagingService>;

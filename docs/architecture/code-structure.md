@@ -4,19 +4,25 @@ where a file goes, which direction its imports may point, and which shapes are
 forbidden. It is the one document in `docs/architecture/` written for a reader who
 *does* read the source language; the others deliberately are not.
 
-Seven source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
-`host/`, `gate/`, `store/`, and `agent/` are real source today. Five of those are
-components the design spec names — [`modules.md`](modules.md) counts the same five
-(runtime facade, Gate, HostSupervisor, Project store, Agent gateway) — while
-`entities/` and `infrastructure/` are additions this convention makes on top of the
-seven. `core/` (the Kernel), `ui/`, and the `main.ts` composition root do not exist
-yet — this document is still their contract, and every section below marks the parts
-that describe them as not yet built. Source anchors move to real paths as each piece
-lands; see `## Source anchors`.
+Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
+`host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` are real source today.
+Seven of those are components the design spec names — [`modules.md`](modules.md)
+counts the same seven — while `entities/` and `infrastructure/` are additions this
+convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
+`entrypoint/` ring that owns their lifecycle have landed, `core`'s own Kernel is
+fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
+WP-1) — `createKernel`, the seven-machine/mailbox/capability wiring, and a real
+command handler registry answering all 43 command kinds — and the production
+adapter graph mapping `store`/`agent`/`gate`/`host` onto `core/ports/` has landed
+too (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) is the
+composition root that builds a real `KernelDeps` from that graph and constructs a
+real `KernelPort` for interactive mode; `demo` mode alone still runs `ui`'s
+in-memory kernel. Source anchors move to real paths as each piece lands; see
+`## Source anchors`.
 
 ```mermaid
 flowchart LR
-    main["main.ts · composition root<br/>(not yet built)<br/>the only file that imports every module"]
+    main["main.tsx · demo.tsx · entrypoint/<br/>composition root — real adapter graph<br/>wired for interactive mode (WP-4)"]
 
     subgraph adapters["Adapters — implement the ports they are handed"]
         store["store/<br/>storage core<br/>(Git adapter: design only, no code yet)"]
@@ -27,11 +33,11 @@ flowchart LR
     end
 
     subgraph inner["Inner — knows the domain, imports no adapter"]
-        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes<br/>(not yet built)"]
+        core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes"]
         entities["entities/<br/>Page · Chat · Turn · Pin<br/>pure types · no ports"]
     end
 
-    ui["ui/ · OpenTUI shell<br/>(not yet built)"]
+    ui["ui/ · OpenTUI shell<br/>(phase 7 complete)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
     infra["infrastructure/<br/>durability · fs-guard · framing · clock ·<br/>uuid · process (owned Job Object tree)<br/>domain-free"]
 
@@ -60,11 +66,14 @@ flowchart LR
 
    ```text
    src/
-     main.ts            composition root — the only file that imports every module
-                         (not yet built)
+     main.tsx           interactive root + `_host`/`export` argv dispatch [landed]
+     demo.tsx           demo root, in-memory kernel                       [landed]
+     entrypoint/        shell selection, terminal lifetime, signals       [landed]
+                         (interactive mode wires the real adapter graph, WP-4;
+                          headless `export` driver, WP-5 Phase D)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
-     core/              Kernel — the only domain decision-maker         (not yet built)
+     core/              Kernel — the only domain decision-maker         [landed]
        ports/           contracts core consumes: GitHistory, GitCommitter, AgentBackend…
        turns/  versions/  export/  chats/
        types.ts
@@ -88,7 +97,7 @@ flowchart LR
        index.ts
      gate/              validation; declares the SmokeRenderer port it consumes [landed]
      host/              HostSupervisor, PreviewSession, design-host protocol    [landed]
-     ui/                OpenTUI shell; imports core's boundary types only       (not yet built)
+     ui/                OpenTUI shell; imports core's boundary types only       [landed]
      runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
      infrastructure/    domain-free technical capabilities                     [landed]
        clock/  durability/  fs-guard/  framing/  process/  uuid/
@@ -97,7 +106,8 @@ flowchart LR
    `agent/` splits in two on purpose. `agent/types.ts` is the port — the
    mechanism-blind contract (start a fenced attempt, cancel it, health-check,
    report models × efforts, derive a session scope) that names no vendor and
-   imports no vendor SDK, so phase 6 can lift it verbatim into `core/ports/`.
+   imports no vendor SDK; `core/ports/agent-backend.ts` now carries the Kernel-side
+   counterpart consumed by phase-6 orchestration.
    Four sibling folders are the shared tier every backend may reuse:
    `confinement/` (the deny-by-default rule, parameterized over a table of tool
    names rather than hard-coding any), `session/` (session-scope derivation and
@@ -192,7 +202,7 @@ flowchart LR
    same test in place, so that is an unextracted candidate, not a violation.
 
 7. **`core` imports no other module.** It imports `entities/` and its own `ports/`,
-   nothing else. `main.ts` constructs the adapters and injects them; the arrows in
+   nothing else. `main.tsx` constructs the adapters and injects them; the arrows in
    [`modules.md`](modules.md) (`kernel --> pstore`, `kernel --> host`, …) are
    runtime calls, not imports. Three things follow: no import cycle between `core`
    and `store` even though each needs the other's names; `core` is testable against
@@ -207,19 +217,22 @@ flowchart LR
    and lets the user switch between turns, and the stored `(agent, model, effort)`
    triple is domain state the Kernel owns. So `core` consumes a registry — enumerate
    the available backends, take one by id — rather than a single `AgentBackend`;
-   `main.ts` supplies the registry with the backends the build knows about, and
+   `main.tsx` supplies the registry with the backends the build knows about, and
    `core` selects from it. The division holds generally: the composition root wires
    *what exists*, the Kernel decides *what is used*. Item 7 is untouched — `core`
    still imports no backend, and `AgentBackend` remains a spec-named port while the
    registry around it is this document's shape.
 
-   Landed today: the port itself and one backend behind it. `agent/index.ts`
-   exports the port types plus a single `createProductionClaudeBackend()` that
-   assembles the real wiring (the SDK query, the Job Object tree factory, a real
-   sleep, and the Windows reparse-point backstop). The registry this item
-   describes is not built — with `core` and `main.ts` still absent there is no
-   composition root to hold one and no Kernel to select from it, so today's single
-   production factory stands in for the one-entry case.
+   Landed today: the Kernel-side registry contract and model-selection logic, the
+   backend port, and one backend behind it. `agent/index.ts` exports the port types
+   plus a single `createProductionClaudeBackend()` that assembles the real wiring
+   (the SDK query, the Job Object tree factory, a real sleep, and the Windows
+   reparse-point backstop), and `agent/adapters/agent-registry.ts`'s
+   `createProductionAgentRegistry()` is the one-entry `AgentRegistry` over it
+   (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) now
+   constructs that registry and every other adapter, and injects the whole graph
+   into `createKernel` for interactive mode — the composition root this item
+   describes is real, not merely a runnable root.
 
 9. **Two entry points, one binary — per platform, and not everything is inside it.**
    `bun build --compile` ships the shell and the design-host entry together (§4.1).
@@ -237,10 +250,32 @@ flowchart LR
    helper import is emitted by the transform.
 
    Landed today: the compiler extraction and the three-specifier resolver both
-   match this item exactly. The `_host --stdio` argv check and the injectable
-   protocol loop it would drive exist too, but nothing wires them to real process
-   stdio yet — no `bun build --compile` binary and no `main.ts` exist, so `termcraft
-   _host` is not yet a runnable second entry point, only the engine one would drive.
+   match this item exactly. `main.tsx`'s first branch now recognizes a `_host
+   --stdio` argv (`parseHostArgs`) and runs `runHostStdio` against real process
+   stdio before the interactive bootstrap, so `termcraft _host --stdio` — the
+   compiled binary invoking itself via `process.execPath`, or `bun run <srcRoot>
+   _host --stdio` in dev — is a runnable second entry point. `createHostSpawnCommand`
+   (`src/host/supervisor/model/spawn-command.ts`) builds the matching compiled-vs-dev
+   argv, and `src/entrypoint/model/create-shell.ts` (WP-4) now constructs it and
+   spawns it against a real `HostSupervisor` for interactive mode — the composition-
+   root wiring this item names has landed. The compiled-vs-dev `isCompiled` flag
+   itself is detected by comparing `process.execPath`'s basename against the Bun
+   runtime's own executable names (`bun`/`bun.exe`): the installed `bun-types`
+   pin does not yet declare `Bun.isStandaloneExecutable`, the newer, more direct API
+   for this — revisit once it does.
+
+   A third `main.tsx` branch (M8, WP-5 Phase D) adds `termcraft export [dir]` as a
+   THIRD runnable entry point, scanned the same way as `_host` (`parseExportArgs`,
+   tolerating the argv-position shift between a compiled binary and `bun run
+   <srcRoot>`). Unlike the interactive root, it never constructs `ui` or acquires a
+   renderer: `src/entrypoint/model/run-export.ts`'s `runHeadlessExport` composes the
+   SAME real adapter graph `create-shell.ts`'s `interactiveShell` builds, then drives
+   `runExport` — dispatch `project.open`, dispatch `export.start`, await the terminal
+   event — directly at the resulting `KernelPort`, closing the shell on every exit
+   path. `main.tsx` stays thin: `formatExportOutcome` decides the stream/text/exit
+   code (destination on stdout and exit 0 on success; the message — including the
+   §3.1 trust-refusal wording on an untrusted project — on stderr and a non-zero exit
+   otherwise), and `main.tsx` only resolves the root argument, writes, and exits.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
@@ -264,27 +299,53 @@ flowchart LR
 
 ## Source anchors
 
-Seven modules landed; `core/`, `ui/`, and `main.ts` have not (item 1). The
-anchors below split accordingly: real files for what exists, design-spec sections
-for what is still contract only.
+`core/` (phase 6), `ui/` (phase 7), the executable roots plus their `entrypoint/`
+ring, and the production adapter graph those roots compose (MVP gap closeout
+WP-2/WP-4, item 1) have all landed. The anchors below are real source files almost
+throughout; the few design-spec sections that remain are kept for one of two reasons
+only — the code does not exist yet (the `GitHistory`/`GitCommitter` page-history
+adapter), or the spec stays the authority for a detail the code does not encode (the
+final group's own heading spells out which is which).
 
 **Module shape (item 2) and the alias map**
 
 - `CLAUDE.md` — Code style: the module shape (`ui/`, `model/`, `types.ts`,
   `index.ts`) and the atomic-function rule this document builds on
 - `tsconfig.json` (`compilerOptions.paths`) — the alias map item 2 and `CLAUDE.md`'s
-  Imports section enforce; the `agent` bare + wildcard pair is now live (the Claude
-  tier reaches the shared tier as `agent/confinement/...`, `agent/session/...`,
-  `agent/health/...`, `agent/run/...`, never relatively), and `core` and `ui` stay
-  reserved ahead of those two modules landing
+  Imports section enforce; the `agent`, `core`, and `ui` bare + wildcard pairs are
+  live, and cross-module imports use those boundaries rather than climbing paths
 - `src/entities/page/index.ts`, `src/entities/page/types.ts`,
   `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
   `index.ts` shape, with no `ui/` because the module has none
 - `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
-  Claude backend now produces both, and the `core` that would consume them (item 8)
-  still does not exist
+  Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
+
+**Kernel and UI boundaries (items 1, 4, 7, 8)**
+
+- `src/core/index.ts`, `src/core/types.ts` — the landed Kernel public boundary:
+  `createKernel` plus every Command/Result/Event DTO boundary type `ui` imports
+  (`core/index.test.ts` proves nothing internal leaks through it)
+- `src/core/kernel/index.ts`, `src/core/kernel/model/kernel.ts`,
+  `src/core/kernel/model/kernel.integration.test.ts` — `createKernel`'s own assembly
+  (the seven machines, the command mailbox, the capability-growth event bus, the
+  handler registry) and the package's own end-to-end integration gate (kernel-assembly
+  WP-1 Task 11)
+- `src/core/mailbox/index.ts`, `src/core/machines/index.ts`,
+  `src/core/capabilities/index.ts` — the command mailbox (decode/dedupe/revision-
+  guard/capability-guard/dispatch/publish), the seven state-machine factories, and the
+  capability guard/projector the mailbox and the Kernel's own snapshot are built from
+- `src/core/ports/`, `src/core/turns/`, and `src/core/protocol/` — the consumed ports
+  (+ their full in-memory `fakes/` set), turn orchestration, and closed command/event
+  DTO surface
+- `src/ui/index.ts` — the landed leaf UI public boundary, including `App`,
+  `createUiRoot`, `createUiDeps`, and the UI-declared `KernelPort`
+- `src/ui/app/model/root.tsx`, `src/ui/app/ui/App.tsx` — the disposable OpenTUI
+  root seam and reactive application root that phase 8 composes
+- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`, and
+  `src/ui/preview/model/interaction.ts` — the interaction ownership boundary from
+  terminal input through exact Kernel commands and displayed-frame geometry tokens
 
 **`agent/` and the shared-vs-vendor split (items 1, 5, 8)**
 
@@ -397,6 +458,10 @@ vendor tier's own pre-split run-loop file.
 - `src/infrastructure/durability/index.ts`, `src/infrastructure/fs-guard/index.ts` —
   the two submodules that stand in for the single `fs/` folder this document
   sketches
+- `src/infrastructure/durability/model/probe.ts` — `probeDurability`: composes the
+  cheap `assertDurableVolume` gate with a real `flushDir` write-through probe into
+  the one pre-flight check `store/model/factory.ts`'s `openProject`/`createProject`
+  run before any mutation of the target volume
 - `src/infrastructure/process/types.ts`, `src/infrastructure/process/index.ts` —
   the `ProcessTree`/`ProcessTreeFactory` contract and public entry: the newest
   domain-free member, five process-level operations and no domain vocabulary
@@ -409,10 +474,10 @@ vendor tier's own pre-split run-loop file.
 **Ports and the composition boundary (items 4, 5, 7, 9, 10)**
 
 - `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
-  uses as its port-placement illustration (item 5): `gate` declares it, and `host`
-  provides the one-shot session an adapter would wrap (`runOneShotSession`) — but
-  no code satisfies the `SmokeRenderer` interface itself, and no composition root
-  wires the two together, because `main.ts` does not exist
+  uses as its port-placement illustration (item 5): `gate` declares it, `host`'s
+  `src/host/adapters/smoke-renderer.ts` satisfies it over `runOneShotSession`
+  (MVP gap closeout WP-2), and `src/entrypoint/model/create-shell.ts` (WP-4)
+  constructs and wires the two together for interactive mode
 - `src/host/supervisor/types.ts`, `src/host/supervisor/model/supervisor.ts` — the
   real `HostSupervisor`; blocker B4 (phase 6 slice 6D) resolved the former
   restart-aware-`PreviewHandle`-vs-non-restart-aware-`PreviewSession` split —
@@ -426,7 +491,11 @@ vendor tier's own pre-split run-loop file.
   records why `supervisor.ts` follows the same interactionMode/resize/setMode/query
   pattern rather than reusing this function directly
 - `src/gate/model/import-scan.ts` — the saved-page import allowlist (item 11's last
-  forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal
+  forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal;
+  the same scan also fatally rejects dynamic-code use (`eval`, `new Function`, and
+  their common evasions), skipping identifier/bracket tokens `./jsx`'s `scanJsx`
+  confirms are genuine JSX children text so a page's own display copy is never
+  mistaken for a live reference
 - `src/host/session/model/resolver.ts` — the runtime resolver plugin item 9
   describes; registers three specifiers (`@termcraft/runtime`, `react/jsx-runtime`,
   `react/jsx-dev-runtime`), not yet the single `@termcraft/runtime/jsx-runtime`
@@ -439,8 +508,29 @@ vendor tier's own pre-split run-loop file.
   describes (`materializeCompiler`: extracted once to a per-user cache, then
   spawned)
 - `src/host/session/model/entry.ts` — `runHostStdio`/`parseHostArgs`: the injectable
-  engine the `termcraft _host` second composition root (item 9) would drive; not yet
-  wired to real process stdio by any binary entry point
+  engine the `termcraft _host` second composition root (item 9) drives; wired to
+  real process stdio by `src/main.tsx`'s first `import.meta.main` branch
+- `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
+  the compiled-vs-dev argv (item 9) `HostSupervisor` spawns the `_host --stdio`
+  child with; called by `src/entrypoint/model/create-shell.ts` (WP-4)
+- `src/entrypoint/model/run-export.ts` — `runExport`/`runHeadlessExport`/
+  `parseExportArgs`/`formatExportOutcome` (M8, WP-5 Phase D): the headless
+  `termcraft export` driver `src/main.tsx`'s third argv branch calls; dispatches
+  `project.open` then `export.start` at the real composed `KernelPort` (no
+  renderer), maps `export.start`'s own guard rejections
+  (`PROJECT_UNTRUSTED`/`TURN_RUNNING`) to the §3.1 trust-refusal wording and a
+  running-turn refusal, and checks the page count once `export.start` is accepted
+  (its handler emits no terminal event for a zero-page project) rather than
+  duplicating any guard logic
+- `src/host/protocol/model/embedded-declaration.ts` — `EMBEDDED_RUNTIME_DECLARATION`
+  / `SUPPORTED_KIT_API_VERSIONS`: this binary's ONE embedded runtime-declaration
+  bundle, read by `src/main.tsx`'s `_host` branch and by every
+  `HostSupervisorDeps`/`SmokeRendererAdapterDeps`/`ExportRenderAdapterDeps.
+  runtimeDeclaration` the composition root builds (WP-4), so the exact-equality
+  handshake check (`handshake.ts`'s `declarationsEqual`) can never diverge from a
+  retyped copy; lives in `host/protocol` (which owns the
+  `RuntimeDeclarationBundleV1` type and validator) rather than in `runtime`, so
+  `runtime` stays the leaf item 10 requires
 
 **`store` and the Git adapter (items 1, 4, 6, 11)**
 
@@ -462,9 +552,21 @@ the code does not encode**
 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 the seven-module
   split, strict boundaries, workspace extractability, and the transport-neutral
-  Kernel boundary (`core/`, `ui/`, and `main.ts` remain unbuilt); §3.6 the
-  runtime-selected agent triple, whose Kernel-owned selection has no code (§6.1's
-  `AgentBackend` contract is now anchored to `src/agent/types.ts` above)
+  Kernel boundary, now including the production adapter graph behind `main.tsx`
+  (MVP gap closeout WP-2/WP-4). §3.6 remains the design authority for the
+  runtime-selected agent triple, whose landed Kernel selection code is anchored
+  above
+- `src/entrypoint/model/run-app.ts`, `src/entrypoint/model/create-shell.ts`,
+  `src/entrypoint/model/bootstrap.ts`, `src/entrypoint/model/process-boundary.ts`,
+  `src/main.tsx`, `src/demo.tsx` — `docs/superpowers/specs/2026-07-22-application-
+  entrypoints-design.md`'s terminal lifetime, signal-driven shutdown, mode
+  selection, and the commands, now including the production dependency
+  composition `createShell("interactive", …)` builds (WP-4) and the
+  `uncaughtException`/`unhandledRejection` panic-recovery boundary M9 asked for
+  (`process-boundary.ts`'s `restoreTerminal()`, followed by an injectable
+  `ProcessExit` seam that terminates the process — restoring alone left the
+  process hanging with the renderer free to re-corrupt the terminal and the
+  project lease/host children still held; round-1 fix on WP-4's own review)
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet

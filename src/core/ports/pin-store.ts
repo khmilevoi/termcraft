@@ -20,9 +20,38 @@ import type { Pin, PinEvent } from "entities/pin";
  * commands blocker B3 names as unreachable through `store`'s current public surface; B3's
  * resolution (named domain methods grown onto `store`'s `TransactionEngine`) is upstream
  * work a sibling agent owns in this same slice.
+ *
+ * `readEvents`/`findPageForPin` close "surface 3"
+ * (`.superpowers/sdd/task9-family-page-pin-report.md`): the pin-to-page resolution primitive
+ * that report proved missing for `pin.setStatus`'s handler
+ * (`core/kernel/model/handlers/page-pin.ts`) to compose `core/pins/model/set-status.ts`'s
+ * `setPinStatus` without fabricating a `pageSlug` or a raw event log. Port + fake only here —
+ * the real adapter (WP-2, `store`) implements both against the actual comments JSONL.
  */
 export interface PinReader {
   fold(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly Pin[]>;
+  /**
+   * The page's complete, unfolded pin-event log — the raw `PinEvent[]` `fold()`'s own
+   * projection is built from, but never returns itself. `core/pins/model/set-status.ts`'s
+   * `SetPinStatusInputV1.priorEvents` needs exactly this: the raw log, not `fold()`'s
+   * folded `Pin[]`, because `Pin` (`entities/pin`) cannot carry the `createdRecordId`/
+   * `latestRecordId`/`updatedAt` a `PinDtoV1` requires (`core/pins/model/pin-projection.ts`'s
+   * own header names this exact gap). An empty array for a page with no comments log yet,
+   * mirroring `fold()`'s own rule.
+   */
+  readEvents(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly PinEvent[]>;
+  /**
+   * Resolves which page owns a standalone `pinId`. Needed because `pin.setStatus`'s payload
+   * and capability target (kernel-command-contract §8.2/§10.1) carry only `{ pinId, status }`
+   * — never a `pageSlug` — at any layer (verified against `core/protocol/model/
+   * command-payload.ts`'s `pinSetStatusPayloadSchema` and `core/capabilities/model/
+   * target.ts`'s `pin.setStatus` extractor), while every other `PinReader`/`PinMutations`
+   * method here is scoped by an explicit `pageSlug` parameter. `null` is a genuine miss — no
+   * page's pin log currently contains a `pin:created` for this id — never conflated with a
+   * real I/O fault, which surfaces as `FailureDtoV1` instead (mirrors `core/ports/
+   * projections.ts`'s own "a missing/malformed entry is a MISS, never an error" convention).
+   */
+  findPageForPin(pinId: string): Promise<FailureDtoV1 | PageSlug | null>;
 }
 
 export interface PinMutations {

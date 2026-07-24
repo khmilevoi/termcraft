@@ -122,7 +122,15 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
     await Promise.race([done, pump]);
   } finally {
     clearInterval(heartbeat);
-    if (!exited) resolveDone();
   }
+  // `pump` can finish two ways: an explicit ExitRequest already ran `performExit` (the
+  // `done` half of the race resolved it), or `io.input` simply ended — the parent's pipe
+  // closed with no ExitRequest ever sent. Spike D: a Reatom + OpenTUI process does not exit
+  // on its own once its renderer is destroyed, so the "stdin closed" case needs the SAME
+  // explicit-exit guarantee as every other termination path, or the child is orphaned with a
+  // live headless renderer and no supervisor left to kill it. `performExit` is idempotent
+  // (its own `exited` guard), so this is a no-op on the already-exited path and the missing
+  // guarantee on the stdin-closed path.
+  performExit({ code: 0, reason: "stdin closed" });
   await done;
 }

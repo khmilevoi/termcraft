@@ -24,3 +24,6 @@ export type {
   FencedEvent,
 } from "./types";
 export { createProductionClaudeBackend } from "./claude";
+// M18: the one-entry production `AgentRegistry` over the backend above (WP-2
+// Task 7 — see `agent/adapters/agent-registry.ts` for the mapping notes).
+export { createProductionAgentRegistry } from "./adapters/agent-registry";

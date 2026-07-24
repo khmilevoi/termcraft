@@ -7,7 +7,7 @@ import type {
   PublicLimits,
   RuntimeDeclarationBundleV1,
 } from "../protocol";
-import type { RenderHandle } from "../render";
+import type { LayoutNode, RenderHandle } from "../render";
 import type { HostMode, InteractionMode, Size, TerminalCapabilities } from "../types";
 
 /** A page's static metadata after structural validation of the imported module. */
@@ -52,6 +52,15 @@ export interface ReadyBody {
   readonly frameIdentity: FrameIdentity;
   /** Tweak declarations — empty in MVP (set-tweak is a later phase). */
   readonly tweaks: readonly never[];
+  /**
+   * The resolved layout tree (design doc §4.2), sealed here ONLY for `smoke`/`export`
+   * one-shot mounts (WP-5 Task A1, D-Q8): the one-shot child exits immediately after this
+   * `ready` + the first frame (`host-state-machine.ts`'s `handleMount`), before any
+   * correlated `query-layout` request could ever arrive, so the tree travels in the
+   * `ready` body instead of a second round trip. Absent for `preview`/`historical`, which
+   * fetch it on demand via `query-layout` instead.
+   */
+  readonly layout?: LayoutNode;
 }
 
 /** The `set-mode` request body (host-supervision §7). */

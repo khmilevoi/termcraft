@@ -49,6 +49,17 @@ export interface WriteMutex {
   isActive(permit: ProjectWritePermit): boolean;
   /** Starts a sequential chain of permit-protected write steps. */
   chain(permit: ProjectWritePermit): WriteMutexChain<void>;
+  /**
+   * The currently-active permit, or `null` when the mutex is free. Exists for a caller that
+   * does not itself hold a `ProjectWritePermit` reference but needs to prove one is already
+   * held by SOMEONE ELSE right now — the WP-2 export-publish adapter's exact situation
+   * (`ExportPublishPort.publish(plan)` carries no permit parameter at all, per
+   * `core/ports/export-publish.ts`'s own header: "the real adapter already holds the SAME
+   * `WriteMutex` instance... reacquired internally"). Every ordinary caller that already
+   * holds a permit (every named `TransactionEngine` method, `ProjectWriteCoordinator`) has
+   * no need for this — they pass their own permit to `isActive`/`chain` instead.
+   */
+  currentPermit(): ProjectWritePermit | null;
 }
 
 export interface WriteMutexDeps {
@@ -159,6 +170,10 @@ export function createWriteMutex(deps: WriteMutexDeps = defaultWriteMutexDeps())
         ? { error: null, result: undefined }
         : makeInvalidChainResult<void>(permit);
       return makeWriteMutexChain(permit, isActive, Promise.resolve(initialState));
+    },
+
+    currentPermit() {
+      return activePermitId === null ? null : { permitId: activePermitId };
     },
   };
 }

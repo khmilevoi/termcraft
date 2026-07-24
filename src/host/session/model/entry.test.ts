@@ -99,4 +99,35 @@ describe("runHostStdio (in-memory transport)", () => {
     expect(hostHello.kind).toBe("host.hello");
     expect(hostHello.sessionId).toBe(SESSION_ID);
   });
+
+  test("still performs the explicit-exit guarantee (Spike D) when the input iterable simply ends", async () => {
+    const exits: number[] = [];
+
+    async function* input() {
+      yield clientHelloFrame();
+      // No more chunks — the iterable just ends, simulating the parent's pipe closing with
+      // no `shutdown` control message and no fatal ExitRequest ever raised. Important 3
+      // (WP-3 fix pass): without an explicit guarantee on THIS path, `io.exit` is never
+      // called and the live headless renderer is never destroyed — the child is orphaned.
+    }
+
+    await runHostStdio({
+      argv: ["exe", "_host", "--stdio"],
+      input: input(),
+      output: () => {},
+      now: () => 1000,
+      exit: (code) => {
+        exits.push(code);
+      },
+      deps: {
+        runtimeDeclaration: RUNTIME_DECLARATION,
+        limits: PROTOCOL_HARD_LIMITS,
+        createRenderer: async () => {
+          throw new Error("no mount in this test");
+        },
+      },
+    });
+
+    expect(exits).toEqual([0]);
+  }, 5_000);
 });

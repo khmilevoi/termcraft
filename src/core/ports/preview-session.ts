@@ -1,4 +1,10 @@
-import type { CommandPayloadByKindV1, FailureDtoV1, FrameTokenV1, Sha256Hex } from "core/protocol";
+import type {
+  CommandPayloadByKindV1,
+  FailureDtoV1,
+  FrameTokenV1,
+  GeometryQueryResultV1,
+  Sha256Hex,
+} from "core/protocol";
 import type { Size } from "entities/page";
 
 /**
@@ -66,16 +72,16 @@ export interface TerminalCapabilitiesV1 {
 
 /**
  * The host-side answer to one geometry query (host-supervision §7; kernel-command-contract
- * §8.1/§9). `result` stays the closed per-`queryKind` body host-supervision defines — not
- * yet drafted upstream, hence `core/protocol/model/event-payload.ts`'s own placeholder
- * schema for `preview.geometryResult` — so this port carries the same bounded-record
- * placeholder rather than inventing a shape the wire protocol does not fix yet.
- * `resolvedAnchor` is set only when a `hit`/`pin-anchor` query resolves an exact page,
- * element, and finite fractional point — precisely the condition under which the Kernel
- * mints a `GeometryTokenV1` (kernel-command-contract §8.1).
+ * §8.1/§9). `result` is the same closed §4.2 `checkHit`/`rectOf`/`describe`/`layoutTree`
+ * union `core/protocol/model/event-payload.ts` closed for `preview.geometryResult`'s own
+ * `result` field (M21) — imported directly from `core/protocol` rather than redeclared, so
+ * the two never drift apart (ports are allowed to import `core/protocol`, never the
+ * reverse). `resolvedAnchor` is set only when a `hit`/`pin-anchor` query resolves an exact
+ * page, element, and finite fractional point — precisely the condition under which the
+ * Kernel mints a `GeometryTokenV1` (kernel-command-contract §8.1).
  */
 export interface PreviewGeometryQueryResultV1 {
-  readonly result: Readonly<Record<string, unknown>>;
+  readonly result: GeometryQueryResultV1;
   readonly resolvedAnchor: Readonly<{
     pageSlug: string;
     elementId: string;

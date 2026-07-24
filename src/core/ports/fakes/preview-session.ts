@@ -163,7 +163,12 @@ export function createFakePreviewSession(
     calls.push({ method: "query", frameToken });
     const queuedFailure = queues.query.shift();
     if (queuedFailure !== undefined) return queuedFailure;
-    return queryResults.shift() ?? { result: {}, resolvedAnchor: null };
+    // Default "nothing resolved" answer: an unresolved `checkHit` (M21's closed
+    // `GeometryQueryResultV1`, `core/protocol`) pairs naturally with the default
+    // `resolvedAnchor: null` below — a scripted `queueQueryResult` overrides both.
+    return (
+      queryResults.shift() ?? { result: { kind: "checkHit", hit: null }, resolvedAnchor: null }
+    );
   }
 
   return {

@@ -23,5 +23,14 @@ export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
 export type { ManifestSlice, ManifestScanInput, ManifestScanResult } from "./model/manifest";
 export { lintDeterminism } from "./model/lints";
+export { createSmokeRender } from "./model/smoke";
+export { smokeResultToErrors } from "./ports/smoke-renderer";
+export type { SmokeRenderer, SmokeRequest, SmokeResult } from "./ports/smoke-renderer";
 export { runGate } from "./model/gate";
 export type { GateInput, GatePorts } from "./model/gate";
+
+// ---- adapters (adapter-ring plan, Task 6): the production `core/ports` `GateRunner`
+// this module owns. Imports `core/ports` type-only to prove conformance (decision C2);
+// nothing under `core/` imports back.
+export { createGateRunnerAdapter } from "./adapters/gate-runner";
+export type { GateRunnerAdapterDeps } from "./adapters/gate-runner";
