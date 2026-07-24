@@ -7,7 +7,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
 import { createUiDeps } from "ui/app";
-import { TEST_SHA, createFakeKernel, event, snapshot } from "ui/testing";
+import { TEST_SHA, TEST_TS, createFakeKernel, event, snapshot } from "ui/testing";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { Workspace } from "./Workspace";
@@ -314,6 +314,69 @@ describe("Workspace action-derived hotkey hints", () => {
       expect(inert && extractRgb(inert.fg)).toBe(SHELL_PALETTE.faint);
       expect((inert?.attrs ?? 0) & 1).toBe(0);
     }
+  });
+});
+
+describe("Workspace chat scrollback (design §3.2 — persisted records above the ephemeral block, WP-10 Task 8)", () => {
+  test("a chat.records tail renders as ChatRecords above the running turn's ephemeral status block", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const chatId = uuidv7();
+    // Events are applied before mount (matching this file's existing pattern throughout) —
+    // no post-mount Reatom write here, so no `act()` wrap is needed.
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: chatId,
+        trust: "trusted",
+        agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" },
+      }),
+    );
+    deps.mirror.apply(
+      event("chat.records", {
+        chatId,
+        records: [
+          {
+            kind: "user",
+            recordId: uuidv7(),
+            turnId: uuidv7(),
+            text: "build a system monitor",
+            selection: null,
+            pins: [],
+            ts: TEST_TS,
+          },
+          {
+            kind: "agent",
+            recordId: uuidv7(),
+            turnId: uuidv7(),
+            text: "created **page main**",
+            changedPages: ["main"],
+            warnings: [],
+            ts: TEST_TS,
+          },
+        ],
+        prevCursor: null,
+      }),
+    );
+    deps.mirror.apply(event("turn.started", { turnId: uuidv7(), chatId, deadline: TEST_TS }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const findRow = (needle: string) =>
+      rows.findIndex((row) => row.some((run) => run.text.includes(needle)));
+
+    const youRow = findRow("❯ you");
+    const boldRow = findRow("page main");
+    const generatingRow = findRow("generating design");
+    expect(youRow).toBeGreaterThanOrEqual(0);
+    expect(boldRow).toBeGreaterThan(youRow);
+    // The persisted scrollback sits ABOVE the ephemeral status block (design §3.2).
+    expect(generatingRow).toBeGreaterThan(boldRow);
+
+    const boldRun = rows[boldRow]?.find((run) => run.text.includes("page main"));
+    expect((boldRun?.attrs ?? 0) & 1).toBe(1);
   });
 });
 

@@ -4,7 +4,7 @@ import { reatomComponent, useWrap } from "@reatom/react";
 import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
-import { AgentStatusBlock, ChatRecord, Composer, PinList } from "ui/chat";
+import { AgentStatusBlock, ChatRecord, ChatScrollback, Composer, PinList } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
@@ -341,6 +341,19 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
                 {`● ${agentLabel}`}
               </text>
+              {/*
+               * The persisted chat scrollback (design §3.2: "the block collapses into the
+               * persisted agent record… above" — spec:149-160). Fed by the mirror's `records`
+               * slice (WP-10 Task 7, the active chat's tail) and painted ABOVE the ephemeral
+               * block below — never mixed with it, matching `design/03-workspace-generating.
+               * dc.html`'s `chatSeq`/`drawChat` layering (persisted seq entries, then the live
+               * `⠹ generating design…` block).
+               */}
+              <ChatScrollback
+                id="ws-scrollback"
+                records={mirror.records()}
+                agentLabel={agentLabel}
+              />
               {turn.phase === "running" && (
                 <AgentStatusBlock
                   id="ws-agent"
