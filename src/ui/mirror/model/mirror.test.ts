@@ -557,6 +557,85 @@ describe("mirror.apply — chats / selection / pins / diagnostics / export", () 
   });
 });
 
+describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
+  // A DTO-shaped `chat.records` user record fixture; `chatId` is not part of the record itself
+  // (it lives on the envelope's `chatId` field) — this helper only builds the record body.
+  const userRecord = () => ({
+    kind: "user" as const,
+    recordId: uuidv7(),
+    turnId: uuidv7(),
+    text: "build a system monitor",
+    selection: null,
+    pins: [],
+    ts: TEST_TS,
+  });
+
+  test("chat.records for the active chat sets records", () => {
+    const m = createMirror();
+    const chatId = uuidv7();
+    m.apply(snapshot({ activeChatId: chatId }));
+    const record = userRecord();
+    m.apply(event("chat.records", { chatId, records: [record], prevCursor: null }));
+    expect(m.records()).toEqual([record]);
+  });
+
+  test("chat.records for a non-active chat is ignored", () => {
+    const m = createMirror();
+    const activeChatId = uuidv7();
+    const otherChatId = uuidv7();
+    m.apply(snapshot({ activeChatId }));
+    m.apply(
+      event("chat.records", { chatId: otherChatId, records: [userRecord()], prevCursor: null }),
+    );
+    expect(m.records()).toEqual([]);
+  });
+
+  test("a fresh kernel.snapshot clears records", () => {
+    const m = createMirror();
+    const chatId = uuidv7();
+    m.apply(snapshot({ activeChatId: chatId }));
+    m.apply(event("chat.records", { chatId, records: [userRecord()], prevCursor: null }));
+    expect(m.records()).toHaveLength(1);
+    m.apply(snapshot());
+    expect(m.records()).toEqual([]);
+  });
+
+  test("switching the active chat (chat.changed) clears the stale tail", () => {
+    const m = createMirror();
+    const chatA = uuidv7();
+    const chatB = uuidv7();
+    m.apply(snapshot({ activeChatId: chatA }));
+    m.apply(event("chat.records", { chatId: chatA, records: [userRecord()], prevCursor: null }));
+    expect(m.records()).toHaveLength(1);
+    m.apply(
+      event("chat.changed", {
+        activeChatId: chatB,
+        added: [{ chatId: chatB, createdAt: TEST_TS, displayName: null }],
+        updated: [],
+        removedChatIds: [],
+      }),
+    );
+    expect(m.records()).toEqual([]);
+  });
+
+  test("chat.changed that keeps the SAME active chat does not clear an already-loaded tail", () => {
+    const m = createMirror();
+    const chatId = uuidv7();
+    m.apply(snapshot({ activeChatId: chatId }));
+    m.apply(event("chat.records", { chatId, records: [userRecord()], prevCursor: null }));
+    expect(m.records()).toHaveLength(1);
+    m.apply(
+      event("chat.changed", {
+        activeChatId: chatId,
+        added: [],
+        updated: [{ chatId, createdAt: TEST_TS, displayName: "hi" }],
+        removedChatIds: [],
+      }),
+    );
+    expect(m.records()).toHaveLength(1);
+  });
+});
+
 describe("mirror.apply — out-of-scope kinds are counter-only no-ops", () => {
   test("kernel.stateChanged advances counters but changes no slice", () => {
     const m = createMirror();

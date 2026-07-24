@@ -13,6 +13,7 @@ import type { AnyEventEnvelope } from "ui/kernel";
 import type {
   AgentIdentity,
   CapabilityState,
+  ChatRecord,
   ChatsMirror,
   ExportMirror,
   PreviewMirror,
@@ -38,6 +39,14 @@ export interface Mirror {
   readonly turn: Atom<TurnMirror>;
   readonly preview: Atom<PreviewMirror>;
   readonly chats: Atom<ChatsMirror>;
+  /**
+   * The ACTIVE chat's persisted tail (WP-10 Task 7), fed by `chat.records`. A single bulk-replace
+   * atom, not a keyed `Map<chatId, records[]>` cache: the slice deliberately holds only the
+   * active chat's records (the Reatom "bulk replace is `atom.set`" guidance, RTM rules) — a
+   * re-switch back to a chat reloads its tail from a fresh `chat.records` (Task 5/6) rather than
+   * showing a cached copy, trading one re-load for avoiding unbounded UI memory (MVP tradeoff).
+   */
+  readonly records: Atom<readonly ChatRecord[]>;
   readonly pinsByPage: Atom<ReadonlyMap<string, readonly PinDtoV1[]>>;
   readonly selection: Atom<SelectionMirror>;
   readonly diagnostics: Atom<ReadonlyMap<UUIDv7, DiagnosticDtoV1>>;
@@ -79,6 +88,7 @@ export function createMirror(): Mirror {
   const turn = atom<TurnMirror>(IDLE_TURN, "ui.mirror.turn");
   const preview = atom<PreviewMirror>(NO_PREVIEW, "ui.mirror.preview");
   const chats = atom<ChatsMirror>({ activeChatId: null, summaries: new Map() }, "ui.mirror.chats");
+  const records = atom<readonly ChatRecord[]>([], "ui.mirror.records");
   const pinsByPage = atom<ReadonlyMap<string, readonly PinDtoV1[]>>(
     new Map(),
     "ui.mirror.pinsByPage",
@@ -123,14 +133,15 @@ export function createMirror(): Mirror {
         chats.set({ activeChatId: payload.activeChatId, summaries: new Map() });
         agentIdentity.set(agentIdentityFromSnapshot(payload));
         // A fresh snapshot is the authoritative reset point; transient slices (turn, preview,
-        // selection, export, pins, diagnostics) are rebuilt from the events that follow it —
-        // there is no replay (§9), so a subscription started mid-turn simply starts idle.
+        // selection, export, pins, diagnostics, records) are rebuilt from the events that follow
+        // it — there is no replay (§9), so a subscription started mid-turn simply starts idle.
         turn.set(IDLE_TURN);
         preview.set(NO_PREVIEW);
         selection.set(null);
         exportAtom.set(IDLE_EXPORT);
         pinsByPage.set(new Map());
         diagnostics.set(new Map());
+        records.set([]);
         return;
       }
       case "kernel.capabilitiesChanged": {
@@ -262,12 +273,26 @@ export function createMirror(): Mirror {
       }
       case "chat.changed": {
         const p = envelope.payload;
+        const previousActiveChatId = chats().activeChatId;
         let summaries = new Map(chats().summaries);
         for (const added of p.added) summaries.set(added.chatId, added);
         for (const updated of p.updated) summaries.set(updated.chatId, updated);
         for (const removed of p.removedChatIds) summaries.delete(removed);
         chats.set({ activeChatId: p.activeChatId, summaries });
         project.set({ ...project(), activeChatId: p.activeChatId });
+        // The mirror's `records` slice holds only the ACTIVE chat's tail (Task 7 design
+        // decision) — moving `activeChatId` to a different chat makes the current tail stale
+        // (it belongs to the chat that was just left). The newly-active chat's own tail arrives
+        // as a follow-on `chat.records` from the same Kernel operation (Task 5/6), so clearing
+        // here never leaves the UI without an eventual correct tail.
+        if (p.activeChatId !== previousActiveChatId) records.set([]);
+        return;
+      }
+      case "chat.records": {
+        const p = envelope.payload;
+        // Fenced to the active chat, the same pattern the turn cases use for a stale/late
+        // arrival (`mirror.ts`'s turnId fence): a tail for a since-switched-away chat is a no-op.
+        if (p.chatId === chats().activeChatId) records.set(p.records);
         return;
       }
       case "selection.changed": {
@@ -360,6 +385,7 @@ export function createMirror(): Mirror {
     turn,
     preview,
     chats,
+    records,
     pinsByPage,
     selection,
     diagnostics,

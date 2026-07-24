@@ -110,6 +110,14 @@ export interface ChatsMirror {
   readonly summaries: ReadonlyMap<UUIDv7, ChatSummary>;
 }
 
+/**
+ * One persisted chat record as `chat.records` carries it (WP-10 Task 7) — the closed,
+ * DTO-derived `ChatRecordDtoV1` union (`core/protocol/model/chat-record.ts`), reached the
+ * same way every other mirror slice reaches its wire shape: indexed access into
+ * `EventPayloadByKindV1`, never a re-declared or cast copy.
+ */
+export type ChatRecord = EventPayloadByKindV1["chat.records"]["records"][number];
+
 /** The selection slice — the `selection.changed` DTO or null. */
 export type SelectionMirror = EventPayloadByKindV1["selection.changed"];
 
