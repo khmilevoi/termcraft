@@ -179,7 +179,7 @@ describe("createUiDeps Home health probe (M15)", () => {
     let calls = 0;
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () => {
       calls += 1;
-      return Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" });
+      return Promise.resolve({ present: false, agent: "claude", detail: "claude CLI not found" });
     });
 
     await tick();
@@ -188,8 +188,8 @@ describe("createUiDeps Home health probe (M15)", () => {
     expect(calls).toBeGreaterThanOrEqual(1);
     expect(deps.local.homeHealth()).toEqual({
       present: false,
-      agent: "codex",
-      detail: "codex CLI not found",
+      agent: "claude",
+      detail: "claude CLI not found",
     });
   });
 

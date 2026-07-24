@@ -28,9 +28,9 @@ const baseProps: HomeProps = {
   id: "home",
   width: 80,
   height: 20,
-  health: { present: true, version: "0.34", detail: "agent ready", agent: "codex" },
+  health: { present: true, version: "0.34", detail: "agent ready", agent: "claude" },
   prompt: "",
-  combo: { agent: "codex", model: "gpt-5.5", effort: "high" },
+  combo: { agent: "claude", model: "sonnet-4.5", effort: "high" },
 };
 
 describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
@@ -79,7 +79,7 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     handle.mount(<Home {...baseProps} />);
     await handle.render();
     const frame = handle.capture();
-    for (const value of ["‹codex›", "‹gpt-5.5›", "‹high›"]) {
+    for (const value of ["‹claude›", "‹sonnet-4.5›", "‹high›"]) {
       const run = findRun(frame, value);
       expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberHi);
       expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
@@ -91,10 +91,24 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     open = handle;
     handle.mount(<Home {...baseProps} />);
     await handle.render();
-    const run = findRun(handle.capture(), "● codex 0.34 · agent ready");
+    const run = findRun(handle.capture(), "● claude 0.34 · agent ready");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.green);
     expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
+  });
+
+  test("an absent agent name renders the neutral empty text, never an invented fallback (M22)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 20 });
+    open = handle;
+    const noAgentProps: HomeProps = {
+      ...baseProps,
+      health: { present: true, version: "0.34", detail: "agent ready" },
+    };
+    handle.mount(<Home {...noAgentProps} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "● claude")).toBeUndefined();
+    expect(findRun(frame, "0.34 · agent ready")).toBeDefined();
   });
 });
 
@@ -103,7 +117,7 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     ...baseProps,
     width: 80,
     height: 14,
-    health: { present: false, detail: "codex CLI not found", agent: "codex" },
+    health: { present: false, detail: "claude CLI not found", agent: "claude" },
   };
 
   test("renders the CLI-not-found line in bold red", async () => {
@@ -111,20 +125,34 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     open = handle;
     handle.mount(<Home {...errorProps} />);
     await handle.render();
-    const run = findRun(handle.capture(), "✗ codex CLI not found");
+    const run = findRun(handle.capture(), "✗ claude CLI not found");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.red);
     expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
   });
 
-  test("renders the install hint in amberHi", async () => {
+  test("renders the install hint driven by the agent name, not a hardcoded package", async () => {
     const handle = await createHeadlessRenderer({ w: 80, h: 14 });
     open = handle;
     handle.mount(<Home {...errorProps} />);
     await handle.render();
-    const run = findRun(handle.capture(), "npm i -g @openai/codex");
+    const run = findRun(handle.capture(), "npm i -g claude");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberHi);
+  });
+
+  test("an absent agent name renders the neutral empty CLI-not-found line, never an invented fallback", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 14 });
+    open = handle;
+    const noAgentProps: HomeProps = {
+      ...errorProps,
+      health: { present: false, detail: "agent CLI not found" },
+    };
+    handle.mount(<Home {...noAgentProps} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "✗ claude")).toBeUndefined();
+    expect(findRun(frame, "✗  CLI not found")).toBeDefined();
   });
 
   test("does not render the idle prompt box", async () => {
@@ -150,12 +178,12 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     open = handle;
     handle.mount(<Home {...errorProps} width={80} height={20} />);
     await handle.render();
-    expect(findRun(handle.capture(), "✗ codex CLI not found")).toBeDefined();
+    expect(findRun(handle.capture(), "✗ claude CLI not found")).toBeDefined();
 
     handle.mount(<Home {...baseProps} />);
     await handle.render();
     const frame = handle.capture();
-    expect(findRun(frame, "✗ codex CLI not found")).toBeUndefined();
-    expect(findRun(frame, "● codex 0.34 · agent ready")).toBeDefined();
+    expect(findRun(frame, "✗ claude CLI not found")).toBeUndefined();
+    expect(findRun(frame, "● claude 0.34 · agent ready")).toBeDefined();
   });
 });

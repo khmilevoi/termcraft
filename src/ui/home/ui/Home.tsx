@@ -16,10 +16,17 @@ const PROMPT_BOX_HEIGHT = 6;
 const BOLD = shellAttrs({ bold: true });
 const BLINK_CURSOR = shellAttrs({ blink: true });
 
+// DIVERGENCE (design sample data, not layout): design/01-home.dc.html's health line and
+// agent-missing panel (design/01-home.dc.html's homeErr()) hardcode "codex" as sample data (user
+// decision 2026-07-23). `health.agent` is optional in HomeAgentHealth's type — the M15 probe
+// always supplies it in practice, but the fallback here stays the neutral empty string, never an
+// invented identity like the design's Codex sample (M22).
+const neutralAgentName = (health: HomeProps["health"]): string => health.agent ?? "";
+
 /** The idle Home screen: centered prompt, combo selectors, agent health line. */
 function HomeIdle(props: HomeProps) {
   const iw = promptBoxWidth(props.width);
-  const agentName = props.health.agent || "codex";
+  const agentName = neutralAgentName(props.health);
   const version = props.health.version || "";
   const hasPrompt = props.prompt.length > 0;
   return (
@@ -106,7 +113,7 @@ function HomeIdle(props: HomeProps) {
 
 /** The agent-missing error variant (design `homeErr()`), replacing the whole screen. */
 function HomeAgentMissing(props: HomeProps) {
-  const agentName = props.health.agent || "codex";
+  const agentName = neutralAgentName(props.health);
   return (
     <box
       id={props.id}
@@ -142,7 +149,14 @@ function HomeAgentMissing(props: HomeProps) {
             {"install:"}
           </text>
           <text id={`${props.id}-agent-install-cmd`} fg={SHELL_PALETTE.amberHi}>
-            {" npm i -g @openai/codex"}
+            {
+              // DIVERGENCE (design sample data, not layout): design/01-home.dc.html's homeErr()
+              // hardcodes the literal Codex npm package `npm i -g @openai/codex` (user decision
+              // 2026-07-23). MVP ships Claude only and there is no data source for a real npm
+              // scope per backend, so the package-name portion is driven by `agentName` instead
+              // of inventing one — never a hardcoded "@openai/codex".
+              ` npm i -g ${agentName}`
+            }
           </text>
         </box>
         <text id={`${props.id}-agent-recheck`} fg={SHELL_PALETTE.faint}>

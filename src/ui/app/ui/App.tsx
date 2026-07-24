@@ -3,6 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import { Home } from "ui/home";
+import type { HomeAgentHealth, HomeCombo } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
 import {
   ChatListPopup,
@@ -19,7 +20,18 @@ import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
 import { resolveActiveOverlay, resolveKey } from "../model/keymap";
 
-const HOME_COMBO = { agent: "codex", model: "gpt-5.5", effort: "high" } as const;
+/**
+ * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design/01-home.dc.html's `home()`). DIVERGENCE
+ * (design sample data, not layout): the design hardcodes `agent ‹codex› model ‹gpt-5.5›` as
+ * sample identity strings (user decision 2026-07-23). Home is shown before any project/kernel
+ * snapshot exists, so `agent`/`model` come from the SAME M15 health probe the health line below
+ * the combo already reads — never a hardcoded fallback. `effort` has no probe/AgentIdentityV1
+ * equivalent (effort/model-picker selection is out of MVP scope, global constraints), so it
+ * stays the design's static literal, never rendered as if it were a live selection.
+ */
+function homeCombo(health: HomeAgentHealth): HomeCombo {
+  return { agent: health.agent ?? "", model: health.model ?? "", effort: "high" };
+}
 
 /**
  * True while an undismissed `export.completed`/`export.failed` result is showing (M14): the
@@ -149,14 +161,15 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
   }
 
   if (screen === "home") {
+    const health = deps.local.homeHealth();
     return (
       <Home
         id="app-home"
         width={size.w}
         height={size.h}
-        health={deps.local.homeHealth()}
+        health={health}
         prompt={deps.local.prompt()}
-        combo={HOME_COMBO}
+        combo={homeCombo(health)}
       />
     );
   }

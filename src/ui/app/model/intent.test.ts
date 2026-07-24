@@ -301,13 +301,13 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
   test("home-recheck re-runs the injected health probe and updates the health atom", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: true, agent: "codex", version: "0.99", detail: "agent ready" }),
+      Promise.resolve({ present: true, agent: "claude", version: "0.99", detail: "agent ready" }),
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
     expect(deps.local.homeHealth()).toEqual({
       present: true,
-      agent: "codex",
+      agent: "claude",
       version: "0.99",
       detail: "agent ready",
     });
@@ -316,14 +316,14 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
   test("home-recheck reflects a still-missing agent from the probe", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: false, agent: "codex", detail: "codex CLI not found" }),
+      Promise.resolve({ present: false, agent: "claude", detail: "claude CLI not found" }),
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
     expect(deps.local.homeHealth()).toEqual({
       present: false,
-      agent: "codex",
-      detail: "codex CLI not found",
+      agent: "claude",
+      detail: "claude CLI not found",
     });
   });
 });

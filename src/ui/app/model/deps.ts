@@ -147,9 +147,15 @@ export class UiPreviewStreamError extends errore.createTaggedError({
  * probe is wired yet by default — that binding is a phase-8 composition-root concern (the
  * `agentHealthProbe` parameter below is its named injection point).
  */
+// DIVERGENCE (design sample data, not layout): this placeholder previously read `agent: "codex"`
+// — the design's sample identity, not layout (user decision 2026-07-23). MVP ships Claude only,
+// so the pre-probe placeholder now names the actual (only) shipped backend instead of the
+// design mock's Codex sample; it is still overwritten by the injected probe's real reading the
+// moment it resolves (M22).
 const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
   present: true,
-  agent: "codex",
+  agent: "claude",
+  model: "sonnet-4.5",
   version: "0.34",
   detail: "agent ready",
 };
