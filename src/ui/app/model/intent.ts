@@ -16,6 +16,12 @@ import type { KeyIntent } from "./keymap";
  *
  * Command dispatches are deliberately fire-and-forget (`void`): the result of a UI-issued
  * command surfaces through the event stream (mirror), never through the dispatch return.
+ *
+ * RTM-S04 standing exception (audit 2026-07-24): the case arms of this switch ARE the named
+ * grouped transitions — each arm is a single-call-site state change already named by its
+ * intent kind, so its inline `.set()` groups are not re-extracted into one-off model actions.
+ * Helpers exist in this file only for REUSE across call sites (`applyEsc`,
+ * `closeStaleSlash`), not to rename an arm's own body.
  */
 export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
   const { local, dispatcher } = deps;
