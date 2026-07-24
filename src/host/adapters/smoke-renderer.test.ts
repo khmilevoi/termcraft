@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { SmokeRequest } from "gate";
+import { DEFAULT_THEME_ID } from "runtime";
 
 import { createManualClock } from "../supervisor";
 import { TEST_RUNTIME_DECLARATION, createOneShotChild } from "./scripted-one-shot";
@@ -98,8 +99,11 @@ describe("createSmokeRendererAdapter (M4: SmokeRenderer over runOneShotSession)"
     });
     await adapter.render(request);
     expect(seenSpecs).toHaveLength(1);
-    expect(seenSpecs[0]?.pageSlug.length).toBeGreaterThan(0);
-    expect(seenSpecs[0]?.theme.length).toBeGreaterThan(0);
-    expect(seenSpecs[0]?.colorDepth).toBeGreaterThan(0);
+    // Pin the documented fixed smoke defaults themselves (smoke-renderer.ts's own
+    // header note), not just their non-emptiness — a regression that swapped in a
+    // different (even otherwise-valid) slug/theme/depth must fail this test.
+    expect(seenSpecs[0]?.pageSlug).toBe("smoke-check");
+    expect(seenSpecs[0]?.theme).toBe(DEFAULT_THEME_ID);
+    expect(seenSpecs[0]?.colorDepth).toBe(24);
   });
 });

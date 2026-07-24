@@ -295,18 +295,23 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
   for (;;) {
     if (tokenIsIdentifierOrKeyword(kind)) {
       kind = scanner.scanJsxIdentifier();
-      if (scanner.getTokenText() === "id") hasId = true;
+      const isBareIdCandidate = scanner.getTokenText() === "id";
       kind = scanner.scan();
       if (kind === SK.ColonToken) {
-        // A namespaced attribute name (`xml:lang="en"`) — legal JSX the
-        // scanner has no dedicated call for. Read the local part the same
-        // way the name itself was read, then fall through to the ordinary
-        // value handling below; `hasId` was already decided on the namespace
-        // segment above, matching only a bare `id`, never `xml:id`.
+        // A namespaced attribute name (`xml:lang="en"`, `id:foo="x"`) — legal
+        // JSX the scanner has no dedicated call for. Read the local part the
+        // same way the name itself was read, then fall through to the
+        // ordinary value handling below. A namespaced name is never treated
+        // as the bare `id` prop, whether `id` is the LOCAL part (`xml:id`,
+        // decided against because the segment read above was `xml`, not
+        // `id`) or the NAMESPACE part (`id:foo`, decided against here
+        // because a colon follows) — only a colon-free bare `id` counts.
         kind = scanner.scan();
         if (!tokenIsIdentifierOrKeyword(kind)) return false;
         scanner.scanJsxIdentifier();
         kind = scanner.scan();
+      } else if (isBareIdCandidate) {
+        hasId = true;
       }
       if (kind !== SK.EqualsToken) continue; // a value-less (boolean) attribute
       kind = scanner.scanJsxAttributeValue();

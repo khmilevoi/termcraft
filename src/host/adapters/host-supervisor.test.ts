@@ -147,6 +147,20 @@ describe("createHostSupervisorAdapter", () => {
     const capacityResult = await capacityAdapter.preview(specFor());
     if (!("code" in capacityResult)) throw new Error("expected a FailureDtoV1");
     expect(capacityResult.code).toBe("HOST_START_FAILED");
+
+    // Drives the CIRCUIT_OPEN branch the same way the TRANSPORT_ERROR case above
+    // drives HOST_PROTOCOL_FAILED: inject it via checkTrust rather than actually
+    // exhausting the restart budget, which real supervisor.test.ts already covers.
+    const circuitAdapter = createHostSupervisorAdapter(
+      depsFor({
+        checkTrust: () =>
+          new SupervisorError({ code: "CIRCUIT_OPEN", reason: "circuit already open" }),
+      }),
+    );
+    const circuitResult = await circuitAdapter.preview(specFor());
+    if (!("code" in circuitResult)) throw new Error("expected a FailureDtoV1");
+    expect(circuitResult.code).toBe("HOST_CIRCUIT_OPEN");
+    expect(circuitResult.retryable).toBe(false);
   });
 
   test("liveCount()/stopAll() delegate to the real supervisor", async () => {

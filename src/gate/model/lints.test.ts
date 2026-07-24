@@ -162,6 +162,12 @@ describe("lintUnpointedElements (§6.3 unpointed-element warning)", () => {
     expect(w).toHaveLength(1);
   });
 
+  test('a namespaced attribute whose NAMESPACE segment is `id` (`id:foo="x"`) is NOT mistaken for a bare `id` — the element still warns', () => {
+    const w = lintUnpointedElements(`export default () => <box id:foo="x">raw</box>\n`);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("unpointed-element");
+  });
+
   test("a genuinely hyphenated tag name is still scanned correctly (no false negative from the merge fix)", () => {
     expect(
       lintUnpointedElements(`export default () => <my-widget id="w">raw</my-widget>\n`),
