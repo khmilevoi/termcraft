@@ -89,63 +89,81 @@ const { createElement } = createRequire(import.meta.url)("react") as {
  * silently worked around — this is the whole point of a test that finally crosses every
  * module at once, design §10/M19's own justification):
  *
- * 1. BLOCKING — no real turn can ever COMMIT through the real composed graph today.
- *    `core/kernel/model/handlers/turn.ts`'s `runTurnStart` captures the chat's CAS baseline
- *    (`context.deps.chatReader.readAppendBase(activeChatId)`) BEFORE calling `runTurn(...)` —
- *    i.e. BEFORE `core/turns/model/admission.ts`'s own `runAdmission` durably appends this
- *    exact turn's user record to that SAME chat. That stale, pre-admission baseline then
- *    flows verbatim through `TurnWorkspaceV1.readSet.chat` into `finalizeTurn`'s own CAS
- *    precondition (`store/transaction/model/wrappers.ts`'s `buildFinalizeCasPrecondition`),
- *    which re-observes the chat's CURRENT (now one-record-longer) state and finds a length/
- *    hash mismatch — `APPLY_STALE` with `details.part: "chat"`, on EVERY real turn, not a
- *    corner case. Confirmed with a minimal, isolated repro against the real store (capture
- *    `readAppendBase` -> `admit()` -> `finalize()` with the pre-admission baseline): it always
- *    returns `{code: "APPLY_STALE", details: {part: "chat"}}`. The CORRECT contract —
- *    established by `store/adapters/turn-transactions.test.ts`'s own already-passing fixture
- *    ("finalize() commits an agent record when the read-set CAS matches current state") — is
- *    to capture the chat baseline AFTER `admit()`, immediately before `finalize()`; nothing in
- *    `core/turns`'s current `RunTurnDeps`/`AdmissionDeps` surface gives `handlers/turn.ts` a
- *    hook to do that (the staged read-set is captured once, pre-admission, and reused verbatim
- *    at finalize time). Fixing it needs a real port/contract change across `core/turns/model/
- *    {admission,run-turn,finalize}.ts` and `core/kernel/model/handlers/turn.ts` together — out
- *    of a test-writing task's scope, and exactly what "assert up to that link and flag the
- *    remainder" calls for. THIS IS WHY this test cannot assert a committed `turn.completed`,
- *    and consequently cannot exercise "render"/"export" against a genuinely-changed page
- *    through the real chain — see the test body's own trailing comment for the precise shape
- *    those two links would need once this is fixed.
- *    A COMPOUNDING SECOND EFFECT, same root cause's blast radius: `core/turns/model/
- *    run-turn.ts` never drives the `finalizing -> terminalizing` edge when `finalizeTurn`
- *    returns `{kind:"failed", ...}` (its own header says this bridge belongs to "whichever
- *    caller decided", but `runTurn` never decides it for this branch — it just returns
- *    `{kind:"finalized", result}` as-is). So the turn MACHINE is left stuck in `"finalizing"`
- *    permanently once any finalize failure occurs (this one included) — every subsequent
- *    `chat.create`/`chat.switch`/`turn.start`/`export.start` in the SAME process is then
- *    guard-rejected `CAPABILITY_UNAVAILABLE` for "turn.phase is finalizing (non-idle)" (visible
- *    directly in this test's own console output). Not asserted on directly here (this test's
- *    own chain never dispatches anything after the terminal event), but worth a maintainer's
- *    attention alongside gap 1 — the two are almost certainly fixed together.
- * 2. `ui`'s Home -> Workspace transition is UNREACHABLE through the real composed Kernel
- *    today. `core/kernel/model/kernel.ts`'s own `buildSnapshotPayload` hardcodes
- *    `projectId`/`activePageSlug`/`activeChatId`/`pageDescriptors` to `null`/`[]`
- *    UNCONDITIONALLY ("No project has ever been opened/created yet in a freshly-assembled
- *    Kernel ... Task 9's project.open/project.create handlers are what will ever populate
- *    these" — never actually wired since). `ui/mirror`'s own `apply()` only ever sets
- *    `project.projectId` from a `kernel.snapshot` envelope (never from `kernel.stateChanged`
- *    or `page.descriptorsChanged`), and the real Kernel never re-emits `kernel.snapshot` after
- *    bootstrap. So `deriveScreen`'s `projectId !== null` condition can never become true for a
- *    live subscriber, and the rendered App's own screen never leaves Home even once a real
- *    `project.create` has genuinely succeeded. This is why the rendered-App step below only
- *    drives the Home prompt/submit (the one interaction that does not depend on that
- *    transition) and every later §10 link is asserted by dispatching directly at the
- *    `KernelPort` — exactly the fallback the task brief names ("dispatched commands at the
- *    KernelPort where the §10 chain names kernel steps") for a link the composed seams cannot
- *    express through the UI today.
+ * 1. FIXED (smoke-bugs closeout) — no real turn could ever COMMIT through the real composed
+ *    graph. `core/kernel/model/handlers/turn.ts`'s `runTurnStart` used to capture the chat's
+ *    CAS baseline (`context.deps.chatReader.readAppendBase(activeChatId)`) BEFORE calling
+ *    `runTurn(...)` — i.e. BEFORE `core/turns/model/admission.ts`'s own `runAdmission` durably
+ *    appends this exact turn's user record to that SAME chat. That stale, pre-admission
+ *    baseline then flowed verbatim through `TurnWorkspaceV1.readSet.chat` into `finalizeTurn`'s
+ *    own CAS precondition (`store/transaction/model/wrappers.ts`'s
+ *    `buildFinalizeCasPrecondition`), which re-observes the chat's CURRENT (now
+ *    one-record-longer) state and found a length/hash mismatch — `APPLY_STALE` with
+ *    `details.part: "chat"`, on EVERY real turn, not a corner case.
+ *
+ *    THE FIX: the honest chat append-base read now lives inside `core/turns/model/
+ *    admission.ts`'s own `runAdmission`, executed right after `turnTransactions.admit(...)`
+ *    commits and before `staging.createTurnWorkspace(...)` — the one point in the whole
+ *    composition that runs strictly between those two calls and can therefore observe the
+ *    chat's state at the only honest moment (`admission.ts`'s own header, step 1b).
+ *    `AdmissionWorkspaceMaterialV1.readSet` (`core/turns/types.ts`) no longer even lets a
+ *    caller supply `chat` — `core/kernel/model/handlers/turn.ts` builds no `readSet.chat`
+ *    value of its own anymore; it only threads its `chatReader` down through
+ *    `RunTurnDeps.chatReader` -> `AdmissionDeps.chatReader`.
+ *
+ *    THE COMPOUNDING SECOND EFFECT, same root cause's blast radius, ALSO FIXED: `core/turns/
+ *    model/run-turn.ts` used to never drive the `finalizing -> terminalizing` edge when
+ *    `finalizeTurn` returned `{kind:"failed", ...}` (its own header says this bridge belongs
+ *    to "whichever caller decided", but `runTurn` never decided it for this branch — it just
+ *    returned `{kind:"finalized", result}` as-is), leaving the turn MACHINE stuck in
+ *    `"finalizing"` permanently once any finalize failure occurred — every subsequent
+ *    `chat.create`/`chat.switch`/`turn.start`/`export.start` in the SAME process was then
+ *    guard-rejected `CAPABILITY_UNAVAILABLE` for "turn.phase is finalizing (non-idle)". `run-
+ *    turn.ts` now bridges `beginTerminalization` and calls `terminalizeTurn` itself whenever
+ *    `finalizeTurn` returns `{kind:"failed"}}`, so the machine always settles back to `idle`
+ *    (`core/turns/model/run-turn.test.ts`'s test "(j)" pins this).
+ *
+ *    Regression coverage: `core/turns/model/admission.test.ts` (the honest post-admission
+ *    read, plus its own new `"chat-append-base"` precondition), `core/turns/model/
+ *    run-turn.test.ts` test "(j)" (the terminalize bridge), and this test's own body below,
+ *    which now asserts the real `turn.completed` outcome end to end.
+ * 2. FIXED (smoke-bugs closeout) — `ui`'s Home -> Workspace transition used to be
+ *    UNREACHABLE through the real composed Kernel. `core/kernel/model/kernel.ts`'s own
+ *    `buildSnapshotPayload` hardcoded `projectId` to `null` UNCONDITIONALLY, and neither
+ *    `finishOpen` nor `finishClose`'s own `kernel.stateChanged` event carried the fact at
+ *    all — so `ui/mirror`'s own `apply()` (which only ever set `project.projectId` from a
+ *    `kernel.snapshot` envelope, and the real Kernel never re-emits `kernel.snapshot` after
+ *    bootstrap, kernel-command-contract §9) could never learn it for a live subscriber.
+ *    `deriveScreen`'s `projectId !== null` condition could never become true, and the
+ *    rendered App's own screen never left Home even once a real `project.create` had
+ *    genuinely succeeded.
+ *
+ *    THE FIX: `handlers/project.ts`'s `finishOpen`/`finishClose`/`setTrust` now carry
+ *    `metadata: {projectId, trust}` on their existing `kernel.stateChanged` event (the
+ *    same free-form per-action bag `setTrust` already used for `workspaceIdentity`) —
+ *    `ui/mirror/model/mirror.ts`'s `apply()` now reads it directly for an already-subscribed
+ *    client, and `kernel.ts`'s existing "growable identity" mechanism
+ *    (`noteEventForCapabilityGrowth`) now also tracks `growableProjectId` from it, fixing
+ *    `buildSnapshotPayload`'s own late-subscriber staleness as the same fix's side effect.
+ *    No protocol/schema change was needed — `metadata` was already an open, per-action bag.
+ *
+ *    Regression coverage: `core/kernel/model/handlers/project.test.ts` (the new metadata on
+ *    all three events), `core/kernel/model/kernel.test.ts` (the late-subscriber snapshot
+ *    fix), and `ui/mirror/model/mirror.test.ts` (the mirror consuming it, plus `deriveScreen`
+ *    genuinely leaving `"home"` — the exact condition this gap's own diagnosis named).
+ *
+ *    This test's own body still drives every §10 step past LINK 1 by dispatching directly
+ *    at the `KernelPort`, not through the rendered App — that remains a valid, independent
+ *    choice (exercising the real Kernel/store/gate chain without needing the App's own
+ *    screen-routing components mounted), not a workaround for this now-fixed gap.
  * 3. `core/export/model/publish.ts`'s own header: `ExportPublishPlanV1.operations`/`.payloads`
  *    stay HARDCODED EMPTY ("WP-5 wires `assembleExportPackage`'s real file list into
  *    operations/payloads ... until that later slice supplies the actual transaction content").
  *    So even through the REAL `exportPublish` adapter, `export.start` would commit a durable
- *    but CONTENT-EMPTY transaction today (moot for this file until gap 1 above closes, since
- *    no real export can be reached without a committed page either).
+ *    but CONTENT-EMPTY transaction today. Gap 1 above is now closed (a real turn genuinely
+ *    commits, so a real committed page now exists for "render"/"export" to key off), but this
+ *    test still stops at LINK 2's `turn.completed` and does not extend into LINK 3/4 — that
+ *    remains separate, future work (see the test body's own trailing comment for the exact
+ *    shape); gap 3 is still a real blocker whenever that extension is attempted.
  */
 
 const PROTOCOL_VERSION = 1;
@@ -496,8 +514,8 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
         "utf8",
       );
 
-      // The turn's TERMINAL event, whichever kind it turns out to be — this file's header
-      // (gap 1) documents why it is `turn.failed`, not `turn.completed`, today.
+      // The turn's TERMINAL event — this file's header (gap 1, now fixed) documents why
+      // this genuinely is `turn.completed` now, not `turn.failed`.
       const turnTerminal = waitForEvent(
         kernel,
         (envelope) => envelope.kind === "turn.completed" || envelope.kind === "turn.failed",
@@ -513,39 +531,42 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // "gate": the real import-scan/page-contract/manifest-slice/lint stages ran over the
       // staged bytes above and were never rejected — no `turn.gateRejected` anywhere in the
       // whole captured stream proves the candidate passed the real Gate on the first
-      // attempt. This holds regardless of gap 1's later, unrelated finalize-time failure:
-      // Gate validation (`runTurnValidation`) always runs, and always runs BEFORE
-      // `finalizeTurn` is ever reached (`core/turns/model/run-turn.ts`'s own sequencing) —
-      // this turn only reached "finalizing" at all because Gate had already passed it.
+      // attempt.
       expect(envelopes.some((envelope) => envelope.kind === "turn.gateRejected")).toBe(false);
 
-      // KNOWN BUG (this file's header, gap 1): the turn does NOT commit through the real
-      // composed graph today. This assertion pins the EXACT current (broken) behavior —
-      // `handlers/turn.ts`'s own generic `turn.failed` branch, citing the underlying
-      // `finalized/failed` outcome — precisely so a future fix to gap 1 breaks this
-      // assertion loudly, forcing this file to be updated to prove the real commit (and
-      // then LINK 3 "render" and LINK 4 "export" below) rather than silently staying green
-      // over a still-broken chain.
-      expect(terminalEnvelope.kind).toBe("turn.failed");
-      const failedPayload = terminalEnvelope.payload as EventPayloadByKindV1["turn.failed"];
-      expect(failedPayload.failure?.safeMessage).toBe(
-        "the turn ended without committing (finalized/failed)",
-      );
+      // GAP 1, FIXED (this file's header): the turn genuinely COMMITS through the real
+      // composed graph now — real admission, real Gate pass, real finalize, all through the
+      // real store/gate/kernel chain this test composes.
+      expect(terminalEnvelope.kind).toBe("turn.completed");
+      const completedPayload = terminalEnvelope.payload as EventPayloadByKindV1["turn.completed"];
+      expect(completedPayload.outcome).toBe("completed");
+      expect(completedPayload.failure).toBeNull();
+      expect(completedPayload.changedPages).toHaveLength(1);
+      const [changedPage] = completedPayload.changedPages;
+      if (changedPage === undefined) throw new Error("expected exactly one changed page");
+      expect(changedPage.pageSlug).toBe("home");
 
-      // The staged edit was real, even though it never reached the canonical store: the
-      // fake agent's bytes exist in the (still-present, unretired-on-failure) turn workspace.
+      // The real store genuinely committed the page — proof "finalize" ran through the real
+      // store, not merely through an in-memory transition: the canonical page now exists on
+      // disk under the project's `.termcraft` root (`store/transaction/model/wrappers.ts`'s
+      // own `canonicalPagePath`), with the fake agent's exact bytes.
+      const canonicalHomePath = path.join(root, ".termcraft", "pages", "home", "page.tsx");
+      expect(fs.existsSync(canonicalHomePath)).toBe(true);
+      expect(fs.readFileSync(canonicalHomePath, "utf8")).toBe(HOME_PAGE_SOURCE);
+
+      // The turn workspace's own staged copy is still there too (never retired on a
+      // successful path until the candidate itself is superseded) — real edits, real disk,
+      // start to finish.
       expect(fs.existsSync(path.join(workspacePath, "pages", "home.tsx"))).toBe(true);
       expect(fs.readFileSync(path.join(workspacePath, "pages", "home.tsx"), "utf8")).toBe(
         HOME_PAGE_SOURCE,
       );
 
-      // LINK 3 "render" and LINK 4 "export" are NOT asserted below — there is no genuinely
-      // committed page for either to operate against while gap 1 stands (a real canonical
-      // `pages/home/page.tsx` never lands on disk, and `pageMetaCache`/`preview.selectCurrent`/
-      // `export.start` all key off that real, post-commit `sourceHash`). Faking a committed
-      // sourceHash here to reach them anyway would be exactly the fabricated assertion this
-      // task's own brief forbids. Once gap 1 closes, this test should:
-      //   1. Read `changedPage.sourceHash` off a genuine `turn.completed` payload.
+      // LINK 3 "render" and LINK 4 "export" are NOT asserted below — extending this test to
+      // drive them against the now-genuinely-committed page is separate follow-up work (gap
+      // 3 above, `ExportPublishPlanV1.operations`/`.payloads` staying hardcoded empty, is a
+      // real blocker for LINK 4 specifically). A future extension should:
+      //   1. Read `changedPage.sourceHash` off the genuine `turn.completed` payload above.
       //   2. Seed `pageMetaCache.put({key: {pageSlug: "home", sourceHash, extractorVersion: 1},
       //      meta: {...}})` directly (mirroring `core/kernel/model/kernel.integration.test.ts`'s
       //      own established technique — no production path populates this cache yet either,

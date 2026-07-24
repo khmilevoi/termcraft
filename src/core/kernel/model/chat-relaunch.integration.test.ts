@@ -238,7 +238,10 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
     // history restored").
     const projectStore = createFakeProjectStore({
       root: "/relaunch-root",
-      manifest: { projectId: "relaunch-project", pages: [home] },
+      // A valid-looking UUIDv7 (fake-fidelity: the real store always mints `projectId` via
+      // `uuidv7()`, and `kernel.project.finishOpen`'s own event metadata — §10 smoke
+      // closeout — now carries it through a real `UUIDv7`-validating schema).
+      manifest: { projectId: "0192f000-0000-7000-8000-00000000aaaa", pages: [home] },
       workspaceState: { activePageSlug: home, activeChatId: chatId },
     });
     const pageStore = createFakePageStore({

@@ -320,6 +320,9 @@ describe("project.close", () => {
         action: "kernel.project.finishClose",
         previousTag: "closing",
         nextTag: "closed",
+        // §10 smoke closeout (bug 2): a project-scoped identity must not outlive the
+        // project it belongs to — mirrors this same event's own `finishOpen` counterpart.
+        metadata: { projectId: null },
       });
       expect(harness.machines.project.phase()).toBe("closed");
       expect(harness.getPreviewSession()).toBeNull();
@@ -350,6 +353,11 @@ describe("project.setTrust", () => {
         action: "kernel.project.setTrust",
         previousTag: "ready",
         nextTag: "ready",
+        // §10 smoke closeout (bug 2): the just-flipped trust decision rides this event's
+        // own metadata too, alongside the pre-existing `workspaceIdentity` — the channel an
+        // already-subscribed `ui/mirror` reads to leave `trust-prompt`/`read-only` for
+        // `workspace` (`./project.ts`'s header).
+        metadata: { workspaceIdentity: "ws-1", trust: "trusted" },
       });
       // The Kernel-visible trust flag is already flipped BEFORE the async operation runs.
       expect(harness.getTrust()).toBe("trusted");
@@ -451,6 +459,11 @@ describe("project.create", () => {
         action: "kernel.project.finishOpen",
         previousTag: "opening",
         nextTag: "ready",
+        // §10 smoke closeout (bug 2): the just-opened project's real identity now rides
+        // this event's own metadata — the ONE channel an already-subscribed client (never
+        // sent a second kernel.snapshot) or `ui/mirror`'s own `apply()` can observe it
+        // through. See `./project.ts`'s header for the full rationale.
+        metadata: { projectId: "fake-project-1", trust: "trusted" },
       });
 
       expect(harness.machines.project.phase()).toBe("ready");

@@ -50,6 +50,7 @@ import {
   type EventPayloadByKindV1,
   type UUIDv7,
   eventPayloadV1SchemaByKind,
+  isUuidv7,
 } from "core/protocol";
 
 import type { Kernel, KernelDeps } from "../types";
@@ -133,6 +134,16 @@ export function createKernel(deps: KernelDeps): Kernel {
     let growableActiveChatId: UUIDv7 | null = null;
     let growableActivePageSlug: string | null = null;
     let growableLivePreviewSessionId: UUIDv7 | null = null;
+    // (§10 smoke closeout, bug 2) The currently-open project's id — the ONE `kernel.snapshot`
+    // field with no other live source anywhere in this Kernel (unlike `activeChatId`/
+    // `activePageSlug` above, or `trust`, which `trustAtom` already tracks reactively for
+    // guards): no capability target ever needs it (every `project.*` capability target is
+    // `null`, kernel-command-contract §10.1's own table), so it lives here as a fourth
+    // growable-identity closure fact, not inside `readKernelState`/`CapabilityKernelStateSnapshot`.
+    // Populated the SAME way the other three are — by inspecting `handlers/project.ts`'s own
+    // already-published `kernel.stateChanged` event, never a second, independent source of
+    // truth (`noteEventForCapabilityGrowth`, below).
+    let growableProjectId: UUIDv7 | null = null;
 
     // Step 3: `readKernelState` — the real value behind the mailbox seam's `unknown`
     // `KernelStateSnapshot`/`GuardTarget` aliases. Returning this concrete, narrower type
@@ -218,10 +229,18 @@ export function createKernel(deps: KernelDeps): Kernel {
         // (`capabilities/types.ts`'s own header note) — the same seven keys, the same
         // per-domain shape — so the read state IS the models snapshot, not a second copy.
         models: state,
-        // No project has ever been opened/created yet in a freshly-assembled Kernel —
-        // Task 9's `project.open`/`project.create` handlers are what will ever populate
-        // these from `core/project`'s open-sequence.
-        projectId: null,
+        // `growableProjectId` (§10 smoke closeout, bug 2) — the currently-open project's
+        // real id once `finishOpen` has published it, `null` again once `finishClose` has
+        // (both tracked above, `noteEventForCapabilityGrowth`'s own new case). Fixes this
+        // exact field for a LATE subscriber too (a client subscribing after a project has
+        // already opened used to still see a hardcoded `null` here) — not only the
+        // already-subscribed case `mirror.ts`'s own `kernel.stateChanged` handling closes.
+        projectId: growableProjectId,
+        // `activePageSlug`/`activeChatId` stay `null` here — Task 9's `page.descriptorsChanged`/
+        // `chat.changed` events are the already-correct live channel for both (`ui/mirror`'s
+        // own `apply()` already reads them), and neither is this task's own reported gap;
+        // widening this to `growableActivePageSlug`/`growableActiveChatId` for a late-subscriber
+        // snapshot is a separate, narrower staleness fix left for whoever picks it up next.
         activePageSlug: null,
         activeChatId: null,
         trust: state.project.trust,
@@ -347,6 +366,29 @@ export function createKernel(deps: KernelDeps): Kernel {
           growableActiveChatId = null;
           growableActivePageSlug = null;
           growableLivePreviewSessionId = null;
+          growableProjectId = null;
+          return;
+        }
+        // (§10 smoke closeout, bug 2) `handlers/project.ts`'s own `runProjectReadySequence`
+        // now carries the just-opened project's real id in THIS event's own `metadata`
+        // (see that file's header) — `metadata` is an untyped `Record<string, unknown>`
+        // (kernel-command-contract §9's own table: "the action's closed bounded `metadata`
+        // union" is closed per-action in prose, not enforced by this loose protocol type),
+        // so the value is re-validated as an honest `UUIDv7` here, never cast. A malformed
+        // or missing value is logged and simply leaves `growableProjectId` at whatever it
+        // already was — never a fabricated identity.
+        if (
+          parsed.data.modelId === "kernel.project.state" &&
+          parsed.data.action === "kernel.project.finishOpen"
+        ) {
+          const rawProjectId = parsed.data.metadata.projectId;
+          if (typeof rawProjectId !== "string" || !isUuidv7(rawProjectId)) {
+            console.warn(
+              `core/kernel: kernel.project.finishOpen's metadata.projectId was not a valid UUIDv7 (${JSON.stringify(rawProjectId)}) — growableProjectId left unchanged`,
+            );
+            return;
+          }
+          growableProjectId = rawProjectId;
         }
       }
     }

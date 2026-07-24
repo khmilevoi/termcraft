@@ -11,6 +11,7 @@ import type {
   ChatMutations,
   ChatReader,
   ReadSetAppendBaseV1,
+  TurnTransactionService,
 } from "core/ports";
 import {
   createFakeAgentBackend,
@@ -38,6 +39,7 @@ import {
   type FailureDtoV1,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import type { ChatRecord } from "entities/chat";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -129,6 +131,20 @@ function makeClock(nowMs: number): Clock {
  * SAME deterministic, no-real-crypto `fakeSha256Hex` formula `core/ports/fakes/chat-store.ts`'s
  * own `readAppendBase` fake uses for the identical zero-record case — never a real
  * SHA-256, and never a placeholder standing in for an UNKNOWN fact.
+ *
+ * UPDATED (§10 smoke closeout, WP-1 smoke report "the kernel fakes passed because their
+ * append-base semantics don't advance on admission the way the real store does"): the
+ * `{length: 0, ...}` constant above described this stub's OWN previous behavior honestly —
+ * it genuinely never appended anything — but that made it fidelity-blind to a real
+ * production bug (`core/kernel/model/handlers/turn.ts` reading the CAS baseline BEFORE
+ * admission durably appends the turn's user record). This stub now tracks real records per
+ * chat id and `readAppendBase` derives its answer from them, so it genuinely advances the
+ * moment `seedRecords` is called — mirroring the real store's own single-JSONL-file
+ * coupling between a chat's readers and its `TurnTransactionService` writers.
+ * `withHonestChatAppendBase` (below) is what calls `seedRecords`; this stub does not call
+ * it itself, matching `core/ports/fakes/index.ts`'s own "every fake is independent" design
+ * — the coupling belongs to this file's own orchestration code, never to either port
+ * double.
  */
 function fakeSha256Hex(seed: string): string {
   let h = 0;
@@ -137,8 +153,14 @@ function fakeSha256Hex(seed: string): string {
   return base.repeat(8).slice(0, 64);
 }
 
-function createChatMutationsStub(): ChatReader & ChatMutations {
+interface ChatAppendLedger {
+  seedRecords(chatId: string, records: readonly ChatRecord[]): void;
+  readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1>;
+}
+
+function createChatMutationsStub(): ChatReader & ChatMutations & ChatAppendLedger {
   const mintedChatIds = new Set<string>();
+  const recordsByChatId = new Map<string, ChatRecord[]>();
 
   function notFound(chatId: string): FailureDtoV1 {
     return {
@@ -153,6 +175,7 @@ function createChatMutationsStub(): ChatReader & ChatMutations {
     async create(): Promise<ChatHeaderV1> {
       const chatId = uuidv7();
       mintedChatIds.add(chatId);
+      recordsByChatId.set(chatId, []);
       return { chatId, createdAt: "2024-01-01T00:00:00.000Z" };
     },
     async switchActive(): Promise<undefined> {
@@ -172,7 +195,64 @@ function createChatMutationsStub(): ChatReader & ChatMutations {
     },
     async readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
       if (!mintedChatIds.has(chatId)) return notFound(chatId);
-      return { length: 0, prefixSha256: fakeSha256Hex("") };
+      const serialized = JSON.stringify(recordsByChatId.get(chatId) ?? []);
+      return {
+        length: new TextEncoder().encode(serialized).byteLength,
+        prefixSha256: fakeSha256Hex(serialized),
+      };
+    },
+    seedRecords(chatId: string, records: readonly ChatRecord[]): void {
+      const existing = recordsByChatId.get(chatId);
+      if (existing === undefined) {
+        console.warn(`kernel.test: seedRecords called for unknown chatId ${chatId}`);
+        return;
+      }
+      existing.push(...records);
+    },
+  };
+}
+
+/**
+ * Wraps a `TurnTransactionService` so its `admit`/`finalize`/`terminalize` calls genuinely
+ * advance — and `finalize` genuinely re-checks — the SAME chat append-base `ledger`
+ * reports. See `kernel.integration.test.ts`'s identical helper for the full rationale
+ * (duplicated here rather than shared, matching this file's own established
+ * "each fake/double gets its own tiny copy" convention, e.g. `fakeSha256Hex` above).
+ */
+function withHonestChatAppendBase(
+  base: TurnTransactionService,
+  ledger: ChatAppendLedger,
+): TurnTransactionService {
+  return {
+    ...base,
+    async admit(input) {
+      const result = await base.admit(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.userRecord]);
+      return result;
+    },
+    async finalize(input) {
+      const current = await ledger.readAppendBase(input.targetChatId);
+      if (!("code" in current)) {
+        const stale =
+          current.length !== input.readSet.chat.length ||
+          current.prefixSha256 !== input.readSet.chat.prefixSha256;
+        if (stale) {
+          return {
+            code: "APPLY_STALE",
+            retryable: true,
+            safeMessage: `chat ${input.targetChatId}'s append base advanced since this turn's read-set was captured`,
+            details: { part: "chat" },
+          };
+        }
+      }
+      const result = await base.finalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.agentRecord]);
+      return result;
+    },
+    async terminalize(input) {
+      const result = await base.terminalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.record]);
+      return result;
     },
   };
 }
@@ -467,9 +547,13 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
       sources: new Map([[home, { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }]]),
     });
     const deps = buildDeps({ chatMutations: createChatMutationsStub() });
+    const openedProjectId = "0192f000-0000-7000-8000-00000000fed1";
     const kernel = createKernel({
       ...deps,
-      projectStore: createFakeProjectStore({ root: "/test-root", manifest: { pages: [home] } }),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        manifest: { projectId: openedProjectId, pages: [home] },
+      }),
       pageReader: pageStore,
       pageMutations: pageStore,
     });
@@ -495,6 +579,32 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
     if (openResult instanceof Error) throw openResult;
     const readyEnvelope = await projectReady;
 
+    // §10 smoke closeout, bug 2: `finishOpen`'s own event now carries the just-opened
+    // project's real identity in its metadata (`handlers/project.ts`'s header) — the
+    // channel an already-subscribed client reads it through, since no second
+    // `kernel.snapshot` is ever sent.
+    expect(readyEnvelope.payload).toMatchObject({
+      metadata: { projectId: openedProjectId, trust: "untrusted-read-only" },
+    });
+
+    // A LATE subscriber (one that subscribes only NOW, after the project already opened)
+    // must also see the real `projectId` in its own bootstrap `kernel.snapshot` — the
+    // OTHER half of this same bug (`kernel.ts`'s own `buildSnapshotPayload` used to
+    // hardcode `null` unconditionally, never reading the growable identity it now tracks).
+    const lateSnapshot: EventEnvelopeV1[] = [];
+    const unsubscribeLate = kernel.events((envelope) => lateSnapshot.push(envelope));
+    if (unsubscribeLate instanceof Error) throw unsubscribeLate;
+    const latePayload = lateSnapshot[0]?.payload as EventPayloadByKindV1["kernel.snapshot"];
+    expect(latePayload.projectId).toBe(openedProjectId);
+    unsubscribeLate();
+
+    const trustChanged = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.setTrust",
+    );
     const trustResult = await kernel.dispatch({
       protocolVersion: 1,
       commandId: uuidv7(),
@@ -506,6 +616,11 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
     if (trustResult.status !== "accepted") {
       throw new Error(`project.setTrust was rejected: ${JSON.stringify(trustResult)}`);
     }
+    // The live `project.setTrust` admission event carries its own resolved `trust` too
+    // (§10 smoke closeout, bug 2) — `mirror.test.ts` proves the mirror-side consumption;
+    // this just confirms the Kernel actually publishes it.
+    const trustChangedEnvelope = await trustChanged;
+    expect(trustChangedEnvelope.payload).toMatchObject({ metadata: { trust: "trusted" } });
 
     const chatChanged = waitForEvent(kernel, (envelope) => envelope.kind === "chat.changed");
     const createResult = await kernel.dispatch({
@@ -603,6 +718,11 @@ describe("the turn.start spine (kernel-assembly Task 9, Gap 4 closeout)", () => 
     const kernel = createKernel({
       ...deps,
       chatReader: chatStore,
+      // Honest advance-on-admission fidelity (this file's header note on `createChatMutationsStub`)
+      // — without this, `finalize()`'s CAS check never re-observes the just-admitted user
+      // record, and this test would give false confidence over the real production bug the
+      // §10 smoke closeout found.
+      turnTransactions: withHonestChatAppendBase(deps.turnTransactions, chatStore),
       // A deliberately zero-page project: isolates the admission/attempt/gate-retry/finalize
       // wiring this test proves without needing byte-level per-page plumbing — matches
       // `handlers/turn.test.ts`'s own identical-shaped fixture and identical reasoning.

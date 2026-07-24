@@ -59,6 +59,20 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * only, real adapters are WP-2's job) supply the two missing facts. `turn.start` below
  * composes `runTurn` for real using them.
  *
+ * GAP 4 CLOSURE BUG, FOUND AND FIXED (§10 smoke closeout): the FIRST implementation of Gap
+ * 4's closure read `readSet.chat` HERE, in this handler, BEFORE ever calling `runTurn` —
+ * i.e. before `core/turns/model/admission.ts`'s own `runAdmission` durably appends this
+ * exact turn's user record to that same chat. That stale, one-record-too-early baseline
+ * then flowed verbatim into `finalizeTurn`'s own CAS precondition, which always found a
+ * length/hash mismatch (`APPLY_STALE`/`chat`) — on EVERY real turn, not a corner case; no
+ * real turn could ever commit through the composed graph. The honest chat append-base read
+ * is NOT this handler's job at all: it now lives inside `runAdmission` itself
+ * (`admission.ts`'s own header, step 1b), the only place that runs strictly between
+ * `turnTransactions.admit(...)` and `staging.createTurnWorkspace(...)` and can therefore
+ * observe the chat's state at the one honest moment. This handler only THREADS its own
+ * `context.deps.chatReader` down through `RunTurnDeps.chatReader` (below) — it builds no
+ * `readSet.chat` value of its own anymore.
+ *
  * - `turn.cancel` is real, end to end (unchanged from Step C2/C3 — see the function's own
  *   doc comment below for the full citation).
  *
@@ -89,11 +103,15 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   active: <workspaceState.activePageSlug>})`, UTF-8 encoded — the exact `ManifestSliceV1`
  *   shape (`core/ports/gate-runner.ts`) `pages.json` already carries.
  *
- *   `readSet.manifest`/`readSet.chat`: `context.deps.projectStore.readManifestSnapshot()`
- *   and `context.deps.chatReader.readAppendBase(targetChatId)` — Gap 4's own two new
- *   primitives. Either failing is an idempotent refusal (logged) — never a fabricated CAS
- *   baseline (this project's hardest rule: a false baseline defeats the exact concurrent-
- *   mutation check the read-set exists to catch).
+ *   `readSet.manifest`: `context.deps.projectStore.readManifestSnapshot()` — Gap 4's
+ *   remaining new primitive this handler itself calls. A failure is an idempotent refusal
+ *   (logged) — never a fabricated CAS baseline (this project's hardest rule: a false
+ *   baseline defeats the exact concurrent-mutation check the read-set exists to catch).
+ *   `readSet.chat` is NOT built here at all anymore (see "GAP 4 CLOSURE BUG" above) —
+ *   `AdmissionWorkspaceMaterialV1.readSet` (`core/turns/types.ts`) excludes `chat` from
+ *   what a caller may supply; `runAdmission` reads it itself, honestly, right after
+ *   `admit()` commits, via the SAME `context.deps.chatReader` this handler threads through
+ *   `RunTurnDeps.chatReader` below.
  *
  *   `runtimeDocs: []` / `candidatePins: []` / `readSet.pins: []`: honest empty values, not
  *   fabrications — no port anywhere in `KernelDeps` sources a runtime-doc file's content,
@@ -163,8 +181,11 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   - `"finalized"` + `result.kind === "committed"` -> `turn.completed` with `outcome:
  *     "completed"`, the changed-page hashes and Gate warnings captured (by side channel)
  *     during the LAST `buildFinalizeInput` call, and `failure: null`.
- *   - `"finalized"` + `result.kind` is `"failed"`/`"illegal"`, or `"terminalized"` (cancelled,
- *     Gate-exhausted, deadline-exceeded, backend failure, ...): `RunTurnResultV1`'s own
+ *   - `"finalized"` + `result.kind === "illegal"`, or `"terminalized"` (cancelled,
+ *     Gate-exhausted, deadline-exceeded, backend failure, a finalize CAS/deadline failure
+ *     now bridged into `terminalizeTurn` by `run-turn.ts` itself — see that file's own
+ *     header — so `{kind:"finalized", result:{kind:"failed"}}` is no longer a reachable
+ *     `RunTurnResultV1` shape at all, ...): `RunTurnResultV1`'s own
  *     `TerminalizeTurnResultV1`/`FinalizeTurnResultV1` variants do NOT echo back which
  *     `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) the composition
  *     originally requested — a genuine, separate gap this task's own scope does not cover
@@ -405,13 +426,6 @@ async function runTurnStart(
   const resolvedAgent = resolveAgentSelection(context, backend, model, effort);
   if (resolvedAgent === null) return [];
 
-  const chatAppendBase = await wrap(context.deps.chatReader.readAppendBase(activeChatId));
-  if ("code" in chatAppendBase) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — could not read the active chat's append base: ${chatAppendBase.safeMessage}`,
-    );
-    return [];
-  }
   const manifestSnapshot = await wrap(context.deps.projectStore.readManifestSnapshot());
   if ("code" in manifestSnapshot) {
     console.warn(
@@ -472,7 +486,6 @@ async function runTurnStart(
       readSet: {
         manifest: manifestSnapshot,
         canonicalPages,
-        chat: chatAppendBase,
         pins: [],
       },
     },
@@ -569,6 +582,7 @@ async function runTurnStart(
     clock: context.deps.clock,
     pinReader: context.deps.pinReader,
     turnTransactions: context.deps.turnTransactions,
+    chatReader: context.deps.chatReader,
     staging: cachingStaging.staging,
     agentBackend: resolvedAgent.agentBackend,
     gateRunner: context.deps.gateRunner,

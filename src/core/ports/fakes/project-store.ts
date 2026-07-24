@@ -75,7 +75,15 @@ export function createFakeProjectStore(options: {
 }): FakeProjectStore {
   const lease: ProjectLeaseIdentityV1 = { root: options.root };
   const manifest: ProjectManifestV1 = {
-    projectId: "fake-project-1",
+    // A fixed, valid-looking UUIDv7 (no real crypto/randomness, matching `fakeSha256Hex`'s
+    // own convention above) — not the earlier `"fake-project-1"`, which was a genuine
+    // fake-fidelity gap (`ProjectManifestV1.projectId` is typed a loose `string` at THIS
+    // port, but the real store always mints it via `uuidv7()`, and the wire protocol's own
+    // `kernelSnapshotPayloadV1Schema`/`kernelStateChangedPayloadV1Schema` require a real
+    // UUIDv7 wherever `projectId` crosses that boundary — `handlers/project.ts`'s
+    // `kernel.project.finishOpen` metadata, closed in the §10 smoke closeout, is exactly
+    // such a crossing).
+    projectId: "0192f000-0000-7000-8000-000000000001",
     name: "Fake Project",
     createdAt: "2024-01-01T00:00:00.000Z",
     targetStack: "generic",

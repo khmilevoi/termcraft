@@ -3,7 +3,13 @@ import { describe, expect, test } from "bun:test";
 import { context, wrap } from "@reatom/core";
 
 import { reatomTurnStateMachine } from "core/machines";
-import type { AgentRunOutcome, AgentTask, GateRunResultV1, StagedTurnReadSetV1 } from "core/ports";
+import type {
+  AgentRunOutcome,
+  AgentTask,
+  ChatReader,
+  GateRunResultV1,
+  StagedTurnReadSetV1,
+} from "core/ports";
 import {
   type FakeAgentBackend,
   type FakeGateRunner,
@@ -72,13 +78,18 @@ function scriptedDeadlines(sequence: readonly TurnDeadlineCheckV1[]): TurnDeadli
   };
 }
 
-function baseReadSet(): StagedTurnReadSetV1 {
+/** `chat` is deliberately absent — see `admission.test.ts`'s identical `baseReadSet()` header. */
+function baseReadSet(): Omit<StagedTurnReadSetV1, "chat"> {
   return {
     manifest: { sha256: "a".repeat(64), size: 10 },
     canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } }],
-    chat: { length: 100, prefixSha256: "c".repeat(64) },
     pins: [],
   };
+}
+
+/** A minimal `Pick<ChatReader, "readAppendBase">` double — matches `admission.test.ts`'s identical helper (duplicated per this ring's own "each fake/double gets its own tiny copy" convention). */
+function fakeChatAppendBaseReader(): Pick<ChatReader, "readAppendBase"> {
+  return { readAppendBase: async () => ({ length: 42, prefixSha256: "f".repeat(64) }) };
 }
 
 function baseAdmission(): AdmissionInputV1 {
@@ -198,6 +209,7 @@ function harness(
     clock,
     pinReader,
     turnTransactions,
+    chatReader: fakeChatAppendBaseReader(),
     staging,
     agentBackend,
     gateRunner,
@@ -551,6 +563,54 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
 
       // Gate never ran — the candidate never froze.
       expect(h.gateRunner.calls).toEqual([]);
+    });
+  });
+
+  test("(j) finalize failure (e.g. a stale read-set): bridges finalizing -> terminalizing and settles to idle — NEVER strands the machine (§10 smoke closeout fix)", async () => {
+    // RED before the fix: `finalizeTurn`'s own header marks the `finalizing ->
+    // terminalizing` edge "reached by a caller this function does not own" — an earlier
+    // version of `runTurn` was never that caller. It returned
+    // `{kind:"finalized", result:{kind:"failed"}}` as-is, leaving the machine stuck in
+    // "finalizing" permanently (every later `chat.*`/`turn.*`/`export.*` command in the
+    // same process then guard-rejected `CAPABILITY_UNAVAILABLE` forever — the §10 smoke
+    // report's "compounding second effect").
+    await context.start(async () => {
+      const h = harness();
+      const failure: FailureDtoV1 = {
+        code: "APPLY_STALE",
+        retryable: true,
+        safeMessage: "chat append base advanced since this turn's read-set was captured",
+        details: { part: "chat" },
+      };
+      h.turnTransactions.failNext("finalize", failure);
+
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.outcome).toBe("error");
+      expect(terminalizeCall.input.record.text).toBe(failure.safeMessage);
+      expect(terminalizeCall.input.record.reason).toBe("APPLY_STALE");
+
+      // The machine genuinely settled all the way to idle — never stranded in "finalizing".
+      expect(h.deps.machine.phase()).toBe("idle");
+      expect(h.turnTransactions.calls.map((c) => c.method)).toEqual([
+        "admit",
+        "finalize",
+        "terminalize",
+      ]);
     });
   });
 });

@@ -14,8 +14,9 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { BackendCapabilities } from "core/ports";
+import type { BackendCapabilities, TurnTransactionService } from "core/ports";
 import {
+  type FakeChatStore,
   createFakeAgentBackend,
   createFakeAgentRegistry,
   createFakeChatStore,
@@ -71,6 +72,61 @@ import type {
  * whether `turn.start` itself can populate that slot in this Kernel build (`./turn.ts`'s own
  * header, Gap 3).
  */
+
+/**
+ * Wraps a `TurnTransactionService` so its `admit`/`finalize`/`terminalize` calls genuinely
+ * advance — and `finalize` genuinely re-checks — the SAME chat append-base `ledger`
+ * reports, mirroring the real store's own single-JSONL-file coupling between a chat's
+ * readers and its `TurnTransactionService` writers (`store/adapters/chat-store.ts` and
+ * `store/adapters/turn-transactions.ts` both read/write the identical file). Without this,
+ * `createFakeChatStore`'s own honest, advancing `readAppendBase` (its header: "an honest,
+ * deterministic append-base derived from the fake's OWN current in-memory records") never
+ * actually observes what `turnTransactions.admit`/`finalize` do, and `createFakeTurnTransactionService`'s
+ * own `finalize` implements no CAS check at all ("No real CAS/read-set comparison is
+ * implemented" — that file's own header) — the exact fidelity gap the §10 smoke closeout's
+ * WP-1 report names ("the kernel fakes passed because their append-base semantics don't
+ * advance on admission the way the real store does"). Built here, at the orchestration
+ * layer, not inside `core/ports/fakes/turn-transactions.ts` itself — that file's sibling
+ * `core/ports/fakes/index.ts` documents "every fake is independent... it is not this ring's
+ * job to simulate that coupling on the fakes' behalf."
+ */
+function withHonestChatAppendBase(
+  base: TurnTransactionService,
+  ledger: Pick<FakeChatStore, "seedRecords" | "readAppendBase">,
+): TurnTransactionService {
+  return {
+    ...base,
+    async admit(input) {
+      const result = await base.admit(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.userRecord]);
+      return result;
+    },
+    async finalize(input) {
+      const current = await ledger.readAppendBase(input.targetChatId);
+      if (!("code" in current)) {
+        const stale =
+          current.length !== input.readSet.chat.length ||
+          current.prefixSha256 !== input.readSet.chat.prefixSha256;
+        if (stale) {
+          return {
+            code: "APPLY_STALE",
+            retryable: true,
+            safeMessage: `chat ${input.targetChatId}'s append base advanced since this turn's read-set was captured`,
+            details: { part: "chat" },
+          };
+        }
+      }
+      const result = await base.finalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.agentRecord]);
+      return result;
+    },
+    async terminalize(input) {
+      const result = await base.terminalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.record]);
+      return result;
+    },
+  };
+}
 
 const FAKE_BACKEND_CAPABILITIES: BackendCapabilities = {
   backendId: "claude",
@@ -272,6 +328,11 @@ describe('turnHandlers["turn.start"]', () => {
     const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
       chatReader: chatStore,
       chatMutations: chatStore,
+      // Honest advance-on-admission fidelity (see `withHonestChatAppendBase`'s own doc
+      // comment) — without this, `finalize()`'s CAS check never re-observes the
+      // just-admitted user record, and this test would give false confidence over the real
+      // production bug the §10 smoke closeout found.
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
       projectStore: createFakeProjectStore({
         root: "/test-root",
         workspaceState: {

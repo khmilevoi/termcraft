@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context, wrap } from "@reatom/core";
 
 import { reatomTurnStateMachine } from "core/machines";
-import type { StagedTurnReadSetV1 } from "core/ports";
+import type { ChatReader, StagedTurnReadSetV1 } from "core/ports";
 import {
   createFakePinStore,
   createFakeStagingService,
@@ -51,12 +51,42 @@ const FAILURE: FailureDtoV1 = {
   details: {},
 };
 
-function baseReadSet(): StagedTurnReadSetV1 {
+/**
+ * `chat` is deliberately absent — `AdmissionWorkspaceMaterialV1.readSet` (`../types.ts`'s
+ * own header) excludes it: the honest chat append-base is read by `runAdmission` itself,
+ * from its own `chatReader` dependency, right after `admit()` commits — never supplied by
+ * the caller. `harness()`'s `chatReader` (below) is this suite's own source for it.
+ */
+function baseReadSet(): Omit<StagedTurnReadSetV1, "chat"> {
   return {
     manifest: { sha256: "a".repeat(64), size: 10 },
     canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } }],
-    chat: { length: 100, prefixSha256: "c".repeat(64) },
     pins: [{ pageSlug: PAGE_HOME, base: { length: 5, prefixSha256: "d".repeat(64) } }],
+  };
+}
+
+/** The honest post-admission chat append-base `harness()`'s default `chatReader` reports. */
+const FRESH_CHAT_APPEND_BASE = { length: 42, prefixSha256: "f".repeat(64) };
+
+/**
+ * A minimal `Pick<ChatReader, "readAppendBase">` double — this suite only ever needs the
+ * one method `AdmissionDeps.chatReader` declares, and only ever for `targetChatId`
+ * `"chat-1"` (`baseInput()`'s own fixture), so a full `ChatReader`/`FakeChatStore` (whose
+ * `create()` mints an unrelated id) would add fixture ceremony this suite does not need.
+ * `calls` (chat ids, in call order) lets a test prove exactly WHEN this ran relative to
+ * `turnTransactions.calls`/`staging.calls` — the whole point of the ordering this file's
+ * header, step 1b, documents.
+ */
+function fakeChatAppendBaseReader(
+  result: FailureDtoV1 | typeof FRESH_CHAT_APPEND_BASE = FRESH_CHAT_APPEND_BASE,
+): Pick<ChatReader, "readAppendBase"> & { readonly calls: readonly string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    readAppendBase: async (chatId: string) => {
+      calls.push(chatId);
+      return result;
+    },
   };
 }
 
@@ -76,13 +106,16 @@ function baseInput(overrides: Partial<AdmissionInputV1> = {}): AdmissionInputV1 
 }
 
 /** Fresh fakes + a fresh turn machine per test — never shared across tests. */
-function harness(clock: Clock = manualClock(T0)) {
+function harness(
+  clock: Clock = manualClock(T0),
+  chatReader: Pick<ChatReader, "readAppendBase"> = fakeChatAppendBaseReader(),
+) {
   const machine = reatomTurnStateMachine();
   const pinReader = createFakePinStore();
   const turnTransactions = createFakeTurnTransactionService();
   const staging = createFakeStagingService();
-  const deps: AdmissionDeps = { machine, clock, pinReader, turnTransactions, staging };
-  return { deps, machine, pinReader, turnTransactions, staging };
+  const deps: AdmissionDeps = { machine, clock, pinReader, turnTransactions, staging, chatReader };
+  return { deps, machine, pinReader, turnTransactions, staging, chatReader };
 }
 
 describe("runAdmission — idle -> admitting -> workspace-ready", () => {
@@ -102,7 +135,8 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
 
   test("the happy path mints a UUIDv7 turnId, captures chat/selection, commits BEFORE creating the workspace, and reaches workspace-ready", async () => {
     await context.start(async () => {
-      const h = harness();
+      const chatReader = fakeChatAppendBaseReader();
+      const h = harness(manualClock(T0), chatReader);
       const selection = { pageSlug: PAGE_HOME, element: "btn-1" };
 
       const input = baseInput({ selection });
@@ -143,8 +177,14 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
 
       // The CAS basis carried forward is a faithful translation of the staged read set —
       // a dropped entry here silently weakens the pre-intent comparison (read-set.ts's header).
-      expect(outcome.context.readSet.chat).toEqual(baseReadSet().chat);
+      // `chat` comes from `h.chatReader` — read HONESTLY, AFTER `admit()` (this file's header,
+      // step 1b) — never from the caller's own (chat-less) `input.workspace.readSet`.
+      expect(outcome.context.readSet.chat).toEqual(FRESH_CHAT_APPEND_BASE);
       expect(outcome.context.readSet.pins.get(PAGE_HOME)).toEqual(baseReadSet().pins[0]?.base);
+      // The read happened for the right chat, exactly once, and the workspace was staged
+      // with that SAME fresh value — not the caller's own stale-by-construction guess.
+      expect(chatReader.calls).toEqual(["chat-1"]);
+      expect(stagingCall.input.readSet.chat).toEqual(FRESH_CHAT_APPEND_BASE);
 
       expect(h.machine.phase()).toBe("workspace-ready");
       // The fence is minted, but attempt 1 is never begun here.
@@ -191,6 +231,33 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
     });
   });
 
+  test("honest chat-append-base precondition: a chatReader failure blocks phase 'chat-append-base' AFTER admission already committed and BEFORE the workspace is ever attempted; machine stays admitting", async () => {
+    // This is the exact fix for the production bug the §10 smoke closeout found: an
+    // earlier version of this composition read the chat append base BEFORE `admit()` (one
+    // level up, in `core/kernel/model/handlers/turn.ts`), which is stale by construction on
+    // every real turn. This test pins the CORRECT ordering: read AFTER admit, BEFORE
+    // staging — and proves a failure here is a distinct, honestly-reported precondition,
+    // never silently folded into `"admit"` or `"workspace"`.
+    await context.start(async () => {
+      const chatFailure: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "chat append base unreadable",
+        details: {},
+      };
+      const h = harness(manualClock(T0), fakeChatAppendBaseReader(chatFailure));
+
+      const outcome = await wrap(runAdmission(h.deps, baseInput()));
+
+      expect(outcome).toEqual({ kind: "blocked", phase: "chat-append-base", failure: chatFailure });
+      // Admission already committed — the workspace is what never gets attempted.
+      expect(h.turnTransactions.calls.length).toBe(1);
+      expect(h.turnTransactions.calls[0]?.method).toBe("admit");
+      expect(h.staging.calls).toEqual([]);
+      expect(h.machine.phase()).toBe("admitting");
+    });
+  });
+
   test("verified-workspace precondition: workspace failure blocks phase 'workspace' AFTER admission already committed; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
@@ -208,7 +275,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("complete-read-set-hashes precondition: a duplicate page slug blocks phase 'read-set' AFTER both admit and workspace succeeded; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
-      const duplicatedReadSet: StagedTurnReadSetV1 = {
+      const duplicatedReadSet: Omit<StagedTurnReadSetV1, "chat"> = {
         ...baseReadSet(),
         canonicalPages: [
           { pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } },

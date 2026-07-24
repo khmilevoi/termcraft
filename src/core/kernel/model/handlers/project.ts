@@ -98,15 +98,27 @@ import { noOpOutcome, startedOutcome } from "./types";
  *   confirmed phase legality (matching every other project handler's synchronous
  *   machine-driven admission), and durably persists the grant asynchronously; it does not
  *   invent a synchronous identity cache `HandlerContext` does not provide.
- * - `kernel.snapshot`'s own `projectId`/`activePageSlug`/`activeChatId`/`pageDescriptors`
- *   fields (`kernel.ts`'s `buildSnapshotPayload`, hardcoded today) have NO corresponding
- *   mutator on `HandlerContext` — only the EVENT STREAM this file publishes
- *   (`kernel.stateChanged`, `page.descriptorsChanged`) reaches an already-subscribed
- *   client; a client that subscribes AFTER a project has already opened still receives a
- *   stale, hardcoded `kernel.snapshot` until `kernel.ts`/`HandlerContext` grows a mutator
- *   for those four fields. This is a real, narrow gap for whichever task wires
- *   `createHandlerRegistry` into `createKernel` (Step C) to close, not something this
- *   family can invent a mutator for on its own.
+ * - CLOSED (§10 smoke closeout, bug 2 — `ui`'s Home -> Workspace transition was
+ *   unreachable): `kernel.snapshot`'s own `projectId` field (`kernel.ts`'s
+ *   `buildSnapshotPayload`) used to be hardcoded `null` unconditionally, and neither
+ *   `finishOpen` nor `finishClose`'s own `kernel.stateChanged` event carried the fact at
+ *   all — so NEITHER an already-subscribed client (kernel-command-contract §9: "no
+ *   event-resume token, replay buffer, or reconnect promise" — there is no second
+ *   `kernel.snapshot` to fall back on) NOR a late-subscriber's bootstrap snapshot could
+ *   ever learn it, and `ui/mirror`'s own `deriveScreen` (gated on `projectId !== null`)
+ *   could never leave `"home"`. No NEW mutator was needed — `finishOpen`/`finishClose`
+ *   below now carry `metadata: {projectId, ...}` on their existing `kernel.stateChanged`
+ *   event (the same free-form per-action bag `setTrust`'s own `workspaceIdentity` already
+ *   used), which `kernel.ts`'s existing "growable identity" mechanism
+ *   (`noteEventForCapabilityGrowth`, the SAME one that already tracks
+ *   `growableActiveChatId`/`growableActivePageSlug`/`growableLivePreviewSessionId` from
+ *   this file's own published events) now ALSO tracks as `growableProjectId`, feeding
+ *   `buildSnapshotPayload` honestly — and which `ui/mirror/model/mirror.ts`'s `apply()`
+ *   now ALSO reads directly off the event for an already-subscribed client, never waiting
+ *   on a snapshot that will never come again. `setTrust`'s event gained the identical
+ *   `trust` fact for the same reason (§7.1's later `project.setTrust` step is exactly what
+ *   moves the screen from `trust-prompt`/`read-only` to `workspace`, and needed the same
+ *   live channel).
  * - WP-10 Task 6: `runProjectReadySequence` now restores the ACTIVE chat's persisted
  *   tail once the project reaches `ready` (`restoreActiveChatTail`, below) — `chat.changed`
  *   plus `chat.records`, so §11's relaunch requirement ("reopens the Workspace with the
@@ -195,7 +207,16 @@ function projectClose(
       );
       return [];
     }
-    return [stateChangedEvent("kernel.project.state", "kernel.project.finishClose", finishOutcome)];
+    // `metadata.projectId: null` — a project-scoped identity must not outlive the project it
+    // belongs to (mirrors this same function's own `setActivePreviewSession(null)` call above,
+    // and `kernel.ts`'s own `noteEventForCapabilityGrowth` clearing its three growable
+    // identities on this exact same action). See `finishOpen`'s identical-purpose metadata
+    // (above, `runProjectReadySequence`) for the full rationale.
+    return [
+      stateChangedEvent("kernel.project.state", "kernel.project.finishClose", finishOutcome, {
+        projectId: null,
+      }),
+    ];
   });
 
   return startedOutcome([admissionEvent], operationId);
@@ -220,11 +241,15 @@ function projectSetTrust(
   // call, and must see this decision immediately, not after an async round trip.
   context.setProjectTrust(payload.trust);
 
+  // `metadata.trust` — the SAME already-resolved value `context.setProjectTrust` just flipped
+  // synchronously above, echoed back so an already-subscribed client can mirror it (see
+  // `finishOpen`'s identical-purpose metadata, `runProjectReadySequence`, for the full
+  // rationale this event-metadata channel closes).
   const admissionEvent = stateChangedEvent(
     "kernel.project.state",
     "kernel.project.setTrust",
     applyOutcome,
-    { workspaceIdentity: payload.workspaceIdentity },
+    { workspaceIdentity: payload.workspaceIdentity, trust: payload.trust },
   );
   const operationId = uuidv7();
 
@@ -539,8 +564,19 @@ async function runProjectReadySequence(
     );
     return events;
   }
+  // `metadata.projectId`/`metadata.trust` close the gap this file's own header used to flag
+  // ("kernel.snapshot's own projectId/... fields have NO corresponding mutator... a client
+  // that subscribes AFTER a project has already opened still receives a stale, hardcoded
+  // kernel.snapshot") — an ALREADY-subscribed client (never re-sent a fresh kernel.snapshot,
+  // kernel-command-contract §9: "no event-resume token, replay buffer, or reconnect promise")
+  // learns the just-resolved identity from THIS event's own metadata instead. Both facts are
+  // already resolved, real values at this exact point (`manifest.projectId` from the read
+  // above, `trust` from the resolution above) — never fabricated.
   events.push(
-    stateChangedEvent("kernel.project.state", "kernel.project.finishOpen", finishOutcome),
+    stateChangedEvent("kernel.project.state", "kernel.project.finishOpen", finishOutcome, {
+      projectId: manifest.projectId,
+      trust,
+    }),
   );
 
   // WP-10 Task 6: restore the active chat's persisted tail now that the project has

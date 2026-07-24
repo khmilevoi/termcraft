@@ -13,6 +13,7 @@ import type {
   ExportPublishPort,
   GateRunner,
   ReadSetAppendBaseV1,
+  TurnTransactionService,
 } from "core/ports";
 import {
   createFakeAgentBackend,
@@ -39,6 +40,7 @@ import {
   type FailureDtoV1,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import type { ChatRecord } from "entities/chat";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -133,6 +135,28 @@ const HOME = homeSlug();
 const HOME_SOURCE_HASH = fakeSha256Hex("home-page-source");
 
 /**
+ * `seedRecords` closes the fake-fidelity gap the §10 smoke closeout found (WP-1 smoke
+ * report, "the kernel fakes passed because their append-base semantics don't advance on
+ * admission the way the real store does"): this stub's own `readAppendBase` used to
+ * return a FIXED `{length: 0, ...}` unconditionally, so a test could never observe the
+ * chat's append base actually advancing once a turn's user/agent/terminal record was
+ * durably admitted — the exact fidelity gap that let `core/kernel/model/handlers/turn.ts`'s
+ * real bug (reading the CAS baseline BEFORE admission) pass every kernel-level test despite
+ * always failing `finalize()` for real. Real records are tracked per chat id now, and
+ * `readAppendBase` derives its answer from them — honest, not fabricated, and it genuinely
+ * changes the moment `seedRecords` is called, mirroring the real store's own single-JSONL-
+ * file coupling between a chat's readers and its `TurnTransactionService` writers.
+ * `withHonestChatAppendBase` (below) is what actually calls `seedRecords` — this stub does
+ * not call it itself, matching `core/ports/fakes/index.ts`'s own "every fake is independent"
+ * design: the coupling between this chat double and `turnTransactions` is orchestration-code
+ * (this file's own job), never baked into either port double itself.
+ */
+interface ChatAppendLedger {
+  seedRecords(chatId: string, records: readonly ChatRecord[]): void;
+  readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1>;
+}
+
+/**
  * A minimal, locally-defined `ChatMutations & ChatReader` double that mints a REAL
  * UUIDv7 `chatId` — the same documented fixture `./kernel.test.ts`'s own "turn.start
  * spine" uses (see that file's identical helper for the full rationale):
@@ -142,8 +166,9 @@ const HOME_SOURCE_HASH = fakeSha256Hex("home-page-source");
  * mint and select, which `buildDeps`'s default independent read/write fake split
  * cannot give — so one instance serves both `chatReader` and `chatMutations` here.
  */
-function createChatMutationsStub(): ChatReader & ChatMutations {
+function createChatMutationsStub(): ChatReader & ChatMutations & ChatAppendLedger {
   const mintedChatIds = new Set<string>();
+  const recordsByChatId = new Map<string, ChatRecord[]>();
 
   function notFound(chatId: string): FailureDtoV1 {
     return {
@@ -158,6 +183,7 @@ function createChatMutationsStub(): ChatReader & ChatMutations {
     async create(): Promise<ChatHeaderV1> {
       const chatId = uuidv7();
       mintedChatIds.add(chatId);
+      recordsByChatId.set(chatId, []);
       return { chatId, createdAt: "2024-01-01T00:00:00.000Z" };
     },
     async switchActive(): Promise<undefined> {
@@ -177,7 +203,69 @@ function createChatMutationsStub(): ChatReader & ChatMutations {
     },
     async readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
       if (!mintedChatIds.has(chatId)) return notFound(chatId);
-      return { length: 0, prefixSha256: fakeSha256Hex("") };
+      const serialized = JSON.stringify(recordsByChatId.get(chatId) ?? []);
+      return {
+        length: new TextEncoder().encode(serialized).byteLength,
+        prefixSha256: fakeSha256Hex(serialized),
+      };
+    },
+    seedRecords(chatId: string, records: readonly ChatRecord[]): void {
+      const existing = recordsByChatId.get(chatId);
+      if (existing === undefined) {
+        console.warn(`kernel.integration.test: seedRecords called for unknown chatId ${chatId}`);
+        return;
+      }
+      existing.push(...records);
+    },
+  };
+}
+
+/**
+ * Wraps a `TurnTransactionService` so its `admit`/`finalize`/`terminalize` calls genuinely
+ * advance — and `finalize` genuinely re-checks — the SAME chat append-base `ledger` reports,
+ * mirroring the real store's own coupling: `store/adapters/turn-transactions.ts` and
+ * `store/adapters/chat-store.ts` both read/write the SAME on-disk JSONL file, so a real
+ * `finalize()`'s CAS re-check (`store/transaction/model/wrappers.ts`'s
+ * `buildFinalizeCasPrecondition`) always sees the exact state a `ChatReader.readAppendBase`
+ * call made right after would report too. `core/ports/fakes/turn-transactions.ts`'s own fake
+ * deliberately implements no CAS check at all (`core/ports/fakes/index.ts`'s "every fake is
+ * independent" design — cross-port coupling is this ORCHESTRATION file's job, never the
+ * shared fakes ring's). Built here, not in `core/ports/fakes/`, for exactly that reason.
+ */
+function withHonestChatAppendBase(
+  base: TurnTransactionService,
+  ledger: ChatAppendLedger,
+): TurnTransactionService {
+  return {
+    ...base,
+    async admit(input) {
+      const result = await base.admit(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.userRecord]);
+      return result;
+    },
+    async finalize(input) {
+      const current = await ledger.readAppendBase(input.targetChatId);
+      if (!("code" in current)) {
+        const stale =
+          current.length !== input.readSet.chat.length ||
+          current.prefixSha256 !== input.readSet.chat.prefixSha256;
+        if (stale) {
+          return {
+            code: "APPLY_STALE",
+            retryable: true,
+            safeMessage: `chat ${input.targetChatId}'s append base advanced since this turn's read-set was captured`,
+            details: { part: "chat" },
+          };
+        }
+      }
+      const result = await base.finalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.agentRecord]);
+      return result;
+    },
+    async terminalize(input) {
+      const result = await base.terminalize(input);
+      if (!("code" in result)) ledger.seedRecords(input.targetChatId, [input.record]);
+      return result;
     },
   };
 }
@@ -203,7 +291,7 @@ const TURN_SPINE_BACKEND_CAPABILITIES: BackendCapabilities = {
  * instance the assembled Kernel never actually holds.
  */
 function buildDeps(
-  chatStore: ChatReader & ChatMutations,
+  chatStore: ChatReader & ChatMutations & ChatAppendLedger,
   gateRunner: GateRunner,
   agentRegistry: AgentRegistry,
   exportPublish: ExportPublishPort,
@@ -242,7 +330,7 @@ function buildDeps(
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,
-    turnTransactions: createFakeTurnTransactionService(),
+    turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
     projectWrite: createFakeProjectWriteCoordinator(),
     staging: createFakeStagingService(),
     trustGate: createFakeTrustGate(),

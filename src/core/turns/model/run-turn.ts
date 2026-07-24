@@ -11,6 +11,7 @@ import type { PublishableEventV1 } from "core/mailbox";
 import type {
   AgentBackend,
   AgentTask,
+  ChatReader,
   GateRunner,
   PinReader,
   StagingService,
@@ -87,12 +88,17 @@ import {
  * work package that composes the real quarantine/health-check supervisor should replace this
  * branch, not extend it.
  *
- * FINALIZE FAILURES STAY OUT OF SCOPE HERE TOO: `finalize.ts`'s own header marks the
+ * FINALIZE FAILURES DO BRIDGE INTO `terminalizeTurn`: `finalize.ts`'s own header marks the
  * `finalizing -> terminalizing` edge on a CAS-mismatch/deadline-exceeded failure "deliberately
- * NOT driven here... reached by a caller this function does not own" — this driver is not
- * that caller either (the brief's own step 3 is "`finalizeTurn` -> return
- * `committed`/`failed`", nothing more), so a finalize failure is returned as-is, not chained
- * into `terminalizeTurn`.
+ * NOT driven here... reached by a caller this function does not own" — THIS driver is that
+ * caller. A `finalizeTurn` result of `{kind:"failed", failure}` means `beginFinalization`
+ * already succeeded (the machine IS in `"finalizing"`), so leaving it there and merely
+ * returning the failure (an earlier version of this file's own bug) strands the turn machine
+ * in `"finalizing"` permanently — every later `chat.*`/`turn.*`/`export.*` command in the same
+ * process is then guard-rejected `CAPABILITY_UNAVAILABLE` forever, not just this one turn.
+ * `{kind:"illegal"}` needs no such bridge: it means `beginFinalization`/`markCommitted`/
+ * `settle` itself was rejected, so the machine never left its PREVIOUS phase (defensive-only,
+ * unreachable given this driver's own correct sequencing) — nothing to unwind.
  */
 
 export interface RunTurnDeps {
@@ -101,6 +107,8 @@ export interface RunTurnDeps {
   readonly pinReader: PinReader;
   readonly turnTransactions: TurnTransactionService;
   readonly staging: StagingService;
+  /** Only `readAppendBase` is needed — threaded straight through to `AdmissionDeps` (`admission.ts`'s own header, step 1b). */
+  readonly chatReader: Pick<ChatReader, "readAppendBase">;
   readonly agentBackend: AgentBackend;
   readonly gateRunner: GateRunner;
   readonly deadlines: TurnDeadlines;
@@ -199,6 +207,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     pinReader: deps.pinReader,
     turnTransactions: deps.turnTransactions,
     staging: deps.staging,
+    chatReader: deps.chatReader,
   };
   const admission = await wrap(runAdmission(admissionDeps, input.admission));
   if (admission.kind !== "workspace-ready")
@@ -404,6 +413,14 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         ...finalizeMaterial,
       }),
     );
+
+    if (finalizeResult.kind === "failed") {
+      // See this file's header, "FINALIZE FAILURES DO BRIDGE INTO terminalizeTurn": without
+      // this bridge the machine is already in "finalizing" (beginFinalization succeeded
+      // inside finalizeTurn) and would be stranded there forever.
+      bridge("beginTerminalization");
+      return terminalize("failed", finalizeResult.failure.safeMessage, finalizeResult.failure.code);
+    }
     return { kind: "finalized", result: finalizeResult };
   }
 }

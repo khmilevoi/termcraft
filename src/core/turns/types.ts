@@ -31,12 +31,25 @@ export interface AdmissionCandidatePinV1 {
   readonly pinId: string;
 }
 
-/** The raw material `StagingService.createTurnWorkspace` needs verbatim, minus the `turnId`/`targetChatId` admission itself mints/captures. */
+/**
+ * The raw material `StagingService.createTurnWorkspace` needs verbatim, minus the
+ * `turnId`/`targetChatId` admission itself mints/captures.
+ *
+ * `readSet.chat` is deliberately EXCLUDED from what the caller supplies (`Omit<...,
+ * "chat">`, not the full `StagedTurnReadSetV1`): the honest chat append-base is a fact
+ * about the chat's state IMMEDIATELY AFTER this turn's own user record commits during
+ * admission (turn-durability §7.2 step 3 precedes step 4's read-set capture) —  no caller
+ * outside `runAdmission` itself can observe that moment, since it happens strictly between
+ * `turnTransactions.admit(...)` and `staging.createTurnWorkspace(...)`, both internal to
+ * that one function. A caller-supplied `chat` value here would necessarily be captured
+ * either too early (before its own turn's user record exists) or fabricated — `admission.ts`
+ * re-reads it itself, at the only honest moment, via its own `chatReader` dependency.
+ */
 export interface AdmissionWorkspaceMaterialV1 {
   readonly pages: readonly StagingPageSourceV1[];
   readonly manifestSlice: Uint8Array;
   readonly runtimeDocs: readonly StagingRuntimeDocV1[];
-  readonly readSet: StagedTurnReadSetV1;
+  readonly readSet: Omit<StagedTurnReadSetV1, "chat">;
 }
 
 /**
@@ -53,8 +66,21 @@ export interface AdmissionInputV1 {
   readonly workspace: AdmissionWorkspaceMaterialV1;
 }
 
-/** Which of `finishAdmission`'s three §7.2 preconditions (committed user record, verified workspace, complete read-set hashes) a run stopped at, plus the fence mint that follows them. */
-export type AdmissionBlockedPhaseV1 = "admit" | "workspace" | "read-set" | "fence";
+/**
+ * Which of `finishAdmission`'s three §7.2 preconditions (committed user record, verified
+ * workspace, complete read-set hashes) a run stopped at, plus the fence mint that follows
+ * them. `"chat-append-base"` sits between `"admit"` and `"workspace"`: the honest
+ * post-admission chat append-base read (this file's own header) that the "complete
+ * read-set hashes" precondition depends on, but that can genuinely fail independently of
+ * both `admit` and `workspace` (a `ChatReader` failure, not a `TurnTransactionService` or
+ * `StagingService` one).
+ */
+export type AdmissionBlockedPhaseV1 =
+  | "admit"
+  | "chat-append-base"
+  | "workspace"
+  | "read-set"
+  | "fence";
 
 /**
  * The fully captured turn identity `workspace-ready` carries forward to the attempt/
@@ -77,7 +103,7 @@ export type AdmissionOutcomeV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
   | {
       readonly kind: "blocked";
-      readonly phase: "admit" | "workspace";
+      readonly phase: "admit" | "chat-append-base" | "workspace";
       readonly failure: FailureDtoV1;
     }
   | {
