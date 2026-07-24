@@ -24,6 +24,21 @@ export interface TerminalControl {
   exitAlternateScreen(): void;
 }
 
+/**
+ * The real process-termination seam (M9). Restoring the terminal and printing is not enough on
+ * a panic: Bun does NOT auto-exit once an `uncaughtException`/`unhandledRejection` handler
+ * returns (confirmed empirically — a pending timer keeps the process alive), so without an
+ * explicit exit the process hangs, the still-live OpenTUI `CliRenderer`'s next paint frame can
+ * re-enter raw mode / mouse tracking / alt-screen right after `restoreTerminal()` just reversed
+ * them, and the project lease plus any host children (the Windows Job Object's kill-on-close
+ * limit, `infrastructure/process/model/job-object.ts`) stay held until *some* process exit
+ * happens. Narrowed to `(code: number) => void`, mirroring `TerminalControl`, so a test can pass
+ * a recording double instead of ending the test runner.
+ */
+export interface ProcessExit {
+  (code: number): void;
+}
+
 /** xterm mouse-tracking modes OpenTUI enables (button-event 1000, cell-motion 1002, any-motion
  *  1003, SGR encoding 1006) — disabled in the same combination, independent of which subset is
  *  actually live, since sending an "off" for a mode that was never on is a no-op. */
@@ -47,6 +62,18 @@ const REAL_TERMINAL_CONTROL: TerminalControl = {
 };
 
 /**
+ * The real exit seam: flushes `stderr` before exiting, mirroring `main.tsx`'s own
+ * flush-then-exit pattern for `stdout` — an empty trailing write's callback fires only after
+ * every earlier write's callback already has (Writable streams process queued writes strictly
+ * in order), so this guarantees the diagnostic `reportFatal` just printed via `console.error`
+ * (which targets `stderr`) physically lands before the process disappears, even on a piped,
+ * non-TTY `stderr` (worse on Windows).
+ */
+const REAL_PROCESS_EXIT: ProcessExit = (code) => {
+  process.stderr.write(new Uint8Array(0), () => process.exit(code));
+};
+
+/**
  * The real process seam. Signals are registered with `once` because shutdown is idempotent
  * anyway (`runApp` shares one teardown promise), and a repeated Ctrl+C should reach the
  * default handler rather than queue another unmount.
@@ -59,10 +86,19 @@ const REAL_TERMINAL_CONTROL: TerminalControl = {
  * error-value path, now share ONE idempotent `restoreTerminal()` that always runs first — so
  * the terminal is sane again before anything is printed, on every exit path, not just the ones
  * `run-app.ts`'s own shutdown sequence already covers.
+ *
+ * A panic additionally terminates the process (via `exit`) once it has restored and reported —
+ * unlike every OTHER `reportFatal` call site, which already owns an explicit `process.exit` of
+ * its own (`main.tsx`/`demo.tsx`'s `app instanceof Error` branches, `_host`'s stdio failure
+ * branch) reached right after the call returns. Only the panic path has no such caller above it
+ * on the stack, so it is the one place this function must own the exit itself, or the process
+ * hangs with the terminal free to be re-corrupted and the project lease/host children still
+ * held — see {@link ProcessExit}'s own doc comment.
  */
 export function createProcessBoundary(
   target: SignalTarget,
   terminal: TerminalControl = REAL_TERMINAL_CONTROL,
+  exit: ProcessExit = REAL_PROCESS_EXIT,
 ): ProcessBoundary {
   let restored = false;
   function restoreTerminal(): void {
@@ -82,6 +118,10 @@ export function createProcessBoundary(
   function onPanic(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     reportFatal(`unrecoverable failure: ${message}`, error);
+    // Restore is synchronous (it runs entirely inside `reportFatal`, above), so by the time
+    // `exit` is called the terminal is already sane — exiting only stops the still-live
+    // renderer from re-corrupting it and releases the OS-level project lease/host children.
+    exit(1);
   }
 
   target.once("uncaughtException", onPanic);

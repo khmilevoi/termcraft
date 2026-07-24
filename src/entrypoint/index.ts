@@ -19,4 +19,9 @@ export type { RunAppOptions } from "./model/run-app";
 export { bootstrap } from "./model/bootstrap";
 export type { BootstrapDeps } from "./model/bootstrap";
 export { createProcessBoundary } from "./model/process-boundary";
-export type { PanicEvent, SignalTarget, TerminalControl } from "./model/process-boundary";
+export type {
+  PanicEvent,
+  ProcessExit,
+  SignalTarget,
+  TerminalControl,
+} from "./model/process-boundary";

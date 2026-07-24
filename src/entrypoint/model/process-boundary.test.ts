@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { ShutdownSignal } from "../types";
 import { createProcessBoundary } from "./process-boundary";
-import type { PanicEvent, SignalTarget, TerminalControl } from "./process-boundary";
+import type { PanicEvent, ProcessExit, SignalTarget, TerminalControl } from "./process-boundary";
 
 /** A `SignalTarget` double tracking the last handler registered per event name, so a test can
  *  fire it directly instead of dispatching a real OS signal or a real process-level panic. */
@@ -26,6 +26,13 @@ function fakeTerminal(calls: string[]): TerminalControl {
     disableMouseCapture: () => calls.push("mouse-off"),
     exitAlternateScreen: () => calls.push("alt-screen-off"),
   };
+}
+
+/** A `ProcessExit` double recording every call instead of ending the test runner — the panic
+ *  path must terminate the process for real (M9), but a test firing that path directly cannot
+ *  be allowed to call the real `process.exit`. */
+function fakeExit(calls: string[]): ProcessExit {
+  return (code) => calls.push(`exit:${code}`);
 }
 
 /** Runs `run` with `console.error` swapped for a recorder, always restoring the real one. */
@@ -75,7 +82,7 @@ describe("createProcessBoundary", () => {
   test("an escaping uncaughtException restores the terminal exactly once, in order, before the failure is printed", () => {
     const { target, handlers } = fakeTarget();
     const calls: string[] = [];
-    createProcessBoundary(target, fakeTerminal(calls));
+    createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
 
     withCapturedConsoleError(calls, () => {
       handlers.get("uncaughtException")?.(new Error("boom"));
@@ -83,13 +90,15 @@ describe("createProcessBoundary", () => {
 
     expect(calls.slice(0, 3)).toEqual(["raw-mode-off", "mouse-off", "alt-screen-off"]);
     expect(calls.length).toBeGreaterThan(3);
-    expect(calls.slice(3).every((entry) => entry.startsWith("printed:"))).toBe(true);
+    const printed = calls.slice(3, -1);
+    expect(printed.length).toBeGreaterThan(0);
+    expect(printed.every((entry) => entry.startsWith("printed:"))).toBe(true);
   });
 
   test("an unhandledRejection is routed through the same restore-then-report panic path", () => {
     const { target, handlers } = fakeTarget();
     const calls: string[] = [];
-    createProcessBoundary(target, fakeTerminal(calls));
+    createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
 
     withCapturedConsoleError(calls, () => {
       handlers.get("unhandledRejection")?.("some rejection reason");
@@ -101,7 +110,7 @@ describe("createProcessBoundary", () => {
   test("restoreTerminal never runs twice, even across a panic followed by an explicit reportFatal", () => {
     const { target, handlers } = fakeTarget();
     const calls: string[] = [];
-    const boundary = createProcessBoundary(target, fakeTerminal(calls));
+    const boundary = createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
 
     withCapturedConsoleError(calls, () => {
       handlers.get("uncaughtException")?.(new Error("first"));
@@ -111,5 +120,30 @@ describe("createProcessBoundary", () => {
     expect(calls.filter((entry) => entry === "raw-mode-off")).toHaveLength(1);
     expect(calls.filter((entry) => entry === "mouse-off")).toHaveLength(1);
     expect(calls.filter((entry) => entry === "alt-screen-off")).toHaveLength(1);
+  });
+
+  test("a panic terminates the process (exit code 1) after the terminal is restored and the failure printed", () => {
+    const { target, handlers } = fakeTarget();
+    const calls: string[] = [];
+    createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
+
+    withCapturedConsoleError(calls, () => {
+      handlers.get("uncaughtException")?.(new Error("boom"));
+    });
+
+    expect(calls.at(-1)).toBe("exit:1");
+    expect(calls.filter((entry) => entry.startsWith("exit:"))).toHaveLength(1);
+  });
+
+  test("an explicit reportFatal call (not a panic) never terminates the process on its own", () => {
+    const { target } = fakeTarget();
+    const calls: string[] = [];
+    const boundary = createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
+
+    withCapturedConsoleError(calls, () => {
+      boundary.reportFatal("startup failed", null);
+    });
+
+    expect(calls.some((entry) => entry.startsWith("exit:"))).toBe(false);
   });
 });

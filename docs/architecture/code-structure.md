@@ -537,7 +537,10 @@ the code does not encode**
   selection, and the commands, now including the production dependency
   composition `createShell("interactive", …)` builds (WP-4) and the
   `uncaughtException`/`unhandledRejection` panic-recovery boundary M9 asked for
-  (`process-boundary.ts`'s `restoreTerminal()`)
+  (`process-boundary.ts`'s `restoreTerminal()`, followed by an injectable
+  `ProcessExit` seam that terminates the process — restoring alone left the
+  process hanging with the renderer free to re-corrupt the terminal and the
+  project lease/host children still held; round-1 fix on WP-4's own review)
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — the
   `GitHistory`/`GitCommitter` port definitions and the Git adapter's placement
   inside the Project store; no code implements either side of this yet
