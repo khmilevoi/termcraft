@@ -3,7 +3,15 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { evaluateCapabilityGuard } from "core/capabilities";
 import type { KernelStateSnapshot } from "core/capabilities";
 import type { EventEnvelopeV1 } from "core/mailbox";
-import type { ChatHeaderV1, ChatMutations } from "core/ports";
+import type {
+  BackendCapabilities,
+  ChatHandleV1,
+  ChatHeaderV1,
+  ChatLoadResultV1,
+  ChatMutations,
+  ChatReader,
+  ReadSetAppendBaseV1,
+} from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentRegistry,
@@ -25,7 +33,11 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
-import { type EventPayloadByKindV1, eventPayloadV1SchemaByKind } from "core/protocol";
+import {
+  type EventPayloadByKindV1,
+  type FailureDtoV1,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -97,21 +109,70 @@ function makeClock(nowMs: number): Clock {
 }
 
 /**
- * A minimal, locally-defined `ChatMutations` double that mints a REAL UUIDv7 `chatId` —
- * matches `handlers/chat.test.ts`'s own `createChatMutationsStub`, for the identical
- * documented reason: `createFakeChatStore`'s own `create()` mints `` `fake-chat-${n}` ``
- * (a readable test id, not a canonical UUIDv7), which fails `chat.changed`'s own
- * `activeChatId: uuidv7Schema` at `eventBus.publishTransition`'s schema validation — a
- * fixture artifact, never something a real `ChatMutations` adapter (or this handler) gets
- * wrong.
+ * A minimal, locally-defined `ChatMutations` (+ `ChatReader`, for the `turn.start` spine
+ * below) double that mints a REAL UUIDv7 `chatId` — matches `handlers/chat.test.ts`'s own
+ * `createChatMutationsStub` for the identical documented reason: `createFakeChatStore`'s
+ * own `create()` mints `` `fake-chat-${n}` `` (a readable test id, not a canonical UUIDv7),
+ * which fails `chat.changed`'s own `activeChatId: uuidv7Schema` at
+ * `eventBus.publishTransition`'s schema validation — a fixture artifact, never something a
+ * real `ChatMutations` adapter (or this handler) gets wrong.
+ *
+ * Widened here (beyond `handlers/chat.test.ts`'s own narrower `ChatMutations`-only version)
+ * to also implement `ChatReader`: the `turn.start` spine below needs `readAppendBase` to
+ * resolve for the SAME chat id `chat.create`/`chat.switch` actually minted and selected —
+ * `buildDeps`'s own default fixture instead splits `chatReader`/`chatMutations` across two
+ * INDEPENDENT `createFakeChatStore()` instances (a real one for reads, this stub for
+ * mutations only), which would leave `readAppendBase` looking up a chat id the read-side
+ * fake never heard of. `readAppendBase`'s own `{length: 0, prefixSha256}` is honest, not
+ * fabricated: every chat this stub mints genuinely has zero records (it tracks minted ids
+ * only, never appends anything), so `length: 0` is simply true, and `prefixSha256` is the
+ * SAME deterministic, no-real-crypto `fakeSha256Hex` formula `core/ports/fakes/chat-store.ts`'s
+ * own `readAppendBase` fake uses for the identical zero-record case — never a real
+ * SHA-256, and never a placeholder standing in for an UNKNOWN fact.
  */
-function createChatMutationsStub(): ChatMutations {
+function fakeSha256Hex(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) | 0;
+  const base = (h >>> 0).toString(16).padStart(8, "0");
+  return base.repeat(8).slice(0, 64);
+}
+
+function createChatMutationsStub(): ChatReader & ChatMutations {
+  const mintedChatIds = new Set<string>();
+
+  function notFound(chatId: string): FailureDtoV1 {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: `no chat found for chatId ${chatId}`,
+      details: { chatId },
+    };
+  }
+
   return {
     async create(): Promise<ChatHeaderV1> {
-      return { chatId: uuidv7(), createdAt: "2024-01-01T00:00:00.000Z" };
+      const chatId = uuidv7();
+      mintedChatIds.add(chatId);
+      return { chatId, createdAt: "2024-01-01T00:00:00.000Z" };
     },
     async switchActive(): Promise<undefined> {
       return undefined;
+    },
+    async open(chatId: string): Promise<FailureDtoV1 | ChatHandleV1> {
+      if (!mintedChatIds.has(chatId)) return notFound(chatId);
+      return {
+        header: { chatId, createdAt: "2024-01-01T00:00:00.000Z" },
+        async loadTail(): Promise<ChatLoadResultV1> {
+          return { records: [], prevCursor: null };
+        },
+        async loadBefore(): Promise<ChatLoadResultV1> {
+          return { records: [], prevCursor: null };
+        },
+      };
+    },
+    async readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
+      if (!mintedChatIds.has(chatId)) return notFound(chatId);
+      return { length: 0, prefixSha256: fakeSha256Hex("") };
     },
   };
 }
@@ -364,27 +425,39 @@ describe("kernel.capabilitiesChanged growth (Step C1)", () => {
   });
 });
 
+/** `model.select`'s validated triple for the `turn.start` spine test below — matches `handlers/turn.test.ts`'s own identical fixture constant. */
+const TURN_SPINE_BACKEND_CAPABILITIES: BackendCapabilities = {
+  backendId: "claude",
+  models: [{ model: "sonnet", efforts: ["medium"] }],
+  confinement: "canUseTool",
+  sessionWorkspaceBinding: "fixed",
+};
+
 /**
- * Kernel-assembly WP-1 task 9, Step C3 — the §11 real-registry spine deliverable. The
- * brief's own named scenario ("admission -> attempt -> gate retry -> finalize" through a
- * dispatched `turn.start`) is currently BLOCKED: `handlers/turn.ts`'s own header ("Gap 4")
- * documents that `AdmissionInputV1.workspace.readSet`'s required chat-append-base/manifest
- * facts have no honest `core/ports` source yet, so `turn.start` stays a sanctioned no-op and
- * the turn machine can never leave `idle` through the REAL, wired Kernel — confirmed
- * directly against the real guard (`capabilities/model/guards.ts`'s `turnCancelReason`:
- * `phase === "idle"` always rejects `turn.cancel` with `TURN_NOT_ACTIVE`), not merely
- * asserted. The composition itself is proven correct in isolation — against fakes, but
- * exhaustively, including a genuine Gate-retry-then-pass case — by `core/turns/model/
- * run-turn.test.ts`'s own suite; the ONE turn kind that IS wired for real, `turn.cancel`, is
- * proven end to end (including its own genuinely-driven cancel handle) by `handlers/
- * turn.test.ts`.
+ * Kernel-assembly WP-1 task 9, Step C3 — the §11 real-registry spine deliverable, plus the
+ * Gap-4-closeout `turn.start` spine (this file's own second test, below). Step C3's own
+ * `project` -> `chat` -> `page` spine (first test) stays as originally written — the brief's
+ * own named scenario ("admission -> attempt -> gate retry -> finalize" through a dispatched
+ * `turn.start`) was BLOCKED at that time (`handlers/turn.ts`'s own header, "Gap 4":
+ * `AdmissionInputV1.workspace.readSet`'s chat-append-base/manifest facts had no honest
+ * `core/ports` source), so a different, currently-real multi-family spine stood in for it,
+ * proving the same two properties (a streamed, schema-valid event sequence and strictly
+ * monotonic `stateRevision`) the brief's own spine test asks for.
  *
- * This suite proves the SAME two properties the brief's own spine test asks for — a
- * streamed, schema-valid event sequence and strictly monotonic `stateRevision` — through a
- * DIFFERENT, currently-real multi-step, multi-family spine (`project` -> `chat` -> `page`),
- * driven through the REAL `createHandlerRegistry`/`createKernel`, not an isolated family
- * fixture. This is the spine Task 11 can generalize the SAME assertions onto once Gap 4
- * closes and a genuine `turn.start` sequence becomes dispatchable the same way.
+ * Gap 4 is now closed (`core/ports/chat-store.ts`'s `readAppendBase`, `core/ports/
+ * project-store.ts`'s `readManifestSnapshot`, both wired into `handlers/turn.ts`'s real
+ * `turn.start`) — the second describe block below is the brief's own originally-named
+ * scenario, dispatched for real through the REAL `createKernel`/`createHandlerRegistry`, not
+ * an isolated family fixture: `project.open` -> `project.setTrust` -> `chat.create` ->
+ * `chat.switch` (persisting `activeChatId` — `chat.create`'s own real handler does not,
+ * `handlers/chat.ts`'s own header note) -> `turn.start` (admission -> attempt -> a genuine
+ * Gate manifest-slice retry -> finalize -> `turn.completed`), asserting the same
+ * schema-valid/monotonic-revision properties PLUS `activeTurnId` cleared once the turn
+ * committed. `core/turns/model/run-turn.test.ts`'s own suite remains the exhaustive,
+ * per-page composition proof (including every terminal branch); this spine's own job is
+ * proving the REAL Kernel wiring, not re-proving `runTurn` a second time — `handlers/
+ * turn.test.ts`'s own identical-shaped test proves the same composition against an isolated
+ * `HandlerContext` fixture, for the same reason.
  */
 describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () => {
   test("project.open -> project.setTrust -> chat.create -> page.removePlan -> page.removeDiscardPlan: every non-snapshot event parses against its own schema, eventSeq strictly increases, and stateRevision never decreases", async () => {
@@ -509,5 +582,210 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
       const parsed = schema.safeParse(envelope.payload);
       expect(parsed.success).toBe(true);
     }
+  });
+});
+
+/**
+ * Kernel-assembly Task 9, Gap 4 closeout — the deliverable-F spine: the brief's own
+ * originally-named scenario, now genuinely dispatchable. See the doc comment above the
+ * preceding describe block for the full "why this test exists now" citation.
+ */
+describe("the turn.start spine (kernel-assembly Task 9, Gap 4 closeout)", () => {
+  test("project.open -> project.setTrust -> chat.create -> chat.switch -> turn.start: admission -> attempt -> a genuine Gate retry -> finalize -> turn.completed; activeTurnId set then cleared; eventSeq/stateRevision stay monotonic", async () => {
+    const gateRunner = createFakeGateRunner();
+    const agentBackend = createFakeAgentBackend({ capabilities: TURN_SPINE_BACKEND_CAPABILITIES });
+    // ONE stub instance for BOTH facets — `turn.start`'s own `readAppendBase` must resolve
+    // for the SAME chat id `chat.create`/`chat.switch` actually minted and selected (see this
+    // stub's own doc comment for why `buildDeps`'s default split-instance fixture cannot do
+    // that here).
+    const chatStore = createChatMutationsStub();
+    const deps = buildDeps({ chatMutations: chatStore });
+    const kernel = createKernel({
+      ...deps,
+      chatReader: chatStore,
+      // A deliberately zero-page project: isolates the admission/attempt/gate-retry/finalize
+      // wiring this test proves without needing byte-level per-page plumbing — matches
+      // `handlers/turn.test.ts`'s own identical-shaped fixture and identical reasoning.
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: { backend: "claude", model: "sonnet", effort: "medium" },
+      }),
+      gateRunner,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    const envelopes: EventEnvelopeV1[] = [];
+    const unsubscribe = kernel.events((envelope) => envelopes.push(envelope));
+    if (unsubscribe instanceof Error) throw unsubscribe;
+
+    const projectReady = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.finishOpen",
+    );
+    const openResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: "0",
+      kind: "project.open",
+      payload: { root: "/test-root" },
+    });
+    if (openResult instanceof Error) throw openResult;
+    const readyEnvelope = await projectReady;
+
+    const trustResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: readyEnvelope.stateRevision,
+      kind: "project.setTrust",
+      payload: { trust: "trusted", workspaceIdentity: "ws-1" },
+    });
+    if (trustResult instanceof Error) throw trustResult;
+    if (trustResult.status !== "accepted") {
+      throw new Error(`project.setTrust was rejected: ${JSON.stringify(trustResult)}`);
+    }
+
+    const chatCreated = waitForEvent(kernel, (envelope) => envelope.kind === "chat.changed");
+    const createResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: trustResult.resultingRevision,
+      kind: "chat.create",
+      payload: {},
+    });
+    if (createResult instanceof Error) throw createResult;
+    if (createResult.status !== "accepted") {
+      throw new Error(`chat.create was rejected: ${JSON.stringify(createResult)}`);
+    }
+    const createdEnvelope = await chatCreated;
+    const createdChatId = (createdEnvelope.payload as EventPayloadByKindV1["chat.changed"])
+      .activeChatId;
+
+    // `chat.create`'s own real handler never persists `activeChatId` into `WorkspaceStateV1`
+    // (`handlers/chat.ts`'s own header note) — `chat.switch` is the one real command that
+    // does, so it is genuinely dispatched here too, rather than poked into the fake directly.
+    // Distinguished from `chat.create`'s own `chat.changed` by `added.length === 0` (a switch
+    // adds no new chat).
+    const chatSwitched = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "chat.changed" &&
+        (envelope.payload as EventPayloadByKindV1["chat.changed"]).added.length === 0,
+    );
+    const switchResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: createdEnvelope.stateRevision,
+      kind: "chat.switch",
+      payload: { chatId: createdChatId },
+    });
+    if (switchResult instanceof Error) throw switchResult;
+    if (switchResult.status !== "accepted") {
+      throw new Error(`chat.switch was rejected: ${JSON.stringify(switchResult)}`);
+    }
+    const switchedEnvelope = await chatSwitched;
+
+    // Forces exactly ONE Gate retry, at the manifest-slice stage (this fixture's own
+    // `pageReader` lists zero pages, so no per-page `runPage` call is ever made).
+    gateRunner.queueRunManifestSliceResult({
+      errors: [{ kind: "manifest", code: "MANIFEST_REJECTED", message: "manifest rejected" }],
+      slice: null,
+    });
+
+    const firstAttemptStarted = waitForEvent(
+      kernel,
+      (envelope) => envelope.kind === "turn.attemptStarted",
+    );
+    const turnStartResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: switchedEnvelope.stateRevision,
+      kind: "turn.start",
+      payload: { text: "please add a page" },
+    });
+    if (turnStartResult instanceof Error) throw turnStartResult;
+    if (turnStartResult.status !== "accepted") {
+      throw new Error(`turn.start was rejected: ${JSON.stringify(turnStartResult)}`);
+    }
+    const firstAttemptEnvelope = await firstAttemptStarted;
+    const turnId = (firstAttemptEnvelope.payload as EventPayloadByKindV1["turn.attemptStarted"])
+      .turnId;
+
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    const gateRejected = waitForEvent(kernel, (envelope) => envelope.kind === "turn.gateRejected");
+    const secondAttemptStarted = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "turn.attemptStarted" &&
+        (envelope.payload as EventPayloadByKindV1["turn.attemptStarted"]).attempt === 2,
+    );
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done-1",
+      usage: null,
+      sessionId: "s1",
+    });
+    await gateRejected;
+    await secondAttemptStarted;
+
+    const secondStart = agentBackend.calls.filter((c) => c.method === "startTurn")[1];
+    if (secondStart?.method !== "startTurn") throw new Error("expected a second startTurn call");
+    const turnCompleted = waitForEvent(kernel, (envelope) => envelope.kind === "turn.completed");
+    agentBackend.completeRun(secondStart.fence, {
+      kind: "completed",
+      finalText: "done-2",
+      usage: null,
+      sessionId: "s2",
+    });
+    const completedEnvelope = await turnCompleted;
+    const completedPayload = completedEnvelope.payload as EventPayloadByKindV1["turn.completed"];
+    expect(completedPayload.turnId).toBe(turnId);
+    expect(completedPayload.outcome).toBe("completed");
+
+    unsubscribe();
+
+    // eventSeq is stamped once per delivered envelope, including the bootstrap snapshot —
+    // strictly increasing across the WHOLE captured stream (§4/§13.3).
+    const eventSeqs = envelopes.map((e) => BigInt(e.eventSeq));
+    for (let i = 1; i < eventSeqs.length; i++) {
+      const prev = eventSeqs[i - 1];
+      const cur = eventSeqs[i];
+      if (prev === undefined || cur === undefined) throw new Error("unreachable");
+      expect(cur > prev).toBe(true);
+    }
+
+    // stateRevision never decreases across the stream, and ends strictly higher than the
+    // bootstrap snapshot's own "0" (§4).
+    const revisions = envelopes.map((e) => BigInt(e.stateRevision));
+    for (let i = 1; i < revisions.length; i++) {
+      const prev = revisions[i - 1];
+      const cur = revisions[i];
+      if (prev === undefined || cur === undefined) throw new Error("unreachable");
+      expect(cur >= prev).toBe(true);
+    }
+    expect(revisions[0]).toBe(0n);
+    expect(revisions[revisions.length - 1]).toBeGreaterThan(0n);
+
+    // Every event's own payload — not merely the ones this test happened to wait on — parses
+    // against the exact schema its own `kind` names.
+    for (const envelope of envelopes) {
+      const schema =
+        eventPayloadV1SchemaByKind[envelope.kind as keyof typeof eventPayloadV1SchemaByKind];
+      expect(schema.safeParse(envelope.payload).success).toBe(true);
+    }
+
+    // activeTurnId cleared once the turn committed — checked via a fresh subscribe's own
+    // bootstrap snapshot, which always reflects LIVE state (`kernel.ts`'s own
+    // `readKernelState`, re-read at subscription time, never cached from the bootstrap).
+    const finalSnapshot: EventEnvelopeV1[] = [];
+    const unsubscribeFinal = kernel.events((envelope) => finalSnapshot.push(envelope));
+    if (unsubscribeFinal instanceof Error) throw unsubscribeFinal;
+    const finalPayload = finalSnapshot[0]?.payload as EventPayloadByKindV1["kernel.snapshot"];
+    expect(finalPayload.models.turn.phase).toBe("idle");
+    expect(finalPayload.models.turn.activeTurnId).toBeNull();
+    unsubscribeFinal();
   });
 });
