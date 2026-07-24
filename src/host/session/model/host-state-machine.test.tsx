@@ -12,7 +12,7 @@ import {
   encodeClientHello,
   encodeControlEnvelope,
 } from "../../protocol";
-import { type RenderHandle, createHeadlessRenderer } from "../../render";
+import { type LayoutNode, type RenderHandle, createHeadlessRenderer } from "../../render";
 import type { HostSessionDeps, OutboundMessage } from "../types";
 import { createHostSession } from "./host-state-machine";
 
@@ -269,6 +269,34 @@ describe("host session — mount", () => {
     expect(h.out.some((m) => m.type === "frame")).toBe(false);
     expect(h.exits).toHaveLength(1);
     expect(h.exits[0]!.code).toBe(1);
+  });
+});
+
+describe("host session — export/smoke layout capture (WP-5 Task A1, D-Q8)", () => {
+  test("an export mount seals a ready whose body carries the resolved layout tree", async () => {
+    const { h, session } = await handshaken();
+    await session.receiveControlPayload(mountEnvelope({ mode: "export" }));
+    const ready = (h.out[0] as { payload: ControlEnvelope }).payload;
+    const readyBody = ready.body as unknown as { layout?: LayoutNode };
+    expect(readyBody.layout).toBeDefined();
+    expect(readyBody.layout).toEqual(liveRenderer!.layoutTree());
+  });
+
+  test("a smoke mount also seals a ready whose body carries the resolved layout tree", async () => {
+    const { h, session } = await handshaken();
+    await session.receiveControlPayload(mountEnvelope({ mode: "smoke" }));
+    const ready = (h.out[0] as { payload: ControlEnvelope }).payload;
+    const readyBody = ready.body as unknown as { layout?: LayoutNode };
+    expect(readyBody.layout).toBeDefined();
+    expect(readyBody.layout).toEqual(liveRenderer!.layoutTree());
+  });
+
+  test("a preview mount's ready body carries no layout (regression)", async () => {
+    const { h, session } = await handshaken();
+    await session.receiveControlPayload(mountEnvelope());
+    const ready = (h.out[0] as { payload: ControlEnvelope }).payload;
+    const readyBody = ready.body as unknown as { layout?: LayoutNode };
+    expect(readyBody.layout).toBeUndefined();
   });
 });
 

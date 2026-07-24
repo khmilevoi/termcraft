@@ -10,7 +10,7 @@ import {
   decodeClientHello,
   decodeControlEnvelope,
 } from "../../protocol";
-import type { RenderHandle } from "../../render";
+import type { LayoutNode, RenderHandle } from "../../render";
 import type { HostMode, InteractionMode } from "../../types";
 import type { HostSession, HostSessionDeps, MountRequestBody, ReadyBody } from "../types";
 
@@ -174,6 +174,19 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     // are always effectively static.
     const initialMode: InteractionMode =
       request.mode === "preview" ? request.interactionMode : "static";
+    // WP-5 Task A1 (D-Q8): the export/smoke one-shot child exits right after this `ready`
+    // (below), before any correlated `query-layout` could ever reach it — so its resolved
+    // layout tree is sealed straight into the `ready` body instead. `preview`/`historical`
+    // stay alive past `ready` and fetch the tree on demand via `query-layout` instead.
+    // D-Q8 confirmed: `ReadyBody`/`ControlEnvelope.body` are both treated generically
+    // (`{ [key: string]: JsonValue }`/decoded with no fixed per-field allowlist), so this
+    // added optional field needs no protocol/schema change on either side of the wire — see
+    // `decodeControlEnvelope`'s `body: jsonObjectSchema`. A bounded terminal tree is small,
+    // but if it ever pushed the envelope past the framing limit, `encodeControlEnvelope`
+    // already returns a typed `OVERSIZED_MESSAGE` `ProtocolError` (never a truncated tree) —
+    // `entry.ts`'s `send` turns that into a clean typed exit, so no new guard is needed here.
+    const layout: LayoutNode | undefined =
+      request.mode === "smoke" || request.mode === "export" ? handle.layoutTree() : undefined;
 
     const readyBody: ReadyBody = {
       meta: loaded.meta,
@@ -181,6 +194,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       interactionMode: initialMode,
       frameIdentity,
       tweaks: [],
+      layout,
     };
     deps.send({
       type: "control",
@@ -201,7 +215,9 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     // §11.3/§11.4: smoke and export are one-shot. Both exit 0 after the first
     // frame (Spike D — the entry, not this handler, calls process.exit). NOTE:
     // export's `frame` here is the documented non-conformant MVP stand-in (see
-    // Scope); the conformant `capture`+layout reply is deferred to 2D.
+    // Scope) — the conformant bulk `capture` reply is still deferred, but its
+    // resolved `layout` tree is NOT: it is sealed into the `ready` body above
+    // (WP-5 Task A1), not a later round trip.
     if (request.mode === "smoke" || request.mode === "export") {
       phase = "closed";
       deps.requestExit({ code: 0, reason: `${request.mode} one-shot complete` });
