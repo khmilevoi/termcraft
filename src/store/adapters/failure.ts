@@ -3,6 +3,11 @@ import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
 import { JsonlOpenError } from "store/model/factory";
 import {
+  DiagnosticsStoreIoError,
+  PageMetaCacheIoError,
+  RenderCacheIoError,
+} from "store/projections";
+import {
   FsAccessError,
   IdentityChangedError,
   LeafRejectedError,
@@ -120,6 +125,27 @@ function isLeaseError(error: Error): boolean {
 }
 
 /**
+ * `ProjectionsError = PageMetaCacheIoError | DiagnosticsStoreIoError | RenderCacheIoError`
+ * (`store/projections`). FLAGGED (plan Task 1 table): the table pairs "`ProjectionsError`
+ * (quota)" with `StorageLimitExceededError` under `RESOURCE_LIMIT_EXCEEDED`, but the landed
+ * `store/projections` classes carry no quota-specific discriminator at all — each is a
+ * generic `{operation: "read"|"write"|"list"|"mkdir", path, cause}` IO fault, and quota
+ * enforcement in that submodule is silent LRU eviction, never a failure return (verified
+ * against `page-meta-cache.ts`/`diagnostics-store.ts`/`render-cache.ts`: `enforceQuota` never
+ * returns an error). There is no honest way to distinguish "this IO fault was actually a
+ * quota event" from an ordinary read/write fault with the shape these classes carry, so all
+ * three map to the same generic `PERSISTENCE_FAILED` every other durable-fault class here
+ * gets — not a guessed `RESOURCE_LIMIT_EXCEEDED`.
+ */
+function isProjectionsError(error: Error): boolean {
+  return (
+    error instanceof PageMetaCacheIoError ||
+    error instanceof DiagnosticsStoreIoError ||
+    error instanceof RenderCacheIoError
+  );
+}
+
+/**
  * Maps a store tagged error onto the closed v1 `FailureDtoV1` registry
  * (`core/protocol`'s `OPERATIONAL_FAILURE_CODES_V1`) per the plan's Task 1 table. Every
  * store adapter in this ring uses this one function — no adapter maps a store error onto a
@@ -214,6 +240,7 @@ export function toFailureDto(error: Error): FailureDtoV1 {
     isStagingOnlyError(error) ||
     isTrustError(error) ||
     isLeaseError(error) ||
+    isProjectionsError(error) ||
     error instanceof JsonlOpenError ||
     error instanceof JournalCorruptError ||
     error instanceof ManifestCorruptError
