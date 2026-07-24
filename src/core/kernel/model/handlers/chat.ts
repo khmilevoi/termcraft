@@ -71,20 +71,28 @@ import { startedOutcome } from "./types";
  *   handling immediately below (a producer hiccup after the fact must not undo or hide a
  *   state change that already genuinely happened).
  *
- * `chat.switch` HAS ONE EXTRA STEP `chat.create` DOES NOT: kernel-assembly task 9's
- * own brief for this family — "chat.switch also persists the active chat via
- * ProjectStore.writeWorkspaceState per the workspace-state shape" — so, after a
- * successful `switchActive`, the handler also calls
- * `context.deps.projectStore.writeWorkspaceState({ activeChatId })`
- * (`core/ports/project-store.ts`'s own `WorkspaceStateV1.activeChatId: string | null`
- * field) to persist the choice machine-locally. IF THAT WRITE ITSELF FAILS, the
- * operation still publishes `chat.changed`: `switchActive` already succeeded by that
- * point — the live, in-Kernel active chat genuinely did switch, which is the fact
+ * BOTH HANDLERS PERSIST THE ACTIVE CHAT the SAME WAY: kernel-assembly task 9's own
+ * brief for this family says "chat.switch also persists the active chat via
+ * ProjectStore.writeWorkspaceState per the workspace-state shape" — but `turn.start`
+ * resolves ITS active chat from that SAME durable `ProjectStore.readWorkspaceState()`
+ * read (`turn.ts`'s own admission read), never from the `ui/mirror` slice
+ * `chat.changed` updates, so `chat.create` needs the identical write or a turn
+ * dispatched right after `/new` finds durable `activeChatId` still `null` and refuses
+ * admission (seam finding, fix wave — this was originally a documented asymmetry:
+ * "chat.switch has one extra step chat.create does not", which the seam finding showed
+ * was actually a gap, not a deliberate omission). So after a successful
+ * `create`/`switchActive`, each handler also calls
+ * `context.deps.projectStore.writeWorkspaceState({ activeChatId: <the chat just
+ * created/switched to> })` (`core/ports/project-store.ts`'s own
+ * `WorkspaceStateV1.activeChatId: string | null` field) to persist the choice
+ * machine-locally. IF THAT WRITE ITSELF FAILS, the operation still publishes
+ * `chat.changed`: `create`/`switchActive` already succeeded by that point — the live,
+ * in-Kernel active chat genuinely did get created or did switch, which is the fact
  * `chat.changed.activeChatId` reports — and `writeWorkspaceState` is a best-effort
  * DURABILITY step (so the choice survives a restart), not the source of truth for
- * whether the switch itself took place. A write failure here is logged, never
+ * whether the create/switch itself took place. A write failure here is logged, never
  * silently dropped, but does not roll back or suppress the event a successful,
- * already-completed switch earned.
+ * already-completed create/switch earned.
  *
  * `kernel.snapshot`'s OWN `activeChatId` field (`KernelSnapshotPayloadV1`,
  * distinct from this file's `chat.changed.activeChatId`) is deliberately NOT updated
@@ -183,6 +191,27 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
     if ("code" in header) {
       console.warn(`core/kernel: chat.create failed: ${header.safeMessage}`);
       return [];
+    }
+
+    // Persist the freshly minted chat as active the SAME way `chat.switch` does (this
+    // file's header, "BOTH HANDLERS PERSIST THE ACTIVE CHAT" paragraph) — `turn.start`
+    // resolves its active chat from `ProjectStore.readWorkspaceState()` (`turn.ts`'s own
+    // admission read), never from the `ui/mirror` slice `chat.changed` below updates, so
+    // without this write a turn dispatched right after `/new` would find durable
+    // `activeChatId` still `null` and refuse admission (seam finding, fix wave). A write
+    // failure here is best-effort and logged (errore rule 21), never blocking: exactly
+    // like `chat.switch`, `ChatMutations.create` already succeeded by this point — the
+    // fact `chat.changed.activeChatId` below reports — and `writeWorkspaceState` only
+    // affects whether that choice survives a restart, not whether creation happened.
+    const persistFailure = await wrap(
+      context.deps.projectStore.writeWorkspaceState({
+        activeChatId: header.chatId,
+      }),
+    );
+    if (persistFailure !== undefined) {
+      console.warn(
+        `core/kernel: chat.create succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
+      );
     }
 
     return [

@@ -363,6 +363,47 @@ describe("chatHandlers['chat.create']", () => {
     });
   });
 
+  test("its launched operation persists the newly created chat as active via ProjectStore.writeWorkspaceState — so turn.start's durable read sees it right after /new (seam finding, no-turn-after-create regression)", async () => {
+    const { handlerContext, projectStore, getLaunches } = buildTestContext();
+
+    chatHandlers["chat.create"]({}, handlerContext);
+    const launch = onlyLaunch(getLaunches());
+    const events = await launch.run();
+
+    const changedEvent = events[0]!;
+    const payload = changedEvent.payload as { readonly activeChatId: string };
+
+    expect(projectStore.calls).toEqual([
+      { method: "writeWorkspaceState", patch: { activeChatId: payload.activeChatId } },
+    ]);
+
+    const readBack = await projectStore.readWorkspaceState();
+    if ("code" in readBack) throw new Error("expected a successful workspace state read");
+    expect(readBack.state.activeChatId).toBe(payload.activeChatId);
+  });
+
+  test("when the create succeeds but persisting it via ProjectStore.writeWorkspaceState fails, its launched operation still logs the persistence failure and still publishes chat.changed + chat.records", async () => {
+    const { handlerContext, projectStore, getLaunches } = buildTestContext();
+    const persistFailure: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "workspace.local.toml locked",
+      details: {},
+    };
+    projectStore.failNext("writeWorkspaceState", persistFailure);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    chatHandlers["chat.create"]({}, handlerContext);
+    const launch = onlyLaunch(getLaunches());
+    const events = await launch.run();
+
+    expect(warnSpy).toHaveBeenCalled();
+    expect(events).toHaveLength(2);
+    expect(events[0]!.kind).toBe("chat.changed");
+    expect(events[1]!.kind).toBe("chat.records");
+    warnSpy.mockRestore();
+  });
+
   test("its launched operation, given a real ChatMutations.create response, publishes chat.changed and chat.records payloads that both parse against eventPayloadV1SchemaByKind", async () => {
     const stub = createChatMutationsStub();
     const { handlerContext, getLaunches } = buildTestContext({ chatMutations: stub });
