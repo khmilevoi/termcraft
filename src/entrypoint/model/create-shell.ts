@@ -167,15 +167,62 @@ async function interactiveShell(
     env: resolvedEnv,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
-    // last — `open` was acquired first, so it is released last.
+    // last — `open` was acquired first, so it is released last. Each step is guarded (see
+    // `closeShellResources`) so an early rejection can never skip a later one — most
+    // importantly `open.close()`, which releases the project LEASE.
     close: async (): Promise<void> => {
       if (closed) return;
       closed = true;
-      await kernel.close();
-      await hostSupervisorAdapter.stopAll();
-      await open.close();
+      await closeShellResources([
+        { name: "kernel.close", run: () => kernel.close() },
+        { name: "hostSupervisor.stopAll", run: () => hostSupervisorAdapter.stopAll() },
+        { name: "open.close", run: () => open.close() },
+      ]);
     },
   };
+}
+
+/** One teardown resource `AppShell.close()` releases, run in reverse-acquisition order. */
+export interface ShellTeardownStep {
+  readonly name: string;
+  run(): Promise<void>;
+}
+
+/** A teardown step (`kernel.close`, `hostSupervisor.stopAll`, or `open.close`) rejected while
+ *  closing the shell. Thrown once every step has run — `AppShell.close(): Promise<void>` has no
+ *  return-value channel of its own, so a rejection is the only way to reach `runApp`'s existing
+ *  `closeShell`, which already `.catch()`es exactly this shape and reports it via
+ *  `boundary.reportFatal` — the same path a single ungoverned failure already took before this
+ *  isolation existed. */
+export class ShellTeardownError extends errore.createTaggedError({
+  name: "ShellTeardownError",
+  message: "$step failed while closing the shell",
+}) {}
+
+/**
+ * Runs every step regardless of an earlier one's rejection — the same "settle everything, don't
+ * short-circuit" semantics as `Promise.allSettled`, without its per-entry `{status, value}`
+ * union. This matters because the steps are NOT independent in importance: the LAST step,
+ * `open.close()`, releases the project LEASE, and must run even when the FIRST step
+ * (`kernel.close()`) rejects — a plain sequential `await` chain would abandon the lease on
+ * exactly that failure. Each step's rejection is `.catch()`-converted to a `ShellTeardownError`
+ * right here, at this exact boundary with the uncontrolled step (errore's own "only `.catch()` at
+ * the edge" rule) — never allowed to propagate and skip the steps after it. Once every step has
+ * settled, the FIRST failure — in the caller's own reverse-acquisition order — is surfaced by
+ * throwing it (see {@link ShellTeardownError}'s own doc comment for why a throw, not a return
+ * value, is correct here).
+ */
+export async function closeShellResources(steps: readonly ShellTeardownStep[]): Promise<void> {
+  const failures: ShellTeardownError[] = [];
+  for (const step of steps) {
+    const result = await step.run().then(
+      () => undefined,
+      (cause: unknown) => new ShellTeardownError({ step: step.name, cause }),
+    );
+    if (result instanceof Error) failures.push(result);
+  }
+  const [firstFailure] = failures;
+  if (firstFailure !== undefined) throw firstFailure;
 }
 
 /**
@@ -259,7 +306,16 @@ function deriveProjectName(root: string): string {
  */
 async function resolveEnvWithProjectIdentity(env: UiEnv, open: OpenProject): Promise<UiEnv> {
   const manifest = await open.manifest.read();
-  if (manifest instanceof Error) return env;
+  if (manifest instanceof Error) {
+    // errore rule 21: this branch does not propagate the error (there is no caller left to
+    // hand a mid-composition failure to — `createShell` already committed to `open` above), so
+    // it must log instead of swallowing it silently, or a genuine post-open manifest failure
+    // would leave no trace anywhere.
+    console.warn(
+      `termcraft: could not read the project manifest (${manifest.message}); keeping the path-based workspaceIdentity ${env.workspaceIdentity}`,
+    );
+    return env;
+  }
   return { ...env, workspaceIdentity: manifest.projectId };
 }
 

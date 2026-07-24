@@ -5,8 +5,8 @@ import path from "node:path";
 
 import type { EventEnvelopeV1 } from "ui";
 
-import { createShell } from "./create-shell";
-import type { ShellDeps } from "./create-shell";
+import { ShellTeardownError, closeShellResources, createShell } from "./create-shell";
+import type { ShellDeps, ShellTeardownStep } from "./create-shell";
 
 /** Never actually invoked: constructing a shell never spawns the design host (only a live
  *  `.preview()` call does) — provided defensively so a regression fails loudly instead of
@@ -204,5 +204,68 @@ describe("createShell", () => {
 
     await interactive.close();
     await demo.close();
+  });
+});
+
+describe("closeShellResources", () => {
+  test("kernel.close rejecting still releases the lease, and the failure surfaces only after every step ran", async () => {
+    const order: string[] = [];
+    const cause = new Error("kernel.close boom");
+    const steps: ShellTeardownStep[] = [
+      {
+        name: "kernel.close",
+        run: () => {
+          order.push("kernel.close");
+          return Promise.reject(cause);
+        },
+      },
+      {
+        name: "hostSupervisor.stopAll",
+        run: async () => {
+          order.push("hostSupervisor.stopAll");
+        },
+      },
+      {
+        name: "open.close",
+        run: async () => {
+          order.push("open.close");
+        },
+      },
+    ];
+
+    const teardown = closeShellResources(steps);
+
+    await expect(teardown).rejects.toBeInstanceOf(ShellTeardownError);
+    // The lease-release step (`open.close`) ran even though the first step rejected.
+    expect(order).toEqual(["kernel.close", "hostSupervisor.stopAll", "open.close"]);
+
+    const failure = await teardown.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ShellTeardownError);
+    expect((failure as ShellTeardownError).step).toBe("kernel.close");
+    expect((failure as ShellTeardownError).cause).toBe(cause);
+  });
+
+  test("reports only the FIRST failure when multiple steps reject", async () => {
+    const firstCause = new Error("kernel.close boom");
+    const secondCause = new Error("open.close boom");
+
+    const teardown = closeShellResources([
+      { name: "kernel.close", run: () => Promise.reject(firstCause) },
+      { name: "hostSupervisor.stopAll", run: () => Promise.resolve() },
+      { name: "open.close", run: () => Promise.reject(secondCause) },
+    ]);
+
+    const failure = await teardown.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ShellTeardownError);
+    expect((failure as ShellTeardownError).step).toBe("kernel.close");
+  });
+
+  test("resolves cleanly when every step succeeds", async () => {
+    await expect(
+      closeShellResources([
+        { name: "a", run: () => Promise.resolve() },
+        { name: "b", run: () => Promise.resolve() },
+      ]),
+    ).resolves.toBeUndefined();
   });
 });

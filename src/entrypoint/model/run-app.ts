@@ -51,7 +51,10 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   }).catch((cause: unknown) => new AppStartupError({ cause }));
   if (root instanceof Error) {
     await closeShell(shell, boundary);
-    return new AppStartupError({ cause: root });
+    // `root` is already an `AppStartupError` when `createUiRoot` itself rejected (the `.catch`
+    // above) — returning it directly avoids wrapping an `AppStartupError` in another one.
+    // Otherwise `root` is a genuine `UiRootError`, which still needs exactly one wrap.
+    return root instanceof AppStartupError ? root : new AppStartupError({ cause: root });
   }
 
   return startShutdownPath(shell, boundary, root);
