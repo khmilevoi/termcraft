@@ -137,20 +137,17 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  * (`.superpowers/sdd/task9-family-turn-report.md`) — see this file's own report appendix
  * ("Step C1") for that investigation and the option chosen.
  *
- * **Gap 2, Step C2 UPDATE (`.superpowers/sdd/task-9-report.md`, "Step C2 turn"):**
- * `setActiveAttempt`/`activeAttempt` are now typed against {@link TurnCancelHandle}, a
- * NARROWER, right-sized replacement for `core/turns`'s own `TurnAttemptHandle` — see that
+ * **Gap 2, Step C2/C3 UPDATE (`.superpowers/sdd/task-9-report.md`, "Step C2 turn" / "## Step
+ * C3"):** `setActiveAttempt`/`activeAttempt` are now typed against {@link TurnCancelHandle},
+ * a NARROWER, right-sized replacement for `core/turns`'s own `TurnAttemptHandle` — see that
  * type's own doc comment for why. `turn.cancel` (`./turn.ts`) is a real, legitimate
  * CONSUMER of `activeAttempt` today (Gap 2's own "genuinely stop a running attempt"
- * requirement is fully implemented and tested against a fake handle). What remains open is
- * a DIFFERENT, later-discovered gap — call it Gap 3 — blocking `turn.start` itself from ever
- * being the caller that POPULATES this slot with a real handle: composing `runTurn` end to
- * end needs `RunTurnInputV1.buildValidationInput`/`buildFinalizeInput` to read the frozen
- * candidate's own file CONTENT (Gate's `manifestText`/page `source`, and finalize's changed
- * page bytes), and `core/ports/staging.ts`'s `StagingService` exposes only hash/size
- * metadata for candidate files (`CandidatePageSetV1.files: StagedFileV1[]`), never a method
- * to read one back. That is a `core/ports` gap, outside this contract's (`core/kernel`)
- * file scope — see `./turn.ts`'s own header for the full citation and options. So
+ * requirement is fully implemented and tested against a fake handle). Step C3 closed Gap 3
+ * (the candidate-content read-back `turn.start` needs) at the ports layer AND built the
+ * producer-side primitive (`core/turns`'s own additive `RunTurnDeps.onAttemptStarted` hook)
+ * that would feed this slot for real — but found a FOURTH, later-discovered gap, Gap 4
+ * (`./turn.ts`'s header), that still blocks `turn.start` from ever composing `runTurn` at
+ * all (a send-time read-set CAS fact no `core/ports` surface can honestly produce yet). So
  * `turn.start` stays the documented no-op it already was; `turn.cancel`'s own correctness
  * does not depend on it (proven with a directly-injected fake handle, matching how this
  * slot's storage was proven correct before any real caller existed).
@@ -178,17 +175,17 @@ export interface TurnRunnerContext {
    * at a time (`turn.start`'s own admission guard, `TURN_ALREADY_ACTIVE`), so this is a
    * single kernel-held slot, not a map.
    *
-   * **Step C2 update:** the ONLY thing that could ever legitimately call this with a
-   * non-null handle is `turn.start`'s own `launchOperation` closure, wrapping
-   * `RunTurnDeps.agentBackend` so its `startTurn` call captures the live `AgentRun` per
-   * attempt (see `./turn.ts`'s own header for the exact recipe: no `core/turns` file needs
-   * to change for this — the wrapping happens entirely on this side of the boundary, at
-   * the ONE place `turn.start` already builds `RunTurnDeps` from `HandlerContext`). That
-   * caller does not exist in THIS Kernel build yet: `turn.start` itself is blocked by a
-   * different, `core/ports`-level gap (Gap 3 — see `./turn.ts`'s header), so this slot
-   * reads back `null` forever until that closes. The STORAGE and its one real CONSUMER
-   * (`turn.cancel`, `./turn.ts`) are both real and tested today (against a
-   * directly-injected fake handle) — only the PRODUCER side is still missing.
+   * **Step C3 update:** the ONLY thing that could ever legitimately call this with a
+   * non-null handle is `turn.start`'s own `launchOperation` closure, feeding
+   * `RunTurnDeps.onAttemptStarted` (`core/turns/model/run-turn.ts`'s additive Step C3 hook)
+   * straight into this setter — see `./turn.ts`'s own header for the exact recipe, and
+   * `run-turn.test.ts`'s own "onAttemptStarted hook" describe block for that hook's own
+   * proof. That caller does not exist in THIS Kernel build yet: `turn.start` itself is
+   * blocked by a different, `core/ports`-level gap (Gap 4 — see `./turn.ts`'s header), so
+   * this slot reads back `null` forever until that closes. The STORAGE and its one real
+   * CONSUMER (`turn.cancel`, `./turn.ts`) are both real and tested today (against a
+   * directly-injected fake handle) — only the PRODUCER side is still missing, and the
+   * primitive it will use (`onAttemptStarted`) is already built and tested, ready for it.
    */
   readonly setActiveAttempt: (handle: TurnCancelHandle | null) => void;
   /**
@@ -201,10 +198,10 @@ export interface TurnRunnerContext {
    * uniformly, before ever consulting this method) or `turnId` no longer matches (defensive
    * only — `checkRevisionGuard`'s own `turn.cancel` rule 1 already makes this unreachable in
    * a correctly-wired Kernel). A non-null return means a live `AgentBackend` run is (or,
-   * once Gap 3 closes, will be) in flight, and its own `handle.requestCancel()` traces
+   * once Gap 4 closes, will be) in flight, and its own `handle.requestCancel()` traces
    * straight to the real backend cancel — never a fabricated second transition (see
    * {@link TurnCancelHandle}'s own doc comment). **Until `turn.start` itself can populate
-   * this slot (Gap 3, `./turn.ts`'s header), this method can only ever return `null`** in
+   * this slot (Gap 4, `./turn.ts`'s header), this method can only ever return `null`** in
    * the real, wired Kernel — but that is a statement about who calls `setActiveAttempt`
    * today, not about whether this method or its one consumer are correct: `turn.cancel`'s
    * own handling of a non-null return is written and tested against a fake handle.
@@ -330,9 +327,13 @@ export type SelectionSnapshotV1 = NonNullable<EventPayloadByKindV1["selection.ch
  * - `turnRunner` ({@link TurnRunnerContext}) — the turn family's own extra surface
  *   (Gap 1 of `.superpowers/sdd/task9-family-turn-report.md`, closed in full; Gap 2 now
  *   FULLY implemented and consumed by `turn.cancel` (Step C2, `./turn.ts`) against a
- *   right-sized {@link TurnCancelHandle} — see that type's own doc comment. What remains
- *   open is a DIFFERENT gap (Step C2's own "Gap 3") blocking `turn.start` from ever being
- *   the caller that populates this slot; `./turn.ts`'s header has the full citation).
+ *   right-sized {@link TurnCancelHandle} — see that type's own doc comment. Step C3 closed
+ *   Gap 3 (the candidate-content read-back) and built the producer-side primitive
+ *   (`core/turns`'s `RunTurnDeps.onAttemptStarted`) this slot's real caller will use — but
+ *   found a DIFFERENT, later gap (Gap 4) that still blocks `turn.start` from ever being the
+ *   caller that populates this slot; `./turn.ts`'s header has the full citation).
+ * - `publishOperationEvent` — the live-publish primitive (Step C3) — see this interface's
+ *   own comment on it, above.
  * - `setSelection`/`selection` — the Kernel-held "current selection" fact
  *   `.superpowers/sdd/task9-family-selection-model-report.md`'s gap 1 confirmed missing;
  *   mirrors `setActivePreviewSession`'s own "not part of `KernelStateSnapshot`, a plain
