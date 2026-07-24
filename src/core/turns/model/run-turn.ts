@@ -111,6 +111,36 @@ export interface RunTurnDeps {
       | PublishableEventV1<"turn.gateRejected">,
   ) => void;
   readonly foldGateDiagnosticsIntoPrompt: typeof foldGateDiagnosticsIntoPrompt;
+  /**
+   * Optional, additive hook (kernel-assembly Task 9, Step C3) closing the turn family's own
+   * remaining "Gap 2 producer side" gap (`.superpowers/sdd/task-9-report.md`, "Step C2
+   * turn" / "C1 fix round 2"): composing this monolithic driver never used to surface a live
+   * attempt's own cancel handle to ITS caller (`RunTurnResultV1`'s three members carry no
+   * handle, and `startTurnAttempt`'s own `TurnAttemptHandle` is consumed entirely inside this
+   * file's own loop). Called with the live handle the MOMENT an attempt starts (right after
+   * `startTurnAttempt` returns `{kind: "started", handle}`, before this driver's own `await
+   * wrap(started.handle.outcome)`), and again with `null` the moment that SAME attempt's
+   * outcome settles (right after that same await resolves) — once per attempt, including
+   * every retry, never overlapping (a NEW attempt's own `onAttemptStarted(handle)` call only
+   * ever follows the PREVIOUS attempt's `onAttemptStarted(null)`, since this driver's loop is
+   * sequential, never concurrent). Never called at all when admission itself is rejected (no
+   * attempt ever starts).
+   *
+   * Deliberately typed against the narrow `{requestCancel}` shape, not the full
+   * `TurnAttemptHandle` (`{outcome, requestCancel}`): a caller registering this handle
+   * elsewhere (`core/kernel`'s `turn.start`, once its own remaining `core/ports` blocker
+   * closes) has no legitimate use for reading `.outcome` a second time — this driver already
+   * awaits it itself — so widening the type here would only invite an unused, redundant read.
+   * Passing the REAL `started.handle` (not a re-wrapped copy) is what lets a caller's
+   * `handle.requestCancel()` reach `attempt.ts`'s own `cancelRequested` coordination
+   * (`./attempt.ts`'s own header, ordering (a)/(b)) — genuinely stopping the live run, and
+   * — just as importantly — marking `cancelRequested` true BEFORE this driver's own
+   * `finalizeOutcome` ever re-checks it, so a caller-driven cancel never trips the "`beginStopping`
+   * illegal" defensive warning `attempt.ts` logs for a redundant same-state transition.
+   */
+  readonly onAttemptStarted?: (
+    handle: { readonly requestCancel: () => Promise<void> } | null,
+  ) => void;
 }
 
 /** What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate. */
@@ -260,7 +290,12 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       return terminalize("failed", `attempt could not start (${started.code})`, started.code);
     }
 
+    // Step C3's own hook (this file's `RunTurnDeps.onAttemptStarted` doc comment) — the live
+    // handle is registered BEFORE awaiting its own outcome, and cleared (`null`) the moment
+    // that outcome resolves, so a caller's registered handle is never stale.
+    deps.onAttemptStarted?.(started.handle);
     const outcome = await wrap(started.handle.outcome);
+    deps.onAttemptStarted?.(null);
 
     if (outcome.kind === "cancelled") {
       bridge("beginTerminalization");

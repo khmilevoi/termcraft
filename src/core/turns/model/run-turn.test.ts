@@ -554,3 +554,108 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
     });
   });
 });
+
+describe("runTurn — the optional onAttemptStarted hook (kernel-assembly Task 9, Step C3)", () => {
+  // Closes the turn family's own remaining "Gap 2 producer side" gap
+  // (`.superpowers/sdd/task-9-report.md`, "Step C2 turn"): `turn.start`'s own `launchOperation`
+  // closure needs a way to register the LIVE attempt's cancel handle on
+  // `context.turnRunner.setActiveAttempt` and clear it once that attempt settles — `runTurn`
+  // never returned one before this hook (`RunTurnResultV1`'s three members carry no handle).
+  // ADDITIVE ONLY: `onAttemptStarted` is optional, so every OTHER test in this file (built
+  // against `RunTurnDeps` objects that never set it) stays green unmodified — verified by the
+  // full suite run this file's own report cites, not merely asserted here.
+
+  test("fires with a live handle when an attempt starts, then with null once that attempt's outcome settles", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const seen: (string | null)[] = [];
+      const deps: RunTurnDeps = {
+        ...h.deps,
+        onAttemptStarted: (handle) => seen.push(handle === null ? null : "handle"),
+      };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      expect(seen).toEqual(["handle"]);
+
+      completeAttempt(h, 1, completedOutcome(1));
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "finalized") throw new Error(`expected finalized, got ${result.kind}`);
+      expect(seen).toEqual(["handle", null]);
+    });
+  });
+
+  test("fires once per attempt across a Gate retry (start/clear, start/clear — never overlapping)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const seen: (string | null)[] = [];
+      const deps: RunTurnDeps = {
+        ...h.deps,
+        onAttemptStarted: (handle) => seen.push(handle === null ? null : "handle"),
+      };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized") throw new Error(`expected finalized, got ${result.kind}`);
+      expect(seen).toEqual(["handle", null, "handle", null]);
+    });
+  });
+
+  test("the handle passed genuinely drives the real cancel path — requestCancel reaches AgentBackend.cancel for the exact leased run", async () => {
+    await context.start(async () => {
+      const h = harness();
+      let liveHandle: { requestCancel: () => Promise<void> } | null = null;
+      const deps: RunTurnDeps = {
+        ...h.deps,
+        onAttemptStarted: (handle) => {
+          if (handle !== null) liveHandle = handle;
+        },
+      };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      if (liveHandle === null) throw new Error("expected a live handle to have been registered");
+
+      const cancelPromise = wrap(
+        (liveHandle as { requestCancel: () => Promise<void> }).requestCancel(),
+      );
+      completeAttempt(h, 1, { kind: "cancelled", exitConfirmed: true });
+      await cancelPromise;
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(h.agentBackend.calls.some((c) => c.method === "cancel")).toBe(true);
+    });
+  });
+
+  test("never called when admission itself is rejected (no attempt ever starts)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.turnTransactions.failNext("admit", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "admit failed",
+        details: {},
+      });
+      const seen: (string | null)[] = [];
+      const deps: RunTurnDeps = {
+        ...h.deps,
+        onAttemptStarted: (handle) => seen.push(handle === null ? null : "handle"),
+      };
+
+      const result = await wrap(runTurn(deps, baseRunTurnInput()));
+
+      expect(result.kind).toBe("admission-rejected");
+      expect(seen).toEqual([]);
+    });
+  });
+});
