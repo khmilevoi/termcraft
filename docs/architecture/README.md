@@ -15,16 +15,26 @@ document here that addresses how the source tree itself is laid out.
 > mailbox/capability wiring, and a real command handler registry answering all 43
 > command kinds (kernel-assembly WP-1). The executable roots (`src/main.tsx`,
 > `src/demo.tsx`) and the `entrypoint/` ring that owns terminal lifetime and shutdown
-> have landed too, so `bun run demo` starts a running program. What has NOT landed is
-> the production adapter graph inside that composition root: nothing maps
-> `store`/`agent`/`gate`/`host` onto `core/ports/` to build a real `KernelDeps`, so
-> the Kernel the UI talks to is still `ui`'s in-memory double. Behavior
-> that crosses component boundaries against real adapters — a live generation turn, a
-> host-rendered preview, export assembly, Git history — is therefore still described
-> ahead of the code. That is deliberate. Each document states which half
-> of a claim is built and which is a design target, and anchors the unbuilt half to
-> the governing specification instead of a source file; anchors keep moving to real
-> paths as implementation proceeds (see the architecture-update skill).
+> have landed too. The production adapter graph inside that composition root has also
+> landed: `store`/`agent`/`gate`/`host` are mapped onto `core/ports/` to build a real
+> `KernelDeps` (WP-2), and `bun start` composes that graph into a real assembled
+> Kernel and mounts the UI shell against it (WP-4) — only the `demo` executable root
+> still runs `ui`'s in-memory Kernel double. Behavior that crosses component
+> boundaries — a live generation turn, a host-rendered preview, export assembly — now
+> runs against real production adapters rather than fakes; Git history remains v1
+> scope with no adapter yet. What is still open, and documented as such in the
+> relevant module/flow sections rather than swept under this status block:
+> `KernelPort.preview()`'s `acknowledgeDisplay` is a documented not-wired stand-in (no
+> public frame-token surface, so geometry queries and hover-to-pin stay unusable); the
+> Gate's `typeCheck` stage stays unwired (no production `runtimeDts` source yet, phase
+> 8); `migration.*` commands route to a not-yet-implemented rejection; session resume
+> is always fresh (no durable `sessionScopeId` a `core/kernel` handler can read back
+> yet); a non-committed turn terminal still publishes a generic `turn.failed`; and the
+> compiled `dist/termcraft.exe` is not yet fully self-contained (dev `bun start` is
+> unaffected). Each document states which half of a claim is built and which is a
+> design target, and anchors the unbuilt half to the governing specification instead
+> of a source file; anchors keep moving to real paths as implementation proceeds (see
+> the architecture-update skill).
 >
 > These documents also describe both the MVP foundation and the v1 target. The MVP
 > has canonical page sources but no history or Git UI; v1 adds Git-backed history,
@@ -53,8 +63,11 @@ document here that addresses how the source tree itself is laid out.
    runtime loop; the transport-neutral Kernel boundary, runtime facade, supervised
    design-host subprocess where agent-written code runs, and the agent gateway's
    confinement and owned process trees. Its per-component table and Source anchors
-   mark all seven as real code today; what remains is the production adapter graph
-   behind the composition root (WP-2), not any one component's own internals.
+   mark all seven as real code today, including the production adapter graph that
+   maps them onto the composition root (WP-2/WP-4); what remains are the specific
+   unwired stages and dormant seams each entry documents (the Gate's `typeCheck`,
+   the runtime facade's tweaks/navigation wiring, `HostSupervisor`'s input
+   forwarding, and so on).
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
    The most fully-built area of the system, and the vocabulary the other documents

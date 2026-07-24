@@ -299,10 +299,13 @@ flowchart LR
 
 ## Source anchors
 
-`core/` (phase 6), `ui/` (phase 7), and the executable roots plus their `entrypoint/`
-ring have landed; the production adapter graph behind those roots has not (item 1).
-The anchors below split accordingly: real files for what exists, design-spec sections
-for what is still contract only.
+`core/` (phase 6), `ui/` (phase 7), the executable roots plus their `entrypoint/`
+ring, and the production adapter graph those roots compose (MVP gap closeout
+WP-2/WP-4, item 1) have all landed. The anchors below are real source files almost
+throughout; the few design-spec sections that remain are kept for one of two reasons
+only — the code does not exist yet (the `GitHistory`/`GitCommitter` page-history
+adapter), or the spec stays the authority for a detail the code does not encode (the
+final group's own heading spells out which is which).
 
 **Module shape (item 2) and the alias map**
 

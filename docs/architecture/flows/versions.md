@@ -110,10 +110,17 @@ stateDiagram-v2
 
 ## Source anchors
 
-No Git-history reader, Restore orchestration, or `/commit-*` command surface
-exists in code yet (no `core`/Kernel or `ui` module has landed) — steps
-1-3 and 5-7 and 9-14 below remain governed entirely by the design spec and design
-files. Steps 4 and 8 are partial exceptions. Step 4's read-only invariant is
+The core Kernel and the `ui` module have both landed, but no live Git-history
+reader, Restore orchestration, or `/commit-*` service exists behind them. The
+command surface for this feature IS real: `core/protocol` defines the `restore.*`,
+`commit.*`, and `history.open` command kinds, their capability targets, and the
+`restore.*`/`commit.*` terminal events. But `core/versions`'s deferred-family
+decision names those ten Tier-C kinds — all four `restore.*`, the three
+`commit.*`, `history.open`, plus `preview.forwardInput`/`preview.setTweak` — and
+the capability guard routes every one of them to a typed `CAPABILITY_UNAVAILABLE`,
+so no service is ever reached. Steps 1-3 and 5-7 and 9-14 below therefore still
+describe design-spec behavior that no live path implements. Steps 4 and 8 are
+partial exceptions. Step 4's read-only invariant is
 host-layer reality, not just spec: `HostMode` already carries `"historical"`, a
 historical mount is always forced to the static interaction mode, an interactive
 `set-mode` request against it is refused with the typed
@@ -134,6 +141,22 @@ below.
   UUID records, local exclusions, and portable commit scopes
 - `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` —
   historical compatibility and current Gate requirements
+- `src/core/protocol/model/capability-target.ts` — `CapabilityTargetByKindV1`
+  defines the `restore.plan`/`confirm`/`discardPlan`/`retryRecord`,
+  `commit.plan`/`confirm`/`discardPlan`, and `history.open` command targets; the
+  command surface this doc walks through exists in the protocol even though no
+  live service sits behind it
+- `src/core/protocol/model/event-kind.ts` — the closed 44-kind event registry
+  (`EVENT_KIND_COUNT === 44`, `chat.records` included), holding the
+  `restore.planReady`/`started`/`recordPending`/`completed`/`failed` and
+  `commit.planReady`/`started`/`completed`/`failed` terminal events the diagram's
+  states would emit once a service exists
+- `src/core/versions/model/deferred-guards.ts` — `DEFERRED_CAPABILITY_KINDS` and
+  `deferredCapabilityReason`: the single decision that routes the ten Tier-C kinds
+  (all `restore.*`, the three `commit.*`, `history.open`, plus
+  `preview.forwardInput`/`preview.setTweak`) to a typed `CAPABILITY_UNAVAILABLE`,
+  which the capability guard returns unconditionally — this is what keeps steps
+  1-3/5-7/9-14 unreachable at runtime today
 - `design/05-version-history.dc.html` — version history popup states
 - `design/09-version-browse.dc.html` — Browse mode presentation
 - `design/25-git-commit-controls.dc.html` — commit controls and scoped commits
