@@ -157,4 +157,51 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
       await open.close();
     }
   });
+
+  test("remove() rejects a plan whose pageSlug fails slug validation before ever reading the manifest — the honest `parsePageSlug` path, not a laundering cast", async () => {
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      await seedHomePage(open);
+
+      let manifestReadCalls = 0;
+      const spiedOpen: typeof open = {
+        ...open,
+        manifest: {
+          ...open.manifest,
+          read: (...args: Parameters<(typeof open.manifest)["read"]>) => {
+            manifestReadCalls += 1;
+            return open.manifest.read(...args);
+          },
+        },
+      };
+      const adapter = createPageStoreAdapter({ ...deps, open: spiedOpen });
+
+      const removed = await adapter.remove({
+        pageRemovePlanId: uuidv7(),
+        // Fails `entities/page`'s slug mask (`^[a-z0-9][a-z0-9-]{0,31}$`) — an uppercase
+        // letter is never a valid slug character.
+        pageSlug: "Not-A-Valid-Slug",
+        sourceHash: "0".repeat(64),
+        orderedPageSlugs: [HOME_SLUG],
+        pageOrderHash: "0".repeat(64),
+        activePageSlug: null,
+        fallbackPageSlug: null,
+        planRevision: "0",
+      });
+
+      if (removed === undefined) throw new Error("fixture bug: expected a failure");
+      expect(removed.code).toBe("PERSISTENCE_FAILED");
+      // A cast-laundered slug would reach `open.transactions.removePage`, which reads the
+      // manifest first (`manifestBefore`) before ever touching the target path — validating
+      // with `parsePageSlug` up front means that read never happens.
+      expect(manifestReadCalls).toBe(0);
+
+      // The valid, existing page is untouched by the rejected plan.
+      const slugs = await adapter.listSlugs();
+      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
+      expect(slugs).toEqual([HOME_SLUG]);
+    } finally {
+      await open.close();
+    }
+  });
 });

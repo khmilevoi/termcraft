@@ -1,5 +1,6 @@
 import type { AssertConforms, PageMutations, PageReader, PageSourceV1 } from "core/ports";
 import type { FailureDtoV1, PageRemovePlanV1 } from "core/protocol";
+import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 
 import { toFailureDto } from "./failure";
@@ -86,6 +87,26 @@ function invalidPageSourceFailure(pageSlug: PageSlug): FailureDtoV1 {
   };
 }
 
+/**
+ * `PageRemovePlanV1.pageSlug` is a plain `string` on the DTO (never the branded `PageSlug`
+ * `entities/page` mints) — a plan that reaches `remove()` should already carry a slug Gate
+ * validated, so a `parsePageSlug` miss here is a defensive "should not happen", the same
+ * shape as {@link invalidPageSourceFailure} above. This is the honest validation path: the
+ * previous code cast `plan.pageSlug as PageSlug` straight past `parsePageSlug`, which this
+ * codebase bans — a cast asserts a runtime fact never checked.
+ */
+function invalidPageSlugFailure(rawSlug: string, reason: string): FailureDtoV1 {
+  console.warn(
+    `store/adapters/page-store: page removal plan named an invalid pageSlug "${rawSlug}": ${reason} — Gate should have already rejected this plan`,
+  );
+  return {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: "page removal plan pageSlug is not a valid page slug",
+    details: {},
+  };
+}
+
 export function createPageStoreAdapter(deps: StoreAdapterDeps): PageReader & PageMutations {
   const { open } = deps;
 
@@ -135,6 +156,9 @@ export function createPageStoreAdapter(deps: StoreAdapterDeps): PageReader & Pag
   }
 
   async function remove(plan: PageRemovePlanV1): Promise<FailureDtoV1 | undefined> {
+    const pageSlug = parsePageSlug(plan.pageSlug);
+    if (pageSlug instanceof Error) return invalidPageSlugFailure(plan.pageSlug, pageSlug.message);
+
     const manifestBefore = await open.manifest.read();
     if (manifestBefore instanceof Error) return toFailureDto(manifestBefore);
 
@@ -142,7 +166,7 @@ export function createPageStoreAdapter(deps: StoreAdapterDeps): PageReader & Pag
       transactionId: deps.uuidv7(),
       actionId: deps.uuidv7(),
       manifestBefore,
-      pageSlug: plan.pageSlug as PageSlug,
+      pageSlug,
       createdAt: nowIso(deps.clock),
     });
     if (result instanceof Error) return toFailureDto(result);
