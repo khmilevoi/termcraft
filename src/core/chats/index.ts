@@ -9,6 +9,8 @@ export { createChatDirectory, sortChatsNewestFirst } from "./model/chat-director
 export type { BuildChatChangedPayloadInputV1 } from "./model/chat-changed";
 export { buildChatChangedPayload } from "./model/chat-changed";
 
+export { deriveChatDisplayName } from "./model/display-name";
+
 export type { CreateChatDeps } from "./model/create";
 export { createChat } from "./model/create";
 

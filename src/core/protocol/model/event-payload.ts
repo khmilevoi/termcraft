@@ -1550,19 +1550,26 @@ export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
 // ---------------------------------------------------------------------------
 
 /**
- * A chat summary as `chat.changed` carries it. Fields are limited to what is
- * already real and landed on `ChatHeader` (`entities/chat/types.ts`: `chatId`,
- * `createdAt`) — no display-title/preview-text field is invented here because no
- * source in this slice's scope fixes one.
+ * A chat summary as `chat.changed` carries it. `chatId`/`createdAt` land on
+ * `ChatHeader` (`entities/chat/types.ts`). `displayName` (WP-10 Task 4) is DERIVED,
+ * never stored (design §3.9: "the first line of its first `user` record, truncated to
+ * ~60 chars") — the Kernel fills it via `core/chats`'s `deriveChatDisplayName`
+ * whenever it has loaded a chat's tail (`chat.create`/`chat.switch`/`project.open`);
+ * `null` until that chat's first `user` record exists, in which case the UI renders
+ * the design's `chatId.slice(0, 8)` fallback (`App.tsx`). Capped at 80 chars in this
+ * schema — a small margin over §3.9's ~60-char target, since the Kernel does the
+ * actual truncation and this bound only guards the DTO from an unbounded string.
  */
 export interface ChatSummaryV1 {
   readonly chatId: UUIDv7;
   readonly createdAt: string;
+  readonly displayName: string | null;
 }
 
 const chatSummaryV1Schema = z.strictObject({
   chatId: uuidv7Schema,
   createdAt: rfc3339UtcSchema,
+  displayName: z.string().max(80).nullable(),
 });
 
 /**

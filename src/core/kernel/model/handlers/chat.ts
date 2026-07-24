@@ -97,7 +97,11 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
     return [
       chatChangedEvent({
         activeChatId: header.chatId,
-        added: [{ chatId: header.chatId, createdAt: header.createdAt }],
+        // A freshly created chat has no records yet, so its derived display name
+        // (design §3.9, `core/chats`'s `deriveChatDisplayName`) is null until a
+        // `user` record lands — see WP-10 Task 5 for the `chat.switch`/`project.open`
+        // paths that fill this field from an already-loaded tail.
+        added: [{ chatId: header.chatId, createdAt: header.createdAt, displayName: null }],
         updated: [],
         removedChatIds: [],
       }),

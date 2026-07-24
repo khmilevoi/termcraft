@@ -1205,13 +1205,29 @@ describe("previewCircuitOpenedPayloadV1Schema", () => {
 describe("chatChangedPayloadV1Schema", () => {
   const valid = {
     activeChatId: uid(),
-    added: [{ chatId: uid(), createdAt: DEADLINE }],
+    added: [{ chatId: uid(), createdAt: DEADLINE, displayName: "Redesign the dashboard" }],
     updated: [],
     removedChatIds: [],
   };
 
   test("accepts a valid diff and rejects an unknown key", () => {
     expectStrict(chatChangedPayloadV1Schema, valid);
+  });
+
+  test("requires an explicit null displayName before any user record exists, never omission (design §3.9)", () => {
+    const withNullName = { ...valid, added: [{ ...valid.added[0]!, displayName: null }] };
+    expect(chatChangedPayloadV1Schema.safeParse(withNullName).success).toBe(true);
+
+    const { displayName: _dropped, ...summaryWithoutDisplayName } = valid.added[0]!;
+    expect(
+      chatChangedPayloadV1Schema.safeParse({ ...valid, added: [summaryWithoutDisplayName] })
+        .success,
+    ).toBe(false);
+  });
+
+  test("rejects a displayName longer than the 80-char DTO bound", () => {
+    const tooLong = { ...valid, added: [{ ...valid.added[0]!, displayName: "x".repeat(81) }] };
+    expect(chatChangedPayloadV1Schema.safeParse(tooLong).success).toBe(false);
   });
 });
 

@@ -6,7 +6,7 @@ import type { ChatSummary } from "../types";
 import { sortChatSummariesNewestFirst } from "./chats";
 
 function summary(createdAt: string): ChatSummary {
-  return { chatId: uuidv7(), createdAt };
+  return { chatId: uuidv7(), createdAt, displayName: null };
 }
 
 describe("sortChatSummariesNewestFirst (design 24-chats.dc.html, wsChats)", () => {

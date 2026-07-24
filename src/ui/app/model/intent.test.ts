@@ -207,8 +207,8 @@ describe("applyIntent — chats and trust", () => {
       event("chat.changed", {
         activeChatId: first,
         added: [
-          { chatId: first, createdAt: TEST_TS },
-          { chatId: second, createdAt: TEST_TS },
+          { chatId: first, createdAt: TEST_TS, displayName: null },
+          { chatId: second, createdAt: TEST_TS, displayName: null },
         ],
         updated: [],
         removedChatIds: [],

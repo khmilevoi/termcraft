@@ -19,7 +19,11 @@ describe("buildChatChangedPayload", () => {
 
   test("carries the given added/updated/removedChatIds verbatim", () => {
     const added = [
-      { chatId: "0192f6f0-0000-7000-8000-000000000002", createdAt: "2024-01-01T00:00:00.000Z" },
+      {
+        chatId: "0192f6f0-0000-7000-8000-000000000002",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        displayName: null,
+      },
     ];
     const payload = buildChatChangedPayload({
       activeChatId: "0192f6f0-0000-7000-8000-000000000001",

@@ -328,8 +328,8 @@ describe("mirror.apply — chats / selection / pins / diagnostics / export", () 
       event("chat.changed", {
         activeChatId: b,
         added: [
-          { chatId: a, createdAt: TEST_TS },
-          { chatId: b, createdAt: TEST_TS },
+          { chatId: a, createdAt: TEST_TS, displayName: null },
+          { chatId: b, createdAt: TEST_TS, displayName: null },
         ],
         updated: [],
         removedChatIds: [],

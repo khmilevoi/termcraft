@@ -340,7 +340,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       kernel.emit(
         event("chat.changed", {
           activeChatId: chatId,
-          added: [{ chatId, createdAt: TEST_TS }],
+          added: [{ chatId, createdAt: TEST_TS, displayName: null }],
           updated: [],
           removedChatIds: [],
         }),
@@ -376,9 +376,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
         event("chat.changed", {
           activeChatId: oldChatId,
           added: [
-            { chatId: oldChatId, createdAt: OLD_TS },
-            { chatId: midChatId, createdAt: MID_TS },
-            { chatId: newChatId, createdAt: NEW_TS },
+            { chatId: oldChatId, createdAt: OLD_TS, displayName: null },
+            { chatId: midChatId, createdAt: MID_TS, displayName: null },
+            { chatId: newChatId, createdAt: NEW_TS, displayName: null },
           ],
           updated: [],
           removedChatIds: [],
@@ -424,7 +424,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       kernel.emit(
         event("chat.changed", {
           activeChatId: chatId,
-          added: [{ chatId, createdAt: TEST_TS }],
+          added: [{ chatId, createdAt: TEST_TS, displayName: null }],
           updated: [],
           removedChatIds: [],
         }),
@@ -697,8 +697,8 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const chatChanged = event("chat.changed", {
       activeChatId: newChatId,
       added: [
-        { chatId: initialChatId, createdAt: TEST_TS },
-        { chatId: newChatId, createdAt: TEST_TS },
+        { chatId: initialChatId, createdAt: TEST_TS, displayName: null },
+        { chatId: newChatId, createdAt: TEST_TS, displayName: null },
       ],
       updated: [],
       removedChatIds: [],

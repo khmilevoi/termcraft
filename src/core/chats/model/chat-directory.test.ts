@@ -5,8 +5,8 @@ import { context } from "@reatom/core";
 import type { ChatSummaryV1 } from "../types";
 import { createChatDirectory, sortChatsNewestFirst } from "./chat-directory";
 
-function chat(chatId: string, createdAt: string): ChatSummaryV1 {
-  return { chatId, createdAt };
+function chat(chatId: string, createdAt: string, displayName: string | null = null): ChatSummaryV1 {
+  return { chatId, createdAt, displayName };
 }
 
 describe("sortChatsNewestFirst", () => {
