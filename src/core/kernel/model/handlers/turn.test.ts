@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { context } from "@reatom/core";
+import { context, wrap } from "@reatom/core";
 
 import {
   type TurnAction,
@@ -86,15 +86,24 @@ interface LaunchedOperation {
 
 interface TestContext {
   readonly handlerContext: HandlerContext;
+  readonly deps: KernelDeps;
   readonly setActiveTurnId: (turnId: UUIDv7 | null) => void;
   readonly getLaunchedOperations: () => readonly LaunchedOperation[];
+  readonly getPublishedEvents: () => readonly PublishableEventV1[];
   readonly getMutatorCalls: () => number;
 }
 
-function buildTestContext(): TestContext {
+/**
+ * `overrides` lets a test swap in its own `createFake*` instances (e.g. a `projectStore`
+ * with a real `backend`/`model`/`effort`/`activeChatId` already set, or a `chatStore` the
+ * test itself minted a chat through) so it can drive them directly after dispatch — mirrors
+ * `kernel.test.ts`'s own `buildDeps(overrides)` precedent.
+ */
+function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
   return context.start(() => {
     let mutatorCalls = 0;
     const launched: LaunchedOperation[] = [];
+    const publishedEvents: PublishableEventV1[] = [];
     let trust: ProjectTrustV1 = null;
     let activeTurnId: UUIDv7 | null = null;
     let commitIntentRecorded = false;
@@ -142,6 +151,7 @@ function buildTestContext(): TestContext {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
       clock,
+      ...overrides,
     };
     const frameTokenLedger = createFrameTokenLedger();
     const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
@@ -180,7 +190,9 @@ function buildTestContext(): TestContext {
       launchOperation: (label, run) => {
         launched.push({ label, run });
       },
-      publishOperationEvent: () => {},
+      publishOperationEvent: (event) => {
+        publishedEvents.push(event);
+      },
       turnRunner: {
         machine: machines.turn,
         // Mirrors `kernel.ts`'s own real `setActiveAttempt`/`activeAttempt`: a single slot,
@@ -209,24 +221,144 @@ function buildTestContext(): TestContext {
 
     return {
       handlerContext,
+      deps,
       setActiveTurnId: (next) => {
         activeTurnId = next;
       },
       getLaunchedOperations: () => launched,
+      getPublishedEvents: () => publishedEvents,
       getMutatorCalls: () => mutatorCalls,
     };
   });
 }
 
 describe('turnHandlers["turn.start"]', () => {
-  test("is a documented no-op: no machine transition, no launched operation (Gap 3, ./turn.ts's own header)", () => {
+  test("starts an operation synchronously, then refuses (logged) when no active chat or agent selection exists yet (Gap 4 closed, but nothing was ever selected in this fixture)", async () => {
     const { handlerContext, getLaunchedOperations } = buildTestContext();
 
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
 
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
+    // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
+    // precedent for "nothing about the outcome is known until the promise settles").
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    expect(operation.label).toBe("kernel.turn.run");
+
+    const events = await operation.run();
+    expect(events).toEqual([]);
+    // Nothing was ever admitted — the machine never left idle, and activeTurnId was never set.
     expect(handlerContext.machines.turn.phase()).toBe("idle");
-    expect(getLaunchedOperations()).toHaveLength(0);
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+  });
+
+  test("real composition: admission -> attempt -> a genuine Gate retry -> finalize -> turn.completed, activeTurnId set then cleared", async () => {
+    // A deliberately minimal fixture (zero pages) isolates the admission/attempt/gate-retry/
+    // finalize composition this test proves without needing byte-level per-page plumbing —
+    // `core/turns/model/run-turn.test.ts`'s own suite already proves per-page composition
+    // exhaustively against fakes; this test's job is proving the wiring THIS handler adds
+    // (the new Gap-4 ports, the content-caching staging decorator, the live-event stream,
+    // activeTurnId set/cleared, the terminal `turn.completed` event), not re-proving `runTurn`
+    // itself a second time.
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const gateRunner = createFakeGateRunner();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner,
+    });
+
+    // Forces exactly ONE retry: the manifest-slice check rejects attempt 1's candidate; the
+    // fake's own default (once its queue is empty) passes attempt 2 — a genuine Gate retry,
+    // driven at the manifest-slice stage since this fixture's own `pageReader` lists zero
+    // pages (no per-page `runPage` call is ever made).
+    gateRunner.queueRunManifestSliceResult({
+      errors: [{ kind: "manifest", code: "MANIFEST_REJECTED", message: "manifest rejected" }],
+      slice: null,
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    /** Drains the microtask queue until `count` events of `kind` have been observed — the same `waitForStartCount` idiom `core/turns/model/run-turn.test.ts` already uses, applied to this handler's own live-published event log instead of a raw backend call log. */
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    // Admission succeeded and attempt 1 started — the machine left "idle", and the FIRST
+    // turn.attemptStarted is what set activeTurnId (this file's header, "LIVE EVENTS").
+    expect(handlerContext.machines.turn.phase()).not.toBe("idle");
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBe(turnId);
+
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done-1",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    await waitForPublishedCount("turn.gateRejected", 1);
+    await waitForPublishedCount("turn.attemptStarted", 2);
+    const secondStart = agentBackend.calls.filter((c) => c.method === "startTurn")[1];
+    if (secondStart?.method !== "startTurn") throw new Error("expected a second startTurn call");
+    agentBackend.completeRun(secondStart.fence, {
+      kind: "completed",
+      finalText: "done-2",
+      usage: null,
+      sessionId: "s2",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    const [terminalEvent] = events;
+    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
+    expect(terminalEvent.kind).toBe("turn.completed");
+    expect(
+      eventPayloadV1SchemaByKind["turn.completed"].safeParse(terminalEvent.payload).success,
+    ).toBe(true);
+    const terminalPayload = terminalEvent.payload as {
+      readonly turnId: string;
+      readonly outcome: string;
+    };
+    expect(terminalPayload.turnId).toBe(turnId);
+    expect(terminalPayload.outcome).toBe("completed");
+
+    // §7.2's success arc settles all the way back to idle, and activeTurnId is cleared —
+    // never left dangling on a turn that already committed.
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+    // The attempt-handle slot is cleared too (Gap 2's producer side, closed by this task).
+    expect(handlerContext.turnRunner.activeAttempt(turnId as UUIDv7)).toBeNull();
   });
 });
 
