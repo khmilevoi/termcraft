@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
-import { context } from "@reatom/core";
+import { atom, context, wrap } from "@reatom/core";
 
 import {
   reatomCommitStateMachine,
@@ -12,7 +12,13 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { ChatHeaderV1, ChatLoadResultV1, ChatMutations, ChatReader } from "core/ports";
+import type {
+  ChatHandleV1,
+  ChatHeaderV1,
+  ChatLoadResultV1,
+  ChatMutations,
+  ChatReader,
+} from "core/ports";
 import {
   type FakeChatStore,
   type FakeProjectStore,
@@ -599,5 +605,63 @@ describe("chatHandlers['chat.switch']", () => {
       removedChatIds: [],
     });
     warnSpy.mockRestore();
+  });
+
+  test("wraps every port call in its chain — a Reatom write triggered mid-tail-load lands in the ORIGINAL calling frame, never a dropped one (RTM-A04 regression, review finding)", async () => {
+    const chatId = uuidv7();
+    const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
+    const mutationsStub = createChatMutationsStub();
+    // A dedicated atom this test uses to detect WHICH Reatom frame is active when
+    // `ChatReader.open` runs. Each `context.start(...)` frame owns its own isolated atom
+    // store (`node_modules/@reatom/core`'s `frame.state.store`) — so a write that lands in
+    // the WRONG frame (the shared global default, restored by a raw, unwrapped `await`) is
+    // invisible to a reader captured against the RIGHT frame, and vice versa. This is the
+    // same isolation `core/chats/model/create.test.ts`'s own header describes for
+    // `ChatDirectory`, applied here with a throwaway probe since `chat.switch` itself has no
+    // atom of its own to observe.
+    const frameMarker = atom(0, "test.chat.switch.frameMarker");
+    const chatReader: ChatReader = {
+      async open(): Promise<ChatHandleV1> {
+        // Written at whatever frame is active the INSTANT `open()` is invoked — the exact
+        // point `loadActiveChatTail`'s own `wrap(context.deps.chatReader.open(chatId))`
+        // synchronously calls it. If every earlier port call in the chain (`switchActive`,
+        // `writeWorkspaceState`) is properly wrapped, that frame is the one this test's own
+        // outer `context.start(...)` established below; if either is a raw, unwrapped
+        // `await` (the bug this test pins), it is the shared global default instead.
+        frameMarker.set(1);
+        return {
+          header,
+          async loadTail() {
+            return { records: [], prevCursor: null };
+          },
+          async loadBefore() {
+            throw new Error("not used in this test");
+          },
+        };
+      },
+      async readAppendBase() {
+        throw new Error("not used in this test");
+      },
+    };
+
+    // Everything synchronous — building the fixture, dispatching `chat.switch`, and
+    // STARTING (not awaiting) the launched operation's `run()` — happens inside ONE
+    // `context.start(...)` call, matching `create.test.ts`'s own discipline: a
+    // `context.start(cb)` frame pops the instant `cb()` returns, so `readMarker` (captured
+    // here via `wrap(...)`, which re-associates its own frame on every call regardless of
+    // what is later active) is the only safe way to read this frame's state after the fact.
+    const { readMarker, callPromise } = context.start(() => {
+      const { handlerContext, getLaunches } = buildTestContext({
+        chatMutations: mutationsStub,
+        chatReader,
+      });
+      chatHandlers["chat.switch"]({ chatId }, handlerContext);
+      const launch = onlyLaunch(getLaunches());
+      return { callPromise: launch.run(), readMarker: wrap(() => frameMarker()) };
+    });
+
+    await callPromise;
+
+    expect(readMarker()).toBe(1);
   });
 });

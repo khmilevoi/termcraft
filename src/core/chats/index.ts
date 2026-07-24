@@ -11,7 +11,11 @@ export { buildChatChangedPayload } from "./model/chat-changed";
 
 export { deriveChatDisplayName } from "./model/display-name";
 
-export { buildChatRecordsPayload, chatRecordToDtoV1 } from "./model/records";
+export {
+  buildChatRecordsPayload,
+  chatRecordToDtoV1,
+  resolveChatDisplayName,
+} from "./model/records";
 
 export type { CreateChatDeps } from "./model/create";
 export { createChat } from "./model/create";

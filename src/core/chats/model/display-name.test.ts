@@ -89,4 +89,10 @@ describe("deriveChatDisplayName (design §3.9)", () => {
     const exactLine = "y".repeat(60);
     expect(deriveChatDisplayName([userRecord(exactLine)])).toBe(exactLine);
   });
+
+  test("returns null, not an empty string, when the first user record's first line is blank/whitespace-only (review finding Minor)", () => {
+    expect(deriveChatDisplayName([userRecord("")])).toBeNull();
+    expect(deriveChatDisplayName([userRecord("   ")])).toBeNull();
+    expect(deriveChatDisplayName([userRecord("\nsecond line has content")])).toBeNull();
+  });
 });

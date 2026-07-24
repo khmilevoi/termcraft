@@ -16,13 +16,16 @@ const DISPLAY_NAME_MAX_LENGTH = 60;
 /**
  * The first line of the first `kind: "user"` record's `text`, trimmed and truncated
  * to `DISPLAY_NAME_MAX_LENGTH`. `null` when no `user` record exists yet (a freshly
- * created chat) — the UI renders the design's `chatId.slice(0, 8)` fallback for that
- * case (`App.tsx`).
+ * created chat), OR when one exists but its first line is blank/whitespace-only after
+ * trimming (review finding Minor, WP-10 fix wave) — an empty string is not a name, and
+ * returning `null` here (rather than `""`) lets the UI's own null-fallback
+ * (`chatId.slice(0, 8)`, `App.tsx`) engage instead of rendering a blank label.
  */
 export function deriveChatDisplayName(records: readonly ChatRecordDtoV1[]): string | null {
   const firstUserRecord = records.find((record) => record.kind === "user");
   if (firstUserRecord === undefined) return null;
 
   const firstLine = (firstUserRecord.text.split("\n")[0] ?? "").trim();
+  if (firstLine === "") return null;
   return firstLine.slice(0, DISPLAY_NAME_MAX_LENGTH);
 }

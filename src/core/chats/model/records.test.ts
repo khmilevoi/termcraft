@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import type { ChatLoadResultV1 } from "core/ports";
+import type { ChatHandleV1, ChatHeaderV1, ChatLoadResultV1, ChatPageCursorV1 } from "core/ports";
 import { chatRecordDtoV1Schema } from "core/protocol";
+import type { FailureDtoV1 } from "core/protocol";
 import type {
   ChatAgentRecord,
   ChatSystemCancelledRecord,
@@ -12,7 +13,7 @@ import type {
 import { parsePageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { buildChatRecordsPayload, chatRecordToDtoV1 } from "./records";
+import { buildChatRecordsPayload, chatRecordToDtoV1, resolveChatDisplayName } from "./records";
 
 /**
  * `chatRecordToDtoV1`/`buildChatRecordsPayload` (WP-10 Task 5) — the entities -> wire
@@ -271,5 +272,148 @@ describe("buildChatRecordsPayload", () => {
 
     expect(payload.records).toEqual([]);
     expect(payload.prevCursor).toEqual({ generation: 0, beforeOffset: 128 });
+  });
+});
+
+describe("resolveChatDisplayName (review finding IMPORTANT — the true first page, not the tail)", () => {
+  const HEADER: ChatHeaderV1 = { chatId: "fake-chat-1", createdAt: TS };
+
+  /** A `ChatHandleV1` double whose `loadBefore` answers from a fixed `{cursor -> page}` map, keyed by `beforeOffset`, and records every call it received. */
+  function makeHandle(
+    pagesByBeforeOffset: ReadonlyMap<number, FailureDtoV1 | ChatLoadResultV1>,
+  ): ChatHandleV1 & { readonly loadBeforeCalls: readonly ChatPageCursorV1[] } {
+    const loadBeforeCalls: ChatPageCursorV1[] = [];
+    return {
+      header: HEADER,
+      loadBeforeCalls,
+      async loadTail() {
+        throw new Error("not used by resolveChatDisplayName — the tail is passed in directly");
+      },
+      async loadBefore(cursor: ChatPageCursorV1) {
+        loadBeforeCalls.push(cursor);
+        const page = pagesByBeforeOffset.get(cursor.beforeOffset);
+        if (page === undefined)
+          throw new Error(`no fixture page for beforeOffset ${cursor.beforeOffset}`);
+        return page;
+      },
+    };
+  }
+
+  test("short-circuits with zero loadBefore calls when the tail's own prevCursor is already null", async () => {
+    const handle = makeHandle(new Map());
+    const tail: ChatLoadResultV1 = {
+      records: [
+        { kind: "user", recordId: uuidv7(), turnId: uuidv7(), text: "single-page chat", ts: TS },
+      ],
+      prevCursor: null,
+    };
+
+    const result = await resolveChatDisplayName(handle, tail);
+
+    expect(result).toBe("single-page chat");
+    expect(handle.loadBeforeCalls).toEqual([]);
+  });
+
+  test("walks back through loadBefore to the chat's TRUE first page when the tail page does not contain the first user record", async () => {
+    const trueFirstUserTurnId = uuidv7();
+    const firstPage: ChatLoadResultV1 = {
+      records: [
+        {
+          kind: "user",
+          recordId: uuidv7(),
+          turnId: trueFirstUserTurnId,
+          text: "the actual first message",
+          ts: TS,
+        },
+      ],
+      prevCursor: null,
+    };
+    // The tail page is bounded and only carries a LATER user record — the exact
+    // "tail longer than one page" scenario the review finding names.
+    const tail: ChatLoadResultV1 = {
+      records: [
+        {
+          kind: "user",
+          recordId: uuidv7(),
+          turnId: uuidv7(),
+          text: "a much later message",
+          ts: TS,
+        },
+      ],
+      prevCursor: { generation: 1, beforeOffset: 512 },
+    };
+    const handle = makeHandle(new Map([[512, firstPage]]));
+
+    const result = await resolveChatDisplayName(handle, tail);
+
+    expect(result).toBe("the actual first message");
+    expect(handle.loadBeforeCalls).toEqual([{ generation: 1, beforeOffset: 512 }]);
+  });
+
+  test("walks back through MULTIPLE pages until prevCursor is null", async () => {
+    const tail: ChatLoadResultV1 = {
+      records: [],
+      prevCursor: { generation: 1, beforeOffset: 900 },
+    };
+    const middlePage: ChatLoadResultV1 = {
+      records: [],
+      prevCursor: { generation: 1, beforeOffset: 400 },
+    };
+    const firstPage: ChatLoadResultV1 = {
+      records: [
+        { kind: "user", recordId: uuidv7(), turnId: uuidv7(), text: "genesis message", ts: TS },
+      ],
+      prevCursor: null,
+    };
+    const handle = makeHandle(
+      new Map<number, FailureDtoV1 | ChatLoadResultV1>([
+        [900, middlePage],
+        [400, firstPage],
+      ]),
+    );
+
+    const result = await resolveChatDisplayName(handle, tail);
+
+    expect(result).toBe("genesis message");
+    expect(handle.loadBeforeCalls).toEqual([
+      { generation: 1, beforeOffset: 900 },
+      { generation: 1, beforeOffset: 400 },
+    ]);
+  });
+
+  test("returns null when the true first page has no user record", async () => {
+    const tail: ChatLoadResultV1 = { records: [], prevCursor: { generation: 1, beforeOffset: 64 } };
+    const firstPage: ChatLoadResultV1 = {
+      records: [
+        {
+          kind: "system:cancelled",
+          recordId: uuidv7(),
+          actionId: uuidv7(),
+          text: "cancelled before any user record",
+          ts: TS,
+        },
+      ],
+      prevCursor: null,
+    };
+    const handle = makeHandle(new Map([[64, firstPage]]));
+
+    const result = await resolveChatDisplayName(handle, tail);
+
+    expect(result).toBeNull();
+  });
+
+  test("propagates a loadBefore failure encountered while walking back", async () => {
+    const failure: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "page directory corrupt",
+      details: {},
+    };
+    const tail: ChatLoadResultV1 = { records: [], prevCursor: { generation: 1, beforeOffset: 32 } };
+    const handle = makeHandle(new Map([[32, failure]]));
+
+    const result = await resolveChatDisplayName(handle, tail);
+
+    expect(result).toEqual(failure);
   });
 });

@@ -1,6 +1,6 @@
 import { wrap } from "@reatom/core";
 
-import { buildChatRecordsPayload, deriveChatDisplayName } from "core/chats";
+import { buildChatRecordsPayload, resolveChatDisplayName } from "core/chats";
 import type { ChatSummaryV1 } from "core/chats";
 import type { TransitionOutcome } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
@@ -396,7 +396,14 @@ type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
  * "project creation always mints an initial chat header" guarantee has no port at this
  * layer to fulfil it yet — see this file's own header, "FLAGGED GAPS" — so a fresh
  * `project.create` legitimately has no chat to restore a tail for). Only an ACTUAL
- * `ChatReader.open`/`loadTail` failure is logged (errore rule 21).
+ * `ChatReader.open`/`loadTail`/`resolveChatDisplayName` (its own `loadBefore` walk) failure
+ * is logged (errore rule 21).
+ *
+ * `displayName` is derived from the chat's TRUE first `user` record via `core/chats`'s
+ * `resolveChatDisplayName` (review finding IMPORTANT, WP-10 fix wave) — NOT from this
+ * function's own (possibly later, bounded) `loadTail()` page alone, which names the wrong
+ * record for any chat longer than one tail page. See that function's own doc comment for
+ * why the existing `ChatHandleV1.loadBefore` cursor is sufficient without a port extension.
  *
  * **Divergence flagged (WP-10 Task 6, do NOT invent a listing port):** this restores
  * only the ACTIVE chat's tail — no port enumerates a project's other chats
@@ -427,11 +434,23 @@ async function restoreActiveChatTail(
     return [];
   }
 
+  const displayName = await wrap(resolveChatDisplayName(handle, loadResult));
+  // See `handlers/chat.ts`'s identical check for why a bare `"code" in displayName` would
+  // throw here: `resolveChatDisplayName`'s success values (`string | null`) are never
+  // objects, so failure is narrowed via `value !== null && typeof value === "object"`
+  // instead (`core/ports/fakes/projections.ts`'s own established idiom).
+  if (displayName !== null && typeof displayName === "object") {
+    console.warn(
+      `core/kernel/handlers/project: could not resolve the active chatId ${activeChatId}'s true first-page display name: ${displayName.safeMessage}`,
+    );
+    return [];
+  }
+
   const recordsPayload = buildChatRecordsPayload(activeChatId, loadResult);
   const summary: ChatSummaryV1 = {
     chatId: activeChatId,
     createdAt: handle.header.createdAt,
-    displayName: deriveChatDisplayName(recordsPayload.records),
+    displayName,
   };
   const chatChangedPayload: ChatChangedPayloadV1 = {
     activeChatId,

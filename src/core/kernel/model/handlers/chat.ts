@@ -1,6 +1,6 @@
 import { wrap } from "@reatom/core";
 
-import { buildChatRecordsPayload, deriveChatDisplayName } from "core/chats";
+import { buildChatRecordsPayload, resolveChatDisplayName } from "core/chats";
 import type { ChatSummaryV1 } from "core/chats";
 import type { PublishableEventV1 } from "core/mailbox";
 import type { EventPayloadByKindV1 } from "core/protocol";
@@ -62,7 +62,8 @@ import { startedOutcome } from "./types";
  *   needed (there is nothing on disk yet to load).
  * - `chat.switch` loads the switched-to chat's tail through `ChatReader.open` +
  *   `ChatHandleV1.loadTail` (`loadActiveChatTail` below), derives its `displayName`
- *   (`core/chats`'s `deriveChatDisplayName`) from the loaded records, and reports it on
+ *   (`core/chats`'s `resolveChatDisplayName`, walking back to the chat's true first page —
+ *   see that function's own doc comment) from the loaded records, and reports it on
  *   `chat.changed`'s `updated` array. A tail-load failure here is a SEPARATE, best-effort
  *   concern from the switch itself: it is logged (errore rule 21) and BOTH the summary
  *   and the `chat.records` event are skipped for this operation, but `chat.changed`
@@ -119,11 +120,18 @@ interface ActiveChatTail {
 
 /**
  * Loads `chatId`'s persisted tail through `ChatReader.open` + `ChatHandleV1.loadTail`
- * (WP-10 Task 5) and derives its `displayName` (design §3.9, `core/chats`'s
- * `deriveChatDisplayName`) from the loaded records. `null` on either port call failing —
- * logged here (errore rule 21), never propagated: this is `chat.switch`'s OWN
- * best-effort tail read, distinct from whether the switch itself succeeded (see this
- * file's header, "TAIL DELIVERY").
+ * (WP-10 Task 5) and derives its `displayName` (design §3.9) from the chat's TRUE first
+ * `user` record via `core/chats`'s `resolveChatDisplayName` — NOT from the (possibly
+ * later, bounded) tail page alone, which names the wrong record for any chat longer than
+ * one tail page (review finding IMPORTANT, WP-10 fix wave; see `resolveChatDisplayName`'s
+ * own doc comment for why the existing `loadBefore` cursor is sufficient without a port
+ * extension). `null` on ANY of `open`/`loadTail`/the display-name walk's own `loadBefore`
+ * calls failing — logged here (errore rule 21), never propagated: this is `chat.switch`'s
+ * OWN best-effort tail read, distinct from whether the switch itself succeeded (see this
+ * file's header, "TAIL DELIVERY"). Every port call here is `await wrap(...)`-ed (Reatom
+ * rule RTM-A04) — a raw `await` drops the Kernel's own Reatom frame the moment control
+ * returns to the event loop, and a LATER `wrap(...)` call in the same closure would then
+ * only ever restore an already-dropped frame (review finding RTM-A04, WP-10 fix wave).
  */
 async function loadActiveChatTail(
   context: HandlerContext,
@@ -145,12 +153,25 @@ async function loadActiveChatTail(
     return null;
   }
 
+  const displayName = await wrap(resolveChatDisplayName(handle, loadResult));
+  // `resolveChatDisplayName`'s success values (`string | null`) are never objects, so a bare
+  // `"code" in displayName` would throw for them — `value !== null && typeof value ===
+  // "object"` is this codebase's own established failure-narrowing idiom for a union whose
+  // success side includes primitives/`null` (`core/ports/fakes/projections.ts`,
+  // `store/transaction/model/plan.ts`).
+  if (displayName !== null && typeof displayName === "object") {
+    console.warn(
+      `core/kernel: chat.switch could not resolve chatId ${chatId}'s true first-page display name: ${displayName.safeMessage}`,
+    );
+    return null;
+  }
+
   const recordsPayload = buildChatRecordsPayload(chatId, loadResult);
   return {
     summary: {
       chatId,
       createdAt: handle.header.createdAt,
-      displayName: deriveChatDisplayName(recordsPayload.records),
+      displayName,
     },
     recordsEvent: chatRecordsEvent(recordsPayload),
   };
@@ -158,7 +179,7 @@ async function loadActiveChatTail(
 
 const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
   context.launchOperation("kernel.chat.create", async () => {
-    const header = await context.deps.chatMutations.create();
+    const header = await wrap(context.deps.chatMutations.create());
     if ("code" in header) {
       console.warn(`core/kernel: chat.create failed: ${header.safeMessage}`);
       return [];
@@ -188,15 +209,17 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
 
 const handleChatSwitch: CommandHandler<"chat.switch"> = (payload, context) => {
   context.launchOperation("kernel.chat.switch", async () => {
-    const switchFailure = await context.deps.chatMutations.switchActive(payload.chatId);
+    const switchFailure = await wrap(context.deps.chatMutations.switchActive(payload.chatId));
     if (switchFailure !== undefined) {
       console.warn(`core/kernel: chat.switch failed: ${switchFailure.safeMessage}`);
       return [];
     }
 
-    const persistFailure = await context.deps.projectStore.writeWorkspaceState({
-      activeChatId: payload.chatId,
-    });
+    const persistFailure = await wrap(
+      context.deps.projectStore.writeWorkspaceState({
+        activeChatId: payload.chatId,
+      }),
+    );
     if (persistFailure !== undefined) {
       console.warn(
         `core/kernel: chat.switch succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
