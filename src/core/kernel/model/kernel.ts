@@ -376,8 +376,8 @@ export function createKernel(deps: KernelDeps): Kernel {
       const growthEvent: PublishableEventV1<"kernel.capabilitiesChanged"> = {
         kind: "kernel.capabilitiesChanged",
         payload: {
-          changed: diff.changed as unknown as readonly CapabilityEntryV1[],
-          removed: diff.removed as unknown as readonly Readonly<{
+          changed: diff.changed as readonly CapabilityEntryV1[],
+          removed: diff.removed as readonly Readonly<{
             id: CommandKindV1;
             target: CapabilityEntryV1["target"];
           }>[],
