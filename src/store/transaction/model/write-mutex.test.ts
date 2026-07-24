@@ -89,6 +89,31 @@ describe("createWriteMutex", () => {
     expect(() => mutex.release({ permitId: "never-issued" })).not.toThrow();
   });
 
+  test("currentPermit() is null when free, the active permit while held, and null again after release", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1", "p2"]));
+    expect(mutex.currentPermit()).toBeNull();
+
+    const first = await mutex.acquire();
+    expect(mutex.currentPermit()).toEqual(first);
+
+    mutex.release(first);
+    expect(mutex.currentPermit()).toBeNull();
+
+    const second = await mutex.acquire();
+    expect(mutex.currentPermit()).toEqual(second);
+  });
+
+  test("currentPermit() reflects the NEXT holder once a waiter is granted, not the released one", async () => {
+    const mutex = createWriteMutex(fakeMutexDeps(["p1", "p2"]));
+    const first = await mutex.acquire();
+    const secondPromise = mutex.acquire();
+
+    mutex.release(first);
+    const second = await secondPromise;
+    expect(mutex.currentPermit()).toEqual(second);
+    expect(mutex.currentPermit()).not.toEqual(first);
+  });
+
   test("mintWritePermitId (default deps) produces a 128-bit base64url random id, not a UUIDv7", async () => {
     const mutex = createWriteMutex();
     const permit = await mutex.acquire();
