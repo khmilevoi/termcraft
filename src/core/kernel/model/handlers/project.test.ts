@@ -1,0 +1,637 @@
+import { describe, expect, test } from "bun:test";
+
+import { context, wrap } from "@reatom/core";
+
+import {
+  reatomCommitStateMachine,
+  reatomExportStateMachine,
+  reatomMigrationStateMachine,
+  reatomPreviewStateMachine,
+  reatomProjectStateMachine,
+  reatomRestoreStateMachine,
+  reatomTurnStateMachine,
+} from "core/machines";
+import type { PreviewSession } from "core/ports";
+import {
+  createFakeAgentBackend,
+  createFakeAgentRegistry,
+  createFakeChatStore,
+  createFakeDiagnosticsCache,
+  createFakeExportPublish,
+  createFakeExportRenderPort,
+  createFakeGateRunner,
+  createFakeHostSupervisorPort,
+  createFakePageMetaCache,
+  createFakePageStore,
+  createFakePinStore,
+  createFakeProjectStore,
+  createFakeProjectWriteCoordinator,
+  createFakeRecoveryService,
+  createFakeRenderCache,
+  createFakeSessionCheckpointService,
+  createFakeStagingService,
+  createFakeTrustGate,
+  createFakeTurnTransactionService,
+} from "core/ports/fakes";
+import {
+  type CommandPayloadByKindV1,
+  type FailureDtoV1,
+  type UUIDv7,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
+import { parsePageSlug } from "entities/page";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
+
+import type { KernelDeps } from "../../types";
+import { projectHandlers } from "./project";
+import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+
+/**
+ * `project.create` / `project.open` / `project.retryOpen` / `project.close` /
+ * `project.setTrust` — Task 9 Step B, the `project` family (`./project.ts`'s own header
+ * documents the design; this file proves it against the real fakes).
+ *
+ * Every test lives inside ONE `context.start(async () => {...})` call — construction,
+ * the handler call, awaiting a captured `launchOperation` `run`, and assertions all in the
+ * same frame — matching `core/project/model/open-sequence.test.ts`'s own established
+ * precedent: a plain, unwrapped `await` mid-test would resume outside the frame the
+ * machines were built in, reading back stuck initial phases instead of what the run
+ * actually did.
+ *
+ * Every emitted event is validated against `eventPayloadV1SchemaByKind` — not just
+ * counted — per the task brief.
+ */
+
+function slug(value: string) {
+  const parsed = parsePageSlug(value);
+  if (parsed instanceof Error) throw parsed;
+  return parsed;
+}
+
+const FAKE_SOURCE_HASH = "a".repeat(64);
+
+const FAILURE: FailureDtoV1 = {
+  code: "PERSISTENCE_FAILED",
+  retryable: false,
+  safeMessage: "boom",
+  details: {},
+};
+
+interface TestHarness {
+  readonly handlerContext: HandlerContext;
+  readonly getTrust: () => ProjectTrustV1;
+  readonly getPreviewSession: () => PreviewSession | null;
+  readonly getLaunchOperations: () => readonly {
+    readonly label: string;
+    readonly run: () => Promise<readonly import("core/mailbox").PublishableEventV1[]>;
+  }[];
+  readonly deps: KernelDeps;
+  readonly machines: HandlerContext["machines"];
+}
+
+/**
+ * Builds a real `HandlerContext` — real machines, real fake ports — matching
+ * `handlers/index.test.ts`'s own `buildTestContext` shape, PLUS a `launchOperation` fake
+ * that CAPTURES every `(label, run)` call instead of discarding it, so a test can await
+ * the operation's own terminal events. Must be called synchronously from inside an active
+ * `context.start(...)` frame — see this file's header.
+ */
+function buildTestContext(options?: {
+  readonly projectStore?: ReturnType<typeof createFakeProjectStore>;
+  readonly pageReader?: ReturnType<typeof createFakePageStore>;
+  readonly recovery?: ReturnType<typeof createFakeRecoveryService>;
+  readonly trustGate?: ReturnType<typeof createFakeTrustGate>;
+}): TestHarness {
+  let trust: ProjectTrustV1 = null;
+  let activeTurnId: UUIDv7 | null = null;
+  let commitIntentRecorded = false;
+  let previewSourceKind: PreviewSourceKindV1 = null;
+  let previewSession: PreviewSession | null = null;
+  const launchOperations: {
+    label: string;
+    run: () => Promise<readonly import("core/mailbox").PublishableEventV1[]>;
+  }[] = [];
+
+  const machines = {
+    project: reatomProjectStateMachine(),
+    turn: reatomTurnStateMachine(),
+    restore: reatomRestoreStateMachine(),
+    commit: reatomCommitStateMachine(),
+    export: reatomExportStateMachine(),
+    preview: reatomPreviewStateMachine(),
+    migration: reatomMigrationStateMachine(),
+  };
+
+  const chatStore = createFakeChatStore();
+  const pageStore = options?.pageReader ?? createFakePageStore({ order: [] });
+  const pinStore = createFakePinStore();
+  const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+
+  const deps: KernelDeps = {
+    projectStore: options?.projectStore ?? createFakeProjectStore({ root: "/test-root" }),
+    chatReader: chatStore,
+    chatMutations: chatStore,
+    pageReader: pageStore,
+    pageMutations: pageStore,
+    pinReader: pinStore,
+    pinMutations: pinStore,
+    turnTransactions: createFakeTurnTransactionService(),
+    projectWrite: createFakeProjectWriteCoordinator(),
+    staging: createFakeStagingService(),
+    trustGate: options?.trustGate ?? createFakeTrustGate(),
+    pageMetaCache: createFakePageMetaCache(),
+    diagnosticsCache: createFakeDiagnosticsCache(),
+    renderCache: createFakeRenderCache(),
+    sessionCheckpoint: createFakeSessionCheckpointService(),
+    recovery: options?.recovery ?? createFakeRecoveryService(),
+    gateRunner: createFakeGateRunner(),
+    hostSupervisor: createFakeHostSupervisorPort(),
+    exportRender: createFakeExportRenderPort(),
+    exportPublish: createFakeExportPublish(),
+    agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    clock,
+  };
+
+  const handlerContext: HandlerContext = {
+    deps,
+    machines,
+    readKernelState: () => ({
+      project: { phase: machines.project.phase(), trust },
+      turn: { phase: machines.turn.phase(), activeTurnId, commitIntentRecorded },
+      restore: { phase: machines.restore.phase() },
+      commit: { phase: machines.commit.phase() },
+      export: { phase: machines.export.phase() },
+      preview: { phase: machines.preview.phase(), sourceKind: previewSourceKind },
+      migration: { phase: machines.migration.phase() },
+    }),
+    setProjectTrust: (next) => {
+      trust = next;
+    },
+    setActiveTurnId: (next) => {
+      activeTurnId = next;
+    },
+    setCommitIntentRecorded: (next) => {
+      commitIntentRecorded = next;
+    },
+    setPreviewSourceKind: (next) => {
+      previewSourceKind = next;
+    },
+    setActivePreviewSession: (session) => {
+      previewSession = session;
+    },
+    launchOperation: (label, run) => {
+      launchOperations.push({ label, run });
+    },
+  };
+
+  return {
+    handlerContext,
+    getTrust: () => trust,
+    getPreviewSession: () => previewSession,
+    getLaunchOperations: () => launchOperations,
+    deps,
+    machines,
+  };
+}
+
+/** Validates one event's payload against its OWN kind's real protocol schema — never just counted. */
+function expectValidEvent(event: { readonly kind: string; readonly payload: unknown }): void {
+  const schema = eventPayloadV1SchemaByKind[event.kind as keyof typeof eventPayloadV1SchemaByKind];
+  const parsed = schema.safeParse(event.payload);
+  if (!parsed.success) {
+    throw new Error(
+      `event "${event.kind}" failed schema validation: ${JSON.stringify(parsed.error.issues)}`,
+    );
+  }
+}
+
+// --- project.close ---------------------------------------------------------------------------
+
+describe("project.close", () => {
+  test("started admission (beginClose) then finishClose once the lease releases", async () => {
+    await context.start(async () => {
+      const harness = buildTestContext();
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("finishOpen"); // precondition: "ready", matching what the guard already confirmed
+
+      const outcome = projectHandlers["project.close"]({}, harness.handlerContext);
+
+      expect(outcome.disposition).toBe("started");
+      expect(outcome.operationId).toBeDefined();
+      expect(outcome.events).toHaveLength(1);
+      expectValidEvent(outcome.events[0]!);
+      expect(outcome.events[0]!.payload).toMatchObject({
+        modelId: "kernel.project.state",
+        action: "kernel.project.beginClose",
+        previousTag: "ready",
+        nextTag: "closing",
+      });
+
+      const launches = harness.getLaunchOperations();
+      expect(launches).toHaveLength(1);
+      expect(launches[0]!.label).toBe("kernel.project.close");
+
+      const terminalEvents = await wrap(launches[0]!.run());
+
+      expect(terminalEvents).toHaveLength(1);
+      expectValidEvent(terminalEvents[0]!);
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+      });
+      expect(harness.machines.project.phase()).toBe("closed");
+      expect(harness.getPreviewSession()).toBeNull();
+      expect(harness.deps.projectStore.close).toBeDefined();
+    });
+  });
+});
+
+// --- project.setTrust -------------------------------------------------------------------------
+
+describe("project.setTrust", () => {
+  test("flips the trust flag synchronously, then durably persists the grant", async () => {
+    await context.start(async () => {
+      const harness = buildTestContext();
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("finishOpen"); // precondition: "ready"
+
+      const payload: CommandPayloadByKindV1["project.setTrust"] = {
+        trust: "trusted",
+        workspaceIdentity: "ws-1",
+      };
+      const outcome = projectHandlers["project.setTrust"](payload, harness.handlerContext);
+
+      expect(outcome.disposition).toBe("started");
+      expect(outcome.events).toHaveLength(1);
+      expectValidEvent(outcome.events[0]!);
+      expect(outcome.events[0]!.payload).toMatchObject({
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+      });
+      // The Kernel-visible trust flag is already flipped BEFORE the async operation runs.
+      expect(harness.getTrust()).toBe("trusted");
+
+      const launches = harness.getLaunchOperations();
+      expect(launches).toHaveLength(1);
+      const terminalEvents = await wrap(launches[0]!.run());
+
+      expect(terminalEvents).toEqual([]);
+    });
+  });
+
+  test("an untrusted-read-only decision never durably grants", async () => {
+    await context.start(async () => {
+      const trustGate = createFakeTrustGate();
+      const harness = buildTestContext({ trustGate });
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("finishOpen");
+
+      const payload: CommandPayloadByKindV1["project.setTrust"] = {
+        trust: "untrusted-read-only",
+        workspaceIdentity: "ws-1",
+      };
+      projectHandlers["project.setTrust"](payload, harness.handlerContext);
+      expect(harness.getTrust()).toBe("untrusted-read-only");
+
+      const launches = harness.getLaunchOperations();
+      await wrap(launches[0]!.run());
+
+      expect(trustGate.calls.some((call) => call.method === "grant")).toBe(false);
+    });
+  });
+});
+
+// --- project.create ----------------------------------------------------------------------------
+
+describe("project.create", () => {
+  test("started admission (beginCreate) then a full open sequence to ready", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      const outcome = projectHandlers["project.create"](payload, harness.handlerContext);
+
+      expect(outcome.disposition).toBe("started");
+      expect(outcome.events).toHaveLength(1);
+      expectValidEvent(outcome.events[0]!);
+      expect(outcome.events[0]!.payload).toMatchObject({
+        action: "kernel.project.beginCreate",
+        previousTag: "closed",
+        nextTag: "opening",
+      });
+
+      const launches = harness.getLaunchOperations();
+      expect(launches).toHaveLength(1);
+      expect(launches[0]!.label).toBe("kernel.project.beginCreate");
+
+      const terminalEvents = await wrap(launches[0]!.run());
+
+      expect(terminalEvents).toHaveLength(2);
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(terminalEvents[0]!.kind).toBe("page.descriptorsChanged");
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        reason: "project-open",
+        activePageSlug: home,
+      });
+      const descriptorsPayload = terminalEvents[0]!.payload;
+      if (descriptorsPayload === null || !("descriptors" in descriptorsPayload)) {
+        throw new Error("expected a page.descriptorsChanged payload");
+      }
+      expect(descriptorsPayload.descriptors).toHaveLength(1);
+
+      expect(terminalEvents[1]!.kind).toBe("kernel.stateChanged");
+      expect(terminalEvents[1]!.payload).toMatchObject({
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+      });
+
+      expect(harness.machines.project.phase()).toBe("ready");
+      expect(harness.getTrust()).toBe("trusted");
+      expect(trustGate.calls.some((call) => call.method === "grant")).toBe(true);
+    });
+  });
+
+  test("blocks (does not durably grant) when the manifest cannot be read", async () => {
+    await context.start(async () => {
+      const projectStore = createFakeProjectStore({ root: "/fake-root" });
+      projectStore.failNext("readManifest", FAILURE);
+      const harness = buildTestContext({ projectStore });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+
+      expect(terminalEvents).toHaveLength(1);
+      expectValidEvent(terminalEvents[0]!);
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+      });
+      const blockedPayload = terminalEvents[0]!.payload;
+      if (blockedPayload === null || !("metadata" in blockedPayload)) {
+        throw new Error("expected a kernel.stateChanged payload");
+      }
+      expect((blockedPayload.metadata as { reason: string }).reason).toBe("manifest-read-failed");
+      expect(harness.machines.project.phase()).toBe("blocked");
+      expect(harness.getTrust()).toBeNull();
+    });
+  });
+});
+
+// --- project.open ------------------------------------------------------------------------------
+
+describe("project.open", () => {
+  test("resolves to trusted when a prior grant already covers this exact subject", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      const subject = await trustGate.buildSubject("/fake-root", "fake-project-1", null);
+      if ("code" in subject) throw new Error("unexpected failure building the fake subject");
+      await trustGate.grant(subject);
+
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      const outcome = projectHandlers["project.open"](
+        { root: "/fake-root" },
+        harness.handlerContext,
+      );
+      expect(outcome.events[0]!.payload).toMatchObject({
+        action: "kernel.project.beginOpen",
+        previousTag: "closed",
+        nextTag: "opening",
+      });
+
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.getTrust()).toBe("trusted");
+      expect(harness.machines.project.phase()).toBe("ready");
+    });
+  });
+
+  test("opens ready but untrusted-read-only with no prior grant and no interactive channel", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.getTrust()).toBe("untrusted-read-only");
+      expect(harness.machines.project.phase()).toBe("ready");
+    });
+  });
+});
+
+// --- project.retryOpen --------------------------------------------------------------------------
+
+describe("project.retryOpen", () => {
+  test("routes to the named domain, resolves, and reaches ready", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const restoreActionId = uuidv7();
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const recovery = createFakeRecoveryService({
+        classifications: new Map([
+          [restoreActionId, { kind: "roll-forward", transactionId: restoreActionId }],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader, recovery });
+
+      // Precondition the guard already confirmed: project "blocked", the named domain "blocked" too.
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("blockOpen");
+      harness.machines.restore.apply("kernel.restore.beginRecovery");
+      harness.machines.restore.apply("kernel.restore.blockRecovery");
+
+      const payload: CommandPayloadByKindV1["project.retryOpen"] = {
+        recovery: { kind: "restore", restoreActionId },
+      };
+      const outcome = projectHandlers["project.retryOpen"](payload, harness.handlerContext);
+
+      expect(outcome.disposition).toBe("started");
+      expect(outcome.events).toHaveLength(2);
+      for (const event of outcome.events) expectValidEvent(event);
+      expect(outcome.events[0]!.payload).toMatchObject({
+        modelId: "kernel.project.state",
+        action: "kernel.project.retryOpen",
+        previousTag: "blocked",
+        nextTag: "opening",
+      });
+      expect(outcome.events[1]!.payload).toMatchObject({
+        modelId: "kernel.restore.state",
+        action: "kernel.restore.retryRecovery",
+        previousTag: "blocked",
+        nextTag: "recovering",
+      });
+
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        modelId: "kernel.restore.state",
+        action: "kernel.restore.complete",
+        previousTag: "recovering",
+        nextTag: "idle",
+      });
+      expect(harness.machines.restore.phase()).toBe("idle");
+      expect(harness.machines.project.phase()).toBe("ready");
+    });
+  });
+
+  test("blocks the domain and the project again when still in conflict", async () => {
+    await context.start(async () => {
+      const restoreActionId = uuidv7();
+      const recovery = createFakeRecoveryService({
+        classifications: new Map([
+          [
+            restoreActionId,
+            { kind: "conflict", transactionId: restoreActionId, reason: "test-conflict" },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ recovery });
+
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("blockOpen");
+      harness.machines.restore.apply("kernel.restore.beginRecovery");
+      harness.machines.restore.apply("kernel.restore.blockRecovery");
+
+      const payload: CommandPayloadByKindV1["project.retryOpen"] = {
+        recovery: { kind: "restore", restoreActionId },
+      };
+      projectHandlers["project.retryOpen"](payload, harness.handlerContext);
+
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(terminalEvents).toHaveLength(2);
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        modelId: "kernel.restore.state",
+        action: "kernel.restore.blockRecovery",
+        previousTag: "recovering",
+        nextTag: "blocked",
+      });
+      expect(terminalEvents[1]!.payload).toMatchObject({
+        modelId: "kernel.project.state",
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+      });
+      expect(harness.machines.restore.phase()).toBe("blocked");
+      expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
+
+  test("an idempotent refusal when the named domain's own phase is inconsistent — nothing moves", async () => {
+    await context.start(async () => {
+      const harness = buildTestContext();
+
+      harness.machines.project.apply("beginOpen");
+      harness.machines.project.apply("blockOpen"); // project: "blocked"
+      // restore machine deliberately left at "idle" — inconsistent with the project's own
+      // "blocked" phase; `kernel.restore.retryRecovery` is illegal from "idle".
+
+      const payload: CommandPayloadByKindV1["project.retryOpen"] = {
+        recovery: { kind: "restore", restoreActionId: uuidv7() },
+      };
+      const outcome = projectHandlers["project.retryOpen"](payload, harness.handlerContext);
+
+      expect(outcome).toEqual({ disposition: "no-op", events: [] });
+      expect(harness.getLaunchOperations()).toHaveLength(0);
+      // Atomicity: the project machine must NOT have moved either, even though ITS OWN
+      // `retryOpen` edge was legal in isolation.
+      expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
+});
