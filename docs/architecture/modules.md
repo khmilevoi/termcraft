@@ -41,7 +41,7 @@ flowchart LR
    |------|----------------|
 | **UI shell** | Screens; input interpretation (keys, mouse, composer slash menu); preview compositing; `/commit-page`, `/commit-infra`, and `/commit-all` command-row status plus shared confirmation presentation; the action table as the registry of triggers, labels, hints, and local screen/focus/modal applicability. Domain availability comes from Kernel capabilities and every command is revalidated by the Kernel. |
 | **Kernel** | The only domain decision-maker: versioned commands in, typed results/events/capabilities out; explicit named Reatom state machines for turns, Restore, commits, export, preview, and migration; transaction and project-write coordination; confirmation-time `targetChatId` capture and `restoreActionId` binding; Git decisions through `GitHistory` and `GitCommitter`. |
-| **Agent gateway** | Backends over vendors' official TypeScript SDKs: start, stream, confirmed process-tree cancel, health-check; normalization into backend-neutral events; per-chat session checkpoints; per-backend confinement to a unique turn workspace; fencing by turn, attempt, and lease nonce. Built today, in two tiers: a vendor-blind port plus a backend-agnostic shared tier — session-scope derivation, staging containment, the deny-by-default confinement rule, and the run loop itself (the terminal latch, the event queue, and both exit-confirmation ladders) — and one vendor tier, the Claude Code backend, behind it. The shared tier imports no vendor SDK at all. A second vendor (Codex, v1.0) becomes a sibling of that tier supplying only its own stream driver, message classifier, and tool vocabulary, not a change to the shared one. Each attempt runs inside an owned OS process tree, and every terminal outcome resolves only after that tree is confirmed exited. What is still missing is above the gateway, not inside it: no Kernel drives a turn, chooses resume-versus-fresh, or consumes the normalized events, and no composition root selects a backend. |
+| **Agent gateway** | Backends over vendors' official TypeScript SDKs: start, stream, confirmed process-tree cancel, health-check; normalization into backend-neutral events; per-chat session checkpoints; per-backend confinement to a unique turn workspace; fencing by turn, attempt, and lease nonce. Built today, in two tiers: a vendor-blind port plus a backend-agnostic shared tier — session-scope derivation, staging containment, the deny-by-default confinement rule, and the run loop itself (the terminal latch, the event queue, and both exit-confirmation ladders) — and one vendor tier, the Claude Code backend, behind it. The shared tier imports no vendor SDK at all. A second vendor (Codex, v1.0) becomes a sibling of that tier supplying only its own stream driver, message classifier, and tool vocabulary, not a change to the shared one. Each attempt runs inside an owned OS process tree, and every terminal outcome resolves only after that tree is confirmed exited. The Kernel now drives a turn end to end — admission, attempt, Gate validation with retry, and finalize (`core/turns`'s `runTurn`, composed for real by `turn.start`) — and consumes the normalized events as they stream. Still missing: genuine resume-versus-fresh choice (every turn starts a fresh session today — session resume needs a durable `workspaceIdentity` no port yet exposes, kernel-assembly WP-1's own flagged gap) and a composition root that selects a backend for a running Kernel (no adapter graph yet — WP-2/WP-4). |
 | **Runtime facade** | `@termcraft/runtime`, the only import a saved page's author may write: selected Reatom v1001 primitives, `reatomComponent`, themed components with stable ids, tokens, tweaks, navigation, and runtime capabilities; embedded so projects need no `node_modules`. It also owns the JSX helper surface the compiler's transform emits against — never named by a page. Built today: the token palette, page contract, and the full component catalog. Not yet: `defineTweaks` is a dormant declaration-only stub, interactive props (`onPress`/`onChange`/`onSelect`) are wired to the right handler but stay inert in the static render, no page-facing navigation API exists, and the host resolver still serves the JSX helpers via the underlying `react/jsx-runtime` specifiers rather than a `@termcraft/runtime`-qualified path — all phase-7/phase-8 work. |
 | **Gate** | Validation of the staging diff: manifest checks, TypeScript checking against embedded runtime types, the import allowlist, page-contract checks, smoke rendering, and lints. The type checker itself is not embedded-and-called: at the pinned TypeScript major it is a per-platform native executable, extracted once to a per-user directory and spawned. Today all five lints are implemented: the determinism pair (unguarded timers, unguarded randomness), a dropped-id warning and an unlisted-navigation warning that each need extra context from the caller and skip silently without it, and an unpointed-element warning for a raw low-level element with no id. The type-check and manifest stages remain wired as optional injected ports with no composition root to call them until the Kernel exists. The smoke stage additionally has its driving factory (`createSmokeRender`, mirroring `createTypeChecker`'s shape): it builds a `SmokeRequest` from a candidate's parsed `meta` and a locally computed source hash (pinned to match the host's own hash of the same bytes), and maps the typed `SmokeResult` through `smokeResultToErrors`. It still has nothing to call, because no host-side `SmokeRenderer` adapter exists yet. |
 | **HostSupervisor** | Owns the isolated design-host subprocess and versioned length-prefixed protocol for preview, Gate smoke, export, and historical snapshots. `HostSupervisor.preview()` returns a `SupervisedPreviewSession` (blocker B4) — bounded latest-frame delivery, resize/set-mode/query/retry/close, and request timeouts, with the restart budget/circuit breaker composed in rather than sitting behind a separate handle type; UI never owns the process. Geometry queries (`checkHit`/`rectOf`/`describe`/`layoutTree`) are wired end to end (blocker B1). Ordered input forwarding and tweak/theme control are still part of the target `PreviewSession` contract but not yet implemented — today's facade deliberately omits them. |
@@ -60,18 +60,21 @@ flowchart LR
 
 ## Source anchors
 
-Six of the seven components are real, tested code today (Runtime facade, Gate,
-HostSupervisor, Project store, Agent gateway, and — as of phase 7 — the UI shell). The
-Kernel (`core/`) is anchored below; its own doc status is tracked with the Kernel section.
+All seven components are real, tested code today (Runtime facade, Gate, HostSupervisor,
+Project store, Agent gateway, the Kernel — as of kernel-assembly WP-1 — and, as of phase 7,
+the UI shell). The Kernel (`core/`) is anchored below; its own doc status is tracked with
+the Kernel section.
 
 **UI shell — `src/ui/` (phase 7):** a leaf presentation module that imports only `core`'s
 boundary DTOs and the `PreviewSession` facade, declares the `KernelPort` the phase-8
 composition root satisfies, and keeps its own Reatom read-model ("mirror") fed by the Kernel
 event stream (design §3.2/§3.3, two graphs). `main.tsx`/`demo.tsx` now mount `<App>` through
-`src/entrypoint/` (terminal lifetime, signal shutdown, mode selection). What remains for
-phase 8: the real Kernel behind `KernelPort` — the adapter graph and handler registry that
-`createShell` currently refuses to fake — plus live agent-health derivation and full
-preview-frame streaming (the consumer exists; session-change re-subscription is minimal).
+`src/entrypoint/` (terminal lifetime, signal shutdown, mode selection). The Kernel itself is
+now real and assembled (`createKernel`, kernel-assembly WP-1 — see the Kernel section
+below); what remains for phase 8 is wiring a REAL one behind `KernelPort` — the production
+adapter graph (`store`/`agent`/`gate`/`host` mapped onto `core/ports/`) that `createShell`
+currently refuses to fake — plus live agent-health derivation and full preview-frame
+streaming (the consumer exists; session-change re-subscription is minimal).
 
 - `src/ui/index.ts` — the module's public surface: `App`, `createUiDeps`, `KernelPort`, and the boundary types phase 8 injects
 - `src/ui/kernel/` — the ui-declared `KernelPort`/`PreviewSessionHandle`, the single `EventEnvelopeV1` re-export (`model/events.ts`, the one tolerated `core/mailbox` type import) with its distributed `AnyEventEnvelope`, and `createDispatcher` (mints `commandId`, stamps `expectedRevision`)
@@ -85,11 +88,57 @@ preview-frame streaming (the consumer exists; session-change re-subscription is 
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §3.x the shell behaviour (action table, slash menu, focus/Esc, status bar) the components implement
 - `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — §8/§9/§10 the commands, events, and capabilities the shell consumes
 
-**Kernel — no code yet:**
+**Kernel — `src/core/` (kernel-assembly WP-1 — real, tested code today):** the only
+domain decision-maker, fully self-assembled behind one public entry
+(`createKernel`/`core/index.ts`): the seven named Reatom state machines, the command
+mailbox (decode → dedupe → revision check → guard → handler → event publication), the
+capability guard/projector, and a real command handler registry answering all 43
+`CommandKindV1` members — deferred (Tier-C), not-yet-built, or composed for real, per
+kind. What is still outstanding sits ABOVE the Kernel, not inside it: no production
+adapter graph maps `store`/`agent`/`gate`/`host` onto `core/ports/` yet (WP-2), so
+nothing constructs a real `KernelDeps` for `main.tsx`/`demo.tsx` to inject, and both
+executable roots still run `ui`'s in-memory kernel double.
 
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 components and the kernel boundary
-- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — authoritative Reatom state machines, DTOs, revisions, capabilities, and command concurrency
-- `docs/architecture/code-structure.md` — where `core/ports/` will sit and which already-built adapters (store, gate, host, agent) it will inject
+- `src/core/index.ts`, `src/core/types.ts` — the Kernel's public entry: `createKernel`
+  plus every boundary type `ui` imports (the Command/Result/Event DTOs, `KernelDeps`) —
+  nothing internal leaks through it (proven by `src/core/index.test.ts`)
+- `src/core/kernel/index.ts`, `src/core/kernel/model/kernel.ts` — `createKernel`'s own
+  assembly: the seven machines, the Kernel-held facts beyond their bare phases, the
+  event bus wired to the capability-growth tracker, the dedupe ledger, and the dispatch
+  pipeline, all inside one Reatom `context.start(...)` frame
+- `src/core/mailbox/model/dispatch.ts`, `src/core/mailbox/model/event-bus.ts` — the
+  command mailbox (decode → dedupe → revision guard → capability guard → handler →
+  event publication) and the event bus (bootstrap `kernel.snapshot`, ordered `eventSeq`,
+  schema-validated delivery)
+- `src/core/machines/index.ts` — the shared state-machine factory and the seven
+  `reatom*StateMachine` factories (project, turn, restore, commit, export, preview,
+  migration)
+- `src/core/capabilities/model/guards.ts`, `src/core/capabilities/model/projector.ts` —
+  the one real capability guard and the projector the Kernel's own snapshot and growth
+  events are built from
+- `src/core/kernel/model/handlers/index.ts` (`createHandlerRegistry`) and its nine
+  per-family modules (`project`, `chat`, `turn`, `page`+`pin`, `preview`+`export`,
+  `selection`+`model`, plus the Tier-C `deferred` backstop) — every `CommandKindV1`
+  resolves to a real handler, a Tier-C deferred rejection, or a documented
+  not-yet-built no-op; `turn.start` composes `core/turns`'s `runTurn` for real
+  (admission → attempt → Gate retry → finalize); `export.start` is still a documented,
+  unconditional no-op (its own header names the exact type-contract gap blocking it)
+- `src/core/turns/index.ts` — the turn lifecycle `runTurn` composes: admission, attempt,
+  candidate freeze, Gate validation, finalize/terminalize
+- `src/core/protocol/index.ts` — the closed Command/Event DTO surface, per-kind payload
+  schemas, and the canonical hash/id primitives underneath
+- `src/core/ports/index.ts`, `src/core/ports/fakes/` — every port contract the Kernel
+  consumes, and the full in-memory fake set `core`'s own tests (and this document's
+  claims) are verified against — no adapter implements any of them yet (WP-2)
+- `src/core/project/index.ts` — the project startup surface (open sequence, trust,
+  orphan-turn scan, recovery routing, page mutations, the page-remove-plan ledger)
+- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §4.1 components and the
+  kernel boundary this section's code now implements
+- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — authoritative
+  Reatom state machines, DTOs, revisions, capabilities, and command concurrency
+- `docs/architecture/code-structure.md` — the module DAG (`core` imports only
+  `entities/` and its own `ports/`) and where the still-unbuilt adapter graph will map
+  `store`/`agent`/`gate`/`host` onto `core/ports/`
 
 **Agent gateway — `src/agent/` (port + shared tier: `confinement`, `session`, `health`, `run`) and `src/agent/claude/` (the one vendor tier: `backend`, `query`, `run`, `tools`, `errors`):**
 
@@ -109,10 +158,10 @@ preview-frame streaming (the consumer exists; session-change re-subscription is 
 - `src/agent/claude/backend/model/probe.ts` — the vendor half of health: a minimal isolated query classified into installed / not-logged-in / ready, backed by the shared deadline/close policy above
 - `src/agent/claude/run/model/normalize.ts` — vendor messages into `AgentEvent`s (reasoning, tool, final, error, usage), dropping anything with no mapping
 - `src/infrastructure/process/model/job-object.ts`, `src/infrastructure/process/types.ts` — the owned process tree itself: a domain-free Windows Job Object with kill-on-close, an OS-read live process count, hard termination, and idempotent invalidating release
-- `src/entities/turn/types.ts` — `AgentEvent` (the normalization target) and `TurnFence` (`turnId`/`attempt`/`leaseNonce`); the backend now stamps every event and outcome with the fence, but no Kernel consumes them yet
+- `src/entities/turn/types.ts` — `AgentEvent` (the normalization target) and `TurnFence` (`turnId`/`attempt`/`leaseNonce`); the backend stamps every event and outcome with the fence, and `core/turns`'s `runTurn` now consumes both for real (fenced re-entry, terminal-outcome classification)
 - `src/store/sandbox/model/staging-store.ts` — the unique per-turn workspace (`{userStateRoot}/sandboxes/<projectKey>/turns/<turnId>/workspace/`) a backend is confined to; the store creates it, and nothing yet hands one to a live turn
 - `src/store/lease/model/lease.ts` — `leaseNonce()` mints a 128-bit base64url nonce in the shape a `TurnFence.leaseNonce` is meant to carry; nothing wires a store lease nonce into a turn fence yet
-- `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §6.2 the turn protocol above the backend (Kernel-side; no `core/` module drives it yet)
+- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — §7.2 the turn protocol above the backend, now driven for real by `core/turns`'s `runTurn` (see the Kernel section above)
 
 **Runtime facade — `src/runtime/`:**
 

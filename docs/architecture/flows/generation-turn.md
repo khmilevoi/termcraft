@@ -57,9 +57,29 @@ sequenceDiagram
 *A step marked "implemented" below is real, unit-tested code inside `store`, `gate`,
 `host`, or `agent`. `store`, `host`, and `agent` compose theirs at their own
 composition roots (see Source anchors); `gate` does not — its stages are
-individually implemented and tested, but nothing composes or
-calls the Gate pipeline yet. None of it yet runs inside a live turn end to end — the
-Kernel that would drive this whole sequence does not exist yet.*
+individually implemented and tested, but nothing composes or calls the Gate pipeline
+against a live host adapter yet.*
+
+**UPDATE (kernel-assembly WP-1):** the Kernel itself is now real — `core/turns`'s
+`runTurn` (composed for real by the `turn.start` command handler) DOES drive this whole
+sequence end to end: it allocates the turn, starts a fenced attempt, receives the
+normalized event stream, freezes the candidate, calls Gate to validate it (retrying on
+a rejection up to the attempt budget), and finalizes a passing candidate through the
+Kernel's own commit/terminalize machinery — proven by `core/kernel/model/
+kernel.integration.test.ts`'s own end-to-end spine. What is still missing is NOT the
+Kernel driving the sequence; it is the PRODUCTION adapter graph behind it (the kernel-assembly plan's own WP-2,
+not yet landed): no real `store`/`agent`/`gate`/
+`host` adapter is wired into a running Kernel's `KernelDeps` today, so every "Kernel
+drives X" claim below is proven against `core/ports/fakes`, not the real, listed
+modules this document otherwise anchors. Two narrower, Kernel-internal gaps remain
+too, flagged (not silently assumed) in the Kernel's own code: session resume always
+falls back to a fresh session (no port carries a durable `workspaceIdentity` to resume
+against yet), and the compiled system-prompt text is a placeholder (no port sources
+`agent/`'s own prompt composition, which sits outside `core`'s import boundary). The
+per-step asides below that still say "no Kernel"/"does not exist" predate this update
+and describe the state before kernel-assembly WP-1 landed; they are flagged here as a
+whole rather than individually rewritten line by line — a dedicated follow-up sweep of
+this file (and its sibling flow docs) against the landed Kernel is recommended.
 
 1. Send: command acceptance mints `turnId` and starts the absolute deadline — Kernel
    command handling that has not been built yet. The message goes out with the
@@ -174,10 +194,12 @@ Session resume and fencing:
 - `src/store/lease/model/lease.ts` — `leaseNonce()`, the CSPRNG nonce primitive; today minted once per project-lease acquisition, not yet wired into a per-attempt turn fence
 - `src/entities/turn/types.ts` — `AgentEvent`/`TurnFence`/`TokenUsage`: the normalized event stream and the `{turnId, attempt, leaseNonce}` fencing shape; the backend now produces the events and stamps the fence, and no Kernel consumes either yet
 
-Design-spec anchors kept because no code exists yet for what they describe:
+Design-spec anchors kept because no code exists yet for what they describe (except
+where noted — kernel-assembly WP-1 landed the Kernel itself; see the update above and
+`docs/architecture/modules.md`'s own Kernel section for its real Source anchors):
 
-- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — the whole Kernel: command/event contracts, capabilities, turn-state guards, revisions, typed results; no `core`/Kernel module exists yet
-- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` — §7.3 the run/retry/candidate-handoff loop and §9 Restore, neither of which any code drives; the Kernel-side half of §6.4's late-event rejection (nothing yet checks a received fence). §6.3's backend cwd/confinement and §6.5's cancellation/process-tree-exit handling are now anchored to `src/agent/` above, with §6.5's rung 3 documented in `src/agent/run/model/engine.ts` as unimplementable on Windows
+- `docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` — the whole Kernel: command/event contracts, capabilities, turn-state guards, revisions, typed results; now a real, tested `core` module (kernel-assembly WP-1) — this spec remains the authoritative reference, not a "no code yet" citation
+- `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` — §7.3 the run/retry/candidate-handoff loop and §9 Restore: the run/retry/candidate-handoff loop is now driven for real by `core/turns`'s `runTurn`; Restore has no code yet (out of MVP scope). The Kernel-side half of §6.4's late-event rejection is real too (`core/turns/model/attempt.ts`'s fence check drops a late/stale event). §6.3's backend cwd/confinement and §6.5's cancellation/process-tree-exit handling are anchored to `src/agent/` above, with §6.5's rung 3 documented in `src/agent/run/model/engine.ts` as unimplementable on Windows
 - `docs/superpowers/specs/2026-07-13-termcraft-design.md` — §6.1's Codex half (v1.0; no second backend exists); §3.2 turn-time streaming-status presentation (ephemeral block, reasoning ticker); §3.9 chats and context usage; §9 cancel/hang/sandbox-degradation *presentation* — all UI/Kernel behavior with no code yet. §6.1's backend abstraction and Claude confinement are now anchored to `src/agent/` above
 - `docs/superpowers/specs/2026-07-16-git-backed-page-history-design.md` — §2 the Git path-history controls on page delete/recreate; §11 v1 acceptance criteria — no Git integration exists in the codebase today
 - `design/03-workspace-generating.dc.html` — streaming status presentation (no `ui` module exists yet)

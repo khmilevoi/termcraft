@@ -10,12 +10,15 @@ document here that addresses how the source tree itself is laid out.
 > **Status:** nine source modules have landed — `entities/`, `infrastructure/`,
 > `runtime/`, `host/`, `gate/`, `store/`, `agent/`, `core/`, and `ui/` — and the
 > documents below anchor those to real source files. All seven components the design
-> names are real code today. The executable roots (`src/main.tsx`, `src/demo.tsx`)
-> and the `entrypoint/` ring that owns terminal lifetime and shutdown have landed
-> too, so `bun run demo` starts a running program. What has NOT landed is the
-> production adapter graph inside that composition root: nothing maps
-> `store`/`agent`/`gate`/`host` onto `core/ports/`, and no command handler registry
-> exists, so the Kernel the UI talks to is still `ui`'s in-memory double. Behavior
+> names are real code today, including the Kernel (`core/`), now fully self-assembled
+> behind a public `core/index.ts` boundary — `createKernel`, the seven-machine/
+> mailbox/capability wiring, and a real command handler registry answering all 43
+> command kinds (kernel-assembly WP-1). The executable roots (`src/main.tsx`,
+> `src/demo.tsx`) and the `entrypoint/` ring that owns terminal lifetime and shutdown
+> have landed too, so `bun run demo` starts a running program. What has NOT landed is
+> the production adapter graph inside that composition root: nothing maps
+> `store`/`agent`/`gate`/`host` onto `core/ports/` to build a real `KernelDeps`, so
+> the Kernel the UI talks to is still `ui`'s in-memory double. Behavior
 > that crosses component boundaries against real adapters — a live generation turn, a
 > host-rendered preview, export assembly, Git history — is therefore still described
 > ahead of the code. That is deliberate. Each document states which half
@@ -49,8 +52,9 @@ document here that addresses how the source tree itself is laid out.
 2. [modules.md](modules.md) — the seven components, their boundaries, and the
    runtime loop; the transport-neutral Kernel boundary, runtime facade, supervised
    design-host subprocess where agent-written code runs, and the agent gateway's
-   confinement and owned process trees. Its per-component table marks which five are
-   real code and which two are still contract only.
+   confinement and owned process trees. Its per-component table and Source anchors
+   mark all seven as real code today; what remains is the production adapter graph
+   behind the composition root (WP-2), not any one component's own internals.
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
    The most fully-built area of the system, and the vocabulary the other documents

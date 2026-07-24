@@ -9,11 +9,15 @@ Nine source modules have landed: `entities/`, `infrastructure/`, `runtime/`,
 Seven of those are components the design spec names — [`modules.md`](modules.md)
 counts the same seven — while `entities/` and `infrastructure/` are additions this
 convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
-`entrypoint/` ring that owns their lifecycle have landed; what the composition root
-still lacks is the *production adapter graph* — nothing maps `store`/`agent`/`gate`/
-`host` onto `core/ports/`, and no command handler registry exists, so no real
-`KernelPort` can be constructed yet and both roots run `ui`'s in-memory kernel.
-Source anchors move to real paths as each piece lands; see `## Source anchors`.
+`entrypoint/` ring that owns their lifecycle have landed, and `core`'s own Kernel is
+now fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
+WP-1) — `createKernel`, the seven-machine/mailbox/capability wiring, and a real
+command handler registry answering all 43 command kinds all land in phase 6. What
+the composition root still lacks is the *production adapter graph* — nothing maps
+`store`/`agent`/`gate`/`host` onto `core/ports/` to build a real `KernelDeps`, so no
+real `KernelPort` can be constructed yet and both roots still run `ui`'s in-memory
+kernel. Source anchors move to real paths as each piece lands; see `## Source
+anchors`.
 
 ```mermaid
 flowchart LR
@@ -294,9 +298,21 @@ for what is still contract only.
 
 **Kernel and UI boundaries (items 1, 4, 7, 8)**
 
-- `src/core/index.ts`, `src/core/ports/`, `src/core/turns/`, and
-  `src/core/protocol/` — the landed Kernel public boundary, consumed ports, turn
-  orchestration, and closed command/event DTO surface
+- `src/core/index.ts`, `src/core/types.ts` — the landed Kernel public boundary:
+  `createKernel` plus every Command/Result/Event DTO boundary type `ui` imports
+  (`core/index.test.ts` proves nothing internal leaks through it)
+- `src/core/kernel/index.ts`, `src/core/kernel/model/kernel.ts`,
+  `src/core/kernel/model/kernel.integration.test.ts` — `createKernel`'s own assembly
+  (the seven machines, the command mailbox, the capability-growth event bus, the
+  handler registry) and the package's own end-to-end integration gate (kernel-assembly
+  WP-1 Task 11)
+- `src/core/mailbox/index.ts`, `src/core/machines/index.ts`,
+  `src/core/capabilities/index.ts` — the command mailbox (decode/dedupe/revision-
+  guard/capability-guard/dispatch/publish), the seven state-machine factories, and the
+  capability guard/projector the mailbox and the Kernel's own snapshot are built from
+- `src/core/ports/`, `src/core/turns/`, and `src/core/protocol/` — the consumed ports
+  (+ their full in-memory `fakes/` set), turn orchestration, and closed command/event
+  DTO surface
 - `src/ui/index.ts` — the landed leaf UI public boundary, including `App`,
   `createUiRoot`, `createUiDeps`, and the UI-declared `KernelPort`
 - `src/ui/app/model/root.tsx`, `src/ui/app/ui/App.tsx` — the disposable OpenTUI
