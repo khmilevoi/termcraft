@@ -37,11 +37,18 @@ export interface RunAppOptions {
 export async function runApp(options: RunAppOptions): Promise<AppStartupError | RunningApp> {
   const { shell, process: boundary } = options;
 
+  // M9: `createUiRoot` never intentionally throws (every internal boundary is `errore.try`/
+  // `.catch()`-wrapped), but it composes real `@opentui/core`/`@opentui/react` calls — an
+  // uncontrolled dependency that could still reject unexpectedly. Converting that rejection
+  // into the same `Error` value `root instanceof Error` already handles below (rather than
+  // letting it escape as an unhandled rejection `main.tsx`'s own `if (app instanceof Error)`
+  // branch would never run for) is what routes the failure through `boundary.reportFatal` —
+  // and, since M9 also made `reportFatal` restore the terminal first, through that too.
   const root = await createUiRoot({
     port: shell.port,
     env: shell.env,
     adapters: options.adapters,
-  });
+  }).catch((cause: unknown) => new AppStartupError({ cause }));
   if (root instanceof Error) {
     await closeShell(shell, boundary);
     return new AppStartupError({ cause: root });
