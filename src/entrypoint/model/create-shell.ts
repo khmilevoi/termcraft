@@ -3,12 +3,14 @@ import os from "node:os";
 import path from "node:path";
 
 import * as errore from "errore";
+import { resolveCompilerAssets } from "scripts/embed-assets";
 
 import { createProductionAgentRegistry } from "agent";
 import { type KernelDeps, createKernel } from "core";
 import type { Kernel } from "core/kernel";
 import type { PreviewFrameV1, PreviewSession } from "core/ports";
 import { createGateRunnerAdapter } from "gate";
+import type { CompilerAssets } from "gate";
 import {
   createExportRenderAdapter,
   createHostSupervisorAdapter,
@@ -144,7 +146,10 @@ async function interactiveShell(
     renderCache: projections.render,
     sessionCheckpoint: createSessionCheckpointAdapter(storeAdapterDeps),
     recovery: createRecoveryAdapter(storeAdapterDeps),
-    gateRunner: createGateRunnerAdapter({ smokeRenderer }),
+    gateRunner: createGateRunnerAdapter({
+      smokeRenderer,
+      compilerAssets: resolveShellCompilerAssets(),
+    }),
     hostSupervisor: hostSupervisorAdapter,
     exportRender: createExportRenderAdapter({
       spawn,
@@ -294,6 +299,32 @@ function ensureRootDirectory(root: string): RootDirectoryError | undefined {
 function deriveProjectName(root: string): string {
   const base = path.basename(root);
   return base.length > 0 ? base : "termcraft-project";
+}
+
+/**
+ * `scripts/embed-assets.ts` (WP-11/B7) embeds `tsc.exe` + the curated lib chain into this
+ * binary's `bun build --compile` module graph — importing it here (and calling it, not just
+ * referencing the module) is what makes `bun run build` actually embed real assets into
+ * `dist/termcraft.exe`, closing gap B7's "the build embeds nothing" finding.
+ *
+ * A staging failure degrades honestly rather than failing shell composition: `gate`'s own
+ * `createGateRunnerAdapter` already treats a missing `compilerAssets` as "skip the type-check
+ * stage" (its header comment: "an honest omission, not a fabricated pass"), and there is no
+ * production `runtimeDts` yet either (same file's header note) — so `typeCheck` stays unwired
+ * either way today; a disk-staging failure here must not take down the whole shell over a
+ * stage that cannot run yet regardless.
+ */
+function resolveShellCompilerAssets(): CompilerAssets | undefined {
+  const assets = resolveCompilerAssets();
+  if (assets instanceof Error) {
+    console.warn(
+      "createShell: could not resolve the embedded TypeScript compiler assets — the Gate's " +
+        "type-check stage stays unwired for this run:",
+      assets.message,
+    );
+    return undefined;
+  }
+  return assets;
 }
 
 /**
