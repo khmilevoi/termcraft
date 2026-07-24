@@ -39,8 +39,11 @@ import {
   type FailureDtoV1,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
+
+import { PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER } from "./handlers/preview-export";
 
 /**
  * Kernel-assembly WP-1 Task 11 — the package's own integration gate (the plan's §11
@@ -85,47 +88,31 @@ import { uuidv7 } from "infrastructure/uuid";
  *
  * "THE FAKE BACKEND EDITS STAGING" (the plan's own wording for the `turn.start` step):
  * realized here identically to the already-verified Gap-4-closure spine's own resolved
- * approach — a deliberately ZERO-PAGE project isolates the admission/attempt/gate-
- * retry/finalize WIRING this test proves without needing per-page byte-level plumbing
- * (`core/turns/model/run-turn.test.ts`'s own suite already proves per-page composition
- * exhaustively, including a genuine Gate-retry case; `handlers/turn.test.ts`'s own
- * identically-shaped fixture uses the same simplification for the same reason). No
- * `core/ports/fakes` primitive today lets a caller inject a distinct "the agent edited
- * page X" byte payload mid-turn: `FakeStagingService`'s per-workspace content
- * (`core/ports/fakes/staging.ts`) is entirely deterministic, derived automatically
- * from `CreateTurnWorkspaceInputV1.pages`/`runtimeDocs`/`manifestSlice` at
- * `createTurnWorkspace` time and never mutable by a caller afterward — extending that
- * fake to support one would be a different module's deliverable, outside this
- * test-only task's authorized scope.
+ * approach. The project carries exactly ONE page (`HOME`, below) — no longer the
+ * zero-page project this test used before Gap B closed, since `export.start`'s own real
+ * composition (see below) genuinely needs at least one project page to capture a
+ * snapshot from (`NO_PAGES` otherwise). This does not reintroduce per-page byte-level
+ * plumbing into the `turn.start` leg: `FakeStagingService`'s per-workspace content
+ * (`core/ports/fakes/staging.ts`) is entirely deterministic, derived automatically from
+ * `CreateTurnWorkspaceInputV1.pages`/`runtimeDocs`/`manifestSlice` at
+ * `createTurnWorkspace` time, never from `HOME`'s own real bytes — so the admission/
+ * attempt/gate-retry/finalize WIRING this test proves is unaffected by which pages
+ * happen to exist (`core/turns/model/run-turn.test.ts`'s own suite already proves
+ * per-page composition exhaustively, including a genuine Gate-retry case;
+ * `handlers/turn.test.ts`'s own identically-shaped fixture makes the same simplification
+ * for the same reason).
  *
- * GENUINE BLOCKER, FLAGGED (not weakened around) — `export.start` / the export publish
- * flow: `core/kernel/model/handlers/preview-export.ts`'s `handleExportStart` is a
- * documented, UNCONDITIONAL no-op ("Gap B" in that file's own header): every one of
- * `core/export`'s already-landed composition functions this family is instructed to
- * reuse (`captureExportSnapshot`, `runExportRendering`, `assembleExportPackage`,
- * `publishExport`) requires the FULL `StateMachine<ExportState, ExportAction>`
- * (`phaseAtom` included), while `HandlerContext.machines.export` is typed
- * `HandlerMachine<ExportState, ExportAction>` (`./handlers/types.ts`'s deliberate
- * `Pick` that excludes `phaseAtom`, closing the escape hatch Task 9 fix round 1
- * found) — verified there by a `tsc --noEmit` probe recorded in that file's own
- * header, re-confirmed by this test rather than taken on faith (see the assertions on
- * `exportStartResult`/`exportPublish.calls` below). This is NOT a missing-precondition
- * gap a preparatory dispatch could route around: `capabilities/model/guards.ts`'s own
- * `familySpecificReason` case `"export.start"` only checks `EXPORT_TRANSITION_TABLE`'s
- * `idle -> preparing` legality (confirmed legal, independent of trust/turn-lock once
- * this sequence reaches it) — the guard genuinely ADMITS the command; it is the
- * handler's own type contract that refuses to compose the real chain, regardless of
- * what state precedes it. Widening `HandlerContext.machines.export` (or implementing
- * `export.start` for real) is a different family's file/contract and a decision this
- * test-only task ("commit test(core): drive the assembled kernel end to end") is not
- * authorized to make unilaterally — flagged here, with the same file:line-cited rigor
- * this project's other genuine gaps (Gap 3, Gap 4) were flagged with, for a
- * maintainer/planner decision, per this task's own brief ("if a genuine blocker
- * emerges, NEEDS_CONTEXT with specifics — do not weaken assertions to pass"). The
- * assertions below describe TODAY's real, honest behavior (accepted, `"no-op"`, zero
- * plans published) — not the plan's own "exactly one plan" target — so this test will
- * go RED the moment a future change starts routing `export.start` through the real
- * composition without also updating this file, which is the intended tripwire.
+ * GAP B — CLOSED (MVP gap closeout, `export.start` is core MVP per the maintainer
+ * decision recorded in `.superpowers/sdd/task-9-report.md`'s "Gap 4 closure"/"Tasks
+ * 10-11" sections). `core/kernel/model/handlers/preview-export.ts`'s `handleExportStart`
+ * now composes `captureExportSnapshot -> runExportRendering -> assembleExportPackage ->
+ * publishExport` for real via `context.exportRunner.machine` (the full
+ * `StateMachine<ExportState, ExportAction>`, `./handlers/types.ts`'s `ExportRunnerContext`
+ * — the same "landed composition needs the full machine" precedent `TurnRunnerContext`
+ * already established for `turn.start`). This test now asserts the plan's own real §11
+ * target: `export.start` accepted with `"started"`, the export event sequence lands
+ * (`export.started` -> `export.progress` x2 -> `export.completed`), `exportPublish`
+ * receives EXACTLY ONE plan, and the export machine returns to `idle`.
  */
 
 /** Same deterministic, no-real-crypto hash helper both prior spines already use. */
@@ -135,6 +122,15 @@ function fakeSha256Hex(seed: string): string {
   const base = (h >>> 0).toString(16).padStart(8, "0");
   return base.repeat(8).slice(0, 64);
 }
+
+/** The project's one page (see this file's own header, "THE FAKE BACKEND EDITS STAGING"). */
+function homeSlug(): PageSlug {
+  const parsed = parsePageSlug("home");
+  if (parsed instanceof Error) throw parsed;
+  return parsed;
+}
+const HOME = homeSlug();
+const HOME_SOURCE_HASH = fakeSha256Hex("home-page-source");
 
 /**
  * A minimal, locally-defined `ChatMutations & ChatReader` double that mints a REAL
@@ -212,8 +208,28 @@ function buildDeps(
   agentRegistry: AgentRegistry,
   exportPublish: ExportPublishPort,
 ): KernelDeps {
-  const pageStore = createFakePageStore({ order: [] });
+  const pageStore = createFakePageStore({
+    order: [HOME],
+    sources: new Map([
+      [
+        HOME,
+        { bytes: new TextEncoder().encode("export const meta = {}"), sourceHash: HOME_SOURCE_HASH },
+      ],
+    ]),
+  });
   const pinStore = createFakePinStore();
+  // Seeded so `export.start`'s real composition can resolve `HOME`'s settings via
+  // `resolvePageSettings` (`preview-export.ts`) — a genuine cache miss would otherwise
+  // refuse the export honestly rather than fabricate a size/theme/version.
+  const pageMetaCache = createFakePageMetaCache();
+  void pageMetaCache.put({
+    key: {
+      pageSlug: HOME,
+      sourceHash: HOME_SOURCE_HASH,
+      extractorVersion: PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
+    },
+    meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
+  });
 
   return {
     projectStore: createFakeProjectStore({
@@ -230,7 +246,7 @@ function buildDeps(
     projectWrite: createFakeProjectWriteCoordinator(),
     staging: createFakeStagingService(),
     trustGate: createFakeTrustGate(),
-    pageMetaCache: createFakePageMetaCache(),
+    pageMetaCache,
     diagnosticsCache: createFakeDiagnosticsCache(),
     renderCache: createFakeRenderCache(),
     sessionCheckpoint: createFakeSessionCheckpointService(),
@@ -260,7 +276,7 @@ function waitForEvent(
 }
 
 describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () => {
-  test("project.open -> project.setTrust -> chat.create -> chat.switch -> turn.start (admission -> attempt -> one genuine Gate retry -> finalize -> turn.completed) -> export.start: every accepted command reports the right disposition, the milestone event kinds appear in order (turn.gateRejected exactly once), eventSeq/stateRevision stay monotonic, every envelope is schema-valid, and export.start's real behavior — still a documented no-op (Gap B) — is asserted honestly rather than assumed", async () => {
+  test("project.open -> project.setTrust -> chat.create -> chat.switch -> turn.start (admission -> attempt -> one genuine Gate retry -> finalize -> turn.completed) -> export.start (capture -> render -> assemble -> publish -> export.completed): every accepted command reports the right disposition, the milestone event kinds appear in order (turn.gateRejected exactly once), eventSeq/stateRevision stay monotonic across every async completion, every envelope is schema-valid, and the export-publish fake receives exactly one plan", async () => {
     const gateRunner = createFakeGateRunner();
     const agentBackend = createFakeAgentBackend({ capabilities: TURN_SPINE_BACKEND_CAPABILITIES });
     const exportPublish = createFakeExportPublish();
@@ -408,12 +424,17 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     expect(completedPayload.turnId).toBe(turnId);
     expect(completedPayload.outcome).toBe("completed");
 
-    // --- export.start: the genuine blocker (Gap B), asserted honestly, not assumed ---
-    // The guard genuinely admits this command (export.phase is "idle", and
-    // `EXPORT_TRANSITION_TABLE`'s `idle -> preparing` edge is legal) — it is
-    // `handleExportStart`'s own unconditional no-op body that refuses to compose the
-    // real chain (see this file's own header). `exportPublish` — the SAME instance this
-    // Kernel was built with above — never receives a call at all.
+    // --- export.start: the real target (Gap B closed) -------------------------------
+    // The guard admits this command (export.phase is "idle", and
+    // `EXPORT_TRANSITION_TABLE`'s `idle -> preparing` edge is legal); `handleExportStart`
+    // now composes the real capture/render/assemble/publish chain end to end, driving
+    // `context.exportRunner.machine` — the SAME real export machine `readKernelState`
+    // observes. `exportPublish` — the SAME instance this Kernel was built with above —
+    // receives exactly one plan.
+    const exportCompleted = waitForEvent(
+      kernel,
+      (envelope) => envelope.kind === "export.completed",
+    );
     const exportStartResult = await kernel.dispatch({
       protocolVersion: 1,
       commandId: uuidv7(),
@@ -424,14 +445,34 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     if (exportStartResult instanceof Error) throw exportStartResult;
     expect(exportStartResult.status).toBe("accepted");
     if (exportStartResult.status !== "accepted") throw new Error("unreachable");
-    expect(exportStartResult.disposition).toBe("no-op");
-    // A no-op never advances `stateRevision` — the guard admitted the command, but
-    // nothing about Kernel state actually changed.
-    expect(exportStartResult.resultingRevision).toBe(exportStartResult.acceptedRevision);
-    // The honest count TODAY, not the plan's own "exactly one plan" target — Gap B
-    // blocks that (this file's own header), flagged for a maintainer decision, never
-    // silently assumed away.
-    expect(exportPublish.calls).toHaveLength(0);
+    // Mirrors `turn.start`'s own admission shape: `kernel.export.begin` itself is applied
+    // INSIDE `captureExportSnapshot`, not by this handler directly, so the synchronous
+    // admission carries no event of its own.
+    expect(exportStartResult.disposition).toBe("started");
+
+    const exportCompletedEnvelope = await exportCompleted;
+    const exportCompletedPayload =
+      exportCompletedEnvelope.payload as EventPayloadByKindV1["export.completed"];
+    expect(exportCompletedPayload.phase).toBe("publishing");
+    expect(exportCompletedPayload.destination).toBe(".termcraft/export");
+    expect(exportCompletedPayload.failure).toBeNull();
+    expect(exportCompletedPayload.generationId).not.toBeNull();
+
+    // The plan's own §11 target: the export-publish fake receives EXACTLY ONE plan.
+    expect(exportPublish.calls).toHaveLength(1);
+
+    // The export event sequence lands, in order: `export.started` once the snapshot is
+    // captured, `export.progress` at each phase boundary the batched compositions can
+    // observe, then the terminal `export.completed` awaited above.
+    const exportEventKinds = envelopes
+      .filter((e) => e.kind.startsWith("export."))
+      .map((e) => e.kind);
+    expect(exportEventKinds).toEqual([
+      "export.started",
+      "export.progress",
+      "export.progress",
+      "export.completed",
+    ]);
 
     unsubscribe();
 
@@ -476,9 +517,8 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     // activeTurnId cleared once the turn committed — checked via a fresh subscribe's own
     // bootstrap snapshot, which always reflects LIVE state (`kernel.ts`'s own
     // `readKernelState`, re-read at subscription time, never cached from the bootstrap).
-    // Export never left `idle` either — `export.start`'s own no-op never applied
-    // `kernel.export.begin`, matching the "guard admits it, the handler refuses it"
-    // finding above.
+    // The export machine returns to `idle` too — `publishExport`'s own `complete` transition
+    // (`publishing -> idle`) once the plan above was durably published.
     const finalSnapshot: EventEnvelopeV1[] = [];
     const unsubscribeFinal = kernel.events((envelope) => finalSnapshot.push(envelope));
     if (unsubscribeFinal instanceof Error) throw unsubscribeFinal;
