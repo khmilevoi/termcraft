@@ -31,20 +31,19 @@ import type { HostSessionSpec, TerminalCapabilities } from "../types";
  * same all-or-nothing one-shot machinery the pool already proves, rather than calling
  * `runOneShotSession` a second, parallel way.
  *
- * KNOWN GAPS (documented, not fabricated — flagged in the WP-2 lane report):
+ * `renderOne`'s `layout` output (WP-5 Task A3) is the real resolved layout tree: the
+ * one-shot capture (`host/supervisor/model/one-shot.ts`) now seals it into the `ready`
+ * body alongside the sealed frame (`host-state-machine.ts`'s `handleMount`, WP-5 Task A1)
+ * and decodes it back onto `OneShotResult.layout` (WP-5 Task A2) — this adapter just
+ * JSON-encodes that tree into the opaque bytes `ExportRenderResultV1.layout` promises.
+ *
+ * KNOWN GAP (documented, not fabricated — flagged in the WP-2 lane report):
  * - `ExportRenderTaskV1` (core/ports/export-render.ts) carries no `capabilities` field,
  *   even though `HostSessionSpec` requires one. Exported packages want maximum color
  *   fidelity, so this fills the gap with a fixed 24-bit truecolor default
  *   (`EXPORT_CAPABILITIES` below) — a reasoned interim value, not a guess at a load-
  *   bearing color, and flagged for the maintainer in case a caller-chosen depth is
  *   needed later (that would need an additive `ExportRenderTaskV1` field).
- * - `renderOne`'s `layout` output is always an empty `Uint8Array` today. The one-shot
- *   capture (`host/supervisor/model/one-shot.ts`) seals a single styled `PreviewFrame`;
- *   it does NOT produce a resolved layout tree — that file's own header calls this "the
- *   documented non-conformant MVP stand-in", deferred "until the 2A bulk schema lands".
- *   An empty payload is the faithful "not yet available" marker; the maintainer should
- *   confirm this is acceptable for WP-2's scope before Export's packaging step (WP-5)
- *   starts consuming `layout` for real.
  */
 
 const EXPORT_CAPABILITIES: TerminalCapabilities = { colorDepth: 24 };
@@ -143,12 +142,12 @@ export function createExportRenderAdapter(deps: ExportRenderAdapterDeps): Export
       );
     }
     if (outcome.result instanceof Error) return toExportFailureDto(outcome.result);
-    const { frame } = outcome.result;
+    const { frame, layout } = outcome.result;
     return {
       manifestIndex: task.manifestIndex,
       styledFrame: encodeStyledFrame(frame),
       textFrame: encodeTextFrame(frame),
-      layout: new Uint8Array(0), // see this file's header note — no layout-tree source yet
+      layout: new TextEncoder().encode(JSON.stringify(layout)),
     };
   }
 

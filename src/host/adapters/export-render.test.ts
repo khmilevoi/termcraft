@@ -71,7 +71,7 @@ describe("createExportRenderAdapter", () => {
     expect(adapter.runtimeDeclaration).toEqual(TEST_RUNTIME_DECLARATION);
   });
 
-  test("renderOne() drives a real one-shot export session and maps the sealed frame to opaque bytes", async () => {
+  test("renderOne() drives a real one-shot export session and maps the sealed frame + layout tree to opaque bytes", async () => {
     const adapter = createExportRenderAdapter({
       spawn: () => createOneShotChild(specForTask),
       command: { cmd: ["_host"] },
@@ -84,10 +84,17 @@ describe("createExportRenderAdapter", () => {
     expect(result.manifestIndex).toBe(3);
     expect(result.styledFrame.length).toBeGreaterThan(0);
     expect(new TextDecoder().decode(result.textFrame)).toContain("ok");
-    // Layout is documented as unavailable until host's one-shot capture gains a real
-    // layout-tree reply (see this adapter's header note) — a faithful empty marker,
-    // never fabricated layout data.
-    expect(result.layout.length).toBe(0);
+    // WP-5 Task A3: `layout` is the real resolved tree the scripted one-shot child seals
+    // into its `ready` body (`scripted-one-shot.ts`'s `defaultLayout`), JSON-encoded — never
+    // the empty placeholder the pre-WP-5 adapter emitted.
+    expect(result.layout.length).toBeGreaterThan(0);
+    const layoutTree = JSON.parse(new TextDecoder().decode(result.layout)) as unknown;
+    expect(layoutTree).toEqual({
+      id: "root",
+      kind: "BoxRenderable",
+      box: { x: 0, y: 0, width: specForTask.size.w, height: specForTask.size.h },
+      children: [],
+    });
   });
 
   test("renderOne() maps a one-shot mount failure to an EXPORT_RENDER_FAILED FailureDtoV1", async () => {
