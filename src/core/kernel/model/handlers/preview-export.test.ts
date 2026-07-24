@@ -566,8 +566,11 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
 
     expect(harness.handlerContext.machines.export.phase()).toBe("idle");
 
+    // WP-5 Task B3: `publishExport` also reads the current pointer (D-Q5) before building
+    // the plan — a genuine second call on this same fake, scoped out below so this test
+    // still asserts exactly one `publish()`.
     const exportPublish = deps.exportPublish as ReturnType<typeof createFakeExportPublish>;
-    expect(exportPublish.calls).toHaveLength(1);
+    expect(exportPublish.calls.filter((c) => c.method === "publish")).toHaveLength(1);
 
     // The terminal batch: exactly one `export.completed`.
     expect(events).toHaveLength(1);

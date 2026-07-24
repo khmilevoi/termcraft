@@ -472,7 +472,7 @@ function handleClose(
 // export.start — real, end to end (Gap B closure)
 // -------------------------------------------------------------------------------------
 
-/** The project-relative export destination directory — the `.termcraft/export` convention already established by `ui/app`'s own export-popup fixtures (`App.test.tsx`, `intent.test.ts`) and the gap-closeout plan's own M6 citation (`.termcraft/export/current.json`), reused verbatim rather than invented a second time. This Kernel slice never varies it — `publishExport`'s own `plan.operations`/`plan.payloads` stay empty (that file's own header: "WP-5's job"). */
+/** The project-relative export destination directory — the `.termcraft/export` convention already established by `ui/app`'s own export-popup fixtures (`App.test.tsx`, `intent.test.ts`) and the gap-closeout plan's own M6 citation (`.termcraft/export/current.json`), reused verbatim rather than invented a second time. This Kernel slice never varies it — `publishExport`'s own `plan.operations`/`plan.payloads` (WP-5 Task B3) are the real per-file/pointer operations `buildExportPublishOperations` builds from `assembled.files`, below. */
 const EXPORT_DESTINATION = ".termcraft/export";
 
 /**
@@ -749,6 +749,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     snapshot,
     currentPages,
     renders: renders.map((render) => ({ pageSlug: render.pageSlug, outcome: render.outcome })),
+    files: assembled.files,
   };
   const published = await wrap(publishExport(publishDeps, publishInput));
 

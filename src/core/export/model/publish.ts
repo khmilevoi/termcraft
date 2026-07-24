@@ -14,6 +14,8 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { ExportPageInputV1, ExportSnapshotV1 } from "../types";
+import type { ExportPackageFileV1 } from "./package";
+import { buildExportPublishOperations } from "./publish-plan";
 
 /**
  * `kernel.export.beginPublication` / `complete` / `failBeforeIntent` —
@@ -41,19 +43,23 @@ import type { ExportPageInputV1, ExportSnapshotV1 } from "../types";
  * Either mismatch is staleness, never a distinct code — §12.5 names exactly one failure
  * for this whole precondition class, `EXPORT_SNAPSHOT_STALE`.
  *
- * PUBLICATION ITSELF, STILL UNDER THE SAME PERMIT: once revalidation passes, this function
- * builds the durable intent, wraps it in an {@link ExportPublishPlanV1}, and calls
- * `ExportPublishPort.publish` before the permit is released — the transaction's own
- * commit/recovery boundary (`turn-durability` §10 steps 4-6) is what actually makes the
- * generation durable, not this function. A `FailureDtoV1` back from the port is
- * `failBeforeIntent` exactly like a revalidation failure — its own `EXPORT_SNAPSHOT_STALE`
- * (the store engine's lower-level precondition re-check) maps to `stale`, every other code
- * (e.g. `EXPORT_PUBLICATION_FAILED`) maps to `failed` — only on success does the machine
- * `complete`. `plan.operations`/`plan.payloads` are empty here: wiring `assembleExportPackage`'s
- * real file list into them is WP-5's job, out of this slice's scope (B6 part 2).
+ * PUBLICATION ITSELF, STILL UNDER THE SAME PERMIT (WP-5 Task B3): once revalidation passes,
+ * this function reads the current export pointer (`ExportPublishPort.readPointer`, WP-5
+ * Phase C) — `null` for a project's first publish, an existing {@link ExportPointerV1} on a
+ * later one, or a `FailureDtoV1` if the durable pointer is itself corrupt (treated the same
+ * as any other pre-intent failure below) — then hands `input.files` (the caller's already-
+ * assembled package, `assembleExportPackage`'s output) plus that pointer to
+ * `buildExportPublishOperations` (`./publish-plan.ts`) to build the REAL
+ * `ExportPublishPlanV1.operations`/`.payloads`, and calls `ExportPublishPort.publish` before
+ * the permit is released — the transaction's own commit/recovery boundary (`turn-durability`
+ * §10 steps 4-6) is what actually makes the generation durable, not this function. A
+ * `FailureDtoV1` back from the port is `failBeforeIntent` exactly like a revalidation
+ * failure — its own `EXPORT_SNAPSHOT_STALE` (the store engine's lower-level precondition
+ * re-check) maps to `stale`, every other code (e.g. `EXPORT_PUBLICATION_FAILED`) maps to
+ * `failed` — only on success does the machine `complete`.
  *
- * REATOM NOTE: every port call is `await wrap(...)`-ed, matching `snapshot.ts`'s /
- * `finalize.ts`'s identical rule.
+ * REATOM NOTE: every port call (`readPointer` included) is `await wrap(...)`-ed, matching
+ * `snapshot.ts`'s / `finalize.ts`'s identical rule.
  */
 
 export interface PublishExportRenderOutcomeV1 {
@@ -74,6 +80,8 @@ export interface PublishExportInputV1 {
   /** The current, freshly-resolved page list/settings to revalidate against the captured snapshot (§12.5). */
   readonly currentPages: readonly ExportPageInputV1[];
   readonly renders: readonly PublishExportRenderOutcomeV1[];
+  /** The assembled package's in-memory file list (`assembleExportPackage`'s output, WP-5 Task B3) — the source `buildExportPublishOperations` turns into the real plan. */
+  readonly files: readonly ExportPackageFileV1[];
 }
 
 /** The durable publication fact this Kernel slice can record — `export/current.json`'s real write is a later slice's job (this module never touches disk). */
@@ -164,16 +172,29 @@ export async function publishExport(
     recordedAt: deps.clock.now().toISOString(),
   };
 
-  // WP-5 wires `assembleExportPackage`'s real file list into `operations`/`payloads` — this
-  // slice's scope (B6 part 2) is only the port call itself under the reacquired permit, so
-  // the plan carries the durability facts the intent already computed plus an empty
-  // operation set until that later slice supplies the actual transaction content.
+  // D-Q5: read the current pointer (still under the reacquired permit) so the plan can
+  // both CAS `export/current.json`'s own oldImage correctly and clean up the old
+  // generation's files. `null` means this project has never published before — a valid
+  // "no previous generation to clean up" case, never a failure.
+  const previousPointer = await wrap(deps.exportPublish.readPointer());
+  if (previousPointer !== null && "code" in previousPointer) {
+    deps.projectWrite.release(permit);
+    deps.machine.apply("kernel.export.failBeforeIntent");
+    return { kind: "failed", failure: previousPointer };
+  }
+
+  const { operations, payloads } = buildExportPublishOperations({
+    files: input.files,
+    generationId: intent.generationId,
+    previousPointer,
+  });
+
   const plan: ExportPublishPlanV1 = {
     generationId: intent.generationId,
     pageCount: intent.pageCount,
     createdAt: intent.recordedAt,
-    operations: [],
-    payloads: new Map(),
+    operations,
+    payloads,
   };
 
   const publication = await wrap(deps.exportPublish.publish(plan));

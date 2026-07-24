@@ -17,6 +17,7 @@ import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
 import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
+import type { ExportPackageFileV1 } from "./package";
 import { type PublishExportInputV1, publishExport } from "./publish";
 
 function slug(value: string): PageSlug {
@@ -89,11 +90,16 @@ function setup(options?: { readonly currentHash?: string; readonly sequence?: Fa
   return { machine, actions, projectWrite, pageReader, clock, exportPublish };
 }
 
+const FILES: readonly ExportPackageFileV1[] = [
+  { relPath: "design-prompt.md", bytes: new TextEncoder().encode("prompt") },
+];
+
 function baseInput(overrides: Partial<PublishExportInputV1> = {}): PublishExportInputV1 {
   return {
     snapshot: SNAPSHOT,
     currentPages: [currentPageInput()],
     renders: [],
+    files: FILES,
     ...overrides,
   };
 }
@@ -279,27 +285,84 @@ describe("publishExport", () => {
 
     expect(result.kind).toBe("published");
     if (result.kind !== "published") return;
-    expect(exportPublish.calls.length).toBe(1);
-    const publishCall = exportPublish.calls[0];
+    // WP-5 Task B3: `publishExport` also reads the current pointer (D-Q5) before building
+    // the plan — a genuine second call on this same fake, not a `publish()`.
+    expect(exportPublish.calls.map((c) => c.method)).toEqual(["readPointer", "publish"]);
+    const publishCall = exportPublish.calls.find((c) => c.method === "publish");
     if (publishCall?.method !== "publish") throw new Error("fixture bug: expected a publish call");
     expect(publishCall.plan.generationId).toBe(result.intent.generationId);
     expect(publishCall.plan.pageCount).toBe(result.intent.pageCount);
     expect(publishCall.plan.createdAt).toBe(result.intent.recordedAt);
+    expect(publishCall.plan.operations.length).toBeGreaterThan(0);
+    expect(publishCall.plan.payloads.size).toBeGreaterThan(0);
     expect(readPhase()).toBe("idle");
     expect(projectWrite.calls.map((c) => c.method)).toEqual([
       "acquire",
       "acquire-granted",
       "release",
     ]);
-    // The permit is released exactly once — after the port call, not before it. Proved by
-    // merging both fakes' own ordered logs and reading the combined method sequence.
+    // The permit is released exactly once — after both port calls, not before them. Proved
+    // by merging both fakes' own ordered logs and reading the combined method sequence.
     const combined = [...projectWrite.calls, ...exportPublish.calls].sort((a, b) => a.seq - b.seq);
     expect(combined.map((entry) => entry.method)).toEqual([
       "acquire",
       "acquire-granted",
+      "readPointer",
       "publish",
       "release",
     ]);
+  });
+
+  test("a corrupt existing pointer (readPointer failure) releases, fails before intent, and returns the failure — never reaches publish()", async () => {
+    const READ_FAILURE: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "export/current.json is corrupt",
+      details: {},
+    };
+    const { call, readPhase, projectWrite, exportPublish, actions } = context.start(() => {
+      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      exportPublish.failNextRead(READ_FAILURE);
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput(),
+      );
+      return { call, readPhase: wrap(() => machine.phase()), projectWrite, exportPublish, actions };
+    });
+
+    const result = await call;
+
+    expect(result).toEqual({ kind: "failed", failure: READ_FAILURE });
+    expect(readPhase()).toBe("idle");
+    expect(actions).toContain("kernel.export.failBeforeIntent");
+    expect(exportPublish.calls.map((c) => c.method)).toEqual(["readPointer"]);
+    expect(projectWrite.calls.map((c) => c.method)).toEqual([
+      "acquire",
+      "acquire-granted",
+      "release",
+    ]);
+  });
+
+  test("builds a non-empty plan from the assembled files, keyed by the newly minted generationId", async () => {
+    const { call } = context.start(() => {
+      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const call = publishExport(
+        { machine, projectWrite, pageReader, clock, exportPublish },
+        baseInput({
+          files: [
+            { relPath: "design-prompt.md", bytes: new TextEncoder().encode("prompt") },
+            { relPath: "layout/home.json", bytes: new TextEncoder().encode('{"80x24":{}}') },
+          ],
+        }),
+      );
+      return { call };
+    });
+
+    const result = await call;
+
+    expect(result.kind).toBe("published");
+    if (result.kind !== "published") return;
+    expect(result.intent.generationId.length).toBeGreaterThan(0);
   });
 
   test("does not complete the machine when the export-publish port fails; releases, fails before intent, and returns the failure", async () => {
