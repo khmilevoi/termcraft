@@ -21,18 +21,21 @@ import type { LayoutNode } from "../types";
  * killed) — but the wire protocol's `smoke`/`export` one-shot modes exit the child the
  * instant the sealed frame is sent (`host-state-machine.ts`'s `handleMount`: "smoke and
  * export are one-shot... deps.requestExit" runs in the SAME call that sends `ready`+frame),
- * before any correlated request could reach it. `runOneShotSession`'s own `OneShotResult`
- * documents this: "the conformant correlated `capture` + layout-tree reply is deferred
- * until the 2A bulk schema lands" — so a one-shot incarnation cannot ALSO hand back a
- * layout tree today.
+ * before any correlated request could reach it — WP-5 Task A1 closed that gap for the
+ * layout tree specifically: `handleMount` now seals `renderer.layoutTree()` straight into
+ * the `ready` body for `smoke`/`export` mounts (`ReadyBody.layout`), so a one-shot
+ * incarnation DOES hand back both frame and layout tree today, from that same single pass.
  *
- * `preview` mode is the one surface honest enough to produce both from a REAL, freshly
- * spawned `_host --stdio` process: the child stays alive past `ready`, and the
- * `query-layout` reply resolves straight off the same live, already-rendered `RenderHandle`
- * that produced the frame (`resolveGeometry`/`layoutTreeOf` walk the CURRENTLY mounted
- * tree, which nothing has touched since the render — no resize, no interaction) — so it is
- * the same pass, just fetched over a second round trip instead of the one bulk reply §5.7
- * envisions. KNOWN DIVERGENCE (documented per CLAUDE.md): `preview` mode's mount body does
+ * This suite still exercises `preview` mode rather than `smoke`/`export`, deliberately: it
+ * is the one surface that also proves determinism over the SEPARATE `query-layout` round
+ * trip (`resolveGeometry`/`layoutTreeOf` walk the CURRENTLY mounted tree, over a second read
+ * from a REAL, freshly spawned `_host --stdio` process, past the ready reply) — a genuinely
+ * different code path than the one-shot's single-message seal, and one still worth its own
+ * determinism proof independent of Task A1's coverage. Both mechanisms read the identical
+ * geometry off the same live, already-rendered `RenderHandle` (nothing has touched it since
+ * the render — no resize, no interaction), so it is the same pass either way, just a second
+ * round trip instead of `smoke`/`export`'s one bulk reply. KNOWN DIVERGENCE (documented per
+ * CLAUDE.md): `preview` mode's mount body does
  * not set the wire `deterministic` flag (only `smoke`/`export` do — see `session.ts`'s
  * mount construction); irrelevant for this fixture, which is static JSX with no timers or
  * randomness (§5.8 bans both outside explicit animation), so nothing depends on that flag.
