@@ -36,6 +36,10 @@ export {
 
 export { CanonicalHashError, canonicalHash, canonicalJson } from "./model/canonical-hash";
 
+// --- Chat record wire union (WP-10 Task 2) ---------------------------------------
+export type { ChatRecordDtoV1 } from "./model/chat-record";
+export { chatRecordDtoV1Schema } from "./model/chat-record";
+
 // --- Shared DTOs ----------------------------------------------------------------
 export type {
   DiagnosticDtoV1,
