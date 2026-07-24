@@ -1,0 +1,514 @@
+import { describe, expect, test } from "bun:test";
+
+import { context } from "@reatom/core";
+
+import {
+  reatomCommitStateMachine,
+  reatomExportStateMachine,
+  reatomMigrationStateMachine,
+  reatomPreviewStateMachine,
+  reatomProjectStateMachine,
+  reatomRestoreStateMachine,
+  reatomTurnStateMachine,
+} from "core/machines";
+import {
+  createFakeAgentBackend,
+  createFakeAgentRegistry,
+  createFakeChatStore,
+  createFakeDiagnosticsCache,
+  createFakeExportPublish,
+  createFakeExportRenderPort,
+  createFakeGateRunner,
+  createFakeHostSupervisorPort,
+  createFakePageMetaCache,
+  createFakePageStore,
+  createFakePinStore,
+  createFakeProjectStore,
+  createFakeProjectWriteCoordinator,
+  createFakeRecoveryService,
+  createFakeRenderCache,
+  createFakeSessionCheckpointService,
+  createFakeStagingService,
+  createFakeTrustGate,
+  createFakeTurnTransactionService,
+} from "core/ports/fakes";
+import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import { parsePageSlug } from "entities/page";
+import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
+
+import type { KernelDeps } from "../../types";
+import {
+  PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
+  exportHandlers,
+  previewHandlers,
+} from "./preview-export";
+import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+
+function slug(value: string) {
+  const parsed = parsePageSlug(value);
+  if (parsed instanceof Error) throw parsed;
+  return parsed;
+}
+
+const HOME = slug("home");
+const HOME_SOURCE_HASH = "a".repeat(64);
+
+function buildDeps(overrides?: {
+  readonly hostSupervisor?: KernelDeps["hostSupervisor"];
+  readonly pageMetaCache?: KernelDeps["pageMetaCache"];
+  readonly projectStore?: KernelDeps["projectStore"];
+}): KernelDeps {
+  const chatStore = createFakeChatStore();
+  const pageStore = createFakePageStore({
+    order: [HOME],
+    sources: new Map([
+      [
+        HOME,
+        { bytes: new TextEncoder().encode("export const meta = {}"), sourceHash: HOME_SOURCE_HASH },
+      ],
+    ]),
+  });
+  const pinStore = createFakePinStore();
+  const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+
+  return {
+    projectStore: overrides?.projectStore ?? createFakeProjectStore({ root: "/test-root" }),
+    chatReader: chatStore,
+    chatMutations: chatStore,
+    pageReader: pageStore,
+    pageMutations: pageStore,
+    pinReader: pinStore,
+    pinMutations: pinStore,
+    turnTransactions: createFakeTurnTransactionService(),
+    projectWrite: createFakeProjectWriteCoordinator(),
+    staging: createFakeStagingService(),
+    trustGate: createFakeTrustGate(),
+    pageMetaCache: overrides?.pageMetaCache ?? createFakePageMetaCache(),
+    diagnosticsCache: createFakeDiagnosticsCache(),
+    renderCache: createFakeRenderCache(),
+    sessionCheckpoint: createFakeSessionCheckpointService(),
+    recovery: createFakeRecoveryService(),
+    gateRunner: createFakeGateRunner(),
+    hostSupervisor: overrides?.hostSupervisor ?? createFakeHostSupervisorPort(),
+    exportRender: createFakeExportRenderPort(),
+    exportPublish: createFakeExportPublish(),
+    agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    clock,
+  };
+}
+
+interface TestHarness {
+  readonly handlerContext: HandlerContext;
+  readonly getMutatorCalls: () => number;
+  /** Every `launchOperation(label, run)` call, in order, so a test can `await` `run()` and inspect its events. */
+  readonly launched: readonly {
+    readonly label: string;
+    readonly run: () => Promise<readonly unknown[]>;
+  }[];
+  readonly getActivePreviewSession: () => unknown;
+}
+
+function buildTestContext(deps: KernelDeps): TestHarness {
+  return context.start(() => {
+    let mutatorCalls = 0;
+    let trust: ProjectTrustV1 = null;
+    let activeTurnId: UUIDv7 | null = null;
+    let commitIntentRecorded = false;
+    let previewSourceKind: PreviewSourceKindV1 = null;
+    let activePreviewSession: unknown = null;
+    const launched: { label: string; run: () => Promise<readonly unknown[]> }[] = [];
+
+    const machines = {
+      project: reatomProjectStateMachine(),
+      turn: reatomTurnStateMachine(),
+      restore: reatomRestoreStateMachine(),
+      commit: reatomCommitStateMachine(),
+      export: reatomExportStateMachine(),
+      preview: reatomPreviewStateMachine(),
+      migration: reatomMigrationStateMachine(),
+    };
+
+    const handlerContext: HandlerContext = {
+      deps,
+      machines,
+      readKernelState: () => ({
+        project: { phase: machines.project.phase(), trust },
+        turn: { phase: machines.turn.phase(), activeTurnId, commitIntentRecorded },
+        restore: { phase: machines.restore.phase() },
+        commit: { phase: machines.commit.phase() },
+        export: { phase: machines.export.phase() },
+        preview: { phase: machines.preview.phase(), sourceKind: previewSourceKind },
+        migration: { phase: machines.migration.phase() },
+      }),
+      setProjectTrust: (next) => {
+        mutatorCalls += 1;
+        trust = next;
+      },
+      setActiveTurnId: (next) => {
+        mutatorCalls += 1;
+        activeTurnId = next;
+      },
+      setCommitIntentRecorded: (next) => {
+        mutatorCalls += 1;
+        commitIntentRecorded = next;
+      },
+      setPreviewSourceKind: (next) => {
+        mutatorCalls += 1;
+        previewSourceKind = next;
+      },
+      setActivePreviewSession: (session) => {
+        mutatorCalls += 1;
+        activePreviewSession = session;
+      },
+      launchOperation: (label, run) => {
+        launched.push({ label, run: run as () => Promise<readonly unknown[]> });
+      },
+    };
+
+    return {
+      handlerContext,
+      getMutatorCalls: () => mutatorCalls,
+      launched,
+      getActivePreviewSession: () => activePreviewSession,
+    };
+  });
+}
+
+function seedPageMeta(cache: ReturnType<typeof createFakePageMetaCache>): void {
+  void cache.put({
+    key: {
+      pageSlug: HOME,
+      sourceHash: HOME_SOURCE_HASH,
+      extractorVersion: PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
+    },
+    meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
+  });
+}
+
+function enable(machines: HandlerContext["machines"]): void {
+  machines.preview.apply("kernel.preview.enable");
+}
+
+describe("previewHandlers.selectPage / selectCurrent — real, end to end", () => {
+  test("selectPage from idle: synchronous admission moves idle -> starting and returns a schema-valid kernel.stateChanged", () => {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+
+    const outcome = previewHandlers["preview.selectPage"](
+      { pageSlug: HOME },
+      harness.handlerContext,
+    );
+
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    const event = outcome.events[0]!;
+    expect(event.kind).toBe("kernel.stateChanged");
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(event.payload);
+    expect(parsed).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.beginStart",
+      previousTag: "idle",
+      nextTag: "starting",
+      metadata: {},
+    });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("starting");
+    expect(harness.launched).toHaveLength(1);
+  });
+
+  test("selectCurrent from live: synchronous admission moves live -> switching (beginSwitch)", () => {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionReady");
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+
+    const outcome = previewHandlers["preview.selectCurrent"](
+      { pageSlug: HOME },
+      harness.handlerContext,
+    );
+
+    expect(outcome.disposition).toBe("started");
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      outcome.events[0]!.payload,
+    );
+    expect(parsed.action).toBe("kernel.preview.beginSwitch");
+    expect(parsed.previousTag).toBe("live");
+    expect(parsed.nextTag).toBe("switching");
+  });
+
+  test("async completion, cache HIT + successful host call: establishes a session and emits preview.sourceChanged", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    expect(harness.launched).toHaveLength(1);
+
+    const events = await harness.launched[0]!.run();
+
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    expect(harness.getActivePreviewSession()).not.toBeNull();
+
+    const sourceChanged = events.find(
+      (event): event is { kind: string; payload: unknown } =>
+        (event as { kind: string }).kind === "preview.sourceChanged",
+    );
+    expect(sourceChanged).toBeDefined();
+    const parsed = eventPayloadV1SchemaByKind["preview.sourceChanged"].parse(
+      sourceChanged!.payload,
+    );
+    expect(parsed.pageSlug).toBe(HOME);
+    expect(parsed.source).toEqual({ kind: "current" });
+    expect(parsed.sourceHash).toBe(HOME_SOURCE_HASH);
+
+    const stateChanged = events.find(
+      (event): event is { kind: string; payload: unknown } =>
+        (event as { kind: string }).kind === "kernel.stateChanged",
+    );
+    expect(stateChanged).toBeDefined();
+    const parsedState = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      stateChanged!.payload,
+    );
+    expect(parsedState).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.sessionReady",
+      previousTag: "starting",
+      nextTag: "live",
+      metadata: {},
+    });
+  });
+
+  test("async completion, page-meta cache MISS: sessionFailed + a schema-valid preview.failed, never a fabricated setting", async () => {
+    const deps = buildDeps(); // pageMetaCache left empty — a genuine miss
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    const events = await harness.launched[0]!.run();
+
+    expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
+    expect(harness.getActivePreviewSession()).toBeNull();
+
+    const failed = events.find((event) => (event as { kind: string }).kind === "preview.failed") as
+      | { kind: string; payload: unknown }
+      | undefined;
+    expect(failed).toBeDefined();
+    const parsed = eventPayloadV1SchemaByKind["preview.failed"].parse(failed!.payload);
+    expect(parsed.pageSlug).toBe(HOME);
+    expect(parsed.phase).toBe("starting");
+    expect(parsed.failure.code).toBe("PERSISTENCE_FAILED");
+
+    const stateChanged = events.find(
+      (event) => (event as { kind: string }).kind === "kernel.stateChanged",
+    ) as { kind: string; payload: unknown } | undefined;
+    expect(stateChanged).toBeDefined();
+    const parsedState = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      stateChanged!.payload,
+    );
+    expect(parsedState.action).toBe("kernel.preview.sessionFailed");
+    expect(parsedState.nextTag).toBe("failed");
+  });
+
+  test("async completion, host supervisor rejects: sessionFailed + preview.failed carrying the host's own failure", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const hostFailure: FailureDtoV1 = {
+      code: "HOST_START_FAILED",
+      retryable: true,
+      safeMessage: "host refused to start",
+      details: {},
+    };
+    (deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>).failNext(
+      "preview",
+      hostFailure,
+    );
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    const events = await harness.launched[0]!.run();
+
+    expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
+    const failed = events.find((event) => (event as { kind: string }).kind === "preview.failed") as
+      | { kind: string; payload: unknown }
+      | undefined;
+    const parsed = eventPayloadV1SchemaByKind["preview.failed"].parse(failed!.payload);
+    expect(parsed.failure.code).toBe(hostFailure.code);
+    expect(parsed.failure.safeMessage).toBe(hostFailure.safeMessage);
+    expect(parsed.failure.retryable).toBe(hostFailure.retryable);
+  });
+
+  test("size/theme/capabilities derive from workspace state, not fabricated defaults", async () => {
+    const deps = buildDeps({
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          previewSizeMode: "custom",
+          previewCustomWidth: 100,
+          previewCustomHeight: 30,
+          themeOverride: "light",
+          colorCapability: "truecolor",
+          renderMode: "interactive",
+        },
+      }),
+    });
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    await harness.launched[0]!.run();
+
+    const fakeHost = deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>;
+    const previewCall = fakeHost.calls.find((call) => call.method === "preview");
+    expect(previewCall).toBeDefined();
+
+    // The fake's own `calls` log only records `pageSlug`; the composed session it returns
+    // otherwise mirrors the spec verbatim (`interactionMode`, `identity.kitApiVersion`), so
+    // asserting on the SESSION proves the derived spec's fields reached `hostSupervisor.preview`.
+    const session = harness.getActivePreviewSession() as {
+      readonly interactionMode: string;
+      readonly identity: { readonly kitApiVersion: number };
+    };
+    expect(session).not.toBeNull();
+    expect(session.interactionMode).toBe("interactive"); // from workspaceState.renderMode
+    expect(session.identity.kitApiVersion).toBe(1); // from the cached PageMeta, not fabricated
+  });
+});
+
+describe("previewHandlers.selectHistorical — out of MVP scope (no Git port)", () => {
+  test("returns the sanctioned no-op and never touches the machine or a mutator", () => {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+
+    const outcome = previewHandlers["preview.selectHistorical"](
+      { pageSlug: HOME, sourceCommit: "a".repeat(40) },
+      harness.handlerContext,
+    );
+
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("idle");
+    expect(harness.getMutatorCalls()).toBe(0);
+    expect(harness.launched).toHaveLength(0);
+  });
+});
+
+describe("previewHandlers — blocked by Gap A (no session read-back)", () => {
+  function liveHarness(): TestHarness {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionReady");
+    return harness;
+  }
+
+  test("resize returns the sanctioned no-op without moving the machine", () => {
+    const harness = liveHarness();
+    const outcome = previewHandlers["preview.resize"](
+      { previewSessionId: uuidv7(), width: 100, height: 30 },
+      harness.handlerContext,
+    );
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    expect(harness.getMutatorCalls()).toBe(0);
+  });
+
+  test("setThemeCapabilities returns the sanctioned no-op", () => {
+    const harness = liveHarness();
+    const outcome = previewHandlers["preview.setThemeCapabilities"](
+      { previewSessionId: uuidv7(), themeId: "dark", terminalCapabilities: { colorDepth: 24 } },
+      harness.handlerContext,
+    );
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+  });
+
+  test("setMode returns the sanctioned no-op", () => {
+    const harness = liveHarness();
+    const outcome = previewHandlers["preview.setMode"](
+      { previewSessionId: uuidv7(), mode: "interactive" },
+      harness.handlerContext,
+    );
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+  });
+
+  test("queryGeometry returns the sanctioned no-op (also matches the machine's own noOp edge)", () => {
+    const harness = liveHarness();
+    const outcome = previewHandlers["preview.queryGeometry"](
+      { frameToken: uuidv7(), query: { kind: "layout" } },
+      harness.handlerContext,
+    );
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+  });
+
+  test("retry returns the sanctioned no-op without moving the machine out of circuit-open", () => {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionFailed");
+    harness.handlerContext.machines.preview.apply("kernel.preview.openCircuit");
+    expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+
+    const outcome = previewHandlers["preview.retry"](
+      { previewSessionId: uuidv7() },
+      harness.handlerContext,
+    );
+
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+  });
+});
+
+describe("previewHandlers.close — real, partial (Kernel-side half only)", () => {
+  test("applies disable, clears the tracked session, and emits a schema-valid kernel.stateChanged", () => {
+    const harness = buildTestContext(buildDeps());
+    enable(harness.handlerContext.machines);
+    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionReady");
+    harness.handlerContext.setActivePreviewSession({ marker: "some-session" } as never);
+
+    const previewSessionId = uuidv7();
+    const outcome = previewHandlers["preview.close"]({ previewSessionId }, harness.handlerContext);
+
+    expect(outcome.disposition).toBe("completed");
+    expect(outcome.events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      outcome.events[0]!.payload,
+    );
+    expect(parsed).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.disable",
+      previousTag: "live",
+      nextTag: "disabled",
+      metadata: {},
+    });
+    expect(outcome.events[0]!.correlation).toEqual({ previewSessionId });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("disabled");
+    expect(harness.getActivePreviewSession()).toBeNull();
+  });
+
+  test("from an already-disabled phase, returns the sanctioned no-op (defensive; unreachable under a correct guard)", () => {
+    const harness = buildTestContext(buildDeps());
+    // Never enabled — machine stays at its initial "disabled" phase, where `disable` is illegal.
+    const outcome = previewHandlers["preview.close"](
+      { previewSessionId: uuidv7() },
+      harness.handlerContext,
+    );
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+  });
+});
+
+describe("exportHandlers.start — blocked by Gap B (verified HandlerMachine/StateMachine mismatch)", () => {
+  test("returns the sanctioned no-op and never moves the export machine out of idle", () => {
+    const harness = buildTestContext(buildDeps());
+
+    const outcome = exportHandlers["export.start"]({}, harness.handlerContext);
+
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(harness.handlerContext.machines.export.phase()).toBe("idle");
+    expect(harness.getMutatorCalls()).toBe(0);
+    expect(harness.launched).toHaveLength(0);
+  });
+});
