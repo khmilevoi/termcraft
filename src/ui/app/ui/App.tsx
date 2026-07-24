@@ -64,7 +64,12 @@ function renderOverlay(deps: UiDeps) {
     // order and the selection index they resolve always agree.
     const rows = sortChatSummariesNewestFirst(chats.summaries.values()).map((summary) => ({
       chatId: summary.chatId,
-      label: summary.chatId.slice(0, 8),
+      // Design §3.9: "a chat's display name is derived… the first line of its first `user`
+      // record" (Kernel-derived, `ChatSummaryV1.displayName`, WP-10 Task 4). A freshly-created
+      // chat carries `displayName: null` until its first `user` record lands; the pre-existing
+      // `chatId.slice(0, 8)` fallback for that window is unchanged — only the label SOURCE
+      // changes here, not the fallback itself (WP-10 Task 9).
+      label: summary.displayName ?? summary.chatId.slice(0, 8),
       when: summary.createdAt,
       active: summary.chatId === chats.activeChatId,
     }));

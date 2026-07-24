@@ -409,6 +409,61 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     });
   });
 
+  test("the /chats popup shows a chat's derived displayName (design 24-chats.dc.html, WP-10 Task 9)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const namedChatId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("chat.changed", {
+          activeChatId: namedChatId,
+          added: [
+            { chatId: namedChatId, createdAt: TEST_TS, displayName: "build a system monitor" },
+          ],
+          updated: [],
+          removedChatIds: [],
+        }),
+      );
+      deps.local.overlay.set("chat-list");
+    });
+    const frame = await renderer.waitForFrame((output) =>
+      output.includes("build a system monitor"),
+    );
+    expect(frame).toContain("build a system monitor");
+    expect(frame).not.toContain(namedChatId.slice(0, 8));
+  });
+
+  test("a chat with displayName: null still falls back to chatId.slice(0, 8)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const chatId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("chat.changed", {
+          activeChatId: chatId,
+          added: [{ chatId, createdAt: TEST_TS, displayName: null }],
+          updated: [],
+          removedChatIds: [],
+        }),
+      );
+      deps.local.overlay.set("chat-list");
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes(chatId.slice(0, 8)));
+    expect(frame).toContain(chatId.slice(0, 8));
+  });
+
   test("the chat-list overlay outranks an undismissed export popup for both render and keys (precedence bug repro)", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
