@@ -11,6 +11,7 @@ import type {
   ChatReader,
 } from "../chat-store";
 import type { AssertConforms } from "../index";
+import type { ReadSetAppendBaseV1 } from "../staging";
 
 /**
  * In-memory {@link ChatReader}/{@link ChatMutations} fake (6D task brief), combined on one
@@ -34,12 +35,41 @@ const NOT_FOUND = (chatId: string): FailureDtoV1 => ({
   details: { chatId },
 });
 
+/**
+ * A deterministic, valid-looking 64-hex-char digest derived from a seed — no real crypto,
+ * no randomness. Mirrors `fakes/staging.ts`'s own identical `fakeSha256Hex` helper
+ * verbatim: two independent, narrow fakes each get their own tiny copy rather than a new
+ * shared fakes-utility module this task's scope does not authorize.
+ */
+function fakeSha256Hex(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) | 0;
+  const base = (h >>> 0).toString(16).padStart(8, "0");
+  return base.repeat(8).slice(0, 64);
+}
+
+/**
+ * An honest, deterministic append-base derived from the fake's OWN current in-memory
+ * records — never a fixed/fabricated placeholder. Serializing the whole record array (not
+ * hashing incrementally) means the result changes whenever `seedRecords` genuinely adds
+ * something, and stays identical across repeated reads of unchanged state, matching the
+ * two properties a real append-base fact must have.
+ */
+function computeAppendBase(records: readonly ChatRecord[]): ReadSetAppendBaseV1 {
+  const serialized = JSON.stringify(records);
+  return {
+    length: new TextEncoder().encode(serialized).byteLength,
+    prefixSha256: fakeSha256Hex(serialized),
+  };
+}
+
 export type ChatStoreFailableMethod =
   | "open"
   | "create"
   | "switchActive"
   | "loadTail"
-  | "loadBefore";
+  | "loadBefore"
+  | "readAppendBase";
 
 export type ChatStoreCall =
   | { readonly method: "open"; readonly chatId: string }
@@ -51,7 +81,8 @@ export type ChatStoreCall =
       readonly chatId: string;
       readonly cursor: ChatPageCursorV1;
       readonly limit: number | undefined;
-    };
+    }
+  | { readonly method: "readAppendBase"; readonly chatId: string };
 
 export interface FakeChatStore extends ChatReader, ChatMutations {
   readonly calls: readonly ChatStoreCall[];
@@ -72,6 +103,7 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
     switchActive: [],
     loadTail: [],
     loadBefore: [],
+    readAppendBase: [],
   };
 
   function failNext(method: ChatStoreFailableMethod, failure: FailureDtoV1): void {
@@ -154,7 +186,16 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
     return undefined;
   }
 
-  return { open, create, switchActive, calls, seedRecords, failNext };
+  async function readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
+    calls.push({ method: "readAppendBase", chatId });
+    const queued = queues.readAppendBase.shift();
+    if (queued !== undefined) return queued;
+    const chat = chats.get(chatId);
+    if (chat === undefined) return NOT_FOUND(chatId);
+    return computeAppendBase(chat.records);
+  }
+
+  return { open, create, switchActive, readAppendBase, calls, seedRecords, failNext };
 }
 
 type _ReaderConforms = AssertConforms<ChatReader, FakeChatStore>;

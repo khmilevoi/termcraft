@@ -78,4 +78,42 @@ describe("createFakeProjectStore", () => {
       "readWorkspaceState",
     ]);
   });
+
+  // Gap 4 closure (kernel-assembly Task 9): `turn.start` needs `project.toml`'s own raw
+  // hash+size — a fact `readManifest()` (the PARSED DTO) never carries. See
+  // `project-store.ts`'s own doc comment on `readManifestSnapshot` for the full citation.
+  describe("readManifestSnapshot()", () => {
+    test("returns a deterministic hash+size derived from the constructed manifest", async () => {
+      const store = createFakeProjectStore({
+        root: "C:/proj",
+        manifest: { pages: [slug("home")] },
+      });
+      const first = await store.readManifestSnapshot();
+      const second = await store.readManifestSnapshot();
+      if ("code" in first) throw new Error("unexpected failure");
+      if ("code" in second) throw new Error("unexpected failure");
+      expect(first).toEqual(second);
+      expect(first.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(first.size).toBeGreaterThan(0);
+    });
+
+    test("differs for a differently-constructed manifest — never a fixed placeholder", async () => {
+      const a = createFakeProjectStore({ root: "C:/proj", manifest: { name: "Project A" } });
+      const b = createFakeProjectStore({ root: "C:/proj", manifest: { name: "Project B" } });
+      const snapshotA = await a.readManifestSnapshot();
+      const snapshotB = await b.readManifestSnapshot();
+      if ("code" in snapshotA) throw new Error("unexpected failure");
+      if ("code" in snapshotB) throw new Error("unexpected failure");
+      expect(snapshotA.sha256).not.toBe(snapshotB.sha256);
+    });
+
+    test("failNext() overrides the next call with the queued failure", async () => {
+      const store = createFakeProjectStore({ root: "C:/proj" });
+      store.failNext("readManifestSnapshot", FAILURE);
+      const first = await store.readManifestSnapshot();
+      expect(first).toEqual(FAILURE);
+      const second = await store.readManifestSnapshot();
+      expect("code" in second).toBe(false);
+    });
+  });
 });
