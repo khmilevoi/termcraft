@@ -18,6 +18,24 @@ export { AppShutdownError, AppStartupError, runApp } from "./model/run-app";
 export type { RunAppOptions } from "./model/run-app";
 export { bootstrap } from "./model/bootstrap";
 export type { BootstrapDeps } from "./model/bootstrap";
+export {
+  ExportDriverError,
+  ExportRefusedError,
+  RUNNING_TURN_REFUSAL_MESSAGE,
+  TRUST_REFUSAL_MESSAGE,
+  ZERO_PAGES_REFUSAL_MESSAGE,
+  formatExportOutcome,
+  parseExportArgs,
+  runExport,
+  runHeadlessExport,
+} from "./model/run-export";
+export type {
+  ExportArgs,
+  ExportCliOutcome,
+  RunExportDeps,
+  RunExportResult,
+  RunHeadlessExportDeps,
+} from "./model/run-export";
 export { createProcessBoundary } from "./model/process-boundary";
 export type {
   PanicEvent,
