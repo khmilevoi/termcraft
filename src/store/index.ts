@@ -126,3 +126,8 @@ export { createPinStoreAdapter } from "./adapters/pin-store";
 export { createStagingAdapter } from "./adapters/staging";
 export { createTurnTransactionsAdapter } from "./adapters/turn-transactions";
 export { createProjectWriteAdapter } from "./adapters/project-write";
+export type { ProjectionsAdapter } from "./adapters/projections";
+export { createProjectionsAdapter } from "./adapters/projections";
+export { createTrustAdapter } from "./adapters/trust";
+export { createRecoveryAdapter } from "./adapters/recovery";
+export { createSessionCheckpointAdapter } from "./adapters/session-checkpoint";
