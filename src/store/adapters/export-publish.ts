@@ -47,9 +47,10 @@ import type { StoreAdapterDeps } from "./types";
 // get the permit `publishExport` is already holding and passes it straight into
 // `buildExportPublishTransaction` — never releasing and reacquiring.
 //
-// `plan.operations`/`plan.payloads` are empty until WP-5 (`export/model/publish.ts:167-177`),
-// so the precondition built from `plan.operations[].oldImage` is trivially satisfiable today —
-// this adapter is a correct, thin pass-through, not yet load-bearing.
+// `plan.operations`/`plan.payloads` now carry the real per-file/pointer/delete operations
+// `buildExportPublishOperations` builds (`core/export/model/publish-plan.ts`, WP-5 Task B2,
+// threaded through `publishExport` in Task B3) — the precondition built from
+// `plan.operations[].oldImage` is genuinely load-bearing, not merely trivially satisfiable.
 
 /** `export.retry`'s own "the export-output snapshot drifted" case (turn-durability §10 step 3's re-CAS, NOT the source read-set — see Design Q1 above). */
 export class ExportSnapshotStaleError extends errore.createTaggedError({

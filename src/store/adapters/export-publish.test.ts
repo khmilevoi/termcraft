@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 
 import { EXPORT_POINTER_TARGET, type ExportPointerV1, type ExportPublishPlanV1 } from "core/ports";
 import { createFakeExportPublish } from "core/ports/fakes";
@@ -281,6 +283,52 @@ describe("createExportPublishAdapter — readPointer()", () => {
       writeCoordinator.release(permit);
       if ("code" in published)
         throw new Error(`fixture bug: publish() failed: ${published.safeMessage}`);
+
+      const result = await adapter.readPointer();
+      if (result === null || !("code" in result))
+        throw new Error("fixture bug: expected a failure");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("returns a FailureDtoV1, never null, when readFile fails for a reason OTHER than not-found", async () => {
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createExportPublishAdapter(deps);
+
+      // `export/current.json` exists but as a DIRECTORY, not a regular file — a genuine
+      // `readFile` failure (`LeafRejectedError`, not `FsAccessError`/not-found) that must
+      // surface as a `FailureDtoV1` through the generic `toFailureDto(bytes)` branch, never
+      // be mistaken for the "absent" case that legitimately returns `null`.
+      const exportDir = path.join(open.safeFs.root.realPath, "export");
+      fs.mkdirSync(path.join(exportDir, "current.json"), { recursive: true });
+
+      const result = await adapter.readPointer();
+      if (result === null || !("code" in result))
+        throw new Error("fixture bug: expected a failure, not null");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("returns a FailureDtoV1 when export/current.json is valid JSON that fails the pointer schema", async () => {
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createExportPublishAdapter(deps);
+
+      // Well-formed JSON (JSON.parse succeeds) but `schemaVersion: 2` fails
+      // `exportPointerV1Schema`'s `z.literal(1)` — a genuinely distinct failure from the
+      // "not valid JSON" case above, exercising `readPointer`'s `validated.success === false`
+      // branch specifically.
+      const exportDir = path.join(open.safeFs.root.realPath, "export");
+      fs.mkdirSync(exportDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(exportDir, "current.json"),
+        JSON.stringify({ schemaVersion: 2, generationId: uuidv7(), files: {} }),
+      );
 
       const result = await adapter.readPointer();
       if (result === null || !("code" in result))
