@@ -36,6 +36,14 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import {
+  createFrameBroker,
+  createFrameTokenLedger,
+  createGeometryTokenLedger,
+  createPreviewBackpressure,
+  createPreviewSessionCommands,
+} from "core/preview";
+import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -165,6 +173,8 @@ function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }
       preview: reatomPreviewStateMachine(),
       migration: reatomMigrationStateMachine(),
     };
+    const frameTokenLedger = createFrameTokenLedger();
+    const geometryTokenLedger = createGeometryTokenLedger({ clock });
 
     const handlerContext: HandlerContext = {
       deps,
@@ -200,6 +210,25 @@ function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }
       launchOperation: (label, run) => {
         launches.push({ label, run });
       },
+      turnRunner: {
+        machine: machines.turn,
+        setActiveAttempt: () => {},
+        activeAttempt: () => null,
+      },
+      setSelection: () => {},
+      selection: () => null,
+      currentPreviewSession: () => null,
+      previewSessionCommands: createPreviewSessionCommands({
+        machine: machines.preview,
+        hostSupervisor: deps.hostSupervisor,
+        frameBroker: createFrameBroker(),
+        frameTokenLedger,
+        geometryTokenLedger,
+        backpressure: createPreviewBackpressure(),
+      }),
+      frameTokenLedger,
+      geometryTokenLedger,
+      pageRemovePlanLedger: createPageRemovePlanLedger(),
     };
 
     return {

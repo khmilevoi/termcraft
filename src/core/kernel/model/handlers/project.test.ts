@@ -34,6 +34,14 @@ import {
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
 import {
+  createFrameBroker,
+  createFrameTokenLedger,
+  createGeometryTokenLedger,
+  createPreviewBackpressure,
+  createPreviewSessionCommands,
+} from "core/preview";
+import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
+import {
   type CommandPayloadByKindV1,
   type FailureDtoV1,
   type UUIDv7,
@@ -152,6 +160,8 @@ function buildTestContext(options?: {
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
     clock,
   };
+  const frameTokenLedger = createFrameTokenLedger();
+  const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
 
   const handlerContext: HandlerContext = {
     deps,
@@ -183,6 +193,25 @@ function buildTestContext(options?: {
     launchOperation: (label, run) => {
       launchOperations.push({ label, run });
     },
+    turnRunner: {
+      machine: machines.turn,
+      setActiveAttempt: () => {},
+      activeAttempt: () => null,
+    },
+    setSelection: () => {},
+    selection: () => null,
+    currentPreviewSession: () => previewSession,
+    previewSessionCommands: createPreviewSessionCommands({
+      machine: machines.preview,
+      hostSupervisor: deps.hostSupervisor,
+      frameBroker: createFrameBroker(),
+      frameTokenLedger,
+      geometryTokenLedger,
+      backpressure: createPreviewBackpressure(),
+    }),
+    frameTokenLedger,
+    geometryTokenLedger,
+    pageRemovePlanLedger: createPageRemovePlanLedger(),
   };
 
   return {

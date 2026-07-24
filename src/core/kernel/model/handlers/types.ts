@@ -18,9 +18,23 @@ import type {
 } from "core/machines";
 import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
 import type { PreviewSession } from "core/ports";
-import type { CommandFamilyV1, CommandKindV1, CommandPayloadByKindV1, UUIDv7 } from "core/protocol";
+import type { FrameTokenLedger, GeometryTokenLedger, PreviewSessionCommands } from "core/preview";
+import type {
+  CommandFamilyV1,
+  CommandKindV1,
+  CommandPayloadByKindV1,
+  EventPayloadByKindV1,
+  UUIDv7,
+} from "core/protocol";
+import type { TurnAttemptHandle } from "core/turns";
 
 import type { KernelDeps } from "../../types";
+// `core/project/index.ts` does not exist yet (kernel-assembly Task 10 owns creating it) — a
+// deep import into `core/project/model/page-remove-plan` is the same documented stopgap
+// `handlers/project.ts`'s own header already uses for `core/project/model/trust.ts`/
+// `orphan-turn-scan.ts`/`descriptors.ts`: once Task 10 lands a public entry, this import
+// should move there.
+import type { PageRemovePlanLedger } from "core/project/model/page-remove-plan";
 
 /**
  * Kernel-assembly WP-1 task 9, STEP A — the shared skeleton every per-family handler
@@ -112,6 +126,68 @@ export type ProjectTrustV1 = KernelStateSnapshot["project"]["trust"];
 /** `KernelStateSnapshot["preview"]["sourceKind"]` by another name — see {@link ProjectTrustV1}. */
 export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
 
+// --- The turn family's own extra surface (Step C1) ----------------------------------------
+
+/**
+ * Everything ONLY `turn.start`/`turn.cancel` need beyond the ordinary `KernelMachines.turn`
+ * (`HandlerMachine`, `phaseAtom` excluded) and the five ordinary mutators — grouped under
+ * one namespaced field on {@link HandlerContext} (`turnRunner`) rather than flattened, so a
+ * reviewer checking "what can ANY handler touch" sees these named together as ONE
+ * clearly-scoped exception, not lost among the ordinary surface. Closes the `turn` family's
+ * own two reported gaps (`.superpowers/sdd/task9-family-turn-report.md`) — see this file's
+ * own report appendix ("Step C1") for the full investigation and the option chosen for each.
+ */
+export interface TurnRunnerContext {
+  /**
+   * The SAME real `StateMachine<TurnState, TurnAction>` object `kernel.ts` already holds
+   * (never a second instance, never a cast) — exposed here FULL (`phaseAtom` included)
+   * because `core/turns`'s six composed functions (`RunTurnDeps.machine`, and each of the
+   * six functions' own `Deps.machine`) all require the full type structurally, even though
+   * NONE of them ever actually reads or writes `phaseAtom` (verified: every call site only
+   * ever uses `.apply()`/`.phase()`/`.canApply()`). Narrowing `core/turns`'s own six `Deps`
+   * fields instead would touch a landed module outside this task's file scope; widening
+   * `KernelMachines.turn` for every family would reopen the `phaseAtom` escape hatch Step
+   * A's fix round 1 deliberately closed. This field is the surgical alternative named as
+   * option 3 in the turn family's own report: ONLY `turn.start`'s `launchOperation` closure
+   * (composing `runTurn`) may ever read it. Every other turn-touching handler — including
+   * `turn.cancel` for every phase except a currently-attempting one — must still go through
+   * `context.machines.turn`.
+   */
+  readonly machine: StateMachine<TurnState, TurnAction>;
+  /**
+   * Registers (or clears, with `null`) the `TurnAttemptHandle` `startTurnAttempt` returns,
+   * for the ONE turn `kernel.ts`'s own `activeTurnIdAtom` currently names — there is at most
+   * one live attempt at a time (`turn.start`'s own admission guard, `TURN_ALREADY_ACTIVE`),
+   * so this is a single kernel-held slot, not a map. `turn.start`'s `launchOperation` closure
+   * is the only legitimate caller that registers one (right after `startTurnAttempt` returns
+   * a live handle); that same closure is the only legitimate caller that clears it (`null`)
+   * once `runTurn`'s promise settles — mirroring `setActivePreviewSession`'s own "one setter,
+   * paired lifecycle" precedent.
+   */
+  readonly setActiveAttempt: (handle: TurnAttemptHandle | null) => void;
+  /**
+   * Returns the CURRENTLY registered attempt handle, but ONLY when `turnId` still names the
+   * turn `kernel.ts`'s own `activeTurnIdAtom` reports active — never a stale handle left over
+   * from an already-settled turn. `turn.cancel`'s handler is the only legitimate caller:
+   * `null` here means either no attempt is currently in flight (every cancelable phase except
+   * `"running"` has none — `context.machines.turn.apply("requestCancel")` is the correct,
+   * complete action for those) or `turnId` no longer matches (defensive only —
+   * `checkRevisionGuard`'s own `turn.cancel` rule 1 already makes this unreachable in a
+   * correctly-wired Kernel). A non-null return means a live `AgentBackend` run is in flight
+   * (`"running"`) and its OWN `handle.requestCancel()` must be called instead of
+   * `apply("requestCancel")` directly — `TurnAttemptHandle.requestCancel` already drives that
+   * exact machine transition itself (`core/turns/model/attempt.ts`), so calling both would
+   * double-apply an already-legal transition and desync from `attempt.ts`'s own internal
+   * `cancelRequested` flag (see the turn family's own report, Gap 2).
+   */
+  readonly activeAttempt: (turnId: UUIDv7) => TurnAttemptHandle | null;
+}
+
+// --- The selection surface (Step C1) -------------------------------------------------------
+
+/** `EventPayloadByKindV1["selection.changed"]`'s non-null member, by another name — matches `selection-model.ts`'s own local `SelectionDtoV1` alias, declared independently here so `types.ts` never imports FROM a family module. */
+export type SelectionSnapshotV1 = NonNullable<EventPayloadByKindV1["selection.changed"]>;
+
 // --- The handler context -----------------------------------------------------------------
 
 /**
@@ -189,6 +265,25 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  * `KernelMachines`'s per-machine type is {@link HandlerMachine}, a `Pick` that omits
  * `phaseAtom` entirely, so `context.machines.<domain>.phaseAtom` does not type-check —
  * see that type's own comment.
+ *
+ * STEP C1 ADDITIONS — closing the contract gaps two family investigations proved (see
+ * this file's own report appendix, "## Step C1", for the full writeup):
+ * - `turnRunner` ({@link TurnRunnerContext}) — the turn family's own extra surface
+ *   (Gap 1/Gap 2 of `.superpowers/sdd/task9-family-turn-report.md`).
+ * - `setSelection`/`selection` — the Kernel-held "current selection" fact
+ *   `.superpowers/sdd/task9-family-selection-model-report.md`'s gap 1 confirmed missing;
+ *   mirrors `setActivePreviewSession`'s own "not part of `KernelStateSnapshot`, a plain
+ *   Kernel-held closure fact instead" precedent, since no capability guard ever reads
+ *   "the current selection" either.
+ * - `currentPreviewSession` — the paired getter `setActivePreviewSession` always lacked
+ *   (`.superpowers/sdd/task9-family-preview-export-report.md`'s Gap A).
+ * - `previewSessionCommands`/`frameTokenLedger`/`geometryTokenLedger` — `core/preview`'s
+ *   already-landed session-commands router, composed once with its real collaborators
+ *   (same report's Gap A, the `SessionCommandsDeps` sub-primitives), plus the two token
+ *   ledgers the `pin`/`page` family's own report (`task9-family-page-pin-report.md`, gap 2)
+ *   needs shared between the not-yet-built `preview`/`pin` follow-up work.
+ * - `pageRemovePlanLedger` — the per-Kernel `PageRemovePlanLedger`
+ *   (`task9-family-page-pin-report.md`, gap 1) every `page.*` command in that family needs.
  */
 export interface HandlerContext {
   readonly deps: KernelDeps;
@@ -206,6 +301,31 @@ export interface HandlerContext {
     label: string,
     run: () => Promise<readonly PublishableEventV1[]>,
   ) => void;
+  /** The turn family's own extra surface (Step C1) — see {@link TurnRunnerContext}'s own comment. */
+  readonly turnRunner: TurnRunnerContext;
+  /** The Kernel-held "current selection" fact (Step C1) — see this interface's own comment above. */
+  readonly setSelection: (selection: SelectionSnapshotV1 | null) => void;
+  readonly selection: () => SelectionSnapshotV1 | null;
+  /** The paired getter for `setActivePreviewSession` (Step C1) — `kernel.ts`'s own `activePreview`, read back. */
+  readonly currentPreviewSession: () => PreviewSession | null;
+  /**
+   * `core/preview`'s already-landed command router (Step C1), composed ONCE inside
+   * `kernel.ts` — never rebuilt per call (`createPreviewSessionCommands`'s own factory doc:
+   * "two kernels — or two tests — must never share live-session state") — over the REAL
+   * `PreviewState` machine plus its four collaborators (`frameBroker`/`frameTokenLedger`/
+   * `geometryTokenLedger`/`backpressure`). NOT yet called by any currently-wired handler
+   * (`preview-export.ts` still drives `context.machines.preview`/`setActivePreviewSession`
+   * directly for its two implemented kinds) — exposed here so a follow-up revision of that
+   * family can adopt it for the five kinds Gap A blocks, without this task inventing
+   * behavior for a family module it does not own.
+   */
+  readonly previewSessionCommands: PreviewSessionCommands;
+  /** The SAME `FrameTokenLedger` instance `previewSessionCommands` holds internally — shared, Kernel-held, cross-family state (Step C1) for the not-yet-built `pin.create` to consume/restore. */
+  readonly frameTokenLedger: FrameTokenLedger;
+  /** The SAME `GeometryTokenLedger` instance `previewSessionCommands` holds internally — see {@link frameTokenLedger}'s own comment. */
+  readonly geometryTokenLedger: GeometryTokenLedger;
+  /** The per-Kernel `PageRemovePlanLedger` (Step C1) — see this interface's own comment above. */
+  readonly pageRemovePlanLedger: PageRemovePlanLedger;
 }
 
 // --- The well-formed outcome, made hard to get wrong ---------------------------------------

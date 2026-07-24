@@ -11,6 +11,7 @@ import {
   reatomRestoreStateMachine,
   reatomTurnStateMachine,
 } from "core/machines";
+import type { PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentRegistry,
@@ -32,6 +33,14 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import {
+  createFrameBroker,
+  createFrameTokenLedger,
+  createGeometryTokenLedger,
+  createPreviewBackpressure,
+  createPreviewSessionCommands,
+} from "core/preview";
+import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -106,7 +115,7 @@ interface TestHarness {
     readonly label: string;
     readonly run: () => Promise<readonly unknown[]>;
   }[];
-  readonly getActivePreviewSession: () => unknown;
+  readonly getActivePreviewSession: () => PreviewSession | null;
 }
 
 function buildTestContext(deps: KernelDeps): TestHarness {
@@ -116,7 +125,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
     let activeTurnId: UUIDv7 | null = null;
     let commitIntentRecorded = false;
     let previewSourceKind: PreviewSourceKindV1 = null;
-    let activePreviewSession: unknown = null;
+    let activePreviewSession: PreviewSession | null = null;
     const launched: { label: string; run: () => Promise<readonly unknown[]> }[] = [];
 
     const machines = {
@@ -128,6 +137,8 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       preview: reatomPreviewStateMachine(),
       migration: reatomMigrationStateMachine(),
     };
+    const frameTokenLedger = createFrameTokenLedger();
+    const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
 
     const handlerContext: HandlerContext = {
       deps,
@@ -164,6 +175,25 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       launchOperation: (label, run) => {
         launched.push({ label, run: run as () => Promise<readonly unknown[]> });
       },
+      turnRunner: {
+        machine: machines.turn,
+        setActiveAttempt: () => {},
+        activeAttempt: () => null,
+      },
+      setSelection: () => {},
+      selection: () => null,
+      currentPreviewSession: () => activePreviewSession,
+      previewSessionCommands: createPreviewSessionCommands({
+        machine: machines.preview,
+        hostSupervisor: deps.hostSupervisor,
+        frameBroker: createFrameBroker(),
+        frameTokenLedger,
+        geometryTokenLedger,
+        backpressure: createPreviewBackpressure(),
+      }),
+      frameTokenLedger,
+      geometryTokenLedger,
+      pageRemovePlanLedger: createPageRemovePlanLedger(),
     };
 
     return {

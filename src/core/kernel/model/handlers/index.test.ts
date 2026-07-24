@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { context } from "@reatom/core";
 
@@ -32,6 +32,14 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import {
+  createFrameBroker,
+  createFrameTokenLedger,
+  createGeometryTokenLedger,
+  createPreviewBackpressure,
+  createPreviewSessionCommands,
+} from "core/preview";
+import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import {
   COMMAND_KINDS_V1,
   type CommandEnvelopeV1,
@@ -109,9 +117,12 @@ function buildTestContext(): HandlerContext {
       preview: reatomPreviewStateMachine(),
       migration: reatomMigrationStateMachine(),
     };
+    const deps = buildDeps();
+    const frameTokenLedger = createFrameTokenLedger();
+    const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
 
     return {
-      deps: buildDeps(),
+      deps,
       machines,
       readKernelState: () => ({
         project: { phase: machines.project.phase(), trust },
@@ -139,6 +150,25 @@ function buildTestContext(): HandlerContext {
       // and captures a session is Step C's/the preview family's own test concern.
       setActivePreviewSession: () => {},
       launchOperation: () => {},
+      turnRunner: {
+        machine: machines.turn,
+        setActiveAttempt: () => {},
+        activeAttempt: () => null,
+      },
+      setSelection: () => {},
+      selection: () => null,
+      currentPreviewSession: () => null,
+      previewSessionCommands: createPreviewSessionCommands({
+        machine: machines.preview,
+        hostSupervisor: deps.hostSupervisor,
+        frameBroker: createFrameBroker(),
+        frameTokenLedger,
+        geometryTokenLedger,
+        backpressure: createPreviewBackpressure(),
+      }),
+      frameTokenLedger,
+      geometryTokenLedger,
+      pageRemovePlanLedger: createPageRemovePlanLedger(),
     };
   });
 }
@@ -219,10 +249,35 @@ describe("createHandlerRegistry", () => {
 
     expect(COMMAND_KINDS_V1.length).toBe(43);
 
+    // Step C1 wired four real family maps (`chat`, `selection`+`model`, `project`,
+    // `preview`+`export`) into `totalHandlers` — `project.create`/`project.open`, in
+    // particular, legally admit from this fixture's fresh `closed` project phase and
+    // return a REAL `"started"` outcome with its own admission event, not the uniform
+    // no-op every kind returned before Step C1. This test's own job is still only "resolves
+    // every kind without throwing" (never a claim about WHICH disposition each kind
+    // returns — that is each family's own test file's job); asserting only shape here, not
+    // a blanket `{disposition: "no-op", events: []}` equality, is what keeps this test
+    // honest about that scope.
+    //
+    // A real dispatch pipeline never calls two handlers whose own preconditions conflict
+    // back to back (the capability guard already enforces phase legality before `handle` is
+    // ever reached) — but THIS test drives all 43 kinds in `COMMAND_KINDS_V1`'s own fixed
+    // order against ONE shared, evolving `HandlerContext`, with no guard between them, purely
+    // to prove every kind resolves. `project.create`'s own admission legitimately moves the
+    // project machine out of the exact phase a LATER kind in this same fixed order expects
+    // (`project.open`'s own `beginOpen`, `project.retryOpen`'s admission pair, `project.close`'s
+    // `beginClose`) — each family's own defensive "illegal despite the guard confirming
+    // legality" warning is expected, real project code, not a bug this loop should hide by
+    // silently swallowing; `console.warn` is spied and suppressed only for this one test's own
+    // duration, matching `kernel.test.ts`'s own "no stderr noise" precedent, and restored
+    // immediately after.
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     for (const kind of COMMAND_KINDS_V1) {
       const outcome = registry(envelopeFor(kind, payloads[kind]));
-      expect(outcome).toEqual({ disposition: "no-op", events: [] });
+      expect(["no-op", "completed", "started"]).toContain(outcome.disposition);
+      expect(Array.isArray(outcome.events)).toBe(true);
     }
+    warnSpy.mockRestore();
   });
 
   test("the 10 deferred kinds resolve to deferredHandlers' own function in totalHandlers — not merely an equal-looking stand-in", () => {

@@ -32,6 +32,14 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import {
+  createFrameBroker,
+  createFrameTokenLedger,
+  createGeometryTokenLedger,
+  createPreviewBackpressure,
+  createPreviewSessionCommands,
+} from "core/preview";
+import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import type { UUIDv7 } from "core/protocol";
 import { deferredCapabilityReason } from "core/versions";
 import { parsePageSlug } from "entities/page";
@@ -109,9 +117,12 @@ function buildTestContext(): {
       preview: reatomPreviewStateMachine(),
       migration: reatomMigrationStateMachine(),
     };
+    const deps = buildDeps();
+    const frameTokenLedger = createFrameTokenLedger();
+    const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
 
     const handlerContext: HandlerContext = {
-      deps: buildDeps(),
+      deps,
       machines,
       readKernelState: () => ({
         project: { phase: machines.project.phase(), trust },
@@ -148,6 +159,25 @@ function buildTestContext(): {
       launchOperation: () => {
         launchOperationCalls += 1;
       },
+      turnRunner: {
+        machine: machines.turn,
+        setActiveAttempt: () => {},
+        activeAttempt: () => null,
+      },
+      setSelection: () => {},
+      selection: () => null,
+      currentPreviewSession: () => null,
+      previewSessionCommands: createPreviewSessionCommands({
+        machine: machines.preview,
+        hostSupervisor: deps.hostSupervisor,
+        frameBroker: createFrameBroker(),
+        frameTokenLedger,
+        geometryTokenLedger,
+        backpressure: createPreviewBackpressure(),
+      }),
+      frameTokenLedger,
+      geometryTokenLedger,
+      pageRemovePlanLedger: createPageRemovePlanLedger(),
     };
 
     return {
