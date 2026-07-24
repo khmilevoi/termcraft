@@ -1,3 +1,5 @@
+import { wrap } from "@reatom/core";
+
 import type { PreviewAction, PreviewState, TransitionOutcome } from "core/machines";
 import type { EventCorrelationV1, PublishableEventV1 } from "core/mailbox";
 import type {
@@ -264,12 +266,12 @@ function selectCurrentSource(
   const fromPhase = applied.to; // "starting" | "switching" — where `sessionFailed` fires from
 
   context.launchOperation("kernel.preview.selectCurrentSource", async () => {
-    const settings = await resolvePageSettings(context.deps, payload.pageSlug);
+    const settings = await wrap(resolvePageSettings(context.deps, payload.pageSlug));
     if ("code" in settings) {
       return failSession(context, payload.pageSlug, null, fromPhase, correlation, settings);
     }
 
-    const workspace = await context.deps.projectStore.readWorkspaceState();
+    const workspace = await wrap(context.deps.projectStore.readWorkspaceState());
     if ("code" in workspace) {
       return failSession(
         context,
@@ -293,7 +295,7 @@ function selectCurrentSource(
       capabilities: { colorDepth: colorDepthFromWorkspaceState(workspace.state) },
     };
 
-    const session = await context.deps.hostSupervisor.preview(spec);
+    const session = await wrap(context.deps.hostSupervisor.preview(spec));
     if ("code" in session) {
       return failSession(
         context,

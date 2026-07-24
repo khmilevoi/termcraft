@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { context } from "@reatom/core";
+import { context, wrap } from "@reatom/core";
 
 import {
   reatomCommitStateMachine,
@@ -276,7 +276,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
     expect(harness.launched).toHaveLength(1);
 
-    const events = await harness.launched[0]!.run();
+    const events = await wrap(harness.launched[0]!.run());
 
     expect(harness.handlerContext.machines.preview.phase()).toBe("live");
     expect(harness.getActivePreviewSession()).not.toBeNull();
@@ -316,7 +316,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     enable(harness.handlerContext.machines);
 
     previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
-    const events = await harness.launched[0]!.run();
+    const events = await wrap(harness.launched[0]!.run());
 
     expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
     expect(harness.getActivePreviewSession()).toBeNull();
@@ -358,7 +358,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     enable(harness.handlerContext.machines);
 
     previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
-    const events = await harness.launched[0]!.run();
+    const events = await wrap(harness.launched[0]!.run());
 
     expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
     const failed = events.find((event) => (event as { kind: string }).kind === "preview.failed") as
@@ -389,7 +389,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     enable(harness.handlerContext.machines);
 
     previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
-    await harness.launched[0]!.run();
+    await wrap(harness.launched[0]!.run());
 
     const fakeHost = deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>;
     const previewCall = fakeHost.calls.find((call) => call.method === "preview");
