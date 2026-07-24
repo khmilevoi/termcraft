@@ -549,7 +549,7 @@ describe("pageHandlers['page.removeConfirm']", () => {
     warnSpy.mockRestore();
   });
 
-  test("logs and performs no write when the plan has drifted stale", async () => {
+  test("logs and performs no write when gathering fresh facts fails (the failure branch, not drift)", async () => {
     const { handlerContext, pageStore, mutex, plan, getLaunches } = setupConfirmScenario();
     pageStore.failNext("readSource", FAILURE);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
@@ -562,6 +562,31 @@ describe("pageHandlers['page.removeConfirm']", () => {
     expect(pageStore.calls.some((c) => c.method === "remove")).toBe(false);
     expect(mutex.calls.some((c) => c.method === "release")).toBe(true);
     expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("logs and performs no write when the plan has genuinely drifted stale (page order changed since mint)", async () => {
+    const { handlerContext, pageStore, mutex, plan, getLaunches } = setupConfirmScenario();
+    // Bypass the plan-invalidating `reorder()` model function (`page-mutations.ts`) — call
+    // the raw port directly so the underlying page order changes WITHOUT the active plan
+    // being invalidated, producing a REAL `detectPageRemovePlanDrift` mismatch
+    // (`orderedPageSlugs`/`pageOrderHash`), not merely a read failure (the previous test's
+    // own, differently-shaped, case).
+    await pageStore.reorder([slug("about"), slug("home")]);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    pageHandlers["page.removeConfirm"]({ pageRemovePlanId: plan.pageRemovePlanId }, handlerContext);
+    const launch = onlyLaunch(getLaunches());
+    const events = await launch.run();
+
+    expect(events).toEqual([]);
+    expect(pageStore.calls.some((c) => c.method === "remove")).toBe(false);
+    expect(mutex.calls.some((c) => c.method === "release")).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+    const [warnMessage] = warnSpy.mock.calls[0] ?? [];
+    expect(typeof warnMessage).toBe("string");
+    expect(warnMessage as string).toContain("stale");
+    expect(warnMessage as string).toContain("orderedPageSlugs");
     warnSpy.mockRestore();
   });
 });

@@ -40,7 +40,7 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * (`./types.ts`'s own comment) — no handler here ever calls `context.machines.*` or any of
  * `HandlerContext`'s five ordinary Kernel-held mutators. `page.removeDiscardPlan` is the one
  * exception to "always async": `discardPageRemovePlan` (`core/project/model/
- * page-remove-plan.ts`) is a plain synchronous function with no port I/O at all, so its
+ * page-mutations.ts`) is a plain synchronous function with no port I/O at all, so its
  * handler resolves synchronously too — `completedOutcome`/`noOpOutcome`, matching its own
  * two-armed `"discarded" | "not-found"` result exactly (something happened vs. nothing did).
  * Every other handler is genuinely async (a port call, a mutex acquisition, or both) and
@@ -242,7 +242,7 @@ function handlePageRemoveConfirm(
 
 /**
  * The one synchronous handler in this file: `discardPageRemovePlan` (`core/project/model/
- * page-remove-plan.ts`) does no port I/O at all (its own doc comment: "Synchronous — no
+ * page-mutations.ts`) does no port I/O at all (its own doc comment: "Synchronous — no
  * port I/O at all"), so there is no async boundary to bridge through `launchOperation` here.
  * `"discarded"` genuinely transitioned Kernel-held ledger state (`completedOutcome`);
  * `"not-found"` changed nothing (`noOpOutcome`) — matching the model function's own two-armed

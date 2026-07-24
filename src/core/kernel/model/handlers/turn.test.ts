@@ -350,6 +350,11 @@ describe('turnHandlers["turn.cancel"]', () => {
         },
       ],
     });
+    const [event] = outcome.events;
+    if (event === undefined) throw new Error("expected exactly one event");
+    expect(eventPayloadV1SchemaByKind["kernel.stateChanged"].safeParse(event.payload).success).toBe(
+      true,
+    );
     expect(getLaunchedOperations()).toHaveLength(0);
   });
 
@@ -385,6 +390,11 @@ describe('turnHandlers["turn.cancel"]', () => {
         },
       ],
     });
+    const [event] = outcome.events;
+    if (event === undefined) throw new Error("expected exactly one event");
+    expect(eventPayloadV1SchemaByKind["kernel.stateChanged"].safeParse(event.payload).success).toBe(
+      true,
+    );
     expect(cancelCalls).toBe(0); // not yet — only inside the launched operation's own run()
 
     const [operation] = getLaunchedOperations();
@@ -394,6 +404,21 @@ describe('turnHandlers["turn.cancel"]', () => {
     const events = await operation.run();
     expect(events).toEqual([]);
     expect(cancelCalls).toBe(1);
+  });
+
+  test("activeAttempt's turnId-mismatch defensive branch: a registered handle is never returned for a turnId other than the one activeTurnId currently names", () => {
+    const { handlerContext, setActiveTurnId } = buildTestContext();
+    setActiveTurnId(TURN_ID);
+    admitTo(handlerContext, ["beginAdmission", "finishAdmission", "beginAttempt"]);
+
+    const fakeHandle: TurnCancelHandle = { requestCancel: async () => {} };
+    handlerContext.turnRunner.setActiveAttempt(fakeHandle);
+
+    const OTHER_TURN_ID = uuidv7();
+    expect(handlerContext.turnRunner.activeAttempt(OTHER_TURN_ID)).toBeNull();
+    // The SAME handle is still reachable under the turnId it was actually registered for —
+    // proving the mismatch above is a targeted defensive check, not a general regression.
+    expect(handlerContext.turnRunner.activeAttempt(TURN_ID)).toBe(fakeHandle);
   });
 
   test('a repeated cancel while already "stopping" is an accepted no-op (§8.4 point 4), not a failure', () => {
