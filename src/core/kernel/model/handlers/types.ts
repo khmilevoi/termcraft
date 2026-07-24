@@ -19,6 +19,7 @@ import type {
 import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
 import type { PreviewSession } from "core/ports";
 import type { FrameTokenLedger, GeometryTokenLedger, PreviewSessionCommands } from "core/preview";
+import type { PageRemovePlanLedger } from "core/project";
 import type {
   CommandFamilyV1,
   CommandKindV1,
@@ -28,12 +29,6 @@ import type {
 } from "core/protocol";
 
 import type { KernelDeps } from "../../types";
-// `core/project/index.ts` does not exist yet (kernel-assembly Task 10 owns creating it) — a
-// deep import into `core/project/model/page-remove-plan` is the same documented stopgap
-// `handlers/project.ts`'s own header already uses for `core/project/model/trust.ts`/
-// `orphan-turn-scan.ts`/`descriptors.ts`: once Task 10 lands a public entry, this import
-// should move there.
-import type { PageRemovePlanLedger } from "core/project/model/page-remove-plan";
 
 /**
  * Kernel-assembly WP-1 task 9, STEP A — the shared skeleton every per-family handler

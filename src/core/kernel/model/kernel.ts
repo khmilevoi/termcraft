@@ -43,9 +43,7 @@ import {
   createPreviewBackpressure,
   createPreviewSessionCommands,
 } from "core/preview";
-// `core/project/index.ts` does not exist yet (kernel-assembly Task 10) — the same
-// documented deep-import stopgap `handlers/project.ts`'s own header already uses.
-import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
+import { createPageRemovePlanLedger } from "core/project";
 import {
   type CommandKindV1,
   type EventKindV1,

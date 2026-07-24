@@ -3,12 +3,14 @@ import { wrap } from "@reatom/core";
 import type { TransitionOutcome } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
 import {
+  type IntendedRecoveryDomainV1,
   PageDescriptorsAssemblyError,
+  type TrustDecisionV1,
   buildPageDescriptorsChangedPayload,
-} from "core/project/model/descriptors";
-import { scanOrphanTurns } from "core/project/model/orphan-turn-scan";
-import { buildTrustStatus, grantImplicitTrust } from "core/project/model/trust";
-import type { IntendedRecoveryDomainV1, TrustDecisionV1 } from "core/project/types";
+  buildTrustStatus,
+  grantImplicitTrust,
+  scanOrphanTurns,
+} from "core/project";
 import type {
   CommandPayloadByKindV1,
   FailureDtoV1,
@@ -36,13 +38,10 @@ import { noOpOutcome, startedOutcome } from "./types";
  * `core/project/model/orphan-turn-scan.ts` (the TD §7.7 orphan scan + classifier), and
  * `core/project/model/descriptors.ts` (the `page.descriptorsChanged` diff/assembly) are
  * an ALREADY-LANDED, already-tested module this file composes verbatim — none of their
- * logic is re-derived here. Deep-imported from `core/project/model/*` rather than
- * `core/project` (the module's own public entry) because `core/project/index.ts` does not
- * exist yet — kernel-assembly Task 10 ("Create: src/core/project/index.ts — export the
- * project startup surface") owns creating it, and this task's own deliverable is
- * explicitly scoped to `handlers/project.ts` + its test, nothing else. Once Task 10 lands
- * that index, these three imports should move to it; the deep paths are a documented,
- * deliberate stopgap, not an accidental boundary violation.
+ * logic is re-derived here. Imported through `core/project` (the module's own public
+ * entry, kernel-assembly Task 10) rather than a deep `core/project/model/*` path — this
+ * file previously deep-imported as a documented stopgap awaiting exactly that barrel;
+ * Task 10 landed it, so the deep paths are gone.
  *
  * NOT REUSED, AND WHY: `core/project/model/open-sequence.ts`'s own `runOpenSequence` is
  * the "whole thing" orchestrator TD §12 describes, but its `OpenSequenceDeps` needs SIX
