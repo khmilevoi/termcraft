@@ -115,6 +115,48 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
   });
 });
 
+describe("Workspace fullscreen preview sizing (F2, design paneShell noChat:true)", () => {
+  const ready = (slug: string, title: string): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: slug,
+    sourceHash: TEST_SHA,
+    title,
+    minSize: { w: 80, h: 24 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  test("the tab strip is sized to the FULL terminal width in fullscreen, not width minus the (unrendered) chat column", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 60, h: 20 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "a",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [
+          ready("a", "AlphaPage"),
+          ready("b", "BravoPage"),
+          ready("c", "CharliePage"),
+        ],
+      }),
+    );
+    deps.local.fullscreen.set(true);
+    const handle = await createHeadlessRenderer({ w: 60, h: 20 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    // paneShell's `noChat:true` branch (design engine.js:392-401) gives the preview pane the
+    // FULL width `w` once the chat column is gone — at w=60 all three tabs fit with no overflow;
+    // the pre-fix `w - chatW` (38) would overflow this same tab set and paint a spurious ‹ / ›.
+    expect(text).not.toContain("‹");
+    expect(text).not.toContain("›");
+    expect(text).toContain("AlphaPage");
+    expect(text).toContain("CharliePage");
+  });
+});
+
 describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
   const pin = (overrides: Partial<PinDtoV1>): PinDtoV1 => ({
     pinId: uuidv7(),
@@ -429,8 +471,31 @@ describe("Workspace agent identity (M22 — data-driven, not the design's codex/
     handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-    expect(text).toContain("chat ·");
+    expect(text).toContain("chat");
     expect(text).not.toContain("codex");
     expect(text).not.toContain("claude");
+  });
+
+  // TRIAGE #38: a null identity is the DEFAULT wiring today (buildAgentIdentity() always
+  // returns null — core/kernel/model/kernel.ts), not a rare edge case, so the chat-panel title
+  // and the presence line must not paint a dangling separator/bullet for it.
+  test("a null identity paints no dangling ' · ' separator on the chat title, nor a bare '●' presence line (TRIAGE #38)", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        agentIdentity: null,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).not.toContain("chat ·");
+    expect(text).not.toContain("●");
   });
 });

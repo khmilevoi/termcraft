@@ -10,6 +10,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   overlay: null,
   composerValue: "",
   homeHealthPresent: true,
+  turnRunning: false,
   ...over,
 });
 
@@ -80,6 +81,16 @@ describe("resolveKey — Home", () => {
       ),
     ).toEqual({ kind: "home-input", ch: "r" });
   });
+
+  test("on the missing-agent error panel, only r is live — no submit/backspace/input affordance exists there", () => {
+    const missingAgent = ctx({ screen: "home", homeHealthPresent: false });
+    expect(resolveKey(key({ name: "return" }), missingAgent)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "backspace" }), missingAgent)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "x", sequence: "x" }), missingAgent)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "r", sequence: "r" }), missingAgent)).toEqual({
+      kind: "home-recheck",
+    });
+  });
 });
 
 describe("resolveKey — Workspace composer", () => {
@@ -119,6 +130,18 @@ describe("resolveKey — Workspace composer", () => {
       kind: "none",
     });
     expect(resolveKey(key({ name: "enter" }), ctx({ screen: "read-only" }))).toEqual({
+      kind: "none",
+    });
+  });
+
+  test("composer input and Enter-submit are inert while a turn is running, matching the disabled composer", () => {
+    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({ turnRunning: true }))).toEqual({
+      kind: "none",
+    });
+    expect(resolveKey(key({ name: "return" }), ctx({ turnRunning: true }))).toEqual({
+      kind: "none",
+    });
+    expect(resolveKey(key({ name: "backspace" }), ctx({ turnRunning: true }))).toEqual({
       kind: "none",
     });
   });

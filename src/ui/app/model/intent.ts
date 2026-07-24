@@ -249,12 +249,21 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
 /** Resolves and applies one `Esc` press against the layered stack (design §3.8). */
 function applyEsc(deps: UiDeps): void {
   const turn = deps.mirror.turn();
+  // Page-scoped exactly like `deriveComposerAttach` (`workspace/model/attach.ts`): the mirror
+  // only clears `selection` on a fresh `kernel.snapshot`, never on a page switch, so an
+  // unscoped read would still report a selection made on a page the user has since navigated
+  // away from — deselecting it here would be a no-op the user never sees (the composer chip is
+  // already hidden for it), silently eating the Esc press that should fall through instead
+  // (TRIAGE #35).
+  const selection = deps.mirror.selection();
+  const hasSelection =
+    selection !== null && selection.pageSlug === deps.mirror.project().activePageSlug;
   const outcome = resolveEsc({
     overlayOpen: deps.local.overlay(),
     focusAwayFromComposer: deps.local.focus() !== "composer",
     historicalBrowse: false,
     generationRunning: turn.phase === "running",
-    hasSelection: deps.mirror.selection() !== null,
+    hasSelection,
   });
 
   switch (outcome.kind) {

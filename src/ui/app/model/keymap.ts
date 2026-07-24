@@ -37,6 +37,14 @@ export interface KeyContext {
    * renders the missing-agent error panel (where `r` re-checks health instead).
    */
   readonly homeHealthPresent: boolean;
+  /**
+   * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). The Composer renders
+   * `disabled` while this is true (`Workspace.tsx`'s `disabled={... || turn.phase === "running"
+   * || ...}`), so the key layer must refuse composer-input/composer-submit here too — otherwise
+   * keystrokes would silently accumulate behind the disabled placeholder and Enter would fire a
+   * second `turn.start` the kernel rejects (`TURN_ALREADY_ACTIVE`), discarding what was typed.
+   */
+  readonly turnRunning: boolean;
 }
 
 /**
@@ -159,15 +167,24 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   if (hotkey?.inert === true) return { kind: "none" };
   if (hotkey !== null) return { kind: "action-execute", actionId: hotkey.id };
 
+  // Excludes `turnRunning`: the Composer renders visually `disabled` for the whole duration of
+  // a running turn (`Workspace.tsx`'s `disabled={... || turn.phase === "running" || ...}`), so
+  // keystrokes/Enter must stop here too — otherwise typed text would silently pile up behind the
+  // "generating… esc to cancel" placeholder and Enter would fire a second rejected `turn.start`,
+  // discarding it (`applyIntent`'s `composer-submit` clears the composer unconditionally).
   const composerActive =
-    context.screen === "workspace" && context.focus === "composer" && context.overlay === null;
+    context.screen === "workspace" &&
+    context.focus === "composer" &&
+    context.overlay === null &&
+    !context.turnRunning;
 
   if (context.screen === "home") {
     // design/12-errors-edge-states.dc.html (homeErr): the missing-agent error panel has no
-    // prompt input, and its status bar reads "r  re-check" — but the idle screen's prompt is
-    // free text, so a literal "r" there must still type, not re-check (M15).
-    if (context.homeHealthPresent === false && key.sequence === "r") {
-      return { kind: "home-recheck" };
+    // prompt input at all, and its status bar reads only "r  re-check" — every other key must be
+    // inert there (M15), not fall through to the idle prompt's input/submit/backspace handling.
+    if (context.homeHealthPresent === false) {
+      if (key.sequence === "r") return { kind: "home-recheck" };
+      return { kind: "none" };
     }
     if (RETURN_NAMES.has(key.name)) return { kind: "home-submit" };
     if (key.name === "backspace") return { kind: "home-backspace" };

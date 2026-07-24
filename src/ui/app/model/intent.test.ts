@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { uuidv7 } from "infrastructure/uuid";
-import { TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
+import { TEST_SHA, TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
 
 import { createUiDeps } from "./deps";
 import { applyIntent } from "./intent";
@@ -399,5 +399,39 @@ describe("applyIntent — Esc layers", () => {
     applyIntent({ kind: "esc" }, deps);
     expect(deps.local.focus()).toBe("composer");
     expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  // TRIAGE #35: `applyEsc` must page-scope `hasSelection` exactly like `deriveComposerAttach`
+  // does (`workspace/model/attach.ts`) — the mirror only clears `selection` on a fresh
+  // `kernel.snapshot`, never on a page switch, so an unscoped read stays "true" for a selection
+  // left over from a page the user has since navigated away from.
+  test("esc does not deselect a stale cross-page selection (page-scoped like the composer chip, TRIAGE #35)", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    deps.mirror.apply(
+      event("selection.changed", {
+        pageSlug: "other",
+        elementId: "gauge-cpu",
+        sourceHash: TEST_SHA,
+      }),
+    );
+    applyIntent({ kind: "esc" }, deps);
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("esc still deselects a selection that matches the active page (TRIAGE #35)", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    deps.mirror.apply(
+      event("selection.changed", {
+        pageSlug: "main",
+        elementId: "gauge-cpu",
+        sourceHash: TEST_SHA,
+      }),
+    );
+    applyIntent({ kind: "esc" }, deps);
+    expect(dispatchedKinds(kernel)).toEqual(["selection.clear"]);
   });
 });

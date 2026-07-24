@@ -265,10 +265,23 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // text below — never an invented fallback like "agent".
   const agentLabel = identity?.backendId ?? "";
   const modelChip = identity === null ? "" : `${identity.backendId} · ${identity.modelLabel}`;
+  // TRIAGE #38: `buildAgentIdentity()` returns `null` by default today (no producer wired yet —
+  // `core/kernel/model/kernel.ts`), so an empty `agentLabel` is the common case, not a rare one.
+  // The chat-panel title's ` · ${agentLabel}` segment must not paint a dangling separator for
+  // it — computed once here so both the title and the presence line agree on when to drop it.
+  const chatTitleSuffix = agentLabel === "" ? "" : ` · ${agentLabel}`;
 
   const w = size.w;
   const h = size.h;
   const chatW = Math.round(w * 0.37);
+  // Fullscreen (F2) drops the chat column entirely (`!fullscreen &&` below), so the preview pane
+  // — tab strip and preview region alike — must claim the FULL terminal width, matching the
+  // design engine's `paneShell(..., {noChat:true})` (`termcraft-engine.js:392-401`: `chatW=0`
+  // when `noChat`, so `pw = w - 0 = w`). Previously both were sized `w - chatW` unconditionally,
+  // clipping the tab strip ~chatW columns early and mis-sizing EmptyState/ErrorPanel/the ready
+  // placeholder in fullscreen — `requestAtMouse` above already branches the same way
+  // (`fullscreen ? 0 : chatW`) for the live frame's mouse-cell origin.
+  const previewWidth = fullscreen ? w : w - chatW;
   const frameH = h - 1;
   const ghostSlug =
     turn.phase === "running" && descriptors.length === 0 ? project.activePageSlug : null;
@@ -333,14 +346,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             border
             borderStyle="rounded"
             borderColor={composerFocused ? SHELL_PALETTE.amber : SHELL_PALETTE.line}
-            title={composerFocused ? `❯ chat · ${agentLabel}` : `chat · ${agentLabel}`}
+            title={composerFocused ? `❯ chat${chatTitleSuffix}` : `chat${chatTitleSuffix}`}
             titleColor={composerFocused ? SHELL_PALETTE.amberHi : SHELL_PALETTE.faint}
             position="relative"
           >
             <box id="ws-chat-stream" flexGrow={1} flexDirection="column">
-              <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
-                {`● ${agentLabel}`}
-              </text>
+              {agentLabel !== "" && (
+                <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
+                  {`● ${agentLabel}`}
+                </text>
+              )}
               {/*
                * The persisted chat scrollback (design §3.2: "the block collapses into the
                * persisted agent record… above" — spec:149-160). Fed by the mirror's `records`
@@ -435,8 +450,8 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderStyle="rounded"
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
-          {renderTabs(tabs, w - chatW)}
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, w - chatW, frameH - 3, {
+          {renderTabs(tabs, previewWidth)}
+          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewWidth, frameH - 3, {
             pins,
             pendingPin,
             selectionRect,

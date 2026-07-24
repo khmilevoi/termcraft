@@ -86,8 +86,16 @@ function renderOverlay(deps: UiDeps) {
     return (
       <ExportPopup
         id="overlay-export"
-        projectName="design"
-        paths={[".termcraft/export/design-prompt.md", ".termcraft/export/pages/*.tsx"]}
+        // DIVERGENCE: the design's sample popup names a project ("system-monitor") and lists
+        // several written-file paths — but the real wire payload (`ExportTerminalPayloadV1`,
+        // the mirror's `ExportMirror` "done" variant) carries no project-name field at all
+        // (`ProjectMirror` only has a `projectId` UUID) and only ONE `destination` identity
+        // string, no per-file manifest. `env.root` — the same folder identity `TrustPrompt`
+        // already shows the user (`folder={deps.env.root}` above) — is the closest real stand-in
+        // for "which project", and the single real `destination` replaces the invented glob
+        // paths, rather than fabricating either.
+        projectName={deps.env.root}
+        paths={[exportState.destination]}
         caveat="reads current page.tsx on disk · incl uncommitted"
       />
     );
@@ -143,6 +151,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
         composerValue: deps.local.composer(),
         homeHealthPresent: deps.local.homeHealth().present,
+        turnRunning: deps.mirror.turn().phase === "running",
       }),
       deps,
     );

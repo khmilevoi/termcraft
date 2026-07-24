@@ -546,6 +546,43 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(dismissed).not.toContain("export ^E");
   });
 
+  test("the export success popup renders the real export.completed result, not the hardcoded 'design' sample (App.tsx:89)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/my-real-project", workspaceIdentity: "wid" },
+    );
+    const operationId = uuidv7();
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("export.completed", {
+          operationId,
+          phase: "publishing",
+          destination: ".termcraft/export/my-real-output",
+          generationId: null,
+          failure: null,
+        }),
+      );
+    });
+    const frame = await renderer.waitForFrame((f) => f.includes("export ^E"));
+    // The real `export.completed` destination the mirror actually retained — never the
+    // fabricated `.termcraft/export/design-prompt.md`/`pages/*.tsx` glob literals.
+    expect(frame).toContain(".termcraft/export/my-real-output");
+    expect(frame).not.toContain("design-prompt.md");
+    expect(frame).not.toContain("pages/*.tsx");
+    // The real project identity available to the UI (`env.root`, the same folder identity
+    // `TrustPrompt` already shows) — never the design's hardcoded "design" sample name.
+    expect(frame).toContain("/my-real-project");
+    expect(frame).not.toContain("exported design");
+  });
+
   test("shows the export failure popup on export.failed, naming the retained page/size, and Escape dismisses it (M14)", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
