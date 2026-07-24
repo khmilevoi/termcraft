@@ -66,10 +66,11 @@ flowchart LR
 
    ```text
    src/
-     main.tsx           interactive root + `_host` argv dispatch         [landed]
+     main.tsx           interactive root + `_host`/`export` argv dispatch [landed]
      demo.tsx           demo root, in-memory kernel                       [landed]
      entrypoint/        shell selection, terminal lifetime, signals       [landed]
-                         (interactive mode wires the real adapter graph, WP-4)
+                         (interactive mode wires the real adapter graph, WP-4;
+                          headless `export` driver, WP-5 Phase D)
      entities/          pure domain types; no ports, no I/O            [landed]
        page/  chat/  turn/  pin/
      core/              Kernel — the only domain decision-maker         [landed]
@@ -262,6 +263,19 @@ flowchart LR
    runtime's own executable names (`bun`/`bun.exe`): the installed `bun-types`
    pin does not yet declare `Bun.isStandaloneExecutable`, the newer, more direct API
    for this — revisit once it does.
+
+   A third `main.tsx` branch (M8, WP-5 Phase D) adds `termcraft export [dir]` as a
+   THIRD runnable entry point, scanned the same way as `_host` (`parseExportArgs`,
+   tolerating the argv-position shift between a compiled binary and `bun run
+   <srcRoot>`). Unlike the interactive root, it never constructs `ui` or acquires a
+   renderer: `src/entrypoint/model/run-export.ts`'s `runHeadlessExport` composes the
+   SAME real adapter graph `create-shell.ts`'s `interactiveShell` builds, then drives
+   `runExport` — dispatch `project.open`, dispatch `export.start`, await the terminal
+   event — directly at the resulting `KernelPort`, closing the shell on every exit
+   path. `main.tsx` stays thin: `formatExportOutcome` decides the stream/text/exit
+   code (destination on stdout and exit 0 on success; the message — including the
+   §3.1 trust-refusal wording on an untrusted project — on stderr and a non-zero exit
+   otherwise), and `main.tsx` only resolves the root argument, writes, and exits.
 
 10. **`ui` and `runtime` are the edge cases.** `ui` imports `core`'s boundary types —
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
@@ -496,6 +510,15 @@ vendor tier's own pre-split run-loop file.
 - `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
   the compiled-vs-dev argv (item 9) `HostSupervisor` spawns the `_host --stdio`
   child with; called by `src/entrypoint/model/create-shell.ts` (WP-4)
+- `src/entrypoint/model/run-export.ts` — `runExport`/`runHeadlessExport`/
+  `parseExportArgs`/`formatExportOutcome` (M8, WP-5 Phase D): the headless
+  `termcraft export` driver `src/main.tsx`'s third argv branch calls; dispatches
+  `project.open` then `export.start` at the real composed `KernelPort` (no
+  renderer), maps `export.start`'s own guard rejections
+  (`PROJECT_UNTRUSTED`/`TURN_RUNNING`) to the §3.1 trust-refusal wording and a
+  running-turn refusal, and checks the page count once `export.start` is accepted
+  (its handler emits no terminal event for a zero-page project) rather than
+  duplicating any guard logic
 - `src/host/protocol/model/embedded-declaration.ts` — `EMBEDDED_RUNTIME_DECLARATION`
   / `SUPPORTED_KIT_API_VERSIONS`: this binary's ONE embedded runtime-declaration
   bundle, read by `src/main.tsx`'s `_host` branch and by every

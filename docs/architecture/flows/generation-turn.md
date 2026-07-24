@@ -158,7 +158,7 @@ The Gate:
 
 Apply, transaction durability, and recovery:
 
-- `src/store/transaction/model/wrappers.ts` — `finalizeTurn` (changed-page/manifest/local-state/agent-record/pin-resolution plan plus the send-time CAS precondition) and `terminalizeTurn` (the idempotent single-terminal-record guard); also the generic `project-mutation` base and the restore/export-publish/migration builders, all unit-tested but with no MVP caller
+- `src/store/transaction/model/wrappers.ts` — `finalizeTurn` (changed-page/manifest/local-state/agent-record/pin-resolution plan plus the send-time CAS precondition) and `terminalizeTurn` (the idempotent single-terminal-record guard); also the generic `project-mutation` base and the restore/migration builders (unit-tested, no MVP caller — out of scope) — the export-publish builder now DOES have a real MVP caller (`src/store/adapters/export-publish.ts`, WP-5)
 - `src/store/transaction/model/engine.ts` — `runTransaction`/`rollForwardTransaction`: payload install → plan → precondition re-check → durable intent (point of no rollback) → idempotent roll-forward → commit marker
 - `src/store/transaction/model/write-mutex.ts` — the in-process project-write mutex and its permit chain
 - `src/store/transaction/model/recovery.ts` — the startup scan that classifies every unfinished transaction (discard / roll-forward / already-complete / conflict) before project state is exposed

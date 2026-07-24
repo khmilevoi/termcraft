@@ -147,9 +147,14 @@ flowchart TB
     `generations/<generationId>/`, including `runtime-api.json`, then replaces
     `current.json` only after every
     package file exists. Capture or assembly failure leaves the previous pointer
-    active. Internal scratch and cache entries are local and excluded. (The
-    publish-transaction mechanism is implemented and tested; no caller yet renders a
-    generation or assembles its operations, so export has no live producer today.)
+    active. Internal scratch and cache entries are local and excluded. Real end to
+    end now (MVP gap closeout WP-5): `export.start` renders and assembles a real
+    generation, `buildExportPublishOperations` builds its real create-generation
+    → replace-pointer → delete-old-generation operations, and the production
+    `ExportPublishPort` adapter durably publishes them; startup also validates
+    `current.json` before a project reopens (`null` — no export yet — never
+    blocks), and the headless `termcraft export` CLI drives the whole sequence
+    with no renderer.
 17. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
     independent format counter. `page.tsx` instead declares `kitApiVersion`.
     Planning mints `migrationPlanId`; confirmation mints `migrationActionId`, and the
@@ -290,8 +295,13 @@ flowchart TB
 - `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` —
   item 16: the export generation's file substructure (`design-prompt.md`,
   `runtime-api.json`, per-page copies, `snapshots/`, `layout/`) and the render
-  pool that would produce them — no code assembles a generation yet; only the
-  publish-transaction mechanism (`wrappers.ts`, above) exists
+  pool that produces them — now real end to end (MVP gap closeout WP-5):
+  `src/core/export/model/package.ts`'s `assembleExportPackage` assembles every
+  file, including a real, non-empty, size-keyed `layout/<slug>.json` per page
+  (the one remaining divergence: `LayoutNode` carries no `text` field yet,
+  pending the runtime component catalog), and `src/store/adapters/
+  export-publish.ts` durably publishes the generation through the
+  publish-transaction mechanism (`wrappers.ts`, above)
 - `docs/superpowers/specs/2026-07-16-runtime-api-compatibility-design.md` —
   item 16: `runtime-api.json`'s content and the `kitApiVersion` compatibility
   contract it encodes — no producer exists yet
