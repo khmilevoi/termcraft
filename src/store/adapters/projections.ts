@@ -11,7 +11,7 @@ import type {
   RenderEntryV1,
 } from "core/ports";
 import type { DiagnosticDtoV1, FailureDtoV1 } from "core/protocol";
-import { sha256Hex } from "store/jsonl";
+import { uuidv7 } from "infrastructure/uuid";
 import type { DiagnosticItem, DiagnosticsEntry } from "store/projections";
 
 import { toFailureDto } from "./failure";
@@ -32,9 +32,17 @@ import type { StoreAdapterDeps } from "./types";
 // this adapter's choice — the port DTO simply has no field for it). No already-landed
 // `core/` caller constructs a `DiagnosticDtoV1` yet to reveal the intended convention. This
 // adapter:
-//   - derives `diagnosticId` DETERMINISTICALLY (a SHA-256 of the key + code + message, never
-//     random) so the same diagnostic content always round-trips to the same id, rather than
-//     minting a fresh one on every read;
+//   - mints `diagnosticId` with the real `infrastructure/uuid` `uuidv7()` (review finding:
+//     a truncated SHA-256 hex is "a string" but NOT a canonical UUIDv7 — it fails the
+//     format `diagnosticDtoV1Schema`/`uuidv7Schema` actually enforce, e.g. no hyphens, no
+//     version/variant nibbles). The store's `DiagnosticItem`/`DiagnosticsEntry` carries no
+//     id field to persist a minted id against, so there is nothing to keep it stable across
+//     reads — identity is per-materialization (a fresh id every `get()`), not per stored
+//     record. A prior revision derived a DETERMINISTIC id from a content hash so repeated
+//     reads matched; that determinism is deliberately dropped here because faking the
+//     UUIDv7 FORMAT from a hash was itself the contract violation being fixed. If a future
+//     caller needs read-stable diagnostic identity, that requires a real id field landing on
+//     `store/projections`'s `DiagnosticItem`, not a synthesized one at this boundary;
 //   - sets `scope` to a single documented placeholder constant (`DIAGNOSTICS_SCOPE_PLACEHOLDER`
 //     below), mirroring `core/kernel/model/handlers/turn.ts`'s own `PLACEHOLDER_GIT_STATUS`/
 ///    `TURN_START_SYSTEM_PROMPT_PLACEHOLDER` precedent for "a real value would need a port
@@ -76,20 +84,11 @@ function toRenderCache(deps: StoreAdapterDeps): RenderCache {
   };
 }
 
-function diagnosticId(key: DiagnosticsKeyV1, item: DiagnosticItem): string {
-  const seed = JSON.stringify([
-    key.pageSlug,
-    key.sourceHash,
-    key.kitApiVersion,
-    item.code,
-    item.message,
-  ]);
-  return sha256Hex(new TextEncoder().encode(seed)).slice(0, 32);
-}
-
 function toDiagnosticDtoV1(key: DiagnosticsKeyV1, item: DiagnosticItem): DiagnosticDtoV1 {
   return {
-    diagnosticId: diagnosticId(key, item),
+    // Real UUIDv7, minted fresh per materialization — see the file header FLAG for why this
+    // is not (and cannot honestly be) stable across repeated reads of the same content.
+    diagnosticId: uuidv7(),
     scope: DIAGNOSTICS_SCOPE_PLACEHOLDER,
     severity: item.severity,
     code: item.code,

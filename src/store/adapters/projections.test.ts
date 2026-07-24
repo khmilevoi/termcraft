@@ -5,6 +5,7 @@ import {
   createFakePageMetaCache,
   createFakeRenderCache,
 } from "core/ports/fakes";
+import { diagnosticDtoV1Schema } from "core/protocol";
 
 import { createProjectionsAdapter } from "./projections";
 import { cleanupScratchRoots, createRealProjectFixture } from "./test-support";
@@ -74,7 +75,7 @@ describe("createProjectionsAdapter — contract test (fake vs. real)", () => {
     }
   });
 
-  test("diagnostics: a miss is null; put()+get() round-trips, deriving a stable diagnosticId and a documented placeholder scope", async () => {
+  test("diagnostics: a miss is null; put()+get() round-trips, minting a schema-valid UUIDv7 diagnosticId and a documented placeholder scope", async () => {
     const fake = createFakeDiagnosticsCache();
     const key = { pageSlug: "home", sourceHash: "c".repeat(64), kitApiVersion: 1 };
     expect(await fake.get(key)).toBeNull();
@@ -107,12 +108,25 @@ describe("createProjectionsAdapter — contract test (fake vs. real)", () => {
       expect(first.diagnostics).toHaveLength(1);
       expect(first.diagnostics[0]?.safeMessage).toBe("bad thing");
       expect(first.diagnostics[0]?.pageSlug).toBe("home");
-      expect(typeof first.diagnostics[0]?.diagnosticId).toBe("string");
 
-      // Deterministic: re-reading the same stored content yields the same diagnosticId.
+      // The pinning check for the DTO-contract fix: `diagnosticId` must be a genuine
+      // canonical UUIDv7 the closed `diagnosticDtoV1Schema` accepts — not merely "a string"
+      // (a truncated content hash is also "a string" but fails this schema).
+      const firstDiagnostic = first.diagnostics[0];
+      expect(firstDiagnostic).toBeDefined();
+      expect(diagnosticDtoV1Schema.safeParse(firstDiagnostic).success).toBe(true);
+
+      // Documented behavioral divergence (see projections.ts header): the landed store
+      // `DiagnosticItem`/`DiagnosticsEntry` carries no id field at all, so a real `uuidv7()`
+      // minted at read time cannot be stable across reads the way the old (schema-invalid)
+      // content-hash derivation was. Re-reading the same stored content therefore yields a
+      // fresh, different, but still schema-valid diagnosticId every time.
       const second = await adapter.diagnostics.get(key);
       if (second === null || "code" in second) throw new Error("fixture bug: expected a hit");
-      expect(second.diagnostics[0]?.diagnosticId).toBe(first.diagnostics[0]?.diagnosticId);
+      const secondDiagnostic = second.diagnostics[0];
+      expect(secondDiagnostic).toBeDefined();
+      expect(diagnosticDtoV1Schema.safeParse(secondDiagnostic).success).toBe(true);
+      expect(secondDiagnostic?.diagnosticId).not.toBe(firstDiagnostic?.diagnosticId);
     } finally {
       await open.close();
     }
