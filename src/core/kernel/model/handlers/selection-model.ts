@@ -53,29 +53,28 @@ import {
  * boundary case that doctrine doesn't have a slot for, flagged here rather than silently
  * worked around.
  *
- * TWO CONFIRMED, FLAGGED CONTRACT GAPS (not invented around — see the task brief's own
+ * ONE CONFIRMED GAP REMAINS OPEN (a second, originally-reported gap has since CLOSED — see
+ * the correction below; not invented around either way — see the task brief's own
  * instruction to name a missing surface rather than patch over it with out-of-contract
  * state):
  *
- * 1. No Kernel-held storage for "the current selection" exists on `HandlerContext`. The
- *    five existing mutators (`setProjectTrust`, `setActiveTurnId`, `setCommitIntentRecorded`,
- *    `setPreviewSourceKind`, `setActivePreviewSession`) are the WHOLE non-machine mutation
- *    surface (`./types.ts`'s own doc comment) — there is no sixth `setSelection`-shaped
- *    mutator, and no accessor either. `kernel-command-contract` §12.2 says `turn.start`
- *    "captures ... authoritative selection" at send time, which requires SOME Kernel-held
- *    fact a future `turn.start` handler can read back — but `turn.start`'s own payload
- *    carries no selection field, `KernelStateSnapshot` deliberately excludes selection (it
- *    is not a capability-guard input — `capabilities/types.ts`'s own header note), and
- *    `ProjectStore`'s `WorkspaceStateV1` explicitly excludes it too ("selection ... deliberately
- *    absent ... those are live Kernel state, not persisted here" — `project-store.ts`).
- *    `selection.clear`'s outcome is therefore UNCONDITIONAL — it always emits
- *    `selection.changed(null)` regardless of whatever was selected before, mirroring
- *    `kernel.ts`'s own `close()` unconditionally nulling `activePreview` — rather than
- *    inventing a module-level atom (forbidden: no family module may hold mutable state of
- *    its own, and only `kernel.ts`/`types.ts` — off-limits to this task — may add a new
- *    Kernel-held fact). Closing this needs a sixth `HandlerContext` mutator (+ a read path)
- *    added by a task empowered to touch `kernel.ts`/`types.ts`, before `turn.start`'s own
- *    family can honor §12.2 for real.
+ * 1. CLOSED, Step C1/C2 correction (this comment previously claimed this gap was still
+ *    open — it is not, as of Step C1): `HandlerContext` now has a sixth Kernel-held
+ *    mutator/accessor pair, `setSelection`/`selection` (`./types.ts`), covering exactly the
+ *    "current selection" fact this paragraph originally said was missing — mirroring
+ *    `setActivePreviewSession`'s own "plain Kernel-held closure fact, not part of
+ *    `KernelStateSnapshot`" precedent (no capability guard reads "the current selection"
+ *    either). `turn.start` (Step C2, `core/kernel/model/handlers/turn.ts`) is the intended
+ *    reader, once its own remaining composition gap closes (that file's own header). **This
+ *    family's two handlers below are deliberately NOT updated to call the new setter** —
+ *    `selection.set`/`selection.clear` still only emit `selection.changed`, exactly as
+ *    before; wiring them to WRITE `context.setSelection`/read it for `selection.clear`'s own
+ *    disposition is an intentionally separate follow-up (C1's own "kept-vs-changed"
+ *    decision, `.superpowers/sdd/task-9-report.md`, "Step C1"), not a silent omission this
+ *    comment failed to mention. `selection.clear`'s outcome therefore remains
+ *    UNCONDITIONAL — it always emits `selection.changed(null)` regardless of whatever was
+ *    selected before, mirroring `kernel.ts`'s own `close()` unconditionally nulling
+ *    `activePreview` — until that follow-up lands.
  * 2. `model.select`'s own effect has no wire representation beyond the durable
  *    `ProjectStore` write. `kernel.snapshot`'s `agentIdentity` field (M22) is the only
  *    place a selected backend/model could ever surface, and `kernel.ts`'s own
