@@ -1,4 +1,12 @@
-import { bootstrap, createProcessBoundary } from "entrypoint";
+import path from "node:path";
+
+import {
+  bootstrap,
+  createProcessBoundary,
+  formatExportOutcome,
+  parseExportArgs,
+  runHeadlessExport,
+} from "entrypoint";
 import * as errore from "errore";
 
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
@@ -22,6 +30,11 @@ class HostStdioFailedError extends errore.createTaggedError({
  */
 if (import.meta.main) {
   const boundary = createProcessBoundary(process);
+
+  // Computed once, ahead of both branches below — `parseExportArgs` is a pure argv scan
+  // (mirrors `parseHostArgs`'s own "_host" scan), so there is no cost to resolving it before
+  // knowing whether the `_host` branch will fire first.
+  const exportArgs = parseExportArgs(process.argv);
 
   // The design host is this same binary, re-invoked as `_host --stdio` (Spike E,
   // `createHostSpawnCommand` in `host/supervisor` builds that argv). Recognizing it
@@ -56,6 +69,24 @@ if (import.meta.main) {
     if (outcome instanceof Error) {
       boundary.reportFatal(outcome.message, outcome.cause);
       process.exit(1);
+    }
+  } else if (exportArgs !== null) {
+    // M8/WP-5 Phase D: `termcraft export [dir]`. Headless — no renderer is ever acquired,
+    // `entrypoint/model/run-export.ts` composes and closes the shell for its own single
+    // dispatch-then-await lifetime. Every decision (trust/zero-page/turn-running refusal,
+    // the resolved package directory) is computed there; this branch only resolves the
+    // root against the working directory, prints, and exits.
+    const root = path.resolve(process.cwd(), exportArgs.rootArg ?? ".");
+    const outcome = await runHeadlessExport({ env: { root, workspaceIdentity: root } });
+    const formatted = formatExportOutcome(outcome);
+    const text = `${formatted.text}\n`;
+    // Same Windows stdout/stderr-flush-before-exit concern as the `_host` branch's own
+    // `exit` callback above: `process.exit()` does not wait for a prior `write` to
+    // physically flush, so the exit is chained off the write's own callback.
+    if (formatted.stream === "stderr") {
+      process.stderr.write(text, () => process.exit(formatted.exitCode));
+    } else {
+      process.stdout.write(text, () => process.exit(formatted.exitCode));
     }
   } else {
     const app = await bootstrap("interactive", {

@@ -1,6 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+import {
+  ExportRefusedError,
+  TRUST_REFUSAL_MESSAGE,
+  formatExportOutcome,
+  parseExportArgs,
+} from "entrypoint";
 
 import {
   type ClientHelloV1,
@@ -10,6 +18,7 @@ import {
 } from "host/protocol";
 import { parseHostArgs } from "host/session";
 import { FrameDecoder, type WireFrame } from "infrastructure/framing";
+import { cleanupScratchRoots, createRealProjectFixture } from "store/adapters/test-support";
 
 /**
  * The executable-surface contract: `package.json`'s commands and the two runnable roots must
@@ -162,6 +171,92 @@ describe("package entrypoints", () => {
     } finally {
       // Guarantees the child never survives this test, even when an assertion above throws.
       child.kill();
+    }
+  }, 20_000);
+});
+
+/**
+ * `termcraft export` (M8, WP-5 Phase D, Task D2). Most of the driver's own logic is unit-tested
+ * against an injected `KernelPort` in `entrypoint/model/run-export.test.ts`; this suite proves
+ * the pieces that only exist at the real `main.tsx` root: argv routing (not `_host`, not
+ * interactive), the CLI-output formatting `main.tsx` prints/exits with, and — the closeout's
+ * own WP-5 acceptance (Gate 2) — a REAL spawned `termcraft export` child refusing an untrusted
+ * project with the exact §3.1 message on stderr and a non-zero exit code.
+ */
+describe("the `termcraft export` CLI (WP-5 Phase D)", () => {
+  afterEach(cleanupScratchRoots);
+
+  test("`export <dir>` argv is recognized by parseExportArgs, and is distinct from `_host --stdio`", () => {
+    expect(parseExportArgs(["exe", "export", "/some/project"])).toEqual({
+      rootArg: "/some/project",
+    });
+    expect(parseExportArgs(["exe", "export"])).toEqual({ rootArg: undefined });
+    expect(parseExportArgs(["exe", "_host", "--stdio"])).toBeNull();
+    expect(parseHostArgs(["exe", "export", "/some/project"])).toBe(false);
+  });
+
+  test("formatExportOutcome prints the resolved package directory to stdout and exits 0 on success", () => {
+    const formatted = formatExportOutcome({
+      destination: "C:/proj/.termcraft/export/generations/g1",
+    });
+    expect(formatted).toEqual({
+      stream: "stdout",
+      text: "C:/proj/.termcraft/export/generations/g1",
+      exitCode: 0,
+    });
+  });
+
+  test("formatExportOutcome prints the §3.1 trust refusal to stderr and exits non-zero", () => {
+    const formatted = formatExportOutcome(
+      new ExportRefusedError({ reason: TRUST_REFUSAL_MESSAGE }),
+    );
+    expect(formatted.stream).toBe("stderr");
+    expect(formatted.exitCode).toBe(1);
+    expect(formatted.text).toContain("designs in this project are code and will run");
+  });
+
+  test("a real spawned `termcraft export` child refuses an untrusted project with the exact §3.1 message and a non-zero exit code", async () => {
+    // The fixture project is created (and thereby implicitly trust-granted, storage-identity
+    // §8) under its OWN throwaway user-state root — a store-level fact this test never reads.
+    // What matters is that the SPAWNED child below runs against a DIFFERENT, freshly-minted
+    // user-state root (via `LOCALAPPDATA`, `create-shell.ts`'s own `resolveDefaultUserStateRoot`
+    // source) whose trust ledger has no grant for this project at all, so `project.open`'s real
+    // `resolveTrust` resolves `untrusted-read-only` (no interactive prompt exists in this
+    // headless contract) regardless of how the project itself came to exist on disk.
+    const fixture = await createRealProjectFixture({ targetStack: "js-opentui" });
+    const projectRoot = fixture.open.root;
+    await fixture.open.close();
+
+    const childUserState = fs.mkdtempSync(path.join(os.tmpdir(), "tc-export-cli-userstate-"));
+
+    const child = Bun.spawn({
+      cmd: [process.execPath, path.join(repoRoot, "src/main.tsx"), "export", projectRoot],
+      cwd: repoRoot,
+      env: { ...process.env, LOCALAPPDATA: childUserState },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    try {
+      const [stdout, stderr, exitCode] = await withTimeout(
+        Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]),
+        15_000,
+        "waiting for the spawned `termcraft export` child to exit",
+      );
+
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("designs in this project are code and will run");
+      expect(stderr).toContain(TRUST_REFUSAL_MESSAGE);
+      expect(stdout).toBe("");
+    } finally {
+      // Guarantees the child never survives this test, even when an assertion above throws.
+      child.kill();
+      fs.rmSync(childUserState, { recursive: true, force: true });
     }
   }, 20_000);
 });
