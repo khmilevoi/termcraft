@@ -109,11 +109,15 @@ describe("createShell", () => {
     if (shell instanceof Error) throw shell;
 
     expect(shell.env.root).toBe(root);
-    // `kernel.snapshot`'s own `projectId`/`activePageSlug`/`activeChatId` are hardcoded
-    // `null` in the currently-landed Kernel (`core/kernel/model/kernel.ts`'s own
-    // `buildSnapshotPayload`, a pre-existing, already-documented gap unrelated to WP-4) —
-    // so every bootstrap snapshot opens on Home (`ui/mirror/model/screen.ts`'s
-    // `projectId === null` branch) regardless of whether a real project was opened.
+    // `projectId` is null here NOT because `buildSnapshotPayload` hardcodes it — the §10
+    // smoke-closeout fix (`core/kernel/model/kernel.ts`'s own `growableProjectId`) already
+    // makes it track the real open project for any subscriber, late or not. It's null because
+    // `createShell` only opens the project at the store level and never dispatches the kernel's
+    // own `project.open` command, so `growableProjectId` is simply never populated on this
+    // bootstrap path. `activePageSlug`/`activeChatId` DO still stay hardcoded `null` in
+    // `buildSnapshotPayload` (a separate, still-open gap) — so every bootstrap snapshot opens
+    // on Home (`ui/mirror/model/screen.ts`'s `projectId === null` branch) regardless of whether
+    // a real project was opened.
     expect((await firstSnapshot(shell.port)).projectId).toBeNull();
     expect(shell.port.preview()).toBeNull();
 

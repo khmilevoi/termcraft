@@ -7,6 +7,7 @@ import {
   parseExportArgs,
   runHeadlessExport,
 } from "entrypoint";
+import type { TerminalControl } from "entrypoint";
 import * as errore from "errore";
 
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
@@ -20,6 +21,19 @@ class HostStdioFailedError extends errore.createTaggedError({
   message: "the _host stdio protocol loop failed",
 }) {}
 
+/** `_host` and `export` never acquire a terminal — `process.stdout` there is either the binary
+ *  framing channel to the parent supervisor (`_host`) or the CLI result channel (`export`), and
+ *  neither branch ever mounts OpenTUI's `CliRenderer`. `createProcessBoundary`'s `reportFatal`/
+ *  panic path calls `restoreTerminal()` unconditionally, so without this no-op double a fatal
+ *  report or an escaping panic on either headless path would write xterm mode-reset escape
+ *  sequences into that channel — corrupting the frame stream (`_host`) or the CLI output
+ *  (`export`) for no reason, since no terminal mode was ever entered there to begin with. */
+const NOOP_TERMINAL_CONTROL: TerminalControl = {
+  disableRawMode() {},
+  disableMouseCapture() {},
+  exitAlternateScreen() {},
+};
+
 /**
  * The interactive root. Thin on purpose: every decision it could make lives in `entrypoint`,
  * where it is tested against injected renderer and process seams, so this file holds only what
@@ -29,18 +43,23 @@ class HostStdioFailedError extends errore.createTaggedError({
  * takes over the terminal.
  */
 if (import.meta.main) {
-  const boundary = createProcessBoundary(process);
-
   // Computed once, ahead of both branches below — `parseExportArgs` is a pure argv scan
   // (mirrors `parseHostArgs`'s own "_host" scan), so there is no cost to resolving it before
-  // knowing whether the `_host` branch will fire first.
+  // knowing whether the `_host` branch will fire first. Both scans also decide which
+  // `TerminalControl` the boundary below gets, so they have to run before it is constructed.
   const exportArgs = parseExportArgs(process.argv);
+  const isHostStdio = parseHostArgs(process.argv);
+
+  const boundary = createProcessBoundary(
+    process,
+    isHostStdio || exportArgs !== null ? NOOP_TERMINAL_CONTROL : undefined,
+  );
 
   // The design host is this same binary, re-invoked as `_host --stdio` (Spike E,
   // `createHostSpawnCommand` in `host/supervisor` builds that argv). Recognizing it
   // is the FIRST branch, ahead of the interactive bootstrap in the `else` below —
   // a `_host` argv only ever runs the stdio protocol loop.
-  if (parseHostArgs(process.argv)) {
+  if (isHostStdio) {
     const outcome = await runHostStdio({
       argv: process.argv,
       input: process.stdin,
@@ -67,8 +86,12 @@ if (import.meta.main) {
     }).catch((cause: unknown) => new HostStdioFailedError({ cause }));
 
     if (outcome instanceof Error) {
-      boundary.reportFatal(outcome.message, outcome.cause);
-      process.exit(1);
+      // `reportFatalAndExit` flushes `stderr` before exiting (same shape as the `export`
+      // branch's own flush-then-exit write below, and the `_host` `exit` callback's write
+      // above) — a bare `process.exit(1)` right after `reportFatal`'s `console.error` does
+      // not wait for that write to physically land on a piped, non-TTY stderr (worse on
+      // Windows), so the operator-facing diagnostic could get truncated.
+      boundary.reportFatalAndExit(outcome.message, outcome.cause);
     }
   } else if (exportArgs !== null) {
     // M8/WP-5 Phase D: `termcraft export [dir]`. Headless — no renderer is ever acquired,
@@ -96,13 +119,18 @@ if (import.meta.main) {
     });
 
     if (app instanceof Error) {
-      boundary.reportFatal(app.message, app.cause);
-      process.exit(1);
+      // Same flush-then-exit concern as the `_host` branch's own fatal report above.
+      // `reportFatalAndExit` returns `void` rather than `never` (its injected `exit` seam is a
+      // test-doubleable callback, not a guaranteed-never-return like `process.exit`), so the
+      // success path below has to live in this `else` rather than fall through past this `if` —
+      // relying on unreachability-after-`never` is what the old `process.exit(1)` let TypeScript
+      // narrow `app` with, and that narrowing is gone now that this call isn't `never`-typed.
+      boundary.reportFatalAndExit(app.message, app.cause);
+    } else {
+      await app.closed;
+      // Spike D: a Reatom + OpenTUI process does not exit on its own once the renderer is
+      // destroyed — the exit has to be explicit or the shell hangs after Ctrl+C.
+      process.exit(0);
     }
-
-    await app.closed;
-    // Spike D: a Reatom + OpenTUI process does not exit on its own once the renderer is
-    // destroyed — the exit has to be explicit or the shell hangs after Ctrl+C.
-    process.exit(0);
   }
 }

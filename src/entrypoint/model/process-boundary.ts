@@ -87,19 +87,30 @@ const REAL_PROCESS_EXIT: ProcessExit = (code) => {
  * the terminal is sane again before anything is printed, on every exit path, not just the ones
  * `run-app.ts`'s own shutdown sequence already covers.
  *
- * A panic additionally terminates the process (via `exit`) once it has restored and reported —
- * unlike every OTHER `reportFatal` call site, which already owns an explicit `process.exit` of
- * its own (`main.tsx`/`demo.tsx`'s `app instanceof Error` branches, `_host`'s stdio failure
- * branch) reached right after the call returns. Only the panic path has no such caller above it
- * on the stack, so it is the one place this function must own the exit itself, or the process
- * hangs with the terminal free to be re-corrupted and the project lease/host children still
- * held — see {@link ProcessExit}'s own doc comment.
+ * A panic additionally terminates the process (via `exit`) once it has restored and reported.
+ * Every EXPLICIT `reportFatal` call site that also needs to end the process should go through
+ * the `reportFatalAndExit` method below instead of owning a bare `process.exit` of its own —
+ * `main.tsx`'s `_host`-stdio-failure and interactive-bootstrap-failure branches both now call
+ * it, so their exit shares the exact same flush-then-exit `exit` seam the panic path already
+ * used (a bare `process.exit()` right after `reportFatal`'s `console.error` does not wait for
+ * that write to physically land on a piped, non-TTY stderr — worse on Windows — so the
+ * diagnostic could get truncated). `demo.tsx` still pairs its own `reportFatal` with a bare
+ * `process.exit(1)` — same latent truncation risk, left alone here since `demo.tsx` is outside
+ * this fix's scope.
  */
 export function createProcessBoundary(
   target: SignalTarget,
   terminal: TerminalControl = REAL_TERMINAL_CONTROL,
   exit: ProcessExit = REAL_PROCESS_EXIT,
-): ProcessBoundary {
+): ProcessBoundary & {
+  /** `reportFatal` followed by the same `exit` seam the panic path (`onPanic`) uses — the
+   *  flush-then-exit shape callers need instead of a bare `process.exit` right after
+   *  `reportFatal` returns. Exit code is fixed at 1, mirroring `onPanic`'s own fixed code:
+   *  every caller of this method is reporting a startup/protocol failure, never a graceful
+   *  shutdown. Widens `ProcessBoundary`'s own return type rather than changing the shared
+   *  interface in `../types.ts`, since only fatal-exit call sites need it. */
+  reportFatalAndExit(message: string, cause: unknown): void;
+} {
   let restored = false;
   function restoreTerminal(): void {
     if (restored) return;
@@ -113,6 +124,14 @@ export function createProcessBoundary(
     restoreTerminal();
     console.error(`termcraft: ${message}`);
     if (cause !== undefined && cause !== null) console.error(cause);
+  }
+
+  function reportFatalAndExit(message: string, cause: unknown): void {
+    reportFatal(message, cause);
+    // Same reasoning as `onPanic` below: `reportFatal` only prints (via `console.error`), it
+    // never exits, so callers that need to end the process route through the injected `exit`
+    // seam themselves — `REAL_PROCESS_EXIT` by default, which flushes `stderr` before exiting.
+    exit(1);
   }
 
   function onPanic(error: unknown): void {
@@ -132,5 +151,6 @@ export function createProcessBoundary(
       target.once(signal, handler);
     },
     reportFatal,
+    reportFatalAndExit,
   };
 }

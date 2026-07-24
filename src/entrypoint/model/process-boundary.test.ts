@@ -146,4 +146,25 @@ describe("createProcessBoundary", () => {
 
     expect(calls.some((entry) => entry.startsWith("exit:"))).toBe(false);
   });
+
+  test("reportFatalAndExit restores the terminal, prints the failure, then exits code 1 through the injected exit seam", () => {
+    // Covers main.tsx's two explicit fatal branches (`_host`-stdio failure, interactive
+    // bootstrap failure): both used to pair `reportFatal` with a bare `process.exit(1)` that
+    // bypassed the injected `exit` seam entirely, so on the real process this could exit before
+    // `reportFatal`'s `console.error` write physically landed on a piped, non-TTY stderr. This
+    // method exists so both call sites go through the SAME `exit` seam the panic path
+    // (`onPanic`, tested above) already uses.
+    const { target } = fakeTarget();
+    const calls: string[] = [];
+    const boundary = createProcessBoundary(target, fakeTerminal(calls), fakeExit(calls));
+
+    withCapturedConsoleError(calls, () => {
+      boundary.reportFatalAndExit("startup failed", null);
+    });
+
+    expect(calls.slice(0, 3)).toEqual(["raw-mode-off", "mouse-off", "alt-screen-off"]);
+    expect(calls.some((entry) => entry.startsWith("printed:"))).toBe(true);
+    expect(calls.at(-1)).toBe("exit:1");
+    expect(calls.filter((entry) => entry.startsWith("exit:"))).toHaveLength(1);
+  });
 });

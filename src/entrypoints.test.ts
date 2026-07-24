@@ -128,8 +128,13 @@ describe("package entrypoints", () => {
       cwd: repoRoot,
       stdin: "pipe",
       stdout: "pipe",
-      stderr: "ignore",
+      stderr: "pipe",
     });
+
+    // Drained continuously (not just read on a failure path) so the child's stderr pipe never
+    // backs up — and so a crash surfaces its real cause in the assertions below instead of only
+    // the generic "waiting for..." timeout/exit-code message `stderr: "ignore"` used to leave.
+    const stderrPromise = new Response(child.stderr).text();
 
     try {
       child.stdin.write(clientHelloFrame());
@@ -137,14 +142,16 @@ describe("package entrypoints", () => {
 
       const decoder = new FrameDecoder();
       const frames: WireFrame[] = [];
-      // Bun's real spawned-child `stdout` is a `ReadableStream<Uint8Array>` that supports
-      // `for await` at runtime; the narrower `AsyncIterable` cast matches the same
-      // established pattern `host/supervisor/model/spawn.ts` uses for the injected
-      // `SpawnedChild` port.
-      const stdout = child.stdout as unknown as AsyncIterable<Uint8Array>;
       await withTimeout(
         (async () => {
-          for await (const chunk of stdout) {
+          // `{ preventCancel: true }` keeps the underlying pipe open across the early `return`
+          // below: without it, `for await`'s implicit `break` calls the stream's `cancel()`,
+          // closing the child's stdout read end while the child is still alive. The `_host`
+          // child emits a heartbeat every second (`host/session/model/entry.ts`'s
+          // `HEARTBEAT_INTERVAL_MS`) — a heartbeat write landing after that cancel hits a
+          // broken pipe (EPIPE), which used to be able to flake this test's `exitCode` assertion
+          // by making the child's own panic handler exit 1 instead of the clean 0 below.
+          for await (const chunk of child.stdout.values({ preventCancel: true })) {
             const fed = decoder.feed(chunk);
             if (fed instanceof Error) throw fed;
             frames.push(...fed);
@@ -167,7 +174,8 @@ describe("package entrypoints", () => {
       // left to kill it.
       await Promise.resolve(child.stdin.end());
       const exitCode = await withTimeout(child.exited, 8_000, "waiting for the child to exit");
-      expect(exitCode).toBe(0);
+      const stderrText = await stderrPromise;
+      expect(exitCode, `child stderr:\n${stderrText}`).toBe(0);
     } finally {
       // Guarantees the child never survives this test, even when an assertion above throws.
       child.kill();
