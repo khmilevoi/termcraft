@@ -12,3 +12,5 @@ node_modules/
 # imported") which fires on a literal `.d.ts` extension regardless of import attributes.
 /scripts/tsc-libs.generated.ts
 /scripts/tsc-lib-sources/
+
+HANDOFF.md
