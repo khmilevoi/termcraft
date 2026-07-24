@@ -1,5 +1,7 @@
 import { wrap } from "@reatom/core";
 
+import { buildChatRecordsPayload, deriveChatDisplayName } from "core/chats";
+import type { ChatSummaryV1 } from "core/chats";
 import type { TransitionOutcome } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
 import {
@@ -13,6 +15,7 @@ import {
 } from "core/project";
 import type {
   CommandPayloadByKindV1,
+  EventPayloadByKindV1,
   FailureDtoV1,
   KernelStateChangedPayloadV1,
   PageDescriptorV1,
@@ -104,6 +107,15 @@ import { noOpOutcome, startedOutcome } from "./types";
  *   for those four fields. This is a real, narrow gap for whichever task wires
  *   `createHandlerRegistry` into `createKernel` (Step C) to close, not something this
  *   family can invent a mutator for on its own.
+ * - WP-10 Task 6: `runProjectReadySequence` now restores the ACTIVE chat's persisted
+ *   tail once the project reaches `ready` (`restoreActiveChatTail`, below) — `chat.changed`
+ *   plus `chat.records`, so §11's relaunch requirement ("reopens the Workspace with the
+ *   active chat's history restored") is satisfied. It restores ONLY the active chat: no
+ *   port enumerates a project's OTHER chats (`core/chats/model/chat-directory.ts`'s own
+ *   "No port lists every chat" comment), so the `/chats` popup's remaining rows populate
+ *   lazily as the user switches to them (`chat.switch`, `./chat.ts`). A full-directory
+ *   restore needs a chat-listing port this package does not own (a `store` surface, WP-2
+ *   territory) — not invented here.
  */
 
 // --- Small, shared helpers -----------------------------------------------------------------
@@ -363,6 +375,77 @@ async function buildPageDescriptors(
   return descriptors;
 }
 
+type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
+
+/**
+ * Restores `activeChatId`'s persisted tail once the project reaches `ready` (WP-10 Task
+ * 6, the M10 requirement §11 states: "reopens the Workspace with the active chat's
+ * history restored"). Builds the SAME two events `chat.switch` publishes on a live switch
+ * (`./chat.ts`'s own `loadActiveChatTail` — this is a deliberate small copy, not a shared
+ * cross-family helper: the two callers diverge on what happens when the tail cannot be
+ * loaded. `chat.switch` still publishes `chat.changed` because the switch itself already
+ * succeeded; here, a `null` `activeChatId` or a load failure publishes NEITHER event —
+ * the project still finishes open (this function's own caller pushes `finishOpen`'s
+ * `kernel.stateChanged` regardless), mirroring `blockOpen`'s "a producer hiccup must not
+ * block a project that DID open" stance the `page.descriptorsChanged` branch above
+ * already takes for the exact same reason.
+ *
+ * `null` `activeChatId` is NOT logged — it is the same legitimate "no active chat yet"
+ * state `KernelSnapshotPayloadV1.activeChatId`'s own doc comment already documents (the
+ * pre-chat window `project.create` can still hit today: storage-identity §14.2's
+ * "project creation always mints an initial chat header" guarantee has no port at this
+ * layer to fulfil it yet — see this file's own header, "FLAGGED GAPS" — so a fresh
+ * `project.create` legitimately has no chat to restore a tail for). Only an ACTUAL
+ * `ChatReader.open`/`loadTail` failure is logged (errore rule 21).
+ *
+ * **Divergence flagged (WP-10 Task 6, do NOT invent a listing port):** this restores
+ * only the ACTIVE chat's tail — no port enumerates a project's other chats
+ * (`core/chats/model/chat-directory.ts`'s own "No port lists every chat" comment), so the
+ * `/chats` popup's other rows populate lazily as the user switches to them (`chat.switch`,
+ * `./chat.ts`). Full-directory restoration on relaunch needs a chat-listing source that is
+ * out of this package's scope (a `store` surface, WP-2 territory).
+ */
+async function restoreActiveChatTail(
+  context: HandlerContext,
+  activeChatId: string | null,
+): Promise<readonly PublishableEventV1[]> {
+  if (activeChatId === null) return [];
+
+  const handle = await wrap(context.deps.chatReader.open(activeChatId));
+  if ("code" in handle) {
+    console.warn(
+      `core/kernel/handlers/project: could not open the active chatId ${activeChatId} to restore its tail: ${handle.safeMessage}`,
+    );
+    return [];
+  }
+
+  const loadResult = await wrap(handle.loadTail());
+  if ("code" in loadResult) {
+    console.warn(
+      `core/kernel/handlers/project: could not load the active chatId ${activeChatId}'s tail: ${loadResult.safeMessage}`,
+    );
+    return [];
+  }
+
+  const recordsPayload = buildChatRecordsPayload(activeChatId, loadResult);
+  const summary: ChatSummaryV1 = {
+    chatId: activeChatId,
+    createdAt: handle.header.createdAt,
+    displayName: deriveChatDisplayName(recordsPayload.records),
+  };
+  const chatChangedPayload: ChatChangedPayloadV1 = {
+    activeChatId,
+    added: [],
+    updated: [summary],
+    removedChatIds: [],
+  };
+
+  return [
+    { kind: "chat.changed", payload: chatChangedPayload },
+    { kind: "chat.records", payload: recordsPayload },
+  ];
+}
+
 /** The full post-admission sequence: recovery, orphan scan, trust, page descriptors, `finishOpen` — shared by `project.create`, `project.open`, and `project.retryOpen`'s continuation. */
 async function runProjectReadySequence(
   context: HandlerContext,
@@ -440,6 +523,16 @@ async function runProjectReadySequence(
   events.push(
     stateChangedEvent("kernel.project.state", "kernel.project.finishOpen", finishOutcome),
   );
+
+  // WP-10 Task 6: restore the active chat's persisted tail now that the project has
+  // reached ready (§11's relaunch requirement, M10) — see `restoreActiveChatTail`'s own
+  // doc comment for why a null activeChatId or a load failure publishes neither event
+  // here without blocking (or otherwise marking) an open that DID succeed.
+  const chatTailEvents = await wrap(
+    restoreActiveChatTail(context, workspaceStateResult.state.activeChatId),
+  );
+  events.push(...chatTailEvents);
+
   return events;
 }
 
