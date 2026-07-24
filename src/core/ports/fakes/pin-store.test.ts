@@ -80,4 +80,70 @@ describe("createFakePinStore", () => {
     await store.fold(slug("home"));
     expect(store.calls.map((c) => c.method)).toEqual(["appendStandaloneEvent", "fold"]);
   });
+
+  describe("readEvents", () => {
+    test("on a page with no log yet returns an empty array, never an error", async () => {
+      const store = createFakePinStore();
+      const result = await store.readEvents(slug("home"));
+      if ("code" in result) throw new Error("unexpected failure");
+      expect(result).toEqual([]);
+    });
+
+    test("returns the complete raw event log, in append order, never the folded Pin[]", async () => {
+      const store = createFakePinStore();
+      const statusEvent: PinEvent = {
+        kind: "pin:status",
+        recordId: "r2",
+        pinId: "p1",
+        status: "resolved",
+        actionId: "action-1",
+        ts: "2024-01-01T00:01:00.000Z",
+      };
+      await store.appendStandaloneEvent(slug("home"), created);
+      await store.appendStandaloneEvent(slug("home"), statusEvent);
+
+      const result = await store.readEvents(slug("home"));
+
+      if ("code" in result) throw new Error("unexpected failure");
+      expect(result).toEqual([created, statusEvent]);
+    });
+
+    test("failNext() queues one failure for readEvents specifically", async () => {
+      const store = createFakePinStore();
+      store.failNext("readEvents", FAILURE);
+      const first = await store.readEvents(slug("home"));
+      expect(first).toEqual(FAILURE);
+      const second = await store.readEvents(slug("home"));
+      expect("code" in second).toBe(false);
+    });
+  });
+
+  describe("findPageForPin", () => {
+    test("resolves the page owning a pin:created pinId", async () => {
+      const store = createFakePinStore();
+      await store.appendStandaloneEvent(slug("home"), created);
+
+      const result = await store.findPageForPin("p1");
+
+      expect(result).toBe(slug("home"));
+    });
+
+    test("returns null — a genuine miss, never an error — for an unknown pinId", async () => {
+      const store = createFakePinStore();
+      await store.appendStandaloneEvent(slug("home"), created);
+
+      const result = await store.findPageForPin("unknown-pin");
+
+      expect(result).toBeNull();
+    });
+
+    test("failNext() queues one failure for findPageForPin specifically", async () => {
+      const store = createFakePinStore();
+      store.failNext("findPageForPin", FAILURE);
+      const first = await store.findPageForPin("p1");
+      expect(first).toEqual(FAILURE);
+      const second = await store.findPageForPin("p1");
+      expect(second).toBeNull();
+    });
+  });
 });

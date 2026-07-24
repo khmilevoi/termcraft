@@ -20,7 +20,11 @@ const FOLD_FAILED = (pageSlug: PageSlug, reason: string): FailureDtoV1 => ({
   details: { pageSlug },
 });
 
-export type PinStoreFailableMethod = "fold" | "appendStandaloneEvent";
+export type PinStoreFailableMethod =
+  | "fold"
+  | "appendStandaloneEvent"
+  | "readEvents"
+  | "findPageForPin";
 
 export type PinStoreCall =
   | { readonly method: "fold"; readonly pageSlug: PageSlug }
@@ -28,7 +32,9 @@ export type PinStoreCall =
       readonly method: "appendStandaloneEvent";
       readonly pageSlug: PageSlug;
       readonly event: PinEvent;
-    };
+    }
+  | { readonly method: "readEvents"; readonly pageSlug: PageSlug }
+  | { readonly method: "findPageForPin"; readonly pinId: string };
 
 export interface FakePinStore extends PinReader, PinMutations {
   readonly calls: readonly PinStoreCall[];
@@ -42,6 +48,8 @@ export function createFakePinStore(): FakePinStore {
   const queues: Record<PinStoreFailableMethod, FailureDtoV1[]> = {
     fold: [],
     appendStandaloneEvent: [],
+    readEvents: [],
+    findPageForPin: [],
   };
 
   function failNext(method: PinStoreFailableMethod, failure: FailureDtoV1): void {
@@ -71,7 +79,26 @@ export function createFakePinStore(): FakePinStore {
     return undefined;
   }
 
-  return { fold, appendStandaloneEvent, calls, failNext };
+  async function readEvents(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly PinEvent[]> {
+    calls.push({ method: "readEvents", pageSlug });
+    const queued = queues.readEvents.shift();
+    if (queued !== undefined) return queued;
+    return logs.get(pageSlug) ?? [];
+  }
+
+  async function findPageForPin(pinId: string): Promise<FailureDtoV1 | PageSlug | null> {
+    calls.push({ method: "findPageForPin", pinId });
+    const queued = queues.findPageForPin.shift();
+    if (queued !== undefined) return queued;
+    for (const [pageSlug, events] of logs) {
+      if (events.some((event) => event.kind === "pin:created" && event.pinId === pinId)) {
+        return pageSlug;
+      }
+    }
+    return null;
+  }
+
+  return { fold, appendStandaloneEvent, readEvents, findPageForPin, calls, failNext };
 }
 
 type _ReaderConforms = AssertConforms<PinReader, FakePinStore>;
