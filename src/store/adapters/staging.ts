@@ -58,6 +58,25 @@ import type { StoreAdapterDeps } from "./types";
 // staged-file inventory) plus its physical-presence check already deliver the port's
 // "out-of-contract paths return FailureDtoV1, never fabricated bytes" without this adapter
 // separately tracking each candidate's file list.
+//
+// KNOWN GAP, DEFERRED (documented, not silently dropped): candidate directories this adapter
+// creates under `candidates/<turnId>/` (see `candidateDestRoot` below) are NEVER removed —
+// `snapshotToCandidate` deliberately places them outside `turns/<turnId>/` so they survive
+// `retireWorkspace` (by design — a Gate/finalize consumer may still need to `readCandidateFile`
+// after the workspace itself is gone), but nothing ever calls anything to release a candidate
+// once ITS OWN lifecycle later ends (finalize commits and reads the bytes it needs, or the
+// turn terminalizes and the candidate is abandoned for good). Across a long session this
+// accumulates one `candidates/<turnId>/` directory per turn, unbounded. This is a genuine gap,
+// not something this adapter can close alone: `StagingService` (`core/ports/staging.ts:92-115`)
+// exposes no `retireCandidate` method, so `core` — the only party that actually knows when a
+// turn's candidate is truly done with — has no way to tell this adapter to release one. Closing
+// this needs a new port method here PLUS a caller in `core/turns`/`core/kernel/model/handlers/
+// turn.ts` invoking it at the correct terminal point (after `finalizeTurn` commits, or after
+// `terminalizeTurn` abandons the turn) — both outside this adapter's own file. A same-adapter
+// heuristic (e.g. deleting a same-turnId candidate before re-creating it) was considered and
+// rejected: `snapshotToCandidate` is called at most once per turn in the current `core/turns`
+// flow (`core/turns/model/candidate.ts`), so it would not address the described leak and would
+// risk masking a genuine double-freeze bug behind a silent overwrite instead.
 
 function toStoreInput(
   input: CreateTurnWorkspaceInputV1,

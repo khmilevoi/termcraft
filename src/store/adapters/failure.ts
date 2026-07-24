@@ -1,4 +1,5 @@
 import type { FailureDtoV1 } from "core/protocol";
+import { JsonlMidFileCorruptionError } from "store/jsonl";
 import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease";
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
 import { JsonlOpenError } from "store/model/factory";
@@ -23,11 +24,15 @@ import {
 import { InvalidIdentityError, TurnJsonWriteError, WorkspaceCollisionError } from "store/sandbox";
 import { ManifestCorruptError, ManifestTooNewError } from "store/toml";
 import {
+  ChatMutationLockedError,
   JournalCorruptError,
   SourceChangedError,
   StaleError,
   TransactionIoPendingError,
   TransactionRecoveryConflictError,
+  TurnAlreadyTerminalError,
+  TurnFinalizeInputError,
+  TurnRecordNotFoundError,
 } from "store/transaction";
 import { TrustLedgerError, TrustSubjectError } from "store/trust";
 
@@ -245,6 +250,97 @@ export function toFailureDto(error: Error): FailureDtoV1 {
     error instanceof JournalCorruptError ||
     error instanceof ManifestCorruptError
   ) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `JsonlMidFileCorruptionError` (`store/jsonl`) is the raw valid-prefix reader's hard
+   * corruption fault (storage-identity §11.3 case 3) — the same failure family as
+   * `JournalCorruptError`/`ManifestCorruptError` just above, only reached through the
+   * direct reader (`chat-store.readAppendBase`, `session-checkpoint`,
+   * `pin-store.readRawEvents`) instead of the factory-level `open()` wrapper
+   * (`JsonlOpenError`). Same generic durable-read fault, same code.
+   */
+  if (error instanceof JsonlMidFileCorruptionError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `ChatMutationLockedError` (`store/transaction`): a chat or comments log's tail is not
+   * `clean` and an explicit repair is required before another append (`wrappers.ts`'s own
+   * header). A durable-write fault of the same generic shape as every other
+   * `PERSISTENCE_FAILED` class above — the closed union has no distinct "locked, needs
+   * repair" code.
+   */
+  if (error instanceof ChatMutationLockedError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TurnFinalizeInputError` (`store/transaction`): the caller handed `finalizeTurn` a
+   * finalization input it cannot turn into a plan (e.g. a `replace` page op with no
+   * bytes — `wrappers.ts`'s own header). The closed v1 union (`failure.ts:10-41`) has no
+   * dedicated "invalid input" code, so — like `ManifestTooNewError` above — this folds to
+   * the general bounded storage/process/queue fault §11.2 assigns `PERSISTENCE_FAILED`,
+   * rather than a guessed, more specific code.
+   */
+  if (error instanceof TurnFinalizeInputError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TurnRecordNotFoundError` (`store/transaction`): `terminalizeTurn`/orphan recovery was
+   * asked to terminalize a `turnId` with no `user` record in the target chat —
+   * turn-durability §7.7 classifies "terminal record without its user record" (and the
+   * cross-chat variant this class documents) as `chat_corrupt`. The closed v1 code union
+   * has no dedicated `chat_corrupt` code, and this is a distinct fault from
+   * `TransactionRecoveryConflictError` (kernel-command-contract §11.2: "durable
+   * roll-forward cannot prove a safe operation" — a roll-forward-machinery concern, not a
+   * data-integrity mismatch the wrapper's own business logic found), so it takes the
+   * general `PERSISTENCE_FAILED` bucket rather than reusing that differently-scoped code.
+   */
+  if (error instanceof TurnRecordNotFoundError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TurnAlreadyTerminalError` (`store/transaction`): `turnId` already has a terminal
+   * record in the target chat. Turn-durability §7.7 documents this as an INTENTIONAL
+   * idempotent no-op — repeated orphan-scan terminalization of the same turn is expected
+   * to hit this every time after the first, per this class's own doc comment ("this is
+   * what makes repeated orphan-scan terminalization idempotent"). It is not a transient
+   * fault worth retrying, and the closed v1 union has no "already done, nothing to do"
+   * code. `PERSISTENCE_FAILED` with `retryable: false` is the most faithful EXISTING code
+   * available — chosen deliberately over inventing a new one (forbidden) or reusing
+   * `TRANSACTION_RECOVERY_CONFLICT`, which names a different concern (durable
+   * roll-forward safety, not an idempotent already-terminal state).
+   */
+  if (error instanceof TurnAlreadyTerminalError) {
     return {
       code: "PERSISTENCE_FAILED",
       retryable: false,
