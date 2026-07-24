@@ -1,13 +1,17 @@
 import * as errore from "errore";
 
-import type {
-  AssertConforms,
-  ExportPublicationV1,
-  ExportPublishOperationV1,
-  ExportPublishPlanV1,
-  ExportPublishPort,
+import {
+  type AssertConforms,
+  EXPORT_POINTER_TARGET,
+  type ExportPointerV1,
+  type ExportPublicationV1,
+  type ExportPublishOperationV1,
+  type ExportPublishPlanV1,
+  type ExportPublishPort,
+  exportPointerV1Schema,
 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
+import { FsAccessError, isNotFound } from "store/safe-fs";
 import type {
   FileImage,
   ProjectWritePermit,
@@ -21,6 +25,7 @@ import {
   observeFileImage,
 } from "store/transaction";
 
+import { toFailureDto } from "./failure";
 import type { StoreAdapterDeps } from "./types";
 
 // `createExportPublishAdapter` — the `ExportPublishPort` port over `store/transaction`'s
@@ -51,6 +56,25 @@ export class ExportSnapshotStaleError extends errore.createTaggedError({
   name: "ExportSnapshotStaleError",
   message: "export target $target no longer matches its expected pre-publish image",
 }) {}
+
+/**
+ * `readPointer()`'s own failure (WP-5 Phase C task C2): the pointer at `$target` is
+ * unreadable as JSON, fails {@link exportPointerV1Schema}, or references a generation
+ * directory that does not exist (D-Q4's shallow structural check). Maps to
+ * `PERSISTENCE_FAILED` in {@link toExportFailureDto} — the same "durable data this ring
+ * read back is internally inconsistent" mapping `store/adapters/failure.ts`'s shared
+ * `toFailureDto` already uses for `ManifestCorruptError`/`JournalCorruptError`, not a new
+ * §11.2 code invented for this one path.
+ */
+export class ExportPointerCorruptError extends errore.createTaggedError({
+  name: "ExportPointerCorruptError",
+  message: "export pointer $target is corrupt: $reason",
+}) {}
+
+/** `export/generations/<generationId>` — the managed directory a valid pointer must reference (D-Q4). */
+function exportGenerationDir(generationId: string): string {
+  return `export/generations/${generationId}`;
+}
 
 function imagesEqual(a: FileImage, b: FileImage): boolean {
   if (a.state === "absent" && b.state === "absent") return true;
@@ -95,6 +119,14 @@ function toExportFailureDto(error: Error): FailureDtoV1 {
   if (error instanceof ExportSnapshotStaleError) {
     return {
       code: "EXPORT_SNAPSHOT_STALE",
+      retryable: false,
+      safeMessage: error.message,
+      details: {},
+    };
+  }
+  if (error instanceof ExportPointerCorruptError) {
+    return {
+      code: "PERSISTENCE_FAILED",
       retryable: false,
       safeMessage: error.message,
       details: {},
@@ -150,7 +182,53 @@ export function createExportPublishAdapter(deps: StoreAdapterDeps): ExportPublis
     };
   }
 
-  return { publish };
+  async function readPointer(): Promise<FailureDtoV1 | ExportPointerV1 | null> {
+    const bytes = open.safeFs.readFile(EXPORT_POINTER_TARGET);
+    if (bytes instanceof Error) {
+      if (bytes instanceof FsAccessError && isNotFound(bytes)) return null;
+      return toFailureDto(bytes);
+    }
+
+    const parsed = errore.try({
+      try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+      catch: (cause) =>
+        new ExportPointerCorruptError({
+          target: EXPORT_POINTER_TARGET,
+          reason: "not valid JSON",
+          cause,
+        }),
+    });
+    if (parsed instanceof Error) return toExportFailureDto(parsed);
+
+    const validated = exportPointerV1Schema.safeParse(parsed);
+    if (!validated.success) {
+      return toExportFailureDto(
+        new ExportPointerCorruptError({
+          target: EXPORT_POINTER_TARGET,
+          reason: validated.error.issues[0]?.message ?? "failed schema validation",
+          cause: validated.error,
+        }),
+      );
+    }
+
+    // D-Q4: confirm the referenced generation directory exists — never a full re-hash of
+    // every file the manifest lists.
+    const generationDir = exportGenerationDir(validated.data.generationId);
+    const listing = open.safeFs.list(generationDir);
+    if (listing instanceof Error) {
+      return toExportFailureDto(
+        new ExportPointerCorruptError({
+          target: EXPORT_POINTER_TARGET,
+          reason: `referenced generation directory "${generationDir}" does not exist or is inaccessible`,
+          cause: listing,
+        }),
+      );
+    }
+
+    return validated.data;
+  }
+
+  return { publish, readPointer };
 }
 
 type _Conforms = AssertConforms<ExportPublishPort, ReturnType<typeof createExportPublishAdapter>>;
