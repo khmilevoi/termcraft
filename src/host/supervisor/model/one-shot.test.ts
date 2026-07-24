@@ -5,6 +5,7 @@ import type {
   ControlEnvelope,
   FrameEnvelope,
   HostHelloV1,
+  JsonValue,
   RuntimeDeclarationBundleV1,
 } from "../../protocol";
 import type { HostSessionSpec } from "../../types";
@@ -37,10 +38,28 @@ function specFor(overrides: Partial<HostSessionSpec> = {}): HostSessionSpec {
   };
 }
 
+/** The default valid layout tree the double seals into `ready.body.layout` (WP-5 Task A2)
+ *  unless `opts.layout` overrides it — every real smoke/export mount carries one per Task
+ *  A1, so `runOneShotSession`'s decode boundary requires one too. */
+function defaultLayout(spec: HostSessionSpec) {
+  return {
+    id: "root",
+    kind: "BoxRenderable",
+    box: { x: 0, y: 0, width: spec.size.w, height: spec.size.h },
+    children: [],
+  };
+}
+
 /** A one-shot host double: handshakes, then on mount seals ready + one frame and exits 0. */
 function oneShotChild(
   spec: HostSessionSpec,
-  opts?: { skipHostHello?: boolean; skipFrame?: boolean; mountErrorCode?: string },
+  opts?: {
+    skipHostHello?: boolean;
+    skipFrame?: boolean;
+    mountErrorCode?: string;
+    /** Override `ready.body.layout` — pass a malformed value to exercise the decode-miss path. */
+    layout?: JsonValue;
+  },
 ): ScriptedChild {
   const child = createScriptedChild();
   let id: { sessionId: string; nonce: string } | null = null;
@@ -104,7 +123,11 @@ function oneShotChild(
           nonce: id.nonce,
           messageId: nextId(),
           responseTo: raw.requestId,
-          body: { size: { w: spec.size.w, h: spec.size.h }, interactionMode: "static" },
+          body: {
+            size: { w: spec.size.w, h: spec.size.h },
+            interactionMode: "static",
+            layout: opts?.layout !== undefined ? opts.layout : defaultLayout(spec),
+          },
         });
         if (opts?.skipFrame) return; // ready but no frame → the runner times out on capture; child stays alive
         const frame: FrameEnvelope = {
@@ -218,6 +241,48 @@ describe("runOneShotSession (2D-4, §4/§11.3/§11.4)", () => {
     const result = await promise;
     expect(result).toBeInstanceOf(SupervisorError);
     if (result instanceof SupervisorError) expect(result.code).toBe("MOUNT_TIMEOUT");
+  });
+
+  test("decodes the ready body's layout tree onto OneShotResult (WP-5 Task A2)", async () => {
+    const spec = specFor({ mode: "export" });
+    const tree = {
+      id: "root",
+      kind: "BoxRenderable",
+      box: { x: 0, y: 0, width: spec.size.w, height: spec.size.h },
+      children: [
+        {
+          id: "child",
+          kind: "TextRenderable",
+          box: { x: 1, y: 1, width: 4, height: 1 },
+          children: [],
+        },
+      ],
+    };
+    const child = oneShotChild(spec, { layout: tree });
+    const clock = createManualClock();
+    const result = await runOneShotSession(spec, {
+      spawn: () => child,
+      command: { cmd: ["_host"] },
+      clock,
+      runtimeDeclaration,
+    });
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) throw result;
+    expect(result.layout).toEqual(tree);
+  });
+
+  test("a malformed layout body is a typed ProtocolError, never a fabricated tree", async () => {
+    const spec = specFor({ mode: "export" });
+    const child = oneShotChild(spec, { layout: { id: "root" } }); // missing kind/box/children
+    const clock = createManualClock();
+    const result = await runOneShotSession(spec, {
+      spawn: () => child,
+      command: { cmd: ["_host"] },
+      clock,
+      runtimeDeclaration,
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    if (result instanceof ProtocolError) expect(result.code).toBe("MALFORMED_PROTOCOL");
   });
 
   test("a non-one-shot mode is refused before spawning", async () => {

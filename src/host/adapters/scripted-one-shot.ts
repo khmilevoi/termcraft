@@ -11,6 +11,7 @@ import type {
   ControlEnvelope,
   FrameEnvelope,
   HostHelloV1,
+  JsonValue,
   RuntimeDeclarationBundleV1,
 } from "../protocol";
 import {
@@ -30,6 +31,19 @@ export const TEST_RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   publicCapabilityIds: [],
 };
 
+/** The default valid layout tree sealed into `ready.body.layout` unless `opts.layout`
+ *  overrides it — every real smoke/export mount carries one (host-state-machine.ts's
+ *  `handleMount`, WP-5 Task A1), and `runOneShotSession`'s decode boundary requires one
+ *  too (WP-5 Task A2). */
+function defaultLayout(spec: HostSessionSpec) {
+  return {
+    id: "root",
+    kind: "BoxRenderable",
+    box: { x: 0, y: 0, width: spec.size.w, height: spec.size.h },
+    children: [],
+  };
+}
+
 /**
  * A one-shot host double: handshakes, then on `mount` either seals `ready` + one frame and
  * exits 0 (the default), or replies with a scripted `error` envelope and exits 1 when
@@ -37,7 +51,7 @@ export const TEST_RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
  */
 export function createOneShotChild(
   spec: HostSessionSpec,
-  opts?: { readonly mountErrorCode?: string },
+  opts?: { readonly mountErrorCode?: string; readonly layout?: JsonValue },
 ): ScriptedChild {
   const child = createScriptedChild();
   let id: { sessionId: string; nonce: string } | null = null;
@@ -108,7 +122,11 @@ export function createOneShotChild(
           nonce: id.nonce,
           messageId: nextId(),
           responseTo: raw.requestId,
-          body: { size: { w: spec.size.w, h: spec.size.h }, interactionMode: "static" },
+          body: {
+            size: { w: spec.size.w, h: spec.size.h },
+            interactionMode: "static",
+            layout: opts?.layout !== undefined ? opts.layout : defaultLayout(spec),
+          },
         });
         const frame: FrameEnvelope = {
           protocolVersion: 1,

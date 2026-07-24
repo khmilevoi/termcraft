@@ -8,6 +8,7 @@ import {
   encodeControlEnvelope,
 } from "../../protocol";
 import type { ControlEnvelope, FrameEnvelope, ProtocolViolationCode } from "../../protocol";
+import { decodeLayoutNode } from "../../render";
 import type { HostSessionSpec, PreviewFrame } from "../../types";
 import type { OneShotDeps, OneShotResult } from "../types";
 import { SupervisorError } from "./errors";
@@ -23,15 +24,20 @@ const REAP_TIMEOUT_MS = 1_000;
 
 /**
  * Drive ONE one-shot `smoke`/`export` incarnation (host-supervision §4, §11.3,
- * §11.4): spawn → negotiate → mount → seal ONE full frame → the child exits 0.
- * Unlike the preview session there is NO pump, NO heartbeat watchdog, and NO
- * automatic restart — a one-shot failure is itself the result (§4), so the child
- * exiting cleanly after the frame is SUCCESS, not a crash. It deliberately mirrors
- * the negotiate/mount/await-ready sequence of `createHostSession.start()` for the
- * one-shot lifetime, without adopting its long-lived machinery. NOTE: `frame` is
- * the documented non-conformant MVP stand-in; the conformant correlated `capture`
- * + layout reply is deferred until the 2A bulk schema lands, so this frame must
- * NOT be routed to any preview stream.
+ * §11.4): spawn → negotiate → mount → seal ONE full frame (+ its resolved layout
+ * tree) → the child exits 0. Unlike the preview session there is NO pump, NO
+ * heartbeat watchdog, and NO automatic restart — a one-shot failure is itself the
+ * result (§4), so the child exiting cleanly after the frame is SUCCESS, not a
+ * crash. It deliberately mirrors the negotiate/mount/await-ready sequence of
+ * `createHostSession.start()` for the one-shot lifetime, without adopting its
+ * long-lived machinery. NOTE: `frame` is the documented non-conformant MVP
+ * stand-in (a styled snapshot, not the design's bulk frame schema) and must NOT
+ * be routed to any preview stream. `layout` (WP-5 Task A2) is the REAL resolved
+ * tree, sealed into the `ready` body's `layout` field because the one-shot child
+ * exits before any correlated `query-layout` request could ever arrive
+ * (`host-state-machine.ts`'s `handleMount`), then decoded here via
+ * `decodeLayoutNode` — a decode miss is a typed `ProtocolError`, never a
+ * fabricated tree.
  */
 export async function runOneShotSession(
   spec: HostSessionSpec,
@@ -159,6 +165,12 @@ export async function runOneShotSession(
   const sealed = await awaitReadyFrame(mountRequestId, captureDeadline);
   if (sealed instanceof Error) return fail(sealed);
 
+  // WP-5 Task A2: decode the layout tree Task A1 sealed into the ready body. A decode
+  // miss is a typed protocol violation — the one-shot's own failure-is-the-result
+  // contract above covers it cleanly, same as every other pre-success check here.
+  const layout = decodeLayoutNode(sealed.ready.body.layout);
+  if (layout instanceof Error) return fail(layout);
+
   // Success: the frame is sealed. Reap the self-exiting one-shot child (no kill) so
   // nothing leaks, then return the typed result — no restart, no preview stream.
   await teardown(false);
@@ -169,6 +181,7 @@ export async function runOneShotSession(
     ready: sealed.ready,
     negotiatedLimits: negotiation.negotiatedLimits,
     exitCode: child.exitCode,
+    layout,
   };
 
   // Await the correlated `ready` AND the sealed frame under ONE 10 s capture deadline,
