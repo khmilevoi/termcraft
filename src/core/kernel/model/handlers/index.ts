@@ -1,7 +1,11 @@
 import type { HandlerRegistry } from "core/mailbox";
 import type { CommandEnvelopeV1, CommandKindV1 } from "core/protocol";
 
+import { chatHandlers } from "./chat";
 import { type DeferredHandlerKind, deferredHandlers } from "./deferred";
+import { exportHandlers, previewHandlers } from "./preview-export";
+import { projectHandlers } from "./project";
+import { modelHandlers, selectionHandlers } from "./selection-model";
 import {
   type CommandHandlerMap,
   type CommandOutcomeV1,
@@ -29,24 +33,51 @@ import {
  */
 
 /**
- * The 9 named families Step B implements (`project`, `chat`, `page`, `pin`, `selection`,
- * `turn`, `preview`, `export`, `model`) plus `migration` — 29 + 4 = 33 kinds, exactly
- * `CommandKindV1`'s other 33 members once `deferredHandlers`'s 10 are removed.
+ * Kernel-assembly WP-1 task 9, STEP C1: four of the nine named families (`chat`,
+ * `selection`+`model`, `project`, `preview`+`export`) have real, tested `FamilyHandlerMap`s
+ * now (`./chat.ts`, `./selection-model.ts`, `./project.ts`, `./preview-export.ts`) and are
+ * spread into {@link totalHandlers} below, replacing their `notYetImplementedHandler`
+ * stand-ins. `turn` and `page`/`pin` stay on the stand-in — both returned NEEDS_CONTEXT
+ * investigations during Step B (`.superpowers/sdd/task9-family-turn-report.md`,
+ * `task9-family-page-pin-report.md`); Step C1 closed the contract gaps those two reports
+ * proved (`./types.ts`'s `HandlerContext` — see its own "STEP C1 ADDITIONS" comment), so
+ * Step C2 can write both families without touching `types.ts`/`kernel.ts` again.
  *
- * `migration.*` is grouped HERE, not with `deferredHandlers`, despite the kernel-assembly
- * plan's Global Constraints text listing "restore/commit/migration" as one Tier-C group.
- * See `./deferred.ts`'s own header comment for the full investigation: `core/versions`'s
- * `DEFERRED_CAPABILITY_KINDS` does not include any `migration.*` kind, and the real guard
- * (`capabilities/model/guards.ts`'s `migrationFamilyReason`) evaluates ACTUAL phase
- * legality against `MIGRATION_TRANSITION_TABLE` rather than rejecting unconditionally —
- * so `migration.*` commands can legitimately pass the guard today. Routing them through
- * `deferredHandlers` would silently no-op a guard-accepted command while pretending it was
- * never reachable, which is not what a Tier-C kind actually is. Until a `migration` family
- * module lands (or a deliberate decision extends `core/versions` to cover it), its four
- * kinds get the exact same well-formed no-op every other unbuilt family gets — flagged
- * here, not silently guessed; see the task report for the full writeup.
+ * `migration.*` stays on the stand-in too, for the reason `./deferred.ts`'s header
+ * documents at length: `core/versions`'s `DEFERRED_CAPABILITY_KINDS` does not include any
+ * `migration.*` kind, and the real guard (`capabilities/model/guards.ts`'s
+ * `migrationFamilyReason`) evaluates ACTUAL phase legality rather than rejecting
+ * unconditionally — so `migration.*` commands can legitimately pass the guard today, and
+ * routing them through `deferredHandlers` would silently no-op a guard-accepted command
+ * while pretending it was never reachable. Until a `migration` family module lands (or a
+ * deliberate decision extends `core/versions` to cover it), its four kinds get the exact
+ * same well-formed no-op every other unbuilt family gets — flagged here, not silently
+ * guessed; see the task report for the full writeup.
  */
-type NotYetImplementedKind = Exclude<CommandKindV1, DeferredHandlerKind>;
+type NotYetImplementedKind = Exclude<
+  CommandKindV1,
+  | DeferredHandlerKind
+  | "chat.create"
+  | "chat.switch"
+  | "selection.set"
+  | "selection.clear"
+  | "model.select"
+  | "project.create"
+  | "project.open"
+  | "project.retryOpen"
+  | "project.close"
+  | "project.setTrust"
+  | "preview.selectPage"
+  | "preview.selectHistorical"
+  | "preview.selectCurrent"
+  | "preview.resize"
+  | "preview.setThemeCapabilities"
+  | "preview.setMode"
+  | "preview.queryGeometry"
+  | "preview.retry"
+  | "preview.close"
+  | "export.start"
+>;
 
 /**
  * The shared stand-in for every kind whose real family module has not landed yet. Mirrors
@@ -60,35 +91,15 @@ function notYetImplementedHandler(): ReturnType<typeof noOpOutcome> {
 }
 
 const notYetImplementedHandlers: CommandHandlerMap<NotYetImplementedKind> = {
-  "project.create": notYetImplementedHandler,
-  "project.open": notYetImplementedHandler,
-  "project.retryOpen": notYetImplementedHandler,
-  "project.close": notYetImplementedHandler,
-  "project.setTrust": notYetImplementedHandler,
   "turn.start": notYetImplementedHandler,
   "turn.cancel": notYetImplementedHandler,
-  "chat.create": notYetImplementedHandler,
-  "chat.switch": notYetImplementedHandler,
-  "model.select": notYetImplementedHandler,
   "page.renameTitle": notYetImplementedHandler,
   "page.removePlan": notYetImplementedHandler,
   "page.removeConfirm": notYetImplementedHandler,
   "page.removeDiscardPlan": notYetImplementedHandler,
   "page.reorder": notYetImplementedHandler,
-  "preview.selectPage": notYetImplementedHandler,
-  "preview.selectHistorical": notYetImplementedHandler,
-  "preview.selectCurrent": notYetImplementedHandler,
-  "preview.resize": notYetImplementedHandler,
-  "preview.setThemeCapabilities": notYetImplementedHandler,
-  "preview.setMode": notYetImplementedHandler,
-  "preview.queryGeometry": notYetImplementedHandler,
-  "preview.retry": notYetImplementedHandler,
-  "preview.close": notYetImplementedHandler,
-  "selection.set": notYetImplementedHandler,
-  "selection.clear": notYetImplementedHandler,
   "pin.create": notYetImplementedHandler,
   "pin.setStatus": notYetImplementedHandler,
-  "export.start": notYetImplementedHandler,
   "migration.plan": notYetImplementedHandler,
   "migration.confirm": notYetImplementedHandler,
   "migration.discardPlan": notYetImplementedHandler,
@@ -96,14 +107,22 @@ const notYetImplementedHandlers: CommandHandlerMap<NotYetImplementedKind> = {
 };
 
 /**
- * Step A's complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) plus
- * `notYetImplementedHandlers` (33, stand-in). The `satisfies` clause below is the
- * compile-time exhaustiveness check the task brief requires — remove, rename, or add a
- * `CommandKindV1` member without updating one of the two maps above and this line stops
+ * The complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the four landed
+ * families' maps (20: `chatHandlers` 2, `selectionHandlers` 2, `modelHandlers` 1,
+ * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1) + `notYetImplementedHandlers`
+ * (13, stand-in: `turn.*` 2, `page.*` 5, `pin.*` 2, `migration.*` 4). The `satisfies` clause
+ * below is the compile-time exhaustiveness check the task brief requires — remove, rename,
+ * or add a `CommandKindV1` member without updating one of these maps and this line stops
  * compiling; it is never a runtime surprise.
  */
 export const totalHandlers = {
   ...deferredHandlers,
+  ...chatHandlers,
+  ...selectionHandlers,
+  ...modelHandlers,
+  ...projectHandlers,
+  ...previewHandlers,
+  ...exportHandlers,
   ...notYetImplementedHandlers,
 } satisfies TotalHandlerMap;
 
