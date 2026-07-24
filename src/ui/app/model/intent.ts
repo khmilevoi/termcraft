@@ -82,7 +82,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.composer.set(next);
       if (next.length === 0) {
         local.overlay.set(null);
-        local.slashSelection.set(0);
         return;
       }
       return;
@@ -101,7 +100,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (entry === null) return;
       local.composer.set("");
       local.overlay.set(null);
-      local.slashSelection.set(0);
       executeAction(entry, deps);
       return;
     }
