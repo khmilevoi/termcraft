@@ -131,3 +131,4 @@ export { createProjectionsAdapter } from "./adapters/projections";
 export { createTrustAdapter } from "./adapters/trust";
 export { createRecoveryAdapter } from "./adapters/recovery";
 export { createSessionCheckpointAdapter } from "./adapters/session-checkpoint";
+export { ExportSnapshotStaleError, createExportPublishAdapter } from "./adapters/export-publish";
