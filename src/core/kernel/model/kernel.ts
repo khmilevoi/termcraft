@@ -53,12 +53,11 @@ import {
   type UUIDv7,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
-import type { TurnAttemptHandle } from "core/turns";
 
 import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
 import { createHandlerRegistry, totalHandlers } from "./handlers";
-import type { HandlerContext, SelectionSnapshotV1 } from "./handlers/types";
+import type { HandlerContext, SelectionSnapshotV1, TurnCancelHandle } from "./handlers/types";
 
 /**
  * `createKernel` (kernel-assembly WP-1, task 8) — assembles the whole Kernel graph inside
@@ -117,13 +116,14 @@ export function createKernel(deps: KernelDeps): Kernel {
 
     // Step C1's Kernel-held "current selection" fact (closes the `selection`/`model`
     // family's own reported gap 1) and the single-slot turn-attempt registry storage the
-    // `turn` family's own reported Gap 2 needs (storage only — see `handlers/types.ts`'s
-    // own `TurnRunnerContext` comment for the still-open plumbing gap C1 fix round 2
-    // found) — see `handlers/types.ts`'s own comments on `HandlerContext.selection`/
-    // `turnRunner` for why each is a plain closure fact rather than part of
-    // `KernelStateSnapshot`.
+    // `turn` family's own reported Gap 2 needs — see `handlers/types.ts`'s own comments on
+    // `HandlerContext.selection`/`turnRunner` for why each is a plain closure fact rather
+    // than part of `KernelStateSnapshot`. Step C2 (`handlers/turn.ts`) is this slot's one
+    // real consumer (`turn.cancel`); `turn.start` remains the still-blocked producer — see
+    // `handlers/types.ts`'s `TurnRunnerContext.setActiveAttempt` doc comment and
+    // `handlers/turn.ts`'s own header for the current, corrected status.
     let currentSelection: SelectionSnapshotV1 | null = null;
-    let activeTurnAttempt: TurnAttemptHandle | null = null;
+    let activeTurnAttempt: TurnCancelHandle | null = null;
 
     // Step C1's capability-growth identity trackers: which `(id, target)` requests beyond
     // the nine null-target kinds are worth projecting right now, because their identity has
@@ -506,15 +506,15 @@ export function createKernel(deps: KernelDeps): Kernel {
     // `machine` is the SAME `turnMachine` object above, exposed FULL (never a second
     // instance, never a cast); `setActiveAttempt`/`activeAttempt` are the single-slot
     // registry the turn family's own reported Gap 2 needs, keyed by `activeTurnIdAtom`
-    // (never a second, independent turnId). NOT a full closure of Gap 2 by itself — see
-    // `TurnRunnerContext`'s own doc comment (`handlers/types.ts`) for the still-open
-    // plumbing gap this task's C1 fix round 2 found: nothing today can call
-    // `setActiveAttempt` with a live handle, since `core/turns`'s `runTurn` never
-    // surfaces the `TurnAttemptHandle` it creates internally.
-    function setActiveAttempt(handle: TurnAttemptHandle | null): void {
+    // (never a second, independent turnId). Step C2 (`handlers/turn.ts`) made this slot's
+    // consumer (`turn.cancel`) real and tested; nothing in THIS Kernel build calls
+    // `setActiveAttempt` with a live handle yet, since `turn.start` itself is still blocked
+    // by a `core/ports`-level gap (`handlers/turn.ts`'s own header) — the storage/consumer
+    // pair is correct and ready for the day that closes.
+    function setActiveAttempt(handle: TurnCancelHandle | null): void {
       activeTurnAttempt = handle;
     }
-    function activeAttempt(turnId: UUIDv7): TurnAttemptHandle | null {
+    function activeAttempt(turnId: UUIDv7): TurnCancelHandle | null {
       if (activeTurnIdAtom() !== turnId) return null;
       return activeTurnAttempt;
     }
