@@ -196,6 +196,14 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       tweaks: [],
       layout,
     };
+    // `ReadyBody` is a named, strongly-typed interface — TypeScript refuses a direct
+    // assertion to the index-signature `ControlEnvelope["body"]` (no "sufficient overlap"),
+    // which is exactly why the old `as unknown as` bypass existed. Widening through a real,
+    // statically-checked `Record<string, unknown>` copy first (every `ReadyBody` field is
+    // trivially assignable to `unknown`) reuses the SAME single-assertion idiom
+    // `sendResponse`/`sendControl` below already use for their own `Record<string, unknown>`
+    // body params — no laundering, just the in-repo generic-indexing precedent applied here.
+    const readyBodyRecord: Record<string, unknown> = { ...readyBody };
     deps.send({
       type: "control",
       payload: {
@@ -205,7 +213,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
         nonce: identity!.nonce,
         messageId: nextMessageId(),
         responseTo: envelope.requestId,
-        body: readyBody as unknown as ControlEnvelope["body"],
+        body: readyBodyRecord as ControlEnvelope["body"],
       },
     });
     emitFrame(captured, frameIdentity);
