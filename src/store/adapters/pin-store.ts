@@ -1,0 +1,84 @@
+import type { AssertConforms, PinMutations, PinReader } from "core/ports";
+import type { FailureDtoV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
+import type { Pin, PinEvent } from "entities/pin";
+import { readPinsJsonl } from "store/jsonl";
+import { FsAccessError, isNotFound } from "store/safe-fs";
+import { pageCommentsPath } from "store/transaction";
+
+import { toFailureDto } from "./failure";
+import type { StoreAdapterDeps } from "./types";
+import { nowIso } from "./types";
+
+// `createPinStoreAdapter` — the `PinReader & PinMutations` port over `OpenProject.pins`/
+// `OpenProject.transactions` (plan Task 1). `readEvents`/`findPageForPin` need no new
+// store-internal accessor: `OpenProject.safeFs` already reaches each page's raw comments
+// JSONL, and `store/jsonl`'s already-public `readPinsJsonl` already decodes it into the
+// same `PinEvent[]` `PinStore.fold`'s own projection is built from.
+
+/** The page's raw pin-event log, or `[]` for a page with no comments log yet (mirrors `fold()`'s own rule). */
+async function readRawEvents(
+  open: StoreAdapterDeps["open"],
+  pageSlug: PageSlug,
+): Promise<FailureDtoV1 | readonly PinEvent[]> {
+  const relPath = pageCommentsPath(pageSlug);
+  const bytes = open.safeFs.readFile(relPath);
+  if (bytes instanceof Error) {
+    if (bytes instanceof FsAccessError && isNotFound(bytes)) return [];
+    return toFailureDto(bytes);
+  }
+  const doc = readPinsJsonl({ path: relPath, chunks: [bytes] });
+  if (doc instanceof Error) return toFailureDto(doc);
+  return doc.records;
+}
+
+export function createPinStoreAdapter(deps: StoreAdapterDeps): PinReader & PinMutations {
+  const { open } = deps;
+
+  async function fold(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly Pin[]> {
+    const result = await open.pins.fold(pageSlug);
+    if (result instanceof Error) return toFailureDto(result);
+    return result;
+  }
+
+  async function readEvents(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly PinEvent[]> {
+    return readRawEvents(open, pageSlug);
+  }
+
+  async function findPageForPin(pinId: string): Promise<FailureDtoV1 | PageSlug | null> {
+    const slugs = await open.pages.listSlugs();
+    if (slugs instanceof Error) return toFailureDto(slugs);
+
+    for (const pageSlug of slugs) {
+      const events = await readRawEvents(open, pageSlug);
+      if ("code" in events) return events; // FailureDtoV1 — a real I/O fault, not a miss
+      if (events.some((event) => event.kind === "pin:created" && event.pinId === pinId)) {
+        return pageSlug;
+      }
+    }
+    return null;
+  }
+
+  async function appendStandaloneEvent(
+    pageSlug: PageSlug,
+    event: PinEvent,
+  ): Promise<FailureDtoV1 | undefined> {
+    const manifest = await open.manifest.read();
+    if (manifest instanceof Error) return toFailureDto(manifest);
+
+    const result = await open.transactions.appendPinEvent({
+      transactionId: deps.uuidv7(),
+      actionId: deps.uuidv7(),
+      pageSlug,
+      projectId: manifest.projectId,
+      event,
+      createdAt: nowIso(deps.clock),
+    });
+    if (result instanceof Error) return toFailureDto(result);
+    return undefined;
+  }
+
+  return { fold, readEvents, findPageForPin, appendStandaloneEvent };
+}
+
+type _Conforms = AssertConforms<PinReader & PinMutations, ReturnType<typeof createPinStoreAdapter>>;
