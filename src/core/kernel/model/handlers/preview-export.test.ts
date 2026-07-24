@@ -175,6 +175,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       launchOperation: (label, run) => {
         launched.push({ label, run: run as () => Promise<readonly unknown[]> });
       },
+      publishOperationEvent: () => {},
       turnRunner: {
         machine: machines.turn,
         setActiveAttempt: () => {},

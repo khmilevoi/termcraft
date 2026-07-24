@@ -180,6 +180,7 @@ function buildTestContext(): TestContext {
       launchOperation: (label, run) => {
         launched.push({ label, run });
       },
+      publishOperationEvent: () => {},
       turnRunner: {
         machine: machines.turn,
         // Mirrors `kernel.ts`'s own real `setActiveAttempt`/`activeAttempt`: a single slot,

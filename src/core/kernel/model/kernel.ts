@@ -58,6 +58,7 @@ import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
 import { createHandlerRegistry, totalHandlers } from "./handlers";
 import type { HandlerContext, SelectionSnapshotV1, TurnCancelHandle } from "./handlers/types";
+import { publishOperationEvents } from "./operation-publish";
 
 /**
  * `createKernel` (kernel-assembly WP-1, task 8) — assembles the whole Kernel graph inside
@@ -557,9 +558,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       run: () => Promise<readonly PublishableEventV1[]>,
     ): Promise<void> {
       const events = await wrap(run());
-      if (events.length === 0) return;
-      counters.advanceRevision();
-      const published = eventBus.publishTransition(events);
+      const published = publishOperationEvents({ counters, eventBus }, events);
       if (published instanceof Error) {
         console.error(
           `core/kernel: launchOperation "${label}" produced events that failed to publish: ${published.message}`,
@@ -577,6 +576,35 @@ export function createKernel(deps: KernelDeps): Kernel {
           cause instanceof Error ? cause.message : String(cause),
         );
       });
+    }
+
+    /**
+     * The live-publish primitive (kernel-assembly Task 9 Step C3 deliverable B) —
+     * `HandlerContext.publishOperationEvent`'s real implementation. Unlike `launchOperation`
+     * (a terminal batch, published exactly once when `run()` settles), this may be called
+     * ANY NUMBER OF TIMES over one launched operation's own lifetime, so a composition like
+     * `core/turns`'s `runTurn` can stream `turn.attemptStarted`/`turn.progress`/
+     * `turn.gateRejected` events DURING the run (`RunTurnDeps.publish`,
+     * `core/turns/model/run-turn.ts:233`/`:314`) instead of only at the very end. Shares the
+     * exact same revision/publish semantics `runLaunchedOperation`'s own tail uses —
+     * `publishOperationEvents` (`./operation-publish.ts`) is the ONE helper both call, never
+     * two independently hand-rolled copies of "advance iff non-empty, then publish through
+     * the same bus."
+     *
+     * A plain, synchronous function — no `wrap()` of its own — matching the same division of
+     * responsibility the five ordinary Kernel-held mutators already have: the CALLER is
+     * responsible for `wrap()`-ing whatever async boundary it crosses before invoking this
+     * (e.g. `attempt.ts`'s own `wrap((fencedEvent) => {...deps.publish(...)...})`), since this
+     * function itself touches no `await` and needs none once called from an already-live
+     * Reatom frame.
+     */
+    function publishOperationEvent(event: PublishableEventV1): void {
+      const published = publishOperationEvents({ counters, eventBus }, [event]);
+      if (published instanceof Error) {
+        console.error(
+          `core/kernel: a mid-operation "${event.kind}" event failed to publish: ${published.message}`,
+        );
+      }
     }
 
     const handlerContext: HandlerContext = {
@@ -597,6 +625,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       setPreviewSourceKind,
       setActivePreviewSession,
       launchOperation,
+      publishOperationEvent,
       turnRunner,
       setSelection,
       selection,

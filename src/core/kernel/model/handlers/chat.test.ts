@@ -210,6 +210,7 @@ function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }
       launchOperation: (label, run) => {
         launches.push({ label, run });
       },
+      publishOperationEvent: () => {},
       turnRunner: {
         machine: machines.turn,
         setActiveAttempt: () => {},

@@ -364,6 +364,20 @@ export interface HandlerContext {
     label: string,
     run: () => Promise<readonly PublishableEventV1[]>,
   ) => void;
+  /**
+   * The live-publish primitive (Step C3) — publishes `event` NOW, mid-operation, sharing
+   * `launchOperation`'s own revision/publish semantics (`core/kernel/model/
+   * operation-publish.ts`'s `publishOperationEvents`) but callable ANY NUMBER of times over
+   * one launched operation's lifetime, not just once at settlement. Exists so a `run`
+   * closure composing `core/turns`'s `runTurn` can stream `turn.attemptStarted`/
+   * `turn.progress`/`turn.gateRejected` events DURING the run
+   * (`RunTurnDeps.publish`, `core/turns/model/run-turn.ts:233`/`:314`) instead of only
+   * batching them into `launchOperation`'s own terminal array. A plain synchronous
+   * function — the CALLER is responsible for its own `wrap()` at whatever async boundary it
+   * crosses before calling this, matching the five ordinary mutators' same division of
+   * responsibility.
+   */
+  readonly publishOperationEvent: (event: PublishableEventV1) => void;
   /** The turn family's own extra surface (Step C1) — see {@link TurnRunnerContext}'s own comment. */
   readonly turnRunner: TurnRunnerContext;
   /** The Kernel-held "current selection" fact (Step C1) — see this interface's own comment above. */

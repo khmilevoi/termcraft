@@ -193,6 +193,7 @@ function buildTestContext(options?: {
     launchOperation: (label, run) => {
       launchOperations.push({ label, run });
     },
+    publishOperationEvent: () => {},
     turnRunner: {
       machine: machines.turn,
       setActiveAttempt: () => {},

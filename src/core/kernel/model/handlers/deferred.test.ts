@@ -99,10 +99,12 @@ function buildTestContext(): {
   readonly handlerContext: HandlerContext;
   readonly getMutatorCalls: () => number;
   readonly getLaunchOperationCalls: () => number;
+  readonly getPublishOperationEventCalls: () => number;
 } {
   return context.start(() => {
     let mutatorCalls = 0;
     let launchOperationCalls = 0;
+    let publishOperationEventCalls = 0;
     let trust: ProjectTrustV1 = null;
     let activeTurnId: UUIDv7 | null = null;
     let commitIntentRecorded = false;
@@ -159,6 +161,9 @@ function buildTestContext(): {
       launchOperation: () => {
         launchOperationCalls += 1;
       },
+      publishOperationEvent: () => {
+        publishOperationEventCalls += 1;
+      },
       turnRunner: {
         machine: machines.turn,
         setActiveAttempt: () => {},
@@ -184,6 +189,7 @@ function buildTestContext(): {
       handlerContext,
       getMutatorCalls: () => mutatorCalls,
       getLaunchOperationCalls: () => launchOperationCalls,
+      getPublishOperationEventCalls: () => publishOperationEventCalls,
     };
   });
 }
@@ -225,7 +231,12 @@ describe("deferredHandlers", () => {
 
   for (const kind of DEFERRED_HANDLER_KINDS) {
     test(`"${kind}" returns the well-formed no-op and never touches the context`, () => {
-      const { handlerContext, getMutatorCalls, getLaunchOperationCalls } = buildTestContext();
+      const {
+        handlerContext,
+        getMutatorCalls,
+        getLaunchOperationCalls,
+        getPublishOperationEventCalls,
+      } = buildTestContext();
       const payload = SAMPLE_PAYLOADS[kind];
 
       const outcome = deferredHandlers[kind](payload as never, handlerContext);
@@ -233,6 +244,7 @@ describe("deferredHandlers", () => {
       expect(outcome).toEqual({ disposition: "no-op", events: [] });
       expect(getMutatorCalls()).toBe(0);
       expect(getLaunchOperationCalls()).toBe(0);
+      expect(getPublishOperationEventCalls()).toBe(0);
     });
   }
 });

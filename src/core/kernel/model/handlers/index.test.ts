@@ -150,6 +150,7 @@ function buildTestContext(): HandlerContext {
       // and captures a session is Step C's/the preview family's own test concern.
       setActivePreviewSession: () => {},
       launchOperation: () => {},
+      publishOperationEvent: () => {},
       turnRunner: {
         machine: machines.turn,
         setActiveAttempt: () => {},
