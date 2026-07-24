@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 
 import type { CommandResultV1, PageDescriptorV1 } from "core/protocol";
 import type { EventOf } from "ui/kernel";
 import { createFakeKernel, event } from "ui/testing";
 
+import type { AppShell } from "../types";
 import {
   ExportDriverError,
   ExportRefusedError,
@@ -12,6 +13,7 @@ import {
   TRUST_REFUSAL_MESSAGE,
   ZERO_PAGES_REFUSAL_MESSAGE,
   runExport,
+  runHeadlessExportOverShell,
 } from "./run-export";
 
 const ROOT = "C:/projects/site";
@@ -193,5 +195,88 @@ describe("runExport", () => {
     const fake = createFakeKernel();
     const result = await runExport({ port: fake, root: ROOT, timeoutMs: 50 });
     expect(result).toBeInstanceOf(ExportDriverError);
+  });
+});
+
+function fakeShell(
+  port: ReturnType<typeof createFakeKernel>,
+  close: () => Promise<void>,
+): AppShell {
+  return { mode: "interactive", port, env: { root: ROOT, workspaceIdentity: ROOT }, close };
+}
+
+describe("runHeadlessExportOverShell", () => {
+  test("a shell that fails to close after a successful export still resolves the destination, not a rejection", async () => {
+    const fake = createFakeKernel();
+    const teardownFailure = new Error("shell teardown failed");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const runPromise = runHeadlessExportOverShell({
+      shell: fakeShell(fake, () => Promise.reject(teardownFailure)),
+      root: ROOT,
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    fake.emit(pageDescriptorsEnvelope([readyDescriptor("home")]));
+    fake.emit(projectOpenSettledEnvelope("kernel.project.finishOpen"));
+    fake.emit(exportCompletedEnvelope("0192f000-0000-7000-8000-00000000abcd"));
+
+    const result = await runPromise;
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) throw result;
+    expect(result.destination).toBe(
+      path.join(
+        ROOT,
+        ".termcraft",
+        "export",
+        "generations",
+        "0192f000-0000-7000-8000-00000000abcd",
+      ),
+    );
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("a shell that fails to close after a refused export still resolves the refusal, not a rejection", async () => {
+    const fake = createFakeKernel();
+    const teardownFailure = new Error("shell teardown failed");
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const runPromise = runHeadlessExportOverShell({
+      shell: fakeShell(fake, () => Promise.reject(teardownFailure)),
+      root: ROOT,
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    fake.setDispatchResult(REJECTED_UNTRUSTED);
+    fake.emit(pageDescriptorsEnvelope([readyDescriptor("home")]));
+    fake.emit(projectOpenSettledEnvelope("kernel.project.finishOpen"));
+
+    const result = await runPromise;
+    expect(result).toBeInstanceOf(ExportRefusedError);
+    if (!(result instanceof Error)) throw new Error("expected a refusal");
+    expect(result.message).toBe(TRUST_REFUSAL_MESSAGE);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("a shell that closes cleanly logs nothing", async () => {
+    const fake = createFakeKernel();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const runPromise = runHeadlessExportOverShell({
+      shell: fakeShell(fake, () => Promise.resolve()),
+      root: ROOT,
+      timeoutMs: TIMEOUT_MS,
+    });
+
+    fake.emit(pageDescriptorsEnvelope([readyDescriptor("home")]));
+    fake.emit(projectOpenSettledEnvelope("kernel.project.finishOpen"));
+    fake.emit(exportCompletedEnvelope("0192f000-0000-7000-8000-00000000abcd"));
+
+    const result = await runPromise;
+    expect(result).not.toBeInstanceOf(Error);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

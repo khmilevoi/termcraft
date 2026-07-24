@@ -7,6 +7,7 @@ import type { UiEnv } from "ui";
 import type { AnyEventEnvelope, EventEnvelopeV1, KernelPort } from "ui/kernel";
 import { createDispatcher } from "ui/kernel";
 
+import type { AppShell } from "../types";
 import { ShellCompositionError, createShell } from "./create-shell";
 import type { ShellDeps } from "./create-shell";
 
@@ -56,6 +57,14 @@ export class ExportRefusedError extends errore.createTaggedError({
 export class ExportDriverError extends errore.createTaggedError({
   name: "ExportDriverError",
   message: "the headless export driver failed: $reason",
+}) {}
+
+/** The composed shell failed to release its resources cleanly after the headless export driver
+ *  finished. Logged, never propagated: see {@link runHeadlessExportOverShell}'s doc comment for
+ *  why this must never replace the primary export result. */
+export class ExportShellCloseError extends errore.createTaggedError({
+  name: "ExportShellCloseError",
+  message: "the composed shell failed to close cleanly after headless export",
 }) {}
 
 export interface RunExportResult {
@@ -313,10 +322,45 @@ export interface RunHeadlessExportDeps {
   readonly timeoutMs?: number;
 }
 
+export interface RunHeadlessExportOverShellDeps {
+  readonly shell: AppShell;
+  readonly root: string;
+  readonly timeoutMs?: number;
+}
+
 /**
- * Composes the real Kernel graph (`createShell("interactive", env)` — no renderer, no `runApp`),
- * drives {@link runExport} over it, and closes the shell on every exit path (mirrors
- * `create-shell.ts`'s own reverse-acquisition-order teardown discipline for `AppShell.close()`).
+ * Drives {@link runExport} over an ALREADY-composed shell and closes it on every exit path — the
+ * part of {@link runHeadlessExport} that does not need `createShell`'s real store/host graph,
+ * split out so this exit-path boundary is directly testable with an injected `AppShell` (mirrors
+ * `run-app.ts`'s own `runApp`, which likewise takes its `AppShell` as a parameter instead of
+ * composing one itself).
+ *
+ * `shell.close()` can reject — `create-shell.ts`'s `closeShellResources` throws a
+ * `ShellTeardownError` when any teardown step (`kernel.close`, `hostSupervisor.stopAll`,
+ * `open.close`) fails, and that is most likely on exactly the success path, where `close()` is
+ * tearing down still-live host children. A bare `await shell.close()` inside `finally` would let
+ * that rejection escape: a `throw` from a `finally` block ALWAYS supersedes whatever the `try`
+ * block already returned, discarding a real `{ destination }` or a legitimate
+ * `ExportRefusedError`/`ExportDriverError` and making this function reject instead of resolve —
+ * breaking its own declared error-as-value return type and turning a clean §3.1 trust refusal
+ * into an unhandled rejection. `closeHeadlessShell` converts that rejection into a logged value
+ * instead, the identical `.catch()` conversion `run-app.ts`'s own `closeShell` performs for the
+ * same `AppShell.close()` boundary — so the primary result computed above is always what this
+ * function resolves with, regardless of teardown outcome.
+ */
+export async function runHeadlessExportOverShell(
+  deps: RunHeadlessExportOverShellDeps,
+): Promise<ExportDriverError | ExportRefusedError | RunExportResult> {
+  try {
+    return await runExport({ port: deps.shell.port, root: deps.root, timeoutMs: deps.timeoutMs });
+  } finally {
+    await closeHeadlessShell(deps.shell);
+  }
+}
+
+/**
+ * Composes the real Kernel graph (`createShell("interactive", env)` — no renderer, no `runApp`)
+ * and drives the export over it via {@link runHeadlessExportOverShell}.
  */
 export async function runHeadlessExport(
   deps: RunHeadlessExportDeps,
@@ -324,10 +368,20 @@ export async function runHeadlessExport(
   const shell = await createShell("interactive", deps.env, deps.shell);
   if (shell instanceof Error) return shell;
 
-  try {
-    return await runExport({ port: shell.port, root: deps.env.root, timeoutMs: deps.timeoutMs });
-  } finally {
-    await shell.close();
+  return runHeadlessExportOverShell({ shell, root: deps.env.root, timeoutMs: deps.timeoutMs });
+}
+
+/**
+ * Releases the shell, converting a rejection into a reported (logged) value — the identical
+ * `.catch()` conversion `run-app.ts`'s own `closeShell` performs for the same `AppShell.close()`
+ * boundary. There is no `ProcessBoundary` at this headless boundary (unlike `runApp`), so the
+ * failure is logged via `console.warn` rather than reported fatally (errore rule 21: an error
+ * branch that does not propagate must still leave a trace).
+ */
+async function closeHeadlessShell(shell: AppShell): Promise<void> {
+  const released = await shell.close().catch((cause) => new ExportShellCloseError({ cause }));
+  if (released instanceof Error) {
+    console.warn(`entrypoint/run-export: ${released.message}`, released);
   }
 }
 

@@ -21,6 +21,7 @@ export type { BootstrapDeps } from "./model/bootstrap";
 export {
   ExportDriverError,
   ExportRefusedError,
+  ExportShellCloseError,
   RUNNING_TURN_REFUSAL_MESSAGE,
   TRUST_REFUSAL_MESSAGE,
   ZERO_PAGES_REFUSAL_MESSAGE,
@@ -28,6 +29,7 @@ export {
   parseExportArgs,
   runExport,
   runHeadlessExport,
+  runHeadlessExportOverShell,
 } from "./model/run-export";
 export type {
   ExportArgs,
@@ -35,6 +37,7 @@ export type {
   RunExportDeps,
   RunExportResult,
   RunHeadlessExportDeps,
+  RunHeadlessExportOverShellDeps,
 } from "./model/run-export";
 export { createProcessBoundary } from "./model/process-boundary";
 export type {
