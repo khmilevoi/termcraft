@@ -143,7 +143,7 @@ describe("runExport", () => {
     expect(result.message).toBe(RUNNING_TURN_REFUSAL_MESSAGE);
   });
 
-  test("refuses with the zero-pages message before ever dispatching export.start", async () => {
+  test("refuses with the zero-pages message once export.start is accepted but no terminal event will ever arrive", async () => {
     const fake = createFakeKernel();
     const runPromise = runExport({ port: fake, root: ROOT, timeoutMs: TIMEOUT_MS });
 
@@ -155,8 +155,25 @@ describe("runExport", () => {
     if (!(result instanceof Error)) throw new Error("expected a refusal");
     expect(result.message).toBe(ZERO_PAGES_REFUSAL_MESSAGE);
 
+    // `export.start` IS dispatched (the guard accepts it — it never checks page count); this
+    // driver notices the empty page list itself instead of waiting for a terminal event that
+    // the real Kernel's `NO_PAGES` handler path would never emit.
     const dispatchedKinds = fake.dispatched.map((raw) => (raw as { kind: string }).kind);
-    expect(dispatchedKinds).toEqual(["project.open"]);
+    expect(dispatchedKinds).toEqual(["project.open", "export.start"]);
+  });
+
+  test("an untrusted, zero-page project reports the trust refusal, never the zero-pages one (guard priority)", async () => {
+    const fake = createFakeKernel();
+    const runPromise = runExport({ port: fake, root: ROOT, timeoutMs: TIMEOUT_MS });
+
+    fake.setDispatchResult(REJECTED_UNTRUSTED);
+    fake.emit(pageDescriptorsEnvelope([]));
+    fake.emit(projectOpenSettledEnvelope("kernel.project.finishOpen"));
+
+    const result = await runPromise;
+    expect(result).toBeInstanceOf(ExportRefusedError);
+    if (!(result instanceof Error)) throw new Error("expected a refusal");
+    expect(result.message).toBe(TRUST_REFUSAL_MESSAGE);
   });
 
   test("resolves an ExportDriverError when project.open itself blocks", async () => {

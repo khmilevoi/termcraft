@@ -192,24 +192,27 @@ export interface RunExportDeps {
 
 /**
  * Drives one headless export end to end over an already-composed `KernelPort`: opens the
- * project, refuses on zero pages before ever dispatching `export.start` (see below), dispatches
- * `export.start`, and awaits its terminal event.
- *
- * ZERO-PAGES PRE-CHECK (flagged, per the plan): `export.start`'s own guard
- * (`core/capabilities/model/guards.ts`) never checks page count — a zero-page project's
- * `export.start` is ACCEPTED (`disposition: "started"`), and its handler's `NO_PAGES` path
- * (`core/kernel/model/handlers/preview-export.ts`'s `runExportStart`) then emits NO terminal
- * event at all, since nothing ran. A CLI that dispatched `export.start` regardless would hang
- * until this function's own timeout. So this driver reads the page count off the ALREADY-
- * ARRIVED `page.descriptorsChanged` event (populated by the same `project.open` continuation
- * that reaches `ready`) and refuses BEFORE ever dispatching `export.start` for that one case —
- * the one refusal not carried by a guard rejection.
+ * project, dispatches `export.start`, and awaits its terminal event.
  *
  * UNTRUSTED / RUNNING-TURN refusals ARE carried by a guard rejection: `export.start` is not in
  * `PROJECT_UNTRUSTED_EXEMPT_KINDS` and IS in `TURN_LOCKED_KINDS`, so dispatching it on an
- * untrusted or turn-active project rejects with `PROJECT_UNTRUSTED`/`TURN_RUNNING` — this
- * driver only needs to map those two codes to the two refusal messages above; no duplicate
- * trust/turn-lock logic lives here.
+ * untrusted or turn-active project rejects with `PROJECT_UNTRUSTED`/`TURN_RUNNING` before the
+ * handler ever runs — this driver only needs to map those two codes to the two refusal
+ * messages above; no duplicate trust/turn-lock logic lives here. Per the guard's own priority
+ * table (`core/protocol/model/unavailable-reason.ts`'s `UNAVAILABLE_REASON_PRIORITY_V1`),
+ * `PROJECT_UNTRUSTED` outranks the zero-pages case below, so an untrusted, zero-page project
+ * still reports the trust refusal, never the zero-pages one.
+ *
+ * ZERO-PAGES POST-ACCEPT CHECK (flagged, per the plan): `export.start`'s own guard
+ * (`core/capabilities/model/guards.ts`) never checks page count — a zero-page project's
+ * `export.start` is ACCEPTED (`disposition: "started"`), and its handler's `NO_PAGES` path
+ * (`core/kernel/model/handlers/preview-export.ts`'s `runExportStart`) then emits NO terminal
+ * event at all, since nothing ran. Waiting for a terminal event regardless would hang until
+ * this function's own timeout. So once `export.start` is ACCEPTED, this driver reads the page
+ * count off the ALREADY-ARRIVED `page.descriptorsChanged` event (populated by the same
+ * `project.open` continuation that reached `ready`) and refuses immediately, without ever
+ * waiting for a terminal event that will never come — the one refusal not carried by a guard
+ * rejection.
  */
 export async function runExport(
   deps: RunExportDeps,
@@ -254,11 +257,6 @@ export async function runExport(
     return new ExportDriverError({ reason: "the project failed to open" });
   }
 
-  if (tracker.pageCount() === 0) {
-    tracker.close();
-    return new ExportRefusedError({ reason: ZERO_PAGES_REFUSAL_MESSAGE });
-  }
-
   const exportDispatch = await dispatcher.dispatch("export.start", {});
   if (exportDispatch instanceof Error) {
     tracker.close();
@@ -270,6 +268,13 @@ export async function runExport(
   if (exportDispatch.status === "rejected") {
     tracker.close();
     return new ExportRefusedError({ reason: refusalMessageForCode(exportDispatch.code) });
+  }
+
+  // Accepted, but a zero-page project's handler never emits a terminal event at all (see this
+  // function's own header) — check now, BEFORE ever waiting for one that will never arrive.
+  if (tracker.pageCount() === 0) {
+    tracker.close();
+    return new ExportRefusedError({ reason: ZERO_PAGES_REFUSAL_MESSAGE });
   }
 
   const terminal = await tracker.waitFor(isExportTerminal, timeoutMs);
