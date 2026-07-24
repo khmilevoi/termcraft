@@ -75,7 +75,7 @@ export function createFakeStagingService(): FakeStagingService {
     if (queued !== undefined) return queued;
 
     const pageFiles: StagedFileV1[] = input.pages.map((page) => ({
-      relPath: `pages/${page.pageSlug}/index.tsx`,
+      relPath: `pages/${page.pageSlug}.tsx`,
       sha256: fakeSha256Hex(page.sourcePath),
       size: 0,
     }));
@@ -98,7 +98,7 @@ export function createFakeStagingService(): FakeStagingService {
     content.set(manifestFile.relPath, input.manifestSlice);
     for (const page of input.pages) {
       content.set(
-        `pages/${page.pageSlug}/index.tsx`,
+        `pages/${page.pageSlug}.tsx`,
         new TextEncoder().encode(`fake-page-source:${page.sourcePath}`),
       );
     }
