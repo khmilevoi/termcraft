@@ -613,6 +613,63 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       ]);
     });
   });
+
+  test("(k) a concurrent cancel races finalize's own durable write: markCommitted goes illegal, but the driver bridges to terminalizing instead of reporting a false 'finalized' success (fixlane-K1-turn-spine.json's domain finding)", async () => {
+    // RED before the fix: `finalizeResult.kind === \"illegal\"` fell through to
+    // `return {kind:\"finalized\", result: finalizeResult}` — a false success signal — leaving
+    // the machine stranded in \"terminalizing\" (never settled to idle).
+    await context.start(async () => {
+      const h = harness();
+      // Simulate a `turn.cancel` landing in the pre-intent window `finalize.ts`'s own header
+      // documents as legitimate: AFTER `turnTransactions.finalize` durably resolves, but
+      // BEFORE `finalizeTurn`'s own `markCommitted` call runs — `requestCancel` is
+      // phase-legal from "finalizing" (`turn-machine.ts`'s own table).
+      const originalFinalize = h.turnTransactions.finalize.bind(h.turnTransactions);
+      h.turnTransactions.finalize = async (input) => {
+        // `wrap(...)` around the awaited promise (not the whole async function) — matching
+        // `run-turn.ts`'s own `await wrap(finalizeTurn(...))` idiom — is required here: an
+        // unwrapped continuation after this `await` resumes OUTSIDE the test's own
+        // `context.start(...)` frame, so `h.deps.machine.apply(...)` would silently observe a
+        // different (fresh, uninitiated) machine instead of the SAME one `runTurn` drives.
+        const result = await wrap(originalFinalize(input));
+        const cancelled = h.deps.machine.apply("requestCancel");
+        if (cancelled.kind === "illegal") {
+          throw new Error(
+            `test setup: requestCancel was illegal (${cancelled.code}) — harness assumption broken`,
+          );
+        }
+        return result;
+      };
+
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      // `TURN_ALREADY_ACTIVE` is the turn machine's one table-wide illegal code
+      // (`turn-machine.ts`'s own `TURN_ILLEGAL_CODE`) — this is `markCommitted`'s own illegal
+      // result's `code`, threaded through as this terminalize's `reason`.
+      expect(terminalizeCall.input.record.reason).toBe("TURN_ALREADY_ACTIVE");
+
+      // The machine genuinely settled all the way to idle — never stranded in "terminalizing".
+      expect(h.deps.machine.phase()).toBe("idle");
+      expect(h.turnTransactions.calls.map((c) => c.method)).toEqual([
+        "admit",
+        "finalize",
+        "terminalize",
+      ]);
+    });
+  });
 });
 
 describe("runTurn — the optional onAttemptStarted hook (kernel-assembly Task 9, Step C3)", () => {
@@ -715,6 +772,97 @@ describe("runTurn — the optional onAttemptStarted hook (kernel-assembly Task 9
       const result = await wrap(runTurn(deps, baseRunTurnInput()));
 
       expect(result.kind).toBe("admission-rejected");
+      expect(seen).toEqual([]);
+    });
+  });
+});
+
+describe("runTurn — the optional onCommitIntentRecorded hook (fixlane-K1-turn-spine.json's kernel finding)", () => {
+  // Closes the durable commit-intent bit's own remaining producer-side gap: no production
+  // handler ever called `HandlerContext.setCommitIntentRecorded`, so `kernel.ts`'s
+  // `commitIntentRecordedAtom` was permanently `false` in a real Kernel — this hook is what
+  // `handlers/turn.ts` now wires onto it. ADDITIVE ONLY: optional, so every other test in
+  // this file (built against `RunTurnDeps` objects that never set it) stays green unmodified.
+
+  test("fires true once finalizeTurn reports a genuine committed result", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const seen: boolean[] = [];
+      const deps: RunTurnDeps = { ...h.deps, onCommitIntentRecorded: (r) => seen.push(r) };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized") throw new Error(`expected finalized, got ${result.kind}`);
+      expect(result.result.kind).toBe("committed");
+      expect(seen).toEqual([true]);
+    });
+  });
+
+  test("fires true even when a raced cancel makes markCommitted illegal — the underlying write still durably committed (pairs with test (k) above)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const originalFinalize = h.turnTransactions.finalize.bind(h.turnTransactions);
+      h.turnTransactions.finalize = async (input) => {
+        const result = await wrap(originalFinalize(input));
+        h.deps.machine.apply("requestCancel");
+        return result;
+      };
+      const seen: boolean[] = [];
+      const deps: RunTurnDeps = { ...h.deps, onCommitIntentRecorded: (r) => seen.push(r) };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(seen).toEqual([true]);
+    });
+  });
+
+  test("never fires for a failed finalize (e.g. a stale read-set) — no durable write ever landed", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.turnTransactions.failNext("finalize", {
+        code: "APPLY_STALE",
+        retryable: true,
+        safeMessage: "chat append base advanced since this turn's read-set was captured",
+        details: { part: "chat" },
+      });
+      const seen: boolean[] = [];
+      const deps: RunTurnDeps = { ...h.deps, onCommitIntentRecorded: (r) => seen.push(r) };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(seen).toEqual([]);
+    });
+  });
+
+  test("never fires when the turn terminalizes without ever reaching finalize (Gate-retry exhaustion)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      for (let i = 0; i < 4; i++) h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT);
+      const seen: boolean[] = [];
+      const deps: RunTurnDeps = { ...h.deps, onCommitIntentRecorded: (r) => seen.push(r) };
+      const runPromise = wrap(runTurn(deps, baseRunTurnInput()));
+
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        await waitForStartCount(h, attempt);
+        completeAttempt(h, attempt, completedOutcome(attempt));
+      }
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
       expect(seen).toEqual([]);
     });
   });

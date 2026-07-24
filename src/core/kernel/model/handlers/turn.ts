@@ -13,7 +13,7 @@ import type {
   StagingService,
   TurnWorkspaceV1,
 } from "core/ports";
-import type { CommandPayloadByKindV1, Sha256Hex, UUIDv7 } from "core/protocol";
+import { type CommandPayloadByKindV1, type Sha256Hex, type UUIDv7, isUuidv7 } from "core/protocol";
 import {
   type AdmissionInputV1,
   type RunTurnDeps,
@@ -164,10 +164,23 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   INSIDE `runAdmission`), but attempt 1 always starts immediately after a successful
  *   admission, so the FIRST `turn.attemptStarted` IS "admission just succeeded, with this
  *   turnId" for this purpose. `setActiveTurnId(null)` runs once `runTurn`'s own result is
- *   `terminalized`/`finalized` (never on `admission-rejected` — nothing was ever set). No
- *   `turn.started` event is separately published — this recipe deliberately treats the first
- *   `turn.attemptStarted` as sufficient proof "admission succeeded," a choice this file's own
- *   header has always documented rather than a silent omission.
+ *   `terminalized`/`finalized` (never on `admission-rejected` — nothing was ever set).
+ *
+ *   TURN.STARTED — NOW PUBLISHED (was: "deliberately not published"; corrected per
+ *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): `ui/mirror/model
+ *   /mirror.ts`'s own `case "turn.started"` is the ONLY transition that moves `TurnMirror`
+ *   into `"running"` — every later `turn.attemptStarted`/`turn.progress`/`turn.gateRejected`
+ *   the mirror applies is gated on `phase === "running"` already, so treating the first
+ *   `turn.attemptStarted` as sufficient proof (this file's prior design) left the mirror
+ *   permanently `"idle"` for the WHOLE turn: no streamed reasoning/tool steps, no gate-retry
+ *   lines, and (via `actionContext.turnRunning`) no working Esc-to-cancel. `publish` (below)
+ *   now synthesizes and sends a schema-valid `PublishableEventV1<"turn.started">` —
+ *   `{turnId, chatId: activeChatId, deadline}` (`event-payload.ts`'s `TurnStartedPayloadV1`) —
+ *   the MOMENT it observes the first `turn.attemptStarted`, strictly BEFORE forwarding that
+ *   event itself. `deadline` is the SAME non-resettable absolute bound `attempt.ts` already
+ *   computed for that `turn.attemptStarted` (`deps.deadlines.absoluteDeadlineAt()`), reused
+ *   verbatim rather than recomputed a second time. `chatId` is `activeChatId`, the SAME
+ *   send-time target this closure resolved from `workspaceState` before admission ever began.
  *
  *   THE ATTEMPT-HANDLE SLOT: `RunTurnDeps.onAttemptStarted` maps directly onto
  *   `context.turnRunner.setActiveAttempt` — the REAL handle `onAttemptStarted` hands over
@@ -176,16 +189,37 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   Gap 2's remaining producer side: `turn.cancel`'s own `handle.requestCancel()` (below)
  *   now reaches the SAME `attempt.ts`-coordinated cancel path `startTurnAttempt` returns.
  *
+ *   THE COMMIT-INTENT BIT — NOW WIRED (corrected per fixlane-K1-turn-spine.json's kernel
+ *   finding): `RunTurnDeps.onCommitIntentRecorded` maps onto `context.setCommitIntentRecorded`
+ *   — the ONE legitimate caller `handlers/types.ts`'s own `HandlerContext` doc names ("the
+ *   turn finalize/terminalize path that records or clears durable commit intent"). Before
+ *   this wiring, NO production handler ever called it, so `kernel.ts`'s own
+ *   `commitIntentRecordedAtom` was permanently `false` — both `revision-guard.ts`'s
+ *   `durableIntentRecorded` and `capabilities/model/guards.ts`'s `commitIntentRecorded` (§8.4
+ *   rule 6 / §7.2's "in finalizing after durable intent, cancellation is forbidden") had their
+ *   forbidding branch dead in every real Kernel. `runTurn` calls the hook with `true` the
+ *   moment `turnTransactions.finalize` durably confirms a commit (`run-turn.ts`'s own doc
+ *   comment on the hook has the exact timing and its one honest limitation: the underlying
+ *   store gives no mid-flight signal, so this can only ever be recorded post-hoc, once
+ *   `finalizeTurn`'s own promise resolves — never in time to prevent the documented pre-intent
+ *   cancel race itself, only to record that a commit genuinely happened). This handler clears
+ *   it back to `false` UNCONDITIONALLY once `runTurn` resolves (mirroring
+ *   `setActiveTurnId(null)` just above it), so the bit never leaks `true` into a LATER,
+ *   unrelated turn's own `finalizing` phase.
+ *
  *   THE TERMINAL EVENT: once `runTurn` resolves, the ONE terminal batch event this operation
  *   returns is built from `RunTurnResultV1`:
  *   - `"finalized"` + `result.kind === "committed"` -> `turn.completed` with `outcome:
  *     "completed"`, the changed-page hashes and Gate warnings captured (by side channel)
  *     during the LAST `buildFinalizeInput` call, and `failure: null`.
- *   - `"finalized"` + `result.kind === "illegal"`, or `"terminalized"` (cancelled,
- *     Gate-exhausted, deadline-exceeded, backend failure, a finalize CAS/deadline failure
- *     now bridged into `terminalizeTurn` by `run-turn.ts` itself — see that file's own
- *     header — so `{kind:"finalized", result:{kind:"failed"}}` is no longer a reachable
- *     `RunTurnResultV1` shape at all, ...): `RunTurnResultV1`'s own
+ *   - `"terminalized"` (cancelled, Gate-exhausted, deadline-exceeded, backend failure, a
+ *     finalize CAS/deadline failure, OR a finalize `illegal` result AFTER a durable commit
+ *     already landed — a raced concurrent cancel most likely won the pre-intent window — all
+ *     now bridged into `terminalizeTurn` by `run-turn.ts` itself — see that file's own header,
+ *     "FINALIZE FAILURES DO BRIDGE"/"`{kind:\"illegal\"}` ALSO BRIDGES" — so neither
+ *     `{kind:"finalized", result:{kind:"failed"}}` NOR `{kind:"finalized",
+ *     result:{kind:"illegal"}}` is a reachable `RunTurnResultV1` shape at all, ...):
+ *     `RunTurnResultV1`'s own
  *     `TerminalizeTurnResultV1`/`FinalizeTurnResultV1` variants do NOT echo back which
  *     `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) the composition
  *     originally requested — a genuine, separate gap this task's own scope does not cover
@@ -422,6 +456,10 @@ async function runTurnStart(
     );
     return [];
   }
+  // A fresh, explicitly-typed `const`: `publish` below is a nested closure, and TypeScript
+  // does not carry the null-check narrowing above into nested function bodies — re-binding
+  // the already-narrowed value here (never reassigned) sidesteps that cleanly, no cast needed.
+  const admittedChatId: string = activeChatId;
 
   const resolvedAgent = resolveAgentSelection(context, backend, model, effort);
   if (resolvedAgent === null) return [];
@@ -509,6 +547,21 @@ async function runTurnStart(
     pages: candidate.presentSlugs.map((pageSlug) => ({
       pageSlug,
       source: decodeCachedUtf8(cachingStaging, candidate.root, pageFileRelPath(pageSlug)),
+      // The absolute staged candidate path (`gate/adapters/gate-runner.ts`'s CRITICAL smoke
+      // finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a page's
+      // source via `Bun.file` inside a fresh scratch-directory child process, so a bare
+      // `${slug}.tsx` never resolves there. `TurnValidationPageInputV1`'s own `fileName` field
+      // (`core/turns/model/validation.ts`, not owned by this fix) is ALREADY spread verbatim
+      // into `GateRunner.runPage`'s `fileName` — the one existing field that reaches the
+      // adapter without widening a file outside this fix's scope — so it carries the absolute
+      // path here rather than the port's newer, dedicated `runPage.sourcePath` (`core/ports
+      // /gate-runner.ts`) that `validation.ts` does not thread through yet. Documented cost:
+      // `runGate` also echoes `fileName` into `GateErrorV1.file` for import/contract
+      // diagnostics, so a turn-validation Gate rejection now reports the absolute staged path
+      // instead of a short `${slug}.tsx` display name. Follow-up: once `validation.ts:140-144`
+      // spreads a `sourcePath` field of its own into `runPage`, move this to `sourcePath` and
+      // drop `fileName` back to its short display form.
+      fileName: `${candidate.root}/${pageFileRelPath(pageSlug)}`,
     })),
   });
 
@@ -573,6 +626,31 @@ async function runTurnStart(
     if (capturedTurnId === null && event.kind === "turn.attemptStarted") {
       capturedTurnId = event.payload.turnId;
       context.setActiveTurnId(capturedTurnId);
+      // See this file's header, "TURN.STARTED — NOW PUBLISHED": sent strictly BEFORE the
+      // first turn.attemptStarted below, so the mirror's `case "turn.started"` moves
+      // TurnMirror into "running" before any phase==="running"-gated event can arrive.
+      // `admittedChatId` is `WorkspaceStateV1.activeChatId` (`core/ports/project-store.ts`
+      // keeps it a plain `string`, not the branded `UUIDv7` the wire DTO needs) — validated,
+      // never cast, matching this file's own `toAdmissionSelection`/`parsePageSlug` precedent.
+      // A real Kernel always mints `activeChatId` via `uuidv7()` (`chat.create`), so a mismatch
+      // here is defensive only: `turn.started` is skipped (logged), never sent with a
+      // fabricated `chatId` — the turn itself is unaffected, since admission never validated
+      // this field's format either.
+      if (isUuidv7(admittedChatId)) {
+        context.publishOperationEvent({
+          kind: "turn.started",
+          payload: {
+            turnId: capturedTurnId,
+            chatId: admittedChatId,
+            deadline: event.payload.deadline,
+          },
+          correlation: { turnId: capturedTurnId },
+        });
+      } else {
+        console.warn(
+          `core/kernel/handlers/turn: turn.start's activeChatId "${admittedChatId}" is not a valid UUIDv7 — turn.started skipped (defensive only)`,
+        );
+      }
     }
     context.publishOperationEvent(event);
   }
@@ -590,6 +668,11 @@ async function runTurnStart(
     publish,
     foldGateDiagnosticsIntoPrompt,
     onAttemptStarted: (handle) => context.turnRunner.setActiveAttempt(handle),
+    // See this file's header, "THE COMMIT-INTENT BIT — NOW WIRED": mirrors `onAttemptStarted`
+    // above verbatim — `runTurn` (`core/turns`) calls this the moment a durable commit is
+    // confirmed; this handler is the one legitimate caller of `context.setCommitIntentRecorded`
+    // per `handlers/types.ts`'s own doc ("the turn finalize/terminalize path").
+    onCommitIntentRecorded: (recorded) => context.setCommitIntentRecorded(recorded),
   };
 
   const runTurnInput: RunTurnInputV1 = {
@@ -624,6 +707,12 @@ async function runTurnStart(
     return [];
   }
   context.setActiveTurnId(null);
+  // Unconditional, exactly like `setActiveTurnId(null)` just above: `onCommitIntentRecorded`
+  // may have fired `true` during the finalize step (a genuine commit), and this Kernel-wide
+  // atom must never leak `true` into a LATER, unrelated turn's own `finalizing` phase — see
+  // `RunTurnDeps.onCommitIntentRecorded`'s own doc comment (`core/turns/model/run-turn.ts`)
+  // for why clearing it is this caller's job, not `runTurn`'s.
+  context.setCommitIntentRecorded(false);
 
   if (result.kind === "finalized" && result.result.kind === "committed") {
     const summary: FinalizeSummaryV1 = finalizeSummary ?? { changedPages: [], gateWarnings: [] };

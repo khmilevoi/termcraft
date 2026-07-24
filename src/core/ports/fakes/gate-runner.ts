@@ -50,6 +50,8 @@ export function createFakeGateRunner(): FakeGateRunner {
     source: string;
     slug: PageSlug;
     fileName?: string;
+    /** Widened alongside the port's own additive field (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so it is accepted and simply unused. */
+    sourcePath?: string;
   }): Promise<GateRunResultV1> {
     calls.push({ method: "runPage", slug: input.slug });
     const queued = pageResults.shift();

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { createFakeGateRunner } from "core/ports/fakes";
 import type { PageSlug } from "entities/page";
@@ -16,6 +19,31 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
 /** A trivial, offline-runnable fake SmokeRenderer — a fixed scripted result, no host process. */
 function fakeSmokeRenderer(result: SmokeResult): SmokeRenderer {
   return { render: async (_request: SmokeRequest) => result };
+}
+
+/**
+ * Mimics the REAL host `SmokeRenderer` (`host/adapters/smoke-renderer.ts` -> `host/session
+ * /model/source-mount.ts`'s `loadPage`): resolves `request.sourcePath` on disk via `Bun.file`,
+ * exactly as the real host child process does, instead of returning a scripted result. Used
+ * to prove this adapter's `sourcePath` wiring for real — a fixed `{ok:true}` fake (like every
+ * other test in this file) would never notice a bare, unresolvable `${slug}.tsx` default.
+ */
+function realDiskSmokeRenderer(): SmokeRenderer {
+  return {
+    render: async (request: SmokeRequest) => {
+      const bytes = await Bun.file(request.sourcePath)
+        .bytes()
+        .catch(() => null);
+      if (bytes === null) {
+        return {
+          ok: false,
+          code: "SMOKE_SOURCE_UNREADABLE",
+          message: `cannot read ${request.sourcePath}`,
+        };
+      }
+      return { ok: true };
+    },
+  };
 }
 
 describe("createGateRunnerAdapter", () => {
@@ -106,6 +134,33 @@ describe("createGateRunnerAdapter", () => {
     });
     expect(result.slice).toBeNull();
     expect(result.errors.some((e) => e.code === "MANIFEST_UNKNOWN_PAGE")).toBe(true);
+  });
+
+  test("runPage() threads sourcePath into the smoke stage so a REAL disk-resolving renderer finds the staged candidate file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-runner-smoke-"));
+    const stagedPath = path.join(dir, "dash.tsx");
+    fs.writeFileSync(stagedPath, cleanSource);
+    try {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: realDiskSmokeRenderer() });
+      const result = await adapter.runPage({
+        source: cleanSource,
+        slug: SLUG,
+        sourcePath: stagedPath,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runPage() without sourcePath falls back to a bare `${slug}.tsx`, which a REAL disk-resolving renderer cannot find", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: realDiskSmokeRenderer() });
+    const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.kind === "smoke" && e.code === "SMOKE_SOURCE_UNREADABLE"),
+    ).toBe(true);
   });
 
   test("contract: an all-clear candidate matches the fake oracle's own default GateRunResultV1 shape", async () => {

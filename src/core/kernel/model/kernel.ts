@@ -96,9 +96,14 @@ export function createKernel(deps: KernelDeps): Kernel {
     // The four Kernel-held facts `KernelStateSnapshot` needs beyond the seven bare
     // phases (`capabilities/types.ts`'s own field comments name exactly these four).
     // Task 9 Step C1 wires the `project`/`preview` handlers that actually mutate
-    // `trustAtom`/`previewSourceKindAtom` (`project.setTrust`, `preview.select*`); `turn`
-    // stays on the not-yet-implemented stand-in (Step C2), so `activeTurnIdAtom`/
-    // `commitIntentRecordedAtom` still never move in THIS Kernel build.
+    // `trustAtom`/`previewSourceKindAtom` (`project.setTrust`, `preview.select*`). CORRECTED
+    // (fixlane-K1-turn-spine.json's kernel finding — the prior text here was stale): `turn`
+    // is REAL now too. `activeTurnIdAtom` moves via `handlers/turn.ts`'s own
+    // `context.setActiveTurnId` (`turn.start`'s admission/terminal outcomes); `
+    // commitIntentRecordedAtom` moves via that SAME file's `context.setCommitIntentRecorded`,
+    // wired onto `core/turns`'s `RunTurnDeps.onCommitIntentRecorded` hook (`handlers/turn.ts`'s
+    // own header, "THE COMMIT-INTENT BIT — NOW WIRED", has the full recipe and its one
+    // honest, documented timing limitation).
     const trustAtom = atom<"trusted" | "untrusted-read-only" | null>(null, "kernel.project.trust");
     const activeTurnIdAtom = atom<UUIDv7 | null>(null, "kernel.turn.activeTurnId");
     const commitIntentRecordedAtom = atom<boolean>(false, "kernel.turn.commitIntentRecorded");

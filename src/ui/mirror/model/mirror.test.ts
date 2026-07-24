@@ -459,6 +459,95 @@ describe("mirror.apply — turn lifecycle", () => {
   });
 });
 
+describe("mirror.apply — turn.started producer/consumer seam (fixlane-K1-turn-spine.json)", () => {
+  // This mirror-side gating (turn.attemptStarted/turn.progress/turn.gateRejected all `return`
+  // unless `current.phase === "running"`, case "turn.started" — mirror.ts:230 — is the ONLY
+  // transition that sets it) was always correct; the seam bug was that NO real producer ever
+  // published `turn.started` (`core/kernel/model/handlers/turn.ts`'s own header, "deliberately
+  // not published"). These two tests pin BOTH sides: the first replays exactly what a real
+  // turn looked like to the mirror BEFORE the fix (no `turn.started` at all); the second
+  // replays the exact sequence `handlers/turn.ts`'s `publish` now emits (`turn.started`
+  // strictly before the first `turn.attemptStarted`, both same `turnId`/`deadline`).
+
+  test("WITHOUT a prior turn.started, the real event sequence (attemptStarted -> progress -> completed) never leaves idle — pins why the seam bug mattered", () => {
+    const m = createMirror();
+    const turnId = uuidv7();
+    expect(m.turn().phase).toBe("idle");
+
+    m.apply(event("turn.attemptStarted", { turnId, attempt: 1, deadline: TEST_TS }));
+    // Gated on phase === "running" (mirror.ts's own guard) — dropped, still idle.
+    expect(m.turn().phase).toBe("idle");
+
+    m.apply(
+      event("turn.progress", {
+        turnId,
+        attempt: 1,
+        content: { kind: "reasoning", text: "laying out gauges" },
+      }),
+    );
+    expect(m.turn().phase).toBe("idle");
+
+    // turn.completed is the one terminal case mirror.ts applies unconditionally (no
+    // phase/turnId gate) — so the user would have seen NOTHING stream, then a sudden jump
+    // straight to "terminal", exactly the smoke-closeout symptom the seam finding describes.
+    m.apply(
+      event("turn.completed", {
+        turnId,
+        outcome: "completed",
+        changedPages: [],
+        warnings: [],
+        failure: null,
+      }),
+    );
+    expect(m.turn().phase).toBe("terminal");
+  });
+
+  test("WITH turn.started immediately preceding the first turn.attemptStarted (the exact order handlers/turn.ts's real Kernel composition now emits), every subsequent event applies through to completed", () => {
+    const m = createMirror();
+    const turnId = uuidv7();
+    const chatId = uuidv7();
+
+    m.apply(event("turn.started", { turnId, chatId, deadline: TEST_TS }));
+    let turn = m.turn();
+    expect(turn.phase).toBe("running");
+    if (turn.phase !== "running") throw new Error("unreachable");
+    expect(turn.attempt).toBe(1);
+    expect(turn.steps).toEqual([]);
+
+    // The real producer's own first turn.attemptStarted — same turnId, same deadline
+    // (`handlers/turn.ts`'s `publish`: "deadline is the SAME non-resettable absolute bound").
+    m.apply(event("turn.attemptStarted", { turnId, attempt: 1, deadline: TEST_TS }));
+    turn = m.turn();
+    if (turn.phase !== "running") throw new Error("unreachable");
+    expect(turn.attempt).toBe(1);
+
+    m.apply(
+      event("turn.progress", {
+        turnId,
+        attempt: 1,
+        content: { kind: "reasoning", text: "laying out gauges" },
+      }),
+    );
+    turn = m.turn();
+    if (turn.phase !== "running") throw new Error("unreachable");
+    expect(turn.reasoning).toBe("laying out gauges");
+
+    m.apply(
+      event("turn.completed", {
+        turnId,
+        outcome: "completed",
+        changedPages: [{ pageSlug: "main", sourceHash: TEST_SHA }],
+        warnings: [],
+        failure: null,
+      }),
+    );
+    turn = m.turn();
+    expect(turn.phase).toBe("terminal");
+    if (turn.phase !== "terminal") throw new Error("unreachable");
+    expect(turn.outcome).toBe("completed");
+  });
+});
+
 describe("mirror.apply — preview", () => {
   test("sessionReady -> ready; failed -> failed; circuitOpened -> circuit-open", () => {
     const m = createMirror();

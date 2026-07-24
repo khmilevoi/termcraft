@@ -96,9 +96,26 @@ import {
  * returning the failure (an earlier version of this file's own bug) strands the turn machine
  * in `"finalizing"` permanently — every later `chat.*`/`turn.*`/`export.*` command in the same
  * process is then guard-rejected `CAPABILITY_UNAVAILABLE` forever, not just this one turn.
- * `{kind:"illegal"}` needs no such bridge: it means `beginFinalization`/`markCommitted`/
- * `settle` itself was rejected, so the machine never left its PREVIOUS phase (defensive-only,
- * unreachable given this driver's own correct sequencing) — nothing to unwind.
+ *
+ * `{kind:"illegal"}` ALSO BRIDGES — CORRECTED (fixlane-K1-turn-spine.json's domain finding):
+ * the claim "the machine never left its PREVIOUS phase, nothing to unwind" is true ONLY for
+ * `beginFinalization`-illegal (defensive-only here — this driver's own strictly synchronous
+ * sequencing from "validation passed" to the `finalizeTurn` call, with no `await` in between,
+ * proves the machine is still `"validating"` at that call; unreachable in practice). It is
+ * FALSE for `markCommitted`/`settle`-illegal: `finalize.ts`'s own body only ever reaches
+ * `deps.machine.apply("markCommitted")` AFTER `turnTransactions.finalize` has ALREADY
+ * returned a real, durable `TurnCommitV1` (its own `if ("code" in result) return
+ * {kind:"failed",...}` runs first) — so by the time either of THOSE two applies can be
+ * illegal, a commit already durably exists, and the machine left `"finalizing"` via some
+ * OTHER already-applied transition (almost always a concurrent `turn.cancel`'s `requestCancel`
+ * landing in the pre-intent window between `beginFinalization` and this durable write — legal
+ * by the turn machine's own table, `turn-machine.ts`'s own comment: "Phase-legal; the
+ * pre/post-intent CANCEL_TOO_LATE split is the guard layer's"). Returning
+ * `{kind:"finalized", result:{kind:"illegal"}}` for THAT case would report a false success
+ * (the caller's own `handlers/turn.ts` maps `finalized`+non-`committed` as a generic
+ * `turn.failed`, but never terminalizes/settles the machine) while leaving it stranded
+ * outside `terminal`/`idle` exactly like the failed-branch bug above — so this branch bridges
+ * identically, and never returns `finalized` for anything but a genuine `committed` result.
  */
 
 export interface RunTurnDeps {
@@ -149,6 +166,29 @@ export interface RunTurnDeps {
   readonly onAttemptStarted?: (
     handle: { readonly requestCancel: () => Promise<void> } | null,
   ) => void;
+  /**
+   * Optional, additive hook (fixlane-K1-turn-spine.json's kernel finding) closing the durable
+   * "commit-intent recorded" bit's own remaining producer-side gap — `core/kernel/model
+   * /kernel.ts`'s own `commitIntentRecordedAtom` (fed to `revision-guard.ts`'s
+   * `durableIntentRecorded` and `capabilities/model/guards.ts`'s `commitIntentRecorded`,
+   * §8.4 rule 6 / §7.2's "in finalizing after durable intent, cancellation is forbidden")
+   * was permanently `false` because no production handler ever called
+   * `HandlerContext.setCommitIntentRecorded`. Mirrors `onAttemptStarted`'s own producer-hook
+   * shape exactly: this driver calls it, `handlers/turn.ts` wires it onto the Kernel-held
+   * mutator (`context.setCommitIntentRecorded`).
+   *
+   * Called with `true` the MOMENT `finalizeTurn` reports that `turnTransactions.finalize`
+   * ALREADY returned a durable `TurnCommitV1` — both the `"committed"` result AND the
+   * `"illegal"` result reaching THIS driver mean that (see this file's header, "`{kind:
+   * "illegal"}` ALSO BRIDGES" for why `markCommitted`/`settle`-illegal still implies a real
+   * commit). Never called `true` for `"failed"` (no write ever durably landed) or for a
+   * `beginFinalization`-illegal (unreachable here). `handlers/turn.ts` is responsible for
+   * clearing it back to `false` once ITS OWN `runTurn` call settles (mirroring how it already
+   * unconditionally clears `setActiveTurnId(null)` there) — this driver does not call it with
+   * `false` itself, since nothing in its own local sequencing ever needs to "un-recall" intent
+   * for a turn that already durably committed.
+   */
+  readonly onCommitIntentRecorded?: (recorded: boolean) => void;
 }
 
 /** What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate. */
@@ -421,6 +461,26 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       bridge("beginTerminalization");
       return terminalize("failed", finalizeResult.failure.safeMessage, finalizeResult.failure.code);
     }
+
+    // `finalizeResult.kind` is `"committed"` or `"illegal"` here — both mean
+    // `turnTransactions.finalize` already returned a durable `TurnCommitV1` (see this file's
+    // header, "`{kind:"illegal"}` ALSO BRIDGES" for the one defensive, unreachable exception).
+    deps.onCommitIntentRecorded?.(true);
+
+    if (finalizeResult.kind === "illegal") {
+      // Corrected (see this file's header): NEVER report this as `finalized` — a durable
+      // commit exists, but the machine left "finalizing" via some other already-applied
+      // transition (almost always a raced `turn.cancel`), so `markCommitted`/`settle` is now
+      // illegal. Bridge to terminalizing exactly like the "failed" branch above, so the
+      // machine still settles to `terminal`/`idle` instead of being stranded.
+      bridge("beginTerminalization");
+      return terminalize(
+        "failed",
+        "the turn's commit landed durably, but the turn machine could not settle onto it (a concurrent cancel most likely raced the pre-intent window)",
+        finalizeResult.code,
+      );
+    }
+
     return { kind: "finalized", result: finalizeResult };
   }
 }

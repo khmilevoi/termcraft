@@ -14,7 +14,7 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { BackendCapabilities, TurnTransactionService } from "core/ports";
+import type { BackendCapabilities, GateRunner, TurnTransactionService } from "core/ports";
 import {
   type FakeChatStore,
   createFakeAgentBackend,
@@ -45,7 +45,8 @@ import {
   createPreviewSessionCommands,
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import { type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import { type Sha256Hex, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
@@ -147,6 +148,8 @@ interface TestContext {
   readonly getLaunchedOperations: () => readonly LaunchedOperation[];
   readonly getPublishedEvents: () => readonly PublishableEventV1[];
   readonly getMutatorCalls: () => number;
+  /** Every value `context.setCommitIntentRecorded` was ever called with, in call order — the fixlane-K1-turn-spine.json kernel finding's own discriminating proof that the bit genuinely moves now. */
+  readonly getCommitIntentRecordedHistory: () => readonly boolean[];
 }
 
 /**
@@ -160,6 +163,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
     let mutatorCalls = 0;
     const launched: LaunchedOperation[] = [];
     const publishedEvents: PublishableEventV1[] = [];
+    const commitIntentRecordedHistory: boolean[] = [];
     let trust: ProjectTrustV1 = null;
     let activeTurnId: UUIDv7 | null = null;
     let commitIntentRecorded = false;
@@ -235,6 +239,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       setCommitIntentRecorded: (next) => {
         mutatorCalls += 1;
         commitIntentRecorded = next;
+        commitIntentRecordedHistory.push(next);
       },
       setPreviewSourceKind: (next) => {
         mutatorCalls += 1;
@@ -285,6 +290,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       getLaunchedOperations: () => launched,
       getPublishedEvents: () => publishedEvents,
       getMutatorCalls: () => mutatorCalls,
+      getCommitIntentRecordedHistory: () => commitIntentRecordedHistory,
     };
   });
 }
@@ -308,6 +314,95 @@ describe('turnHandlers["turn.start"]', () => {
     // Nothing was ever admitted — the machine never left idle, and activeTurnId was never set.
     expect(handlerContext.machines.turn.phase()).toBe("idle");
     expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+  });
+
+  // Triage #13 (fixlane-K1-turn-spine.json): the cheap refusal-branch tests via
+  // error-returning fakes — everything below asserts the SAME shape as the test just above
+  // (`{disposition:"started", events:[]}`, `operation.run()` resolves to `[]`, the machine
+  // never leaves "idle", `activeTurnId` stays `null`), just triggering a LATER refusal branch.
+
+  /** A projectStore with a real, complete agent selection already set — every test below only exercises ONE later refusal. */
+  function selectedProjectStore(overrides?: {
+    readonly backend?: string;
+    readonly model?: string;
+    readonly effort?: string;
+  }) {
+    return createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: {
+        backend: overrides?.backend ?? "claude",
+        model: overrides?.model ?? "sonnet",
+        effort: overrides?.effort ?? "medium",
+        activeChatId: "chat-1",
+      },
+    });
+  }
+
+  async function assertIdempotentRefusal(
+    handlerContext: HandlerContext,
+    getLaunchedOperations: () => readonly LaunchedOperation[],
+  ): Promise<void> {
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const events = await operation.run();
+    expect(events).toEqual([]);
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+  }
+
+  test("refuses (logged) when project.toml's manifest snapshot cannot be read", async () => {
+    const projectStore = selectedProjectStore();
+    projectStore.failNext("readManifestSnapshot", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "manifest snapshot unreadable",
+      details: {},
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when resolveAgentSelection finds the backend but not the requested model", async () => {
+    const projectStore = selectedProjectStore({ model: "opus" }); // FAKE_BACKEND_CAPABILITIES only offers "sonnet"
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when resolveAgentSelection finds the model but not the requested effort", async () => {
+    const projectStore = selectedProjectStore({ effort: "high" }); // FAKE_BACKEND_CAPABILITIES's "sonnet" only offers "medium"
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when a listed page's canonical source cannot be read", async () => {
+    const HOME = "home" as PageSlug;
+    const pageStore = createFakePageStore({ order: [HOME] }); // no `sources` entry seeded for HOME
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore: selectedProjectStore(),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
   });
 
   test("real composition: admission -> attempt -> a genuine Gate retry -> finalize -> turn.completed, activeTurnId set then cleared", async () => {
@@ -421,6 +516,359 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
     // The attempt-handle slot is cleared too (Gap 2's producer side, closed by this task).
     expect(handlerContext.turnRunner.activeAttempt(turnId as UUIDv7)).toBeNull();
+  });
+
+  test("buildValidationInput threads the ABSOLUTE staged candidate path to the Gate's per-page runPage() call (the real smoke stage can only resolve an absolute path — a bare `${slug}.tsx` fails in the host's fresh scratch cwd, `gate/adapters/gate-runner.ts`'s own test)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const capturedRunPageInputs: {
+      readonly source: string;
+      readonly slug: PageSlug;
+      readonly fileName?: string;
+    }[] = [];
+    const gateRunner: GateRunner = {
+      runManifestSlice: async (input) => ({
+        errors: [],
+        slice: { pages: input.presentSlugs, active: null },
+      }),
+      runPage: async (input) => {
+        capturedRunPageInputs.push(input);
+        return {
+          ok: true,
+          errors: [],
+          warnings: [],
+          descriptor: {
+            slug: input.slug,
+            meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+          },
+        };
+      },
+    };
+
+    const pageStore = createFakePageStore({
+      order: [HOME],
+      sources: new Map([
+        [
+          HOME,
+          {
+            bytes: new TextEncoder().encode("home-source"),
+            sourceHash: "a".repeat(64) as Sha256Hex,
+          },
+        ],
+      ]),
+    });
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner,
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
+
+    // The real bug (`fixlane-K1-turn-spine.json`'s smoke-sourcePath finding): the Gate's
+    // per-page `runPage()` call must resolve to the staged candidate's real file on disk, not
+    // a bare `${slug}.tsx` the real host's fresh scratch child process cwd can never find.
+    expect(capturedRunPageInputs).toHaveLength(1);
+    const [call] = capturedRunPageInputs;
+    if (call === undefined) throw new Error("expected exactly one captured runPage() call");
+    expect(call.slug).toBe(HOME);
+    expect(call.fileName).toBe(`/fake-candidate/${turnId}/pages/home.tsx`);
+  });
+
+  test("publishes a schema-valid turn.started BEFORE the first turn.attemptStarted, carrying the real chatId and the SAME absolute deadline (fixlane-K1-turn-spine.json's seam finding — the mirror only leaves 'idle' on turn.started)", async () => {
+    // `createFakeChatStore().create()` mints `fake-chat-N` ids (never a real UUIDv7) — this
+    // thin alias lets `activeChatId` be a REAL UUIDv7 (what `turn.started`'s wire schema
+    // requires) while every actual chat-record read/write still resolves to the SAME
+    // underlying fake chat, exactly like `withHonestChatAppendBase` above wraps one port
+    // without reimplementing it.
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    // A fresh, explicitly-typed `const`: `resolveId` below is a nested closure, and
+    // TypeScript does not carry the `"code" in chatHeader` narrowing above into nested
+    // function bodies (this file's `admittedChatId` precedent in `./turn.ts`'s own fix).
+    const internalChatId: string = chatHeader.chatId;
+    const REAL_CHAT_ID = uuidv7();
+    function resolveId(id: string): string {
+      return id === REAL_CHAT_ID ? internalChatId : id;
+    }
+    const aliasedChatStore: FakeChatStore = {
+      ...chatStore,
+      open: (id) => chatStore.open(resolveId(id)),
+      readAppendBase: (id) => chatStore.readAppendBase(resolveId(id)),
+      switchActive: (id) => chatStore.switchActive(resolveId(id)),
+      seedRecords: (id, records) => chatStore.seedRecords(resolveId(id), records),
+    };
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: aliasedChatStore,
+      chatMutations: aliasedChatStore,
+      turnTransactions: withHonestChatAppendBase(
+        createFakeTurnTransactionService(),
+        aliasedChatStore,
+      ),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: REAL_CHAT_ID,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const published = getPublishedEvents();
+    const startedIndex = published.findIndex((e) => e.kind === "turn.started");
+    const attemptIndex = published.findIndex((e) => e.kind === "turn.attemptStarted");
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    expect(startedIndex).toBeLessThan(attemptIndex);
+
+    const startedEvent = published[startedIndex];
+    const attemptEvent = published[attemptIndex];
+    if (startedEvent === undefined || attemptEvent === undefined) {
+      throw new Error("expected both turn.started and turn.attemptStarted to be present");
+    }
+    expect(eventPayloadV1SchemaByKind["turn.started"].safeParse(startedEvent.payload).success).toBe(
+      true,
+    );
+    const startedPayload = startedEvent.payload as {
+      readonly turnId: string;
+      readonly chatId: string;
+      readonly deadline: string;
+    };
+    const attemptPayload = attemptEvent.payload as {
+      readonly turnId: string;
+      readonly deadline: string;
+    };
+    expect(startedPayload.chatId).toBe(REAL_CHAT_ID);
+    expect(startedPayload.turnId).toBe(attemptPayload.turnId);
+    expect(startedPayload.deadline).toBe(attemptPayload.deadline);
+
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe("commit-intent bit: context.setCommitIntentRecorded genuinely moves now (fixlane-K1-turn-spine.json's kernel finding)", () => {
+  // Before this fix, NO production handler ever called `context.setCommitIntentRecorded`, so
+  // `kernel.ts`'s `commitIntentRecordedAtom` was permanently `false` — the `CANCEL_TOO_LATE`/
+  // forbidden branch both `revision-guard.ts` and `capabilities/model/guards.ts` guard on
+  // (§8.4 rule 6) was dead code in a real Kernel. These tests prove `handlers/turn.ts`'s own
+  // wiring (`RunTurnDeps.onCommitIntentRecorded` -> `context.setCommitIntentRecorded`, plus the
+  // unconditional clear once `runTurn` resolves) actually reaches the Kernel-held mutator —
+  // `core/turns/model/run-turn.test.ts`'s own "onCommitIntentRecorded" suite already proves
+  // `runTurn` calls the hook at the right moments; this proves THIS handler's wiring of it.
+
+  function buildRacingTransactions(chatStore: FakeChatStore): {
+    readonly turnTransactions: TurnTransactionService;
+    readonly bindMachine: (machine: { apply: (action: TurnAction) => unknown }) => void;
+  } {
+    const base = createFakeTurnTransactionService();
+    const honest = withHonestChatAppendBase(base, chatStore);
+    let machineRef: { apply: (action: TurnAction) => unknown } | null = null;
+    const turnTransactions: TurnTransactionService = {
+      ...honest,
+      finalize: async (input) => {
+        const result = await wrap(honest.finalize(input));
+        // Simulate a `turn.cancel` landing in the pre-intent window (legal per
+        // `turn-machine.ts`'s own table) — see `run-turn.test.ts`'s identical test (k).
+        if (!("code" in result)) machineRef?.apply("requestCancel");
+        return result;
+      },
+    };
+    return {
+      turnTransactions,
+      bindMachine: (machine) => {
+        machineRef = machine;
+      },
+    };
+  }
+
+  test("clean single-attempt commit: setCommitIntentRecorded fires [true, false], in that order", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const { turnTransactions } = buildRacingTransactions(chatStore); // no race bound — clean path
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const { handlerContext, getLaunchedOperations, getCommitIntentRecordedHistory } =
+      buildTestContext({
+        chatReader: chatStore,
+        chatMutations: chatStore,
+        turnTransactions,
+        projectStore: createFakeProjectStore({
+          root: "/test-root",
+          workspaceState: {
+            backend: "claude",
+            model: "sonnet",
+            effort: "medium",
+            activeChatId: chatHeader.chatId,
+          },
+        }),
+        agentRegistry: createFakeAgentRegistry([agentBackend]),
+        gateRunner: createFakeGateRunner(),
+      });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events[0]?.kind).toBe("turn.completed");
+    expect(getCommitIntentRecordedHistory()).toEqual([true, false]);
+  });
+
+  test("a raced concurrent cancel makes markCommitted illegal (run-turn.ts bridges to terminalized): setCommitIntentRecorded STILL fires [true, false] — the durable commit genuinely happened even though the machine diverged", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const { turnTransactions, bindMachine } = buildRacingTransactions(chatStore);
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const { handlerContext, getLaunchedOperations, getCommitIntentRecordedHistory } =
+      buildTestContext({
+        chatReader: chatStore,
+        chatMutations: chatStore,
+        turnTransactions,
+        projectStore: createFakeProjectStore({
+          root: "/test-root",
+          workspaceState: {
+            backend: "claude",
+            model: "sonnet",
+            effort: "medium",
+            activeChatId: chatHeader.chatId,
+          },
+        }),
+        agentRegistry: createFakeAgentRegistry([agentBackend]),
+        gateRunner: createFakeGateRunner(),
+      });
+    bindMachine(handlerContext.machines.turn);
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    // The race made the machine diverge from "finalizing" before `markCommitted` — this
+    // handler's own generic terminal-event mapping (this file's header, "THE TERMINAL EVENT")
+    // reports it as `turn.failed`, NEVER `turn.completed`, since no real success occurred from
+    // the machine's own point of view.
+    expect(events[0]?.kind).toBe("turn.failed");
+    expect(getCommitIntentRecordedHistory()).toEqual([true, false]);
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
   });
 });
 

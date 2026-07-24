@@ -35,14 +35,15 @@ import type { GateError } from "../types";
  * warning lints stay dormant whenever a page is validated through this port. Note it here,
  * do not invent the fields.
  *
- * FLAGGED: `runPage`'s input also carries no dedicated physical staging path for the smoke
- * stage's `SmokeRequest.sourcePath` (`gate/model/smoke.ts`'s `createSmokeRender(renderer,
- * sourcePath)` needs one per candidate). This adapter reuses `fileName` (or its
- * `${slug}.tsx` default — the SAME default `runGate` itself applies internally) as that
- * value, since it is the only path-like field the port's input carries. The maintainer
- * should confirm whether WP-4's composition root needs a real absolute staging path
- * threaded through here instead once the real `HostSupervisorDeps`-backed `SmokeRenderer`
- * needs to resolve a file on disk.
+ * CLOSED (was FLAGGED): `runPage`'s input now carries a dedicated `sourcePath` (`core/ports
+ * /gate-runner.ts`, additive optional field) for the smoke stage's `SmokeRequest.sourcePath`
+ * (`gate/model/smoke.ts`'s `createSmokeRender(renderer, sourcePath)`), separate from
+ * `fileName` (the SHORT display name `runGate` echoes into `GateErrorV1.file`). When a caller
+ * supplies it — the real host `SmokeRenderer` resolves it via `Bun.file` in a fresh child
+ * process cwd, so a bare `${slug}.tsx` never resolves there — it is used for the smoke
+ * request; otherwise this adapter falls back to `fileName` (or its own `${slug}.tsx` default,
+ * the SAME default `runGate` itself applies internally), preserving every existing caller's
+ * behavior unchanged.
  *
  * FLAGGED: `typeCheck` is wired ONLY when BOTH `compilerAssets` and `runtimeDts` are
  * supplied. `createTypeChecker` (`gate/model/type-check.ts`) needs the ambient
@@ -109,12 +110,17 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly source: string;
     readonly slug: PageSlug;
     readonly fileName?: string;
+    readonly sourcePath?: string;
   }): Promise<GateRunResultV1> {
     const fileName = input.fileName ?? `${input.slug}.tsx`;
+    // The smoke stage needs a path it can actually resolve on disk (see this file's header,
+    // "CLOSED (was FLAGGED)") — `sourcePath` is preferred when a caller staged a real
+    // candidate file; `fileName` stays the diagnostics-facing display name regardless.
+    const smokeSourcePath = input.sourcePath ?? fileName;
     const ports: GatePorts = {
       ...(typeCheck !== undefined ? { typeCheck } : {}),
       ...(deps.checkManifest !== undefined ? { checkManifest: deps.checkManifest } : {}),
-      smokeRender: createSmokeRender(deps.smokeRenderer, fileName),
+      smokeRender: createSmokeRender(deps.smokeRenderer, smokeSourcePath),
     };
     return runGate({ source: input.source, slug: input.slug, fileName }, ports);
   }
