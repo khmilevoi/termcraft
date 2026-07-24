@@ -159,6 +159,7 @@ function buildTestContext(options?: {
   readonly recovery?: ReturnType<typeof createFakeRecoveryService>;
   readonly trustGate?: ReturnType<typeof createFakeTrustGate>;
   readonly chatReader?: ChatReader;
+  readonly exportPublish?: ReturnType<typeof createFakeExportPublish>;
 }): TestHarness {
   let trust: ProjectTrustV1 = null;
   let activeTurnId: UUIDv7 | null = null;
@@ -205,7 +206,7 @@ function buildTestContext(options?: {
     gateRunner: createFakeGateRunner(),
     hostSupervisor: createFakeHostSupervisorPort(),
     exportRender: createFakeExportRenderPort(),
-    exportPublish: createFakeExportPublish(),
+    exportPublish: options?.exportPublish ?? createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
     clock,
   };
@@ -584,6 +585,89 @@ describe("project.open", () => {
 
       expect(harness.getTrust()).toBe("untrusted-read-only");
       expect(harness.machines.project.phase()).toBe("ready");
+    });
+  });
+
+  // --- WP-5 Phase C task C4 (D-Q3): TD §12 step 9's export pointer, validated on the LIVE
+  // --- production open path (this file's header explains why `runOpenSequence` — which
+  // --- validates the same fact, task C3 — is never called here) --------------------------
+
+  test("blocks with reason 'export-pointer-read-failed' when the export pointer is corrupt", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const exportPublish = createFakeExportPublish();
+      exportPublish.failNextRead(FAILURE);
+      const harness = buildTestContext({ projectStore, pageReader, exportPublish });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+
+      expect(terminalEvents).toHaveLength(1);
+      expectValidEvent(terminalEvents[0]!);
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+      });
+      const blockedPayload = terminalEvents[0]!.payload;
+      if (blockedPayload === null || !("metadata" in blockedPayload)) {
+        throw new Error("expected a kernel.stateChanged payload");
+      }
+      expect((blockedPayload.metadata as { reason: string }).reason).toBe(
+        "export-pointer-read-failed",
+      );
+      expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
+
+  test("a null export pointer (no export published yet) never blocks — the check runs but absent is valid", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const exportPublish = createFakeExportPublish(); // readPointer() defaults to null
+      const harness = buildTestContext({ projectStore, pageReader, exportPublish });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.project.phase()).toBe("ready");
+      expect(exportPublish.calls.some((call) => call.method === "readPointer")).toBe(true);
     });
   });
 

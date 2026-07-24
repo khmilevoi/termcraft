@@ -546,8 +546,11 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     expect(exportCompletedPayload.failure).toBeNull();
     expect(exportCompletedPayload.generationId).not.toBeNull();
 
-    // The plan's own §11 target: the export-publish fake receives EXACTLY ONE plan.
-    expect(exportPublish.calls).toHaveLength(1);
+    // The plan's own §11 target: the export-publish fake receives EXACTLY ONE plan. This
+    // opening `project.open` ALSO calls `readPointer()` now (WP-5 Phase C task C4, TD §12
+    // step 9) — a genuine, expected extra call on the SAME fake, not a `publish()` — so the
+    // count below is scoped to `method: "publish"` rather than every call this fake logged.
+    expect(exportPublish.calls.filter((call) => call.method === "publish")).toHaveLength(1);
 
     // The export event sequence lands, in order: `export.started` once the snapshot is
     // captured, `export.progress` at each phase boundary the batched compositions can

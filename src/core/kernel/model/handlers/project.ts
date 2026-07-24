@@ -128,6 +128,13 @@ import { noOpOutcome, startedOutcome } from "./types";
  *   lazily as the user switches to them (`chat.switch`, `./chat.ts`). A full-directory
  *   restore needs a chat-listing port this package does not own (a `store` surface, WP-2
  *   territory) — not invented here.
+ * - WP-5 Phase C task C4 (D-Q3): TD §12 step 9's "...export pointer..." is now validated
+ *   HERE too, not only in `core/project/model/open-sequence.ts`'s `runOpenSequence` (task
+ *   C3) — this file's header already explains why `runOpenSequence` itself is never
+ *   called from the live path, so validating the pointer only there would be dead code in
+ *   production. `runProjectReadySequence` calls `deps.exportPublish.readPointer()` after
+ *   `buildPageDescriptors`, before `finishOpen`; a `null` pointer (no export published
+ *   yet) never blocks.
  */
 
 // --- Small, shared helpers -----------------------------------------------------------------
@@ -536,6 +543,17 @@ async function runProjectReadySequence(
 
   const descriptors = await wrap(buildPageDescriptors(context, slugs));
   if ("code" in descriptors) return blockOpen(context, "page-source-read-failed", descriptors);
+
+  // TD §12 step 9's "...export pointer..." (WP-5 Phase C task C4, D-Q3): this is the LIVE
+  // production open path — `core/project/model/open-sequence.ts`'s own `runOpenSequence`
+  // validates the same fact (task C3), but nothing here ever calls that function (see this
+  // file's header), so the pointer must be validated here too or it would never run in
+  // production. `null` means the project has never published an export — ABSENT IS VALID,
+  // never a block.
+  const pointer = await wrap(deps.exportPublish.readPointer());
+  if (pointer !== null && "code" in pointer) {
+    return blockOpen(context, "export-pointer-read-failed", pointer);
+  }
 
   const events: PublishableEventV1[] = [];
   const activePageSlug = workspaceStateResult.state.activePageSlug ?? manifest.pages[0] ?? null;
