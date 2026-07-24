@@ -109,10 +109,12 @@ export function createKernel(deps: KernelDeps): Kernel {
     let closed = false;
 
     // Step C1's Kernel-held "current selection" fact (closes the `selection`/`model`
-    // family's own reported gap 1) and the single-slot turn-attempt registry (closes the
-    // `turn` family's own reported Gap 2) — see `handlers/types.ts`'s own comments on
-    // `HandlerContext.selection`/`turnRunner` for why each is a plain closure fact rather
-    // than part of `KernelStateSnapshot`.
+    // family's own reported gap 1) and the single-slot turn-attempt registry storage the
+    // `turn` family's own reported Gap 2 needs (storage only — see `handlers/types.ts`'s
+    // own `TurnRunnerContext` comment for the still-open plumbing gap C1 fix round 2
+    // found) — see `handlers/types.ts`'s own comments on `HandlerContext.selection`/
+    // `turnRunner` for why each is a plain closure fact rather than part of
+    // `KernelStateSnapshot`.
     let currentSelection: SelectionSnapshotV1 | null = null;
     let activeTurnAttempt: TurnAttemptHandle | null = null;
 
@@ -466,8 +468,12 @@ export function createKernel(deps: KernelDeps): Kernel {
     // The turn family's own extra surface (`handlers/types.ts`'s `TurnRunnerContext`) —
     // `machine` is the SAME `turnMachine` object above, exposed FULL (never a second
     // instance, never a cast); `setActiveAttempt`/`activeAttempt` are the single-slot
-    // registry closing the turn family's own reported Gap 2, keyed by `activeTurnIdAtom`
-    // (never a second, independent turnId).
+    // registry the turn family's own reported Gap 2 needs, keyed by `activeTurnIdAtom`
+    // (never a second, independent turnId). NOT a full closure of Gap 2 by itself — see
+    // `TurnRunnerContext`'s own doc comment (`handlers/types.ts`) for the still-open
+    // plumbing gap this task's C1 fix round 2 found: nothing today can call
+    // `setActiveAttempt` with a live handle, since `core/turns`'s `runTurn` never
+    // surfaces the `TurnAttemptHandle` it creates internally.
     function setActiveAttempt(handle: TurnAttemptHandle | null): void {
       activeTurnAttempt = handle;
     }

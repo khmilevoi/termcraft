@@ -133,9 +133,14 @@ export type PreviewSourceKindV1 = KernelStateSnapshot["preview"]["sourceKind"];
  * (`HandlerMachine`, `phaseAtom` excluded) and the five ordinary mutators — grouped under
  * one namespaced field on {@link HandlerContext} (`turnRunner`) rather than flattened, so a
  * reviewer checking "what can ANY handler touch" sees these named together as ONE
- * clearly-scoped exception, not lost among the ordinary surface. Closes the `turn` family's
- * own two reported gaps (`.superpowers/sdd/task9-family-turn-report.md`) — see this file's
- * own report appendix ("Step C1") for the full investigation and the option chosen for each.
+ * clearly-scoped exception, not lost among the ordinary surface. Closes Gap 1 of the `turn`
+ * family's own two reported gaps in full
+ * (`.superpowers/sdd/task9-family-turn-report.md`) — see this file's own report appendix
+ * ("Step C1") for that investigation and the option chosen. **Gap 2 is only PARTIALLY
+ * closed** — `setActiveAttempt`/`activeAttempt` are real, correct KERNEL-HELD STORAGE, but
+ * nothing in the landed surface can currently populate that storage with a live handle; see
+ * `setActiveAttempt`'s own doc comment below and this file's report appendix ("C1 fix round
+ * 2") for the still-open plumbing gap this leaves for whoever implements `turn.start`.
  */
 export interface TurnRunnerContext {
   /**
@@ -155,14 +160,29 @@ export interface TurnRunnerContext {
    */
   readonly machine: StateMachine<TurnState, TurnAction>;
   /**
-   * Registers (or clears, with `null`) the `TurnAttemptHandle` `startTurnAttempt` returns,
-   * for the ONE turn `kernel.ts`'s own `activeTurnIdAtom` currently names — there is at most
-   * one live attempt at a time (`turn.start`'s own admission guard, `TURN_ALREADY_ACTIVE`),
-   * so this is a single kernel-held slot, not a map. `turn.start`'s `launchOperation` closure
-   * is the only legitimate caller that registers one (right after `startTurnAttempt` returns
-   * a live handle); that same closure is the only legitimate caller that clears it (`null`)
-   * once `runTurn`'s promise settles — mirroring `setActivePreviewSession`'s own "one setter,
-   * paired lifecycle" precedent.
+   * Registers (or clears, with `null`) a live `TurnAttemptHandle` for the ONE turn
+   * `kernel.ts`'s own `activeTurnIdAtom` currently names — there is at most one live attempt
+   * at a time (`turn.start`'s own admission guard, `TURN_ALREADY_ACTIVE`), so this is a
+   * single kernel-held slot, not a map. `turn.start`'s `launchOperation` closure is the ONLY
+   * legitimate caller.
+   *
+   * **STILL-OPEN PLUMBING GAP (found in C1 fix round 2, not closed by this task — flagged
+   * forward, matching the page/pin family's own surface-3 treatment rather than silently
+   * claimed complete):** Gap 1's resolution requires `turn.start` to compose the monolithic
+   * `runTurn` (`core/turns/model/run-turn.ts`), never the six functions individually. But
+   * `runTurn` creates its `TurnAttemptHandle` via `startTurnAttempt` entirely INSIDE its own
+   * private loop (`run-turn.ts:240`) and never surfaces it — `RunTurnResultV1`
+   * (`run-turn.ts:153-159`) has only `admission-rejected` / `terminalized` / `finalized`
+   * members, none carrying a handle, and the loop itself only ever awaits
+   * `started.handle.outcome` (`run-turn.ts:263`) before moving on. So there is currently NO
+   * value a `launchOperation` closure composing `runTurn` could pass to this method — this
+   * primitive's storage is real and correctly built, but it has no legitimate caller yet, and
+   * will read back `null` forever until that changes. Closing this for real needs a
+   * `core/turns` change (e.g. an additional `RunTurnDeps` hook invoked when an attempt starts
+   * and clears when it settles) — a landed module outside this task's (`core/kernel`) file
+   * scope, so not built here; left for whoever implements the real `turn.start` handler (Step
+   * C2) or revises `core/turns`'s own contract, per this task's own hard rule against
+   * improvising a fix in a module outside its scope.
    */
   readonly setActiveAttempt: (handle: TurnAttemptHandle | null) => void;
   /**
@@ -178,7 +198,13 @@ export interface TurnRunnerContext {
    * `apply("requestCancel")` directly — `TurnAttemptHandle.requestCancel` already drives that
    * exact machine transition itself (`core/turns/model/attempt.ts`), so calling both would
    * double-apply an already-legal transition and desync from `attempt.ts`'s own internal
-   * `cancelRequested` flag (see the turn family's own report, Gap 2).
+   * `cancelRequested` flag (see the turn family's own report, Gap 2). **Until
+   * `setActiveAttempt`'s own still-open plumbing gap closes (see that method's doc comment),
+   * this method can only ever return `null`** — no caller has any way to register a non-null
+   * handle yet. A future `turn.start`/`turn.cancel` implementation (Step C2) must NOT read
+   * that as proof the `"running"` phase is safely handled by the phase-table branch alone —
+   * it is not (the turn family's own report, Gap 2, shows exactly why) — only as proof this
+   * method itself has no live caller to populate it with yet.
    */
   readonly activeAttempt: (turnId: UUIDv7) => TurnAttemptHandle | null;
 }
@@ -269,7 +295,9 @@ export type SelectionSnapshotV1 = NonNullable<EventPayloadByKindV1["selection.ch
  * STEP C1 ADDITIONS — closing the contract gaps two family investigations proved (see
  * this file's own report appendix, "## Step C1", for the full writeup):
  * - `turnRunner` ({@link TurnRunnerContext}) — the turn family's own extra surface
- *   (Gap 1/Gap 2 of `.superpowers/sdd/task9-family-turn-report.md`).
+ *   (Gap 1 of `.superpowers/sdd/task9-family-turn-report.md`, closed in full; Gap 2's
+ *   KERNEL-HELD STORAGE only — see {@link TurnRunnerContext}'s own doc comment for the
+ *   still-open plumbing gap C1 fix round 2 found and left flagged forward).
  * - `setSelection`/`selection` — the Kernel-held "current selection" fact
  *   `.superpowers/sdd/task9-family-selection-model-report.md`'s gap 1 confirmed missing;
  *   mirrors `setActivePreviewSession`'s own "not part of `KernelStateSnapshot`, a plain
