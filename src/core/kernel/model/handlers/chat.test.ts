@@ -12,7 +12,7 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { ChatHeaderV1, ChatMutations } from "core/ports";
+import type { ChatHeaderV1, ChatLoadResultV1, ChatMutations, ChatReader } from "core/ports";
 import {
   type FakeChatStore,
   type FakeProjectStore,
@@ -78,6 +78,13 @@ import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./type
  *   not a second, competing fake for `core/ports/fakes` to reconcile with, and this file
  *   never edits `chat-store.ts` to "fix" its id format, matching this task's own
  *   deliverable boundary (`chat.ts` + `chat.test.ts` only).
+ *
+ * WP-10 Task 5 adds a THIRD local double, {@link createChatReaderStub}, for the same
+ * reason as `createChatMutationsStub`: `createFakeChatStore`'s own `open()` only
+ * recognizes a chatId it minted itself via `create()` (`fake-chat-N` format), so a test
+ * that needs `ChatReader.open` to recognize an arbitrary, schema-valid UUIDv7 chatId
+ * (to validate the resulting `chat.changed`/`chat.records` payloads against their real
+ * protocol schemas) needs a purpose-built single-chat reader instead.
  */
 
 function slugClock(): Clock {
@@ -110,6 +117,46 @@ function createChatMutationsStub(options?: {
   };
 }
 
+interface ChatReaderStubCall {
+  readonly method: "open";
+  readonly chatId: string;
+}
+
+/** A minimal, single-chat `ChatReader` double — see this file's header comment for why. */
+function createChatReaderStub(
+  chatId: string,
+  header: ChatHeaderV1,
+  loadTailResult: FailureDtoV1 | ChatLoadResultV1,
+): ChatReader & { readonly calls: readonly ChatReaderStubCall[] } {
+  const calls: ChatReaderStubCall[] = [];
+  const unknownChat = (requestedChatId: string): FailureDtoV1 => ({
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: `chat-reader stub only knows chatId ${chatId}, not ${requestedChatId}`,
+    details: { chatId: requestedChatId },
+  });
+
+  return {
+    calls,
+    async open(requestedChatId: string) {
+      calls.push({ method: "open", chatId: requestedChatId });
+      if (requestedChatId !== chatId) return unknownChat(requestedChatId);
+      return {
+        header,
+        async loadTail() {
+          return loadTailResult;
+        },
+        async loadBefore() {
+          return unknownChat(requestedChatId);
+        },
+      };
+    },
+    async readAppendBase(requestedChatId: string) {
+      return unknownChat(requestedChatId);
+    },
+  };
+}
+
 interface LaunchedOperation {
   readonly label: string;
   readonly run: () => Promise<readonly PublishableEventV1[]>;
@@ -124,7 +171,10 @@ interface TestFixture {
 }
 
 /** Builds a real `HandlerContext` over the shared `core/ports/fakes` set — matches `deferred.test.ts`/`index.test.ts`'s own `buildTestContext` shape. */
-function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }): TestFixture {
+function buildTestContext(overrides?: {
+  readonly chatMutations?: ChatMutations;
+  readonly chatReader?: ChatReader;
+}): TestFixture {
   return context.start(() => {
     const chatStore = createFakeChatStore({ clock: slugClock() });
     const projectStore = createFakeProjectStore({ root: "/test-root" });
@@ -134,7 +184,7 @@ function buildTestContext(overrides?: { readonly chatMutations?: ChatMutations }
 
     const deps: KernelDeps = {
       projectStore,
-      chatReader: chatStore,
+      chatReader: overrides?.chatReader ?? chatStore,
       chatMutations: overrides?.chatMutations ?? chatStore,
       pageReader: pageStore,
       pageMutations: pageStore,
@@ -268,7 +318,7 @@ describe("chatHandlers['chat.create']", () => {
     expect(getMutatorCalls()).toBe(0);
   });
 
-  test("its launched operation calls ChatMutations.create exactly once and publishes one internally-consistent chat.changed event", async () => {
+  test("its launched operation calls ChatMutations.create exactly once and publishes a chat.changed event plus an empty chat.records event", async () => {
     const { handlerContext, chatStore, getLaunches } = buildTestContext();
 
     chatHandlers["chat.create"]({}, handlerContext);
@@ -277,11 +327,17 @@ describe("chatHandlers['chat.create']", () => {
     const events = await launch.run();
 
     expect(chatStore.calls).toEqual([{ method: "create" }]);
-    const event = onlyEvent(events);
-    expect(event.kind).toBe("chat.changed");
-    const payload = event.payload as {
+    expect(events).toHaveLength(2);
+
+    const changedEvent = events[0]!;
+    expect(changedEvent.kind).toBe("chat.changed");
+    const payload = changedEvent.payload as {
       readonly activeChatId: string;
-      readonly added: readonly { readonly chatId: string; readonly createdAt: string }[];
+      readonly added: readonly {
+        readonly chatId: string;
+        readonly createdAt: string;
+        readonly displayName: string | null;
+      }[];
       readonly updated: readonly unknown[];
       readonly removedChatIds: readonly unknown[];
     };
@@ -290,9 +346,18 @@ describe("chatHandlers['chat.create']", () => {
     expect(payload.added).toHaveLength(1);
     expect(payload.added[0]?.chatId).toBe(payload.activeChatId);
     expect(payload.added[0]?.createdAt).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(payload.added[0]?.displayName).toBeNull();
+
+    const recordsEvent = events[1]!;
+    expect(recordsEvent.kind).toBe("chat.records");
+    expect(recordsEvent.payload).toEqual({
+      chatId: payload.activeChatId,
+      records: [],
+      prevCursor: null,
+    });
   });
 
-  test("its launched operation, given a real ChatMutations.create response, publishes a payload that parses against eventPayloadV1SchemaByKind", async () => {
+  test("its launched operation, given a real ChatMutations.create response, publishes chat.changed and chat.records payloads that both parse against eventPayloadV1SchemaByKind", async () => {
     const stub = createChatMutationsStub();
     const { handlerContext, getLaunches } = buildTestContext({ chatMutations: stub });
 
@@ -301,10 +366,14 @@ describe("chatHandlers['chat.create']", () => {
 
     const events = await launch.run();
 
-    const event = onlyEvent(events);
-    expect(event.kind).toBe("chat.changed");
-    const parsed = eventPayloadV1SchemaByKind["chat.changed"].safeParse(event.payload);
-    expect(parsed.success).toBe(true);
+    expect(events).toHaveLength(2);
+    expect(events[0]!.kind).toBe("chat.changed");
+    expect(events[1]!.kind).toBe("chat.records");
+    for (const event of events) {
+      const schema =
+        eventPayloadV1SchemaByKind[event.kind as keyof typeof eventPayloadV1SchemaByKind];
+      expect(schema.safeParse(event.payload).success).toBe(true);
+    }
   });
 
   test("when ChatMutations.create fails, its launched operation logs the failure and resolves with no events", async () => {
@@ -339,30 +408,152 @@ describe("chatHandlers['chat.switch']", () => {
     expect(getMutatorCalls()).toBe(0);
   });
 
-  test("its launched operation switches the active chat, persists it via ProjectStore.writeWorkspaceState, and publishes one chat.changed event that parses against eventPayloadV1SchemaByKind", async () => {
-    const stub = createChatMutationsStub();
-    const { handlerContext, projectStore, getLaunches } = buildTestContext({ chatMutations: stub });
+  test("its launched operation switches the active chat, persists it via ProjectStore.writeWorkspaceState, loads the tail, and publishes chat.changed + chat.records — both parsing against eventPayloadV1SchemaByKind", async () => {
+    const mutationsStub = createChatMutationsStub();
     const chatId = uuidv7();
+    const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
+    const chatReader = createChatReaderStub(chatId, header, { records: [], prevCursor: null });
+    const { handlerContext, projectStore, getLaunches } = buildTestContext({
+      chatMutations: mutationsStub,
+      chatReader,
+    });
 
     chatHandlers["chat.switch"]({ chatId }, handlerContext);
     const launch = onlyLaunch(getLaunches());
 
     const events = await launch.run();
 
-    expect(stub.calls).toEqual([{ method: "switchActive", chatId }]);
+    expect(mutationsStub.calls).toEqual([{ method: "switchActive", chatId }]);
     expect(projectStore.calls).toEqual([
       { method: "writeWorkspaceState", patch: { activeChatId: chatId } },
     ]);
+    expect(chatReader.calls).toEqual([{ method: "open", chatId }]);
+    expect(events).toHaveLength(2);
+
+    const changedEvent = events[0]!;
+    expect(changedEvent.kind).toBe("chat.changed");
+    expect(eventPayloadV1SchemaByKind["chat.changed"].safeParse(changedEvent.payload).success).toBe(
+      true,
+    );
+    expect(changedEvent.payload).toEqual({
+      activeChatId: chatId,
+      added: [],
+      updated: [{ chatId, createdAt: header.createdAt, displayName: null }],
+      removedChatIds: [],
+    });
+
+    const recordsEvent = events[1]!;
+    expect(recordsEvent.kind).toBe("chat.records");
+    expect(eventPayloadV1SchemaByKind["chat.records"].safeParse(recordsEvent.payload).success).toBe(
+      true,
+    );
+    expect(recordsEvent.payload).toEqual({ chatId, records: [], prevCursor: null });
+  });
+
+  test("when the tail loads with records, its launched operation maps them in order into chat.records and derives the summary's displayName from the first user record", async () => {
+    const mutationsStub = createChatMutationsStub();
+    const chatId = uuidv7();
+    const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
+    const userRecordId = uuidv7();
+    const userTurnId = uuidv7();
+    const agentRecordId = uuidv7();
+    const chatReader = createChatReaderStub(chatId, header, {
+      records: [
+        {
+          kind: "user",
+          recordId: userRecordId,
+          turnId: userTurnId,
+          text: "Add a dark theme toggle",
+          ts: "2024-06-01T00:00:01.000Z",
+        },
+        {
+          kind: "agent",
+          recordId: agentRecordId,
+          turnId: userTurnId,
+          text: "Done",
+          changedPages: [],
+          warnings: [],
+          ts: "2024-06-01T00:00:02.000Z",
+        },
+      ],
+      prevCursor: null,
+    });
+    const { handlerContext, getLaunches } = buildTestContext({
+      chatMutations: mutationsStub,
+      chatReader,
+    });
+
+    chatHandlers["chat.switch"]({ chatId }, handlerContext);
+    const events = await onlyLaunch(getLaunches()).run();
+
+    expect(events).toHaveLength(2);
+    expect(events[0]!.payload).toMatchObject({
+      updated: [{ chatId, createdAt: header.createdAt, displayName: "Add a dark theme toggle" }],
+    });
+
+    const recordsEvent = events[1]!;
+    expect(recordsEvent.kind).toBe("chat.records");
+    expect(eventPayloadV1SchemaByKind["chat.records"].safeParse(recordsEvent.payload).success).toBe(
+      true,
+    );
+    expect(recordsEvent.payload).toEqual({
+      chatId,
+      records: [
+        {
+          kind: "user",
+          recordId: userRecordId,
+          turnId: userTurnId,
+          text: "Add a dark theme toggle",
+          selection: null,
+          pins: [],
+          ts: "2024-06-01T00:00:01.000Z",
+        },
+        {
+          kind: "agent",
+          recordId: agentRecordId,
+          turnId: userTurnId,
+          text: "Done",
+          changedPages: [],
+          warnings: [],
+          ts: "2024-06-01T00:00:02.000Z",
+        },
+      ],
+      prevCursor: null,
+    });
+  });
+
+  test("when loading the tail fails, its launched operation still publishes only chat.changed (no summary, no chat.records) and logs the failure", async () => {
+    const mutationsStub = createChatMutationsStub();
+    const chatId = uuidv7();
+    const chatReader = createChatReaderStub(
+      chatId,
+      { chatId, createdAt: "2024-06-01T00:00:00.000Z" },
+      {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "disk read failed",
+        details: {},
+      },
+    );
+    const { handlerContext, getLaunches } = buildTestContext({
+      chatMutations: mutationsStub,
+      chatReader,
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    chatHandlers["chat.switch"]({ chatId }, handlerContext);
+    const events = await onlyLaunch(getLaunches()).run();
+
+    expect(warnSpy).toHaveBeenCalled();
     const event = onlyEvent(events);
     expect(event.kind).toBe("chat.changed");
-    const parsed = eventPayloadV1SchemaByKind["chat.changed"].safeParse(event.payload);
-    expect(parsed.success).toBe(true);
     expect(event.payload).toEqual({
       activeChatId: chatId,
       added: [],
       updated: [],
       removedChatIds: [],
     });
+    warnSpy.mockRestore();
   });
 
   test("when ChatMutations.switchActive fails (unknown chatId), its launched operation logs the failure, never persists to ProjectStore, and resolves with no events", async () => {
