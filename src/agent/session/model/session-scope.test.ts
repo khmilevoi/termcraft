@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import path from "node:path";
 
 import { deriveSessionScope } from "./session-scope";
 
@@ -50,4 +51,20 @@ test("scope changes when the workspace identity changes", () => {
 test("the digest is stable lowercase hex of SHA-256 length", () => {
   const scope = deriveSessionScope("claude", base);
   expect(scope).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("a genuine process restart yields a different scope for otherwise-identical inputs (real subprocess, not simulated)", async () => {
+  // `path.join(import.meta.dir, ...)`, NOT `new URL(...).pathname` — this file's own
+  // established convention (`store/lease/model/lease.test.ts`'s identical subprocess-fixture
+  // pattern): a `file://`-style pathname is `/C:/...` on Windows, which Bun's module
+  // resolver rejects outright ("Module not found") — a real, not theoretical, portability gap.
+  const fixture = path.join(import.meta.dir, "session-scope-process-fixture.ts");
+  const run = () =>
+    new Response(Bun.spawn({ cmd: [process.execPath, fixture], stdout: "pipe" }).stdout).text();
+
+  const [first, second] = await Promise.all([run(), run()]);
+  // Sequential would also prove it; parallel additionally proves two processes launched
+  // "at the same moment" (the adversarial case for any millisecond-based scheme) still diverge.
+  expect(first.trim()).not.toBe(second.trim());
+  expect(first.trim()).toMatch(/^[0-9a-f]{64}$/);
 });

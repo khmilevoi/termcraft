@@ -89,7 +89,7 @@ const DEFAULT_CAPABILITIES: BackendCapabilities = {
 };
 
 export type AgentBackendCall =
-  | { readonly method: "startTurn"; readonly fence: TurnFence }
+  | { readonly method: "startTurn"; readonly fence: TurnFence; readonly task: AgentTask }
   | { readonly method: "cancel"; readonly fence: TurnFence }
   | { readonly method: "healthCheck" }
   | { readonly method: "capabilities" }
@@ -143,7 +143,7 @@ export function createFakeAgentBackend(options?: {
   }
 
   function startTurn(task: AgentTask): AgentRun {
-    calls.push({ method: "startTurn", fence: task.fence });
+    calls.push({ method: "startTurn", fence: task.fence, task });
     const channel = createChannel<FencedEvent>();
     let resolveOutcome!: (outcome: AgentRunOutcome) => void;
     const outcome = new Promise<AgentRunOutcome>((resolve) => {

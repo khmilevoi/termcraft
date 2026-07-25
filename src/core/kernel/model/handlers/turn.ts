@@ -32,7 +32,9 @@ import {
   type RunTurnResultV1,
   type RunTurnValidationMaterialV1,
   type TurnCandidateV1,
+  advanceSessionCheckpoint,
   createTurnDeadlines,
+  evaluateSessionPlan,
   foldGateDiagnosticsIntoPrompt,
   runTurn,
 } from "core/turns";
@@ -182,18 +184,34 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   await, matching kernel-command-contract §12.2's "captures ... authoritative selection"
  *   — never from the payload, which carries none.
  *
- *   `baseTask.session: SessionPlan`: ALWAYS `{kind: "fresh", seed}`, seeded honestly via
- *   `context.deps.sessionCheckpoint.selectSeed(targetChatId)` (a REAL port call, real prior
- *   chat history — never fabricated). **Documented divergence, separate from Gap 4**:
- *   resuming a previous SDK session needs `AgentBackend.sessionScope({account, model,
- *   workspaceIdentity})`, and `workspaceIdentity` (turn-durability §6.3 item 4) has no
- *   durable `core/ports` source at all — it exists ONLY as a payload-only fact on
- *   `project.create`/`project.setTrust` (`ui/app/model/deps.ts`'s own `UiEnv.workspaceIdentity`),
- *   never persisted anywhere `core` can read back later. Building a `sessionScopeId` would
- *   need either fabricating `workspaceIdentity` or a NEW port primitive outside this task's
- *   authorized chat-store/project-store extension — flagged here for whoever closes it next,
- *   exactly like Gap 3/Gap 4 were each flagged in their own turn; a fresh (never resumed),
- *   honestly-seeded session is the sanctioned interim behavior, not a silent shortcut.
+ *   `baseTask.session: SessionPlan`: resolved via `evaluateSessionPlan` (`core/turns`) — phase-8
+ *   WP-7, closing this file's own former "documented divergence" here. `workspaceIdentity` comes
+ *   from `context.deps.projectStore.readManifest().projectId` — a SECOND call this handler now
+ *   makes alongside its existing `readManifestSnapshot()` call just above (that one returns only
+ *   `{sha256, size}`, `core/ports/staging.ts`'s `ReadSetFileSnapshotV1`, never the parsed DTO
+ *   `projectId` lives on). A read failure is a LOGGED, idempotent refusal, in the exact shape as
+ *   the `readManifestSnapshot`/pin-fold refusals elsewhere in this function — never a fabricated
+ *   identity. `manifest.projectId` is the SAME value `core`'s own `runProjectReadySequence`
+ *   (`handlers/project.ts:507,531,595`) already reads on every `project.open`/`project.create`,
+ *   and the SAME value `entrypoint/model/create-shell.ts`'s `resolveEnvWithProjectIdentity`
+ *   already threads into `UiEnv.workspaceIdentity` on every shell construction — so no new
+ *   persisted field is needed (phase-8 WP-7's own design amendment: the original plan to persist
+ *   a copy into `workspace.local.toml` was dropped once this direct read was confirmed to work on
+ *   the SAME path `project.open` already takes; see the sub-plan's own "Amendment" section).
+ *   `sessionScopeId` comes from `resolvedAgent.agentBackend.sessionScope({account: null, model,
+ *   workspaceIdentity})` — `account` is a documented `null` literal, not a fresh `healthCheck()`
+ *   call, because Claude's own probe (`agent/claude/backend/model/probe.ts`) returns
+ *   `account: null` on EVERY branch today, so a fresh probe would report the identical `null` at
+ *   the cost of one more round trip; wiring master §9's "checked ... before each send" health
+ *   check into `turn.start` for real is a separate, larger gap this task does not close (see this
+ *   plan's "Known softness"). **CROSS-RESTART RESUME REMAINS UNREACHABLE**: `deriveSessionScope`
+ *   (`agent/session/model/session-scope.ts`) substitutes a fresh per-PROCESS
+ *   `UNRESUMABLE_ACCOUNT` whenever `account` is `null`, which it always is for Claude — so
+ *   `sessionScopeId` differs across every process restart regardless of `workspaceIdentity`, and
+ *   `evaluateResume` honestly reports "fresh" every first turn of a new process. What resumes is
+ *   the SECOND and later turn of the SAME process (storage-identity §6.2's own escape hatch: "a
+ *   backend that cannot supply a stable account ... returns a fresh scope for each process, which
+ *   safely disables cross-process resume for that backend").
  *
  *   `baseTask.systemPrompt`: NOW REAL (phase-8 WP-3) — `context.deps.agentPromptSource
  *   .systemPrompt(promptContext)`, where `promptContext: AgentPromptContextV1` is built just
@@ -698,6 +716,18 @@ async function runTurnStart(
     return [];
   }
 
+  // WP-7: a SECOND, different call to the SAME port — `readManifestSnapshot` above returns
+  // only `{sha256, size}` (the CAS read-set baseline), never the parsed `projectId` this
+  // handler's own `sessionScopeId` needs below. A failure here is a LOGGED, idempotent
+  // refusal, in the exact shape as the read above — never a fabricated `workspaceIdentity`.
+  const manifest = await wrap(context.deps.projectStore.readManifest());
+  if ("code" in manifest) {
+    console.warn(
+      `core/kernel/handlers/turn: turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`,
+    );
+    return [];
+  }
+
   const pageSlugs = await wrap(context.deps.pageReader.listSlugs());
   if ("code" in pageSlugs) {
     console.warn(
@@ -769,13 +799,35 @@ async function runTurnStart(
     }
   }
 
-  const seedResult = await wrap(context.deps.sessionCheckpoint.selectSeed(activeChatId));
-  if ("code" in seedResult) {
+  // WP-7: the real resume-or-fresh decision (storage-identity §6.2), replacing the
+  // unconditional `{kind: "fresh", seed}` this handler used to build directly from
+  // `selectSeed`. `sessionScopeId` folds in `workspaceIdentity` (the manifest read just
+  // above) and a documented `account: null` literal — see this file's own header,
+  // "`baseTask.session: SessionPlan`," for the full account/cross-restart rationale.
+  const sessionScopeId = resolvedAgent.agentBackend.sessionScope({
+    account: null,
+    model: resolvedAgent.model,
+    workspaceIdentity: manifest.projectId,
+  });
+  // Flat, not a nested async IIFE: an `await` on an unwrapped inner promise (even one
+  // that itself calls `wrap(...)`) is its OWN unwrapped async boundary the moment it
+  // resolves — `references/async-notes.md`'s "Where the async context is lost" table
+  // ("continuation after `await`... inside a unit" needs `wrap(...)`, and an IIFE's own
+  // returned promise is exactly such a continuation). A single top-level `await wrap(...)`
+  // keeps this call on the SAME pattern every other port read in this function already uses.
+  const sessionPlanResult = await wrap(
+    evaluateSessionPlan(
+      { sessionCheckpoint: context.deps.sessionCheckpoint },
+      { chatId: activeChatId, sessionScopeId },
+    ),
+  );
+  if ("code" in sessionPlanResult) {
     console.warn(
-      `core/kernel/handlers/turn: turn.start could not select a fresh-session seed for chat "${activeChatId}" — ${seedResult.safeMessage}; starting with an empty seed`,
+      `core/kernel/handlers/turn: turn.start's evaluateSessionPlan failed for chat "${activeChatId}" scope "${sessionScopeId}" — ${sessionPlanResult.safeMessage}; starting with an empty seed`,
     );
   }
-  const sessionPlan: SessionPlan = { kind: "fresh", seed: "code" in seedResult ? [] : seedResult };
+  const sessionPlan: SessionPlan =
+    "code" in sessionPlanResult ? { kind: "fresh", seed: [] } : sessionPlanResult;
 
   const admission: AdmissionInputV1 = {
     targetChatId: activeChatId,
@@ -842,6 +894,12 @@ async function runTurnStart(
   });
 
   let finalizeSummary: FinalizeSummaryV1 | null = null;
+  // WP-7: captured the SAME way `finalizeSummary` above already is — from inside
+  // `buildFinalizeInput`, the one closure that receives the LAST attempt's own
+  // `TurnAttemptOutcomeV1` (`attempt.sessionId`, always present on a `"completed"` outcome).
+  // Read after `runTurn` resolves, only on the `"committed"` branch below, to advance the
+  // checkpoint for the scope `sessionScopeId` (Task 1) already resolved.
+  let capturedSessionId: string | null = null;
 
   const buildFinalizeInput: RunTurnInputV1["buildFinalizeInput"] = ({
     turnId,
@@ -849,6 +907,7 @@ async function runTurnStart(
     candidate,
     validation,
   }): RunTurnFinalizeMaterialV1 => {
+    capturedSessionId = attempt.sessionId;
     const changedPages: ChangedPageOpV1[] = [];
     for (const change of candidate.changes) {
       if (change.change === "removed") {
@@ -991,6 +1050,28 @@ async function runTurnStart(
   context.setCommitIntentRecorded(false);
 
   if (result.kind === "finalized" && result.result.kind === "committed") {
+    // WP-7: the write half of the resume-or-fresh decision (finding 4) — without this,
+    // `sessionScopeId`'s checkpoint (Task 1) would never exist for a later turn to resume
+    // from. `capturedSessionId` is only ever `null` if `buildFinalizeInput` itself never ran,
+    // which cannot happen on THIS branch (reaching a `"committed"` result requires a finalize
+    // attempt to have completed) — the guard is defensive, matching this project's own "never
+    // assume success blindly" convention (see `capturedTurnId`'s identical guard just above).
+    if (capturedSessionId !== null) {
+      const advanced = await wrap(
+        advanceSessionCheckpoint(
+          { sessionCheckpoint: context.deps.sessionCheckpoint },
+          { chatId: admittedChatId, sessionScopeId, sessionId: capturedSessionId },
+        ),
+      );
+      if (advanced !== undefined) {
+        // storage-identity §6.2: "Session checkpoint failure never changes chat history." The
+        // turn already committed durably above — this is a non-fatal, logged best-effort step:
+        // the NEXT turn simply evaluates "fresh" again, honestly, rather than resuming.
+        console.warn(
+          `core/kernel/handlers/turn: turn.start could not advance the session checkpoint for chat "${admittedChatId}" scope "${sessionScopeId}": ${advanced.safeMessage}`,
+        );
+      }
+    }
     const summary: FinalizeSummaryV1 = finalizeSummary ?? { changedPages: [], gateWarnings: [] };
     return [
       {

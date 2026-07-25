@@ -1944,3 +1944,350 @@ describe('turnHandlers["turn.cancel"]', () => {
     expect(getLaunchedOperations()).toHaveLength(0);
   });
 });
+
+describe('turnHandlers["turn.start"] — WP-7 same-process session resume', () => {
+  test("the manifest's projectId resolves session through sessionScope + evaluateSessionPlan, not the unconditional fresh path (WP-7)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const pinStore = createFakePinStore();
+    const staging = createFakeStagingService();
+    const sessionCheckpoint = createFakeSessionCheckpointService();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const scopeId = agentBackend.sessionScope({
+      account: null,
+      model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+      workspaceIdentity: "ws-1",
+    });
+    await sessionCheckpoint.advanceCheckpoint({
+      chatId: chatHeader.chatId,
+      sessionScopeId: scopeId,
+      sessionId: "prior-session",
+    });
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      staging,
+      sessionCheckpoint,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        manifest: { projectId: "ws-1" },
+        workspaceState: {
+          backend: "claude",
+          model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "continue" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+    await waitForPublishedCount("turn.attemptStarted", 1);
+
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    expect(startCall.task.session).toEqual({
+      kind: "resume",
+      sessionId: "prior-session",
+      promptDelta: null,
+    });
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "prior-session",
+    });
+    await runPromise;
+  });
+
+  test("a manifest-read failure refuses turn.start — logged, never a fabricated workspaceIdentity (WP-7)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: {
+        backend: "claude",
+        model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+        effort: "medium",
+        activeChatId: chatHeader.chatId,
+        activePageSlug: HOME,
+      },
+    });
+    projectStore.failNext("readManifest", {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "simulated manifest read failure",
+      details: {},
+    });
+
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: createFakePinStore(),
+      pinMutations: createFakePinStore(),
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "hi" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const events = await operation.run();
+
+    expect(events).toEqual([]);
+    expect(agentBackend.calls.some((c) => c.method === "startTurn")).toBe(false);
+  });
+
+  test("a committed turn advances the session checkpoint under the manifest-derived scope (WP-7)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const sessionCheckpoint = createFakeSessionCheckpointService();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: createFakePinStore(),
+      pinMutations: createFakePinStore(),
+      staging: createFakeStagingService(),
+      sessionCheckpoint,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        manifest: { projectId: "ws-1" },
+        workspaceState: {
+          backend: "claude",
+          model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "first turn" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+    await waitForPublishedCount("turn.attemptStarted", 1);
+
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    expect(startCall.task.session.kind).toBe("fresh"); // no prior checkpoint — honest first turn
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "sess-first",
+    });
+    const events = await runPromise;
+    expect(events[0]?.kind).toBe("turn.completed");
+
+    const scopeId = agentBackend.sessionScope({
+      account: null,
+      model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+      workspaceIdentity: "ws-1",
+    });
+    const verdict = await sessionCheckpoint.evaluateResume({
+      chatId: chatHeader.chatId,
+      sessionScopeId: scopeId,
+    });
+    expect(verdict).toMatchObject({ kind: "resume", sessionId: "sess-first" });
+  });
+
+  test("acceptance (WP-7): the second turn.start in one process resumes the first turn's session", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const sessionCheckpoint = createFakeSessionCheckpointService();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      manifest: { projectId: "ws-1" },
+      workspaceState: {
+        backend: "claude",
+        model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+        effort: "medium",
+        activeChatId: chatHeader.chatId,
+        activePageSlug: HOME,
+      },
+    });
+
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: createFakePinStore(),
+      pinMutations: createFakePinStore(),
+      staging: createFakeStagingService(),
+      sessionCheckpoint,
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    async function runOneTurn(text: string, sessionId: string) {
+      // `agentBackend.calls` accumulates across BOTH dispatches in this test (never cleared
+      // between them) — waiting for "count exceeds what it was before THIS dispatch", not
+      // "any startTurn call exists at all," is what makes the second call correctly wait for
+      // the SECOND turn's own attempt instead of re-grabbing the first turn's already-settled
+      // fence (which `completeRun` would then silently ignore, and the run would never
+      // resolve).
+      const priorStartCount = agentBackend.calls.filter((c) => c.method === "startTurn").length;
+      turnHandlers["turn.start"]({ text }, handlerContext);
+      const launches = getLaunchedOperations();
+      const operation = launches[launches.length - 1];
+      if (operation === undefined) throw new Error("expected a launched operation");
+      const runPromise = operation.run();
+
+      for (let i = 0; i < 200; i++) {
+        const count = agentBackend.calls.filter((c) => c.method === "startTurn").length;
+        if (count > priorStartCount) break;
+        await wrap(Bun.sleep(0));
+      }
+      const startCall = agentBackend.calls.filter((c) => c.method === "startTurn").pop();
+      if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+      agentBackend.completeRun(startCall.fence, {
+        kind: "completed",
+        finalText: `done: ${text}`,
+        usage: null,
+        sessionId,
+      });
+      await runPromise;
+      return startCall;
+    }
+
+    const firstStart = await runOneTurn("first message", "sess-1");
+    expect(firstStart.task.session.kind).toBe("fresh");
+
+    const secondStart = await runOneTurn("second message", "sess-2");
+    expect(secondStart.task.session).toEqual({
+      kind: "resume",
+      sessionId: "sess-1",
+      promptDelta: null,
+    });
+  });
+
+  test("acceptance (WP-7): a scope change (simulating any of the 4 storage-identity §6.2 triggers, including a process restart) starts honestly fresh, never a stale resume", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const sessionCheckpoint = createFakeSessionCheckpointService();
+    // A checkpoint under a DIFFERENT scope stands in for any of storage-identity §6.2's four
+    // triggers (backend, account, model, or workspace identity changing) — including a process
+    // restart's own `UNRESUMABLE_ACCOUNT` — without needing a real subprocess (Task 4, at the
+    // mechanism's own layer, is the genuine cross-process proof).
+    await sessionCheckpoint.advanceCheckpoint({
+      chatId: chatHeader.chatId,
+      sessionScopeId: "some-other-scope-entirely",
+      sessionId: "stale-session",
+    });
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: createFakePinStore(),
+      pinMutations: createFakePinStore(),
+      staging: createFakeStagingService(),
+      sessionCheckpoint,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        manifest: { projectId: "ws-1" },
+        workspaceState: {
+          backend: "claude",
+          model: FAKE_BACKEND_CAPABILITIES.defaultSelection.model,
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "hi" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected a launched operation");
+    const runPromise = operation.run();
+    for (let i = 0; i < 200; i++) {
+      if (agentBackend.calls.some((c) => c.method === "startTurn")) break;
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    expect(startCall.task.session.kind).toBe("fresh");
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s-new",
+    });
+    await runPromise;
+  });
+});

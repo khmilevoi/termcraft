@@ -124,7 +124,9 @@ describe("startTurnAttempt — workspace-ready -> running -> stopping", () => {
       const lease = h.fence.currentLease();
       if (lease === null) throw new Error("expected a live lease");
       expect(lease).toEqual({ turnId: TURN_ID, attempt: 1, leaseNonce: expect.any(String) });
-      expect(h.agentBackend.calls).toEqual([{ method: "startTurn", fence: lease }]);
+      expect(h.agentBackend.calls).toEqual([
+        { method: "startTurn", fence: lease, task: { ...baseTask(), fence: lease } },
+      ]);
     });
   });
 
