@@ -27,6 +27,12 @@ describe("the generated runtime declaration", () => {
     }
   });
 
+  test("the plain .d.ts companion file matches RUNTIME_DTS byte-for-byte (phase-8 WP-3)", () => {
+    const companionPath = path.join(process.cwd(), "src/runtime/generated/runtime.generated.d.ts");
+    const companion = fs.readFileSync(companionPath, "utf8");
+    expect(companion.trim()).toBe(RUNTIME_DTS.trim());
+  });
+
   if (!HAS_PLATFORM_TSC) {
     console.warn(
       `runtime-dts.test.ts: skipping the fresh-emit drift check — ${PLATFORM_TSC_PACKAGE} is ` +

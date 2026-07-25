@@ -4,6 +4,7 @@ import type { TransitionOutcome, TurnAction, TurnState } from "core/machines";
 import type { EventCorrelationV1, PublishableEventV1 } from "core/mailbox";
 import type {
   AgentBackend,
+  AgentPromptContextV1,
   AgentTask,
   ChangedPageOpV1,
   ReadSetAppendBaseV1,
@@ -19,6 +20,7 @@ import {
   type FailureDtoV1,
   type Sha256Hex,
   type UUIDv7,
+  isOperationalFailureCode,
   isUuidv7,
 } from "core/protocol";
 import {
@@ -137,11 +139,12 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   `admit()` commits, via the SAME `context.deps.chatReader` this handler threads through
  *   `RunTurnDeps.chatReader` below.
  *
- *   `runtimeDocs: []`: an honest empty value, not a fabrication — no port anywhere in
- *   `KernelDeps` sources a runtime-doc file's content, so an empty list here means exactly
- *   what it would for a turn genuinely sent with none, never a guess (mirrors `kernel.ts`'s
- *   own `PLACEHOLDER_GIT_STATUS` precedent for "a real value would need a port that does not
- *   exist yet").
+ *   `runtimeDocs`: NOW REAL (phase-8 WP-3) — `context.deps.agentPromptSource.runtimeDocs()`
+ *   (`core/ports/agent-prompt.ts`, implemented by `agent/prompt/`) returns the two files
+ *   staged alongside `pages/`/`pages.json`: `runtime.d.ts` (the generated `@termcraft/runtime`
+ *   ambient declaration, `runtime/generated/runtime.generated.d.ts`) and `RUNTIME.md` (the
+ *   hand-authored guide). Both are ordinary files inside the installed package — under npm
+ *   there is no startup staging step, only a path (phase-8 design §WP-3).
  *
  *   `candidatePins`: NOW REAL (Task 10 — kernel-command-contract §12.2 item 1: "captures ...
  *   only currently open, resolvable pins"). Folded live from
@@ -192,12 +195,21 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   exactly like Gap 3/Gap 4 were each flagged in their own turn; a fresh (never resumed),
  *   honestly-seeded session is the sanctioned interim behavior, not a silent shortcut.
  *
- *   `baseTask.systemPrompt`: `TURN_START_SYSTEM_PROMPT_PLACEHOLDER` (below) — no port
- *   anywhere sources the compiled system-prompt text, and `agent/`'s own real prompt
- *   composition (`agent/session/model/prompt.ts`) lives outside `core`'s import boundary
- *   (module DAG: `core` imports only `entities/` + its own `ports/`) — mirrors `kernel.ts`'s
- *   own `PLACEHOLDER_GIT_STATUS` precedent for "a real value would need a port that does not
- *   exist yet," not a fabricated value dressed up as real.
+ *   `baseTask.systemPrompt`: NOW REAL (phase-8 WP-3) — `context.deps.agentPromptSource
+ *   .systemPrompt(promptContext)`, where `promptContext: AgentPromptContextV1` is built just
+ *   above from facts this handler already holds honestly: `activePageSlug`/`pageSlugs` (the
+ *   SAME `WorkspaceStateV1.activePageSlug` and `pageReader.listSlugs()` result the manifest
+ *   slice above already reads), `kitApiVersion` from `context.deps.exportRender
+ *   .runtimeDeclaration.currentKitApiVersion` (the SAME already-wired constant
+ *   `ExportRenderPort` carries — no new `KernelDeps` field needed), and `openPins` folded in
+ *   the SAME loop that builds `candidatePins` just above, from the SAME `PinReader.fold`
+ *   result — never a second port call, never a fabricated pin text. `agent/prompt/`
+ *   (implementing `core/ports/agent-prompt.ts`) owns the prose: role, §5.8's design-code
+ *   rules including the slug mask, the page-file layout, and answer-style guidance — `core`
+ *   imports only the port, never `agent/prompt/` itself. NOTE: `agent/session/model/
+ *   prompt.ts`'s `buildPrompt` is a DIFFERENT function entirely — it composes the per-attempt
+ *   USER message (a resume delta, or the fresh-session seed transcript), never the system
+ *   prompt; the two were never in conflict.
  *
  *   `buildValidationInput`/`buildFinalizeInput`: both are SYNCHRONOUS per `RunTurnInputV1`'s
  *   own signature, but the only honest source of a frozen candidate's byte content —
@@ -273,21 +285,14 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *     now bridged into `terminalizeTurn` by `run-turn.ts` itself — see that file's own header,
  *     "FINALIZE FAILURES DO BRIDGE"/"`{kind:\"illegal\"}` ALSO BRIDGES" — so neither
  *     `{kind:"finalized", result:{kind:"failed"}}` NOR `{kind:"finalized",
- *     result:{kind:"illegal"}}` is a reachable `RunTurnResultV1` shape at all, ...):
- *     `RunTurnResultV1`'s own
- *     `TerminalizeTurnResultV1`/`FinalizeTurnResultV1` variants do NOT echo back which
- *     `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) the composition
- *     originally requested, NOR WHY (Gate exhaustion, a backend failure, a deadline, a
- *     finalize CAS mismatch, ...) — a genuine, separate gap this task's own scope does not
- *     cover (closing it would mean widening a landed `core/turns` return type, not extending
- *     `core/ports`; the operational-failure vocabulary already HAS `GATE_RETRY_EXHAUSTED` and
- *     `BACKEND_FAILED` codes waiting for exactly this use, `core/protocol/model/failure.ts` —
- *     they simply cannot be reached from here yet). Rather than fabricate a precise-looking
- *     distinction this composition cannot honestly make, every one of these branches still
- *     publishes `turn.failed` with `outcome: "failed"` — logged with the real branch name for
- *     traceability.
+ *     result:{kind:"illegal"}}` is a reachable `RunTurnResultV1` shape at all, ...): the wire
+ *     `outcome` field itself still only ever publishes `"failed"` for every one of these
+ *     causes — widening IT would misrepresent a guess as spec-fixed fact (§7.2 fixes the
+ *     `cancelled`/`failed`/`stale`/`interrupted` vocabulary verbatim), so this driver never
+ *     tries. What CAN be, and now is, more precise is `failure`, the DTO alongside it — see
+ *     "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED" below.
  *
- *     ONE SUB-CASE IS TYPED NOW, NOT FABRICATED (WP-8 item 4, phase-8 design's
+ *     ONE SUB-CASE WAS TYPED FIRST, NOT FABRICATED (WP-8 item 4, phase-8 design's
  *     documented-debt sweep — "Generic `turn.failed`, a typed outcome instead of the
  *     catch-all"): `TerminalizeTurnResultV1`'s `"unrecorded"` variant means
  *     `terminalizeTurn`'s own append of the terminal chat record ITSELF failed
@@ -295,28 +300,56 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *     unrecorded stale turn and startup orphan recovery retries terminalization") — and that
  *     variant already carries a REAL `FailureDtoV1`, produced by
  *     `turnTransactions.terminalize`'s own adapter (`store/adapters/turn-transactions.ts`'s
- *     `toFailureDto`), never a placeholder. `runTurnStart` (below) now propagates that DTO
+ *     `toFailureDto`), never a placeholder. `terminalFailureDto` (below) propagates that DTO
  *     verbatim as `turn.failed`'s own `failure` field instead of discarding it for the
- *     generic bucket. Every OTHER branch — `"recorded"` (an ordinary terminal chat record WAS
- *     durably written, whatever its real cause), the defensive `"illegal"` case, and the two
- *     practically-unreachable `"finalized"` cases above — still gets the SAME generic
- *     `PERSISTENCE_FAILED` DTO `branch`'s own text names, because nothing more specific is
- *     honestly available for them. THIS IS WHY a turn terminalized by Gate exhaustion and one
- *     terminalized by a backend failure still publish an IDENTICAL `turn.failed` payload today
- *     — both land on `"recorded"`, and `"recorded"` carries no further breakdown. Flagged, not
- *     smoothed over: a future task widening `TerminalizeTurnResultV1`/`FinalizeTurnResultV1`
- *     to echo the originally requested `TurnTerminalOutcome`/reason is what would let
- *     `"recorded"` split further.
+ *     generic bucket — unchanged by this task.
+ *
+ *     GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED (this task's own follow-up to WP-8 item 4):
+ *     every OTHER branch — `"recorded"` (an ordinary terminal chat record WAS durably written,
+ *     whatever its real cause), the defensive `"illegal"` case, and the two
+ *     practically-unreachable `"finalized"` cases above — USED TO get the SAME generic
+ *     `PERSISTENCE_FAILED` DTO regardless of cause, which is why a Gate-exhausted turn and a
+ *     backend-failed turn published byte-identical `turn.failed` payloads: both land on
+ *     `"recorded"`, and `"recorded"` used to carry no further breakdown at all.
+ *     `core/turns/model/terminalize.ts`'s `TerminalizeTurnResultV1` now echoes back the
+ *     ORIGINALLY REQUESTED `TurnTerminalOutcome` and `TerminalizeTurnInputV1.reason` on BOTH
+ *     the `"recorded"` and `"unrecorded"` variants, never discarded. `run-turn.ts` already
+ *     passed a real, closed `OperationalFailureCode` as `reason` for several call sites before
+ *     this task (Gate exhaustion's own `"GATE_RETRY_EXHAUSTED"`; a finalize CAS/deadline
+ *     failure's own `FailureDtoV1.code`, e.g. `"TURN_DEADLINE_EXCEEDED"`/`"PERSISTENCE_FAILED"`);
+ *     the one gap was the agent-backend-failure call site (`outcome.kind === "failed"` in
+ *     `run-turn.ts`'s retry loop), which passed `reason: undefined` — now `"BACKEND_FAILED"`,
+ *     the code the vocabulary already reserved for exactly this (that call site's own comment).
+ *     `terminalFailureDto` (below) narrows the echoed `reason` with `isOperationalFailureCode`
+ *     — a TYPED discriminant, never a string match on `safeMessage` prose (fragile: a reworded
+ *     message would silently break a prose match, where a closed code union cannot) — and uses
+ *     it as this failure's `code` when it recognizes one THAT ITS OWN WIRE SCHEMA ALSO ACCEPTS
+ *     WITH BARE `details`: `"APPLY_SOURCE_CHANGED"`/`"APPLY_STALE"` are excluded even though
+ *     they ARE real operational-failure codes a finalize CAS failure can legitimately pass as
+ *     `reason` — their own schema variants require a typed `details.part` this layer only has
+ *     the bare code string for, never the original detail (`terminalFailureDto`'s own
+ *     `FAILURE_CODES_NEEDING_TYPED_DETAILS`, below). Every other unusable `"recorded"` reason
+ *     (e.g. `undefined`, or a `CommandRejectionCode` from the disjoint command-rejection
+ *     vocabulary such as `"TURN_ALREADY_ACTIVE"`) still falls back to the generic
+ *     `PERSISTENCE_FAILED` bucket exactly as before — nothing invented for causes this
+ *     composition genuinely cannot distinguish (the attempt-budget/deadline/gate-fold-error
+ *     call sites, none of which pass a typed `reason` today). `"unrecorded"`'s REAL
+ *     adapter-level `FailureDtoV1` still wins outright over the echoed reason: that failure
+ *     describes something more specific (the append itself broke) than why the turn
+ *     terminalized in the first place.
  *
  *     A widened `TurnTerminalPayloadV1` (a brand-new wire field distinguishing
- *     recorded/unrecorded) was considered and rejected for this task:
- *     `TurnTerminalPayloadV1` is a `z.strictObject` shared verbatim by
- *     `turn.completed`/`turn.failed`/`turn.cancelled` and is constructed as typed literals in
- *     `ui/app`/`ui/workspace` test fixtures this task does not own — a new REQUIRED field
- *     there ripples into files outside this task's scope, and an optional field would break
- *     `event-payload.ts`'s own "nullable, never optional" convention for a payload the KCC
- *     spec already fixes verbatim (§9). Enriching the EXISTING `failure` field's VALUE, as
- *     done here, needs no schema change and stays inside this file.
+ *     recorded/unrecorded, or Gate-exhaustion/backend-failure) was considered and rejected —
+ *     unchanged reasoning from WP-8 item 4: `TurnTerminalPayloadV1` is a `z.strictObject`
+ *     shared verbatim by `turn.completed`/`turn.failed`/`turn.cancelled` and is constructed as
+ *     typed literals in `ui/app`/`ui/workspace` test fixtures this task does not own — a new
+ *     REQUIRED field there ripples into files outside this task's scope, and an optional field
+ *     would break `event-payload.ts`'s own "nullable, never optional" convention for a payload
+ *     the KCC spec already fixes verbatim (§9). Enriching the EXISTING `failure` field's VALUE,
+ *     as done here, needs no schema change AND touches no such fixture at all: neither
+ *     `GATE_RETRY_EXHAUSTED` nor `BACKEND_FAILED` appears in any `ui/app`/`ui/workspace` test
+ *     literal today, and `event-payload.test.ts`'s own closure test already proved every code
+ *     this can now produce round-trips `turn.failed`'s wire schema.
  *
  * HARD RULES OBSERVED: no cast anywhere; `wrap()` at the async boundary inside `turn.cancel`'s
  * `launchOperation` closure AND at the outer boundary `launchOperation` itself wraps
@@ -351,14 +384,6 @@ function turnStateChangedEvent(
 }
 
 // --- turn.start — real, composing `runTurn` ------------------------------------------------
-
-/**
- * No `core/ports` surface sources the compiled system-prompt text (see this file's header)
- * — retained as an explicit, documented placeholder, mirroring `kernel.ts`'s own
- * `PLACEHOLDER_GIT_STATUS`, never silently invented as if it were real.
- */
-const TURN_START_SYSTEM_PROMPT_PLACEHOLDER =
-  "You are termcraft's page-authoring agent. Edit only files under the given workspace.";
 
 /** The real staging store's own page-file convention, transcribed from `core/turns/model/candidate.ts`'s identical constant (that file's own header cites `store/sandbox/model/staging-store.ts`'s `stageAllFiles`). */
 function pageFileRelPath(pageSlug: PageSlug): string {
@@ -575,6 +600,55 @@ function toAdmissionSelection(selection: SelectionSnapshotV1 | null): ChatSelect
 }
 
 /**
+ * The two `OperationalFailureCode`s whose OWN wire schema demands more than the general
+ * bounded-`details` shape (`core/protocol/model/failure.ts`'s `applySourceChangedFailureSchema`/
+ * `applyStaleFailureSchema` — each requires a typed `details.part`). `TerminalizeTurnResultV1`
+ * only echoes back a bare `reason: string`, never the typed detail that produced it, so
+ * `terminalFailureDto` below cannot honestly reconstruct either shape — reusing the code with
+ * an empty `details` would build a `FailureDtoV1` `turnTerminalPayloadV1Schema` itself rejects.
+ * Excluded from reuse, not silently risked.
+ */
+const FAILURE_CODES_NEEDING_TYPED_DETAILS: ReadonlySet<string> = new Set([
+  "APPLY_SOURCE_CHANGED",
+  "APPLY_STALE",
+]);
+
+/**
+ * `turn.failed`'s `failure` DTO for every `RunTurnResultV1` that did not commit — this file's
+ * header, "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED". `"unrecorded"`'s REAL adapter-level
+ * `FailureDtoV1` always wins first (unchanged from WP-8 item 4). Otherwise, a `"recorded"`
+ * result's echoed `TerminalizeTurnResultV1.reason` (`core/turns/model/terminalize.ts`) becomes
+ * this failure's `code` when — and only when — `isOperationalFailureCode` recognizes it as a
+ * real, closed `OperationalFailureCode` NOT in {@link FAILURE_CODES_NEEDING_TYPED_DETAILS}: a
+ * TYPED discriminant, never a match on `safeMessage` prose. Every other case (no reason, an
+ * unrecognized one, one needing typed details this layer does not have, or the defensive
+ * `"illegal"`/practically-unreachable `"finalized"` branches) falls back to the same generic
+ * `PERSISTENCE_FAILED` bucket this file has always used — nothing invented for a cause this
+ * composition genuinely cannot distinguish.
+ */
+function terminalFailureDto(result: RunTurnResultV1, branch: string): FailureDtoV1 {
+  if (result.kind === "terminalized" && result.result.kind === "unrecorded") {
+    return result.result.failure;
+  }
+  const reason =
+    result.kind === "terminalized" && result.result.kind === "recorded"
+      ? result.result.reason
+      : undefined;
+  const code =
+    reason !== undefined &&
+    isOperationalFailureCode(reason) &&
+    !FAILURE_CODES_NEEDING_TYPED_DETAILS.has(reason)
+      ? reason
+      : "PERSISTENCE_FAILED";
+  return {
+    code,
+    retryable: false,
+    safeMessage: `the turn ended without committing (${branch})`,
+    details: {},
+  };
+}
+
+/**
  * The whole `turn.start` composition, run inside `launchOperation`'s own async closure (see
  * this file's header for the full recipe). Every port call is `await wrap(...)`-ed — code
  * after each await calls `context.publishOperationEvent`/`context.setActiveTurnId`, both of
@@ -660,6 +734,10 @@ async function runTurnStart(
   // pins") — see this file's header, "candidatePins," for the full rationale. No active page
   // means nothing to fold: an empty candidate list then is an honest empty, not a refusal.
   const candidatePins: AdmissionCandidatePinV1[] = [];
+  // The prompt library's own `openPins` list (phase-8 WP-3) — folded in this SAME loop, from
+  // the SAME `PinReader.fold` result `candidatePins` is built from, never a second port call
+  // and never a fabricated pin text (this file's header, "`baseTask.systemPrompt`").
+  const openPinsForPrompt: { pageSlug: PageSlug; text: string }[] = [];
   const readSetPins: { pageSlug: PageSlug; base: ReadSetAppendBaseV1 }[] = [];
   if (activePageSlug !== null) {
     const pins = await wrap(context.deps.pinReader.fold(activePageSlug));
@@ -672,6 +750,7 @@ async function runTurnStart(
     for (const pin of pins) {
       if (pin.status !== "open") continue;
       candidatePins.push({ pageSlug: activePageSlug, pinId: pin.pinId });
+      openPinsForPrompt.push({ pageSlug: activePageSlug, text: pin.text });
     }
 
     // `readSet.pins` (see this file's header, "readSet.pins," for the full WP-6 citation):
@@ -706,7 +785,9 @@ async function runTurnStart(
     workspace: {
       pages,
       manifestSlice,
-      runtimeDocs: [],
+      // NOW REAL (phase-8 WP-3) — see this file's header, "`runtimeDocs`," for the full
+      // citation.
+      runtimeDocs: context.deps.agentPromptSource.runtimeDocs(),
       readSet: {
         manifest: manifestSnapshot,
         canonicalPages,
@@ -716,9 +797,22 @@ async function runTurnStart(
     },
   };
 
+  // See this file's header, "`baseTask.systemPrompt`" — every field here traces to a fact
+  // this handler already holds honestly: `activePageSlug`/`pageSlugs` from the manifest
+  // slice above, `kitApiVersion` from the already-wired `ExportRenderPort`, `openPins` from
+  // the SAME pin-fold loop above `candidatePins` is built from.
+  const promptContext: AgentPromptContextV1 = {
+    activePageSlug,
+    pageOrder: pageSlugs,
+    kitApiVersion: context.deps.exportRender.runtimeDeclaration.currentKitApiVersion,
+    openPins: openPinsForPrompt,
+  };
+
   const baseTask: Omit<AgentTask, "fence"> = {
     workspacePath: "/unset", // always overridden by runTurn from the minted turn workspace
-    systemPrompt: TURN_START_SYSTEM_PROMPT_PLACEHOLDER,
+    // NOW REAL (phase-8 WP-3) — see this file's header, "`baseTask.systemPrompt`," for the
+    // full citation.
+    systemPrompt: context.deps.agentPromptSource.systemPrompt(promptContext),
     userMessage: payload.text,
     model: resolvedAgent.model,
     effort: resolvedAgent.effort,
@@ -913,27 +1007,16 @@ async function runTurnStart(
     ];
   }
 
-  // See this file's header, "THE TERMINAL EVENT": neither `FinalizeTurnResultV1` nor
-  // `TerminalizeTurnResultV1` echoes back which `TurnTerminalOutcome` was originally
-  // requested, nor WHY, so a precise cancelled/failed/stale/interrupted distinction — let
-  // alone Gate-exhaustion-vs-backend-failure — is not honestly constructible here. What IS
-  // honestly available (WP-8 item 4 — see the header's "ONE SUB-CASE IS TYPED NOW"): a
-  // `"terminalized"`/`"unrecorded"` result already carries the REAL `FailureDtoV1`
-  // `turnTransactions.terminalize` itself returned — propagated verbatim below instead of
-  // replaced by the generic bucket every other branch still falls into.
+  // See this file's header, "THE TERMINAL EVENT" / "GATE-EXHAUSTION-VS-BACKEND-FAILURE —
+  // CLOSED": the wire `outcome` field still only ever publishes `"failed"` here (widening it
+  // would misrepresent a guess as spec-fixed fact), but `failure`'s own `code` is now as
+  // precise as `TerminalizeTurnResultV1`'s echoed `reason` honestly allows — `terminalFailureDto`
+  // (above) does the narrowing.
   const branch =
     result.kind === "finalized"
       ? `finalized/${result.result.kind}`
       : `terminalized/${result.result.kind}`;
-  const propagatedFailure: FailureDtoV1 =
-    result.kind === "terminalized" && result.result.kind === "unrecorded"
-      ? result.result.failure
-      : {
-          code: "PERSISTENCE_FAILED",
-          retryable: false,
-          safeMessage: `the turn ended without committing (${branch})`,
-          details: {},
-        };
+  const propagatedFailure = terminalFailureDto(result, branch);
   console.warn(
     `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing turn.failed (see ./turn.ts's header, "THE TERMINAL EVENT")`,
   );

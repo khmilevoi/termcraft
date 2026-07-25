@@ -14,6 +14,7 @@ import {
 import type { ChatHeaderV1, ChatLoadResultV1, ChatReader, PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -208,6 +209,7 @@ function buildTestContext(options?: {
     exportRender: createFakeExportRenderPort(),
     exportPublish: options?.exportPublish ?? createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    agentPromptSource: createFakeAgentPromptSource(),
     clock,
   };
   const frameTokenLedger = createFrameTokenLedger();

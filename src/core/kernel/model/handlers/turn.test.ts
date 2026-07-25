@@ -24,6 +24,7 @@ import type {
 import {
   type FakeChatStore,
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -226,6 +227,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       agentRegistry: createFakeAgentRegistry([
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
+      agentPromptSource: createFakeAgentPromptSource(),
       clock,
       ...overrides,
     };
@@ -724,6 +726,125 @@ describe('turnHandlers["turn.start"]', () => {
     );
   });
 
+  test("turn.start builds the real AgentPromptContextV1 and sends the agent-prompt library's composed system prompt and runtime docs — not the placeholder, not an honest empty (phase-8 WP-3)", async () => {
+    const HOME = "home" as PageSlug;
+    const ABOUT = "about" as PageSlug;
+    const OPEN_PIN_ID = "pin-open";
+
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const pinStore = createFakePinStore();
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r1",
+      pinId: OPEN_PIN_ID,
+      element: "btn-1",
+      fx: 0.5,
+      fy: 0.5,
+      text: "make this gauge red",
+      ts: "2024-01-01T00:00:00.000Z",
+    });
+
+    const pageStore = createFakePageStore({
+      order: [HOME, ABOUT],
+      sources: new Map([
+        [
+          HOME,
+          { sourceHash: "a".repeat(64) as Sha256Hex, bytes: new TextEncoder().encode("home") },
+        ],
+        [
+          ABOUT,
+          { sourceHash: "b".repeat(64) as Sha256Hex, bytes: new TextEncoder().encode("about") },
+        ],
+      ]),
+    });
+
+    const staging = createFakeStagingService();
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const fakePrompts = createFakeAgentPromptSource({
+      systemPromptText: () => "the composed system prompt",
+      runtimeDocs: [{ relPath: "RUNTIME.md", sourcePath: "/fake/RUNTIME.md" }],
+    });
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      pageReader: pageStore,
+      staging,
+      agentPromptSource: fakePrompts,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "make this gauge red" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
+
+    // The prompt library was called with the honest AgentPromptContextV1 this handler holds.
+    const promptCall = fakePrompts.calls.find((c) => c.method === "systemPrompt");
+    if (promptCall?.method !== "systemPrompt") throw new Error("expected a systemPrompt call");
+    expect(promptCall.context).toEqual({
+      activePageSlug: HOME,
+      pageOrder: [HOME, ABOUT],
+      kitApiVersion: 1,
+      openPins: [{ pageSlug: HOME, text: "make this gauge red" }],
+    });
+    expect(fakePrompts.calls.some((c) => c.method === "runtimeDocs")).toBe(true);
+
+    // The fake's own runtimeDocs() return value reached the staged workspace input verbatim.
+    const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
+    if (createCall?.method !== "createTurnWorkspace") {
+      throw new Error("expected a createTurnWorkspace call");
+    }
+    expect(createCall.input.runtimeDocs).toEqual([
+      { relPath: "RUNTIME.md", sourcePath: "/fake/RUNTIME.md" },
+    ]);
+  });
+
   test("real composition: admission -> attempt -> a genuine Gate retry -> finalize -> turn.completed, activeTurnId set then cleared", async () => {
     // A deliberately minimal fixture (zero pages) isolates the admission/attempt/gate-retry/
     // finalize composition this test proves without needing byte-level per-page plumbing —
@@ -838,15 +959,18 @@ describe('turnHandlers["turn.start"]', () => {
   });
 
   // WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all",
-  // phase-8 design's documented-debt sweep): the three tests below prove exactly what
-  // `./turn.ts`'s own header now documents under "THE TERMINAL EVENT" / "ONE SUB-CASE IS
-  // TYPED NOW" — Gate exhaustion and a backend failure are STILL not distinguishable at this
-  // arm (both terminalize normally, i.e. `"recorded"`, and `"recorded"` carries no further
-  // breakdown of why), while a genuinely different situation — the terminal record itself
-  // failing to persist (`"unrecorded"`) — now surfaces the REAL failure DTO instead of the
-  // same fabricated `PERSISTENCE_FAILED` bucket the other two share.
+  // phase-8 design's documented-debt sweep) plus its own gate-exhaustion-vs-backend-failure
+  // follow-up: the three tests below prove exactly what `./turn.ts`'s own header now documents
+  // under "THE TERMINAL EVENT" / "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED" — Gate
+  // exhaustion and a backend failure both still terminalize normally (i.e. `"recorded"`), but
+  // `"recorded"` now echoes back a typed `reason` (`core/turns/model/terminalize.ts`'s widened
+  // `TerminalizeTurnResultV1`), so the two publish DIFFERENT `turn.failed` failure codes
+  // (`"GATE_RETRY_EXHAUSTED"` vs. `"BACKEND_FAILED"`) instead of the same fabricated
+  // `PERSISTENCE_FAILED` bucket they both used to share. A genuinely different situation — the
+  // terminal record itself failing to persist (`"unrecorded"`) — still surfaces the REAL
+  // adapter-level failure DTO instead, exactly as before.
 
-  test("Gate exhaustion terminalizes the turn — turn.failed carries the generic PERSISTENCE_FAILED failure DTO (compare with the backend-failure test below: byte-identical)", async () => {
+  test("Gate exhaustion terminalizes the turn — turn.failed carries a typed GATE_RETRY_EXHAUSTED failure DTO (compare with the backend-failure test below: a DIFFERENT code, not byte-identical anymore)", async () => {
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
     if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
@@ -930,7 +1054,7 @@ describe('turnHandlers["turn.start"]', () => {
       changedPages: [],
       warnings: [],
       failure: {
-        code: "PERSISTENCE_FAILED",
+        code: "GATE_RETRY_EXHAUSTED",
         retryable: false,
         safeMessage: "the turn ended without committing (terminalized/recorded)",
         details: {},
@@ -939,7 +1063,7 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.machines.turn.phase()).toBe("idle");
   });
 
-  test("a backend failure terminalizes the turn — turn.failed carries the SAME generic PERSISTENCE_FAILED failure DTO the Gate-exhaustion test above does: 'THE TERMINAL EVENT' arm genuinely cannot tell WHY a termination happened", async () => {
+  test("a backend failure terminalizes the turn — turn.failed carries a typed BACKEND_FAILED failure DTO, DIFFERENT from the Gate-exhaustion test above: 'GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED' makes the two tellable apart", async () => {
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
     if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
@@ -994,16 +1118,17 @@ describe('turnHandlers["turn.start"]', () => {
     const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
     if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
     const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
-    // IDENTICAL shape to the Gate-exhaustion test's expected payload above — the honest
-    // limitation the header documents: both causes reach "terminalized"/"recorded", and that
-    // variant alone carries no further breakdown of why.
+    // DIFFERENT `failure.code` from the Gate-exhaustion test's expected payload above — proof
+    // a consumer CAN tell the two apart now, even though both still reach
+    // "terminalized"/"recorded": `run-turn.ts`'s own `outcome.kind === "failed"` call site now
+    // passes `"BACKEND_FAILED"` as `terminalizeTurn`'s `reason`, echoed back verbatim.
     expect(terminalEvent.payload).toEqual({
       turnId,
       outcome: "failed",
       changedPages: [],
       warnings: [],
       failure: {
-        code: "PERSISTENCE_FAILED",
+        code: "BACKEND_FAILED",
         retryable: false,
         safeMessage: "the turn ended without committing (terminalized/recorded)",
         details: {},
@@ -1012,7 +1137,7 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.machines.turn.phase()).toBe("idle");
   });
 
-  test("when the terminal record itself fails to persist ('unrecorded'), turn.failed propagates the REAL failure DTO from turnTransactions.terminalize instead of the generic bucket the two tests above share (WP-8 item 4: a typed outcome instead of the catch-all)", async () => {
+  test("when the terminal record itself fails to persist ('unrecorded'), turn.failed propagates the REAL failure DTO from turnTransactions.terminalize instead of the generic bucket a reason-less recorded termination would still fall into (WP-8 item 4: a typed outcome instead of the catch-all)", async () => {
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
     if ("code" in chatHeader) throw new Error("unexpected chat-create failure");

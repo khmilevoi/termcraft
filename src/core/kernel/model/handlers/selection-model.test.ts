@@ -16,6 +16,7 @@ import type { BackendCapabilities, PageSourceV1 } from "core/ports";
 import {
   type FakeProjectStore,
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -140,6 +141,7 @@ function buildTestContext(options?: {
       hostSupervisor: createFakeHostSupervisorPort(),
       exportRender: createFakeExportRenderPort(),
       exportPublish: createFakeExportPublish(),
+      agentPromptSource: createFakeAgentPromptSource(),
       agentRegistry: createFakeAgentRegistry(
         options?.backends ?? [createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES })],
       ),

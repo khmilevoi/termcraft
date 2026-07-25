@@ -401,7 +401,12 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     }
     if (outcome.kind === "failed") {
       bridge("beginTerminalization");
-      return terminalize("failed", outcome.message, undefined, candidateRoot);
+      // `"BACKEND_FAILED"` (`core/protocol/model/failure.ts`'s own closed vocabulary) rather
+      // than `undefined`: this `reason` is what `terminalize.ts`'s widened
+      // `TerminalizeTurnResultV1` now echoes back to `handlers/turn.ts`, which is otherwise
+      // unable to tell an agent-backend failure apart from Gate exhaustion on `turn.failed`
+      // (both terminalize as an ordinary `"recorded"` outcome) — see that file's header.
+      return terminalize("failed", outcome.message, "BACKEND_FAILED", candidateRoot);
     }
     if (outcome.kind === "backend-unhealthy") {
       // See this file's header: BACKEND-UNHEALTHY DIVERGENCE.

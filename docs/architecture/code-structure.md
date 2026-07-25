@@ -402,6 +402,14 @@ vendor tier's own pre-split run-loop file.
 - `src/agent/session/model/prompt.ts` — `buildPrompt`, the SHARED resume-delta /
   fresh-seed prompt assembly; moved out of the vendor tier because nothing about
   assembling this string is Claude-specific
+- `src/agent/prompt/index.ts` — the agent-prompt library (phase-8 WP-3):
+  `createProductionAgentPromptSource`, implementing `core/ports/agent-prompt.ts`'s
+  `AgentPromptSource`. Composes the turn's SYSTEM prompt (role, §5.8 design-code
+  rules including the slug mask, the page-file layout, answer-style guidance, plus
+  the live `AgentPromptContextV1`) and returns the two runtime-doc files
+  (`RUNTIME.md`, `runtime.d.ts`) as paths into the installed package. Distinct
+  from, and does not replace, `agent/session/model/prompt.ts` above — that file
+  composes the per-attempt USER message; this one composes the SYSTEM prompt
 - `src/agent/health/model/errors.ts` — `AgentHealthProbeError`, the one
   backend-generic error in the shared tier
 - `src/agent/health/model/probe.ts` — `runHealthProbe`, the SHARED probe policy: the
@@ -497,6 +505,10 @@ vendor tier's own pre-split run-loop file.
 
 **Ports and the composition boundary (items 4, 5, 7, 9, 10)**
 
+- `src/core/ports/agent-prompt.ts` — `AgentPromptContextV1`/`AgentPromptSource`
+  (phase-8 WP-3): `core` declares the port, `agent/prompt/` implements it,
+  mirroring the `AgentBackend`/`GateRunner` placement precedent this section
+  already documents
 - `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
   uses as its port-placement illustration (item 5): `gate` declares it, `host`'s
   `src/host/adapters/smoke-renderer.ts` satisfies it over `runOneShotSession`

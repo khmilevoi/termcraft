@@ -27,3 +27,6 @@ export { createProductionClaudeBackend } from "./claude";
 // M18: the one-entry production `AgentRegistry` over the backend above (WP-2
 // Task 7 — see `agent/adapters/agent-registry.ts` for the mapping notes).
 export { createProductionAgentRegistry } from "./adapters/agent-registry";
+// phase-8 WP-3: the agent-prompt library — implements `core/ports/agent-prompt.ts`'s
+// `AgentPromptSource` (system prompt composition + runtime-doc file paths).
+export { createProductionAgentPromptSource } from "./prompt";

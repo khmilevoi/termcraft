@@ -439,7 +439,7 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
     });
   });
 
-  test('(f) attempt outcome "failed": terminalizeTurn with the failed record', async () => {
+  test('(f) attempt outcome "failed": terminalizeTurn with the failed record, reason "BACKEND_FAILED"', async () => {
     await context.start(async () => {
       const h = harness();
       const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
@@ -456,6 +456,14 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       if (result.kind !== "terminalized")
         throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
       expect(result.result.kind).toBe("recorded");
+      // Gate-exhaustion-vs-backend-failure follow-up to WP-8 item 4
+      // (`core/kernel/model/handlers/turn.ts`'s own header): this call site used to pass
+      // `reason: undefined`, the exact gap that left an agent-backend failure indistinguishable
+      // from Gate exhaustion (which already passed a typed `"GATE_RETRY_EXHAUSTED"` reason, test
+      // (c) above) once both reached `"recorded"`. `TerminalizeTurnResultV1.reason` now echoes
+      // the typed `"BACKEND_FAILED"` code back to the caller.
+      if (result.result.kind !== "recorded") throw new Error("expected recorded");
+      expect(result.result.reason).toBe("BACKEND_FAILED");
 
       const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
       if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
@@ -464,7 +472,7 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       }
       expect(terminalizeCall.input.record.outcome).toBe("error");
       expect(terminalizeCall.input.record.text).toBe("the backend crashed");
-      expect(terminalizeCall.input.record.reason).toBeUndefined();
+      expect(terminalizeCall.input.record.reason).toBe("BACKEND_FAILED");
 
       // Never reached freeze/validation/finalize.
       expect(h.staging.calls.map((c) => c.method)).toEqual(["createTurnWorkspace"]);

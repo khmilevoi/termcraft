@@ -575,18 +575,20 @@ describe("turnTerminalPayloadV1Schema (turn.completed/failed/cancelled)", () => 
     expect(turnTerminalPayloadV1Schema.safeParse(missing).success).toBe(false);
   });
 
-  // WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all"):
-  // `handlers/turn.ts` widened WHICH `failure` DTO it emits (see that file's header, "ONE
-  // SUB-CASE IS TYPED NOW") rather than the wire shape itself — no new field was added, so
-  // there is nothing new to round-trip here. What IS new: `turn.failed` can now honestly
-  // carry a REAL adapter-level code (e.g. `TRANSACTION_RECOVERY_CONFLICT`, propagated
-  // verbatim from `TurnTransactionService.terminalize`'s own failure) instead of always the
-  // same fabricated `PERSISTENCE_FAILED`. This asserts the closed `OperationalFailureCode`
-  // vocabulary already accepts every code a real termination failure can plausibly carry —
-  // including `GATE_RETRY_EXHAUSTED`/`BACKEND_FAILED`/`TURN_DEADLINE_EXCEEDED`, which the
-  // vocabulary has held since before this task but `handlers/turn.ts` still cannot reach (a
-  // separate, documented gap — see that file's header) — proving the WIRE FORMAT was never
-  // the obstacle to a more precise `turn.failed`.
+  // WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all") plus its
+  // own gate-exhaustion-vs-backend-failure follow-up: `handlers/turn.ts` widened WHICH
+  // `failure` DTO it emits (see that file's header, "ONE SUB-CASE WAS TYPED FIRST" /
+  // "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED") rather than the wire shape itself — no new
+  // field was added, so there is nothing new to round-trip here. What IS new across both
+  // landings: `turn.failed` can now honestly carry a REAL adapter-level code (e.g.
+  // `TRANSACTION_RECOVERY_CONFLICT`, propagated verbatim from
+  // `TurnTransactionService.terminalize`'s own failure), AND an ordinary `"recorded"`
+  // termination's own typed cause (`GATE_RETRY_EXHAUSTED`/`BACKEND_FAILED`/
+  // `TURN_DEADLINE_EXCEEDED`) — instead of always the same fabricated `PERSISTENCE_FAILED`.
+  // This asserts the closed `OperationalFailureCode` vocabulary already accepted every one of
+  // these codes even BEFORE `handlers/turn.ts` could reach them — proving the WIRE FORMAT was
+  // never the obstacle to a more precise `turn.failed`, only the missing echo `core/turns`
+  // now provides.
   test("accepts every operational-failure code a real termination can plausibly carry, on turn.failed", () => {
     for (const code of [
       "PERSISTENCE_FAILED",

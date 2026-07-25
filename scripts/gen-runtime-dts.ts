@@ -24,11 +24,15 @@
 //     specifiers (`./types`, `./model/reatom`, `./ui/gauge`). An ambient module declaration
 //     may not name a relative module (`Ambient module declaration cannot specify relative
 //     module name`), so the 21 chunks are FLATTENED into one `declare module "@termcraft/runtime"`
-//     block: every chunk's declarations are re-emitted verbatim with their `export` modifier
-//     stripped (so they become block-local), and `index.d.ts`'s own re-export list is replayed
-//     as bare `export { … }` / `export type { … }` statements. That reproduces the facade's
-//     public surface EXACTLY — `activeTokens`, which `model/tokens.ts` exports but
-//     `index.ts` does not, stays internal, as it must.
+//     block: every chunk's declarations are re-emitted verbatim with their `export` AND
+//     `declare` modifiers stripped (so they become block-local — a bare `declare function …`
+//     left in place after flattening is TS1038, "A 'declare' modifier cannot be used in an
+//     already ambient context", since the surrounding `declare module` block is already
+//     ambient; `stripDeclareModifier` below removes it the same way the `export ` strip does,
+//     for the same reason), and `index.d.ts`'s own re-export list is replayed as bare
+//     `export { … }` / `export type { … }` statements. That reproduces the facade's public
+//     surface EXACTLY — `activeTokens`, which `model/tokens.ts` exports but `index.ts` does
+//     not, stays internal, as it must.
 //
 //  2. THE EXTERNAL TYPE SURFACE STAYS BY REFERENCE, NOT INLINED. The emitted declarations
 //     reference three external identities: `@reatom/core` (`Atom`, `Computed`, `AtomLike`,
@@ -101,6 +105,7 @@ const REPO_ROOT = path.resolve(import.meta.dir, "..");
 const RUNTIME_DIR = path.join(REPO_ROOT, "src/runtime");
 const ENTRY = path.join(RUNTIME_DIR, "index.ts");
 const OUT_FILE = path.join(REPO_ROOT, "src/runtime/generated/runtime-dts.ts");
+const DTS_OUT_FILE = path.join(REPO_ROOT, "src/runtime/generated/runtime.generated.d.ts");
 const MODULE_SPECIFIER = "@termcraft/runtime";
 /** The emitted chunk that owns the JSX factory re-exports, and the upstream scope it re-exports. */
 const JSX_CHUNK = "model/jsx.d.ts";
@@ -205,6 +210,26 @@ function isRelative(specifier: string): boolean {
   return specifier.startsWith(".");
 }
 
+/**
+ * Strip a leading `declare ` modifier from one declaration's first line. TypeScript's
+ * per-file declaration emit always places `declare` — when present — as the very first token
+ * of a top-level VALUE declaration's first line (`function`/`const`/`let`/`var`/`class`/
+ * `namespace`/`enum`; a pure `interface`/`type` never carries it, since those have no runtime
+ * existence to declare ambient). An exported value gets `export declare …`; a module-private
+ * helper referenced only by another declaration's type (`ALIGN`/`JUSTIFY` backing `BoxProps`)
+ * gets a bare `declare …` with no `export`. Both forms describe the CHUNK's own module
+ * boundary — "this value exists outside this file" — which flattening dissolves: every chunk
+ * lands inside one already-ambient `declare module "@termcraft/runtime"` block, where a
+ * second, nested `declare` is invalid (TS1038, "A 'declare' modifier cannot be used in an
+ * already ambient context"). This mirrors the `export ` strip below for the same reason.
+ * Continuation lines of a multi-line declaration (an object-type literal spanning several
+ * lines, e.g. `ALIGN`'s body) never repeat the leading token, so a single-line, first-token-only
+ * check covers the whole statement without touching its body.
+ */
+function stripDeclareModifier(line: string): string {
+  return line.startsWith("declare ") ? line.slice("declare ".length) : line;
+}
+
 /** Record one external specifier's names into the hoisted-import table. */
 function hoist(
   into: Map<string, HoistedImport>,
@@ -272,13 +297,13 @@ function flattenChunk(
           reason: `unrecognised exported declaration in ${file}: ${trimmedEnd}`,
         });
       if (nameMatch[1] !== undefined) declared.push(nameMatch[1]);
-      out.push(local);
+      out.push(stripDeclareModifier(local));
       continue;
     }
 
     const nameMatch = DECLARED_NAME_RE.exec(trimmedEnd);
     if (nameMatch?.[1] !== undefined) declared.push(nameMatch[1]);
-    out.push(trimmedEnd);
+    out.push(stripDeclareModifier(trimmedEnd));
   }
 
   return { file, body: out.join("\n").trim(), declared };
@@ -492,7 +517,17 @@ function main(): RuntimeDtsEmitError | null {
 
   fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
   fs.writeFileSync(OUT_FILE, renderModule(declaration));
+  // A second, plain-text artifact: the SAME declaration text as `RUNTIME_DTS` above, but as
+  // an ordinary `.d.ts` file rather than a JS string constant. `RUNTIME_DTS` serves the
+  // Gate's in-process `runtimeDts: string` parameter; this file serves the agent-prompt
+  // library (phase-8 WP-3, `agent/prompt/model/runtime-docs.ts`), which stages a real,
+  // human/agent-readable declaration file into the turn workspace BY PATH — "under npm these
+  // are ordinary files inside the installed package" (phase-8 design §WP-3). Both are written
+  // from the SAME `declaration` string in this one run, so they cannot drift from each other;
+  // `runtime-dts.test.ts`'s own drift test pins that.
+  fs.writeFileSync(DTS_OUT_FILE, declaration);
   console.log(`wrote ${OUT_FILE} (${String(declaration.length)} chars of declaration)`);
+  console.log(`wrote ${DTS_OUT_FILE}`);
   return null;
 }
 

@@ -16,6 +16,7 @@ import type {
 } from "core/ports";
 import {
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -287,6 +288,7 @@ function buildDeps(overrides?: { readonly chatMutations?: ChatMutations }): Kern
     exportRender: createFakeExportRenderPort(),
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    agentPromptSource: createFakeAgentPromptSource(),
     clock: makeClock(1_700_000_000_000),
   };
 }

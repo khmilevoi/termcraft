@@ -13,6 +13,7 @@ import {
 } from "core/machines";
 import {
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -85,6 +86,7 @@ function buildDeps(): KernelDeps {
     exportRender: createFakeExportRenderPort(),
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    agentPromptSource: createFakeAgentPromptSource(),
     clock,
   };
 }

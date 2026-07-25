@@ -4,7 +4,7 @@ import path from "node:path";
 
 import * as errore from "errore";
 
-import { createProductionAgentRegistry } from "agent";
+import { createProductionAgentPromptSource, createProductionAgentRegistry } from "agent";
 import { type KernelDeps, createKernel } from "core";
 import type { Kernel } from "core/kernel";
 import type { GateRunner, PreviewFrameV1, PreviewSession } from "core/ports";
@@ -181,6 +181,7 @@ async function interactiveShell(
     }),
     exportPublish: createExportPublishAdapter(storeAdapterDeps),
     agentRegistry,
+    agentPromptSource: createProductionAgentPromptSource(),
     clock: systemClock,
   };
 

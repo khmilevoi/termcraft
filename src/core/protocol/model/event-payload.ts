@@ -874,21 +874,25 @@ const turnWarningV1Schema = z.strictObject({
  * parallel arrays whose index-correlation is easy to break.
  *
  * WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all",
- * phase-8 design's documented-debt sweep): `handlers/turn.ts`'s own composer cannot
- * honestly reconstruct WHY a non-completed turn ended (Gate exhaustion vs. a backend
- * failure vs. a deadline vs. ... — see that file's header, "THE TERMINAL EVENT") from what
- * `core/turns`' `runTurn` returns it, so `outcome` still only ever carries `"failed"` for
- * every one of those causes today; widening `outcome` itself would misrepresent a guess as
- * spec-fixed fact (§7.2 fixes this vocabulary verbatim). What DID change: `failure` is no
- * longer unconditionally a fabricated `PERSISTENCE_FAILED` DTO — when the terminal chat
- * record itself failed to persist, `failure` now carries the REAL adapter-level
- * `FailureDtoV1` the store produced, propagated verbatim. No NEW field was added here (a
- * brand-new wire discriminant was considered and rejected — `handlers/turn.ts`'s own header
- * has the full reasoning: this type is constructed as typed literals in `ui/app`/
- * `ui/workspace` test fixtures outside that task's scope, so a new required field would
- * ripple beyond it, and an optional one would break this file's own "nullable, never
- * optional" convention for a KCC-fixed payload) — only WHICH already-typed `FailureDtoV1`
- * gets chosen changed, so no schema edit was needed for that half of the fix.
+ * phase-8 design's documented-debt sweep) plus its own gate-exhaustion-vs-backend-failure
+ * follow-up: `handlers/turn.ts`'s own composer still cannot honestly reconstruct WHICH
+ * `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) a turn ended on — so
+ * `outcome` still only ever carries `"failed"` for every non-completed cause today; widening
+ * `outcome` itself would misrepresent a guess as spec-fixed fact (§7.2 fixes this vocabulary
+ * verbatim). What DID change, across both landings: `failure` is no longer unconditionally a
+ * fabricated `PERSISTENCE_FAILED` DTO — when the terminal chat record itself failed to
+ * persist, `failure` carries the REAL adapter-level `FailureDtoV1` the store produced,
+ * propagated verbatim (WP-8 item 4); and an ORDINARY `"recorded"` termination now surfaces a
+ * real, closed `OperationalFailureCode` too when `core/turns` echoed one back as `reason`
+ * (e.g. Gate exhaustion's `"GATE_RETRY_EXHAUSTED"`, a backend failure's `"BACKEND_FAILED"` —
+ * see `handlers/turn.ts`'s own header, "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED"). No NEW
+ * field was added for either landing (a brand-new wire discriminant was considered and
+ * rejected both times — `handlers/turn.ts`'s own header has the full reasoning: this type is
+ * constructed as typed literals in `ui/app`/`ui/workspace` test fixtures outside either task's
+ * scope, so a new required field would ripple beyond it, and an optional one would break this
+ * file's own "nullable, never optional" convention for a KCC-fixed payload) — only WHICH
+ * already-typed `FailureDtoV1`/`code` gets chosen changed, so no schema edit was needed for
+ * either half of the fix.
  */
 export interface TurnTerminalPayloadV1 {
   readonly turnId: UUIDv7;

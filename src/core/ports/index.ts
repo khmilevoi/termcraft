@@ -34,6 +34,9 @@ export type {
 } from "./agent-backend";
 export type { AgentRegistry } from "./agent-registry";
 
+// ---- agent prompt library (phase-8 WP-3) ------------------------------------------------
+export type { AgentPromptContextV1, AgentPromptSource } from "./agent-prompt";
+
 // ---- project lifecycle -----------------------------------------------------------------
 export type {
   ColorCapabilityV1,

@@ -37,5 +37,26 @@
       "unknown",
     ],
   },
-  "ignorePatterns": ["design", "design-prompts", "docs", "src/host/session/fixtures"],
+  "ignorePatterns": [
+    "design",
+    "design-prompts",
+    "docs",
+    "src/host/session/fixtures",
+    // This single file, not the whole `src/runtime/generated` directory: it is the ONE
+    // artifact in the repo emitted verbatim from TypeScript's own declaration printer
+    // (scripts/gen-runtime-dts.ts), whose indentation (4-space, tsc's fixed convention)
+    // and line-wrapping are tsc's, not this project's oxfmt style. The committed bytes
+    // must stay exactly what a fresh `tsc` emit produces — `runtime-dts.test.ts`'s drift
+    // check diffs them against `bun run scripts/gen-runtime-dts.ts --stdout`, and a
+    // second test pins this file byte-for-byte against the `RUNTIME_DTS` string constant
+    // in the sibling `runtime-dts.ts` (which oxfmt cannot reach into either — it is a
+    // template-literal value, not formattable code). Running this file through oxfmt
+    // would mean piping tsc's emit through a SECOND formatter inside the generator; that
+    // is mechanically possible (oxfmt's CLI takes stdin via `--stdin-filepath`) but was
+    // not done here because the only objection is cosmetic byte-parity between two
+    // formatters' conventions, not a content defect — oxlint parses this file clean with
+    // no exception (`.oxlintrc.json` carries none for it), which is what actually matters
+    // for the artifact the malformed-`declare` bug was about.
+    "src/runtime/generated/runtime.generated.d.ts",
+  ],
 }

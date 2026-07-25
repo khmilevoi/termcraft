@@ -23,6 +23,7 @@ import {
   type FakeChatStore,
   type FakeProjectStore,
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -210,6 +211,7 @@ function buildTestContext(overrides?: {
       exportRender: createFakeExportRenderPort(),
       exportPublish: createFakeExportPublish(),
       agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+      agentPromptSource: createFakeAgentPromptSource(),
       clock,
     };
 

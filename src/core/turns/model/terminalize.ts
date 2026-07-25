@@ -87,10 +87,36 @@ export interface TerminalizeTurnInputV1 {
   readonly candidateRoot?: string | null;
 }
 
+/**
+ * `outcome`/`reason` on the `"recorded"`/`"unrecorded"` variants (WP-8 item 4 follow-up —
+ * gate-exhaustion-vs-backend-failure indistinguishability): the ORIGINALLY REQUESTED
+ * {@link TurnTerminalOutcome} and this call's own `TerminalizeTurnInputV1.reason`, echoed back
+ * verbatim rather than discarded. Before this, `"recorded"` carried only an opaque
+ * `TurnCommitV1` (`{transactionId: string}`) and `"unrecorded"` only the append failure itself
+ * — neither said WHICH outcome/reason the caller passed in, so `handlers/turn.ts` (the one
+ * production caller, via `run-turn.ts`'s `terminalize()` helper) could not honestly rebuild a
+ * `turn.failed` `failure.code` more specific than a fabricated `PERSISTENCE_FAILED` bucket, even
+ * though `run-turn.ts` already passes a real `OperationalFailureCode` string as `reason` for
+ * several call sites (e.g. Gate exhaustion's `"GATE_RETRY_EXHAUSTED"`). `reason` stays the same
+ * loosely-typed `string | undefined` `TerminalizeTurnInputV1.reason` already is (it is also used
+ * for non-operational-failure tokens like `"unhealthy_unconfirmed_exit"`); the caller is the one
+ * that narrows it with `isOperationalFailureCode` before trusting it as a wire failure code —
+ * see `handlers/turn.ts`'s own header.
+ */
 export type TerminalizeTurnResultV1 =
   | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
-  | { readonly kind: "recorded"; readonly commit: TurnCommitV1 }
-  | { readonly kind: "unrecorded"; readonly failure: FailureDtoV1 };
+  | {
+      readonly kind: "recorded";
+      readonly commit: TurnCommitV1;
+      readonly outcome: TurnTerminalOutcome;
+      readonly reason?: string;
+    }
+  | {
+      readonly kind: "unrecorded";
+      readonly failure: FailureDtoV1;
+      readonly outcome: TurnTerminalOutcome;
+      readonly reason?: string;
+    };
 
 /**
  * §7.2 verbatim: "`failed` persists as a `system:error` record with typed outcome
@@ -170,6 +196,8 @@ export async function terminalizeTurn(
   // The turn is DONE either way now — see this file's header, "CANDIDATE RETIREMENT".
   await retireIfCandidateFrozen(deps.staging, input.candidateRoot);
 
-  if ("code" in result) return { kind: "unrecorded", failure: result };
-  return { kind: "recorded", commit: result };
+  if ("code" in result) {
+    return { kind: "unrecorded", failure: result, outcome: input.outcome, reason: input.reason };
+  }
+  return { kind: "recorded", commit: result, outcome: input.outcome, reason: input.reason };
 }

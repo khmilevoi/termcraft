@@ -4,6 +4,7 @@ import { type KernelDeps, createKernel } from "core";
 import type { EventEnvelopeV1 } from "core/mailbox";
 import type { ChatHeaderV1, ChatLoadResultV1, ChatMutations, ChatReader } from "core/ports";
 import {
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
@@ -193,6 +194,7 @@ function buildRelaunchDeps(options: {
     exportRender: createFakeExportRenderPort(),
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([]),
+    agentPromptSource: createFakeAgentPromptSource(),
     clock: makeClock(1_700_000_000_000),
   };
 }

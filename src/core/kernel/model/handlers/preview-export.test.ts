@@ -15,6 +15,7 @@ import type { PublishableEventV1 } from "core/mailbox";
 import type { PageReader, PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDiagnosticsCache,
@@ -104,6 +105,7 @@ function buildDeps(overrides?: {
     exportRender: createFakeExportRenderPort(),
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
+    agentPromptSource: createFakeAgentPromptSource(),
     clock,
   };
 }

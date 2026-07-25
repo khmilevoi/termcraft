@@ -17,6 +17,7 @@ import type {
 } from "core/ports";
 import {
   createFakeAgentBackend,
+  createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
@@ -345,6 +346,7 @@ function buildDeps(
     exportRender: createFakeExportRenderPort(),
     exportPublish,
     agentRegistry,
+    agentPromptSource: createFakeAgentPromptSource(),
     clock: makeClock(1_700_000_000_000),
   };
 }

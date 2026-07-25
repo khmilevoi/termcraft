@@ -1,5 +1,6 @@
 import type { EventBusPayloadError, EventEnvelopeV1 } from "core/mailbox";
 import type {
+  AgentPromptSource,
   AgentRegistry,
   ChatMutations,
   ChatReader,
@@ -75,6 +76,13 @@ export interface KernelDeps {
   readonly exportRender: ExportRenderPort;
   readonly exportPublish: ExportPublishPort;
   readonly agentRegistry: AgentRegistry;
+  /**
+   * The agent-prompt library's composed system prompt and runtime-doc file list (phase-8
+   * WP-3) — `turn.start` (`handlers/turn.ts`) is the one caller. Declared in `core/ports/
+   * agent-prompt.ts`; implemented by `agent/prompt/` (static prose plus paths into the
+   * installed package, no I/O beyond an existence check).
+   */
+  readonly agentPromptSource: AgentPromptSource;
   readonly clock: Clock;
 }
 

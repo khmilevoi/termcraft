@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
+import { createProductionAgentPromptSource } from "agent";
 import {
   type EventEnvelopeV1,
   type EventPayloadByKindV1,
@@ -392,6 +393,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
     exportRender,
     exportPublish: createExportPublishAdapter(storeAdapterDeps),
     agentRegistry: createFakeAgentRegistry([agentBackend]),
+    agentPromptSource: createProductionAgentPromptSource(),
     clock: systemClock,
   };
 
@@ -517,6 +519,13 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
       const workspacePath = agentBackend.lastWorkspacePath();
       if (workspacePath === null) throw new Error("fixture bug: no workspace path captured");
+
+      // phase-8 WP-3 acceptance: the runtime docs the agent-prompt library returns are
+      // PHYSICALLY staged into the real turn workspace by the time the first attempt starts
+      // — proven here against the REAL `store` staging adapter and the REAL
+      // `createProductionAgentPromptSource()`, not a fake.
+      expect(fs.existsSync(path.join(workspacePath, "RUNTIME.md"))).toBe(true);
+      expect(fs.existsSync(path.join(workspacePath, "runtime.d.ts"))).toBe(true);
 
       // "the fake agent edits staging": a REAL page file plus a REAL manifest-slice update
       // are written into the REAL turn workspace the staging adapter minted on disk —

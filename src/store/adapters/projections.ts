@@ -44,9 +44,11 @@ import type { StoreAdapterDeps } from "./types";
 //     caller needs read-stable diagnostic identity, that requires a real id field landing on
 //     `store/projections`'s `DiagnosticItem`, not a synthesized one at this boundary;
 //   - sets `scope` to a single documented placeholder constant (`DIAGNOSTICS_SCOPE_PLACEHOLDER`
-//     below), mirroring `core/kernel/model/handlers/turn.ts`'s own `PLACEHOLDER_GIT_STATUS`/
-///    `TURN_START_SYSTEM_PROMPT_PLACEHOLDER` precedent for "a real value would need a port
-//     that does not exist yet" — never silently invented as if it were a settled decision.
+//     below), mirroring `core/kernel/model/handlers/turn.ts`'s own `PLACEHOLDER_GIT_STATUS`
+//     precedent for "a real value would need a port that does not exist yet" — never silently
+//     invented as if it were a settled decision. (That file's sibling
+//     `TURN_START_SYSTEM_PROMPT_PLACEHOLDER`, cited here until phase 8, is gone: WP-3 gave it the
+//     port it was waiting for, which is exactly the resolution this comment anticipates.)
 // FLAG FOR THE MAINTAINER: confirm the intended `scope` value (or add a real per-diagnostic
 // scope field to `store/projections`'s `DiagnosticsEntry`) before this cache carries
 // non-gate/host-page diagnostics; `range` is unrecoverable through this port's DTO as declared.

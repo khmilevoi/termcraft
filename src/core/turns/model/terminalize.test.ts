@@ -138,6 +138,29 @@ describe("terminalizeTurn", () => {
     expect(turnTransactions.calls.map((c) => c.method)).toEqual(["terminalize"]);
   });
 
+  // Gate-exhaustion-vs-backend-failure follow-up to WP-8 item 4: `TerminalizeTurnResultV1`'s
+  // `"recorded"` variant used to carry only an opaque `TurnCommitV1`, discarding which
+  // `TurnTerminalOutcome`/`reason` the caller originally requested — the exact gap that left
+  // two DIFFERENT `run-turn.ts` causes indistinguishable once both reached `"recorded"`
+  // (`core/kernel/model/handlers/turn.ts`'s own header). This pins the echo directly, at the
+  // point it is produced.
+  test("a 'recorded' result echoes back the outcome and reason it was called with, not just the opaque commit", async () => {
+    const { call } = context.start(() => {
+      const { machine, turnTransactions, staging } = setup();
+      const call = terminalizeTurn(
+        { machine, turnTransactions, staging },
+        baseInput({ outcome: "failed", reason: "GATE_RETRY_EXHAUSTED" }),
+      );
+      return { call };
+    });
+
+    const result = await call;
+
+    if (result.kind !== "recorded") throw new Error(`expected recorded, got ${result.kind}`);
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe("GATE_RETRY_EXHAUSTED");
+  });
+
   test("rejects with the machine's illegal code and touches no port when the turn is not terminalizing", async () => {
     const { call, turnTransactions } = context.start(() => {
       const machine = reatomTurnStateMachine(); // stays at idle
@@ -172,7 +195,10 @@ describe("terminalizeTurn", () => {
 
     const result = await call;
 
-    expect(result).toEqual({ kind: "unrecorded", failure: FAILURE });
+    // `outcome`/`reason` are the echo this task's own follow-up added (see this file's
+    // `TerminalizeTurnResultV1` doc comment) — `baseInput()`'s `outcome: "failed"` and no
+    // `reason`, echoed back verbatim rather than discarded.
+    expect(result).toEqual({ kind: "unrecorded", failure: FAILURE, outcome: "failed" });
     expect(readPhase()).toBe("idle");
     expect(turnTransactions.calls.map((c) => c.method)).toEqual(["terminalize"]);
   });

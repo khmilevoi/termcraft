@@ -30,6 +30,9 @@ export { createFakeAgentRegistry } from "./agent-registry";
 export type { AgentBackendCall, FakeAgentBackend } from "./agent-backend";
 export { createFakeAgentBackend } from "./agent-backend";
 
+export type { AgentPromptSourceCall, FakeAgentPromptSource } from "./agent-prompt";
+export { createFakeAgentPromptSource } from "./agent-prompt";
+
 export type {
   ProjectStoreCall,
   ProjectStoreFailableMethod,
