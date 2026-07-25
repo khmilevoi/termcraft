@@ -22,16 +22,26 @@ document here that addresses how the source tree itself is laid out.
 > still runs `ui`'s in-memory Kernel double. Behavior that crosses component
 > boundaries — a live generation turn, a host-rendered preview, export assembly — now
 > runs against real production adapters rather than fakes; Git history remains v1
-> scope with no adapter yet. What is still open, and documented as such in the
-> relevant module/flow sections rather than swept under this status block:
-> `KernelPort.preview()`'s `acknowledgeDisplay` is a documented not-wired stand-in (no
-> public frame-token surface, so geometry queries and hover-to-pin stay unusable); the
-> Gate's `typeCheck` stage stays unwired (no production `runtimeDts` source yet, phase
-> 8); `migration.*` commands route to a not-yet-implemented rejection; session resume
-> is always fresh (no durable `sessionScopeId` a `core/kernel` handler can read back
-> yet); a non-committed turn terminal still publishes a generic `turn.failed`; and the
-> npm package (phase 8, master §4.1: an npm package run under Bun ≥1.3.14, no compiled
-> binary) is not yet fully wired end to end (dev `bun start` is unaffected). Each
+> scope with no adapter yet. Phase 8 (npm distribution, the live Gate type check, and
+> the documented-debt sweep) has landed: `KernelPort.preview()`'s `acknowledgeDisplay`
+> is wired to a real frame-token ledger (Task 16); the Gate's `typeCheck` stage runs
+> live in the shipped configuration (Task 7, a generated `runtimeDts` plus a resolved
+> compiler path); session resume works within one live process (WP-7 — cross-restart
+> resume remains a stated, deliberate limit for Claude, not a gap); `turn.failed`'s
+> `failure.code` distinguishes Gate-exhaustion from a backend failure where a typed
+> reason is available (WP-8 item 4); and termcraft ships as a real npm package — `npm
+> pack` plus a global install runs from an empty directory on all three argv paths
+> (WP-1, verified by `src/entrypoint/model/installed-package.test.ts` against an
+> installed tarball). What is still open, and documented as such in the relevant
+> module/flow sections rather than swept under this status block:
+> `migration.*` commands route to a deliberate post-MVP no-op (there is exactly one
+> storage format version, so a migration step has nothing to migrate from or to —
+> `docs/architecture/flows/migration.md`); the composed agent system prompt cannot yet
+> carry source-extracted per-page metadata or the current selection (`agent/prompt/`,
+> phase-8 WP-3); and no currently-wired `core/kernel` handler ever dispatches
+> `kernel.preview.enable`, so a live `PreviewSession` is unreachable through
+> `kernel.dispatch()` alone and geometry/hover-to-pin queries stay unusable regardless
+> of the acknowledgement wiring above. Each
 > document states which half of a claim is built and which is a
 > design target, and anchors the unbuilt half to the governing specification instead
 > of a source file; anchors keep moving to real paths as implementation proceeds (see
@@ -66,9 +76,8 @@ document here that addresses how the source tree itself is laid out.
    confinement and owned process trees. Its per-component table and Source anchors
    mark all seven as real code today, including the production adapter graph that
    maps them onto the composition root (WP-2/WP-4); what remains are the specific
-   unwired stages and dormant seams each entry documents (the Gate's `typeCheck`,
-   the runtime facade's tweaks/navigation wiring, `HostSupervisor`'s input
-   forwarding, and so on).
+   unwired stages and dormant seams each entry documents (the runtime facade's
+   tweaks/navigation wiring, `HostSupervisor`'s input forwarding, and so on).
 3. [storage.md](storage.md) — the `.termcraft/` folder: layout, record schemas,
    what commits to git, format versioning, and the machine-local trust ledger.
    The most fully-built area of the system, and the vocabulary the other documents

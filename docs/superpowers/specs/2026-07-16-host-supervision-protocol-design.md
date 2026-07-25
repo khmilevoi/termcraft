@@ -453,16 +453,21 @@ request, not the UI preview frame stream.
 No page module is imported before framing, protocol, identity, limits, and
 runtime compatibility have been negotiated.
 
-1. The supervisor spawns the current termcraft executable with the argument
+1. The supervisor spawns the current termcraft entry with the argument
    array `[_host, --stdio]`, with no shell interpolation. Round 2 Spike E
    (`docs/spikes/05-host-respawn/FINDINGS.md`) verified `process.execPath`
    correctly names the running `.exe`'s real on-disk path inside a
    `bun build --compile` binary on Windows — not an embedded `B:/~BUN/root/…`
-   namespace path and not an external Bun runtime — so it is the correct value
-   to spawn with; no fallback (`argv[0]`, `Bun.main`, `GetModuleFileNameW`) was
-   needed. `process.execPath` is the *wrong* source under `bun run` (it resolves
-   to the Bun CLI, not the script), so this only applies to the compiled
-   product. The spike also confirmed that framed stdio reliably arrives split
+   namespace path and not an external Bun runtime — so it was the correct value
+   to spawn with under that distribution mechanism; no fallback (`argv[0]`,
+   `Bun.main`, `GetModuleFileNameW`) was needed. **Amendment (phase 8):** MVP
+   ships as an npm package run under Bun instead of a compiled binary
+   (`2026-07-25-mvp-phase-8-design.md` §2); Spike E's finding remains factually
+   correct but is now dormant, not applied — `createHostSpawnCommand`
+   (`src/host/supervisor/model/spawn-command.ts`) spawns one shape,
+   `[bunExecPath, srcRoot, "_host", "--stdio"]`, the same shape `package.json`'s
+   `start` script uses, and there is no longer an `isCompiled` branch reading
+   `process.execPath` at all. The spike also confirmed that framed stdio reliably arrives split
    across multiple Windows pipe `"data"` events (5 events observed for 3
    logical frames under load) — the length-prefixed frame reader must buffer
    partial frames as a normal case, not a defensive edge case.
@@ -813,7 +818,9 @@ Host supervision preserves the layered isolation model from the master design:
 
 - Workspace trust is checked before any preview, history, smoke, or export host
   starts. CLI export refuses an untrusted project through the same Kernel check.
-- Spawn uses the current binary and an argument array, never a shell command.
+- Spawn uses the current entry and an argument array, never a shell command
+  (under phase-8 npm distribution: the Bun executable plus the installed
+  `src/main.tsx` entry, per the amendment on §6 item 1 above).
 - The child receives only stdin/stdout protocol pipes and a separately drained
   stderr. It receives no terminal handle.
 - The environment is rebuilt from a small allowlist and contains no inherited
@@ -821,8 +828,11 @@ Host supervision preserves the layered isolation model from the master design:
   project variables. `PATH` is not required because the child executes no
   external command. Locale and timezone are explicit.
 - The working directory is a fresh scratch directory. The mounted page source
-  and approved embedded runtime are read-only inputs. Project root, staging
-  root, Git metadata, chats, pins, and export destination are not host-owned.
+  and the `@termcraft/runtime` facade are read-only inputs — resolved, under
+  npm distribution, from termcraft's own installed dependency via the host's
+  `Bun.plugin` resolver rather than an embedded asset (master §4.1). Project
+  root, staging root, Git metadata, chats, pins, and export destination are not
+  host-owned.
 - The Gate import check is repeated before dynamic import. The approved runtime
   surface, best-effort global scrub, and workspace trust keep their existing
   roles. Process isolation is the stability boundary; this remains an honest
