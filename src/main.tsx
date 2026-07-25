@@ -7,7 +7,7 @@ import {
   parseExportArgs,
   runHeadlessExport,
 } from "entrypoint";
-import type { TerminalControl } from "entrypoint";
+import type { ProcessExit, TerminalControl } from "entrypoint";
 import * as errore from "errore";
 
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
@@ -32,6 +32,22 @@ const NOOP_TERMINAL_CONTROL: TerminalControl = {
   disableRawMode() {},
   disableMouseCapture() {},
   exitAlternateScreen() {},
+};
+
+/**
+ * The interactive branch's real `exit` seam (phase-8 Task 11 / WP-10), threaded into
+ * `bootstrap`/`runApp`'s own `exit` option — see that option's doc comment
+ * (`entrypoint/model/run-app.ts`) for why a forced exit is unavoidable even after a fully
+ * correct `close()` (an upstream `@reatom/core` handle keeps the event loop alive on its own).
+ * Same flush-then-exit shape as the `_host` branch's own `exit` callback and the `export`
+ * branch's own write below: an empty trailing `stdout` write's callback fires only after every
+ * earlier write's callback already has (Writable streams process queued writes strictly in
+ * order), which is what actually guarantees the renderer's own terminal-restore escape codes
+ * (written by `root.dispose()` inside `close()`, before this fires) physically land before the
+ * process disappears — worse on a piped, non-TTY stdout, i.e. on Windows.
+ */
+const interactiveExit: ProcessExit = (code) => {
+  process.stdout.write(new Uint8Array(0), () => process.exit(code));
 };
 
 /**
@@ -116,6 +132,13 @@ if (import.meta.main) {
       argv: process.argv.slice(2),
       cwd: () => process.cwd(),
       process: boundary,
+      // Phase-8 Task 11 / WP-10: `runApp`'s own `exit` option (`entrypoint/model/run-app.ts`)
+      // fires this AFTER `close()` has fully released the shell — the SAME `close()` a SIGINT/
+      // SIGTERM, an `/exit` command, or the `q` quit keys all now share. Wired here (not left
+      // as a bare `process.exit(0)` after `await app.closed`, the old shape) because a bare
+      // call is not unit-testable — `run-app.test.ts`'s "exit runs AFTER shell.close()" test
+      // needs a recording double in `exit`'s place, which only an injected seam allows.
+      exit: interactiveExit,
     });
 
     if (app instanceof Error) {
@@ -127,10 +150,10 @@ if (import.meta.main) {
       // narrow `app` with, and that narrowing is gone now that this call isn't `never`-typed.
       boundary.reportFatalAndExit(app.message, app.cause);
     } else {
+      // `close()` (triggered by a signal, `/exit`, or `q`) already ends the process itself via
+      // `interactiveExit` above — awaiting `closed` here is only for symmetry with the other
+      // branches' own structure, not because anything further needs to run after it.
       await app.closed;
-      // Spike D: a Reatom + OpenTUI process does not exit on its own once the renderer is
-      // destroyed — the exit has to be explicit or the shell hangs after Ctrl+C.
-      process.exit(0);
     }
   }
 }

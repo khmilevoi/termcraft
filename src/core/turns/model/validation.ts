@@ -49,6 +49,21 @@ export interface TurnValidationPageInputV1 {
   readonly pageSlug: PageSlug;
   readonly source: string;
   readonly fileName?: string;
+  /**
+   * The staged candidate's ABSOLUTE on-disk file path (`core/ports/gate-runner.ts`'s
+   * `runPage.sourcePath` doc) — needed only by the Gate smoke stage, which resolves it via
+   * `Bun.file` in a fresh child-process cwd, so a bare `${slug}.tsx`/short `fileName` never
+   * resolves there. Deliberately separate from `fileName`, which stays the SHORT display name
+   * `runGate` echoes into `GateErrorV1.file` for diagnostics: conflating the two would leak an
+   * absolute filesystem path into user-facing Gate error messages — the defect this field was
+   * added to fix. FIXED (review finding #7 — corrected from an earlier, now-false claim that
+   * `buildValidationInput` still stuffed the absolute path into `fileName`):
+   * `core/kernel/model/handlers/turn.ts`'s `buildValidationInput` now sets `fileName` to the
+   * short `pageFileRelPath(pageSlug)` display name and `sourcePath` to the absolute staged
+   * candidate path (`${candidate.root}/${pageFileRelPath(pageSlug)}`) separately, so a
+   * validation Gate rejection reports the short name, never the absolute path.
+   */
+  readonly sourcePath?: string;
 }
 
 export interface RunTurnValidationInputV1 {
@@ -141,6 +156,7 @@ export async function runTurnValidation(
         source: page.source,
         slug: page.pageSlug,
         ...(page.fileName !== undefined ? { fileName: page.fileName } : {}),
+        ...(page.sourcePath !== undefined ? { sourcePath: page.sourcePath } : {}),
       }),
     );
     errors.push(...pageResult.errors);

@@ -15,6 +15,15 @@ export interface HomeAgentHealth {
   readonly agent?: string;
   /** The model label (M22), e.g. "sonnet-4.5" — same probe, drives the Home combo's model text. */
   readonly model?: string;
+  /**
+   * The reasoning effort label (phase-8 Task 9 / WP-5), e.g. "high" — drives the Home combo's
+   * effort text. Unlike `agent`/`model` this is not something `AgentBackend.healthCheck()`
+   * itself reports (it carries no selection data at all); it rides along the SAME probe
+   * reading because `entrypoint/model/agent-health.ts`'s `createAgentHealthProbe` folds in
+   * `AgentBackend.capabilities().defaultSelection` (WP-4) — a SELECTION fact, not a HEALTH
+   * fact, merged here because there is exactly one probe injection point Home has.
+   */
+  readonly effort?: string;
 }
 
 /** The inline agent/model/effort combo selectors shown under the prompt box. */

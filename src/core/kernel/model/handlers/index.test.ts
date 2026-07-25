@@ -284,19 +284,27 @@ describe("createHandlerRegistry", () => {
 
   test("the 10 deferred kinds resolve to deferredHandlers' own function in totalHandlers — not merely an equal-looking stand-in", () => {
     // Output equality alone (`registry(...)` returning `{disposition: "no-op", events: []}`)
-    // cannot prove ROUTING: `notYetImplementedHandler` (this file's stand-in for every
-    // not-yet-built family) returns the exact same well-formed no-op via the same
-    // `noOpOutcome()` call, so a test asserting only the OUTCOME would pass identically
-    // whether `totalHandlers` wired a deferred kind to `deferredHandlers` or accidentally
-    // left it on the stand-in. Function-reference identity is differential: it fails the
-    // moment `./index.ts`'s `totalHandlers = {...deferredHandlers, ...notYetImplementedHandlers}`
-    // spread ever stops giving a deferred kind `deferredHandlers`'s own handler.
+    // cannot prove ROUTING: `migrationPostMvpHandler` (`./index.ts`'s deliberately-post-MVP
+    // refusal for the four `migration.*` kinds — see that file's own header) returns the
+    // exact same well-formed no-op via the same `noOpOutcome()` call, so a test asserting
+    // only the OUTCOME would pass identically whether `totalHandlers` wired a deferred kind
+    // to `deferredHandlers` or accidentally left it on the migration stand-in. Function-
+    // reference identity is differential: it fails the moment `./index.ts`'s `totalHandlers =
+    // {...deferredHandlers, ...migrationPostMvpHandlers}` spread ever stops giving a deferred
+    // kind `deferredHandlers`'s own handler.
     for (const kind of DEFERRED_HANDLER_KINDS) {
       expect(totalHandlers[kind]).toBe(deferredHandlers[kind]);
     }
   });
 
-  test("migration.* — flagged as not-yet-implemented, not Tier-C deferred — still resolves to a well-formed no-op", () => {
+  test("migration.* — flagged deliberately post-MVP (task 18), not Tier-C deferred and not merely not-yet-built — still resolves to a well-formed no-op", () => {
+    // MVP ships exactly one storage format version, so there is nothing to migrate FROM and
+    // no second version to exercise a migration step against in a test (`./index.ts`'s own
+    // header, and `docs/architecture/flows/migration.md`). `migrationPostMvpHandlers`
+    // (`./index.ts`) still returns `noOpOutcome()` — the only typed refusal a handler's own
+    // vocabulary has, since `HandlerOutcome` has no rejected disposition and the typed
+    // `UnavailableReason` codes (`core/protocol/model/unavailable-reason.ts`) are a
+    // guard/projector-only concern, never something a handler constructs.
     const registry = createHandlerRegistry(buildTestContext(), totalHandlers);
     const payloads = samplePayloads();
 
@@ -327,7 +335,7 @@ describe("KernelMachines closed surface", () => {
 });
 
 describe("FamilyHandlerMap excludes Tier-C deferred kinds (fix round 2)", () => {
-  /** Zero-arg stand-in, assignable to any `CommandHandler<K>` for any `K` — same shape as `./index.ts`'s own `notYetImplementedHandler`. */
+  /** Zero-arg stand-in, assignable to any `CommandHandler<K>` for any `K` — same shape as `./index.ts`'s own `migrationPostMvpHandler`. */
   const stubHandler = (): ReturnType<typeof noOpOutcome> => noOpOutcome();
 
   test('the 9 non-deferred preview kinds alone satisfy FamilyHandlerMap<"preview">', () => {

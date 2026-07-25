@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { COMMAND_KINDS_V1, type CommandKindV1, primaryReason } from "core/protocol";
+import { DEFERRED_CAPABILITY_KINDS } from "core/versions";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { CapabilityRecord, KernelStateSnapshot } from "../types";
@@ -239,6 +240,62 @@ describe("projectCapability — parity with evaluateCapabilityGuard (§10.2, §1
     }
     // Sanity: the generator + 43 kinds actually produced a non-trivial number of comparisons.
     expect(comparisons).toBeGreaterThan(1000);
+  });
+});
+
+/**
+ * MVP phase-8 task 18 documented `migration.*`'s handler (`core/kernel/model/handlers/
+ * index.ts`'s `migrationPostMvpHandler`) as a deliberate post-MVP no-op — MVP ships exactly
+ * one storage format version, so there is nothing to migrate FROM. That decision does NOT
+ * make `migration.*` a Tier-C `DEFERRED_CAPABILITY_KINDS` member (`core/versions`): unlike the
+ * 10 deferred kinds, whose guards reject unconditionally in every phase because no service
+ * exists behind them at all, `migration.*`'s guard (`guards.ts`'s `migrationFamilyReason`) is
+ * fully real — it evaluates genuine phase legality against `MIGRATION_TRANSITION_TABLE`
+ * (`core/machines`), matching kernel-command-contract §7.7 row for row (see that function's
+ * own header comment for the full citation chain).
+ *
+ * These tests exercise `projectCapability` — the PROJECTOR a UI actually consumes, not
+ * `evaluateCapabilityGuard` in isolation (the existing per-kind property test above already
+ * proves projector/guard parity generically for all 43 kinds; this block makes the
+ * migration-specific shape explicit and independently readable) — to pin down, on purpose:
+ * capability `available: true` here means "this command passes the guard" (KCC §10.2's own
+ * definition), never "dispatching it will move `MigrationState` or perform migration work."
+ * A future change that "fixes" this by adding `migration.*` to `DEFERRED_CAPABILITY_KINDS`
+ * would make it unconditionally unavailable in every phase and break `guards.test.ts`'s own
+ * `describe("migration family phase legality", ...)` assertions (`migration.plan` available
+ * from `idle`, `migration.confirm`/`discardPlan` only from `awaiting-confirmation`,
+ * `migration.retryRecovery` only from `blocked`) — this block is the projector-side half of
+ * that same regression guard.
+ */
+describe("projectCapability — migration.* is guard-legal, phase-sensitive, and NOT Tier-C deferred (task 18)", () => {
+  test("migration.* kinds are absent from DEFERRED_CAPABILITY_KINDS", () => {
+    for (const kind of [
+      "migration.plan",
+      "migration.confirm",
+      "migration.discardPlan",
+      "migration.retryRecovery",
+    ] as const) {
+      expect(DEFERRED_CAPABILITY_KINDS, `${kind} must not be Tier-C deferred`).not.toContain(kind);
+    }
+  });
+
+  test("migration.plan projects available: true from the migration machine's idle phase", () => {
+    const state = cleanState();
+    expect(state.migration.phase).toBe("idle");
+
+    const entry = projectCapability("migration.plan", null, state);
+
+    expect(entry).toEqual({ id: "migration.plan", target: null, state: { available: true } });
+  });
+
+  test("migration.plan projects available: false once migration has left idle — real phase sensitivity, not an unconditional block", () => {
+    const state = { ...cleanState(), migration: { phase: "transforming" as const } };
+
+    const entry = projectCapability("migration.plan", null, state);
+
+    expect(entry.state.available).toBe(false);
+    if (entry.state.available) return;
+    expect(primaryReason(entry.state.reasons).code).toBe("CAPABILITY_UNAVAILABLE");
   });
 });
 

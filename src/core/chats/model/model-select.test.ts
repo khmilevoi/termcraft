@@ -19,6 +19,7 @@ function registryWithOneBackend() {
       ],
       confinement: "canUseTool",
       sessionWorkspaceBinding: "fixed",
+      defaultSelection: { model: "sonnet", effort: "high" },
     },
   });
   return createFakeAgentRegistry([backend]);

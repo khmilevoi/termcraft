@@ -10,6 +10,7 @@ import type {
   ChatLoadResultV1,
   ChatMutations,
   ChatReader,
+  PreviewFrameV1,
   ReadSetAppendBaseV1,
   TurnTransactionService,
 } from "core/ports";
@@ -34,6 +35,7 @@ import {
   createFakeTrustGate,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
+import { FrameAckError, PreviewNoLiveSessionError } from "core/preview";
 import {
   type EventPayloadByKindV1,
   type FailureDtoV1,
@@ -305,12 +307,14 @@ function buildDeps(overrides?: { readonly chatMutations?: ChatMutations }): Kern
  * real proof `bind`/`wrap` re-enter the Kernel's one Reatom frame correctly, not this file.
  */
 describe("createKernel", () => {
-  test("construction succeeds and returns the four-method Kernel surface", () => {
+  test("construction succeeds and returns the six-method Kernel surface", () => {
     const kernel = createKernel(buildDeps());
 
     expect(typeof kernel.dispatch).toBe("function");
     expect(typeof kernel.events).toBe("function");
     expect(typeof kernel.currentPreview).toBe("function");
+    expect(typeof kernel.publishFrame).toBe("function");
+    expect(typeof kernel.acknowledgeDisplay).toBe("function");
     expect(typeof kernel.close).toBe("function");
     // No preview.* command has ever run — nothing has established a live preview session.
     expect(kernel.currentPreview()).toBeNull();
@@ -420,6 +424,57 @@ describe("createKernel", () => {
   });
 });
 
+function testPreviewFrame(): PreviewFrameV1 {
+  return {
+    sessionId: "kernel-test-session",
+    sourceHash: "a".repeat(64),
+    frameSeq: "1",
+    width: 80,
+    height: 24,
+    rows: [],
+  };
+}
+
+/**
+ * kernel-assembly Task 16 — `Kernel.publishFrame`/`Kernel.acknowledgeDisplay`, the two
+ * methods that replace `entrypoint`'s previously-fabricated `uuidv7()` frame token and its
+ * unconditional `FrameAcknowledgeNotWiredError`.
+ *
+ * `kernel.preview.enable` (`disabled -> idle`) is "driven by broader project-lifecycle
+ * orchestration" (kernel-command-contract §7.6; `core/preview/model/session-commands.
+ * test.ts`'s own header note says the same) — no currently-wired handler anywhere under
+ * `core/kernel/model/handlers` ever applies it (verified by reading every handler in that
+ * family), so `preview.selectPage`/`selectCurrent` are rejected by the capability guard
+ * from EVERY freshly-constructed Kernel, and `kernel.currentPreview()` can never become
+ * non-null through `kernel.dispatch()` alone today. That gap is real, pre-existing, and
+ * unrelated to this task (closing it means wiring project/recovery-lifecycle orchestration
+ * a different family owns) — so the tests below cover exactly what is genuinely reachable
+ * from OUTSIDE the Kernel's own frame right now: neither method ever fabricates a token or
+ * a success when no live session exists. The mint -> acknowledge round trip itself (a REAL
+ * token succeeding, an unknown one failing) is proven at `core/preview/model/session-
+ * commands.test.ts`'s own "noteSessionEstablished/noteSessionClosed" suite — the exact
+ * function `setActivePreviewSession` calls — and at `entrypoint/model/create-shell.
+ * test.ts`'s own `toPreviewSessionHandle` suite, both reachable without the enable gap in
+ * the way.
+ */
+describe("Kernel.publishFrame / Kernel.acknowledgeDisplay", () => {
+  test("publishFrame with no live preview session returns PreviewNoLiveSessionError, never a fabricated token", () => {
+    const kernel = createKernel(buildDeps());
+
+    const published = kernel.publishFrame(testPreviewFrame());
+
+    expect(published).toBeInstanceOf(PreviewNoLiveSessionError);
+  });
+
+  test("acknowledgeDisplay for a token nothing ever minted returns FrameAckError, never a fabricated identity", () => {
+    const kernel = createKernel(buildDeps());
+
+    const acked = kernel.acknowledgeDisplay("0192f6f0-0000-7000-8000-0000000000ff");
+
+    expect(acked).toBeInstanceOf(FrameAckError);
+  });
+});
+
 /**
  * Kernel-assembly WP-1 task 9, STEP C1 — `kernel.capabilitiesChanged` growth
  * (`kernel.ts`'s own `currentCapabilityRequests`/`publishAndTrackCapabilities`). Drives
@@ -511,6 +566,7 @@ const TURN_SPINE_BACKEND_CAPABILITIES: BackendCapabilities = {
   models: [{ model: "sonnet", efforts: ["medium"] }],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  defaultSelection: { model: "sonnet", effort: "medium" },
 };
 
 /**
@@ -697,6 +753,113 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
       const parsed = schema.safeParse(envelope.payload);
       expect(parsed.success).toBe(true);
     }
+  });
+});
+
+/**
+ * Task 17 — late-subscriber liveness for `kernel.snapshot`'s `activePageSlug`/`activeChatId`.
+ *
+ * `buildSnapshotPayload` (`kernel.ts`) used to hardcode both fields to `null` unconditionally
+ * — its own comment named `page.descriptorsChanged`/`chat.changed` as "the already-correct
+ * live channel for both", true for an ALREADY-subscribed client (`ui/mirror`'s own `apply()`),
+ * but never updated the bootstrap `kernel.snapshot` a LATE subscriber (one that attaches after
+ * the active page/chat already changed) receives — exactly the same defect shape §10 smoke
+ * closeout bug 2 already fixed for `projectId` (see the preceding describe block's own late-
+ * subscribe assertion). This proves the analogous fix for `activePageSlug`/`activeChatId`:
+ * subscribing AFTER `project.open` resolves (which publishes `page.descriptorsChanged` with a
+ * real `activePageSlug`) and AFTER `chat.create` (which publishes `chat.changed` with a real
+ * `activeChatId`) must read those CURRENT values, not the `null` the projection returned when
+ * the Kernel was first constructed.
+ */
+describe("late-subscriber liveness for activePageSlug/activeChatId (Task 17)", () => {
+  test("a subscriber attaching after the active page and active chat changed reads the CURRENT values, not null", async () => {
+    const home = slug("home");
+    const pageStore = createFakePageStore({
+      order: [home],
+      sources: new Map([[home, { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }]]),
+    });
+    const deps = buildDeps({ chatMutations: createChatMutationsStub() });
+    const kernel = createKernel({
+      ...deps,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        manifest: { projectId: "0192f000-0000-7000-8000-00000000fed2", pages: [home] },
+      }),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+    });
+
+    const projectReady = waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.finishOpen",
+    );
+    const openResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: "0",
+      kind: "project.open",
+      payload: { root: "/test-root" },
+    });
+    if (openResult instanceof Error) throw openResult;
+    const readyEnvelope = await projectReady;
+
+    // `finishOpen`'s own async completion already published `page.descriptorsChanged` with
+    // `activePageSlug: "home"` (no workspace state was seeded, so it falls back to
+    // `manifest.pages[0]`, `handlers/project.ts`'s own `runProjectReadySequence`) in the SAME
+    // batch as the `kernel.stateChanged` this test already awaited above. A subscriber
+    // attaching only NOW must see that real slug in its own bootstrap snapshot.
+    const afterOpenSnapshot: EventEnvelopeV1[] = [];
+    const unsubscribeAfterOpen = kernel.events((envelope) => afterOpenSnapshot.push(envelope));
+    if (unsubscribeAfterOpen instanceof Error) throw unsubscribeAfterOpen;
+    const afterOpenPayload = afterOpenSnapshot[0]
+      ?.payload as EventPayloadByKindV1["kernel.snapshot"];
+    expect(afterOpenPayload.activePageSlug).toBe(home);
+    // No chat has been created yet — `activeChatId` genuinely has no identity, so `null` here
+    // is the honest value, not the same bug this test is chasing.
+    expect(afterOpenPayload.activeChatId).toBeNull();
+    unsubscribeAfterOpen();
+
+    const trustResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: readyEnvelope.stateRevision,
+      kind: "project.setTrust",
+      payload: { trust: "trusted", workspaceIdentity: "ws-1" },
+    });
+    if (trustResult instanceof Error) throw trustResult;
+    if (trustResult.status !== "accepted") {
+      throw new Error(`project.setTrust was rejected: ${JSON.stringify(trustResult)}`);
+    }
+
+    const chatChanged = waitForEvent(kernel, (envelope) => envelope.kind === "chat.changed");
+    const createResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: trustResult.resultingRevision,
+      kind: "chat.create",
+      payload: {},
+    });
+    if (createResult instanceof Error) throw createResult;
+    if (createResult.status !== "accepted") {
+      throw new Error(`chat.create was rejected: ${JSON.stringify(createResult)}`);
+    }
+    const chatEnvelope = await chatChanged;
+    const createdChatId = (chatEnvelope.payload as EventPayloadByKindV1["chat.changed"])
+      .activeChatId;
+
+    // A second late subscriber, attaching after the chat also changed, must read BOTH real
+    // values now — the active page from before, plus the just-created chat's real id.
+    const afterChatSnapshot: EventEnvelopeV1[] = [];
+    const unsubscribeAfterChat = kernel.events((envelope) => afterChatSnapshot.push(envelope));
+    if (unsubscribeAfterChat instanceof Error) throw unsubscribeAfterChat;
+    const afterChatPayload = afterChatSnapshot[0]
+      ?.payload as EventPayloadByKindV1["kernel.snapshot"];
+    expect(afterChatPayload.activePageSlug).toBe(home);
+    expect(afterChatPayload.activeChatId).toBe(createdChatId);
+    unsubscribeAfterChat();
   });
 });
 

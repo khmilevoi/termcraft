@@ -872,6 +872,23 @@ const turnWarningV1Schema = z.strictObject({
  * resulting hash are paired in one object per page, the same pairing style
  * `PageDescriptorChangeV1` already uses for before/after hashes, rather than two
  * parallel arrays whose index-correlation is easy to break.
+ *
+ * WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all",
+ * phase-8 design's documented-debt sweep): `handlers/turn.ts`'s own composer cannot
+ * honestly reconstruct WHY a non-completed turn ended (Gate exhaustion vs. a backend
+ * failure vs. a deadline vs. ... — see that file's header, "THE TERMINAL EVENT") from what
+ * `core/turns`' `runTurn` returns it, so `outcome` still only ever carries `"failed"` for
+ * every one of those causes today; widening `outcome` itself would misrepresent a guess as
+ * spec-fixed fact (§7.2 fixes this vocabulary verbatim). What DID change: `failure` is no
+ * longer unconditionally a fabricated `PERSISTENCE_FAILED` DTO — when the terminal chat
+ * record itself failed to persist, `failure` now carries the REAL adapter-level
+ * `FailureDtoV1` the store produced, propagated verbatim. No NEW field was added here (a
+ * brand-new wire discriminant was considered and rejected — `handlers/turn.ts`'s own header
+ * has the full reasoning: this type is constructed as typed literals in `ui/app`/
+ * `ui/workspace` test fixtures outside that task's scope, so a new required field would
+ * ripple beyond it, and an optional one would break this file's own "nullable, never
+ * optional" convention for a KCC-fixed payload) — only WHICH already-typed `FailureDtoV1`
+ * gets chosen changed, so no schema edit was needed for that half of the fix.
  */
 export interface TurnTerminalPayloadV1 {
   readonly turnId: UUIDv7;
@@ -1072,9 +1089,41 @@ export const commitTerminalPayloadV1Schema = z.strictObject({
 // export.started / export.progress / export.completed|failed
 // ---------------------------------------------------------------------------
 
-/** The in-flight `ExportState` phases progress/terminal events can name (§7.5: `kernel.export.beginRendering` -> `rendering`, `kernel.export.beginPublication` -> `publishing`). */
-const EXPORT_PHASES_V1 = ["rendering", "publishing"] as const;
+/**
+ * The `ExportState` phases the TERMINAL export events (`export.completed`/`export.failed`)
+ * can name (§7.5: `kernel.export.beginRendering` -> `rendering`, `kernel.export.
+ * beginPublication` -> `publishing`).
+ *
+ * `"idle"` widens the original in-flight-only pair for `export.failed` alone (never
+ * `export.progress` — nothing ever progresses at `"idle"`, see `EXPORT_PROGRESS_PHASES_V1`
+ * below, which deliberately excludes it): it reports a failure that happens BEFORE
+ * `captureExportSnapshot` ever moves the export machine out of `"idle"` — either the machine
+ * never left it, or `captureExportSnapshot`'s own `kernel.export.fail` forced it back there on
+ * a page-read failure (`core/kernel/handlers/preview-export.ts`'s `runExportStart`, see its
+ * header's "PRE-CAPTURE FAILURES" section). This reuses `ExportState`'s own `"idle"` member
+ * verbatim (`core/machines/model/export-machine.ts`) rather than inventing a fourth phase
+ * name — the widening this project's design chose over a whole new event kind, which would
+ * have carried the full kernel-command-contract §8.2 obligation set for one
+ * already-representable machine state.
+ *
+ * This tuple stays the wider, TERMINAL-only set (name kept stable — `exportTerminalPayloadV1Schema`
+ * and every other consumer of `ExportPhaseV1` already depend on it); `export.progress` uses the
+ * narrower `EXPORT_PROGRESS_PHASES_V1` below instead of sharing this one, so a phase
+ * `export.progress` never actually emits cannot slip past its own schema (finding #12, part 2:
+ * the two were briefly shared, which silently loosened `export.progress` too).
+ */
+const EXPORT_PHASES_V1 = ["idle", "rendering", "publishing"] as const;
 export type ExportPhaseV1 = (typeof EXPORT_PHASES_V1)[number];
+
+/**
+ * The narrower phase set `export.progress` actually emits: `"rendering"` and `"publishing"`
+ * only (§7.5, same mapping as `EXPORT_PHASES_V1` above, minus the terminal-only `"idle"`
+ * widening). `export.progress` never fires before a snapshot is captured, so `"idle"` — a
+ * real phase only a pre-capture `export.failed` can report — must be REJECTED here even
+ * though it is accepted by the terminal schema below.
+ */
+const EXPORT_PROGRESS_PHASES_V1 = ["rendering", "publishing"] as const;
+export type ExportProgressPhaseV1 = (typeof EXPORT_PROGRESS_PHASES_V1)[number];
 
 /** `export.started`'s payload (§9 row, KCC:811): "export `operationId`, immutable source-snapshot digest, page count, render-job count, and destination identity." */
 export interface ExportStartedPayloadV1 {
@@ -1096,7 +1145,7 @@ export const exportStartedPayloadV1Schema = z.strictObject({
 /** `export.progress`'s payload (§9 row, KCC:812): "export `operationId`, phase, completed jobs, total jobs, nullable page slug, and nullable size." */
 export interface ExportProgressPayloadV1 {
   readonly operationId: UUIDv7;
-  readonly phase: ExportPhaseV1;
+  readonly phase: ExportProgressPhaseV1;
   readonly completedJobs: number;
   readonly totalJobs: number;
   readonly pageSlug: string | null;
@@ -1105,7 +1154,7 @@ export interface ExportProgressPayloadV1 {
 
 export const exportProgressPayloadV1Schema = z.strictObject({
   operationId: uuidv7Schema,
-  phase: z.enum(EXPORT_PHASES_V1),
+  phase: z.enum(EXPORT_PROGRESS_PHASES_V1),
   completedJobs: nonNegativeIntSchema,
   totalJobs: nonNegativeIntSchema,
   pageSlug: pageSlugSchema.nullable(),

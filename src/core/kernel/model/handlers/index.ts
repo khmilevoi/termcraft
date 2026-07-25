@@ -56,18 +56,55 @@ import {
  * `turn.start` no-op) instead of the generic `notYetImplementedHandler` stand-in, which is
  * exactly what changed.
  *
- * `migration.*` stays on the stand-in, for the reason `./deferred.ts`'s header documents at
- * length: `core/versions`'s `DEFERRED_CAPABILITY_KINDS` does not include any `migration.*`
- * kind, and the real guard (`capabilities/model/guards.ts`'s `migrationFamilyReason`)
- * evaluates ACTUAL phase legality rather than rejecting unconditionally — so `migration.*`
- * commands can legitimately pass the guard today, and routing them through
- * `deferredHandlers` would silently no-op a guard-accepted command while pretending it was
- * never reachable. Until a `migration` family module lands (or a deliberate decision extends
- * `core/versions` to cover it), its four kinds get the exact same well-formed no-op every
- * other unbuilt family gets — flagged here, not silently guessed; see the task report for
- * the full writeup.
+ * `migration.*` is NOT a ninth Step B/C family still waiting its turn like the eight above —
+ * MVP phase-8 task 18 re-documents it as DELIBERATELY POST-MVP, a distinct status from every
+ * other kind this file has ever stood in for. The eight families above were "not yet built"
+ * in the ordinary sense: each had a real target module and landed the moment its Step B/C
+ * work did. Migration has no such target inside MVP at all: MVP ships exactly ONE storage
+ * format version (`docs/architecture/flows/migration.md`'s walkthrough item 1 — every
+ * versioned file kind, `project.toml`/`workspace.local.toml`/the transaction journal, has
+ * only ever produced format version 1), so there is nothing to migrate FROM, and a migration
+ * step written against a single known version has no second version to migrate FROM or TO in
+ * a test — it would be unexercisable by construction, not merely untested. Writing a real
+ * `migration` family handler stays out of scope until a second format version actually ships,
+ * which is a post-MVP event, not a scheduling gap in this phase's own work list.
+ *
+ * The guard-level reasoning `./deferred.ts`'s header documents is unchanged and still the
+ * reason this can never route through `deferredHandlers` either: `core/versions`'s
+ * `DEFERRED_CAPABILITY_KINDS` does not include any `migration.*` kind, and the real guard
+ * (`capabilities/model/guards.ts`'s `migrationFamilyReason`) evaluates ACTUAL phase legality
+ * rather than rejecting unconditionally (e.g. `migration.plan` is legal from the migration
+ * machine's own `idle` phase) — so `migration.*` commands can legitimately pass the guard
+ * today, and routing them through `deferredHandlers` would silently no-op a guard-accepted
+ * command while pretending it was never reachable. Nor can a handler return a typed rejection
+ * instead of a no-op: `HandlerOutcome` (`core/mailbox`, see `./types.ts`'s own `CommandHandler`
+ * doc comment) has exactly three dispositions — `no-op`/`completed`/`started` — and no fourth
+ * "rejected" shape at all. The 31-code typed `UnavailableReason` vocabulary
+ * (`core/protocol/model/unavailable-reason.ts`) that WOULD say "deliberately unavailable, and
+ * here is why" more precisely than a bare no-op is surfaced exclusively by
+ * `evaluateCapabilityGuard` and the capability projector that calls it verbatim
+ * (`core/capabilities/model/projector.ts`), never by a handler — a handler is never the layer
+ * that reports "rejected" (`./deferred.ts`'s own header makes the identical point for the
+ * Tier-C kinds). So `noOpOutcome()` remains the only typed refusal this file's own vocabulary
+ * has to offer, and it is the right one for a command MVP has already decided never to act on:
+ * nothing runs, no machine transitions, no Kernel-held fact changes, no event fires. Its four
+ * kinds get that well-formed no-op via {@link migrationPostMvpHandler} below — renamed from
+ * the generic `notYetImplementedHandler` this map used while it still held nine families'
+ * worth of stand-ins, since migration is now the only entry left in it and its own reason is
+ * settled, not open; see the task report for the full writeup.
  */
-type NotYetImplementedKind = Exclude<
+
+/**
+ * Exclusion-computed, not hand-listed — the complement of `DeferredHandlerKind` and every
+ * landed family's own kinds. Today that complement resolves to EXACTLY the four
+ * `migration.*` kinds (see the header above for why); the `Exclude` form is kept anyway
+ * rather than switched to a literal 4-member union, because it is what makes the
+ * `satisfies TotalHandlerMap` clause on {@link totalHandlers} a real exhaustiveness check —
+ * a `CommandKindV1` member added anywhere without a matching family entry falls into this
+ * type automatically and the compiler demands a handler for it, instead of silently
+ * type-checking a map with a hole in it.
+ */
+type MigrationPostMvpKind = Exclude<
   CommandKindV1,
   | DeferredHandlerKind
   | "chat.create"
@@ -102,29 +139,37 @@ type NotYetImplementedKind = Exclude<
 >;
 
 /**
- * The shared stand-in for every kind whose real family module has not landed yet. Mirrors
- * task 8's original minimal `HandlerRegistry` (`kernel.ts`'s own comment: "an explicitly
- * empty, revision-neutral no-op for every kind") but WITHOUT its `console.warn` — the
- * same fix also-fix (b) applies to `kernel.ts` itself, so this stand-in never re-introduces
- * the stderr noise that fix removes.
+ * MVP's one deliberate post-MVP refusal (task 18) — no longer a generic "not yet built"
+ * stand-in, since migration is now the only family left on this slot and its own reason is
+ * settled: MVP ships exactly one storage format version, so there is nothing to migrate
+ * FROM, and a migration step has no second version to be exercised against in a test. See
+ * this file's own header above and `docs/architecture/flows/migration.md` for the full
+ * reasoning, and that header's own paragraph for why `noOpOutcome()` — not a typed
+ * `UnavailableReason` — is the correct refusal shape here: `HandlerOutcome` has no rejected
+ * disposition a handler could return instead, and the typed reason vocabulary is a
+ * guard/projector-only concern. Still mirrors task 8's original minimal `HandlerRegistry`
+ * (`kernel.ts`'s own comment: "an explicitly empty, revision-neutral no-op for every kind")
+ * but WITHOUT its `console.warn` — the same fix also-fix (b) applies to `kernel.ts` itself,
+ * so this handler never re-introduces the stderr noise that fix removes.
  */
-function notYetImplementedHandler(): ReturnType<typeof noOpOutcome> {
+function migrationPostMvpHandler(): ReturnType<typeof noOpOutcome> {
   return noOpOutcome();
 }
 
-const notYetImplementedHandlers: CommandHandlerMap<NotYetImplementedKind> = {
-  "migration.plan": notYetImplementedHandler,
-  "migration.confirm": notYetImplementedHandler,
-  "migration.discardPlan": notYetImplementedHandler,
-  "migration.retryRecovery": notYetImplementedHandler,
+const migrationPostMvpHandlers: CommandHandlerMap<MigrationPostMvpKind> = {
+  "migration.plan": migrationPostMvpHandler,
+  "migration.confirm": migrationPostMvpHandler,
+  "migration.discardPlan": migrationPostMvpHandler,
+  "migration.retryRecovery": migrationPostMvpHandler,
 };
 
 /**
  * The complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the six landed
  * families' maps (29: `chatHandlers` 2, `selectionHandlers` 2, `modelHandlers` 1,
  * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1, `turnHandlers` 2,
- * `pageHandlers` 5, `pinHandlers` 2) + `notYetImplementedHandlers` (4, stand-in:
- * `migration.*`). The `satisfies` clause below is the compile-time exhaustiveness check the
+ * `pageHandlers` 5, `pinHandlers` 2) + `migrationPostMvpHandlers` (4, deliberately
+ * post-MVP: `migration.*` — see this file's own header for why, not merely "not yet
+ * built"). The `satisfies` clause below is the compile-time exhaustiveness check the
  * task brief requires — remove, rename, or add a `CommandKindV1` member without updating one
  * of these maps and this line stops compiling; it is never a runtime surprise.
  */
@@ -139,7 +184,7 @@ export const totalHandlers = {
   ...turnHandlers,
   ...pageHandlers,
   ...pinHandlers,
-  ...notYetImplementedHandlers,
+  ...migrationPostMvpHandlers,
 } satisfies TotalHandlerMap;
 
 /**

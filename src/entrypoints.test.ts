@@ -27,6 +27,9 @@ import { cleanupScratchRoots, createRealProjectFixture } from "store/adapters/te
  */
 
 const repoRoot = path.resolve(import.meta.dir, "..");
+const ENTRYPOINT_MODULE_URL = Bun.pathToFileURL(
+  path.join(repoRoot, "src/entrypoint/index.ts"),
+).href;
 
 /**
  * Races `promise` against a timer so a hang fails fast with a clear message instead of
@@ -86,11 +89,11 @@ function referencedRoots(command: string): readonly string[] {
 }
 
 describe("package entrypoints", () => {
-  test("declares the four documented commands", () => {
-    expect(Object.keys(scripts)).toEqual(expect.arrayContaining(["start", "dev", "demo", "build"]));
+  test("declares the three documented commands", () => {
+    expect(Object.keys(scripts)).toEqual(expect.arrayContaining(["start", "dev", "demo"]));
   });
 
-  test.each(["start", "dev", "demo", "build"])("`%s` points at an existing root", (name) => {
+  test.each(["start", "dev", "demo"])("`%s` points at an existing root", (name) => {
     const roots = referencedRoots(scripts[name] ?? "");
     expect(roots).not.toEqual([]);
     for (const root of roots) expect(fs.existsSync(path.join(repoRoot, root))).toBe(true);
@@ -99,11 +102,6 @@ describe("package entrypoints", () => {
   test("`dev` runs the interactive root under watch mode", () => {
     expect(scripts.dev).toContain("--watch");
     expect(referencedRoots(scripts.dev ?? "")).toEqual(referencedRoots(scripts.start ?? ""));
-  });
-
-  test("`build` compiles a standalone executable", () => {
-    expect(scripts.build).toContain("--compile");
-    expect(scripts.build).toContain("dist/termcraft");
   });
 
   test.each(["src/main.tsx", "src/demo.tsx"])("%s only starts under import.meta.main", (root) => {
@@ -267,4 +265,105 @@ describe("the `termcraft export` CLI (WP-5 Phase D)", () => {
       fs.rmSync(childUserState, { recursive: true, force: true });
     }
   }, 20_000);
+});
+
+/**
+ * Phase-8 Task 11 / WP-10 "the exit must actually exit" fix, proven end to end. A prior
+ * investigation established: (1) `runApp`'s `close()` releases every resource correctly, but
+ * nothing terminated the OS process on the interactive path — `@reatom/core`'s ESM bundle opens
+ * an unref'd `BroadcastChannel` at import time (`node_modules/@reatom/core/dist/index.js`,
+ * confirmed by bisection and `async_hooks`, reproduces under Node too, not fixable from `src/**`)
+ * — so the event loop never drains on its own once the renderer is destroyed; (2) `run-app.ts`'s
+ * `RunAppOptions.exit` now fires a real `process.exit()` AFTER `close()` finishes, closing that
+ * gap. This suite proves fact (2) empirically, against a REAL separate OS process, not merely a
+ * unit test with a recording double (`run-app.test.ts` already covers ordering and wiring that
+ * way — this is deliberately the OTHER kind of proof).
+ *
+ * TWO DELIBERATE SCOPE DECISIONS, verified before being made — read before changing this test:
+ *
+ * 1. TRIGGER: a genuinely EXTERNAL SIGINT/SIGTERM cannot be delivered to a separate Bun child
+ *    process on Windows through any standard API — verified empirically (bisected outside this
+ *    file, not fabricated): `Bun.spawn(...).kill("SIGINT"|"SIGTERM")` and Node's own
+ *    `process.kill(childPid, signal)` both unconditionally hard-terminate the child (exit codes
+ *    130/143) WITHOUT its registered `process.on("SIGINT"|"SIGTERM", ...)` handler ever running;
+ *    `taskkill /PID <pid>` (no `/F`) is flatly refused ("This process can only be terminated
+ *    forcefully"); `taskkill /F` is the same unconditional hard kill. This matches Node's own
+ *    documented Windows behavior for `child_process.kill()` (signals other than plain
+ *    termination are not implemented on Windows). So instead, the spawned child SELF-delivers
+ *    the signal via `process.emit("SIGINT")` once it is confirmed up — this invokes the EXACT
+ *    SAME listener `createProcessBoundary`'s `target.once("SIGINT", handler)` registered on the
+ *    real global `process` (verified: `process.kill(process.pid, "SIGINT")`, the "real" Windows
+ *    self-signal API, ALSO hard-terminates on this Bun build with no handler run — `.emit()` is
+ *    the only mechanism on this platform that actually invokes the registered listener instead
+ *    of bypassing it). What is being proven — "does the process registered for this event
+ *    actually terminate once that handler runs" — does not depend on how the event arrived; the
+ *    interactive `/exit` keystroke itself (a different trigger, same `close()`) is covered by
+ *    Task 21's manual runbook, not here, exactly as the interactive argv path already is
+ *    (`installed-package.test.ts`'s own header comment states the identical limit).
+ * 2. MODE: `demo`, not `interactive` — this test's subject is process-lifecycle plumbing
+ *    (`bootstrap` -> `runApp` -> `createProcessBoundary`/`close()`/the injected `exit` seam),
+ *    genuinely imported and run in a separate process exactly as `main.tsx` composes them; it is
+ *    NOT project/Gate/host composition (already covered elsewhere). `demo` exercises the
+ *    identical shutdown machinery `interactive` does — `runApp`'s `close()` does not branch on
+ *    mode — while needing no real project directory, Gate compiler resolution, or host
+ *    supervisor, keeping this test fast and isolated to what Task 11 actually changed. What is
+ *    NOT re-executed here is `main.tsx`'s own few-line `interactiveExit` glue constant (its
+ *    shape is the SAME flush-then-exit write the already-proven `_host`/`export` branches use,
+ *    verified by direct reading, not by inference).
+ */
+function shutdownHarnessScript(signal: "SIGINT" | "SIGTERM"): string {
+  return [
+    `const mod = await import(${JSON.stringify(ENTRYPOINT_MODULE_URL)})`,
+    `const boundary = mod.createProcessBoundary(process)`,
+    `const app = await mod.bootstrap("demo", {`,
+    `  argv: [],`,
+    `  cwd: () => process.cwd(),`,
+    `  process: boundary,`,
+    // The SAME flush-then-exit shape `main.tsx`'s own `interactiveExit` uses (and the `_host`/
+    // `export` branches before it) — an empty trailing write's callback fires only after every
+    // earlier queued write's callback already has.
+    `  exit: (code) => { process.stdout.write(new Uint8Array(0), () => process.exit(code)) },`,
+    `})`,
+    `if (app instanceof Error) { process.stdout.write("STARTUP_ERROR:" + app.message + "\\n"); process.exit(2) }`,
+    `process.stdout.write("READY\\n")`,
+    `process.emit(${JSON.stringify(signal)})`,
+  ].join("\n");
+}
+
+describe("the interactive shutdown path actually terminates the process (Task 11 / WP-10)", () => {
+  test.each(["SIGINT", "SIGTERM"] as const)(
+    "close()'s own %s path ends the process on its own, within a bounded time, without this test killing it",
+    async (signal) => {
+      const child = Bun.spawn({
+        cmd: [process.execPath, "-e", shutdownHarnessScript(signal)],
+        cwd: repoRoot,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      try {
+        const stdoutPromise = new Response(child.stdout).text();
+        const stderrPromise = new Response(child.stderr).text();
+
+        // Only a timeout kills the child (in `finally`, below) — a clean self-triggered exit
+        // resolves `child.exited` on its own, well before that, and `withTimeout` fails the
+        // test with a clear message if it does not.
+        const exitCode = await withTimeout(
+          child.exited,
+          15_000,
+          `waiting for the interactive shutdown path to end the process on its own after ${signal}`,
+        );
+
+        const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+        expect(stdout, `child stderr:\n${stderr}`).toContain("READY");
+        expect(stdout).not.toContain("STARTUP_ERROR");
+        expect(exitCode, `child stderr:\n${stderr}`).toBe(0);
+      } finally {
+        // Guarantees the child never survives this test, even when an assertion above throws —
+        // a no-op on an already-exited process, matching every other spawn test in this file.
+        child.kill();
+      }
+    },
+    20_000,
+  );
 });

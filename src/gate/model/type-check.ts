@@ -9,11 +9,15 @@ import type { GateError } from "../types";
 import { lineColOf } from "./lexer";
 
 /**
- * The injected seams a type-checker needs (Spike C). `tscExePath` is a spawnable
- * `tsc.exe` on real disk (produced by `materializeCompiler`); `runtimeDts` is the
- * ambient `@termcraft/runtime` declaration TEXT — injected because phase 8 generates
- * the real one. The libs are NOT served here: they sit on disk next to the exe and
- * the Go compiler reads them itself (Spike C: "What the virtual FS is actually for").
+ * The injected seams a type-checker needs (Spike C). `tscExePath` is a spawnable `tsc`/`tsgo`
+ * executable already resolved from the INSTALLED `typescript` package
+ * (`gate/model/tsc-extract.ts`'s `resolveCompilerPath()`, phase-8 Task 4) — this module does no
+ * resolution of its own, only spawns the path it is handed. `runtimeDts` is the ambient
+ * `@termcraft/runtime` declaration TEXT: the composition root injects `runtime/generated
+ * /runtime-dts.ts`'s generated `RUNTIME_DTS` (Task 6) here rather than this module reading it
+ * off disk, which is what keeps `gate` free of a `runtime` import (the module DAG's leaf rule).
+ * The libs are NOT served here: they sit on disk next to the exe and the Go compiler reads them
+ * itself (Spike C: "What the virtual FS is actually for").
  */
 export interface TypeCheckerConfig {
   readonly tscExePath: string;
@@ -47,12 +51,23 @@ function norm(p: string): string {
  * four other libs neither embedded nor wanted in a TUI (where `document` must not
  * exist). `strict` + `noEmit` + `moduleResolution: bundler` + `jsx: react-jsx`
  * mirror the runtime; `types: []` + `skipLibCheck: true` keep the check hermetic.
+ *
+ * `jsxImportSource: "@termcraft/runtime"` (phase-8 WP-2) is the one field the hermetic
+ * check cannot go without. `jsx: "react-jsx"` alone implies the factory module `react`,
+ * and NOTHING resolves `react` from `os.tmpdir()` — so every JSX page, including a
+ * perfectly valid one, failed with `TS2875 This JSX tag requires the module path
+ * 'react/jsx-runtime' to exist`. Pointing it at the facade instead makes the factory
+ * module `@termcraft/runtime/jsx-runtime`, which the generated `runtimeDts` declares
+ * alongside the facade itself (`scripts/gen-runtime-dts.ts`, `buildJsxSubmodules`) —
+ * exactly the wiring `src/runtime/model/jsx.ts`'s own NOTE names as the phase-8 job.
+ * This affects the TYPE CHECK only; the transform that renders a saved page is Bun's.
  */
 function synthesizeTsconfig(candidatePath: string, runtimeDtsPath: string): string {
   return JSON.stringify({
     compilerOptions: {
       strict: true,
       jsx: "react-jsx",
+      jsxImportSource: "@termcraft/runtime",
       noEmit: true,
       target: "esnext",
       module: "esnext",

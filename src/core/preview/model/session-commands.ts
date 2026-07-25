@@ -53,6 +53,15 @@ import type { GeometryTokenLedger } from "./geometry-token-ledger";
  * Every port call is `await wrap(...)`-ed, matching `admission.ts`'s own rule: code
  * after each await calls `deps.machine.apply` (a Reatom write), and a plain unwrapped
  * `await` would resume outside the caller's `context.start(...)` frame.
+ *
+ * kernel-assembly Task 16 finding: `selectPage`/`selectCurrent`/`selectHistorical`/`close`
+ * above are NOT currently reachable in production — `handlers/preview-export.ts` drives
+ * session establishment/teardown directly against `HandlerContext.setActivePreviewSession`
+ * instead (Gap A). `publishFrame`/`acknowledgeDisplay` remain the real, tested frame-token
+ * authority regardless; `noteSessionEstablished`/`noteSessionClosed` (bottom of this file)
+ * are the external hooks `kernel.ts` uses to keep this module's own incarnation identity in
+ * step with whichever path actually set the session, so those two methods stay genuinely
+ * reachable even while Gap A is open.
  */
 
 /** §8.2/§10.1's closed geometry-query-body union, reused directly rather than redeclared. */
@@ -111,6 +120,24 @@ export interface PreviewSessionCommands {
   /** The UI's typed display acknowledgement (§8.1) — not a Kernel command, see `frame-token-ledger.ts`. */
   readonly acknowledgeDisplay: (frameToken: FrameTokenV1) => FrameAckError | FrameIdentityV1;
   readonly currentPreviewSessionId: () => string | null;
+  /**
+   * Marks the Kernel-tracked live session as freshly established from OUTSIDE this
+   * module's own `selectSource` (kernel-assembly Task 16 finding): `core/kernel/model/
+   * handlers/preview-export.ts`'s `selectCurrentSource`/`handleClose` still drive session
+   * establishment/teardown directly against `HandlerContext.setActivePreviewSession`
+   * rather than this module's `selectPage`/`selectCurrent`/`selectHistorical`/`close`
+   * (Gap A, `handlers/types.ts`'s own `previewSessionCommands` doc comment: "NOT yet
+   * called by any currently-wired handler") — so this module's own session-establishing
+   * entry points never run in production today. `publishFrame`/`acknowledgeDisplay` are
+   * still the real frame-token authority the UI needs regardless of which
+   * session-establishment path actually ran, so `core/kernel/model/kernel.ts`'s
+   * `setActivePreviewSession` calls this the moment a non-null session lands, seeding the
+   * exact same fresh incarnation identity `establishSession` mints for its own
+   * (currently unreachable) callers, over the SAME `frameTokenLedger`/`frameBroker`.
+   */
+  readonly noteSessionEstablished: (session: PreviewSession) => void;
+  /** The paired teardown hook — see {@link noteSessionEstablished}'s own comment. */
+  readonly noteSessionClosed: () => void;
 }
 
 /** A fresh 32-lowercase-hex-char stand-in host nonce (matches `hostNonceSchema`) — see this file's header NAMED GAP. */
@@ -324,6 +351,41 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     return deps.frameTokenLedger.acknowledge(frameToken);
   }
 
+  /**
+   * `noteSessionEstablished`/`noteSessionClosed` (kernel-assembly Task 16): the external
+   * counterpart to `establishSession`'s own success tail / `close`'s own teardown tail,
+   * for the ONE caller outside this module that actually drives the real Kernel-tracked
+   * session today — `core/kernel/model/kernel.ts`'s `setActivePreviewSession`. See
+   * `PreviewSessionCommands.noteSessionEstablished`'s own doc comment (above) for the
+   * full "why": `handlers/preview-export.ts`'s `selectCurrentSource`/`handleClose` still
+   * call `HandlerContext.setActivePreviewSession` directly rather than THIS module's own
+   * `selectPage`/`selectCurrent`/`close` (Gap A), so `establishSession`/`close` above
+   * never run in production — `publishFrame`/`acknowledgeDisplay` still need a real
+   * incarnation identity to mint against regardless of which path established the
+   * session, so `kernel.ts` seeds one through this pair instead.
+   *
+   * Deliberately NOT refactored to share a helper with `establishSession`'s success tail
+   * / `close`'s teardown tail: those two already carry this file's own extensive, passing
+   * test coverage, and extracting a shared helper risks a transcription slip in
+   * already-proven code for no benefit a caller of THIS module can observe. The bodies
+   * below are an intentional literal mirror, not a re-use.
+   */
+  function noteSessionEstablished(session: PreviewSession): void {
+    currentSession = session;
+    currentPreviewSessionId = uuidv7();
+    currentNonce = mintHostNonce();
+    deps.frameBroker.clear();
+    deps.frameTokenLedger.invalidateCurrent();
+  }
+
+  function noteSessionClosed(): void {
+    currentSession = null;
+    currentPreviewSessionId = null;
+    currentNonce = null;
+    deps.frameBroker.clear();
+    deps.frameTokenLedger.invalidateCurrent();
+  }
+
   return {
     selectPage: selectSource,
     selectCurrent: selectSource,
@@ -337,5 +399,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     publishFrame,
     acknowledgeDisplay,
     currentPreviewSessionId: () => currentPreviewSessionId,
+    noteSessionEstablished,
+    noteSessionClosed,
   };
 }

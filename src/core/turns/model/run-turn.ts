@@ -197,10 +197,17 @@ export interface RunTurnValidationMaterialV1 {
   readonly pages: readonly TurnValidationPageInputV1[];
 }
 
-/** `finalizeTurn`'s domain-specific fields — everything this driver cannot derive itself (the agent's own record text/warnings, the Gate-validated page diff, which sent pins resolved). */
+/**
+ * `finalizeTurn`'s domain-specific fields — everything this driver cannot derive itself (the
+ * agent's own record text/warnings, the Gate-validated page diff, which sent pins resolved).
+ * `candidateRoot` is omitted for the same reason as `turnId`/`stagedReadSet`/`createdAt`:
+ * this driver already holds `candidate.root` itself (the freeze this exact attempt just
+ * produced) and supplies it directly at the `finalizeTurn` call site below — a caller's
+ * `buildFinalizeInput` has no legitimate way to know it independently.
+ */
 export type RunTurnFinalizeMaterialV1 = Omit<
   FinalizeTurnInputV1,
-  "turnId" | "targetChatId" | "stagedReadSet" | "createdAt"
+  "turnId" | "targetChatId" | "stagedReadSet" | "createdAt" | "candidateRoot"
 >;
 
 export interface RunTurnInputV1 {
@@ -265,14 +272,34 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     }
   }
 
+  /**
+   * `candidateRoot` is REQUIRED at every call site below — CORRECTED (review finding #4): an
+   * earlier version treated it as optional and omitted it at every call site that fired
+   * before THIS iteration's own `freezeTurnCandidate` call, on the false assumption that "no
+   * candidate frozen yet this iteration" meant "no candidate exists at all". That is false
+   * once retries exist: a gate-triggered retry (`validation.kind === "retry"`, below) leaves
+   * the PRIOR attempt's already-frozen candidate live, then loops back to the top with a
+   * fresh `attempt` number — so a NEXT-iteration cancellation/failure/deadline-expiry that
+   * fires before ITS OWN freeze was silently abandoning the PREVIOUS attempt's candidate
+   * forever, on the ordinary gate-retry path this whole task exists to close. Note also that
+   * `freezeTurnCandidate` reuses the SAME turnId-keyed root on every attempt of one turn
+   * (`store/adapters/staging.ts`'s `candidateDestRoot`; the in-memory fake's identical
+   * `/fake-candidate/${turnId}` keying) — so a retry never leaves a SECOND, distinct
+   * candidate directory behind; it is always the one true candidate for this turn, which
+   * every call site below must still retire even when THIS iteration never got to (re)freeze
+   * it. `candidateRoot` is `null` only before the FIRST successful freeze of this turn —
+   * the one case where no candidate has ever existed.
+   */
   async function terminalize(
     outcome: TurnTerminalOutcome,
     text: string,
-    reason?: string,
+    reason: string | undefined,
+    candidateRoot: string | null,
   ): Promise<RunTurnResultV1> {
     const terminalizeDeps: TerminalizeTurnDeps = {
       machine: deps.machine,
       turnTransactions: deps.turnTransactions,
+      staging: deps.staging,
     };
     const result = await wrap(
       terminalizeTurn(terminalizeDeps, {
@@ -282,6 +309,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         text,
         ...(reason !== undefined ? { reason } : {}),
         createdAt: deps.clock.now().toISOString(),
+        candidateRoot,
       }),
     );
     return { kind: "terminalized", result };
@@ -289,6 +317,16 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
 
   let attempt: TurnAttempt = 1;
   let userMessage = input.baseTask.userMessage;
+  /**
+   * The most recently frozen candidate's own root, across every attempt this turn has run so
+   * far — hoisted above the retry loop (review finding #4) instead of being declared fresh
+   * inside it, precisely so a retry's own abandonment (see `terminalize`'s own doc just
+   * above) never loses track of what still needs retiring. Reassigned the moment THIS
+   * iteration's own freeze succeeds; every earlier `terminalize(...)` call site in a given
+   * iteration reads whatever a PRIOR iteration already set. `null` until the first successful
+   * freeze this turn has ever produced.
+   */
+  let candidateRoot: string | null = null;
 
   for (;;) {
     // Defense in depth matching the brief's own loop bound — unreachable via this driver's
@@ -296,13 +334,18 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     // `MAX_TURN_ATTEMPTS`), but never silently trusted either.
     if (attempt > MAX_TURN_ATTEMPTS) {
       bridge("requestCancel");
-      return terminalize("failed", "the turn exceeded its attempt budget");
+      return terminalize(
+        "failed",
+        "the turn exceeded its attempt budget",
+        undefined,
+        candidateRoot,
+      );
     }
 
     const deadline = deps.deadlines.check();
     if (deadline.kind === "expired") {
       bridge("requestCancel");
-      return terminalize("failed", deadlineExceededText(deadline.bound));
+      return terminalize("failed", deadlineExceededText(deadline.bound), undefined, candidateRoot);
     }
 
     const attemptDeps: TurnAttemptDeps = {
@@ -331,12 +374,18 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         "failed",
         `attempt fence rejected: ${started.message}`,
         String(started.reason),
+        candidateRoot,
       );
     }
     if (started.kind === "illegal") {
       // `beginAttempt` itself was illegal — the phase never left "workspace-ready".
       bridge("requestCancel");
-      return terminalize("failed", `attempt could not start (${started.code})`, started.code);
+      return terminalize(
+        "failed",
+        `attempt could not start (${started.code})`,
+        started.code,
+        candidateRoot,
+      );
     }
 
     // Step C3's own hook (this file's `RunTurnDeps.onAttemptStarted` doc comment) — the live
@@ -348,11 +397,11 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
 
     if (outcome.kind === "cancelled") {
       bridge("beginTerminalization");
-      return terminalize("cancelled", "the turn was cancelled");
+      return terminalize("cancelled", "the turn was cancelled", undefined, candidateRoot);
     }
     if (outcome.kind === "failed") {
       bridge("beginTerminalization");
-      return terminalize("failed", outcome.message);
+      return terminalize("failed", outcome.message, undefined, candidateRoot);
     }
     if (outcome.kind === "backend-unhealthy") {
       // See this file's header: BACKEND-UNHEALTHY DIVERGENCE.
@@ -361,6 +410,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         "failed",
         "the backend could not confirm a clean exit",
         "unhealthy_unconfirmed_exit",
+        candidateRoot,
       );
     }
 
@@ -374,7 +424,12 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     const postAttemptDeadline = deps.deadlines.check();
     if (postAttemptDeadline.kind === "expired") {
       bridge("beginTerminalization");
-      return terminalize("failed", deadlineExceededText(postAttemptDeadline.bound));
+      return terminalize(
+        "failed",
+        deadlineExceededText(postAttemptDeadline.bound),
+        undefined,
+        candidateRoot,
+      );
     }
 
     bridge("beginSnapshot");
@@ -383,14 +438,23 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
 
     if (freeze.kind === "illegal") {
       bridge("requestCancel");
-      return terminalize("failed", `candidate freeze rejected (${freeze.code})`, freeze.code);
+      return terminalize(
+        "failed",
+        `candidate freeze rejected (${freeze.code})`,
+        freeze.code,
+        candidateRoot,
+      );
     }
     if (freeze.kind === "failed") {
       bridge("requestCancel");
-      return terminalize("failed", freeze.failure.safeMessage, freeze.failure.code);
+      return terminalize("failed", freeze.failure.safeMessage, freeze.failure.code, candidateRoot);
     }
 
     const candidate = freeze.candidate;
+    // This iteration successfully (re)froze the turn's one candidate — see this file's own
+    // `terminalize` doc comment for why every earlier-in-a-LATER-iteration call site needs
+    // this hoisted binding rather than a loop-local `const`.
+    candidateRoot = candidate.root;
     const material = input.buildValidationInput(candidate);
     const validationDeps: TurnValidationDeps = {
       machine: deps.machine,
@@ -408,7 +472,12 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
 
     if (validation.kind === "exhausted") {
       bridge("beginTerminalization");
-      return terminalize("failed", validation.failure.safeMessage, validation.failure.code);
+      return terminalize(
+        "failed",
+        validation.failure.safeMessage,
+        validation.failure.code,
+        candidateRoot,
+      );
     }
 
     if (validation.kind === "retry") {
@@ -423,9 +492,11 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       if (folded instanceof Error) {
         // The freshness barrier tripped — unreachable given this driver's own strictly
         // consecutive attempt numbering, but handled rather than assumed. The machine is
-        // already back in "workspace-ready" (see the comment above).
+        // already back in "workspace-ready" (see the comment above). This iteration's own
+        // freeze already succeeded (`candidateRoot` was just set above), so it still needs
+        // retiring here.
         bridge("requestCancel");
-        return terminalize("failed", folded.message);
+        return terminalize("failed", folded.message, undefined, candidateRoot);
       }
       userMessage = appendPromptFold(input.baseTask.userMessage, folded);
       attempt = validation.nextAttempt;
@@ -437,6 +508,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       machine: deps.machine,
       turnTransactions: deps.turnTransactions,
       deadlines: deps.deadlines,
+      staging: deps.staging,
     };
     const finalizeMaterial = input.buildFinalizeInput({
       turnId: context.turnId,
@@ -450,6 +522,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         targetChatId: context.targetChatId,
         stagedReadSet: context.workspace.readSet,
         createdAt: deps.clock.now().toISOString(),
+        candidateRoot: candidate.root,
         ...finalizeMaterial,
       }),
     );
@@ -457,9 +530,18 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     if (finalizeResult.kind === "failed") {
       // See this file's header, "FINALIZE FAILURES DO BRIDGE INTO terminalizeTurn": without
       // this bridge the machine is already in "finalizing" (beginFinalization succeeded
-      // inside finalizeTurn) and would be stranded there forever.
+      // inside finalizeTurn) and would be stranded there forever. `finalizeTurn` itself never
+      // reached its own candidate-retirement call on this exit (see its header — that only
+      // runs after a durable commit), so the candidate this attempt froze is still live;
+      // passing `candidateRoot` here is what lets `terminalizeTurn`'s own retirement close
+      // it instead of leaking it (review finding #4).
       bridge("beginTerminalization");
-      return terminalize("failed", finalizeResult.failure.safeMessage, finalizeResult.failure.code);
+      return terminalize(
+        "failed",
+        finalizeResult.failure.safeMessage,
+        finalizeResult.failure.code,
+        candidateRoot,
+      );
     }
 
     // `finalizeResult.kind` is `"committed"` or `"illegal"` here — both mean
@@ -472,12 +554,15 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       // commit exists, but the machine left "finalizing" via some other already-applied
       // transition (almost always a raced `turn.cancel`), so `markCommitted`/`settle` is now
       // illegal. Bridge to terminalizing exactly like the "failed" branch above, so the
-      // machine still settles to `terminal`/`idle` instead of being stranded.
+      // machine still settles to `terminal`/`idle` instead of being stranded. `markCommitted`
+      // going illegal means `finalizeTurn` returned before its own candidate-retirement call
+      // too (see its header) — `candidateRoot` here retires it via `terminalizeTurn` instead.
       bridge("beginTerminalization");
       return terminalize(
         "failed",
         "the turn's commit landed durably, but the turn machine could not settle onto it (a concurrent cancel most likely raced the pre-intent window)",
         finalizeResult.code,
+        candidateRoot,
       );
     }
 

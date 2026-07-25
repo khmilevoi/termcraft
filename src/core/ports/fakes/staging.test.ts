@@ -168,4 +168,86 @@ describe("createFakeStagingService", () => {
       ]);
     });
   });
+
+  describe("retireCandidate()", () => {
+    test("then retiring the same root again is still safe (idempotent no-op)", async () => {
+      const service = createFakeStagingService();
+      const workspace = await service.createTurnWorkspace(input);
+      if ("code" in workspace) throw new Error("unexpected failure");
+      const candidate = await service.snapshotToCandidate(workspace);
+      if ("code" in candidate) throw new Error("unexpected failure");
+
+      const first = await service.retireCandidate(candidate.root);
+      const second = await service.retireCandidate(candidate.root);
+      expect(first).toBeUndefined();
+      expect(second).toBeUndefined();
+    });
+
+    test("retiring a root that was never frozen into a candidate is also a safe no-op", async () => {
+      const service = createFakeStagingService();
+      const result = await service.retireCandidate("/never-a-candidate");
+      expect(result).toBeUndefined();
+    });
+
+    // Review finding #8: without `seedForeignCandidateRoot`, "nothing exists at this root"
+    // and "something real exists at this root, but this instance never froze it" (the port's
+    // own two distinct outcomes — `core/ports/staging.ts`'s `retireCandidate` doc) were
+    // indistinguishable in this fake's model, so no test could exercise how `core` handles a
+    // retire REFUSAL. This test exercises exactly that second outcome.
+    test("refuses a root seeded as foreign (real, but never frozen by this instance) — models the port's own outcome-2 refusal", async () => {
+      const service = createFakeStagingService();
+      service.seedForeignCandidateRoot("/foreign-candidate");
+
+      const result = await service.retireCandidate("/foreign-candidate");
+      if (result === undefined) throw new Error("expected retireCandidate() to refuse this root");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+    });
+
+    test("a live candidate this instance itself froze still retires normally even if some OTHER root was seeded as foreign", async () => {
+      const service = createFakeStagingService();
+      service.seedForeignCandidateRoot("/foreign-candidate");
+      const workspace = await service.createTurnWorkspace(input);
+      if ("code" in workspace) throw new Error("unexpected failure");
+      const candidate = await service.snapshotToCandidate(workspace);
+      if ("code" in candidate) throw new Error("unexpected failure");
+
+      const result = await service.retireCandidate(candidate.root);
+      expect(result).toBeUndefined();
+    });
+
+    test("failNext() queues one failure for retireCandidate()", async () => {
+      const service = createFakeStagingService();
+      const workspace = await service.createTurnWorkspace(input);
+      if ("code" in workspace) throw new Error("unexpected failure");
+      const candidate = await service.snapshotToCandidate(workspace);
+      if ("code" in candidate) throw new Error("unexpected failure");
+
+      service.failNext("retireCandidate", FAILURE);
+      const first = await service.retireCandidate(candidate.root);
+      expect(first).toEqual(FAILURE);
+      const second = await service.retireCandidate(candidate.root);
+      expect(second).toBeUndefined();
+    });
+
+    test("records calls in order alongside the rest of the lifecycle, marking effective vs. no-op retires", async () => {
+      const service = createFakeStagingService();
+      const workspace = await service.createTurnWorkspace(input);
+      if ("code" in workspace) throw new Error("unexpected failure");
+      const candidate = await service.snapshotToCandidate(workspace);
+      if ("code" in candidate) throw new Error("unexpected failure");
+
+      await service.retireCandidate(candidate.root);
+      await service.retireCandidate(candidate.root);
+      expect(service.calls.map((c) => c.method)).toEqual([
+        "createTurnWorkspace",
+        "snapshotToCandidate",
+        "retireCandidate",
+        "retireCandidate",
+      ]);
+      const retireCalls = service.calls.filter((c) => c.method === "retireCandidate");
+      expect(retireCalls.map((c) => (c.method === "retireCandidate" ? c.effective : null))).toEqual(
+        [true, false],
+      );
+    });
+  });
 });

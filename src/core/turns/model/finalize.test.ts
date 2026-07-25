@@ -10,7 +10,7 @@ import {
 } from "core/machines";
 import type { SentPinV1 } from "core/pins/model/turn-resolution";
 import type { StagedTurnReadSetV1 } from "core/ports";
-import { createFakeTurnTransactionService } from "core/ports/fakes";
+import { createFakeStagingService, createFakeTurnTransactionService } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 import type { ChatAgentRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
@@ -82,6 +82,9 @@ function stagedReadSet(overrides: Partial<StagedTurnReadSetV1> = {}): StagedTurn
   };
 }
 
+/** `candidateRoot` is required on `FinalizeTurnInputV1` (review finding #4 — `finalizeTurn` is only ever called once a candidate has already been frozen), so every `baseInput()` needs SOME value even when a test's own focus is elsewhere. */
+const DEFAULT_CANDIDATE_ROOT = "/fake-candidate/default";
+
 function baseInput(overrides: Partial<FinalizeTurnInputV1> = {}): FinalizeTurnInputV1 {
   return {
     turnId: TURN_ID,
@@ -92,6 +95,7 @@ function baseInput(overrides: Partial<FinalizeTurnInputV1> = {}): FinalizeTurnIn
     sentPins: [] as readonly SentPinV1[],
     stagedReadSet: stagedReadSet(),
     createdAt: CREATED_AT,
+    candidateRoot: DEFAULT_CANDIDATE_ROOT,
     ...overrides,
   };
 }
@@ -100,17 +104,18 @@ function setup(options?: { readonly deadlineExpired?: boolean }) {
   const machine = reatomTurnStateMachine();
   advanceToValidating(machine);
   const turnTransactions = createFakeTurnTransactionService();
+  const staging = createFakeStagingService();
   const clock = manualClock(T0);
   const deadlines = createTurnDeadlines({ clock, absoluteMs: 10_000, silenceMs: 5_000 });
   if (options?.deadlineExpired) clock.advance(10_000);
-  return { machine, turnTransactions, deadlines, clock };
+  return { machine, turnTransactions, staging, deadlines, clock };
 }
 
 describe("finalizeTurn", () => {
   test("on success it moves finalizing -> committed -> idle and reports the commit", async () => {
     const { call, readPhase, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, baseInput());
+      const { machine, turnTransactions, staging, deadlines } = setup();
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, baseInput());
       return { call, readPhase: wrap(() => machine.phase()), turnTransactions };
     });
 
@@ -125,10 +130,10 @@ describe("finalizeTurn", () => {
 
   test("passes the translated read set and caller-built fields straight through to TurnTransactionService.finalize", async () => {
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
+      const { machine, turnTransactions, staging, deadlines } = setup();
       const record = agentRecord({ text: "custom text" });
       const call = finalizeTurn(
-        { machine, turnTransactions, deadlines },
+        { machine, turnTransactions, staging, deadlines },
         baseInput({ agentRecord: record, requestedActivePage: slug("about") }),
       );
       return { call, turnTransactions };
@@ -156,8 +161,8 @@ describe("finalizeTurn", () => {
     // for such fields; this pins the ACTUAL object this module sends to the port to
     // exactly those four keys, so a future edit cannot smuggle local UI context into it.
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, baseInput());
+      const { machine, turnTransactions, staging, deadlines } = setup();
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, baseInput());
       return { call, turnTransactions };
     });
 
@@ -177,9 +182,10 @@ describe("finalizeTurn", () => {
     const { call, turnTransactions } = context.start(() => {
       const machine = reatomTurnStateMachine(); // stays at idle
       const turnTransactions = createFakeTurnTransactionService();
+      const staging = createFakeStagingService();
       const clock = manualClock(T0);
       const deadlines = createTurnDeadlines({ clock, absoluteMs: 10_000, silenceMs: 5_000 });
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, baseInput());
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, baseInput());
       return { call, turnTransactions };
     });
 
@@ -191,8 +197,8 @@ describe("finalizeTurn", () => {
 
   test("an expired absolute deadline blocks commit intent and leaves the machine in finalizing", async () => {
     const { call, readPhase, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup({ deadlineExpired: true });
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, baseInput());
+      const { machine, turnTransactions, staging, deadlines } = setup({ deadlineExpired: true });
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, baseInput());
       return { call, readPhase: wrap(() => machine.phase()), turnTransactions };
     });
 
@@ -214,7 +220,7 @@ describe("finalizeTurn", () => {
 
   test("checks the deadline BEFORE calling TurnTransactionService.finalize", async () => {
     const { call, order } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
+      const { machine, turnTransactions, staging, deadlines } = setup();
       const order: string[] = [];
       const tracedDeadlines = {
         ...deadlines,
@@ -231,7 +237,7 @@ describe("finalizeTurn", () => {
         },
       };
       const call = finalizeTurn(
-        { machine, turnTransactions: tracedTransactions, deadlines: tracedDeadlines },
+        { machine, turnTransactions: tracedTransactions, staging, deadlines: tracedDeadlines },
         baseInput(),
       );
       return { call, order };
@@ -250,9 +256,9 @@ describe("finalizeTurn", () => {
       details: { part: "chat" },
     };
     const { call, readPhase } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
+      const { machine, turnTransactions, staging, deadlines } = setup();
       turnTransactions.failNext("finalize", FAILURE);
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, baseInput());
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, baseInput());
       return { call, readPhase: wrap(() => machine.phase()) };
     });
 
@@ -266,7 +272,7 @@ describe("finalizeTurn", () => {
     // A pin created AFTER turn capture was never added to sentPins, so it structurally
     // cannot appear here — "pins created after turn capture ... remain open" (§12.2 item 8).
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
+      const { machine, turnTransactions, staging, deadlines } = setup();
       const input = baseInput({
         changedPages: [
           { pageSlug: slug("home"), change: "replace" },
@@ -274,7 +280,7 @@ describe("finalizeTurn", () => {
         ],
         sentPins: [{ pinId: "pin-a", pageSlug: slug("home") }],
       });
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, input);
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, input);
       return { call, turnTransactions };
     });
 
@@ -289,13 +295,13 @@ describe("finalizeTurn", () => {
 
   test("an empty changedPages diff resolves no pins at all", async () => {
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions, deadlines } = setup();
+      const { machine, turnTransactions, staging, deadlines } = setup();
       const input = baseInput({
         changedPages: [],
         agentRecord: agentRecord({ changedPages: [] }),
         sentPins: [{ pinId: "pin-a", pageSlug: slug("home") }],
       });
-      const call = finalizeTurn({ machine, turnTransactions, deadlines }, input);
+      const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, input);
       return { call, turnTransactions };
     });
 
@@ -304,5 +310,93 @@ describe("finalizeTurn", () => {
     const finalizeCall = turnTransactions.calls.find((c) => c.method === "finalize");
     if (finalizeCall?.method !== "finalize") throw new Error("expected a finalize call");
     expect(finalizeCall.input.resolvedPins).toEqual([]);
+  });
+
+  describe("candidate retirement (kernel-assembly Task 13)", () => {
+    const CANDIDATE_ROOT = "/fake-candidate/finalize-test";
+
+    test("retires the frozen candidate exactly once on a successful commit", async () => {
+      const { call, staging } = context.start(() => {
+        const { machine, turnTransactions, deadlines } = setup();
+        const staging = createFakeStagingService();
+        const call = finalizeTurn(
+          { machine, turnTransactions, deadlines, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call, staging };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("committed");
+      expect(staging.calls.map((c) => c.method)).toEqual(["retireCandidate"]);
+      const retireCall = staging.calls.find((c) => c.method === "retireCandidate");
+      if (retireCall?.method !== "retireCandidate")
+        throw new Error("expected a retireCandidate call");
+      expect(retireCall.root).toBe(CANDIDATE_ROOT);
+    });
+
+    // REMOVED (review finding #4): this describe block used to also pin "never retires when
+    // staging or candidateRoot is absent" — `FinalizeTurnDeps.staging` and
+    // `FinalizeTurnInputV1.candidateRoot` were both optional, and omitting either one made
+    // retirement a silent no-op. Finding #4 flagged that as the exact bug (nothing in
+    // production ever threaded either value through, so the candidate leak stayed open) and
+    // required both fields to become REQUIRED instead — a `finalizeTurn` call that omits
+    // either one is now a compile error, so the scenario this test pinned can no longer be
+    // constructed through the public API at all. It is removed rather than left to bit-rot
+    // into a type error.
+
+    test("never retires on a deadline-exceeded failure — the turn never reaches committed", async () => {
+      const { call, staging } = context.start(() => {
+        const { machine, turnTransactions, deadlines } = setup({ deadlineExpired: true });
+        const staging = createFakeStagingService();
+        const call = finalizeTurn(
+          { machine, turnTransactions, deadlines, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call, staging };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("failed");
+      expect(staging.calls).toEqual([]);
+    });
+
+    test("a retire failure is reported via console.warn without failing the already-committed turn", async () => {
+      const RETIRE_FAILURE: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "candidate cleanup failed",
+        details: {},
+      };
+      const { call } = context.start(() => {
+        const { machine, turnTransactions, deadlines } = setup();
+        const staging = createFakeStagingService();
+        staging.failNext("retireCandidate", RETIRE_FAILURE);
+        const call = finalizeTurn(
+          { machine, turnTransactions, deadlines, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call, staging };
+      });
+
+      const originalWarn = console.warn;
+      const warnCalls: unknown[][] = [];
+      console.warn = (...args: unknown[]) => {
+        warnCalls.push(args);
+      };
+      const result = await call.finally(() => {
+        console.warn = originalWarn;
+      });
+
+      expect(result.kind).toBe("committed");
+      // Exactly the ONE warning this code path itself emits (`retireFinalizedCandidate`'s own
+      // `console.warn` call in finalize.ts) — not merely "some warning fired somewhere",
+      // which would also pass for an unrelated warning this same run happened to log.
+      expect(warnCalls).toEqual([
+        ["finalizeTurn: candidate retirement failed:", RETIRE_FAILURE.safeMessage],
+      ]);
+    });
   });
 });

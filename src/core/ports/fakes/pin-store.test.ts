@@ -146,4 +146,61 @@ describe("createFakePinStore", () => {
       expect(second).toBeNull();
     });
   });
+
+  // phase-8 WP-6: the pin-log analogue of `fakes/chat-store.test.ts`'s own `readAppendBase()`
+  // describe block — see `pin-store.ts`'s own doc comment on `readAppendBase` for the full
+  // citation (`AdmissionWorkspaceMaterialV1.readSet.pins`, `buildFinalizeCasPrecondition`).
+  describe("readAppendBase", () => {
+    test("on a page with no log yet returns a stable, deterministic base — never an error", async () => {
+      const store = createFakePinStore();
+      const first = await store.readAppendBase(slug("home"));
+      const second = await store.readAppendBase(slug("home"));
+      if ("code" in first) throw new Error("unexpected failure");
+      if ("code" in second) throw new Error("unexpected failure");
+      // Deterministic: reading twice with nothing appended in between yields the SAME
+      // length/hash — never a value that changes just because it was read again.
+      expect(first).toEqual(second);
+      expect(first.prefixSha256).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    test("changes once an event is appended — never a fabricated, unchanging baseline", async () => {
+      const store = createFakePinStore();
+      const before = await store.readAppendBase(slug("home"));
+      if ("code" in before) throw new Error("unexpected failure");
+
+      await store.appendStandaloneEvent(slug("home"), created);
+      const after = await store.readAppendBase(slug("home"));
+      if ("code" in after) throw new Error("unexpected failure");
+
+      expect(after.length).not.toBe(before.length);
+      expect(after.prefixSha256).not.toBe(before.prefixSha256);
+    });
+
+    test("is scoped per page — appending on one page never changes another page's base", async () => {
+      const store = createFakePinStore();
+      const before = await store.readAppendBase(slug("about"));
+      if ("code" in before) throw new Error("unexpected failure");
+
+      await store.appendStandaloneEvent(slug("home"), created);
+      const after = await store.readAppendBase(slug("about"));
+      if ("code" in after) throw new Error("unexpected failure");
+
+      expect(after).toEqual(before);
+    });
+
+    test("failNext() queues one failure for readAppendBase specifically", async () => {
+      const store = createFakePinStore();
+      store.failNext("readAppendBase", FAILURE);
+      const first = await store.readAppendBase(slug("home"));
+      expect(first).toEqual(FAILURE);
+      const second = await store.readAppendBase(slug("home"));
+      expect("code" in second).toBe(false);
+    });
+
+    test("records calls in order with their page slugs", async () => {
+      const store = createFakePinStore();
+      await store.readAppendBase(slug("home"));
+      expect(store.calls).toEqual([{ method: "readAppendBase", pageSlug: slug("home") }]);
+    });
+  });
 });

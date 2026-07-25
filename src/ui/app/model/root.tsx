@@ -2,6 +2,7 @@ import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import * as errore from "errore";
 
+import type { HomeAgentHealth } from "ui/home";
 import type { KernelPort } from "ui/kernel";
 
 import { App } from "../ui/App";
@@ -29,6 +30,21 @@ export interface UiRootOptions {
   readonly port: KernelPort;
   readonly env?: UiEnv;
   readonly adapters?: UiRootAdapters;
+  /**
+   * The real Home agent-health probe (phase-8 Task 9 / WP-5), built by the composition root
+   * from the shell's agent registry (`entrypoint/model/agent-health.ts`'s
+   * `createAgentHealthProbe`, wired in `entrypoint/model/run-app.ts`). Optional so every
+   * existing `createUiRoot` call keeps compiling — `createUiDeps`'s own fourth parameter
+   * already defaults to today's pre-probe placeholder reading when this is omitted.
+   */
+  readonly agentHealthProbe?: () => Promise<HomeAgentHealth>;
+  /**
+   * The one shutdown trigger (phase-8 Task 11 / WP-10), forwarded verbatim into
+   * `createUiDeps`'s fifth parameter — see `deps.ts`'s `UiDeps.requestExit` for the full
+   * reasoning. Optional so every existing `createUiRoot` call keeps compiling; `createUiDeps`'s
+   * own default (a no-op) applies when this is omitted.
+   */
+  readonly requestExit?: () => void;
 }
 
 export interface UiRootHandle {
@@ -63,7 +79,13 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
   const mounted = errore.try(() =>
     root.render(
       <App
-        deps={createUiDeps(options.port, { w: renderer.width, h: renderer.height }, options.env)}
+        deps={createUiDeps(
+          options.port,
+          { w: renderer.width, h: renderer.height },
+          options.env,
+          options.agentHealthProbe,
+          options.requestExit,
+        )}
       />,
     ),
   );

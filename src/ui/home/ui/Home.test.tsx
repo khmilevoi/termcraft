@@ -97,6 +97,26 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
   });
 
+  // phase-8 Task 11 / WP-10: Home had no status bar at all before this — design
+  // `home()`/`design/termcraft-engine.js:144-145` draws one; this reproduces its segments
+  // through the existing `ui/status-bar` component.
+  test("renders a HOME status bar naming the /exit hint, not q quit (WP-10 divergence)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 20 });
+    open = handle;
+    handle.mount(<Home {...baseProps} />);
+    await handle.render();
+    const frame = handle.capture();
+    const mode = findRun(frame, "HOME");
+    expect(mode).toBeDefined();
+    expect(mode && extractRgb(mode.bg)).toBe<string>(SHELL_PALETTE.amber);
+    expect(findRun(frame, "no project yet")).toBeDefined();
+    // The live combo, not the design's Codex sample ("gpt5.5 · high").
+    expect(findRun(frame, "sonnet-4.5 · high")).toBeDefined();
+    expect(findRun(frame, "/exit")).toBeDefined();
+    // `q` never appears as its own key-hint glyph on idle Home — it still types (see keymap.ts).
+    expect(findRun(frame, " q ")).toBeUndefined();
+  });
+
   test("an absent agent name renders the neutral empty text, never an invented fallback (M22)", async () => {
     const handle = await createHeadlessRenderer({ w: 80, h: 20 });
     open = handle;
@@ -141,7 +161,7 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberHi);
   });
 
-  test("an absent agent name renders the neutral empty CLI-not-found line, never an invented fallback", async () => {
+  test("the headline renders the probe's own detail verbatim; an absent agent name still avoids an invented fallback elsewhere (WP-5)", async () => {
     const handle = await createHeadlessRenderer({ w: 80, h: 14 });
     open = handle;
     const noAgentProps: HomeProps = {
@@ -151,8 +171,29 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     handle.mount(<Home {...noAgentProps} />);
     await handle.render();
     const frame = handle.capture();
+    // The headline is `health.detail` verbatim (WP-5, Home.tsx's own comment on
+    // `agent-missing`) — never re-synthesized from `agentName` — so an absent `health.agent`
+    // cannot make the HEADLINE invent one either.
+    expect(findRun(frame, "✗ agent CLI not found")).toBeDefined();
     expect(findRun(frame, "✗ claude")).toBeUndefined();
-    expect(findRun(frame, "✗  CLI not found")).toBeDefined();
+    // The other two lines DO still derive from `agentName` (`neutralAgentName`) — this is
+    // where the "never an invented fallback" guarantee still lives.
+    expect(findRun(frame, "termcraft needs the  agent on your PATH.")).toBeDefined();
+  });
+
+  test("distinguishes the three not-present reasons via the probe's own detail text, not a single hardcoded string (WP-5)", async () => {
+    const reasons = [
+      "claude CLI not found",
+      "claude CLI found but not logged in",
+      "claude exited without confirming shutdown; locked out until restarted",
+    ];
+    for (const detail of reasons) {
+      const handle = await createHeadlessRenderer({ w: 80, h: 14 });
+      handle.mount(<Home {...errorProps} health={{ present: false, detail, agent: "claude" }} />);
+      await handle.render();
+      expect(findRun(handle.capture(), `✗ ${detail}`)).toBeDefined();
+      handle.destroy();
+    }
   });
 
   test("does not render the idle prompt box", async () => {
@@ -171,6 +212,27 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     const run = findRun(handle.capture(), "then reopen, or press r to re-check");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
+  });
+
+  // phase-8 Task 11 / WP-10: design `homeErr()`'s status bar
+  // (`design/termcraft-engine.js:583`) reads `[['r','re-check'],['q','quit']]` verbatim — this
+  // screen has no text input, so `q quit` needs no divergence (unlike idle Home's `/exit`).
+  test("renders a HOME status bar with the r re-check and q quit hints", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 14 });
+    open = handle;
+    handle.mount(<Home {...errorProps} />);
+    await handle.render();
+    const frame = handle.capture();
+    const mode = findRun(frame, "HOME");
+    expect(mode).toBeDefined();
+    expect(mode && extractRgb(mode.bg)).toBe<string>(SHELL_PALETTE.amber);
+    // The panel headline AND the status-bar badge both render the same honest detail text
+    // (two separate runs — the panel and the status bar are different chrome).
+    const badgeRuns = frame.rows.flat().filter((r) => r.text.includes("✗ claude CLI not found"));
+    expect(badgeRuns).toHaveLength(2);
+    expect(extractRgb(badgeRuns[1]!.bg)).toBe<string>(SHELL_PALETTE.red);
+    expect(findRun(frame, " re-check ")).toBeDefined();
+    expect(findRun(frame, " quit ")).toBeDefined();
   });
 
   test("a re-check that flips present:true renders the idle health line instead (M15)", async () => {

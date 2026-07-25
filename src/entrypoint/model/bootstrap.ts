@@ -5,6 +5,7 @@ import type { UiEnv, UiRootAdapters } from "ui";
 import type { EntrypointMode, ProcessBoundary, RunningApp } from "../types";
 import { ShellCompositionError, createShell } from "./create-shell";
 import type { ShellDeps } from "./create-shell";
+import type { ProcessExit } from "./process-boundary";
 import { AppStartupError, runApp } from "./run-app";
 
 export interface BootstrapDeps {
@@ -15,6 +16,14 @@ export interface BootstrapDeps {
   readonly adapters?: UiRootAdapters;
   /** Injected only for tests — production always uses `createShell`'s own real defaults. */
   readonly shell?: ShellDeps;
+  /**
+   * Forwarded verbatim to `runApp`'s own `exit` option (phase-8 Task 11 / WP-10) — see that
+   * option's doc comment (`run-app.ts`) for why a forced exit is unavoidable. Optional so
+   * `demo.tsx` (which owns its own separate `process.exit(0)` after `app.closed`) keeps
+   * compiling and behaving exactly as before; `main.tsx`'s interactive branch is the one
+   * caller that supplies the real, flush-then-exit implementation.
+   */
+  readonly exit?: ProcessExit;
 }
 
 /**
@@ -33,6 +42,7 @@ export async function bootstrap(
     shell,
     process: deps.process,
     adapters: deps.adapters,
+    exit: deps.exit,
   });
 }
 

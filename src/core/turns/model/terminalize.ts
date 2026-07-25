@@ -1,7 +1,12 @@
 import { wrap } from "@reatom/core";
 
 import type { StateMachine, TurnAction, TurnState, TurnTerminalOutcome } from "core/machines";
-import type { TurnCommitV1, TurnTerminalRecordV1, TurnTransactionService } from "core/ports";
+import type {
+  StagingService,
+  TurnCommitV1,
+  TurnTerminalRecordV1,
+  TurnTransactionService,
+} from "core/ports";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 
@@ -36,11 +41,38 @@ import { uuidv7 } from "infrastructure/uuid";
  * turn must not get stuck outside `terminal` merely because its own failure record could
  * not be written; `unrecorded` is exactly that reported condition, for the caller/orphan
  * scan to pick up later — never a thrown/swallowed error.
+ *
+ * CANDIDATE RETIREMENT (kernel-assembly Task 13): `settle` is applied unconditionally
+ * above — so the frozen candidate directory (`StagingService.retireCandidate`) is retired
+ * unconditionally too, right after `settle`, whether the terminal record ended up recorded
+ * or unrecorded: either way the turn is DONE and the candidate is no longer needed. A
+ * retire failure is REPORTED via `console.warn`, never propagated — matching `finalize.ts`'s
+ * identical reasoning ("the turn's outcome is already durable by then"). `staging` is
+ * REQUIRED (review finding #4 — matching `finalize.ts`'s identical fix: an optional
+ * dependency here was never actually threaded through by any real caller, silently
+ * reopening the candidate leak this task closed): `core/turns/model/run-turn.ts` is the one
+ * production driver, and it always has a real `StagingService` on its own `RunTurnDeps`.
+ * `candidateRoot` stays OPTIONAL, unlike `finalize.ts`'s own now-required field — CORRECTED
+ * (review finding #4, second half): the one legitimate skip is "no candidate has EVER been
+ * frozen for THIS TURN yet", not merely "THIS attempt never froze one". An earlier version of
+ * this comment described the skip as firing for "a very early cancellation before
+ * `freezeTurnCandidate` ever ran" as if that were the only case — false once retries exist,
+ * since a gate-triggered retry (`validation.ts`'s `"retry"` result) leaves an EARLIER
+ * attempt's candidate live before looping back for another attempt. `run-turn.ts`'s own
+ * `runTurn` now hoists its `candidateRoot` binding above the whole per-attempt retry loop
+ * specifically so a retry that then gets cancelled/fails/times out BEFORE ITS OWN freeze
+ * still passes the PRIOR attempt's already-frozen root here, rather than omitting it just
+ * because the CURRENT attempt never froze one. So `candidateRoot` legitimately reaches this
+ * function `null`/absent only when a turn is cancelled/fails/expires, or its own freeze
+ * itself fails, on attempt 1 before ANY freeze in the turn ever succeeded — in which case
+ * retirement is silently skipped (no candidate ever existed — nothing to warn about).
  */
 
 export interface TerminalizeTurnDeps {
   readonly machine: StateMachine<TurnState, TurnAction>;
   readonly turnTransactions: TurnTransactionService;
+  /** See this file's header, "CANDIDATE RETIREMENT". */
+  readonly staging: StagingService;
 }
 
 export interface TerminalizeTurnInputV1 {
@@ -51,6 +83,8 @@ export interface TerminalizeTurnInputV1 {
   /** Only meaningful for a `system:error` record (e.g. `"process_restart_before_intent"`). */
   readonly reason?: string;
   readonly createdAt: string;
+  /** The frozen candidate's own root (`TurnCandidateV1.root`) to retire — `null`/absent when none was ever frozen. See `TerminalizeTurnDeps.staging`. */
+  readonly candidateRoot?: string | null;
 }
 
 export type TerminalizeTurnResultV1 =
@@ -93,6 +127,25 @@ function buildTerminalRecord(input: TerminalizeTurnInputV1): TurnTerminalRecordV
   };
 }
 
+/**
+ * Retires the frozen candidate once known (see this file's header, "CANDIDATE RETIREMENT").
+ * `staging` is required (review finding #4) — this call site no longer needs a defensive
+ * "missing dependency" branch at all. `candidateRoot` legitimately absent (no candidate has
+ * EVER been frozen for this turn yet — see this file's header for why that is "for this
+ * turn", not merely "for this attempt") is the one remaining silent no-op — nothing to warn
+ * about, since no candidate ever existed. A real retire failure is logged, never propagated:
+ * by the time this runs the turn is already reaching its own terminal outcome.
+ */
+async function retireIfCandidateFrozen(
+  staging: StagingService,
+  candidateRoot: string | null | undefined,
+): Promise<void> {
+  if (candidateRoot === null || candidateRoot === undefined) return;
+  const retired = await wrap(staging.retireCandidate(candidateRoot));
+  if (retired !== undefined)
+    console.warn("terminalizeTurn: candidate retirement failed:", retired.safeMessage);
+}
+
 export async function terminalizeTurn(
   deps: TerminalizeTurnDeps,
   input: TerminalizeTurnInputV1,
@@ -113,6 +166,9 @@ export async function terminalizeTurn(
   // Unconditional: §7.2 allows this edge on EITHER a recorded outcome or a typed
   // unrecorded condition — see this file's header.
   deps.machine.apply("settle");
+
+  // The turn is DONE either way now — see this file's header, "CANDIDATE RETIREMENT".
+  await retireIfCandidateFrozen(deps.staging, input.candidateRoot);
 
   if ("code" in result) return { kind: "unrecorded", failure: result };
   return { kind: "recorded", commit: result };

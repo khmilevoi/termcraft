@@ -1,4 +1,4 @@
-import { atom, bind, context, wrap } from "@reatom/core";
+import { atom, bind, computed, context, wrap } from "@reatom/core";
 import type { z } from "zod";
 
 import {
@@ -35,8 +35,10 @@ import {
   createDispatch,
   createEventBus,
 } from "core/mailbox";
-import type { PreviewSession } from "core/ports";
+import type { PreviewFrameV1, PreviewSession } from "core/ports";
 import {
+  type FrameAckError,
+  type PreviewNoLiveSessionError,
   createFrameBroker,
   createFrameTokenLedger,
   createGeometryTokenLedger,
@@ -48,6 +50,8 @@ import {
   type CommandKindV1,
   type EventKindV1,
   type EventPayloadByKindV1,
+  type FrameIdentityV1,
+  type FrameTokenV1,
   type UUIDv7,
   eventPayloadV1SchemaByKind,
   isUuidv7,
@@ -76,7 +80,8 @@ import { publishOperationEvents } from "./operation-publish";
  * are already `wrap`-captured inside `createDispatch` itself (built here, inside this same
  * frame), and `dispatch`'s synchronous prologue (decode, then the dedupe ledger's plain
  * `Map` lookup) never touches an atom directly — every atom read happens inside one of
- * those two already-wrapped continuations. `currentPreview`/`close` read/write only a
+ * those two already-wrapped continuations. `currentPreview`/`close`/`publishFrame`/
+ * `acknowledgeDisplay` (kernel-assembly Task 16 added the last two) read/write only a
  * plain closure variable, never an atom, so they need no wrapping either.
  */
 export function createKernel(deps: KernelDeps): Kernel {
@@ -136,18 +141,29 @@ export function createKernel(deps: KernelDeps): Kernel {
     // already publishes (`noteEventForCapabilityGrowth`, below `publishAndTrackCapabilities`)
     // — never a second, independent source of truth, and never touched by any handler
     // directly. See this file's own "## Step C1" report appendix for the full design.
-    let growableActiveChatId: UUIDv7 | null = null;
-    let growableActivePageSlug: string | null = null;
+    //
+    // `growableActiveChatId`/`growableActivePageSlug` are named atoms, not plain closure
+    // `let`s (Task 17 fix): `buildSnapshotPayload`'s `activeIdentities` computed, below,
+    // derives `kernel.snapshot`'s `activeChatId`/`activePageSlug` from them on every call —
+    // "derived state is computed, not copied" (Reatom rule RTM-S02) — rather than the
+    // hand-copied `null` this file used to hardcode there (see that computed's own comment
+    // for the full defect this replaces). `growableLivePreviewSessionId`/`growableProjectId`
+    // stay plain closure facts: nothing downstream needs them through a `computed`, only a
+    // direct read at call time (`currentCapabilityRequests`/`buildSnapshotPayload`'s own
+    // `projectId` field, unchanged by this fix).
+    const growableActiveChatIdAtom = atom<UUIDv7 | null>(null, "kernel.growable.activeChatId");
+    const growableActivePageSlugAtom = atom<string | null>(null, "kernel.growable.activePageSlug");
     let growableLivePreviewSessionId: UUIDv7 | null = null;
     // (§10 smoke closeout, bug 2) The currently-open project's id — the ONE `kernel.snapshot`
     // field with no other live source anywhere in this Kernel (unlike `activeChatId`/
-    // `activePageSlug` above, or `trust`, which `trustAtom` already tracks reactively for
-    // guards): no capability target ever needs it (every `project.*` capability target is
-    // `null`, kernel-command-contract §10.1's own table), so it lives here as a fourth
-    // growable-identity closure fact, not inside `readKernelState`/`CapabilityKernelStateSnapshot`.
-    // Populated the SAME way the other three are — by inspecting `handlers/project.ts`'s own
-    // already-published `kernel.stateChanged` event, never a second, independent source of
-    // truth (`noteEventForCapabilityGrowth`, below).
+    // `activePageSlug` above, both of which now have their own named atom, or `trust`, which
+    // `trustAtom` already tracks reactively for guards): no capability target ever needs it
+    // (every `project.*` capability target is `null`, kernel-command-contract §10.1's own
+    // table), so it lives here as a fourth growable-identity closure fact, not inside
+    // `readKernelState`/`CapabilityKernelStateSnapshot`. Populated the SAME way the other
+    // three are — by inspecting `handlers/project.ts`'s own already-published
+    // `kernel.stateChanged` event, never a second, independent source of truth
+    // (`noteEventForCapabilityGrowth`, below).
     let growableProjectId: UUIDv7 | null = null;
 
     // Step 3: `readKernelState` — the real value behind the mailbox seam's `unknown`
@@ -225,10 +241,29 @@ export function createKernel(deps: KernelDeps): Kernel {
     const evaluateGuard: GuardRegistry = (kind, target) =>
       evaluateCapabilityGuard(kind, target, readKernelState());
 
+    // Step 6 (Task 17 fix): the named computed `kernel.snapshot`'s `activePageSlug`/
+    // `activeChatId` derive from — `growableActivePageSlugAtom`/`growableActiveChatIdAtom`
+    // above, re-read fresh every time this computed is read, never a value captured once.
+    // Closes the SAME defect shape `buildSnapshotPayload`'s own `projectId` field already
+    // closed (§10 smoke closeout, bug 2): a subscriber attaching AFTER the active page or
+    // chat changed used to still read the `null` this file hardcoded at construction time
+    // — `page.descriptorsChanged`/`chat.changed` genuinely are the live channel for an
+    // ALREADY-subscribed client (`ui/mirror`'s own `apply()`), exactly as the comment this
+    // replaces said, but that says nothing about what a LATE subscriber's own bootstrap
+    // `kernel.snapshot` carries, which is this computed's own job.
+    const activeIdentitiesComputed = computed(
+      () => ({
+        activePageSlug: growableActivePageSlugAtom(),
+        activeChatId: growableActiveChatIdAtom(),
+      }),
+      "kernel.snapshot.activeIdentities",
+    );
+
     // Step 6: `buildSnapshotPayload` — everything `KernelSnapshotPayloadV1` needs minus
     // `eventSeq` (the event bus stamps that itself on every delivery).
     function buildSnapshotPayload(): Omit<EventPayloadByKindV1["kernel.snapshot"], "eventSeq"> {
       const state = readKernelState();
+      const activeIdentities = activeIdentitiesComputed();
       return {
         // `CapabilityKernelStateSnapshot` mirrors `KernelModelsSnapshotV1` field for field
         // (`capabilities/types.ts`'s own header note) — the same seven keys, the same
@@ -241,13 +276,13 @@ export function createKernel(deps: KernelDeps): Kernel {
         // already opened used to still see a hardcoded `null` here) — not only the
         // already-subscribed case `mirror.ts`'s own `kernel.stateChanged` handling closes.
         projectId: growableProjectId,
-        // `activePageSlug`/`activeChatId` stay `null` here — Task 9's `page.descriptorsChanged`/
-        // `chat.changed` events are the already-correct live channel for both (`ui/mirror`'s
-        // own `apply()` already reads them), and neither is this task's own reported gap;
-        // widening this to `growableActivePageSlug`/`growableActiveChatId` for a late-subscriber
-        // snapshot is a separate, narrower staleness fix left for whoever picks it up next.
-        activePageSlug: null,
-        activeChatId: null,
+        // `activePageSlug`/`activeChatId` (Task 17 fix, see `activeIdentitiesComputed` above):
+        // Task 9's `page.descriptorsChanged`/`chat.changed` events remain the live channel an
+        // ALREADY-subscribed client reads both through (`ui/mirror`'s own `apply()`), but a
+        // LATE subscriber's own bootstrap snapshot now carries the SAME current identities too
+        // — no second, independent source of truth, just this computed re-read on every call.
+        activePageSlug: activeIdentities.activePageSlug,
+        activeChatId: activeIdentities.activeChatId,
         trust: state.project.trust,
         capabilities: buildCapabilities(state),
         pageDescriptors: [],
@@ -275,10 +310,12 @@ export function createKernel(deps: KernelDeps): Kernel {
       const requests: Readonly<{ id: CommandKindV1; target: unknown }>[] =
         SNAPSHOT_CAPABILITY_KINDS.map((kind) => ({ id: kind, target: null }));
 
+      const growableActiveChatId = growableActiveChatIdAtom();
       if (growableActiveChatId !== null) {
         requests.push({ id: "chat.switch", target: { chatId: growableActiveChatId } });
       }
 
+      const growableActivePageSlug = growableActivePageSlugAtom();
       if (growableActivePageSlug !== null) {
         const target = { pageSlug: growableActivePageSlug };
         requests.push({ id: "page.renameTitle", target });
@@ -340,7 +377,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       if (event.kind === "chat.changed") {
         const parsed = eventPayloadV1SchemaByKind["chat.changed"].safeParse(event.payload);
         if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
-        growableActiveChatId = parsed.data.activeChatId;
+        growableActiveChatIdAtom.set(parsed.data.activeChatId);
         return;
       }
       if (event.kind === "page.descriptorsChanged") {
@@ -348,7 +385,7 @@ export function createKernel(deps: KernelDeps): Kernel {
           event.payload,
         );
         if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
-        growableActivePageSlug = parsed.data.activePageSlug;
+        growableActivePageSlugAtom.set(parsed.data.activePageSlug);
         return;
       }
       if (event.kind === "preview.sourceChanged") {
@@ -368,8 +405,8 @@ export function createKernel(deps: KernelDeps): Kernel {
           parsed.data.modelId === "kernel.project.state" &&
           parsed.data.action === "kernel.project.finishClose"
         ) {
-          growableActiveChatId = null;
-          growableActivePageSlug = null;
+          growableActiveChatIdAtom.set(null);
+          growableActivePageSlugAtom.set(null);
           growableLivePreviewSessionId = null;
           growableProjectId = null;
           return;
@@ -537,8 +574,21 @@ export function createKernel(deps: KernelDeps): Kernel {
     function setPreviewSourceKind(sourceKind: "current" | "historical" | null): void {
       previewSourceKindAtom.set(sourceKind);
     }
+    // kernel-assembly Task 16: this is ALSO the one place that keeps
+    // `previewSessionCommands`'s own frame-token incarnation identity in step with the
+    // REAL Kernel-tracked session — see `PreviewSessionCommands.noteSessionEstablished`'s
+    // own doc comment (`core/preview/model/session-commands.ts`) for why this external
+    // notification exists: `handlers/preview-export.ts` still calls THIS function
+    // directly to establish/close a session (Gap A), never `previewSessionCommands`'s own
+    // `selectPage`/`close`, so `publishFrame`/`acknowledgeDisplay` would otherwise never
+    // see a live incarnation to mint/acknowledge against.
     function setActivePreviewSession(session: PreviewSession | null): void {
       activePreview = session;
+      if (session === null) {
+        previewSessionCommands.noteSessionClosed();
+        return;
+      }
+      previewSessionCommands.noteSessionEstablished(session);
     }
     function currentPreviewSession(): PreviewSession | null {
       return activePreview;
@@ -721,11 +771,31 @@ export function createKernel(deps: KernelDeps): Kernel {
       return activePreview;
     }
 
+    // kernel-assembly Task 16 — the Kernel's own frame-token authority surface. Both are
+    // plain, synchronous delegations to `previewSessionCommands` (itself touching only
+    // plain closures, never a Reatom atom — see that module's own header), so neither
+    // needs `wrap`/`bind`: the same reasoning `currentPreview`/`close` above already rely
+    // on ("read/write only a plain closure variable ... need no wrapping either").
+    // `types.ts`'s own `Kernel.publishFrame` doc comment records the Step-1 surface
+    // decision and its rejected alternatives in full.
+    function publishFrame(frame: PreviewFrameV1): PreviewNoLiveSessionError | FrameTokenV1 {
+      return previewSessionCommands.publishFrame(frame);
+    }
+
+    function acknowledgeDisplay(frameToken: FrameTokenV1): FrameAckError | FrameIdentityV1 {
+      return previewSessionCommands.acknowledgeDisplay(frameToken);
+    }
+
     async function close(): Promise<void> {
       if (closed) return;
       closed = true;
       const preview = activePreview;
-      activePreview = null;
+      // Routed through `setActivePreviewSession(null)` (not a bare `activePreview = null`
+      // assignment) so this teardown path ALSO invalidates `previewSessionCommands`'s own
+      // frame-token incarnation identity — the same cleanup `handlers/project.ts`'s
+      // `project.close`/`handlers/preview-export.ts`'s `preview.close` already get by
+      // calling that function themselves (see its own comment, above).
+      setActivePreviewSession(null);
       // "Dispose the frame": Reatom v1001 exposes no explicit per-frame teardown API
       // beyond the global `context.reset()` (which would tear down every OTHER Kernel/test
       // sharing this process, not just this one) — so disposal here means releasing this
@@ -736,7 +806,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       if (preview !== null) await preview.close();
     }
 
-    return { dispatch, events, currentPreview, close };
+    return { dispatch, events, currentPreview, publishFrame, acknowledgeDisplay, close };
   });
 }
 

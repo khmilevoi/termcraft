@@ -209,3 +209,22 @@ describe("createUiDeps Home health probe (M15)", () => {
     });
   });
 });
+
+describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
+  test("defaults to a no-op so every existing UiDeps construction keeps compiling", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    expect(() => deps.requestExit()).not.toThrow();
+  });
+
+  test("the injected requestExit is exposed verbatim, not wrapped", () => {
+    const kernel = createFakeKernel();
+    let calls = 0;
+    const requestExit = () => {
+      calls += 1;
+    };
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, requestExit);
+    deps.requestExit();
+    expect(calls).toBe(1);
+  });
+});

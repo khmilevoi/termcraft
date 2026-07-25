@@ -188,6 +188,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "esc":
       applyEsc(deps);
       return;
+    case "exit":
+      // The `q` keys on the agent-missing/too-small-terminal screens (keymap.ts) resolve
+      // directly to this intent; `/exit` reaches the SAME `requestExit` call through
+      // `executeAction`'s `effect === "exit"` branch below (phase-8 Task 11 / WP-10) — one
+      // shutdown trigger, two ways to reach it.
+      deps.requestExit();
+      return;
     case "none":
       return;
   }
@@ -240,6 +247,11 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
   }
   if (execution.effect === "fullscreen") {
     deps.local.fullscreen.set(!deps.local.fullscreen());
+    return;
+  }
+  if (execution.effect === "exit") {
+    // `/exit`, dispatched via the slash menu's `slash-submit` -> `action-execute` path.
+    deps.requestExit();
     return;
   }
   const chats = deps.mirror.chats();

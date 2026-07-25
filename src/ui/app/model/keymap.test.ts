@@ -82,13 +82,59 @@ describe("resolveKey — Home", () => {
     ).toEqual({ kind: "home-input", ch: "r" });
   });
 
-  test("on the missing-agent error panel, only r is live — no submit/backspace/input affordance exists there", () => {
+  test("on the missing-agent error panel, only r and q are live — no submit/backspace/input affordance exists there", () => {
     const missingAgent = ctx({ screen: "home", homeHealthPresent: false });
     expect(resolveKey(key({ name: "return" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "backspace" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "x", sequence: "x" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "r", sequence: "r" }), missingAgent)).toEqual({
       kind: "home-recheck",
+    });
+    expect(resolveKey(key({ name: "q", sequence: "q" }), missingAgent)).toEqual({ kind: "exit" });
+  });
+
+  // WP-10 (phase-8, master spec §3.9/§9): design's homeErr() status bar reads
+  // `[['r','re-check'],['q','quit']]` (design/termcraft-engine.js:583) — `q` belongs beside `r`.
+  test("q quits on the agent-missing panel, where no prompt is focused", () => {
+    const intent = resolveKey(
+      key({ name: "q", sequence: "q" }),
+      ctx({ screen: "home", homeHealthPresent: false }),
+    );
+    expect(intent).toEqual({ kind: "exit" });
+  });
+
+  test("q still types on the idle Home prompt", () => {
+    const intent = resolveKey(
+      key({ name: "q", sequence: "q" }),
+      ctx({ screen: "home", homeHealthPresent: true }),
+    );
+    expect(intent.kind).not.toBe("exit");
+  });
+});
+
+describe("resolveKey — too-small-terminal (enlarge)", () => {
+  // design `termSmall()` (design/termcraft-engine.js:610-615): four centered lines, no chrome,
+  // no input of any kind — q quits (phase-8 WP-10) since there is nothing to type into.
+  test("q quits on the too-small-terminal screen", () => {
+    expect(resolveKey(key({ name: "q", sequence: "q" }), ctx({ screen: "enlarge" }))).toEqual({
+      kind: "exit",
+    });
+  });
+
+  test("every other key is inert on the too-small-terminal screen", () => {
+    const small = ctx({ screen: "enlarge" });
+    expect(resolveKey(key({ name: "return" }), small)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "x", sequence: "x" }), small)).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "tab" }), small)).toEqual({ kind: "none" });
+  });
+
+  test("Escape and known hotkeys still resolve on the too-small-terminal screen", () => {
+    expect(resolveKey(key({ name: "escape" }), ctx({ screen: "enlarge" }))).toEqual({
+      kind: "esc",
+    });
+    expect(resolveKey(key({ name: "f2" }), ctx({ screen: "enlarge" }))).toEqual({
+      kind: "action-execute",
+      actionId: "preview.fullscreen",
     });
   });
 });

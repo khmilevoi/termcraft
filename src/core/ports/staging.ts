@@ -112,4 +112,34 @@ export interface StagingService {
    * this file's own header already states for `retireWorkspace`).
    */
   readCandidateFile(root: string, relPath: string): Promise<FailureDtoV1 | Uint8Array>;
+  /**
+   * Release the immutable candidate directory `snapshotToCandidate` froze, once the turn
+   * that owns it has reached its own terminal outcome — finalize committed, or the turn
+   * terminalized (kernel-assembly Task 13). The candidate deliberately lives outside
+   * `retireWorkspace`'s reach (that method only ever clears the turn's `workspace/` tree —
+   * see its own doc above) so a Gate/finalize consumer can still `readCandidateFile` after
+   * the workspace itself is gone; this is the method that finally releases it once nothing
+   * needs it anymore. Closes the "KNOWN GAP, DEFERRED" `store/adapters/staging.ts`'s own
+   * header previously left open — `core` (the only party that knows when a turn's candidate
+   * is truly done) now has a way to say so.
+   *
+   * CONTAINMENT IS PART OF THE CONTRACT, NOT AN IMPLEMENTATION DETAIL (review finding #3):
+   * `root` is NOT "any path" — it is expected to be a `CandidatePageSetV1.root` THIS SAME
+   * `StagingService` instance itself returned from an earlier `snapshotToCandidate` call.
+   * `core` never mints or derives this string itself; it only ever forwards a value it
+   * already received back from this port. Two distinct outcomes for an out-of-contract
+   * `root`, both never destructive:
+   *   - Nothing exists at `root`: idempotent no-op (`undefined`) — the ordinary
+   *     "already-gone or never-frozen" case `retireWorkspace` already established the
+   *     convention for. There is nothing at risk to protect, so this is indistinguishable
+   *     from — and treated the same as — retiring a candidate THIS instance already froze
+   *     whose directory some other process (or an earlier `retireCandidate` call) already
+   *     removed.
+   *   - Something exists at `root` but it is NOT a candidate this instance itself froze
+   *     (an arbitrary directory, a caller mistake, a path-traversal attempt): refused
+   *     (`FailureDtoV1`), and the real adapter never calls its own delete primitive for it.
+   *     A `root` outside the contract is never silently deleted just because the target
+   *     happens to be a real, well-formed directory.
+   */
+  retireCandidate(root: string): Promise<FailureDtoV1 | undefined>;
 }

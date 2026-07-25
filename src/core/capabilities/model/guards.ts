@@ -320,6 +320,40 @@ function previewFamilyReason(
 
 // --- Migration family: §7.7 phase legality (the machine's own transition table) --------
 
+/**
+ * This guard reports `migration.*` `available: true` whenever `MIGRATION_TRANSITION_TABLE`
+ * (`core/machines`) says the current `state.migration.phase` legally admits it — e.g.
+ * `migration.plan` from `idle` — the same real, tested phase-legality treatment every other
+ * landed state machine gets in this file. `migration.*` is deliberately NOT added to
+ * `core/versions`'s `DEFERRED_CAPABILITY_KINDS` (consumed above via `deferredCapabilityReason`
+ * in `collectReasons`), even though `core/kernel/model/handlers/index.ts`'s
+ * `migrationPostMvpHandler` no-ops every one of these four kinds today (MVP phase-8 task 18:
+ * MVP ships exactly one storage format version, so there is nothing to migrate FROM). Reusing
+ * `DEFERRED_CAPABILITY_KINDS` here would misrepresent what THIS function actually decided: that
+ * mechanism means "unavailable unconditionally, in every phase, because no service exists
+ * behind the guard at all" (`deferred-guards.ts`'s own header — Tier-C's restore/commit/
+ * history/preview-tweak kinds have no phase-legality logic of their own in this file at all,
+ * only the blanket deferred reason). Migration's guard is the opposite: it is fully built,
+ * matches §7.7's table row for row, and this file's own `describe("migration family phase
+ * legality", ...)` tests (`guards.test.ts`) pin real per-phase results — `migration.plan`
+ * available from `idle` (and the §7.1 "trusted pre-Workspace" exception in
+ * `projectNotReadyReason` above), `migration.confirm`/`discardPlan` available only from
+ * `awaiting-confirmation`, `migration.retryRecovery` only from `blocked`. Forcing an
+ * unconditional `DEFERRED_CAPABILITY_KINDS` rejection would directly contradict those
+ * assertions, not merely change them.
+ *
+ * So `available: true` here means exactly what kernel-command-contract §10.2 defines it to
+ * mean — "a direct current-revision command passes the guard" — never a promise that
+ * dispatching it moves `MigrationState` or does any migration work. That promise gap is
+ * intentional and safe: `migrationPostMvpHandler`'s well-formed `noOpOutcome()` is a
+ * sanctioned `HandlerOutcome` disposition (no rejected shape exists for a handler to return
+ * instead — see that file's own header), nothing in `src/ui` reads a `migration.*` capability
+ * today (`grep -rn "migration\." src/ui` is empty), and MVP's real-world precondition ("an
+ * older supported format exists to migrate from") can in fact never hold with a single shipped
+ * format version — so a no-op behind an admitted guard is the honest behavior, not a stand-in
+ * for missing work. See `core/kernel/model/handlers/index.ts`'s own header for the full
+ * writeup this comment cross-references.
+ */
 function migrationFamilyReason(
   kind: Extract<CommandKindV1, `migration.${string}`>,
   state: KernelStateSnapshot,

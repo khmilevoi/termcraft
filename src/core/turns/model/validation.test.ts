@@ -9,7 +9,7 @@ import {
   type TurnState,
   reatomTurnStateMachine,
 } from "core/machines";
-import type { GateRunResultV1 } from "core/ports";
+import type { GateRunResultV1, GateRunner } from "core/ports";
 import { createFakeGateRunner } from "core/ports/fakes";
 import { type UUIDv7, isUuidv7 } from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
@@ -165,6 +165,53 @@ describe("runTurnValidation", () => {
       expect(result.diagnostics.warnings).toEqual([
         { kind: "unguarded-timer", message: "setTimeout without a guard", line: 12, column: 3 },
       ]);
+    });
+  });
+
+  test("threads fileName (short display name) and sourcePath (absolute staged path) to runPage as two separate fields, and the diagnostic reports the short name in `file`", async () => {
+    // A bespoke local GateRunner double (not core/ports/fakes' shared one, out of this task's
+    // file set) that both records what runPage actually received AND echoes `fileName` into
+    // the returned error's `file` the way the real `gate/model/gate.ts` does — the only way to
+    // observe, from this side of the port, that `fileName` and `sourcePath` reach `runPage` as
+    // genuinely separate fields rather than one value doing double duty.
+    await context.start(async () => {
+      const machine = machineAtValidating();
+      const runPageCalls: { fileName?: string; sourcePath?: string }[] = [];
+      const gateRunner: GateRunner = {
+        async runManifestSlice(input) {
+          return { errors: [], slice: { pages: input.presentSlugs, active: null } };
+        },
+        async runPage(input) {
+          runPageCalls.push({ fileName: input.fileName, sourcePath: input.sourcePath });
+          return {
+            ok: false,
+            errors: [{ kind: "type", code: "TS2322", message: "type error", file: input.fileName }],
+            warnings: [],
+            descriptor: null,
+          };
+        },
+      };
+      const published: PublishedEvent[] = [];
+      const deps: TurnValidationDeps = {
+        machine,
+        gateRunner,
+        publish: (event) => published.push(event),
+      };
+      const pages = onePage({
+        fileName: "home/index.tsx",
+        sourcePath: "C:/workspace/turn-0192f6f0/pages/home/index.tsx",
+      });
+
+      const result = await wrap(runTurnValidation(deps, baseInput(1, pages)));
+
+      expect(runPageCalls).toEqual([
+        {
+          fileName: "home/index.tsx",
+          sourcePath: "C:/workspace/turn-0192f6f0/pages/home/index.tsx",
+        },
+      ]);
+      if (result.kind !== "retry") throw new Error(`expected retry, got ${JSON.stringify(result)}`);
+      expect(result.diagnostics.errors[0]?.file).toBe("home/index.tsx");
     });
   });
 

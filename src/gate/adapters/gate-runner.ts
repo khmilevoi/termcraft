@@ -12,8 +12,6 @@ import { runGate } from "../model/gate";
 import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { createSmokeRender } from "../model/smoke";
-import { materializeCompiler } from "../model/tsc-extract";
-import type { CompilerAssets } from "../model/tsc-extract";
 import { createTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
 import type { GateError } from "../types";
@@ -45,59 +43,40 @@ import type { GateError } from "../types";
  * the SAME default `runGate` itself applies internally), preserving every existing caller's
  * behavior unchanged.
  *
- * FLAGGED: `typeCheck` is wired ONLY when BOTH `compilerAssets` and `runtimeDts` are
- * supplied. `createTypeChecker` (`gate/model/type-check.ts`) needs the ambient
- * `@termcraft/runtime` `.d.ts` TEXT, and no production source for that text exists
- * anywhere in the codebase yet (`gate/model/tsc-extract.ts`'s own comment: "phase 8 will
- * embed + inject the curated 88-file set"; today only a hand-written test fixture exists
- * in `type-check.test.ts`). Until phase 8 lands it, omitting `typeCheck` here is honest —
- * `runGate`'s own `ports.typeCheck` parameter is optional for exactly this reason.
+ * CLOSED (phase-8 Task 7): `typeCheck` is wired whenever BOTH `tscExePath` and `runtimeDts` are
+ * supplied, and the composition root now always supplies both. `entrypoint/model/
+ * create-shell.ts`'s `interactiveShell` resolves `tscExePath` via `gate/model/tsc-extract.ts`'s
+ * `resolveCompilerPath()` before any project I/O runs — a failed resolution aborts the whole
+ * shell construction as a `ShellCompositionError` rather than reaching this adapter at all — and
+ * passes `runtime/generated/runtime-dts.ts`'s generated `RUNTIME_DTS` as `runtimeDts`. So in the
+ * shipped configuration `typeCheck` is never actually omitted; the `tscExePath`/`runtimeDts`
+ * parameters stay OPTIONAL on this adapter only so a caller with no compiler available (a unit
+ * test, a hermetic fixture) can still run the source-only stages standalone — `runGate`'s own
+ * `ports.typeCheck` parameter being optional is what makes that fallback honest, never a
+ * fabricated pass.
  */
 
-/** Bounded plain text (host-supervision §13 convention gate itself follows in `type-check.ts`). */
-function boundedPlainText(raw: string): string {
-  return raw.length > 200 ? `${raw.slice(0, 197)}...` : raw;
-}
-
 function createTypeCheckPort(
-  compilerAssets: CompilerAssets | undefined,
+  tscExePath: string | undefined,
   runtimeDts: string | undefined,
 ): ((source: string, fileName: string) => Promise<GateError[]>) | undefined {
-  if (compilerAssets === undefined || runtimeDts === undefined) return undefined;
-
-  let cachedChecker: ((source: string, fileName: string) => Promise<GateError[]>) | null = null;
-  let materializeFailure: GateError | null = null;
-
-  return async (source, fileName) => {
-    if (materializeFailure !== null) return [materializeFailure];
-    if (cachedChecker === null) {
-      const exePath = materializeCompiler(compilerAssets);
-      if (exePath instanceof Error) {
-        materializeFailure = {
-          kind: "type",
-          code: "TYPE_CHECK_UNAVAILABLE",
-          message: boundedPlainText(
-            `type check unavailable — failed to materialize the TypeScript compiler: ${exePath.message}`,
-          ),
-        };
-        return [materializeFailure];
-      }
-      cachedChecker = createTypeChecker({ tscExePath: exePath, runtimeDts });
-    }
-    return cachedChecker(source, fileName);
-  };
+  if (tscExePath === undefined || runtimeDts === undefined) return undefined;
+  return createTypeChecker({ tscExePath, runtimeDts });
 }
 
 export interface GateRunnerAdapterDeps {
   readonly smokeRenderer: SmokeRenderer;
-  readonly compilerAssets?: CompilerAssets;
-  /** See this file's header note — no production source exists for this yet. */
+  /** A path already resolved by `gate/model/tsc-extract.ts`'s `resolveCompilerPath()` — this
+   *  adapter does no resolution of its own; see this file's header note. */
+  readonly tscExePath?: string;
+  /** See this file's header note — the composition root supplies `runtime/generated
+   *  /runtime-dts.ts`'s `RUNTIME_DTS` here (phase-8 Task 7). */
   readonly runtimeDts?: string;
   readonly checkManifest?: GatePorts["checkManifest"];
 }
 
 export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner {
-  const typeCheck = createTypeCheckPort(deps.compilerAssets, deps.runtimeDts);
+  const typeCheck = createTypeCheckPort(deps.tscExePath, deps.runtimeDts);
 
   async function runManifestSlice(input: {
     readonly manifestText: string;

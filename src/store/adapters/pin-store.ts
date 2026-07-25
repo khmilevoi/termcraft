@@ -1,8 +1,8 @@
-import type { AssertConforms, PinMutations, PinReader } from "core/ports";
+import type { AssertConforms, PinMutations, PinReader, ReadSetAppendBaseV1 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Pin, PinEvent } from "entities/pin";
-import { readPinsJsonl } from "store/jsonl";
+import { readPinsJsonl, sha256Hex } from "store/jsonl";
 import { FsAccessError, isNotFound } from "store/safe-fs";
 import { pageCommentsPath } from "store/transaction";
 
@@ -14,7 +14,12 @@ import { nowIso } from "./types";
 // `OpenProject.transactions` (plan Task 1). `readEvents`/`findPageForPin` need no new
 // store-internal accessor: `OpenProject.safeFs` already reaches each page's raw comments
 // JSONL, and `store/jsonl`'s already-public `readPinsJsonl` already decodes it into the
-// same `PinEvent[]` `PinStore.fold`'s own projection is built from.
+// same `PinEvent[]` `PinStore.fold`'s own projection is built from. `readAppendBase` (phase-8
+// WP-6, the pin-log analogue of `store/adapters/chat-store.ts`'s `readAppendBase`) needs no
+// new accessor either: the SAME `readPinsJsonl({path, chunks: [bytes]})` call `readRawEvents`
+// below already makes also decodes `validPrefixBytes`/`prefixSha256` — the exact
+// `{length, prefixSha256}` pair `store/transaction/model/wrappers.ts`'s own `readPinsBefore`
+// computes from the identical file for `buildFinalizeCasPrecondition`'s `pins:<slug>` check.
 
 /** The page's raw pin-event log, or `[]` for a page with no comments log yet (mirrors `fold()`'s own rule). */
 async function readRawEvents(
@@ -43,6 +48,29 @@ export function createPinStoreAdapter(deps: StoreAdapterDeps): PinReader & PinMu
 
   async function readEvents(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly PinEvent[]> {
     return readRawEvents(open, pageSlug);
+  }
+
+  /**
+   * Mirrors `readRawEvents`'s own "no comments log yet" handling (honest, never a failure —
+   * see `PinReader.readAppendBase`'s own doc comment for why this deliberately diverges from
+   * `ChatReader.readAppendBase`), but returns the SAME zero-length/empty-hash value
+   * `store/transaction/model/wrappers.ts`'s own `emptyBefore()` produces for a missing file,
+   * rather than `readRawEvents`'s `[]` — `buildFinalizeCasPrecondition` compares against
+   * `emptyBefore()` verbatim for a page with no comments log, so this must match it exactly,
+   * not merely be "some" honest empty.
+   */
+  async function readAppendBase(pageSlug: PageSlug): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
+    const relPath = pageCommentsPath(pageSlug);
+    const bytes = open.safeFs.readFile(relPath);
+    if (bytes instanceof Error) {
+      if (bytes instanceof FsAccessError && isNotFound(bytes)) {
+        return { length: 0, prefixSha256: sha256Hex(new Uint8Array(0)) };
+      }
+      return toFailureDto(bytes);
+    }
+    const doc = readPinsJsonl({ path: relPath, chunks: [bytes] });
+    if (doc instanceof Error) return toFailureDto(doc);
+    return { length: doc.validPrefixBytes, prefixSha256: doc.prefixSha256 };
   }
 
   async function findPageForPin(pinId: string): Promise<FailureDtoV1 | PageSlug | null> {
@@ -78,7 +106,7 @@ export function createPinStoreAdapter(deps: StoreAdapterDeps): PinReader & PinMu
     return undefined;
   }
 
-  return { fold, readEvents, findPageForPin, appendStandaloneEvent };
+  return { fold, readEvents, findPageForPin, readAppendBase, appendStandaloneEvent };
 }
 
 type _Conforms = AssertConforms<PinReader & PinMutations, ReturnType<typeof createPinStoreAdapter>>;

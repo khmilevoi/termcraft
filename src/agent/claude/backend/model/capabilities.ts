@@ -17,5 +17,8 @@ export function claudeCapabilities(): BackendCapabilities {
     // the workspace changes — is a one-line change here if rebinding is ever
     // found to leak state across turn workspaces.
     sessionWorkspaceBinding: "rebindable",
+    // MVP has no `/model` picker, so the Kernel falls back to this when a turn
+    // starts with no stored (backend, model, effort) triple (see turn.ts).
+    defaultSelection: { model: "claude-sonnet-5", effort: "high" },
   };
 }

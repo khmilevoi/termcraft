@@ -173,6 +173,7 @@ const BACKEND_CAPABILITIES: BackendCapabilities = {
   models: [{ model: "sonnet", efforts: ["medium"] }],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  defaultSelection: { model: "sonnet", effort: "medium" },
 };
 
 /** A minimal page the real Gate's source-only stages (import-scan, page-contract, lints)
@@ -222,29 +223,43 @@ function createStagingAwareAgentBackend(inner: FakeAgentBackend): FakeAgentBacke
   };
 }
 
-/** Never wired in this fixture — this smoke test never dispatches a query through a live
- *  preview session (see this file's header, gap 1, on why "render" cannot be reached at all
- *  today), so no genuine `FrameIdentityV1` authority is needed here either. */
-function toRealPreviewSessionHandle(session: PreviewSession): PreviewSessionHandle {
+/** Mirrors `create-shell.ts`'s own exported `toPreviewSessionHandle` (phase-8 Task 16) —
+ *  duplicated here, not imported, for the same reason `toRealKernelPort` below duplicates
+ *  `toKernelPort`: this test's composition is deliberately one level below `createShell`
+ *  (see this file's header). Frame tokens now come from `kernel.publishFrame` (a REAL
+ *  ledger-minted token) and acknowledgement forwards to `kernel.acknowledgeDisplay` — this
+ *  smoke test still never dispatches a query through a live preview session (gap 1, this
+ *  file's header, on why "render" cannot be reached at all today), so the round trip is
+ *  never actually exercised end to end here; it is real, reachable plumbing sitting idle,
+ *  not a stub. */
+function toRealPreviewSessionHandle(
+  kernel: ReturnType<typeof createKernel>,
+  session: PreviewSession,
+): PreviewSessionHandle {
   async function* displayFrames(): AsyncGenerator<UiPreviewFrame> {
     for await (const frame of session.frames) {
-      yield { frame, frameToken: uuidv7(), handle };
+      const frameToken = kernel.publishFrame(frame);
+      if (frameToken instanceof Error) {
+        console.warn(`smoke.test: dropped a preview frame — ${frameToken.message}`);
+        continue;
+      }
+      yield { frame, frameToken, handle };
     }
   }
   const handle: PreviewSessionHandle = {
     previewSessionId: session.identity.sessionId,
     session,
     frames: { [Symbol.asyncIterator]: displayFrames },
-    acknowledgeDisplay: () =>
-      new Error("preview.acknowledgeDisplay is not wired in this smoke fixture"),
+    acknowledgeDisplay: (frameToken) => kernel.acknowledgeDisplay(frameToken),
   };
   return handle;
 }
 
 /** Adapts the composed `Kernel` to `ui`'s narrower `KernelPort` — the same shape `create-
- *  shell.ts`'s own (unexported) `toKernelPort` builds. Duplicated here (not imported) because
- *  `create-shell.ts` does not export it, and this test's composition is deliberately one level
- *  below `createShell` (see this file's header on why `createShell` itself cannot be reused). */
+ *  shell.ts`'s own `toKernelPort` builds. Duplicated here (not imported) because
+ *  `create-shell.ts` does not export `toKernelPort` itself, and this test's composition is
+ *  deliberately one level below `createShell` (see this file's header on why `createShell`
+ *  itself cannot be reused). */
 function toRealKernelPort(kernel: ReturnType<typeof createKernel>): KernelPort {
   let cachedSession: PreviewSession | null = null;
   let cachedHandle: PreviewSessionHandle | null = null;
@@ -261,7 +276,7 @@ function toRealKernelPort(kernel: ReturnType<typeof createKernel>): KernelPort {
       }
       if (session !== cachedSession) {
         cachedSession = session;
-        cachedHandle = toRealPreviewSessionHandle(session);
+        cachedHandle = toRealPreviewSessionHandle(kernel, session);
       }
       return cachedHandle;
     },

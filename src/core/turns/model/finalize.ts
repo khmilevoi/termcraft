@@ -5,6 +5,7 @@ import { type SentPinV1, resolveSentPinAppends } from "core/pins/model/turn-reso
 import type {
   ChangedPageOpV1,
   StagedTurnReadSetV1,
+  StagingService,
   TurnCommitV1,
   TurnTransactionService,
 } from "core/ports";
@@ -48,12 +49,31 @@ import { toFinalizeReadSet } from "./read-set";
  * "validating -> finalizing -> committed -> idle"; `terminalizing` is `terminalize.ts`'s
  * own entry phase (its header explains why), reached by a caller this function does not
  * own once it inspects this function's `{kind:"failed", failure}` result.
+ *
+ * CANDIDATE RETIREMENT (kernel-assembly Task 13): once `markCommitted`/`settle` both
+ * succeed the turn's outcome is already durable, so this function retires the frozen
+ * candidate directory (`StagingService.retireCandidate`) exactly once, right before
+ * returning `{kind:"committed"}` — never on the `{kind:"illegal"}`/`{kind:"failed"}` exits,
+ * since those never reach a committed outcome (a CAS-mismatch/deadline failure instead
+ * bridges into `terminalizing`, where `terminalize.ts`'s own call retires it later). A
+ * retire failure is REPORTED via `console.warn`, never propagated: the turn's outcome does
+ * not retroactively fail over a cleanup problem (errore rule: an error that is not
+ * propagated must still leave a trace). `staging` is REQUIRED (review finding #4 — an
+ * optional dependency here was never actually threaded through by any real caller, silently
+ * reopening the candidate leak this task closed): `core/turns/model/run-turn.ts` is the one
+ * production driver, and it always has a real `StagingService` on its own `RunTurnDeps`
+ * (`RunTurnDeps.staging`, required there too). `candidateRoot` is likewise REQUIRED on
+ * `FinalizeTurnInputV1` below — `run-turn.ts` only ever calls this function once a candidate
+ * has ALREADY been frozen (`freezeTurnCandidate`'s own `candidate.root`), so there is never a
+ * legitimate finalize call with no candidate to retire.
  */
 
 export interface FinalizeTurnDeps {
   readonly machine: StateMachine<TurnState, TurnAction>;
   readonly turnTransactions: TurnTransactionService;
   readonly deadlines: TurnDeadlines;
+  /** See this file's header, "CANDIDATE RETIREMENT". */
+  readonly staging: StagingService;
 }
 
 export interface FinalizeTurnInputV1 {
@@ -68,6 +88,8 @@ export interface FinalizeTurnInputV1 {
   readonly sentPins: readonly SentPinV1[];
   readonly stagedReadSet: StagedTurnReadSetV1;
   readonly createdAt: string;
+  /** The frozen candidate's own root (`TurnCandidateV1.root`) to retire on commit — always present: this function is only ever called once a candidate has been frozen. See `FinalizeTurnDeps.staging`. */
+  readonly candidateRoot: string;
 }
 
 export type FinalizeTurnResultV1 =
@@ -82,6 +104,20 @@ function deadlineExceededFailure(bound: "stream-silence" | "absolute"): FailureD
     safeMessage: "the turn's deadline expired before finalization intent could be written",
     details: { bound },
   };
+}
+
+/**
+ * Retires the frozen candidate (see this file's header, "CANDIDATE RETIREMENT"). Both
+ * arguments are required — a retire failure is logged, never propagated: by the time this
+ * runs the turn's own outcome is already durable.
+ */
+async function retireFinalizedCandidate(
+  staging: StagingService,
+  candidateRoot: string,
+): Promise<void> {
+  const retired = await wrap(staging.retireCandidate(candidateRoot));
+  if (retired !== undefined)
+    console.warn("finalizeTurn: candidate retirement failed:", retired.safeMessage);
 }
 
 function translationFailure(reason: string): FailureDtoV1 {
@@ -134,6 +170,9 @@ export async function finalizeTurn(
 
   const settled = deps.machine.apply("settle");
   if (settled.kind === "illegal") return { kind: "illegal", code: settled.code };
+
+  // The commit is durable now — see this file's header, "CANDIDATE RETIREMENT".
+  await retireFinalizedCandidate(deps.staging, input.candidateRoot);
 
   return { kind: "committed", commit: result };
 }

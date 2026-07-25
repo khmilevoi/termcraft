@@ -694,4 +694,42 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     );
     expect(renderingProgress.phase).toBe("rendering");
   });
+
+  test('pre-capture failure: resolveExportPageInputs fails before captureExportSnapshot is ever called — publishes a schema-valid export.failed with phase "idle" instead of being swallowed', async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+
+    // Fails on the FIRST call — resolveExportPageInputs never even reaches
+    // captureExportSnapshot, so the export machine never leaves "idle".
+    const failingPageReader: PageReader = {
+      readSource: (pageSlug) => deps.pageReader.readSource(pageSlug),
+      listSlugs: async () => ({
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "listSlugs failed before capture",
+        details: {},
+      }),
+    };
+    const harness = buildTestContext({ ...deps, pageReader: failingPageReader });
+
+    exportHandlers["export.start"]({}, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    expect(harness.handlerContext.machines.export.phase()).toBe("idle");
+
+    const exportPublish = deps.exportPublish as ReturnType<typeof createFakeExportPublish>;
+    expect(exportPublish.calls).toHaveLength(0);
+
+    expect(events).toHaveLength(1);
+    const failed = events[0] as { kind: string; payload: unknown };
+    expect(failed.kind).toBe("export.failed");
+    const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
+    expect(parsedFailed.phase).toBe("idle");
+    expect(parsedFailed.generationId).toBeNull();
+    expect(parsedFailed.failure?.code).toBe("PERSISTENCE_FAILED");
+
+    // Capture never began — no export.started, no export.progress, nothing else.
+    const published = harness.getPublishedEvents();
+    expect(published).toHaveLength(0);
+  });
 });

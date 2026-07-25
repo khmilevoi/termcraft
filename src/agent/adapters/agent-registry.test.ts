@@ -22,6 +22,7 @@ function stubBackend(backendId: string): AgentBackend {
     models: [{ model: "test-model", efforts: ["medium"] }],
     confinement: "canUseTool",
     sessionWorkspaceBinding: "fixed",
+    defaultSelection: { model: "test-model", effort: "medium" },
   };
   return {
     startTurn: () => {

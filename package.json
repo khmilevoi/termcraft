@@ -1,14 +1,20 @@
 {
   "name": "termcraft",
-  "private": true,
+  "version": "0.1.0",
+  "bin": {
+    "termcraft": "./src/main.tsx"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "tsconfig.json"
+  ],
   "type": "module",
   "scripts": {
     "start": "bun run src/main.tsx",
     "dev": "bun --watch run src/main.tsx",
     "demo": "bun run src/demo.tsx",
-    "build": "bun build --compile --target=bun-windows-x64 --outfile dist/termcraft.exe src/main.tsx",
-    "build:check": "bun run scripts/lib-cross-check.ts",
-    "postinstall": "bun run scripts/gen-tsc-libs.ts",
+    "gen:runtime-dts": "bun run scripts/gen-runtime-dts.ts",
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"

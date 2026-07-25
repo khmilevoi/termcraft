@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
+import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
+
 import { createTypeChecker } from "./type-check";
 
 // Integration test against the REAL Go compiler. The libs are co-located with the exe
@@ -15,8 +17,10 @@ const HAS_TSC = fs.existsSync(TSC_EXE);
 const withTsc = HAS_TSC ? test : test.skip;
 const TIMEOUT_MS = 30_000;
 
-// The injected ambient runtime facade (phase 8 generates the real one). Covers exactly
-// what the fixtures use — no JSX, so no jsx-runtime resolution is dragged in.
+// A minimal hand-written stand-in for the ambient runtime facade, kept because it isolates the
+// diagnostic-plumbing cases below from the real declaration's content. Covers exactly what those
+// fixtures use — no JSX, so no jsx-runtime resolution is dragged in. The REAL generated
+// declaration gets its own suite at the bottom of this file.
 const runtimeDts = `declare module "@termcraft/runtime" {
   export function definePage(meta: { kitApiVersion: number; title: string; minSize: { w: number; h: number }; theme: string }): typeof meta
   export function reatomComponent<T>(render: () => T): () => T
@@ -107,6 +111,70 @@ export default n
       expect(errors[0]?.message.length).toBeGreaterThan(0);
       // The point of the whole check: a crashed compiler never reads as a clean page.
       expect(errors).not.toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+// Phase-8 WP-2's acceptance gate, and Task 6 Step 5's verify-not-assume step: the REAL generated
+// declaration — not the hand-written stub above — must type-check a real authored page. A
+// declaration that cannot is worse than none, because the Gate would then reject correct agent
+// output. Both halves matter: a valid page must come back clean, AND a broken page must still
+// produce a `type` diagnostic, or "clean" would only prove the checker was silently disabled.
+//
+// This is the one place `gate` reaches into `runtime` — a TEST-ONLY edge. In production the
+// composition root owns that wiring (design §WP-2: it "wires `typeCheck` into
+// `createGateRunnerAdapter`, supplying the compiler path and the generated declaration"), so
+// `gate`'s shipped code stays free of any `runtime` import and `runtime` stays the leaf the
+// module DAG requires. `tscExePath` is resolved locally here, from the same `TSC_EXE` the suite
+// above already uses, rather than through `./tsc-extract` — the compiler-resolution helper is
+// being reshaped by phase-8 WP-1 and this check must not depend on which name it lands under.
+const realChecker = createTypeChecker({ tscExePath: TSC_EXE, runtimeDts: RUNTIME_DTS });
+
+/** A page in the shape §5.8 asks agents for: `definePage` meta, a Reatom atom, JSX from the catalog. */
+const FIXTURE_PAGE = `import { definePage, reatomComponent, Panel, Text, Gauge, atom } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "Fixture",
+  minSize: { w: 80, h: 24 },
+  theme: "dark-default",
+})
+
+const load = atom(0.5, "fixture.load")
+
+export default reatomComponent(() => (
+  <Panel id="root" title="Fixture">
+    <Text id="label" color="accent">load</Text>
+    <Gauge id="load" value={load()} label="50%" />
+  </Panel>
+), "Fixture")
+`;
+
+describe("the generated @termcraft/runtime declaration, through the real type checker", () => {
+  withTsc(
+    "a valid JSX page against the real generated declaration type-checks clean",
+    async () => {
+      const errors = await realChecker(FIXTURE_PAGE, "fixture.tsx");
+      expect(errors).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a deliberate prop-type error on the same page still surfaces a type diagnostic",
+    async () => {
+      // `GaugeProps.value` is `number`, and the interface is declared INSIDE the ambient module,
+      // so this is checked for real even though the external `@reatom/core`/`react` identities the
+      // declaration references do not resolve in the hermetic environment.
+      const broken = FIXTURE_PAGE.replace("value={load()}", 'value="half"');
+      expect(broken).not.toBe(FIXTURE_PAGE);
+
+      const errors = await realChecker(broken, "fixture.tsx");
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.every((e) => e.kind === "type")).toBe(true);
+      expect(errors.some((e) => e.code === "TS2322")).toBe(true);
+      expect(errors.some((e) => e.file === "fixture.tsx")).toBe(true);
     },
     TIMEOUT_MS,
   );

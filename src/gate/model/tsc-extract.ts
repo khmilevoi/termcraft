@@ -1,132 +1,105 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import * as errore from "errore";
 
 /**
- * The compiler assets the gate materializes to a per-user cache (Spike C). Phase 3
- * INJECTS `assetDir` (the platform package's `lib/` dir, holding `tsc.exe` + the
- * lib `.d.ts` chain); phase 8 will embed + inject the curated 88-file set. Nothing
- * here embeds assets with `with { type: "file" }` — that is the phase-8 concern.
+ * Resolves a spawnable `tsc` executable straight from the INSTALLED `typescript` package
+ * (phase-8 WP-1): there is no embedded/extracted compiler anymore — the dev-only build scripts
+ * this module used to hand a materialized cache path to are deleted this task, because they made
+ * an npm-installed termcraft unable to even import its own composition root (the deleted scripts
+ * lived outside the published package's `files` allowlist, and one of them imported a
+ * gitignored, `postinstall`-generated module a fresh clone or install never produces anymore,
+ * since that `postinstall` step itself is already gone). `typescript` 7.0.2 (the native Go port)
+ * ships its actual compiler in a per-platform package, `@typescript/typescript-<platform>-<arch>`,
+ * with `tsc.exe` (`tsc` on non-Windows) and the WHOLE `lib.*.d.ts` chain sitting side by side in
+ * that package's `lib/` directory — the Go compiler reads the lib chain off real disk itself,
+ * next to the exe, never through the virtual FS (`type-check.ts`'s own header comment; this
+ * module's own test "the resolved compiler finds its own lib chain" VERIFIES that holds through
+ * this resolution path, per the plan's explicit gate).
  */
-export interface CompilerAssets {
-  /** Directory holding `tsc.exe` and the `lib.*.d.ts` files to extract. */
-  readonly assetDir: string;
-  /** Compiler version, used as the cache subdirectory name (`tsc-<version>/`). */
-  readonly version: string;
-  /**
-   * Where `tsc-<version>/` is created. Defaults to `%LOCALAPPDATA%/termcraft`
-   * (the roadmap's per-user path), falling back to the OS temp dir.
-   */
-  readonly cacheRoot?: string;
-}
 
-/** A fatal failure to materialize the compiler onto real disk (Spike C boundary). */
+/** A failure to resolve the installed TypeScript compiler executable — the `typescript` package,
+ *  its platform-specific package, or the resolved executable path itself was not found on disk.
+ *  Returned as a VALUE (errore's boundary rule): a missing compiler is an expected, recoverable
+ *  condition (an npm install that skipped optional dependencies, an unsupported platform), never
+ *  a reason to throw. The class name is unchanged from the pre-WP-1 extraction module so `gate`'s
+ *  existing import sites (`gate/index.ts`) do not need to churn their error-type name. */
 export class CompilerExtractError extends errore.createTaggedError({
   name: "CompilerExtractError",
-  message: "failed to materialize the TypeScript compiler from $assetDir",
+  message: "failed to resolve the TypeScript compiler executable: $reason",
 }) {}
 
-/** The Windows compiler executable name (Spike C concern #2: this is OS/arch-specific). */
-const EXE_NAME = "tsc.exe";
-
-/** Marker stamped ONLY after a fully complete extraction (Spike C latency note, §"Latency"). */
-const MARKER_NAME = ".extraction-complete";
-
 /**
- * The default cache root: `%LOCALAPPDATA%/termcraft` per the roadmap's
- * `%LOCALAPPDATA%/termcraft/tsc-<version>/`, falling back to the OS temp dir where
- * `LOCALAPPDATA` is absent (non-Windows / stripped env).
+ * Mirrors `node_modules/typescript/lib/getExePath.js`'s own naming rule — that file is NOT in
+ * the package's `exports` map (verified: `node_modules/typescript/package.json`'s `exports`
+ * lists only `.`, `./package.json`, and the `./unstable/*` API entry points), so it cannot be
+ * imported directly. Its logic is reproduced here instead of hand-building a
+ * `node_modules/...` path, so a future change to that naming rule surfaces as a RESOLUTION
+ * FAILURE from `Bun.resolveSync` rather than a silently wrong path. `baseName === "typescript"`
+ * (the published package, not a fork such as the native-preview line) yields `tsc`; anything
+ * else yields `tsgo`.
  */
-function defaultCacheRoot(): string {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (localAppData !== undefined && localAppData.length > 0)
-    return path.join(localAppData, "termcraft");
-  return os.tmpdir();
+function expectedBinName(baseName: string): "tsc" | "tsgo" {
+  return baseName === "typescript" ? "tsc" : "tsgo";
 }
 
-/** Every `lib.*.d.ts` in the asset dir — including the `lib.d.ts` startup sentinel. */
-function listLibNames(assetDir: string): string[] {
-  return fs
-    .readdirSync(assetDir)
-    .filter((name) => name.startsWith("lib.") && name.endsWith(".d.ts"));
+/** `pkg.name`'s trailing segment after the `@scope/` prefix, or the whole name when unscoped —
+ *  same split `getExePath.js` performs on the `typescript` package's own `name` field. */
+function baseNameOf(pkgName: string): string {
+  if (!pkgName.startsWith("@")) return pkgName;
+  return pkgName.split("/")[1] ?? pkgName;
 }
 
-/**
- * A cache is reusable only when a prior extraction COMPLETED (marker present), the
- * exe is present and its size matches the asset exe, and every lib is present. The
- * per-lib presence check (not just the exe) is load-bearing: a half-cleaned cache
- * must re-extract rather than reproduce the `noembed` startup panic Spike C found
- * (a missing `lib.d.ts` next to the exe crashes the Go compiler before any VFS).
- */
-function isCacheComplete(params: {
-  dir: string;
-  exe: string;
-  assetExe: string;
-  libNames: readonly string[];
-}): boolean {
-  const { dir, exe, assetExe, libNames } = params;
-  if (!fs.existsSync(path.join(dir, MARKER_NAME))) return false;
-  if (!fs.existsSync(exe)) return false;
-  if (fs.statSync(exe).size !== fs.statSync(assetExe).size) return false;
-  return libNames.every((name) => fs.existsSync(path.join(dir, name)));
+/** The `typescript` package's own `package.json`, read to derive `baseName` exactly as
+ *  `getExePath.js` does — never hand-assumed, since a future rename of the `typescript`
+ *  package itself must also change which platform package this resolves. */
+function readPackageName(packageJsonPath: string): string {
+  const raw = fs.readFileSync(packageJsonPath, "utf8");
+  const parsed = JSON.parse(raw) as { name?: unknown };
+  return typeof parsed.name === "string" ? parsed.name : "typescript";
+}
+
+/** Windows' `MAX_PATH` long-path guard, reproduced verbatim from `getExePath.js`: a resolved
+ *  path at or beyond 248 characters needs the `\\?\` prefix to remain openable. */
+function withLongPathPrefix(exe: string): string {
+  if (process.platform === "win32" && exe.length >= 248) return `\\\\?\\${exe}`;
+  return exe;
 }
 
 /**
- * Copy the exe + every lib next to it, then stamp the completion marker LAST. The
- * marker is cleared first and written only after every copy, so a crash mid-copy
- * leaves no marker and the next run re-extracts (Spike C concern #4/#5).
+ * Resolve a spawnable `tsc`/`tsgo` executable from the installed `typescript` package through
+ * Bun's own module resolution — never a hand-built `node_modules/...` string — so a change in
+ * TypeScript's platform-package layout (a renamed package, a missing optional dependency, an
+ * unsupported platform) surfaces as a resolution FAILURE here, not a wrong path handed to
+ * `spawn`. The lib `.d.ts` chain is NOT resolved separately: it lives in the SAME directory as
+ * the executable in the installed layout (verified fact; this module's own test proves the
+ * compiler loads it unassisted from there).
  */
-function extractCompiler(params: {
-  dir: string;
-  exe: string;
-  assetExe: string;
-  assetDir: string;
-  libNames: readonly string[];
-  version: string;
-}): void {
-  const { dir, exe, assetExe, assetDir, libNames, version } = params;
-  fs.rmSync(path.join(dir, MARKER_NAME), { force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(exe, fs.readFileSync(assetExe));
-  // The startup sentinel and the lib chain must live next to the exe on real disk —
-  // the Go compiler stats/reads them itself, before any virtual FS exists (Spike C).
-  for (const name of libNames) {
-    fs.writeFileSync(path.join(dir, name), fs.readFileSync(path.join(assetDir, name)));
-  }
-  fs.writeFileSync(path.join(dir, MARKER_NAME), version);
-}
-
-/**
- * Ensure the TypeScript compiler + its lib `.d.ts` chain are present in
- * `<cacheRoot>/tsc-<version>/` and return the extracted `tsc.exe` path (Spike C:
- * a `bun build --compile` binary cannot spawn an embedded exe, so the compiler is
- * materialized to real disk once per version and reused). All filesystem access is
- * a boundary: a failure is returned as a `CompilerExtractError`, never thrown.
- */
-export function materializeCompiler(assets: CompilerAssets): CompilerExtractError | string {
-  const cacheRoot = assets.cacheRoot ?? defaultCacheRoot();
-  const dir = path.join(cacheRoot, `tsc-${assets.version}`);
-  const exe = path.join(dir, EXE_NAME);
-  const assetExe = path.join(assets.assetDir, EXE_NAME);
-
-  // The whole filesystem span is one boundary: Node `fs` throws `Error` instances,
-  // which `errore.try` wraps into a `CompilerExtractError` value (never thrown).
+export function resolveCompilerPath(): CompilerExtractError | string {
   return errore.try({
     try: () => {
-      const libNames = listLibNames(assets.assetDir);
-      if (isCacheComplete({ dir, exe, assetExe, libNames })) return exe;
-      extractCompiler({
-        dir,
-        exe,
-        assetExe,
-        assetDir: assets.assetDir,
-        libNames,
-        version: assets.version,
-      });
+      const typescriptPackageJsonPath = Bun.resolveSync("typescript/package.json", process.cwd());
+      const baseName = baseNameOf(readPackageName(typescriptPackageJsonPath));
+      const binName = expectedBinName(baseName);
+
+      const platformPackageName = `@typescript/${baseName}-${process.platform}-${process.arch}`;
+      // Resolved from the `typescript` package's own path (not `process.cwd()`): the platform
+      // package is an optional dependency declared alongside `typescript` itself, so resolving
+      // from there follows the same node_modules chain npm/Bun would install it into.
+      const platformPackageJsonPath = Bun.resolveSync(
+        `${platformPackageName}/package.json`,
+        typescriptPackageJsonPath,
+      );
+      const exeDir = path.join(path.dirname(platformPackageJsonPath), "lib");
+      const exeName = process.platform === "win32" ? `${binName}.exe` : binName;
+      const exe = withLongPathPrefix(path.join(exeDir, exeName));
+
+      if (!fs.existsSync(exe))
+        throw new Error(`resolved executable does not exist on disk: ${exe}`);
       return exe;
     },
-    catch: (e) => new CompilerExtractError({ assetDir: assets.assetDir, cause: e }),
+    catch: (e) =>
+      new CompilerExtractError({ reason: e instanceof Error ? e.message : String(e), cause: e }),
   });
 }

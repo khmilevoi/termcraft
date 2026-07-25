@@ -14,7 +14,13 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { BackendCapabilities, GateRunner, TurnTransactionService } from "core/ports";
+import type {
+  AgentBackend,
+  AgentTask,
+  BackendCapabilities,
+  GateRunner,
+  TurnTransactionService,
+} from "core/ports";
 import {
   type FakeChatStore,
   createFakeAgentBackend,
@@ -45,7 +51,13 @@ import {
   createPreviewSessionCommands,
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import { type Sha256Hex, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import {
+  type FailureDtoV1,
+  type Sha256Hex,
+  type UUIDv7,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
+import type { ChatUserRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -134,6 +146,10 @@ const FAKE_BACKEND_CAPABILITIES: BackendCapabilities = {
   models: [{ model: "sonnet", efforts: ["medium"] }],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  // WP-4: a real declared default, consistent with this fixture's own (sole) model/effort —
+  // not exercised by the tests that use this constant, which all set an explicit workspace-state
+  // triple, but required now that `BackendCapabilities.defaultSelection` is non-optional.
+  defaultSelection: { model: "sonnet", effort: "medium" },
 };
 
 interface LaunchedOperation {
@@ -405,6 +421,309 @@ describe('turnHandlers["turn.start"]', () => {
     await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
   });
 
+  test("WP-4 default agent selection: with an active chat but NO stored (backend, model, effort) triple, the turn is admitted (not refused) and the started AgentTask carries the registry's declared default model and effort", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    // Mirrors `claudeCapabilities()`'s real declared default (`agent/claude/backend/model
+    // /capabilities.ts`) — this fixture's own capabilities object, not a fetch of the real
+    // one, matching every other test in this file's own `FAKE_BACKEND_CAPABILITIES` precedent.
+    const DEFAULT_SELECTION_CAPABILITIES: BackendCapabilities = {
+      backendId: "claude",
+      models: [{ model: "claude-sonnet-5", efforts: ["high"] }],
+      confinement: "canUseTool",
+      sessionWorkspaceBinding: "fixed",
+      defaultSelection: { model: "claude-sonnet-5", effort: "high" },
+    };
+
+    // `createFakeAgentBackend`'s own `AgentBackendCall` shape only records a run's `fence`
+    // (not its full `AgentTask`), so this thin wrapper captures the task itself — the same
+    // "wrap a base fake to observe one extra thing" pattern `withHonestChatAppendBase` above
+    // already uses, never a second hand-rolled `AgentBackend`.
+    const capturedTasks: AgentTask[] = [];
+    const baseAgentBackend = createFakeAgentBackend({
+      capabilities: DEFAULT_SELECTION_CAPABILITIES,
+    });
+    const agentBackend: AgentBackend = {
+      ...baseAgentBackend,
+      startTurn: (task) => {
+        capturedTasks.push(task);
+        return baseAgentBackend.startTurn(task);
+      },
+    };
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        // NO `backend`/`model`/`effort` in this patch — `DEFAULT_WORKSPACE_STATE`
+        // (`core/ports/fakes/project-store.ts`) leaves all three `null`, exactly the "nothing
+        // selected yet" shape WP-4 falls back from. Only `activeChatId` is set.
+        workspaceState: { activeChatId: chatHeader.chatId },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    // Pre-WP-4, this exact fixture (active chat, no triple) refused synchronously with zero
+    // events and no launched attempt (this file's very first test, same shape minus the chat).
+    // Proving `disposition: "started"` here is necessary but not sufficient — the assertions
+    // below prove the refusal genuinely did not fire, by proving a REAL attempt started.
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+
+    expect(capturedTasks).toHaveLength(1);
+    const [startedTask] = capturedTasks;
+    if (startedTask === undefined) throw new Error("expected exactly one captured AgentTask");
+    expect(startedTask.model).toBe("claude-sonnet-5");
+    expect(startedTask.effort).toBe("high");
+
+    const firstStart = baseAgentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    baseAgentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
+  });
+
+  test('candidatePins: an OPEN pin on the active page reaches admission as a candidate, keyed by that page\'s slug — a RESOLVED pin on the same page does not (kernel-command-contract §12.2 item 1: "only currently open, resolvable pins")', async () => {
+    const HOME = "home" as PageSlug;
+    const OPEN_PIN_ID = "pin-open";
+    const RESOLVED_PIN_ID = "pin-resolved";
+
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    // Extends the file's existing fake pin reader's fold response — never a second fake —
+    // with TWO pins on the active page: one still open, one already resolved.
+    const pinStore = createFakePinStore();
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r1",
+      pinId: OPEN_PIN_ID,
+      element: "btn-1",
+      fx: 0.5,
+      fy: 0.5,
+      text: "still open",
+      ts: "2024-01-01T00:00:00.000Z",
+    });
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r2",
+      pinId: RESOLVED_PIN_ID,
+      element: "btn-2",
+      fx: 0.2,
+      fy: 0.2,
+      text: "already handled",
+      ts: "2024-01-01T00:00:01.000Z",
+    });
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:status",
+      recordId: "r3",
+      pinId: RESOLVED_PIN_ID,
+      status: "resolved",
+      actionId: "action-1",
+      ts: "2024-01-01T00:00:02.000Z",
+    });
+
+    // Wraps `turnTransactions.admit` (the "wrap a base fake to observe one extra thing"
+    // pattern this file's own `capturedTasks`/`AgentTask` precedent above already uses) to
+    // capture the EXACT `ChatUserRecord` admission committed — `admission.ts`'s own
+    // `resolveOpenPins` populates `userRecord.pins` from `AdmissionInputV1.candidatePins`
+    // and nothing else, so this is the direct, honest proof of what this handler passed as
+    // candidates: `pins` here can equal `[OPEN_PIN_ID]` if and only if a candidate keyed by
+    // HOME's slug and OPEN_PIN_ID reached admission and was still open at admission time.
+    const capturedUserRecords: ChatUserRecord[] = [];
+    const baseTurnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+    const turnTransactions: TurnTransactionService = {
+      ...baseTurnTransactions,
+      admit: async (input) => {
+        capturedUserRecords.push(input.userRecord);
+        return baseTurnTransactions.admit(input);
+      },
+    };
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "please look at my pins" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
+
+    expect(capturedUserRecords).toHaveLength(1);
+    const [userRecord] = capturedUserRecords;
+    if (userRecord === undefined) throw new Error("expected exactly one captured user record");
+    expect(userRecord.pins).toEqual([OPEN_PIN_ID]);
+  });
+
+  test("readSet.pins: an OPEN pin on the active page carries a readSet.pins entry sourced from PinReader.readAppendBase — not the honest-empty [] placeholder (phase-8 WP-6)", async () => {
+    const HOME = "home" as PageSlug;
+    const OPEN_PIN_ID = "pin-open";
+
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const pinStore = createFakePinStore();
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r1",
+      pinId: OPEN_PIN_ID,
+      element: "btn-1",
+      fx: 0.5,
+      fy: 0.5,
+      text: "still open",
+      ts: "2024-01-01T00:00:00.000Z",
+    });
+
+    const staging = createFakeStagingService();
+    const turnTransactions = withHonestChatAppendBase(
+      createFakeTurnTransactionService(),
+      chatStore,
+    );
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      staging,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "please look at my pins" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
+
+    const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
+    if (createCall?.method !== "createTurnWorkspace") {
+      throw new Error("expected a createTurnWorkspace call");
+    }
+    expect(createCall.input.readSet.pins).toHaveLength(1);
+    const [pinsEntry] = createCall.input.readSet.pins;
+    if (pinsEntry === undefined) throw new Error("expected one readSet.pins entry");
+    expect(pinsEntry.pageSlug).toBe(HOME);
+
+    // The captured base came from the port, not a fabricated/placeholder value: recomputing
+    // it now (the fake's log never changed mid-turn — `resolveOpenPins` only folds, and this
+    // handler's own `sentPins: []` means finalize never appends either) must match exactly.
+    const expectedBase = await pinStore.readAppendBase(HOME);
+    if ("code" in expectedBase) throw new Error("fixture bug: readAppendBase failed");
+    expect(pinsEntry.base).toEqual(expectedBase);
+
+    expect(pinStore.calls.some((c) => c.method === "readAppendBase" && c.pageSlug === HOME)).toBe(
+      true,
+    );
+  });
+
   test("real composition: admission -> attempt -> a genuine Gate retry -> finalize -> turn.completed, activeTurnId set then cleared", async () => {
     // A deliberately minimal fixture (zero pages) isolates the admission/attempt/gate-retry/
     // finalize composition this test proves without needing byte-level per-page plumbing —
@@ -518,7 +837,260 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.turnRunner.activeAttempt(turnId as UUIDv7)).toBeNull();
   });
 
-  test("buildValidationInput threads the ABSOLUTE staged candidate path to the Gate's per-page runPage() call (the real smoke stage can only resolve an absolute path — a bare `${slug}.tsx` fails in the host's fresh scratch cwd, `gate/adapters/gate-runner.ts`'s own test)", async () => {
+  // WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all",
+  // phase-8 design's documented-debt sweep): the three tests below prove exactly what
+  // `./turn.ts`'s own header now documents under "THE TERMINAL EVENT" / "ONE SUB-CASE IS
+  // TYPED NOW" — Gate exhaustion and a backend failure are STILL not distinguishable at this
+  // arm (both terminalize normally, i.e. `"recorded"`, and `"recorded"` carries no further
+  // breakdown of why), while a genuinely different situation — the terminal record itself
+  // failing to persist (`"unrecorded"`) — now surfaces the REAL failure DTO instead of the
+  // same fabricated `PERSISTENCE_FAILED` bucket the other two share.
+
+  test("Gate exhaustion terminalizes the turn — turn.failed carries the generic PERSISTENCE_FAILED failure DTO (compare with the backend-failure test below: byte-identical)", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const gateRunner = createFakeGateRunner();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner,
+    });
+
+    // Rejects the manifest slice on all 4 permitted attempts (`MAX_TURN_ATTEMPTS`,
+    // `core/turns/model/fence.ts`) — the zero-page fixture means only the manifest-slice
+    // check ever produces an error, the same technique the "genuine Gate retry" test above
+    // uses for exactly one retry, repeated until the attempt budget is exhausted instead of
+    // stopped after the first.
+    for (let i = 0; i < 4; i++) {
+      gateRunner.queueRunManifestSliceResult({
+        errors: [{ kind: "manifest", code: "MANIFEST_REJECTED", message: "manifest rejected" }],
+        slice: null,
+      });
+    }
+
+    const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await waitForPublishedCount("turn.attemptStarted", attempt);
+      const starts = agentBackend.calls.filter((c) => c.method === "startTurn");
+      const thisStart = starts[attempt - 1];
+      if (thisStart?.method !== "startTurn") {
+        throw new Error(`expected startTurn call ${attempt}`);
+      }
+      agentBackend.completeRun(thisStart.fence, {
+        kind: "completed",
+        finalText: `done-${attempt}`,
+        usage: null,
+        sessionId: `s${attempt}`,
+      });
+    }
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    const [terminalEvent] = events;
+    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
+    expect(terminalEvent.kind).toBe("turn.failed");
+    expect(eventPayloadV1SchemaByKind["turn.failed"].safeParse(terminalEvent.payload).success).toBe(
+      true,
+    );
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+    expect(terminalEvent.payload).toEqual({
+      turnId,
+      outcome: "failed",
+      changedPages: [],
+      warnings: [],
+      failure: {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "the turn ended without committing (terminalized/recorded)",
+        details: {},
+      },
+    });
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+  });
+
+  test("a backend failure terminalizes the turn — turn.failed carries the SAME generic PERSISTENCE_FAILED failure DTO the Gate-exhaustion test above does: 'THE TERMINAL EVENT' arm genuinely cannot tell WHY a termination happened", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    // `AgentRunOutcome`'s `"backend-error"` case (`core/ports/agent-backend.ts`) — `attempt.ts`'s
+    // own `toAttemptOutcome` maps this onto `TurnAttemptOutcomeV1`'s `"failed"`, driving
+    // `run-turn.ts`'s `terminalize("failed", outcome.message, undefined, candidateRoot)`.
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "backend-error",
+      message: "the agent process crashed",
+      sessionId: null,
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    const [terminalEvent] = events;
+    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
+    expect(terminalEvent.kind).toBe("turn.failed");
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+    // IDENTICAL shape to the Gate-exhaustion test's expected payload above — the honest
+    // limitation the header documents: both causes reach "terminalized"/"recorded", and that
+    // variant alone carries no further breakdown of why.
+    expect(terminalEvent.payload).toEqual({
+      turnId,
+      outcome: "failed",
+      changedPages: [],
+      warnings: [],
+      failure: {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "the turn ended without committing (terminalized/recorded)",
+        details: {},
+      },
+    });
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+  });
+
+  test("when the terminal record itself fails to persist ('unrecorded'), turn.failed propagates the REAL failure DTO from turnTransactions.terminalize instead of the generic bucket the two tests above share (WP-8 item 4: a typed outcome instead of the catch-all)", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const baseTurnTransactions = createFakeTurnTransactionService();
+    // A REAL adapter-level failure (what `store/adapters/turn-transactions.ts`'s own
+    // `toFailureDto` would produce from a genuine store error) — deliberately a DIFFERENT
+    // code/message/details than the fabricated `PERSISTENCE_FAILED` bucket, so the assertion
+    // below can only pass if this exact object was propagated, not reconstructed generically.
+    const REAL_TERMINALIZE_FAILURE: FailureDtoV1 = {
+      code: "TRANSACTION_RECOVERY_CONFLICT",
+      retryable: true,
+      safeMessage: "a recovery transaction is already in flight for this project",
+      details: { store: "sqlite-busy" },
+    };
+    baseTurnTransactions.failNext("terminalize", REAL_TERMINALIZE_FAILURE);
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(baseTurnTransactions, chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "backend-error",
+      message: "the agent process crashed",
+      sessionId: null,
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    const [terminalEvent] = events;
+    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
+    expect(terminalEvent.kind).toBe("turn.failed");
+    expect(eventPayloadV1SchemaByKind["turn.failed"].safeParse(terminalEvent.payload).success).toBe(
+      true,
+    );
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+    expect(terminalEvent.payload).toEqual({
+      turnId,
+      outcome: "failed",
+      changedPages: [],
+      warnings: [],
+      failure: REAL_TERMINALIZE_FAILURE,
+    });
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+  });
+
+  test("buildValidationInput threads the ABSOLUTE staged candidate path to the Gate's per-page runPage() call via `sourcePath`, and keeps `fileName` at the SHORT display name (the real smoke stage can only resolve an absolute path — a bare `${slug}.tsx` fails in the host's fresh scratch cwd, `gate/adapters/gate-runner.ts`'s own test; Finding #6 — `fileName` no longer doubles as the absolute-path carrier)", async () => {
     const HOME = "home" as PageSlug;
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
@@ -528,6 +1100,7 @@ describe('turnHandlers["turn.start"]', () => {
       readonly source: string;
       readonly slug: PageSlug;
       readonly fileName?: string;
+      readonly sourcePath?: string;
     }[] = [];
     const gateRunner: GateRunner = {
       runManifestSlice: async (input) => ({
@@ -617,11 +1190,153 @@ describe('turnHandlers["turn.start"]', () => {
     // The real bug (`fixlane-K1-turn-spine.json`'s smoke-sourcePath finding): the Gate's
     // per-page `runPage()` call must resolve to the staged candidate's real file on disk, not
     // a bare `${slug}.tsx` the real host's fresh scratch child process cwd can never find.
+    // Finding #6 fix: that absolute path now travels in `sourcePath`, never in `fileName` —
+    // `fileName` stays the short display name Gate echoes into a diagnostic's `file` field.
     expect(capturedRunPageInputs).toHaveLength(1);
     const [call] = capturedRunPageInputs;
     if (call === undefined) throw new Error("expected exactly one captured runPage() call");
     expect(call.slug).toBe(HOME);
-    expect(call.fileName).toBe(`/fake-candidate/${turnId}/pages/home.tsx`);
+    expect(call.fileName).toBe("pages/home.tsx");
+    expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/pages/home.tsx`);
+  });
+
+  test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged path travels separately in `runPage`'s own `sourcePath` (Finding #6)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    let pageCallCount = 0;
+    const capturedSourcePaths: (string | undefined)[] = [];
+    const gateRunner: GateRunner = {
+      runManifestSlice: async (input) => ({
+        errors: [],
+        slice: { pages: input.presentSlugs, active: null },
+      }),
+      runPage: async (input) => {
+        pageCallCount += 1;
+        capturedSourcePaths.push(input.sourcePath);
+        // Attempt 1 fails, echoing `input.fileName` into the error's `file` — exactly what the
+        // real `runGate` does (`core/ports/gate-runner.ts`'s own doc). Attempt 2 passes, the
+        // same "reject once, then default pass" shape the genuine-retry test above uses.
+        if (pageCallCount === 1) {
+          return {
+            ok: false,
+            errors: [
+              {
+                kind: "contract",
+                code: "PAGE_CONTRACT_VIOLATION",
+                message: "bad contract",
+                file: input.fileName,
+              },
+            ],
+            warnings: [],
+            descriptor: null,
+          };
+        }
+        return {
+          ok: true,
+          errors: [],
+          warnings: [],
+          descriptor: {
+            slug: input.slug,
+            meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+          },
+        };
+      },
+    };
+
+    const pageStore = createFakePageStore({
+      order: [HOME],
+      sources: new Map([
+        [
+          HOME,
+          {
+            bytes: new TextEncoder().encode("home-source"),
+            sourceHash: "a".repeat(64) as Sha256Hex,
+          },
+        ],
+      ]),
+    });
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner,
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForPublishedCount(kind: string, count: number): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (getPublishedEvents().filter((e) => e.kind === kind).length >= count) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error(`waitForPublishedCount: never observed ${count} "${kind}" event(s)`);
+    }
+
+    await waitForPublishedCount("turn.attemptStarted", 1);
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done-1",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    await waitForPublishedCount("turn.gateRejected", 1);
+    const gateRejected = getPublishedEvents().find((e) => e.kind === "turn.gateRejected");
+    if (gateRejected === undefined) throw new Error("expected a turn.gateRejected event");
+    const diagnostics = (
+      gateRejected.payload as {
+        readonly diagnostics: { readonly errors: readonly { readonly file: string | null }[] };
+      }
+    ).diagnostics;
+    const [firstError] = diagnostics.errors;
+    if (firstError === undefined) throw new Error("expected exactly one Gate error");
+    // The short display name only — no drive letter, no candidate root, no absolute path.
+    expect(firstError.file).toBe("pages/home.tsx");
+    expect(firstError.file).not.toContain("/test-root");
+    expect(firstError.file).not.toContain("fake-candidate");
+    expect(firstError.file).not.toMatch(/^[A-Za-z]:/);
+
+    // The absolute staged path travels separately, in its own `sourcePath` field.
+    expect(capturedSourcePaths[0]).toMatch(/^\/fake-candidate\//);
+    expect(capturedSourcePaths[0]).toContain("pages/home.tsx");
+
+    await waitForPublishedCount("turn.attemptStarted", 2);
+    const secondStart = agentBackend.calls.filter((c) => c.method === "startTurn")[1];
+    if (secondStart?.method !== "startTurn") throw new Error("expected a second startTurn call");
+    agentBackend.completeRun(secondStart.fence, {
+      kind: "completed",
+      finalText: "done-2",
+      usage: null,
+      sessionId: "s2",
+    });
+
+    const events = await runPromise;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("turn.completed");
   });
 
   test("publishes a schema-valid turn.started BEFORE the first turn.attemptStarted, carrying the real chatId and the SAME absolute deadline (fixlane-K1-turn-spine.json's seam finding — the mirror only leaves 'idle' on turn.started)", async () => {

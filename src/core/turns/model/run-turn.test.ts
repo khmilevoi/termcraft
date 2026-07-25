@@ -249,7 +249,20 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
   test("(a) happy path: admit -> attempt -> freeze -> validate-pass -> finalize -> committed", async () => {
     await context.start(async () => {
       const h = harness();
-      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+      // Captures the exact root `finalizeTurn` itself retires on a committed exit (review
+      // finding #1) — `buildFinalizeInput` receives the same frozen `TurnCandidateV1` the
+      // driver's own `candidate.root` retires by, so this is the ground truth to compare
+      // the retire call's own `root` against, not a hand-rederived fake-path literal.
+      let capturedCandidateRoot: string | null = null;
+      const base = baseRunTurnInput();
+      const runInput: RunTurnInputV1 = {
+        ...base,
+        buildFinalizeInput: (args) => {
+          capturedCandidateRoot = args.candidate.root;
+          return base.buildFinalizeInput(args);
+        },
+      };
+      const runPromise = wrap(runTurn(h.deps, runInput));
 
       await waitForStartCount(h, 1);
       completeAttempt(h, 1, completedOutcome(1));
@@ -260,10 +273,20 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
         throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
       expect(result.result.kind).toBe("committed");
       expect(h.turnTransactions.calls.map((c) => c.method)).toEqual(["admit", "finalize"]);
+      // `finalizeTurn` retires its own frozen candidate unconditionally on a committed exit
+      // (`finalize.ts`'s own "CANDIDATE RETIREMENT" header) — the sequence below is not
+      // driven by `run-turn.ts`'s own `terminalize()` helper at all on this happy path.
       expect(h.staging.calls.map((c) => c.method)).toEqual([
         "createTurnWorkspace",
         "snapshotToCandidate",
+        "retireCandidate",
       ]);
+      const retireCall = h.staging.calls.find((c) => c.method === "retireCandidate");
+      if (retireCall?.method !== "retireCandidate")
+        throw new Error("expected a retireCandidate call");
+      if (capturedCandidateRoot === null)
+        throw new Error("expected buildFinalizeInput to have captured a candidate root");
+      expect(retireCall.root).toBe(capturedCandidateRoot);
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual(["runManifestSlice", "runPage"]);
       expect(h.startedTasks.length).toBe(1);
       expect(h.startedTasks[0]?.workspacePath).not.toBe("/unset");
@@ -864,6 +887,95 @@ describe("runTurn — the optional onCommitIntentRecorded hook (fixlane-K1-turn-
       if (result.kind !== "terminalized")
         throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
       expect(seen).toEqual([]);
+    });
+  });
+});
+
+describe("runTurn — candidate retirement is wired through the COMPOSED driver, not only the leaf units (review findings #4/#5)", () => {
+  // Retirement was previously covered only by `finalize.test.ts`/`terminalize.test.ts` unit
+  // tests that build their own deps by hand — deleting the wiring from `run-turn.ts` itself
+  // would have left both of those suites, and every other test in THIS file, green. These two
+  // tests exercise retirement through `runTurn`'s own composed loop and `harness()`.
+
+  test("a committed turn retires the frozen candidate exactly once, at its own root", async () => {
+    await context.start(async () => {
+      const h = harness();
+      let capturedCandidateRoot: string | null = null;
+      const base = baseRunTurnInput();
+      const runInput: RunTurnInputV1 = {
+        ...base,
+        buildFinalizeInput: (args) => {
+          capturedCandidateRoot = args.candidate.root;
+          return base.buildFinalizeInput(args);
+        },
+      };
+      const runPromise = wrap(runTurn(h.deps, runInput));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized") throw new Error(`expected finalized, got ${result.kind}`);
+      expect(result.result.kind).toBe("committed");
+
+      const retireCalls = h.staging.calls.filter((c) => c.method === "retireCandidate");
+      expect(retireCalls.length).toBe(1);
+      const retireCall = retireCalls[0];
+      if (retireCall?.method !== "retireCandidate")
+        throw new Error("expected a retireCandidate call");
+      if (capturedCandidateRoot === null)
+        throw new Error("expected buildFinalizeInput to have captured a candidate root");
+      expect(retireCall.root).toBe(capturedCandidateRoot);
+    });
+  });
+
+  test("a gate-retry-then-cancel turn retires the candidate frozen by the earlier, since-abandoned attempt (finding #4's own regression — this test was RED before that fix, see this file's own report)", async () => {
+    // Attempt 1 completes, freezes a candidate, and gets Gate-rejected -> the loop retries
+    // into attempt 2. Attempt 2 is then cancelled BEFORE it ever reaches its own freeze — so
+    // the ONLY candidate this turn ever froze is the one attempt 1 produced. Before finding
+    // #4's fix, `run-turn.ts`'s `outcome.kind === "cancelled"` branch called `terminalize()`
+    // with no `candidateRoot` at all (the branch fires before THIS iteration's own freeze),
+    // silently abandoning attempt 1's already-frozen candidate forever.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT);
+      let capturedCandidateRoot: string | null = null;
+      const base = baseRunTurnInput();
+      const runInput: RunTurnInputV1 = {
+        ...base,
+        buildValidationInput: (candidate) => {
+          capturedCandidateRoot = candidate.root;
+          return base.buildValidationInput(candidate);
+        },
+      };
+      const runPromise = wrap(runTurn(h.deps, runInput));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, { kind: "cancelled", exitConfirmed: true });
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+
+      // Only attempt 1 ever froze a candidate — attempt 2 was cancelled before its own freeze
+      // ran, so there is exactly one `snapshotToCandidate` call for the whole turn.
+      expect(h.staging.calls.map((c) => c.method)).toEqual([
+        "createTurnWorkspace",
+        "snapshotToCandidate",
+        "retireCandidate",
+      ]);
+      const retireCalls = h.staging.calls.filter((c) => c.method === "retireCandidate");
+      expect(retireCalls.length).toBe(1);
+      const retireCall = retireCalls[0];
+      if (retireCall?.method !== "retireCandidate")
+        throw new Error("expected a retireCandidate call");
+      if (capturedCandidateRoot === null)
+        throw new Error("expected buildValidationInput to have captured a candidate root");
+      expect(retireCall.root).toBe(capturedCandidateRoot);
     });
   });
 });

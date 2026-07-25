@@ -82,6 +82,10 @@ const DEFAULT_CAPABILITIES: BackendCapabilities = {
   models: [{ model: "fake-model", efforts: ["medium"] }],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  // What a test's turn.start fallback resolves to when no (backend, model, effort)
+  // triple is stored. Must name a real member of `models` above — here the fake's
+  // only model, at its only offered effort — never an invented value.
+  defaultSelection: { model: "fake-model", effort: "medium" },
 };
 
 export type AgentBackendCall =

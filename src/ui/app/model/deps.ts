@@ -131,6 +131,16 @@ export interface UiDeps {
    * rather than a cached/derived read.
    */
   readonly refreshHomeHealth: () => Promise<void>;
+  /**
+   * The one shutdown trigger (phase-8 Task 11 / WP-10): `applyIntent`'s `exit` intent (the `q`
+   * keys on the agent-missing/too-small-terminal screens) and the `/exit` slash command both
+   * call this and nothing else. The composition root (`entrypoint/model/run-app.ts`) binds it to
+   * the SAME `close()` its own SIGINT/SIGTERM handlers already use — one shutdown path, not a
+   * second independently-behaving one. A plain synchronous `() => void` (not
+   * `() => Promise<void>`): `close()` is fire-and-forget from the UI's perspective, exactly like
+   * every other command dispatch in `applyIntent` — the UI never awaits its own shutdown.
+   */
+  readonly requestExit: () => void;
 }
 
 export class UiPreviewStreamError extends errore.createTaggedError({
@@ -143,20 +153,35 @@ export class UiPreviewStreamError extends errore.createTaggedError({
  * probe once at startup (see `refreshHomeHealth()` below), but Home's very first render happens
  * synchronously, before that probe's Promise can resolve — a component render cannot await one.
  * This value only ever shows for that first frame; it preserves the "agent ready" idle layout
- * Home showed before this task, rather than inventing a different placeholder. No CLI-checking
- * probe is wired yet by default — that binding is a phase-8 composition-root concern (the
- * `agentHealthProbe` parameter below is its named injection point).
+ * Home showed before this task, rather than inventing a different placeholder. The real
+ * CLI-checking probe IS wired by default now (phase-8 Task 9 / WP-5,
+ * `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe` supplies it through
+ * `agentHealthProbe` below) — this placeholder only ever paints the one synchronous frame
+ * before that real probe's first resolution overwrites it.
  */
 // DIVERGENCE (design sample data, not layout): this placeholder previously read `agent: "codex"`
 // — the design's sample identity, not layout (user decision 2026-07-23). MVP ships Claude only,
-// so the pre-probe placeholder now names the actual (only) shipped backend instead of the
-// design mock's Codex sample; it is still overwritten by the injected probe's real reading the
-// moment it resolves (M22).
+// so the pre-probe placeholder names the actual (only) shipped backend instead of the design
+// mock's Codex sample; it is still overwritten by the injected probe's real reading the moment
+// it resolves (M22).
+//
+// It carries ONLY what is known without probing: the one shipped backend's id, and the
+// `present`/`detail` pair that preserves the idle layout. `model`, `version` and `effort` are
+// deliberately ABSENT, because every one of them can only come from a probe:
+//   - `version`: `AgentInfo` has no version field at all, so the real reading is permanently
+//     `null` (`entrypoint/model/agent-health.ts` documents why). A placeholder "0.34" — the
+//     design's Codex sample version — would paint a number this application can NEVER show.
+//   - `model`: the real reading folds in `claudeCapabilities().defaultSelection` (`claude-sonnet-5`),
+//     so the former "sonnet-4.5" placeholder was not merely unsourced but a different string
+//     from the one that replaces it a frame later.
+//   - `effort`: same source as `model`; duplicating the backend's declared default here would
+//     put domain knowledge in `ui` where it could silently drift from the catalog.
+// `homeCombo` (`ui/app/ui/App.tsx`) already reads each of the three as `?? ""`, so their absence
+// renders an empty combo for that one synchronous frame — honestly empty rather than briefly wrong.
 const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
   present: true,
   agent: "claude",
-  model: "sonnet-4.5",
-  version: "0.34",
+  version: null,
   detail: "agent ready",
 };
 
@@ -168,6 +193,10 @@ export function createUiDeps(
   // The named M15 injection point: the phase-8 composition root supplies a probe that actually
   // checks the agent CLI on PATH; tests inject a fake. The default keeps today's MVP reading.
   agentHealthProbe: () => Promise<HomeAgentHealth> = () => Promise.resolve(DEFAULT_HOME_HEALTH),
+  // The named Task 11 / WP-10 injection point: the phase-8 composition root binds this to
+  // `RunningApp.close()`. Defaults to a no-op so every existing test/demo construction of
+  // `UiDeps` keeps compiling without knowing about shutdown at all.
+  requestExit: () => void = () => undefined,
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
@@ -330,6 +359,7 @@ export function createUiDeps(
     interaction,
     local,
     refreshHomeHealth,
+    requestExit,
   };
   return deps;
 }

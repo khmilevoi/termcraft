@@ -10,7 +10,10 @@ import type {
 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
 import {
+  FsAccessError,
+  PathEscapeError,
   createSafeProjectFs,
+  isNotFound,
   nodeCandidateDeps,
   nodeSafeFsDeps,
   openManagedRoot,
@@ -59,24 +62,32 @@ import type { StoreAdapterDeps } from "./types";
 // "out-of-contract paths return FailureDtoV1, never fabricated bytes" without this adapter
 // separately tracking each candidate's file list.
 //
-// KNOWN GAP, DEFERRED (documented, not silently dropped): candidate directories this adapter
-// creates under `candidates/<turnId>/` (see `candidateDestRoot` below) are NEVER removed —
+// RESOLVED GAP (kernel-assembly Task 13): candidate directories this adapter creates under
+// `candidates/<turnId>/` (see `candidateDestRoot` below) used to be NEVER removed —
 // `snapshotToCandidate` deliberately places them outside `turns/<turnId>/` so they survive
 // `retireWorkspace` (by design — a Gate/finalize consumer may still need to `readCandidateFile`
-// after the workspace itself is gone), but nothing ever calls anything to release a candidate
-// once ITS OWN lifecycle later ends (finalize commits and reads the bytes it needs, or the
-// turn terminalizes and the candidate is abandoned for good). Across a long session this
-// accumulates one `candidates/<turnId>/` directory per turn, unbounded. This is a genuine gap,
-// not something this adapter can close alone: `StagingService` (`core/ports/staging.ts:92-115`)
-// exposes no `retireCandidate` method, so `core` — the only party that actually knows when a
-// turn's candidate is truly done with — has no way to tell this adapter to release one. Closing
-// this needs a new port method here PLUS a caller in `core/turns`/`core/kernel/model/handlers/
-// turn.ts` invoking it at the correct terminal point (after `finalizeTurn` commits, or after
-// `terminalizeTurn` abandons the turn) — both outside this adapter's own file. A same-adapter
-// heuristic (e.g. deleting a same-turnId candidate before re-creating it) was considered and
-// rejected: `snapshotToCandidate` is called at most once per turn in the current `core/turns`
-// flow (`core/turns/model/candidate.ts`), so it would not address the described leak and would
-// risk masking a genuine double-freeze bug behind a silent overwrite instead.
+// after the workspace itself is gone), but nothing called anything to release a candidate once
+// ITS OWN lifecycle later ended. `retireCandidate` below closes that: `StagingService` now
+// exposes it (`core/ports/staging.ts`), and `core/turns/model/finalize.ts`/`terminalize.ts`
+// call it (via `core/turns/model/run-turn.ts`'s dependency wiring) once a turn reaches its own
+// terminal outcome (committed, or terminalized).
+//
+// CONTAINMENT (review finding #3, fixed alongside the above): `retireCandidate` deletes real
+// bytes, so unlike every read-only method here it cannot trust a caller-supplied `root`
+// unvalidated. `liveCandidateRoots` (below) tracks every root THIS adapter instance itself
+// produced via `snapshotToCandidate` — the only roots `retireCandidate` will ever pass to
+// `removeTree`. A `root` that resolves to a real, existing directory NOT in that set is
+// refused (`FailureDtoV1`), never deleted, however innocuous `openManagedRoot`'s own no-follow
+// check found it (that check only proves "a real, non-reparse-point directory", not "one of
+// OUR candidates" — it has no notion of a containment boundary on its own). A `root` that
+// does not resolve to anything at all (never staged by this instance, or already retired) is
+// the same idempotent no-op `retireWorkspace` already established the convention for — see
+// this method's own port doc for the full two-outcome contract. `removeTree` is the same
+// best-effort, warn-and-swallow primitive every other cleanup call site in this ring uses
+// (`store/safe-fs/model/candidate.ts`'s `nodeCandidateDeps`); a real removal failure is
+// REPORTED via `console.warn` inside `removeTree` itself rather than propagated as a
+// `FailureDtoV1` — the turn's outcome is already durable by the time this runs, so a cleanup
+// failure must never retroactively fail it (this method's own port doc).
 
 function toStoreInput(
   input: CreateTurnWorkspaceInputV1,
@@ -128,6 +139,16 @@ function candidateDestRoot(workspaceRoot: string, turnId: string): string {
   return path.join(sandboxParent, "candidates", turnId);
 }
 
+/**
+ * True when any `/`- or `\`-delimited component of `raw` is exactly `..` (review finding
+ * #3's explicit "a `..`-bearing path" test case). Checked as an up-front, filesystem-free
+ * refusal in `retireCandidate` rather than relying on where the string happens to resolve —
+ * see that method's own doc.
+ */
+function hasTraversalSegment(raw: string): boolean {
+  return raw.split(/[\\/]+/).some((segment) => segment === "..");
+}
+
 export function createStagingAdapter(deps: StoreAdapterDeps): StagingService {
   const { open } = deps;
   const safeFsDeps = nodeSafeFsDeps();
@@ -136,6 +157,14 @@ export function createStagingAdapter(deps: StoreAdapterDeps): StagingService {
   // Keyed by `turnId` — see this file's header on why `retireWorkspace` needs the real
   // `TurnWorkspace` (its `turnJsonPath`) that `TurnWorkspaceV1` never carries.
   const liveWorkspaces = new Map<string, TurnWorkspace>();
+
+  // Every candidate root THIS adapter instance itself froze via `snapshotToCandidate` — the
+  // containment allowlist `retireCandidate` checks before ever deleting anything (see this
+  // file's header, "CONTAINMENT"). Deliberately never pruned on retire: a real removal makes
+  // the directory itself disappear, so a repeat `retireCandidate` call for the SAME root hits
+  // the "nothing exists there" idempotent branch regardless of set membership — keeping the
+  // entry around costs nothing and avoids reintroducing a second "was this ever ours" check.
+  const liveCandidateRoots = new Set<string>();
 
   async function createTurnWorkspace(
     input: CreateTurnWorkspaceInputV1,
@@ -171,6 +200,11 @@ export function createStagingAdapter(deps: StoreAdapterDeps): StagingService {
     const snapshot = snapshotStoreCandidate({ source, destRoot, deps: candidateDeps });
     if (snapshot instanceof Error) return toFailureDto(snapshot);
 
+    // Recorded verbatim (not realpath-resolved) — this is the EXACT string threaded back to
+    // a caller as `CandidatePageSetV1.root`, and the exact string `retireCandidate` will
+    // later receive back unchanged (see this file's header, "CONTAINMENT").
+    liveCandidateRoots.add(snapshot.root);
+
     return { root: snapshot.root, files: snapshot.files, totalBytes: snapshot.totalBytes };
   }
 
@@ -197,7 +231,71 @@ export function createStagingAdapter(deps: StoreAdapterDeps): StagingService {
     return bytes;
   }
 
-  return { createTurnWorkspace, snapshotToCandidate, retireWorkspace, readCandidateFile };
+  /**
+   * Candidate cleanup — see this file's header ("RESOLVED GAP (kernel-assembly Task 13)" and
+   * "CONTAINMENT"). Three outcomes, in order:
+   *
+   * 1. `root` is malformed on its face (empty, or carries a `..` traversal segment) — refused
+   *    before touching the filesystem at all. Caught here rather than left to
+   *    `openManagedRoot`/realpath resolution because whether a `..`-bearing string happens to
+   *    resolve to something that exists is an accident of the current working directory and
+   *    filesystem layout, not something this method's safety should depend on.
+   * 2. `openManagedRoot` cannot find anything at `root` (`isNotFound`) — the idempotent
+   *    "already-gone or never-frozen" no-op the port doc documents, matching
+   *    `retireWorkspace`'s own convention. Any OTHER `openManagedRoot` failure (a reparse
+   *    point, a non-directory leaf) is a real failure, reported via `toFailureDto`.
+   * 3. `root` resolves to a real, existing directory: only removed if it is one THIS adapter
+   *    instance itself froze (`liveCandidateRoots`); otherwise refused — `openManagedRoot`'s
+   *    own no-follow check proves the target is safe to descend into, not that it is one of
+   *    OUR candidates, so containment is enforced here rather than assumed from that check.
+   *
+   * `removeTree` never returns an error to this function (it warns and swallows its own
+   * failures), so a successful containment check always resolves to `undefined`; the
+   * signature still returns `FailureDtoV1 | undefined` to match the port's own convention.
+   */
+  async function retireCandidate(root: string): Promise<FailureDtoV1 | undefined> {
+    if (root.length === 0 || hasTraversalSegment(root)) {
+      return toFailureDto(
+        new PathEscapeError({
+          relPath: root,
+          resolved: root,
+          root: "<staging adapter: refused before resolving — empty or `..`-bearing root>",
+        }),
+      );
+    }
+
+    const candidateRoot = openManagedRoot({ kind: "candidate", path: root, deps: safeFsDeps });
+    if (candidateRoot instanceof Error) {
+      // `openManagedRoot`'s failure is only ever an `FsAccessError` (a missing path) OR one
+      // of the no-follow/type-rejection classes (`ReparsePointRejectedError`,
+      // `LeafRejectedError`) — `isNotFound` is typed against `FsAccessError` specifically
+      // (it reads `.code`, which only that class carries), so the "already gone" idempotent
+      // check only applies once the class itself is confirmed.
+      if (candidateRoot instanceof FsAccessError && isNotFound(candidateRoot)) return undefined;
+      return toFailureDto(candidateRoot);
+    }
+
+    if (!liveCandidateRoots.has(root)) {
+      return toFailureDto(
+        new PathEscapeError({
+          relPath: root,
+          resolved: candidateRoot.realPath,
+          root: "<staging adapter's own tracked candidate roots>",
+        }),
+      );
+    }
+
+    candidateDeps.removeTree(candidateRoot.realPath);
+    return undefined;
+  }
+
+  return {
+    createTurnWorkspace,
+    snapshotToCandidate,
+    retireWorkspace,
+    readCandidateFile,
+    retireCandidate,
+  };
 }
 
 type _Conforms = AssertConforms<StagingService, ReturnType<typeof createStagingAdapter>>;

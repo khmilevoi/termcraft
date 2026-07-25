@@ -53,10 +53,11 @@ describe("SLASH_COMMANDS registry", () => {
       ["commit.infra", { kind: "inert" }],
       ["commit.all", { kind: "inert" }],
       ["preview.controls", { kind: "inert" }],
+      ["app.exit", { kind: "local", effect: "exit" }],
     ]);
   });
 
-  test("matches design's commandRegistry order and mapping", () => {
+  test("matches design's commandRegistry order and mapping, plus the trailing /exit row", () => {
     expect(SLASH_COMMANDS.map((c) => c.cmd)).toEqual([
       "/new",
       "/chats",
@@ -65,9 +66,23 @@ describe("SLASH_COMMANDS registry", () => {
       "/commit-page",
       "/commit-infra",
       "/commit-all",
+      "/exit",
     ]);
     expect(SLASH_COMMANDS.find((c) => c.cmd === "/chats")?.capability).toBeNull();
     expect(SLASH_COMMANDS.find((c) => c.cmd === "/export")?.capability).toBe("export.start");
+  });
+
+  test("/exit is a UI-local action with no Kernel capability", () => {
+    const entry = UI_ACTIONS.find((a) => a.id === "app.exit");
+
+    expect(entry).toBeDefined();
+    expect(entry?.execution).toEqual({ kind: "local", effect: "exit" });
+    expect(entry?.slash).toEqual({
+      cmd: "/exit",
+      desc: "quit termcraft",
+      order: 8,
+      capability: null,
+    });
   });
 });
 
@@ -145,10 +160,11 @@ describe("slashRowState", () => {
 });
 
 describe("filterSlashRows", () => {
-  test('"/" shows all seven rows in order', () => {
+  test('"/" shows all eight rows in order (the seven design rows plus /exit)', () => {
     const rows = filterSlashRows("/", context());
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     expect(rows[0]?.command.cmd).toBe("/new");
+    expect(rows.at(-1)?.command.cmd).toBe("/exit");
   });
 
   test('a longer prefix keeps only matching commands ("/ch" -> /chats)', () => {

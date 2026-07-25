@@ -67,6 +67,7 @@ const FAKE_BACKEND_CAPABILITIES: BackendCapabilities = {
   ],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  defaultSelection: { model: "sonnet", effort: "high" },
 };
 
 interface LaunchedOperation {

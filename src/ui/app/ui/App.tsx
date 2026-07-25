@@ -24,13 +24,20 @@ import { resolveActiveOverlay, resolveKey } from "../model/keymap";
  * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design/01-home.dc.html's `home()`). DIVERGENCE
  * (design sample data, not layout): the design hardcodes `agent ‹codex› model ‹gpt-5.5›` as
  * sample identity strings (user decision 2026-07-23). Home is shown before any project/kernel
- * snapshot exists, so `agent`/`model` come from the SAME M15 health probe the health line below
- * the combo already reads — never a hardcoded fallback. `effort` has no probe/AgentIdentityV1
- * equivalent (effort/model-picker selection is out of MVP scope, global constraints), so it
- * stays the design's static literal, never rendered as if it were a live selection.
+ * snapshot exists, so `agent`/`model`/`effort` all come from the SAME M15 health probe the
+ * health line below the combo already reads — never a hardcoded fallback.
+ *
+ * `effort` — WP-4 (`BackendCapabilities.defaultSelection`, `core/ports/agent-backend.ts`) gives
+ * the backend a real declared default (`claudeCapabilities()`: `claude-sonnet-5` at `high`).
+ * Phase-8 Task 9 (WP-5) is what finishes routing it: `entrypoint/model/agent-health.ts`'s
+ * `createAgentHealthProbe` folds `capabilities().defaultSelection` into the SAME
+ * `HomeAgentHealth` reading `healthCheck()` produces — a SELECTION fact riding along the one
+ * probe injection point Home actually has, not a fact `healthCheck()` itself reports.
+ * `HomeAgentHealth.effort` (`ui/home/types.ts`) now exists to carry it, so this is a genuine
+ * live read, not a literal kept in sync by hand.
  */
 function homeCombo(health: HomeAgentHealth): HomeCombo {
-  return { agent: health.agent ?? "", model: health.model ?? "", effort: "high" };
+  return { agent: health.agent ?? "", model: health.model ?? "", effort: health.effort ?? "" };
 }
 
 /**

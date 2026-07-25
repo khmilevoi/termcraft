@@ -81,6 +81,14 @@ describe("createFakeAgentBackend", () => {
     expect((await backend.healthCheck()).health).toEqual({ status: "ready" });
   });
 
+  test("capabilities() declares a defaultSelection that is an actual member of its own models catalog", () => {
+    const backend = createFakeAgentBackend();
+    const caps = backend.capabilities();
+    const model = caps.models.find((m) => m.model === caps.defaultSelection.model);
+    expect(model).toBeDefined();
+    expect(model?.efforts).toContain(caps.defaultSelection.effort);
+  });
+
   test("sessionScope() is a pure deterministic function of its input", () => {
     const backend = createFakeAgentBackend();
     const a = backend.sessionScope({

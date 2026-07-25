@@ -1,3 +1,4 @@
+import type { AgentRegistry } from "core/ports";
 import type { KernelPort, UiEnv } from "ui";
 
 /**
@@ -24,6 +25,22 @@ export interface AppShell {
   readonly port: KernelPort;
   readonly env: UiEnv;
   close(): Promise<void>;
+}
+
+/**
+ * `AppShell` widened with the live agent registry Task 9's Home health probe needs
+ * (`run-app.ts`'s `resolveAgentHealthProbe`). Declared here, in the module's shared `types.ts`
+ * (this repository's module-shape convention — CLAUDE.md), rather than in a `model/` file —
+ * moved from `create-shell.ts` by phase-8 Task 11, which found it living there. Its reasoning is
+ * unchanged by the move: `AppShell` is the general per-mode contract every entrypoint consumer
+ * (`bootstrap.ts`, `run-export.ts`) already depends on, and only the run-app path needs the
+ * registry. `ShellWithAgentRegistry` is a strict superset (`AppShell & {…}`), so it satisfies
+ * every existing `shell: AppShell`-typed call site without any of them changing — `createShell`'s
+ * own callers keep compiling unmodified. `agentRegistry` is `null` for the demo shell: there is
+ * no real agent to probe in an offline demo (see `create-shell.ts`'s `demoShell`).
+ */
+export interface ShellWithAgentRegistry extends AppShell {
+  readonly agentRegistry: AgentRegistry | null;
 }
 
 /**

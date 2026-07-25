@@ -12,8 +12,9 @@ import type {
 /**
  * In-memory {@link StagingService} fake (6D task brief). `createTurnWorkspace` synthesizes
  * a deterministic root path and file list from `input.turnId`/`pages`/`runtimeDocs`/
- * `manifestSlice` — no real disk write happens, so `snapshotToCandidate` and
- * `retireWorkspace` only need to track which workspace ids are live, not copy real bytes.
+ * `manifestSlice` — no real disk write happens, so `snapshotToCandidate`, `retireWorkspace`
+ * and `retireCandidate` only need to track which workspace/candidate ids are live, not copy
+ * or delete real bytes (kernel-assembly Task 13's own header).
  */
 
 /** A deterministic, valid-looking 64-hex-char {@link Sha256Hex} derived from a seed — no crypto, no randomness. */
@@ -28,17 +29,31 @@ export type StagingFailableMethod =
   | "createTurnWorkspace"
   | "snapshotToCandidate"
   | "retireWorkspace"
-  | "readCandidateFile";
+  | "readCandidateFile"
+  | "retireCandidate";
 
 export type StagingCall =
   | { readonly method: "createTurnWorkspace"; readonly input: CreateTurnWorkspaceInputV1 }
   | { readonly method: "snapshotToCandidate"; readonly turnId: string }
   | { readonly method: "retireWorkspace"; readonly turnId: string; readonly effective: boolean }
-  | { readonly method: "readCandidateFile"; readonly root: string; readonly relPath: string };
+  | { readonly method: "readCandidateFile"; readonly root: string; readonly relPath: string }
+  | { readonly method: "retireCandidate"; readonly root: string; readonly effective: boolean };
 
 export interface FakeStagingService extends StagingService {
   readonly calls: readonly StagingCall[];
   failNext(method: StagingFailableMethod, failure: FailureDtoV1): void;
+  /**
+   * Registers `root` as "a real, existing directory this fake never froze itself" — the only
+   * way this in-memory fake can honestly model `retireCandidate`'s own port doc outcome 2
+   * (review finding #8): something exists at `root` but it is not one of THIS instance's own
+   * candidates, so it is refused (`FailureDtoV1`), never silently no-op'd. Without this, a
+   * genuinely never-seen root (nothing exists there) and a real-but-foreign root (something
+   * exists, but not ours) were indistinguishable in this fake's model — both returned
+   * `undefined` — so no test could exercise how `core` handles a retire REFUSAL, on the one
+   * method that deletes directories. A root never passed here still hits the idempotent
+   * "nothing exists" no-op `retireWorkspace` already established the convention for.
+   */
+  seedForeignCandidateRoot(root: string): void;
 }
 
 export function createFakeStagingService(): FakeStagingService {
@@ -50,7 +65,17 @@ export function createFakeStagingService(): FakeStagingService {
     snapshotToCandidate: [],
     retireWorkspace: [],
     readCandidateFile: [],
+    retireCandidate: [],
   };
+
+  // Which candidate roots `snapshotToCandidate` has frozen and `retireCandidate` has not
+  // yet released — mirrors `live`'s identical bookkeeping for workspaces one level up.
+  const liveCandidateRoots = new Set<string>();
+
+  // Roots `seedForeignCandidateRoot` has marked as "real, but never frozen by this instance"
+  // — the fake's only way to model the port doc's outcome-2 refusal (review finding #8). See
+  // `FakeStagingService.seedForeignCandidateRoot`'s own doc.
+  const foreignCandidateRoots = new Set<string>();
 
   // Per-workspace synthetic content, keyed by `turnId` — built once, at `createTurnWorkspace`
   // time, from the ONE real byte payload this fake ever actually receives (`manifestSlice`)
@@ -129,6 +154,7 @@ export function createFakeStagingService(): FakeStagingService {
     // port's contract (a candidate is the one thing `runTurn` still holds a reference to
     // once the workspace itself has been retired).
     contentByCandidateRoot.set(root, contentByTurnId.get(workspace.turnId) ?? new Map());
+    liveCandidateRoots.add(root);
     return { root, files: workspace.files, totalBytes: workspace.totalBytes };
   }
 
@@ -162,13 +188,44 @@ export function createFakeStagingService(): FakeStagingService {
     return undefined;
   }
 
+  function foreignCandidateRootRefusal(root: string): FailureDtoV1 {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: `refused to retire "${root}": not a candidate this instance froze`,
+      details: { root },
+    };
+  }
+
+  /**
+   * Idempotent for a genuinely never-seen root (matching the port's own doc: retiring an
+   * already-gone or never-frozen root is a no-op, never a failure) — but refuses a root
+   * `seedForeignCandidateRoot` marked as "real, but not ours" (review finding #8), matching
+   * the real adapter's own containment refusal for a root outside its tracked set.
+   */
+  async function retireCandidate(root: string): Promise<FailureDtoV1 | undefined> {
+    const effective = liveCandidateRoots.has(root);
+    calls.push({ method: "retireCandidate", root, effective });
+    const queued = queues.retireCandidate.shift();
+    if (queued !== undefined) return queued;
+    if (!effective && foreignCandidateRoots.has(root)) return foreignCandidateRootRefusal(root);
+    liveCandidateRoots.delete(root);
+    return undefined;
+  }
+
+  function seedForeignCandidateRoot(root: string): void {
+    foreignCandidateRoots.add(root);
+  }
+
   return {
     createTurnWorkspace,
     snapshotToCandidate,
     retireWorkspace,
     readCandidateFile,
+    retireCandidate,
     calls,
     failNext,
+    seedForeignCandidateRoot,
   };
 }
 

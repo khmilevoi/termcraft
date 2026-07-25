@@ -3,14 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import * as errore from "errore";
-import { resolveCompilerAssets } from "scripts/embed-assets";
 
 import { createProductionAgentRegistry } from "agent";
 import { type KernelDeps, createKernel } from "core";
 import type { Kernel } from "core/kernel";
-import type { PreviewFrameV1, PreviewSession } from "core/ports";
-import { createGateRunnerAdapter } from "gate";
-import type { CompilerAssets } from "gate";
+import type { GateRunner, PreviewFrameV1, PreviewSession } from "core/ports";
+import { createGateRunnerAdapter, resolveCompilerPath } from "gate";
+import type { SmokeRenderer } from "gate";
 import {
   createExportRenderAdapter,
   createHostSupervisorAdapter,
@@ -25,6 +24,7 @@ import {
 import type { SpawnFn } from "host/supervisor";
 import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
+import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 import {
   createChatStoreAdapter,
   createExportPublishAdapter,
@@ -45,7 +45,7 @@ import type { OpenProject, Store, StoreAdapterDeps } from "store";
 import type { KernelPort, PreviewSessionHandle, UiEnv, UiPreviewFrame } from "ui";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession } from "ui/testing";
 
-import type { AppShell, EntrypointMode } from "../types";
+import type { EntrypointMode, ShellWithAgentRegistry } from "../types";
 
 /**
  * Builds the Kernel boundary one run drives.
@@ -63,7 +63,7 @@ export async function createShell(
   mode: EntrypointMode,
   env: UiEnv,
   deps: ShellDeps = {},
-): Promise<ShellCompositionError | AppShell> {
+): Promise<ShellCompositionError | ShellWithAgentRegistry> {
   return mode === "demo" ? demoShell(env) : interactiveShell(env, deps);
 }
 
@@ -75,7 +75,6 @@ export interface ShellDeps {
   /** Defaults to `%LOCALAPPDATA%/termcraft` (see {@link resolveDefaultUserStateRoot}). */
   readonly userStateRoot?: string;
   readonly execPath?: string;
-  readonly isCompiled?: boolean;
   readonly srcRoot?: string;
   readonly spawn?: SpawnFn;
 }
@@ -90,7 +89,28 @@ export class ShellCompositionError extends errore.createTaggedError({
 async function interactiveShell(
   env: UiEnv,
   deps: ShellDeps,
-): Promise<ShellCompositionError | AppShell> {
+): Promise<ShellCompositionError | ShellWithAgentRegistry> {
+  // The Gate's `typeCheck` stage needs a spawnable `tsc` resolved from the INSTALLED
+  // `typescript` package (Task 4's `resolveCompilerPath()`, `gate/model/tsc-extract.ts`) —
+  // resolved here, first, before any project I/O runs. A failed resolution surfaces as a
+  // `ShellCompositionError` and aborts the WHOLE shell construction; it is never swallowed
+  // into a degraded `GateRunner` with `typeCheck` silently omitted, which would let the Gate
+  // pass a candidate page it never actually type-checked. This is a DELIBERATE reversal of
+  // this file's own pre-Task-7 behavior: the old `resolveShellCompilerAssets()` helper caught
+  // exactly this failure with `console.warn(...)` and returned `undefined`, letting
+  // `createGateRunnerAdapter` build a shell whose Gate quietly never type-checked anything for
+  // the rest of the run. phase-8 design §WP-2's acceptance gate ("the Gate catches a
+  // deliberate type error ... in the shipped configuration") requires the opposite: a run
+  // with no working type checker must not start at all.
+  const compilerPath = resolveCompilerPath();
+  if (compilerPath instanceof Error) {
+    return new ShellCompositionError({
+      root: env.root,
+      reason: `could not resolve the TypeScript compiler for the Gate's type-check stage: ${compilerPath.message}`,
+      cause: compilerPath,
+    });
+  }
+
   const userStateRoot = deps.userStateRoot ?? resolveDefaultUserStateRoot();
   const store = createStore(nodeStoreDeps({ userStateRoot }));
 
@@ -106,18 +126,18 @@ async function interactiveShell(
   const pinStore = createPinStoreAdapter(storeAdapterDeps);
 
   const execPath = deps.execPath ?? process.execPath;
-  const isCompiled = deps.isCompiled ?? isCompiledBinary(execPath);
   const srcRoot = deps.srcRoot ?? Bun.main;
-  const spawnCommand = createHostSpawnCommand({ execPath, isCompiled, srcRoot });
+  const spawnCommand = createHostSpawnCommand({ execPath, srcRoot });
   const spawn = deps.spawn ?? createBunSpawn();
   const hostClock = createHostClock();
 
   const hostSupervisorAdapter = createHostSupervisorAdapter({
     clock: hostClock,
     runtimeDeclaration: EMBEDDED_RUNTIME_DECLARATION,
-    // The spawn command is fixed for the life of this process (the execPath-vs-dev branch
-    // Spike E fixes never changes mid-run), so every session spec spawns the identical
-    // `_host --stdio` argv — `spec` itself carries no information the command needs.
+    // The spawn command is fixed for the life of this process (there is exactly one spawn
+    // shape now — phase-8 design §2 — so `execPath`/`srcRoot` never change mid-run), so
+    // every session spec spawns the identical `_host --stdio` argv — `spec` itself carries
+    // no information the command needs.
     spawnFor: () => spawnCommand,
     spawn,
     mintSessionId: uuidv7,
@@ -128,6 +148,11 @@ async function interactiveShell(
     clock: hostClock,
     runtimeDeclaration: EMBEDDED_RUNTIME_DECLARATION,
   });
+
+  // Captured once so the SAME registry both feeds the Kernel's own `agentRegistry` port AND is
+  // exposed on the returned shell (`ShellWithAgentRegistry.agentRegistry`) for `run-app.ts`'s
+  // Task 9 Home health probe — never two independently constructed registries drifting apart.
+  const agentRegistry = createProductionAgentRegistry();
 
   const kernelDeps: KernelDeps = {
     projectStore: createProjectStoreAdapter(storeAdapterDeps),
@@ -146,10 +171,7 @@ async function interactiveShell(
     renderCache: projections.render,
     sessionCheckpoint: createSessionCheckpointAdapter(storeAdapterDeps),
     recovery: createRecoveryAdapter(storeAdapterDeps),
-    gateRunner: createGateRunnerAdapter({
-      smokeRenderer,
-      compilerAssets: resolveShellCompilerAssets(),
-    }),
+    gateRunner: buildGateRunner(compilerPath, smokeRenderer),
     hostSupervisor: hostSupervisorAdapter,
     exportRender: createExportRenderAdapter({
       spawn,
@@ -158,7 +180,7 @@ async function interactiveShell(
       runtimeDeclaration: EMBEDDED_RUNTIME_DECLARATION,
     }),
     exportPublish: createExportPublishAdapter(storeAdapterDeps),
-    agentRegistry: createProductionAgentRegistry(),
+    agentRegistry,
     clock: systemClock,
   };
 
@@ -170,6 +192,7 @@ async function interactiveShell(
     mode: "interactive",
     port,
     env: resolvedEnv,
+    agentRegistry,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
     // last — `open` was acquired first, so it is released last. Each step is guarded (see
@@ -185,6 +208,31 @@ async function interactiveShell(
       ]);
     },
   };
+}
+
+/**
+ * Builds the production `GateRunner` — the exact composition `interactiveShell` wires into
+ * `KernelDeps.gateRunner` above (phase-8 Task 7). Pairs the caller-resolved compiler executable
+ * with `RUNTIME_DTS`, the generated ambient `@termcraft/runtime` declaration (Task 6,
+ * `runtime/generated/runtime-dts.ts`). Importing `runtime/generated/runtime-dts` here is
+ * correct even though `runtime` is a leaf: leafness constrains `runtime`'s own OUTGOING imports
+ * only (docs/architecture/code-structure.md item 10), and item 11's forbidden-shapes table
+ * carries no "X importing `runtime`" row — nothing bars this composition root, or any other
+ * module, from importing `runtime`'s generated declaration text.
+ *
+ * `tscExePath` is taken as an already-resolved value, not re-resolved here, so
+ * `interactiveShell`'s own `resolveCompilerPath()` call (at the top of that function, before any
+ * project I/O) stays the ONE place a resolution failure is turned into a `ShellCompositionError`
+ * — this function itself cannot fail.
+ *
+ * Exported (not an inline expression in `kernelDeps`) so `create-shell.test.ts` can exercise
+ * this exact composition's real type-check behavior directly, with a fake `smokeRenderer` to
+ * avoid spawning a real host process — `AppShell`/`KernelPort` expose no seam to reach a running
+ * shell's internal `gateRunner` (only a live `turn.start` reaches it, which needs a real or fake
+ * agent that `ShellDeps` has no seam to inject either; see that test file's own header comment).
+ */
+export function buildGateRunner(tscExePath: string, smokeRenderer: SmokeRenderer): GateRunner {
+  return createGateRunnerAdapter({ smokeRenderer, tscExePath, runtimeDts: RUNTIME_DTS });
 }
 
 /** One teardown resource `AppShell.close()` releases, run in reverse-acquisition order. */
@@ -302,32 +350,6 @@ function deriveProjectName(root: string): string {
 }
 
 /**
- * `scripts/embed-assets.ts` (WP-11/B7) embeds `tsc.exe` + the curated lib chain into this
- * binary's `bun build --compile` module graph — importing it here (and calling it, not just
- * referencing the module) is what makes `bun run build` actually embed real assets into
- * `dist/termcraft.exe`, closing gap B7's "the build embeds nothing" finding.
- *
- * A staging failure degrades honestly rather than failing shell composition: `gate`'s own
- * `createGateRunnerAdapter` already treats a missing `compilerAssets` as "skip the type-check
- * stage" (its header comment: "an honest omission, not a fabricated pass"), and there is no
- * production `runtimeDts` yet either (same file's header note) — so `typeCheck` stays unwired
- * either way today; a disk-staging failure here must not take down the whole shell over a
- * stage that cannot run yet regardless.
- */
-function resolveShellCompilerAssets(): CompilerAssets | undefined {
-  const assets = resolveCompilerAssets();
-  if (assets instanceof Error) {
-    console.warn(
-      "createShell: could not resolve the embedded TypeScript compiler assets — the Gate's " +
-        "type-check stage stays unwired for this run:",
-      assets.message,
-    );
-    return undefined;
-  }
-  return assets;
-}
-
-/**
  * A durable `projectId` is a far more stable "workspace identity" than the raw filesystem path
  * (a rename/move would otherwise silently change it) — `agent/session/model/session-scope.ts`'s
  * `deriveSessionScope` folds `workspaceIdentity` into the SDK session-resume key precisely
@@ -351,11 +373,12 @@ async function resolveEnvWithProjectIdentity(env: UiEnv, open: OpenProject): Pro
 }
 
 /**
- * `%LOCALAPPDATA%/termcraft`, matching `gate/model/tsc-extract.ts`'s own established per-user
- * cache convention (roadmap phase 8) — the same physical root, a different subdirectory
- * (`trust/`, `sandboxes/`, `backups/` per storage-identity, vs. that module's `tsc-<version>/`).
- * Falls back to `<tmpdir>/termcraft`, not the bare OS temp dir: unlike a tsc extraction cache,
- * this root also holds the trust ledger, so it stays namespaced even on that path.
+ * `%LOCALAPPDATA%/termcraft` (the roadmap's per-user path) — this root holds the trust ledger
+ * per storage-identity (`trust/`), plus `sandboxes/`/`backups/`, so it needs its own namespaced
+ * directory regardless of anything TypeScript-compiler-related; there is no longer a tsc
+ * extraction cache under this root to mirror (phase-8 WP-1 deleted it — `gate/model
+ * /tsc-extract.ts` now resolves the installed compiler directly, materializing nothing to disk).
+ * Falls back to `<tmpdir>/termcraft`, not the bare OS temp dir, so it stays namespaced there too.
  */
 function resolveDefaultUserStateRoot(): string {
   const localAppData = process.env.LOCALAPPDATA;
@@ -366,27 +389,13 @@ function resolveDefaultUserStateRoot(): string {
 }
 
 /**
- * The installed `bun-types@1.3.14` does not yet declare `Bun.isStandaloneExecutable` (a newer
- * Bun API), and `Bun.embeddedFiles` stays empty either way until WP-11/B7 embeds real file
- * assets — neither is a reliable "am I compiled" signal for this build today. Spike E
- * (`docs/spikes/05-host-respawn/FINDINGS.md`) confirms `process.execPath` inside a compiled
- * binary resolves to the exe's own real on-disk path, while under `bun run` it resolves to the
- * Bun CLI binary itself — so comparing its basename against the Bun runtime's own executable
- * names is the honest interim detection this composition root can perform without a cast.
- * Revisit once `bun-types` declares `Bun.isStandaloneExecutable`.
- */
-function isCompiledBinary(execPath: string): boolean {
-  const name = path.basename(execPath).toLowerCase();
-  return name !== "bun" && name !== "bun.exe";
-}
-
-/**
- * Adapts the composed `Kernel` (`dispatch`/`events`/`currentPreview`) to the `KernelPort`
- * (`dispatch`/`subscribe`/`preview`) `ui` depends on. `dispatch`/`subscribe` are passed through
- * directly — `Kernel`'s own `CommandDecodeError | CanonicalHashError`/`EventBusPayloadError`
- * return types are already narrower than the port's widened `Error`, so no wrapping is needed.
- * `preview` caches the adapted `PreviewSessionHandle` by the underlying `PreviewSession`
- * reference: `ui`'s own frame-consuming loop (`ui/app/model/deps.ts`) calls `port.preview()`
+ * Adapts the composed `Kernel` (`dispatch`/`events`/`currentPreview`/`publishFrame`/
+ * `acknowledgeDisplay`) to the `KernelPort` (`dispatch`/`subscribe`/`preview`) `ui`
+ * depends on. `dispatch`/`subscribe` are passed through directly — `Kernel`'s own
+ * `CommandDecodeError | CanonicalHashError`/`EventBusPayloadError` return types are
+ * already narrower than the port's widened `Error`, so no wrapping is needed. `preview`
+ * caches the adapted `PreviewSessionHandle` by the underlying `PreviewSession` reference:
+ * `ui`'s own frame-consuming loop (`ui/app/model/deps.ts`) calls `port.preview()`
  * repeatedly while the SAME session stays current, and a fresh wrapper on every call would
  * restart `frames`'s async generator each time — mirroring `FakeKernel.preview()`'s own
  * "return the same stored handle" behavior.
@@ -407,7 +416,7 @@ function toKernelPort(kernel: Kernel): KernelPort {
       }
       if (session !== cachedSession) {
         cachedSession = session;
-        cachedHandle = toPreviewSessionHandle(session);
+        cachedHandle = toPreviewSessionHandle(kernel, session);
       }
       return cachedHandle;
     },
@@ -415,27 +424,44 @@ function toKernelPort(kernel: Kernel): KernelPort {
 }
 
 /**
- * `preview.acknowledgeDisplay` is NOT wired to a real frame-token authority. `Kernel`'s public
- * surface (`core/kernel/types.ts`) exposes only `currentPreview(): PreviewSession | null` —
- * never the `frameTokenLedger`/`previewSessionCommands` `core/preview` builds internally — and
- * even reaching those, `FrameIdentityV1.nonce` (kernel-command-contract §4/§12.5) has no source
- * at this boundary: `PreviewIdentityV1` is documented as "the incarnation identity minus the
- * volatile nonce" (`core/ports/preview-session.ts`). This mirrors `host/adapters/
- * host-supervisor.ts`'s own already-documented `query`/`setTheme` "NOT WIRED" precedent
- * (blocker B1): hover/click-to-pin geometry queries are unusable either way until that gap
- * closes, so this degrades the SAME already-unwired feature, not a new one — the preview still
- * streams and renders, only the geometry-authorizing handshake no-ops.
+ * Adapts one live `PreviewSession` into the `ui`-facing `PreviewSessionHandle` (phase-8
+ * Task 16 closure — `preview.acknowledgeDisplay`'s wiring). Pairs every frame the
+ * host-owned `session.frames` async iterable yields with a REAL ledger-minted
+ * `FrameTokenV1` (`kernel.publishFrame`, kernel-command-contract §8.1: "For each
+ * frame-stream item, the Kernel mints a `FrameTokenV1`") and forwards the UI's typed
+ * display acknowledgement to the SAME Kernel authority (`kernel.acknowledgeDisplay`) —
+ * replacing the fabricated `uuidv7()` this function used to mint locally and the
+ * unconditional `FrameAcknowledgeNotWiredError` `acknowledgeDisplay` used to return
+ * (both removed by this same change; see git history for the prior shape).
+ *
+ * Exported — not an inline closure inside `toKernelPort` — so `create-shell.test.ts` can
+ * exercise this exact composition directly with a lightweight `Kernel` double backed by a
+ * REAL `FrameTokenLedger`: the same testability reason `buildGateRunner`, above, is
+ * already exported for.
+ *
+ * `kernel` is narrowed to `Pick<Kernel, "publishFrame" | "acknowledgeDisplay">`: this
+ * function never dispatches a command or reads a snapshot, so it depends on nothing
+ * beyond the two frame-token methods it actually calls.
+ *
+ * A frame published with no live Kernel session (`PreviewNoLiveSessionError` — a real, if
+ * narrow, race between `session.frames` yielding and the Kernel's own bookkeeping already
+ * observing the session as closed) is DROPPED, logged, and never forwarded with an
+ * invented token: a `UiPreviewFrame` without a genuine, ledger-recognized `frameToken`
+ * would violate its own contract worse than skipping one frame (errore rule 21: an error
+ * that is not propagated must still be logged).
  */
-export class FrameAcknowledgeNotWiredError extends errore.createTaggedError({
-  name: "FrameAcknowledgeNotWiredError",
-  message:
-    "preview.acknowledgeDisplay is not wired: the Kernel exposes no frame-token ledger at this boundary, and PreviewIdentityV1 carries no nonce to build a genuine FrameIdentityV1 from (blocker B1)",
-}) {}
-
-function toPreviewSessionHandle(session: PreviewSession): PreviewSessionHandle {
+export function toPreviewSessionHandle(
+  kernel: Pick<Kernel, "acknowledgeDisplay" | "publishFrame">,
+  session: PreviewSession,
+): PreviewSessionHandle {
   async function* displayFrames(): AsyncGenerator<UiPreviewFrame> {
     for await (const frame of session.frames) {
-      yield { frame, frameToken: uuidv7(), handle };
+      const frameToken = kernel.publishFrame(frame);
+      if (frameToken instanceof Error) {
+        console.warn(`entrypoint: dropped a preview frame — ${frameToken.message}`);
+        continue;
+      }
+      yield { frame, frameToken, handle };
     }
   }
 
@@ -443,12 +469,12 @@ function toPreviewSessionHandle(session: PreviewSession): PreviewSessionHandle {
     previewSessionId: session.identity.sessionId,
     session,
     frames: { [Symbol.asyncIterator]: displayFrames },
-    acknowledgeDisplay: () => new FrameAcknowledgeNotWiredError(),
+    acknowledgeDisplay: (frameToken) => kernel.acknowledgeDisplay(frameToken),
   };
   return handle;
 }
 
-function demoShell(env: UiEnv): AppShell {
+function demoShell(env: UiEnv): ShellWithAgentRegistry {
   const preview = createFakePreviewSession({ pageSlug: DEMO_PAGE_SLUG });
   const port = createFakeKernel({
     snapshot: {
@@ -482,6 +508,10 @@ function demoShell(env: UiEnv): AppShell {
     mode: "demo",
     port,
     env,
+    // No real agent to probe in an offline demo (`ShellWithAgentRegistry`'s own doc comment)
+    // — `run-app.ts`'s `resolveAgentHealthProbe` treats `null` as "leave `createUiDeps`'s
+    // default probe in place", preserving demo's existing seeded reading exactly.
+    agentRegistry: null,
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

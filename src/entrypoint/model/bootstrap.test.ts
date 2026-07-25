@@ -41,7 +41,6 @@ function shellDepsFor(scratch: string): ShellDeps {
   return {
     userStateRoot: path.join(scratch, "user-state"),
     execPath: "bun",
-    isCompiled: false,
     srcRoot: "src/main.tsx",
     spawn: NEVER_SPAWN,
   };

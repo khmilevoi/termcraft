@@ -114,7 +114,6 @@ async function renderIndependently(spec: HostSessionSpec): Promise<Error | Rende
     spawn: tracked.spawn,
     command: createHostSpawnCommand({
       execPath: process.execPath,
-      isCompiled: false,
       srcRoot: MAIN_ENTRY,
     }),
     clock: createSystemClock(),

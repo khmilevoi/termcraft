@@ -132,6 +132,13 @@ export interface BackendCapabilities {
   /** Confinement mechanism descriptor: Claude uses the in-process `canUseTool` veto (Spike H). */
   readonly confinement: "canUseTool" | "sandbox";
   readonly sessionWorkspaceBinding: SessionWorkspaceBinding;
+  /**
+   * What this backend runs when nothing has been selected. MVP has no `/model` picker
+   * (roadmap "Out of scope for MVP"), so the Kernel resolves against this rather than
+   * refusing every turn. The backend declares it because the catalog is the backend's
+   * domain knowledge, not the composition root's.
+   */
+  readonly defaultSelection: { readonly model: string; readonly effort: ReasoningEffort };
 }
 
 /**

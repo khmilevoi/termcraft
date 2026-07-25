@@ -2,7 +2,7 @@ import type { CommandKindV1, UnavailableReason } from "core/protocol";
 import type { CapabilityState, ScreenKind } from "ui/mirror";
 
 export type UiActionExecution =
-  | { readonly kind: "local"; readonly effect: "fullscreen" | "open-chats" }
+  | { readonly kind: "local"; readonly effect: "fullscreen" | "open-chats" | "exit" }
   | { readonly kind: "command"; readonly command: "chat.create" | "export.start" }
   | { readonly kind: "inert" };
 

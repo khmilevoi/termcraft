@@ -280,6 +280,7 @@ const TURN_SPINE_BACKEND_CAPABILITIES: BackendCapabilities = {
   models: [{ model: "sonnet", efforts: ["medium"] }],
   confinement: "canUseTool",
   sessionWorkspaceBinding: "fixed",
+  defaultSelection: { model: "sonnet", effort: "medium" },
 };
 
 /**

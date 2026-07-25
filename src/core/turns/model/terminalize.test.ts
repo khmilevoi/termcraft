@@ -9,7 +9,7 @@ import {
   type TurnTerminalOutcome,
   reatomTurnStateMachine,
 } from "core/machines";
-import { createFakeTurnTransactionService } from "core/ports/fakes";
+import { createFakeStagingService, createFakeTurnTransactionService } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 
 import { type TerminalizeTurnInputV1, terminalizeTurn } from "./terminalize";
@@ -57,7 +57,8 @@ function setup() {
   const machine = reatomTurnStateMachine();
   advanceToTerminalizing(machine);
   const turnTransactions = createFakeTurnTransactionService();
-  return { machine, turnTransactions };
+  const staging = createFakeStagingService();
+  return { machine, turnTransactions, staging };
 }
 
 describe("terminalizeTurn", () => {
@@ -78,9 +79,9 @@ describe("terminalizeTurn", () => {
     for (const testCase of CASES) {
       test(`"${testCase.outcome}" persists as ${testCase.expectKind}${testCase.expectRecordOutcome ? ` with outcome "${testCase.expectRecordOutcome}"` : ""}`, async () => {
         const { call, turnTransactions } = context.start(() => {
-          const { machine, turnTransactions } = setup();
+          const { machine, turnTransactions, staging } = setup();
           const call = terminalizeTurn(
-            { machine, turnTransactions },
+            { machine, turnTransactions, staging },
             baseInput({ outcome: testCase.outcome, text: "boom" }),
           );
           return { call, turnTransactions };
@@ -109,8 +110,8 @@ describe("terminalizeTurn", () => {
 
   test("never persists turnId AND actionId together — actionId is always absent for a turn terminalization", async () => {
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions } = setup();
-      const call = terminalizeTurn({ machine, turnTransactions }, baseInput());
+      const { machine, turnTransactions, staging } = setup();
+      const call = terminalizeTurn({ machine, turnTransactions, staging }, baseInput());
       return { call, turnTransactions };
     });
 
@@ -123,8 +124,8 @@ describe("terminalizeTurn", () => {
 
   test("on success it moves terminalizing -> terminal -> idle and reports 'recorded'", async () => {
     const { call, readPhase, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions } = setup();
-      const call = terminalizeTurn({ machine, turnTransactions }, baseInput());
+      const { machine, turnTransactions, staging } = setup();
+      const call = terminalizeTurn({ machine, turnTransactions, staging }, baseInput());
       return { call, readPhase: wrap(() => machine.phase()), turnTransactions };
     });
 
@@ -141,7 +142,8 @@ describe("terminalizeTurn", () => {
     const { call, turnTransactions } = context.start(() => {
       const machine = reatomTurnStateMachine(); // stays at idle
       const turnTransactions = createFakeTurnTransactionService();
-      const call = terminalizeTurn({ machine, turnTransactions }, baseInput());
+      const staging = createFakeStagingService();
+      const call = terminalizeTurn({ machine, turnTransactions, staging }, baseInput());
       return { call, turnTransactions };
     });
 
@@ -162,9 +164,9 @@ describe("terminalizeTurn", () => {
       details: {},
     };
     const { call, readPhase, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions } = setup();
+      const { machine, turnTransactions, staging } = setup();
       turnTransactions.failNext("terminalize", FAILURE);
-      const call = terminalizeTurn({ machine, turnTransactions }, baseInput());
+      const call = terminalizeTurn({ machine, turnTransactions, staging }, baseInput());
       return { call, readPhase: wrap(() => machine.phase()), turnTransactions };
     });
 
@@ -177,9 +179,9 @@ describe("terminalizeTurn", () => {
 
   test("a reason is threaded onto the system:error record only", async () => {
     const { call, turnTransactions } = context.start(() => {
-      const { machine, turnTransactions } = setup();
+      const { machine, turnTransactions, staging } = setup();
       const call = terminalizeTurn(
-        { machine, turnTransactions },
+        { machine, turnTransactions, staging },
         baseInput({ outcome: "interrupted", reason: "process_restart_before_intent" }),
       );
       return { call, turnTransactions };
@@ -192,5 +194,109 @@ describe("terminalizeTurn", () => {
     if (terminalizeCall.input.record.kind !== "system:error")
       throw new Error("expected system:error");
     expect(terminalizeCall.input.record.reason).toBe("process_restart_before_intent");
+  });
+
+  describe("candidate retirement (kernel-assembly Task 13)", () => {
+    const CANDIDATE_ROOT = "/fake-candidate/terminalize-test";
+
+    test("retires the frozen candidate exactly once on a recorded terminalization", async () => {
+      const { call, staging } = context.start(() => {
+        const { machine, turnTransactions } = setup();
+        const staging = createFakeStagingService();
+        const call = terminalizeTurn(
+          { machine, turnTransactions, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call, staging };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("recorded");
+      expect(staging.calls.map((c) => c.method)).toEqual(["retireCandidate"]);
+      const retireCall = staging.calls.find((c) => c.method === "retireCandidate");
+      if (retireCall?.method !== "retireCandidate")
+        throw new Error("expected a retireCandidate call");
+      expect(retireCall.root).toBe(CANDIDATE_ROOT);
+    });
+
+    test("also retires exactly once on an UNRECORDED terminalization — the turn is still done either way", async () => {
+      const APPEND_FAILURE: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "disk unavailable",
+        details: {},
+      };
+      const { call, staging } = context.start(() => {
+        const { machine, turnTransactions } = setup();
+        turnTransactions.failNext("terminalize", APPEND_FAILURE);
+        const staging = createFakeStagingService();
+        const call = terminalizeTurn(
+          { machine, turnTransactions, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call, staging };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("unrecorded");
+      expect(staging.calls.map((c) => c.method)).toEqual(["retireCandidate"]);
+    });
+
+    // NARROWED (review finding #4): `TerminalizeTurnDeps.staging` is now REQUIRED — a
+    // "staging absent" half of this test can no longer be constructed through the public
+    // API (a compile error), matching `finalize.test.ts`'s identical fix. `candidateRoot`
+    // stays optional here (unlike `finalize.ts`'s own now-required field): a turn can
+    // legitimately terminalize before any candidate was ever frozen, so this test keeps
+    // pinning THAT one remaining honest skip.
+    test("never retires when candidateRoot is absent (no candidate ever froze) — an honest skip, not a failure", async () => {
+      const { call, staging } = context.start(() => {
+        const { machine, turnTransactions, staging } = setup();
+        // no candidateRoot on the input (the default baseInput()).
+        const call = terminalizeTurn({ machine, turnTransactions, staging }, baseInput());
+        return { call, staging };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("recorded");
+      expect(staging.calls).toEqual([]);
+    });
+
+    test("a retire failure is reported via console.warn without failing the already-recorded terminalization", async () => {
+      const RETIRE_FAILURE: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "candidate cleanup failed",
+        details: {},
+      };
+      const { call } = context.start(() => {
+        const { machine, turnTransactions, staging } = setup();
+        staging.failNext("retireCandidate", RETIRE_FAILURE);
+        const call = terminalizeTurn(
+          { machine, turnTransactions, staging },
+          baseInput({ candidateRoot: CANDIDATE_ROOT }),
+        );
+        return { call };
+      });
+
+      const originalWarn = console.warn;
+      const warnCalls: unknown[][] = [];
+      console.warn = (...args: unknown[]) => {
+        warnCalls.push(args);
+      };
+      const result = await call.finally(() => {
+        console.warn = originalWarn;
+      });
+
+      expect(result.kind).toBe("recorded");
+      // Exactly the ONE warning this code path itself emits (`retireIfCandidateFrozen`'s own
+      // `console.warn` call in terminalize.ts) — not merely "some warning fired somewhere",
+      // which would also pass for `terminalizeTurn`'s own unrelated unrecorded-path warning.
+      expect(warnCalls).toEqual([
+        ["terminalizeTurn: candidate retirement failed:", RETIRE_FAILURE.safeMessage],
+      ]);
+    });
   });
 });

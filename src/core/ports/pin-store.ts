@@ -2,6 +2,8 @@ import type { FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Pin, PinEvent } from "entities/pin";
 
+import type { ReadSetAppendBaseV1 } from "./staging";
+
 /**
  * The pin read/write surface `core` consumes. `PinReader.fold` mirrors `store/index.ts`'s
  * `PinStore.fold` exactly (an empty array for a page with no comments log yet, never
@@ -27,6 +29,19 @@ import type { Pin, PinEvent } from "entities/pin";
  * (`core/kernel/model/handlers/page-pin.ts`) to compose `core/pins/model/set-status.ts`'s
  * `setPinStatus` without fabricating a `pageSlug` or a raw event log. Port + fake only here —
  * the real adapter (WP-2, `store`) implements both against the actual comments JSONL.
+ *
+ * `readAppendBase` is the pin-log analogue of `ChatReader.readAppendBase`
+ * (`core/ports/chat-store.ts`) — same "Gap 4" precedent (kernel-assembly Task 9), closed here
+ * for pins by phase-8 WP-6 (`docs/superpowers/specs/2026-07-25-mvp-phase-8-design.md` §WP-6:
+ * "`candidatePins` and `readSet.pins` are populated from the active page's open pins"). Before
+ * this method existed, `core/kernel/model/handlers/turn.ts` could only leave
+ * `AdmissionWorkspaceMaterialV1.readSet.pins` an honest `[]` — never the SAME shape of gap
+ * `runtimeDocs` is in ("no port sources this at all"), but a narrower one: `readSet.pins`
+ * genuinely matters for `store/transaction/model/wrappers.ts`'s `buildFinalizeCasPrecondition`,
+ * which compares each entry against the live per-page comments log and fails
+ * `StaleError({part: "pins:<slug>"})` on drift, so an empty list there silently disabled that
+ * concurrency check for every pin edit. `ReadSetAppendBaseV1` is reused verbatim from
+ * `./staging` — the same cross-port-file reuse `ChatReader.readAppendBase` already relies on.
  */
 export interface PinReader {
   fold(pageSlug: PageSlug): Promise<FailureDtoV1 | readonly Pin[]>;
@@ -52,6 +67,29 @@ export interface PinReader {
    * projections.ts`'s own "a missing/malformed entry is a MISS, never an error" convention).
    */
   findPageForPin(pinId: string): Promise<FailureDtoV1 | PageSlug | null>;
+  /**
+   * The page's comments-log send-time append-base — `{length, prefixSha256}` ({@link
+   * ReadSetAppendBaseV1}), turn-durability §7.5's own CAS baseline `turn.start` durably
+   * captures at admission and `finalizeTurn` re-checks before ever committing a write. See
+   * this interface's own header for the full "Gap 4 pin analogue" citation.
+   *
+   * Mirrors `fold()`/`readEvents()`'s own "no comments log yet" rule, NOT
+   * `ChatReader.readAppendBase`'s: a page with no comments log at all returns the honest
+   * empty base `{length: 0, prefixSha256: <sha256 of zero bytes>}` — the exact value
+   * `store/transaction/model/wrappers.ts`'s own `emptyBefore()` produces for a missing file,
+   * and the exact fact `buildFinalizeCasPrecondition` compares its own
+   * `readPinsBefore(fs, pageCommentsPath(slug))` result against. This deliberately diverges
+   * from `ChatReader.readAppendBase`, which treats a missing file as a genuine failure — that
+   * method is only ever called immediately after `turnTransactions.admit(...)` durably
+   * appends to that exact chat file, so a miss there is unexpected; a page's comments log,
+   * by contrast, legitimately does not exist until its first pin is created, exactly like
+   * `readEvents()`'s own `[]`-for-missing-log convention. Only a genuine I/O or decode fault
+   * is a `FailureDtoV1` here.
+   *
+   * Port + fake only here — the real adapter is `store/adapters/pin-store.ts`'s job,
+   * mirroring `ChatReader.readAppendBase`'s identical division.
+   */
+  readAppendBase(pageSlug: PageSlug): Promise<FailureDtoV1 | ReadSetAppendBaseV1>;
 }
 
 export interface PinMutations {

@@ -17,10 +17,11 @@ import type { Clock } from "infrastructure/clock";
 
 import { HOST_CONTROL_QUEUE_CAPACITY, createPreviewBackpressure } from "./backpressure";
 import { createFrameBroker } from "./frame-broker";
-import { createFrameTokenLedger } from "./frame-token-ledger";
+import { FrameAckError, createFrameTokenLedger } from "./frame-token-ledger";
 import { createGeometryTokenLedger } from "./geometry-token-ledger";
 import {
   MAX_OUTSTANDING_GEOMETRY_REQUESTS,
+  PreviewNoLiveSessionError,
   createPreviewSessionCommands,
 } from "./session-commands";
 
@@ -677,5 +678,66 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
       const afterRelease = await wrap(h.commands.queryGeometry(token, { kind: "layout" }));
       expect(afterRelease.kind).toBe("resolved");
     });
+  });
+});
+
+/**
+ * kernel-assembly Task 16: `noteSessionEstablished`/`noteSessionClosed` are the external
+ * counterpart to `selectPage`'s own `establishSession`/`close` — the path `core/kernel/
+ * model/kernel.ts`'s `setActivePreviewSession` actually drives in production today, since
+ * `handlers/preview-export.ts` still calls that function directly rather than this
+ * module's own `selectPage`/`close` (Gap A, this file's own top-of-file header note).
+ * These tests prove the SAME publishFrame/acknowledgeDisplay contract the `selectPage`
+ * describe block above already covers holds when a session is seeded THIS way instead —
+ * never through `establishSession` — which is the only path `kernel.ts` can genuinely
+ * reach given Gap A.
+ */
+describe("createPreviewSessionCommands — noteSessionEstablished/noteSessionClosed", () => {
+  test("publishFrame with no session established yet is refused, never fabricated", () => {
+    const h = harness();
+    const published = h.commands.publishFrame(frame());
+    expect(published).toBeInstanceOf(PreviewNoLiveSessionError);
+  });
+
+  test("noteSessionEstablished seeds a fresh incarnation: publishFrame mints a token the ledger recognises, and acknowledging it returns the frame's real identity", () => {
+    const h = harness();
+    h.commands.noteSessionEstablished(stubSession());
+
+    const oneFrame = frame({ sourceHash: "3".repeat(64), frameSeq: "42" });
+    const token = h.commands.publishFrame(oneFrame);
+    if (token instanceof Error) throw token;
+
+    const acked = h.commands.acknowledgeDisplay(token);
+    if (acked instanceof Error) throw acked;
+    expect(acked.sourceHash).toBe(oneFrame.sourceHash);
+    expect(acked.frameSeq).toBe(oneFrame.frameSeq);
+    expect(isUuidv7(acked.previewSessionId)).toBe(true);
+  });
+
+  test("acknowledging a token the ledger never minted fails even while a session is live — the ledger is real, not a rubber stamp", () => {
+    const h = harness();
+    h.commands.noteSessionEstablished(stubSession());
+    // `publishFrame` was never called, so no token was ever minted for this session —
+    // an arbitrary well-formed UUIDv7 stands in for "a token from nowhere".
+    const neverMinted = "0192f6f0-0000-7000-8000-0000000000ff";
+
+    const acked = h.commands.acknowledgeDisplay(neverMinted);
+
+    expect(acked).toBeInstanceOf(FrameAckError);
+  });
+
+  test("noteSessionClosed invalidates the current token and blocks further publishFrame calls until the next noteSessionEstablished", () => {
+    const h = harness();
+    h.commands.noteSessionEstablished(stubSession());
+    const token = acknowledgedFrameToken(h);
+
+    h.commands.noteSessionClosed();
+
+    expect(h.frameTokenLedger.verifyCurrent(token)).toEqual({
+      ok: false,
+      code: "FRAME_TOKEN_STALE",
+    });
+    const publishedAfterClose = h.commands.publishFrame(frame());
+    expect(publishedAfterClose).toBeInstanceOf(PreviewNoLiveSessionError);
   });
 });

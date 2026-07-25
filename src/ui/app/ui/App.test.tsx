@@ -236,6 +236,41 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     );
     expect(text).toContain("termcraft");
     expect(text).toContain("agent ready");
+    // WP-4/Task 9: `homeCombo`'s `model`/`effort` are genuine live reads of the health reading
+    // (see `App.tsx`'s own doc comment on `homeCombo`). This test injects NO probe, so it paints
+    // `createUiDeps`'s pre-probe placeholder (`DEFAULT_HOME_HEALTH`, `ui/app/model/deps.ts`),
+    // which deliberately carries NEITHER — both can only come from a probe, so the placeholder
+    // renders them honestly empty rather than briefly showing a value the probe would replace.
+    // Asserting the empty slots is what keeps a fabricated placeholder from creeping back in.
+    expect(text).toContain("‹›");
+    expect(text).not.toContain("‹high›");
+  });
+
+  test("Home's combo reads the injected probe's model and effort once it resolves", async () => {
+    const kernel = createFakeKernel();
+    // The live path the placeholder above deliberately does not exercise: `createUiDeps`'s
+    // fourth parameter is the agent-health probe the composition root supplies
+    // (`entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`, which folds
+    // `claudeCapabilities().defaultSelection` into the reading). Distinctive values — not the
+    // real catalog's — so a pass cannot come from a hardcoded default anywhere in the chain.
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({
+        present: true,
+        agent: "claude",
+        version: null,
+        detail: "probe reading",
+        model: "probe-model",
+        effort: "probe-effort",
+      }),
+    );
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    const text = await renderer.waitForFrame((frame) => frame.includes("probe reading"));
+    expect(text).toContain("‹probe-model›");
+    expect(text).toContain("‹probe-effort›");
   });
 
   test("mounts the enlarge placeholder below the minimum frame", async () => {

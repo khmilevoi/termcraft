@@ -91,6 +91,36 @@ describe("applyIntent — local toggles", () => {
   });
 });
 
+describe("applyIntent — exit (phase-8 Task 11 / WP-10)", () => {
+  test("the exit intent calls requestExit and dispatches nothing", () => {
+    const kernel = createFakeKernel();
+    let calls = 0;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, () => {
+      calls += 1;
+    });
+    applyIntent({ kind: "exit" }, deps);
+    expect(calls).toBe(1);
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("/exit's action-execute reaches the SAME requestExit call", () => {
+    const kernel = createFakeKernel();
+    let calls = 0;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, () => {
+      calls += 1;
+    });
+    applyIntent({ kind: "action-execute", actionId: "app.exit" }, deps);
+    expect(calls).toBe(1);
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("requestExit defaults to a no-op so existing test constructions keep compiling", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    expect(() => applyIntent({ kind: "exit" }, deps)).not.toThrow();
+  });
+});
+
 describe("applyIntent — slash menu", () => {
   test("opening and typing filters rows and selects the first enabled row", () => {
     const kernel = createFakeKernel();
@@ -140,7 +170,10 @@ describe("applyIntent — slash menu", () => {
     );
     applyIntent({ kind: "slash-open" }, deps);
     applyIntent({ kind: "slash-move", delta: -1 }, deps);
-    expect(deps.local.slashSelection()).toBe(2); // wraps to /export, not inert /model or commits
+    // Enabled rows here are /new(0), /chats(1), /export(2), /exit(7) — /model and every
+    // /commit-* stay inert regardless of capability. Moving -1 from /new wraps to the LAST
+    // enabled row, /exit, not to inert /model or the commits in between.
+    expect(deps.local.slashSelection()).toBe(7);
     applyIntent({ kind: "slash-move", delta: 1 }, deps);
     expect(deps.local.slashSelection()).toBe(0);
   });

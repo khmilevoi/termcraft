@@ -87,6 +87,7 @@ export type KeyIntent =
   | { readonly kind: "export-dismiss" }
   | { readonly kind: "esc" }
   | { readonly kind: "tab" }
+  | { readonly kind: "exit" }
   | { readonly kind: "none" };
 
 /** A single printable character (no modifier, not a control byte). */
@@ -180,16 +181,38 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (context.screen === "home") {
     // design/12-errors-edge-states.dc.html (homeErr): the missing-agent error panel has no
-    // prompt input at all, and its status bar reads only "r  re-check" — every other key must be
-    // inert there (M15), not fall through to the idle prompt's input/submit/backspace handling.
+    // prompt input at all, so every key but the two the design's own status bar names is inert
+    // there (M15) — not a fall-through to the idle prompt's input/submit/backspace handling.
+    // That status bar reads `[['r','re-check'],['q','quit']]` (design/termcraft-engine.js:583,
+    // read verbatim before writing this comment) — `r` re-checks health (above); `q` quits
+    // (phase-8 WP-10) belongs beside it for the identical reason: no text input is focused here
+    // to type a stray "q" into.
     if (context.homeHealthPresent === false) {
       if (key.sequence === "r") return { kind: "home-recheck" };
+      if (key.sequence === "q") return { kind: "exit" };
       return { kind: "none" };
     }
     if (RETURN_NAMES.has(key.name)) return { kind: "home-submit" };
     if (key.name === "backspace") return { kind: "home-backspace" };
     const ch = printableChar(key);
     if (ch !== null) return { kind: "home-input", ch };
+    return { kind: "none" };
+  }
+
+  // The too-small-terminal takeover (design `termSmall()`, `design/termcraft-engine.js:610-615`)
+  // has no input of any kind — it is four centered lines of static text, no chrome, no status
+  // bar. `q` quits (phase-8 WP-10) because there is nothing here to type into, matching the
+  // agent-missing panel's identical reasoning above. NOTE ON THE CITED LINE: the WP-10 design
+  // (`docs/superpowers/specs/2026-07-25-mvp-phase-8-design.md`) cites `:622` for this screen's
+  // `q quit`, but reading the engine source shows `:622` is inside a DIFFERENT function,
+  // `lockScreen()` (the already-running-instance lock screen, `:617-623`) — `termSmall()` itself
+  // (`:610-615`) draws no key hint at all, and `lockScreen()` has no corresponding `ScreenKind`
+  // in this codebase to attach a branch to. This still implements the design SPEC's own explicit,
+  // dated decision ("q quit is implemented ... at ... the too-small-terminal screen") for the
+  // screen that spec's prose actually names — just noting the mismatched line citation, not
+  // inventing a new affordance the design never asked for.
+  if (context.screen === "enlarge") {
+    if (key.sequence === "q") return { kind: "exit" };
     return { kind: "none" };
   }
 

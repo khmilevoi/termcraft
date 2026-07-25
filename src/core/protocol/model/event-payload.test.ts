@@ -574,6 +574,40 @@ describe("turnTerminalPayloadV1Schema (turn.completed/failed/cancelled)", () => 
     const { failure: _dropped, ...missing } = valid;
     expect(turnTerminalPayloadV1Schema.safeParse(missing).success).toBe(false);
   });
+
+  // WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all"):
+  // `handlers/turn.ts` widened WHICH `failure` DTO it emits (see that file's header, "ONE
+  // SUB-CASE IS TYPED NOW") rather than the wire shape itself — no new field was added, so
+  // there is nothing new to round-trip here. What IS new: `turn.failed` can now honestly
+  // carry a REAL adapter-level code (e.g. `TRANSACTION_RECOVERY_CONFLICT`, propagated
+  // verbatim from `TurnTransactionService.terminalize`'s own failure) instead of always the
+  // same fabricated `PERSISTENCE_FAILED`. This asserts the closed `OperationalFailureCode`
+  // vocabulary already accepts every code a real termination failure can plausibly carry —
+  // including `GATE_RETRY_EXHAUSTED`/`BACKEND_FAILED`/`TURN_DEADLINE_EXCEEDED`, which the
+  // vocabulary has held since before this task but `handlers/turn.ts` still cannot reach (a
+  // separate, documented gap — see that file's header) — proving the WIRE FORMAT was never
+  // the obstacle to a more precise `turn.failed`.
+  test("accepts every operational-failure code a real termination can plausibly carry, on turn.failed", () => {
+    for (const code of [
+      "PERSISTENCE_FAILED",
+      "TRANSACTION_RECOVERY_CONFLICT",
+      "GATE_RETRY_EXHAUSTED",
+      "BACKEND_FAILED",
+      "TURN_DEADLINE_EXCEEDED",
+    ]) {
+      const withFailure = {
+        ...valid,
+        outcome: "failed",
+        failure: {
+          code,
+          retryable: false,
+          safeMessage: "the turn ended without committing",
+          details: {},
+        },
+      };
+      expect(turnTerminalPayloadV1Schema.safeParse(withFailure).success).toBe(true);
+    }
+  });
 });
 
 describe("restorePlanReadyPayloadV1Schema", () => {
@@ -780,6 +814,18 @@ describe("exportProgressPayloadV1Schema", () => {
       false,
     );
   });
+
+  // Finding #12, part 2: `EXPORT_PHASES_V1` (the wider, terminal-only tuple) and
+  // `EXPORT_PROGRESS_PHASES_V1` (this schema's tuple) used to be the same shared enum, which
+  // silently let `export.progress` accept `"idle"` — a phase it never actually emits (`"idle"`
+  // only ever appears on a pre-capture `export.failed`, `core/kernel/handlers/
+  // preview-export.ts`'s `preCaptureExportFailure`). Now split: `export.progress` REJECTS
+  // `"idle"`, while the terminal schema below still ACCEPTS it.
+  test('rejects the terminal-only "idle" phase — export.progress never emits it', () => {
+    expect(exportProgressPayloadV1Schema.safeParse({ ...valid, phase: "idle" }).success).toBe(
+      false,
+    );
+  });
 });
 
 describe("exportTerminalPayloadV1Schema (export.completed/failed)", () => {
@@ -799,6 +845,25 @@ describe("exportTerminalPayloadV1Schema (export.completed/failed)", () => {
     expect(exportTerminalPayloadV1Schema.safeParse({ ...valid, generationId: null }).success).toBe(
       true,
     );
+  });
+
+  // The widened member (task 12): a pre-capture `export.failed` reports `phase: "idle"` — a
+  // real `ExportState` member, not an invented one — for a failure the export machine never
+  // left `"idle"` for (`core/kernel/handlers/preview-export.ts`'s `preCaptureExportFailure`).
+  test('accepts the widened "idle" phase for a pre-capture export.failed', () => {
+    expect(
+      exportTerminalPayloadV1Schema.safeParse({
+        ...valid,
+        phase: "idle",
+        generationId: null,
+        failure: {
+          code: "PERSISTENCE_FAILED",
+          retryable: false,
+          safeMessage: "listSlugs failed before capture",
+          details: {},
+        },
+      }).success,
+    ).toBe(true);
   });
 });
 

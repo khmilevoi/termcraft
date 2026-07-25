@@ -6,6 +6,7 @@ import type {
   AgentBackend,
   AgentTask,
   ChangedPageOpV1,
+  ReadSetAppendBaseV1,
   ReadSetFileSnapshotV1,
   ReasoningEffort,
   SessionPlan,
@@ -13,8 +14,15 @@ import type {
   StagingService,
   TurnWorkspaceV1,
 } from "core/ports";
-import { type CommandPayloadByKindV1, type Sha256Hex, type UUIDv7, isUuidv7 } from "core/protocol";
 import {
+  type CommandPayloadByKindV1,
+  type FailureDtoV1,
+  type Sha256Hex,
+  type UUIDv7,
+  isUuidv7,
+} from "core/protocol";
+import {
+  type AdmissionCandidatePinV1,
   type AdmissionInputV1,
   type RunTurnDeps,
   type RunTurnFinalizeMaterialV1,
@@ -81,14 +89,30 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *
  *   `AdmissionInputV1.targetChatId` and the agent's `backend`/`model`/`effort` triple: ALL
  *   FOUR are read asynchronously via `context.deps.projectStore.readWorkspaceState()`
- *   (`WorkspaceStateV1.activeChatId`/`backend`/`model`/`effort`). A `null` in any of the
- *   four, or a `backend`/`model`/`effort` string the live `AgentRegistry` does not
- *   currently offer, is an IDEMPOTENT REFUSAL (logged, resolved with zero events) — never a
- *   fabricated default. `effort` is narrowed from the durable plain string to the branded
- *   `ReasoningEffort` union by looking it up inside the matched model's own
- *   `BackendCapabilities.models[].efforts: readonly ReasoningEffort[]` array (`.find(e => e
- *   === effort)`) — cast-free, since the array's own element type is already
- *   `ReasoningEffort`.
+ *   (`WorkspaceStateV1.activeChatId`/`backend`/`model`/`effort`). A `null` `activeChatId` is
+ *   still an IDEMPOTENT REFUSAL (logged, resolved with zero events) — there is no honest
+ *   default for "which chat," so this is unchanged from before WP-4.
+ *
+ *   WP-4 (default agent selection): MVP ships no `/model` picker (roadmap "Out of scope for
+ *   MVP"), so a stored `backend`/`model`/`effort` triple that is entirely absent no longer
+ *   refuses the turn on its own. `resolveStoredOrDefaultAgentTriple` (below) falls back to
+ *   the SINGLE registered backend's own `BackendCapabilities.defaultSelection` — a real,
+ *   backend-declared value (`claudeCapabilities()` declares `claude-sonnet-5`/`high`), never
+ *   a fabricated one. Nothing is written to disk by this fallback: `workspace.local.toml`
+ *   stays exactly as it was, and `model.select`'s own validate-and-persist path is untouched.
+ *   The fallback itself still refuses (logged) if the registry is EMPTY (no default can be
+ *   conjured from an empty catalog) or offers MORE THAN ONE backend (today's registry is
+ *   Claude-only, per `agent-registry.ts`'s own "MVP ships exactly one entry" — a
+ *   multi-backend registry has no picker-free way to choose among their defaults, so it
+ *   refuses rather than silently guessing). A PARTIALLY-set triple (e.g. only `model` stored)
+ *   is passed through unchanged to `resolveAgentSelection`'s own validation below, exactly as
+ *   before — the fallback only fires when all three are absent. `effort` is narrowed from the
+ *   durable plain string to the branded `ReasoningEffort` union by looking it up inside the
+ *   matched model's own `BackendCapabilities.models[].efforts: readonly ReasoningEffort[]`
+ *   array (`.find(e => e === effort)`) — cast-free, since the array's own element type is
+ *   already `ReasoningEffort`. A resolved triple naming a `backend`/`model`/`effort` string
+ *   the live `AgentRegistry` does not currently offer is still an IDEMPOTENT REFUSAL, exactly
+ *   as before WP-4.
  *
  *   `pages: StagingPageSourceV1[]` / `readSet.canonicalPages`: one entry per
  *   `context.deps.pageReader.listSlugs()` result. Each page's `sourcePath` is built from
@@ -113,12 +137,43 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   `admit()` commits, via the SAME `context.deps.chatReader` this handler threads through
  *   `RunTurnDeps.chatReader` below.
  *
- *   `runtimeDocs: []` / `candidatePins: []` / `readSet.pins: []`: honest empty values, not
- *   fabrications — no port anywhere in `KernelDeps` sources a runtime-doc file's content,
- *   tracks "which pins the composer currently shows as open," or names a contributing
- *   comments log, so an empty list here means exactly what it would for a turn genuinely
- *   sent with none of those, never a guess (mirrors `kernel.ts`'s own `PLACEHOLDER_GIT_STATUS`
- *   precedent for "a real value would need a port that does not exist yet").
+ *   `runtimeDocs: []`: an honest empty value, not a fabrication — no port anywhere in
+ *   `KernelDeps` sources a runtime-doc file's content, so an empty list here means exactly
+ *   what it would for a turn genuinely sent with none, never a guess (mirrors `kernel.ts`'s
+ *   own `PLACEHOLDER_GIT_STATUS` precedent for "a real value would need a port that does not
+ *   exist yet").
+ *
+ *   `candidatePins`: NOW REAL (Task 10 — kernel-command-contract §12.2 item 1: "captures ...
+ *   only currently open, resolvable pins"). Folded live from
+ *   `context.deps.pinReader.fold(activePageSlug)` — `WorkspaceStateV1.activePageSlug`, the
+ *   SAME field `manifestSlice` already reads — right before `admission` is built. Only pins
+ *   whose folded `status` is `"open"` become a `{pageSlug, pinId}` candidate; `resolveOpenPins`
+ *   (`core/turns/model/admission.ts`) re-folds and re-checks the SAME page a moment later, at
+ *   the only honest "send-time" instant, before committing any pin id into the chat's own
+ *   `userRecord.pins` — this handler's own fold is the CANDIDATE step §12.2 names, never the
+ *   final decision. A fold failure is a LOGGED, idempotent refusal (mirrors the
+ *   `readManifestSnapshot` refusal just above it) — never a silently empty candidate list,
+ *   which would look identical to "the user had no pins open." `activePageSlug === null` (no
+ *   page currently selected) is handled honestly as "nothing to fold": an empty candidate
+ *   list there means exactly that, not a refusal.
+ *
+ *   `readSet.pins` — NOW REAL (phase-8 WP-6, closing the gap this header used to document as
+ *   "still an honest empty"): `PinReader.readAppendBase(pageSlug)` (`core/ports/pin-store.ts`)
+ *   is now the direct pin-log analogue of `ChatReader.readAppendBase` (Gap 4's own precedent,
+ *   above) — a real `core/ports` surface addition, port + fake only (the real adapter is
+ *   `store/adapters/pin-store.ts`'s job), so this handler no longer needs to invent a
+ *   serialization from `readEvents()`'s parsed events (the exact shortcut this header used to
+ *   flag as rejected — it would not have matched the real store adapter's own on-disk
+ *   append-base, silently defeating the concurrent-mutation check the read-set exists to
+ *   catch). Read ONLY when `candidatePins` above actually gained an entry for the active
+ *   page — a page that folds fine but has zero open pins never enters `readSet.pins` at all,
+ *   mirroring turn-durability §7.2 step 4's "sent pins contributed context" (`core/turns/
+ *   types.ts`'s own `AdmissionWorkspaceMaterialV1` header quotes the identical rule). A
+ *   `readAppendBase` failure is a LOGGED, idempotent refusal, exactly like the `fold` failure
+ *   just above it — never a silently empty `readSet.pins` entry, which would be
+ *   indistinguishable from "this page had no open pins" and would leave
+ *   `buildFinalizeCasPrecondition`'s `pins:<slug>` check disabled for exactly the turn that
+ *   needed it (`store/transaction/model/wrappers.ts`'s own citation, unchanged from before).
  *
  *   `context.selection()`: read synchronously at the very top of `runTurnStart`, before any
  *   await, matching kernel-command-contract §12.2's "captures ... authoritative selection"
@@ -222,15 +277,46 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *     `RunTurnResultV1`'s own
  *     `TerminalizeTurnResultV1`/`FinalizeTurnResultV1` variants do NOT echo back which
  *     `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) the composition
- *     originally requested — a genuine, separate gap this task's own scope does not cover
- *     (closing it would mean widening a landed `core/turns` return type, not extending
- *     `core/ports`). Rather than fabricate a precise-looking distinction this composition
- *     cannot honestly make, every one of these branches publishes `turn.failed` with
- *     `outcome: "failed"` and a generic `PERSISTENCE_FAILED` `failure` DTO carrying whatever
- *     detail IS available — logged with the real branch name for traceability. This is
- *     flagged, not silently smoothed over: a future task closing it should widen
- *     `TerminalizeTurnResultV1`/`FinalizeTurnResultV1` to echo the requested outcome, then
- *     replace this fallback with the precise mapping.
+ *     originally requested, NOR WHY (Gate exhaustion, a backend failure, a deadline, a
+ *     finalize CAS mismatch, ...) — a genuine, separate gap this task's own scope does not
+ *     cover (closing it would mean widening a landed `core/turns` return type, not extending
+ *     `core/ports`; the operational-failure vocabulary already HAS `GATE_RETRY_EXHAUSTED` and
+ *     `BACKEND_FAILED` codes waiting for exactly this use, `core/protocol/model/failure.ts` —
+ *     they simply cannot be reached from here yet). Rather than fabricate a precise-looking
+ *     distinction this composition cannot honestly make, every one of these branches still
+ *     publishes `turn.failed` with `outcome: "failed"` — logged with the real branch name for
+ *     traceability.
+ *
+ *     ONE SUB-CASE IS TYPED NOW, NOT FABRICATED (WP-8 item 4, phase-8 design's
+ *     documented-debt sweep — "Generic `turn.failed`, a typed outcome instead of the
+ *     catch-all"): `TerminalizeTurnResultV1`'s `"unrecorded"` variant means
+ *     `terminalizeTurn`'s own append of the terminal chat record ITSELF failed
+ *     (turn-durability §7.5: "If even that append cannot be made safely, the UI reports the
+ *     unrecorded stale turn and startup orphan recovery retries terminalization") — and that
+ *     variant already carries a REAL `FailureDtoV1`, produced by
+ *     `turnTransactions.terminalize`'s own adapter (`store/adapters/turn-transactions.ts`'s
+ *     `toFailureDto`), never a placeholder. `runTurnStart` (below) now propagates that DTO
+ *     verbatim as `turn.failed`'s own `failure` field instead of discarding it for the
+ *     generic bucket. Every OTHER branch — `"recorded"` (an ordinary terminal chat record WAS
+ *     durably written, whatever its real cause), the defensive `"illegal"` case, and the two
+ *     practically-unreachable `"finalized"` cases above — still gets the SAME generic
+ *     `PERSISTENCE_FAILED` DTO `branch`'s own text names, because nothing more specific is
+ *     honestly available for them. THIS IS WHY a turn terminalized by Gate exhaustion and one
+ *     terminalized by a backend failure still publish an IDENTICAL `turn.failed` payload today
+ *     — both land on `"recorded"`, and `"recorded"` carries no further breakdown. Flagged, not
+ *     smoothed over: a future task widening `TerminalizeTurnResultV1`/`FinalizeTurnResultV1`
+ *     to echo the originally requested `TurnTerminalOutcome`/reason is what would let
+ *     `"recorded"` split further.
+ *
+ *     A widened `TurnTerminalPayloadV1` (a brand-new wire field distinguishing
+ *     recorded/unrecorded) was considered and rejected for this task:
+ *     `TurnTerminalPayloadV1` is a `z.strictObject` shared verbatim by
+ *     `turn.completed`/`turn.failed`/`turn.cancelled` and is constructed as typed literals in
+ *     `ui/app`/`ui/workspace` test fixtures this task does not own — a new REQUIRED field
+ *     there ripples into files outside this task's scope, and an optional field would break
+ *     `event-payload.ts`'s own "nullable, never optional" convention for a payload the KCC
+ *     spec already fixes verbatim (§9). Enriching the EXISTING `failure` field's VALUE, as
+ *     done here, needs no schema change and stays inside this file.
  *
  * HARD RULES OBSERVED: no cast anywhere; `wrap()` at the async boundary inside `turn.cancel`'s
  * `launchOperation` closure AND at the outer boundary `launchOperation` itself wraps
@@ -291,10 +377,10 @@ const MANIFEST_SLICE_REL_PATH = "pages.json";
  * propagated as `snapshotToCandidate`'s own failure, exactly like an inline read failure
  * would be.
  *
- * Spreads `base`'s other three methods unchanged (`createTurnWorkspace`/`retireWorkspace`/
- * `readCandidateFile`) — safe because every `StagingService` in this ring (today's fakes,
- * and any adapter following the same closure-factory convention every other port
- * fake/adapter in this codebase uses) is plain closures over its own factory-local state,
+ * Spreads `base`'s other four methods unchanged (`createTurnWorkspace`/`retireWorkspace`/
+ * `readCandidateFile`/`retireCandidate`) — safe because every `StagingService` in this ring
+ * (today's fakes, and any adapter following the same closure-factory convention every other
+ * port fake/adapter in this codebase uses) is plain closures over its own factory-local state,
  * never a class instance whose methods read `this`.
  */
 interface ContentCachingStagingV1 {
@@ -351,6 +437,66 @@ interface ResolvedAgentSelectionV1 {
   readonly model: string;
   readonly effort: ReasoningEffort;
   readonly agentBackend: AgentBackend;
+}
+
+/** The `(backend, model, effort)` triple this turn resolves against, before catalog validation. */
+interface StoredOrDefaultAgentTripleV1 {
+  readonly backend: string;
+  readonly model: string;
+  readonly effort: string;
+}
+
+/**
+ * WP-4 (default agent selection — see this file's header for the full rationale): returns
+ * `stored` unchanged whenever ANY of its three fields is already set (including a partially
+ * set triple, which `resolveAgentSelection` below still validates and can still refuse).
+ * Falls back to the single registered backend's `BackendCapabilities.defaultSelection` only
+ * when ALL THREE are absent. Refuses (logged, `null`) when the registry cannot honestly
+ * supply exactly one default: zero registered backends, or more than one with no picker to
+ * choose between them (MVP registers Claude only — `agent-registry.ts`'s own "MVP ships
+ * exactly one entry" — so this branch is a documented guard against a future registry shape,
+ * not a case this build can exercise).
+ */
+function resolveStoredOrDefaultAgentTriple(
+  context: HandlerContext,
+  stored: {
+    readonly backend: string | null;
+    readonly model: string | null;
+    readonly effort: string | null;
+  },
+): StoredOrDefaultAgentTripleV1 | null {
+  if (stored.backend !== null && stored.model !== null && stored.effort !== null) {
+    return { backend: stored.backend, model: stored.model, effort: stored.effort };
+  }
+
+  const registered = context.deps.agentRegistry.list();
+  if (registered.length === 0) {
+    console.warn(
+      "core/kernel/handlers/turn: turn.start refused — no agent selection stored and no backend registered to default from",
+    );
+    return null;
+  }
+  if (registered.length > 1) {
+    console.warn(
+      `core/kernel/handlers/turn: turn.start refused — no agent selection stored and ${registered.length} backends are registered; MVP has no picker to choose a default among them`,
+    );
+    return null;
+  }
+  const [only] = registered;
+  if (only === undefined) {
+    // Unreachable given the length checks above (`=== 0` and `> 1` both returned already, so
+    // exactly one element remains) — kept explicit per this project's "never silently assume
+    // success" rule.
+    console.warn(
+      "core/kernel/handlers/turn: turn.start refused — registry reported one backend but yielded none on read",
+    );
+    return null;
+  }
+  return {
+    backend: only.backendId,
+    model: only.defaultSelection.model,
+    effort: only.defaultSelection.effort,
+  };
 }
 
 function resolveAgentSelection(
@@ -450,10 +596,8 @@ async function runTurnStart(
     return [];
   }
   const { activeChatId, backend, model, effort, activePageSlug } = workspaceState.state;
-  if (activeChatId === null || backend === null || model === null || effort === null) {
-    console.warn(
-      "core/kernel/handlers/turn: turn.start refused — no active chat or agent selection yet",
-    );
+  if (activeChatId === null) {
+    console.warn("core/kernel/handlers/turn: turn.start refused — no active chat yet");
     return [];
   }
   // A fresh, explicitly-typed `const`: `publish` below is a nested closure, and TypeScript
@@ -461,7 +605,15 @@ async function runTurnStart(
   // the already-narrowed value here (never reassigned) sidesteps that cleanly, no cast needed.
   const admittedChatId: string = activeChatId;
 
-  const resolvedAgent = resolveAgentSelection(context, backend, model, effort);
+  const agentTriple = resolveStoredOrDefaultAgentTriple(context, { backend, model, effort });
+  if (agentTriple === null) return [];
+
+  const resolvedAgent = resolveAgentSelection(
+    context,
+    agentTriple.backend,
+    agentTriple.model,
+    agentTriple.effort,
+  );
   if (resolvedAgent === null) return [];
 
   const manifestSnapshot = await wrap(context.deps.projectStore.readManifestSnapshot());
@@ -504,6 +656,40 @@ async function runTurnStart(
     JSON.stringify({ pages: pageSlugs, active: activePageSlug }),
   );
 
+  // kernel-command-contract §12.2 item 1 ("captures ... only currently open, resolvable
+  // pins") — see this file's header, "candidatePins," for the full rationale. No active page
+  // means nothing to fold: an empty candidate list then is an honest empty, not a refusal.
+  const candidatePins: AdmissionCandidatePinV1[] = [];
+  const readSetPins: { pageSlug: PageSlug; base: ReadSetAppendBaseV1 }[] = [];
+  if (activePageSlug !== null) {
+    const pins = await wrap(context.deps.pinReader.fold(activePageSlug));
+    if ("code" in pins) {
+      console.warn(
+        `core/kernel/handlers/turn: turn.start refused — could not fold pins for active page "${activePageSlug}": ${pins.safeMessage}`,
+      );
+      return [];
+    }
+    for (const pin of pins) {
+      if (pin.status !== "open") continue;
+      candidatePins.push({ pageSlug: activePageSlug, pinId: pin.pinId });
+    }
+
+    // `readSet.pins` (see this file's header, "readSet.pins," for the full WP-6 citation):
+    // the active page's comments-log append-base, read ONLY when it genuinely contributed a
+    // candidate pin above — a page folded fine but with zero open pins never enters the CAS
+    // read-set, mirroring turn-durability §7.2 step 4's "sent pins contributed context."
+    if (candidatePins.length > 0) {
+      const pinsAppendBase = await wrap(context.deps.pinReader.readAppendBase(activePageSlug));
+      if ("code" in pinsAppendBase) {
+        console.warn(
+          `core/kernel/handlers/turn: turn.start refused — could not read pin append-base for active page "${activePageSlug}": ${pinsAppendBase.safeMessage}`,
+        );
+        return [];
+      }
+      readSetPins.push({ pageSlug: activePageSlug, base: pinsAppendBase });
+    }
+  }
+
   const seedResult = await wrap(context.deps.sessionCheckpoint.selectSeed(activeChatId));
   if ("code" in seedResult) {
     console.warn(
@@ -516,7 +702,7 @@ async function runTurnStart(
     targetChatId: activeChatId,
     text: payload.text,
     ...(selection !== null ? { selection } : {}),
-    candidatePins: [],
+    candidatePins,
     workspace: {
       pages,
       manifestSlice,
@@ -524,7 +710,8 @@ async function runTurnStart(
       readSet: {
         manifest: manifestSnapshot,
         canonicalPages,
-        pins: [],
+        // NOW REAL (WP-6) — see this file's header, "readSet.pins," for the full citation.
+        pins: readSetPins,
       },
     },
   };
@@ -550,18 +737,13 @@ async function runTurnStart(
       // The absolute staged candidate path (`gate/adapters/gate-runner.ts`'s CRITICAL smoke
       // finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a page's
       // source via `Bun.file` inside a fresh scratch-directory child process, so a bare
-      // `${slug}.tsx` never resolves there. `TurnValidationPageInputV1`'s own `fileName` field
-      // (`core/turns/model/validation.ts`, not owned by this fix) is ALREADY spread verbatim
-      // into `GateRunner.runPage`'s `fileName` — the one existing field that reaches the
-      // adapter without widening a file outside this fix's scope — so it carries the absolute
-      // path here rather than the port's newer, dedicated `runPage.sourcePath` (`core/ports
-      // /gate-runner.ts`) that `validation.ts` does not thread through yet. Documented cost:
-      // `runGate` also echoes `fileName` into `GateErrorV1.file` for import/contract
-      // diagnostics, so a turn-validation Gate rejection now reports the absolute staged path
-      // instead of a short `${slug}.tsx` display name. Follow-up: once `validation.ts:140-144`
-      // spreads a `sourcePath` field of its own into `runPage`, move this to `sourcePath` and
-      // drop `fileName` back to its short display form.
-      fileName: `${candidate.root}/${pageFileRelPath(pageSlug)}`,
+      // `${slug}.tsx` never resolves there. `TurnValidationPageInputV1.sourcePath`
+      // (`core/turns/model/validation.ts`) carries it through to `GateRunner.runPage`'s own
+      // `sourcePath`, which the Gate smoke stage resolves via `Bun.file`. `fileName` stays the
+      // SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics, so a
+      // turn-validation Gate rejection reports `${slug}.tsx`, never the absolute staged path.
+      fileName: pageFileRelPath(pageSlug),
+      sourcePath: `${candidate.root}/${pageFileRelPath(pageSlug)}`,
     })),
   });
 
@@ -733,14 +915,27 @@ async function runTurnStart(
 
   // See this file's header, "THE TERMINAL EVENT": neither `FinalizeTurnResultV1` nor
   // `TerminalizeTurnResultV1` echoes back which `TurnTerminalOutcome` was originally
-  // requested, so a precise cancelled/failed/stale/interrupted distinction is not honestly
-  // constructible here — flagged, not fabricated.
+  // requested, nor WHY, so a precise cancelled/failed/stale/interrupted distinction — let
+  // alone Gate-exhaustion-vs-backend-failure — is not honestly constructible here. What IS
+  // honestly available (WP-8 item 4 — see the header's "ONE SUB-CASE IS TYPED NOW"): a
+  // `"terminalized"`/`"unrecorded"` result already carries the REAL `FailureDtoV1`
+  // `turnTransactions.terminalize` itself returned — propagated verbatim below instead of
+  // replaced by the generic bucket every other branch still falls into.
   const branch =
     result.kind === "finalized"
       ? `finalized/${result.result.kind}`
       : `terminalized/${result.result.kind}`;
+  const propagatedFailure: FailureDtoV1 =
+    result.kind === "terminalized" && result.result.kind === "unrecorded"
+      ? result.result.failure
+      : {
+          code: "PERSISTENCE_FAILED",
+          retryable: false,
+          safeMessage: `the turn ended without committing (${branch})`,
+          details: {},
+        };
   console.warn(
-    `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing a generic turn.failed (see ./turn.ts's header, "THE TERMINAL EVENT")`,
+    `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing turn.failed (see ./turn.ts's header, "THE TERMINAL EVENT")`,
   );
   return [
     {
@@ -750,12 +945,7 @@ async function runTurnStart(
         outcome: "failed",
         changedPages: [],
         warnings: [],
-        failure: {
-          code: "PERSISTENCE_FAILED",
-          retryable: false,
-          safeMessage: `the turn ended without committing (${branch})`,
-          details: {},
-        },
+        failure: propagatedFailure,
       },
       correlation: { turnId: capturedTurnId },
     },

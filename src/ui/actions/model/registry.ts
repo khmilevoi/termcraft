@@ -13,7 +13,9 @@ import type {
 
 /**
  * The slash-command registry, verbatim from design's `commandRegistry`
- * (`termcraft-engine.js:779-786`) — literal commands, descriptions, order, and commit dots.
+ * (`termcraft-engine.js:779-786`) — literal commands, descriptions, order, and commit dots —
+ * PLUS the trailing `app.exit` row (order 8), which the design never drew; see that entry's
+ * own comment for why it is added rather than invented silently.
  * `/chats` has `capability: null` because the row opens the chat-list popup (a UI-local
  * action); the actual switch is a separate `chat.switch` command issued from the popup.
  * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render dimmed.
@@ -115,6 +117,19 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       capability: null,
       inert: true,
     },
+  },
+  // `/exit` EXTENDS design's own command registry (`design/termcraft-engine.js:779-786`
+  // `commandRegistry()`): that list holds exactly the seven rows above and no `/exit` — the
+  // design never drew a Workspace quit affordance at all, only `q quit` on Home's status bars
+  // (`:145`, `:583`) and the too-small-terminal screen. This is a dated product decision
+  // (phase-8 WP-10, 2026-07-25) filling that gap: `/exit` is a UI-local action (no Kernel
+  // capability — quitting is not a Kernel command), reachable from both the Workspace composer
+  // and the Home prompt per master spec §3.9's slash-menu permission, ordered after the seven
+  // design rows rather than interleaved among them.
+  {
+    id: "app.exit",
+    execution: { kind: "local", effect: "exit" },
+    slash: { cmd: "/exit", desc: "quit termcraft", order: 8, capability: null },
   },
 ];
 
