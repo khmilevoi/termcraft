@@ -1,10 +1,11 @@
 # MVP blocker fix bundle — design
 
-Nine defects stand between the current build and an MVP that can pass the §11 acceptance
-walkthrough. They were found in a live end-to-end session on `phase-8` and recorded, with
-evidence, in [`docs/mvp-remaining-work.md`](../../mvp-remaining-work.md). This spec fixes all
-nine as one coordinated change, because three of them edit the same function and two of them
-are ordered by a real safety dependency rather than by preference.
+Eleven defects stand between the current build and an MVP that can pass the §11 acceptance
+walkthrough. They were found in a live end-to-end session on `phase-8` — and two of them by a
+real turn driven headlessly while this spec was being written — and are recorded, with evidence,
+in [`docs/mvp-remaining-work.md`](../../mvp-remaining-work.md). This spec fixes all eleven as one
+coordinated change, because three of them edit the same function and two of them are ordered by a
+real safety dependency rather than by preference.
 
 Two written authorities are amended by this work — see [Spec amendments](#spec-amendments).
 Both are named where they bite.
@@ -13,11 +14,18 @@ Both are named where they bite.
 
 **In:** Gap A (preview never renders), Gap C (Enter on Home does not start the first turn),
 Gap D (an existing project still opens on Home), Gap E (the chat list shows one chat while
-three exist), Gap F (one rejected admission bricks the turn machine), finding §2.4 (no slash
-menu on Home), finding §2.5 (the composer is frozen for the whole turn), finding §2.6 (the
-cursor renders after the placeholder), finding §2.7 (Home shows no model for up to 20 seconds
-and claims "agent ready" before checking). Plus the two shared UI primitives the updated design
-system requires, and the two spec amendments.
+three exist), Gap F (one rejected admission bricks the turn machine), **Gap G (a project with
+any page can never run another turn)**, finding §2.4 (no slash menu on Home), finding §2.5 (the
+composer is frozen for the whole turn), finding §2.6 (the cursor renders after the placeholder),
+finding §2.7 (Home shows no model for up to 20 seconds and claims "agent ready" before
+checking), and **the agent's reasoning becoming an ordered log rather than a one-line ticker**.
+Plus the two shared UI primitives the updated design system requires, and the two spec
+amendments.
+
+**Added after this spec was first written**, both on 2026-07-26: Gap G was found by running a
+real turn through a temporary headless driver, and the reasoning log came out of the same run —
+it is folded in here rather than deferred because it edits `ui/mirror` and `AgentStatusBlock`,
+the same two files findings §2.5 and §2.7 already open in stage 4.
 
 **Out:** everything in `docs/mvp-remaining-work.md` §4, and the §6 instrumentation decisions.
 `console.*` observability (finding §3.1) is confirmed but not fixed here — it is a repo-wide
@@ -32,15 +40,18 @@ Kernel-command-contract and storage-identity sections are always named with thei
 
 Four stages. The order is set by two dependencies; everything else may proceed in parallel.
 
-1. **Gap F** — the turn machine's admission-failure path.
+1. **A turn can run, and can fail safely** — Gap F (the admission-failure path) and Gap G (the
+   canonical page path). Independent of each other in code, inseparable in effect: Gap G is what
+   makes admission fail on every real project, and Gap F is what turns that failure into a
+   permanently stranded machine.
 2. **The ready sequence** — Gap E's listing call, Gap A's `enable`, Gap D's predicate: one pass
    over `runProjectReadySequence`. Two adjacent changes ride along in the same stage because
    they belong to the same items — Gap A's handler re-pointing (§2.3) and the gitignore rule
    (§2.5) — though neither is inside that function.
 3. **First turn and composition root** — Gap C, the open-vs-create discriminator, the
    synchronous agent selection.
-4. **UI** — the two shared primitives first, then findings §2.7, §2.5, §2.4, §2.6, and Gap A's
-   `preview.selectPage` dispatch.
+4. **UI** — the two shared primitives first, then findings §2.7, §2.5, §2.4, §2.6, the reasoning
+   log (§4.6), and Gap A's `preview.selectPage` dispatch.
 
 **Why Gap F precedes Gap C.** Gap C makes a turn the first action a new user takes. Today,
 reaching the `admitting` hang requires getting to the Workspace and sending something; after
@@ -56,15 +67,23 @@ re-readings and three re-tests of one sequence, each renegotiating the order of 
 
 ```mermaid
 flowchart LR
-    F["1 · Gap F<br/>turn machine"] --> C["3 · Gap C<br/>first turn + root"]
+    F["1 · a turn can run and fail safely<br/>Gap F · Gap G"] --> C["3 · Gap C<br/>first turn + root"]
     R["2 · ready sequence<br/>Gap E · Gap A enable · Gap D"] --> C
-    R --> U["4 · UI<br/>primitives → 2.7 · 2.5 · 2.4 · 2.6 · selectPage"]
+    R --> U["4 · UI<br/>primitives → 2.7 · 2.5 · 2.4 · 2.6 · reasoning log · selectPage"]
     F -.->|"no dependency"| R
 ```
 
 ---
 
-## 1. Gap F — the admission-failure path
+## 1. A turn can neither run nor fail safely — Gap F and Gap G
+
+Two defects, one stage. Gap G (§1.7) is why admission fails on any project that has ever
+produced a page; Gap F (§1.1–§1.6) is why that failure strands the turn machine for the life of
+the process instead of surfacing. Either alone is serious; together they are the whole observed
+behaviour — one good turn on a fresh project, then an application that silently refuses
+everything.
+
+### Gap F — the admission-failure path
 
 **The defect.** `runAdmission` applies `beginAdmission` (`idle → admitting`) before any of the
 work that can fail, and every failure path returns without an inverse transition. The
@@ -130,6 +149,34 @@ old handler then clears the **new** turn's id. The clear moves to where the mach
 The synchronous trio plus the operation launch become one function — call it
 `beginTurn(context, { text, … })` — used by both `turn.start`'s handler and (§3.1) the ready
 sequence. "One path" is then literal rather than aspirational.
+
+### 1.7 Gap G — the canonical page path
+
+**The defect.** `handlers/turn.ts:782` resolves each page's canonical source as
+`${context.deps.projectStore.root}/${pageFileRelPath(pageSlug)}`. `pageFileRelPath`
+(`turn.ts:408-410`) returns `pages/<slug>.tsx` — the **agent workspace's** flat layout, not
+canonical storage, which is `<root>/.termcraft/pages/<slug>/page.tsx`. Admission therefore fails
+its `workspace` phase with `PERSISTENCE_FAILED` / ENOENT for every page the project owns.
+
+The same helper is correct three lines later, at `:917`, `:926` and `:927`, where it is resolved
+against `candidate.root` — a staged workspace, where the flat shape is exactly right. One helper,
+two namespaces, one of them wrong. `store/safe-fs/model/limits.ts:134-135` already warns about
+precisely this distinction in prose.
+
+**Why it presents as "it worked once."** `stageAllFiles`
+(`store/sandbox/model/staging-store.ts:267`) copies pages only when `pages.length > 0`. A new
+project has none, so its first turn admits cleanly and creates a page; every turn after that has
+one and dies. Reproduced both ways on 2026-07-26 — `examples/clock` (one page) fails, a fresh
+empty directory runs a full turn.
+
+**The fix** resolves the canonical path through canonical storage's own convention rather than
+the workspace helper. Both call sites should name which namespace they mean, so the next reader
+cannot repeat the substitution — the helper's current name says neither.
+
+**Testing.** A test that stages a workspace for a project with at least one page on disk and
+asserts the source is found. Today's coverage cannot catch this: it either stages zero pages or
+supplies paths directly, so the one construction that matters is never exercised against a real
+canonical layout.
 
 ---
 
@@ -300,7 +347,47 @@ cell while empty, after the last character once not. Home and the composer are c
 `PinInputPopup` is left alone — it already matches its own design source. The three private
 copies of the cursor glyph and blink attribute collapse into one.
 
-### 4.6 Gap A — `preview.selectPage`
+### 4.6 The reasoning log
+
+**Today** the agent's reasoning is a ticker: `mirror.ts:136` overwrites a single
+`reasoning: string | null`, while `mirror.ts:134` appends tool steps to `steps`. Only the latest
+thought survives, and its ordering against the tool calls is destroyed on arrival.
+
+**The enabler, already applied and measured.** Thinking blocks were reaching us with empty text:
+the SDK enables adaptive thinking by default but its *display* defaults to `omitted`. A live turn
+delivered four `thinking` blocks, every one zero-length; with
+`thinking: { type: "adaptive", display: "summarized" }` set in
+`agent/claude/query/model/query-options.ts`, the same turn delivered blocks of 491, 453 and 248
+characters. Without that one line there is no reasoning content to log, and the faint row the UI
+shows is really the interim assistant `text` block (5 characters in that run).
+
+**The model change.** Reasoning and tool steps merge into **one ordered list** — the design's
+`genTurn` returns exactly that, a single array of `{status}` and `{think}` entries in event
+order. Ordering then holds by construction rather than by reconciling two collections.
+
+**Three display states per reasoning block**, from the design:
+
+- **live** (the block the agent is on) — tailed to its last N lines, with `┊` marking the head
+  that scrolled away; N is per-frame in the design (3–5);
+- **past** — collapsed to its first line plus `…`;
+- **folded** — on a long turn, the head of the list collapses into one counted row
+  (`▲ 6 earlier thoughts · 5 steps`), so the live block can never push the conversation above it
+  off screen.
+
+"Live" is the last entry in the list, so it needs no flag of its own. The fold counts **both**
+elided reasoning blocks and elided steps.
+
+**Content is prose, not fragments** — the measured 248–491 characters wrap to several lines,
+which is why the caps and the fold exist at all. Reasoning hangs off a thread one column in from
+the step glyphs; `┊` (U+250A) is a new glyph, already added to the design's own width-measurement
+set.
+
+**One new fact the protocol does not carry.** The design's long-turn frame shows elapsed time in
+the spinner (`⠹ generating design… · 2m 40s`). `turn.started` carries only an absolute
+`deadline`, so elapsed has to be derived client-side from when that event arrived. That is honest
+— it is the UI's own clock, not a Kernel fact — but it is new state in the mirror.
+
+### 4.7 Gap A — `preview.selectPage`
 
 Dispatched when the active page slug appears or changes. Per RTM-L01 this is a long-lived
 subscriber to the mirror and needs a lifetime owner returning cleanup — attached through an atom
@@ -369,6 +456,25 @@ Recorded so they are not discovered twice.
 - **`FrameIdentityV1.nonce`.** `session-commands.ts` records a NAMED GAP: the nonce has no source
   in this slice's narrowed ports, so the module mints a stand-in. A fidelity gap in frame
   identity, not a rendering blocker.
-- **Why the observed admission was rejected.** The live trace recorded `result.kind` but never
-  `result.outcome.kind`. §1.4 makes the cause available; the specific historical rejection
-  remains unexplained.
+- ~~**Why the observed admission was rejected.**~~ **Answered 2026-07-26** — it was Gap G
+  (§1.7). Widening that one trace line, exactly as §1.4 prescribes, named the cause on the first
+  re-run: `phase: "workspace"`, `PERSISTENCE_FAILED`, ENOENT on a canonical page path built with
+  the workspace helper. Left in the list rather than deleted, because how it was answered is the
+  argument for §1.4: the deciding fact was in the returned value the whole time and was being
+  thrown away at the log line.
+
+## Verification already performed
+
+Not a plan — this ran. On 2026-07-26 a temporary headless driver (`scripts/probe-turn.ts`) drove
+the real `KernelPort`, the same surface the TUI drives and the same one `run-export.ts` already
+uses for headless export. It established four things this spec previously only argued for:
+
+- Gap F reproduces on demand, and outside OpenTUI its warning is plainly visible — confirming
+  finding §3.1's mechanism a second way.
+- Gap G exists, and is the reason admission fails on a real project (§1.7).
+- The zero-page/one-page split is real: a fresh directory runs a full turn, `examples/clock` does
+  not.
+- Thinking blocks arrive empty by default and carry text with `display: "summarized"` (§4.6).
+
+Whatever of that instrumentation is kept, the driver itself is worth keeping until stage 1 lands:
+it is the only way to exercise a turn end to end in an environment that cannot drive the TUI.
