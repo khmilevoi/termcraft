@@ -79,7 +79,19 @@ function withLongPathPrefix(exe: string): string {
 export function resolveCompilerPath(): CompilerExtractError | string {
   return errore.try({
     try: () => {
-      const typescriptPackageJsonPath = Bun.resolveSync("typescript/package.json", process.cwd());
+      // Resolved from THIS MODULE's own directory (`import.meta.dir`), never `process.cwd()`.
+      // `process.cwd()` is the user's DESIGN PROJECT, which master spec §4.1 guarantees never
+      // grows a `package.json` or a `node_modules` — so resolving from there finds `typescript`
+      // only by accident, when the cwd happens to sit under termcraft's own development
+      // checkout. An installed package launched from any other directory failed outright:
+      // `Cannot find module 'typescript/package.json' from '<empty-dir>'`, on both the `export`
+      // and interactive argv paths, since `createShell` resolves the compiler eagerly and a
+      // failed resolution is a hard `ShellCompositionError`. `import.meta.dir` walks
+      // termcraft's OWN node_modules chain, which is where its own dependency actually lives —
+      // the same reasoning the platform-package resolution below already applies one level down.
+      // A `bun link` probe cannot catch this: the dev checkout's `node_modules` is an ancestor
+      // of every cwd inside it, so the wrong base still resolved there.
+      const typescriptPackageJsonPath = Bun.resolveSync("typescript/package.json", import.meta.dir);
       const baseName = baseNameOf(readPackageName(typescriptPackageJsonPath));
       const binName = expectedBinName(baseName);
 
