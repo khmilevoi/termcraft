@@ -1,0 +1,15 @@
+# Canonical line endings: LF in the index AND in the working tree, on every platform.
+#
+# Why `eol=lf` and not just `text=auto`: `text=auto` alone normalises to LF in the index but
+# still lets a Windows checkout write CRLF to disk when `core.autocrlf=true` is set locally.
+# `oxfmt` — this repository's formatter — has an `endOfLine` option whose only values are
+# `lf`, `crlf` and `cr`, with no "auto"/"preserve", so a CRLF working tree makes
+# `npm run fmt:check` fail on every file for a reason that has nothing to do with formatting,
+# while setting `endOfLine: "crlf"` would break the same check on Linux and in CI. Pinning the
+# checkout to LF is the only setting that makes the gate deterministic everywhere.
+#
+# `text=auto` still does the binary detection, so files git identifies as binary are left
+# untouched — including the two source fixtures that deliberately embed a literal NUL byte
+# (`src/core/ports/fakes/session-checkpoint.ts`,
+# `src/host/supervisor/model/restart-policy.test.ts`), which must not be line-ending converted.
+* text=auto eol=lf
