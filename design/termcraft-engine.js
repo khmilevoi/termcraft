@@ -17,7 +17,7 @@ export class Engine {
   glyphScale = {};
 
   measure(onReady){
-    const SPECIAL = "\u2502\u2500\u256d\u256e\u2570\u256f\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c\u2588\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u258c\u258f\u256c\u2551\u2550\u274f\u25b8\u25cf\u2191\u2193\u23ce\u2713\u2717\u2839\u2026\u2039\u203a\u00b7\u26a0\u25ce\u2261\u231c\u231d\u231e\u231f\u27f2\u25a3\u25cb\u25b2\u25be\u21a9\u22ef";
+    const SPECIAL = "\u2502\u2500\u256d\u256e\u2570\u256f\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c\u2588\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u258c\u258f\u256c\u2551\u2550\u274f\u25b8\u25cf\u2191\u2193\u23ce\u2713\u2717\u2839\u2026\u2039\u203a\u00b7\u26a0\u25ce\u2261\u231c\u231d\u231e\u231f\u27f2\u25a3\u25cb\u25b2\u25be\u21a9\u22ef\u250a";
     const doMeasure = () => {
       try {
         const probe = document.createElement('span');
@@ -64,11 +64,14 @@ export class Engine {
   statusBar(b,y,left,keys){ const P=this.pal; this.fillRow(b,y,' ',{fg:P.dim,bg:P.statusBg});
     let x=1; left.forEach(seg=>{ this.text(b,x,y,seg.t,{fg:seg.fg||P.dim,bg:seg.bg||P.statusBg,bold:seg.bold}); x+=seg.t.length; });
     const leftEnd=x;
-    const build=(ks)=>{ const s=[]; ks.forEach(k=>{ const kt=' '+k[0]+' '; const lt=(k[1]?' '+k[1]:'')+' '; s.push({t:kt,active:k[2]}); s.push({t:lt,label:true}); }); return s; };
+    const build=(ks)=>{ const s=[]; ks.forEach(k=>{ const kt=' '+k[0]+' '; const lt=(k[1]?' '+k[1]:'')+' '; const ds=k[2]==='dis';
+      s.push({t:kt,active:k[2]===true,dis:ds}); s.push({t:lt,label:true,dis:ds}); }); return s; };
     let ks=keys.slice(); let segs=build(ks); let total=segs.reduce((a,s)=>a+s.t.length,0);
     while(ks.length>1 && leftEnd+2+total>b.w){ ks=ks.slice(0,-1); segs=build(ks); total=segs.reduce((a,s)=>a+s.t.length,0); }
     let rx=Math.max(b.w-1-total, leftEnd+2);
-    segs.forEach(s=>{ if(s.label){ this.text(b,rx,y,s.t,{fg:P.dim,bg:P.statusBg}); } else { this.text(b,rx,y,s.t,{fg:s.active?P.bg:P.amber,bg:s.active?P.amber:P.statusBg,bold:true}); } rx+=s.t.length; }); }
+    segs.forEach(s=>{ if(s.label){ this.text(b,rx,y,s.t,{fg:s.dis?P.faint:P.dim,bg:P.statusBg}); }
+      else if(s.dis){ this.text(b,rx,y,s.t,{fg:P.faint,bg:P.statusBg,bold:false}); }
+      else { this.text(b,rx,y,s.t,{fg:s.active?P.bg:P.amber,bg:s.active?P.amber:P.statusBg,bold:true}); } rx+=s.t.length; }); }
 
   render(b){ const P=this.pal; const cw=this.cw||9; const SC=this.glyphScale||{}; const LH=this.LH;
     const React = window.React;
@@ -126,25 +129,70 @@ export class Engine {
   }
 
   // ---- HOME ----
-  home(w,h){ const P=this.pal; const b=this.mk(w,h); const cx=Math.floor(w/2);
+  // mode: undefined (ready) · 'checking' (health probe in flight, ⏎ refused)
+  //       'slash' (/ typed — Home-anchored command menu) · 'slash-one' (/e → one row)
+  //       'slash-none' (no row matches — the menu does not open, / stays literal text)
+  home(w,h,mode){ const P=this.pal; const b=this.mk(w,h); const cx=Math.floor(w/2);
+    const checking = mode==='checking';
+    const typed = mode==='slash' ? '/' : mode==='slash-one' ? '/e' : mode==='slash-none' ? '/mo'
+                : checking ? 'a system monitor for my homelab' : null;
     const iw=Math.min(w-16,84); const ix=Math.floor((w-iw)/2); const boxH=6;
-    const iy=Math.floor((h-boxH)/2)-2;
+    const iy=Math.floor(h/2)-1;
     const logo='❯ termcraft'; this.text(b,cx-Math.floor(logo.length/2),iy-4,logo,{fg:P.amber,bold:true});
     const tag='design terminal UIs by describing them'; this.text(b,cx-Math.floor(tag.length/2),iy-3,tag,{fg:P.dim});
     this.box(b,ix,iy,iw,boxH,{title:'describe',fg:P.amber,titleFg:P.amberHi});
     this.text(b,ix+2,iy+1,'❯ ',{fg:P.amber,bold:true});
-    this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint});
-    this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true});
-    this.text(b,ix+2,iy+2,'⏎ create',{fg:P.dim});
+    if(typed!==null){ this.text(b,ix+4,iy+1,typed,{fg:P.fg}); this.put(b,ix+4+typed.length,iy+1,'█',{fg:P.amber,blink:true}); }
+    else { this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint}); this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true}); }
+    this.text(b,ix+2,iy+2,'⏎ create',{fg:checking?P.faint:P.dim});
+    if(checking) this.text(b,ix+11,iy+2,'· ⠹ checking codex — up to 20s',{fg:P.amberDim});
     let acx=ix+2; const yy=iy+4;
     const sel=(lbl,val)=>{ this.text(b,acx,yy,lbl,{fg:P.faint}); acx+=lbl.length+1; this.text(b,acx,yy,'‹'+val+'›',{fg:P.amberHi,bold:true}); acx+=val.length+3; };
     sel('agent','codex'); sel('model','gpt-5.5'); sel('effort','high');
     if(acx+10<=ix+iw-2) this.text(b,acx,yy,'· / model',{fg:P.faint});
-    const health='● codex 0.34 · agent ready'; this.text(b,cx-Math.floor(health.length/2),iy+boxH+1,health,{fg:P.green,bold:true});
-    this.statusBar(b,h-1,[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true},{t:'  no project yet',fg:P.dim},{t:'  gpt5.5 · high',fg:P.dim}],
-      [['⏎','create'],['q','quit']]);
+    if(mode==='slash'||mode==='slash-one'){
+      const rows=this.slashRows(typed,{scope:'home'});
+      if(rows.length) this.slashBox(b,ix,iy+boxH,Math.min(42,iw),rows,typed==='/'?'commands':typed);
+    }
+    const left=[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true}];
+    if(checking) left.push({t:' ⠹ checking codex — ⏎ disabled ',fg:P.amberHi,bg:P.line,bold:true});
+    else left.push({t:'  no project yet',fg:P.dim});
+    left.push({t:'  gpt5.5 · high',fg:P.dim});
+    this.statusBar(b,h-1,left, checking?[['⏎','create','dis'],['q','quit']]:[['⏎','create'],['q','quit']]);
     return this.render(b);
   }
+
+  // The three health outcomes with no full-screen takeover: found-but-not-signed-in
+  // (blocking, ⏎ refused), probe ended unconfirmed, sandbox degraded (both advisory).
+  homeHealth(kind){ const P=this.pal; const w=70,h=12; const b=this.mk(w,h);
+    const blocking = kind==='login';
+    const ix=2, iw=w-4, iy=1, boxH=4;
+    this.box(b,ix,iy,iw,boxH,{title:'describe',fg:blocking?P.border:P.amber,titleFg:blocking?P.dim:P.amberHi});
+    this.text(b,ix+2,iy+1,'❯ ',{fg:blocking?P.faint:P.amber,bold:true});
+    this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint});
+    if(!blocking) this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true});
+    this.text(b,ix+2,iy+2,'⏎ create',{fg:blocking?P.faint:P.dim});
+    const spec={
+      login:{title:'not signed in',fg:P.red,lines:[
+        {t:'✗ codex 0.34 found · not signed in',fg:P.red,bold:true},
+        {t:'run codex login, then r to re-check',fg:P.dim},
+        {t:'⏎ stays refused until the probe passes',fg:P.faint}]},
+      shutdown:{title:'health unconfirmed',fg:P.amber,lines:[
+        {t:'⚠ codex exited without confirming shutdown',fg:P.amberHi,bold:true},
+        {t:'version read · health unproven',fg:P.dim},
+        {t:'⏎ works — the first turn may still fail',fg:P.faint}]},
+      sandbox:{title:'sandbox degraded',fg:P.amber,lines:[
+        {t:'⚠ sandbox unavailable — codex runs unconfined',fg:P.amberHi,bold:true},
+        {t:'writes are not contained to this folder',fg:P.dim},
+        {t:'⏎ works — designing is unaffected',fg:P.faint}]} }[kind];
+    const ny=iy+boxH+1;
+    this.box(b,ix,ny,iw,5,{title:spec.title,fg:spec.fg,titleFg:spec.fg});
+    let y=ny+1; spec.lines.forEach(l=>{ this.text(b,ix+2,y,l.t,{fg:l.fg,bold:!!l.bold}); y++; });
+    const seg = blocking? {t:' ✗ codex not signed in ',fg:P.bg,bg:P.red,bold:true}
+      : {t:' ⚠ '+(kind==='sandbox'?'sandbox degraded':'health unconfirmed')+' ',fg:P.amberHi,bg:P.line,bold:true};
+    this.statusBar(b,h-1,[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true},seg],
+      blocking?[['r','re-check'],['⏎','create','dis'],['q','quit']]:[['r','re-check'],['⏎','create'],['q','quit']]);
+    return this.render(b); }
 
   // ---- WORKSPACE (idle / gen) ----
   workspace(w,h,state){ const P=this.pal; const b=this.mk(w,h); const gen=state==='gen';
@@ -184,15 +232,14 @@ export class Engine {
       {role:'● codex'}, {status:'✓ created page main',c:P.dim}, {status:'✓ added resources + processes',c:P.dim}, {gap:1},
       {role:'❯ you'}, {body:'add a network throughput sparkline'}, {gap:1}
     ];
-    if(gen){ seq.push(
-      {role:'● codex'}, {status:'⠹ generating design…',c:P.amber,bold:true},
-      {status:'✓ read current design',c:P.green}, {status:'✓ planned layout',c:P.green},
-      {status:'▸ writing widgets',c:P.fg}, {status:'  network gauge · sparkline',c:P.faint}); }
+    if(gen){ seq.push({role:'● codex'}, ...this.genTurn('full')); }
     else { seq.push(
       {role:'● codex'}, {status:'✓ updated network sparkline',c:P.dim}, {status:'✓ ↑/↓ throughput labels',c:P.dim}); }
     for(const e of seq){ if(y>=composerTop-1) break;
       if(e.gap){ y+=e.gap; continue; }
       if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; continue; }
+      if(e.think!==undefined){ y+=this.thinkRow(b,tx,y,e,maxX,iw,composerTop-1-y); continue; }
+      if(e.fold!==undefined){ this.foldRow(b,tx,y,e,maxX); y++; continue; }
       const txt = e.body!==undefined ? e.body : e.status;
       const lines = this.wrapLines(txt, iw);
       for(let li=0; li<lines.length && y<composerTop-1; li++){
@@ -208,6 +255,44 @@ export class Engine {
     if(gen){ this.text(b,tx,composerTop+2,'❯ ',{fg:P.faint,bold:true}); this.ctext(b,x+3,composerTop+2,'generating… esc to cancel',{fg:P.faint},maxX); }
     else { this.text(b,tx,composerTop+2,'❯ ',{fg:P.amber,bold:true}); this.ctext(b,x+3,composerTop+2,'Ask for changes…',{fg:P.faint},maxX); this.put(b,x+3,composerTop+2,'█',{fg:P.amber,blink:true}); }
   }
+
+  // §03 · the composer holding a draft while the turn runs. The input is alive — amber
+  // ❯, real text, blinking caret — and the refusal lives above it and in the key row.
+  wsGenTyping(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ generating',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
+      {role:'● codex'},...this.genTurn('full') ],
+      scrollback:'▲ 6 earlier messages',
+      attach:'⏎ send disabled — draft kept', attachFg:P.amberHi,
+      composerMeta:{model:'codex · gpt5.5 · high',ctx:47}});
+    const composerTop=s.frameH-4; const draft='and label the peaks';
+    for(let k=3;k<s.chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
+    this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
+    this.text(b,3,composerTop+2,draft,{fg:P.fg});
+    this.put(b,3+draft.length,composerTop+2,'█',{fg:P.amber,blink:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,hint:'⚠ turn running — send disabled',
+      mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['⏎','send','dis'],['esc','cancel']]});
+    return this.render(b); }
+
+  // §03 · a long turn. The live block is capped so it can never push the conversation
+  // above it off screen: the spinner stays pinned, the elided head collapses into one
+  // counted ┊ row, and the tail below it keeps true chronological order.
+  wsGenLong(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ generating',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
+      {role:'● codex'},{status:'✓ created page main',c:P.dim},{status:'✓ resources + processes',c:P.dim},{gap:1},
+      {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
+      {role:'● codex'},...this.genTurn('long') ],
+      scrollback:'▲ 9 earlier messages',
+      composerDisabled:true, placeholder:'generating… esc to cancel',
+      composerMeta:{model:'codex · gpt5.5 · high',ctx:61}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,
+      mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
+    return this.render(b); }
 
   ctext(b,x,y,str,s,maxX){ str=String(str); for(let i=0;i<str.length;i++){ const cx=x+i; if(maxX!==undefined && cx>maxX) break; this.put(b,cx,y,str[i],s); } }
   wrapLines(str,width){ str=String(str); const words=str.split(' '); const lines=[]; let cur='';
@@ -421,6 +506,63 @@ export class Engine {
     {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
     {role:'● codex'},{status:'✓ added network sparkline',c:P.dim} ]; }
 
+  // A live turn is one ordered list: tool steps and reasoning blocks in the order they
+  // happened. Steps keep their glyph at the left edge; reasoning hangs off a thread one
+  // column in. Reasoning is prose, not a fragment (measured: 248–491 chars a block), so
+  // it wraps — but only the block the agent is on gets room: the live block tails to its
+  // last 5 lines (┊ marks the head that scrolled), and a block the agent has moved past
+  // collapses to its first line + … . Long turns fold from the top into one counted ┊ row.
+  genTurn(kind){ const P=this.pal;
+    const R={
+      band:'The gauges already fill the top band and the processes table owns the bottom half, so there is no room to inline another widget without shrinking one of them.',
+      reuse:'Reusing the resources frame keeps the borders aligned with the block above, and the sparkline helper already takes a series, so this is mostly wiring samples in.',
+      samples:'Sixty samples is about the pane width at the narrowest supported size, so the series will not need resampling when the preview is resized. The peaks read better against a shared y-max with the memory gauge, and putting the ↑/↓ throughput labels under the chart rather than inline keeps the row height at one line, which matters because the processes table below is already tight.',
+      fresh:'No current page source, so nothing to read first. Three bands — resources, processes, network — is the layout the request implies, and it is the one the ratatui helpers already cover.',
+      gpu:'The temperature panel wants the same frame style as resources so the two read as one column, and a single gauge is enough until there is a second sensor to compare against.',
+      labels:'Labels go under the chart, not inline: inline would push the row to two lines and the processes table below is already tight on space.',
+      bands:'Resources goes first, since the gauges anchor the top of the page and everything else sizes against them. Processes below it with fixed columns so the table does not reflow at narrow widths, and network last as a single band once there is a series to draw into it.'
+    };
+    const head={status:'⠹ generating design…',c:P.amber,bold:true};
+    const rows={
+      full:[ {status:'✓ read current design',c:P.green},
+             {think:R.band},
+             {status:'✓ planned layout',c:P.green},
+             {think:R.reuse},
+             {status:'▸ writing widgets',c:P.fg},
+             {think:R.samples,live:true,cap:5} ],
+      short:[ {status:'▸ writing widgets',c:P.fg},
+              {think:R.gpu,live:true,cap:3} ],
+      first:[ {think:R.fresh},
+              {status:'✓ planned layout',c:P.green},
+              {status:'▸ writing widgets',c:P.fg},
+              {think:R.bands,live:true,cap:4} ],
+      long:[ {fold:'▲ 6 earlier thoughts · 5 steps'},
+             {status:'✓ wrote network gauge',c:P.green},
+             {think:R.labels},
+             {status:'✓ wrote throughput labels',c:P.green},
+             {think:R.reuse},
+             {status:'▸ writing sparkline',c:P.fg},
+             {think:R.samples,live:true,cap:5} ]
+    };
+    if(kind==='long') return [{status:'⠹ generating design… · 2m 40s',c:P.amber,bold:true}].concat(rows.long);
+    return [head].concat(rows[kind]||rows.full); }
+
+  // Returns rows drawn. Live blocks tail (newest lines kept, head marked ┊); finished
+  // blocks keep their first line and say so with … .
+  thinkRow(b,tx,y,e,maxX,iw,avail){ const P=this.pal; const w=iw-2;
+    const all=this.wrapLines(String(e.think),w);
+    let lines, clipped=false;
+    if(e.live){ const cap=Math.max(1,Math.min(e.cap||5,avail===undefined?99:avail));
+      if(all.length>cap){ lines=all.slice(all.length-cap); clipped=true; } else lines=all; }
+    else { let t=all[0]; if(all.length>1) t=t.replace(/[ ,.;:]+$/,'').slice(0,w-1)+'…'; lines=[t]; }
+    lines.forEach((l,i)=>{ const g=(clipped&&i===0)?'┊':'│';
+      this.put(b,tx,y+i,g,{fg:e.live?P.amberDim:P.line});
+      this.ctext(b,tx+2,y+i,l,{fg:e.live?P.dim:P.faint},maxX); });
+    return lines.length; }
+  foldRow(b,tx,y,e,maxX){ const P=this.pal;
+    this.put(b,tx,y,'┊',{fg:P.amberDim});
+    this.ctext(b,tx+2,y,e.fold,{fg:P.amberDim,bold:true},maxX); }
+
   chatSeq(b,chatX,chatW,frameH,o){ o=o||{}; const P=this.pal; const tx=chatX+1, maxX=chatX+chatW-2, iw=chatW-3; let y=1;
     if(o.header!==false){ this.text(b,tx,y,'● codex',{fg:o.offline?P.faint:P.green,bold:true});
       const meta=o.headerMeta||'ratatui · connected'; if((9+meta.length)<=chatW-2) this.ctext(b,chatX+9,y,meta,{fg:P.faint},maxX); y+=2; }
@@ -429,6 +571,8 @@ export class Engine {
     (o.seq||[]).forEach(e=>{ if(y>=composerTop-1) return;
       if(e.gap){ y+=e.gap; return; }
       if(e.head!==undefined){ this.ctext(b,tx,y,e.head,{fg:P.faint,bold:true},maxX); y++; return; }
+      if(e.think!==undefined){ y+=this.thinkRow(b,tx,y,e,maxX,iw,composerTop-1-y); return; }
+      if(e.fold!==undefined){ this.foldRow(b,tx,y,e,maxX); y++; return; }
       if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; return; }
       if(e.pins){ e.pins.forEach(p=>{ if(y>=composerTop-1) return;
           if(p.orphan) this.put(b,tx+1,y,'⚠',{fg:P.amberDim});
@@ -646,7 +790,7 @@ export class Engine {
     this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)+1,'no current page source yet — creating main/page.tsx',{fg:P.faint});
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'a system monitor with cpu, memory and network'},{gap:1},
-      {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true},{status:'✓ planned layout',c:P.green},{status:'▸ writing widgets',c:P.fg},{status:'  resources · processes',c:P.faint} ],
+      {role:'● codex'},...this.genTurn('first') ],
       composerDisabled:true, placeholder:'generating… esc to cancel', composerMeta:{model:'codex · gpt5.5 · high',ctx:8}});
     this.wsStatus(b,w,h,{combo:false,ctx:false,ver:false,mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
     return this.render(b); }
@@ -776,31 +920,52 @@ export class Engine {
     return this.render(b); }
 
   // ---- 23 slash menu · shared command registry ----
+  // `lock` = the kernel capability this command needs is refused while a turn runs
+  // (§10.4). Commands with no `lock` are turn-safe — the /commit-* family and /exit.
+  // `home` = also reachable from the Home prompt.
   commandRegistry(){ return [
-    {cmd:'/new',    desc:'start a new chat'},
-    {cmd:'/chats',  desc:'switch or list chats'},
-    {cmd:'/export', desc:'write the export package'},
-    {cmd:'/model',  desc:'agent · model · effort'},
+    {cmd:'/new',    desc:'start a new chat',      lock:'locked · turn running'},
+    {cmd:'/chats',  desc:'switch or list chats',  lock:'locked · turn running'},
+    {cmd:'/export', desc:'write the export package', lock:'locked · turn running'},
+    {cmd:'/model',  desc:'agent · model · effort', lock:'locked · turn running', home:true},
     {cmd:'/commit-page',  desc:'current page · 1 file', dot:true},
-    {cmd:'/commit-infra', desc:'infrastructure · clean', clean:true},
-    {cmd:'/commit-all',   desc:'entire project · 7 files', dot:true} ]; }
+    {cmd:'/commit-infra', desc:'infrastructure', clean:true},
+    {cmd:'/commit-all',   desc:'entire project · 7 files', dot:true},
+    {cmd:'/exit',   desc:'quit termcraft', home:true} ]; }
+
+  // Resolve the visible rows for a scope and their availability.
+  //   _lk = locally available but kernel-locked for this turn — comes back on its own
+  //   _un = unavailable, nothing to do · nothing here will change that
+  slashRows(typed,o){ o=o||{}; const all=this.commandRegistry();
+    let rows=(typed==='/'?all:all.filter(c=>c.cmd.indexOf(typed)===0));
+    if(o.scope==='home') rows=rows.filter(c=>c.home);
+    return rows.map(c=>{ const r=Object.assign({},c);
+      if(o.scope==='home' && c.cmd==='/model'){ r._un=true; r._why='v1.0 — not in this build'; }
+      else if(c.clean){ r._un=true; r._why='nothing to commit'; }
+      else if(o.turn && c.lock){ r._lk=true; r._why=c.lock; }
+      return r; }); }
+
+  // One command list, drawn at an explicit rect. Locked rows keep readable dim text
+  // with an amber reason (temporary); unavailable rows go fully faint (no amber).
+  slashBox(b,x,y,w,rows,title){ const P=this.pal; const h=rows.length+2;
+    this.fillRect(b,x,y,w,h,{ch:' ',bg:P.bg});
+    this.box(b,x,y,w,h,{title,fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    let selIdx=rows.findIndex(r=>!r._un&&!r._lk); if(selIdx<0) selIdx=0;
+    rows.forEach((c,i)=>{ const yy=y+1+i, sel=(i===selIdx), un=c._un, lk=c._lk, off=un||lk;
+      if(sel) for(let k=1;k<w-1;k++) this.put(b,x+k,yy,' ',{bg:P.sel});
+      const bg=sel?P.sel:P.bg;
+      this.put(b,x+1,yy,sel?'▸':' ',{fg:off?P.faint:P.amber,bg,bold:true});
+      this.put(b,x+2,yy,c.dot?'●':' ',{fg:un?P.faint:(lk?P.amberDim:(sel?P.selFg:P.amber)),bg,bold:!off});
+      this.text(b,x+3,yy,this.pad(c.cmd,13),{fg:un?P.faint:(lk?P.dim:(sel?P.selFg:P.fg)),bg,bold:sel&&!off});
+      const txt=off?c._why:c.desc;
+      this.text(b,x+17,yy,this.pad(txt,Math.max(0,w-18)),{fg:un?P.faint:(lk?P.amberDim:(sel?P.selFg:P.dim)),bg}); });
+    return h; }
 
   // The non-modal autocomplete popup, anchored directly above the composer.
-  slashMenu(b,chatX,chatW,composerTop,typed,o){ o=o||{}; const P=this.pal;
-    const all=this.commandRegistry();
-    const rows=(typed==='/'?all:all.filter(c=>c.cmd.indexOf(typed)===0));
-    const isCommit=c=>c.cmd.indexOf('/commit')===0;
-    rows.forEach(c=>{ c._dis = !!c.clean || (o.turn && !isCommit(c)); });
-    let selIdx=rows.findIndex(c=>!c._dis); if(selIdx<0) selIdx=0;
-    const boxW=chatW-2, boxH=rows.length+2, bx=chatX+1, by=composerTop-boxH;
-    this.fillRect(b,bx,by,boxW,boxH,{ch:' ',bg:P.bg});
-    this.box(b,bx,by,boxW,boxH,{title:typed==='/'?'commands':typed,fg:P.amber,titleFg:P.amberHi,bg:P.bg});
-    rows.forEach((c,i)=>{ const yy=by+1+i, sel=(i===selIdx), dis=c._dis;
-      if(sel) for(let k=1;k<boxW-1;k++) this.put(b,bx+k,yy,' ',{bg:P.sel});
-      this.put(b,bx+1,yy,sel?'▸':' ',{fg:dis?P.faint:P.amber,bg:sel?P.sel:P.bg,bold:true});
-      this.put(b,bx+2,yy,c.dot?'●':' ',{fg:dis?P.faint:(sel?P.selFg:P.amber),bg:sel?P.sel:P.bg,bold:!dis});
-      this.text(b,bx+3,yy,this.pad(c.cmd,13),{fg:dis?P.faint:(sel?P.selFg:P.fg),bg:sel?P.sel:P.bg,bold:sel&&!dis});
-      this.text(b,bx+17,yy,c.desc,{fg:dis?P.faint:(sel?P.selFg:P.dim),bg:sel?P.sel:P.bg}); }); }
+  slashMenu(b,chatX,chatW,composerTop,typed,o){ o=o||{};
+    const rows=this.slashRows(typed,o); if(!rows.length) return 0;
+    const h=rows.length+2;
+    return this.slashBox(b,chatX+1,composerTop-h,chatW-2,rows,typed==='/'?'commands':typed); }
 
   wsSlash(w,h,typed,o){ o=o||{}; typed = (typeof typed==='string')?typed:(typed?'/ch':'/');
     const P=this.pal; const b=this.mk(w,h);
@@ -816,12 +981,33 @@ export class Engine {
     for(let k=3;k<chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
     this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
     this.text(b,3,composerTop+2,typed,{fg:P.fg,bold:true}); this.put(b,3+typed.length,composerTop+2,'█',{fg:P.amber,blink:true});
-    this.slashMenu(b,0,chatW,composerTop,typed,{});
+    this.slashMenu(b,0,chatW,composerTop,typed,{turn:!!o.turn});
     this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
     return this.render(b); }
 
+  // §23 · the menu opened during a turn. Sending is refused (⏎ dimmed in the key row)
+  // but / still opens local command mode; rows lock individually, not as a block.
+  wsSlashTurn(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ generating',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2),'⠹ generating…',{fg:P.amber,bold:true});
+    const chatW=s.chatW, frameH=s.frameH;
+    this.chatSeq(b,0,chatW,frameH,{seq:[
+      {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
+      {role:'● codex'},...this.genTurn('short') ],
+      attach:'send refused — / still runs commands', attachFg:P.amberHi,
+      composerMeta:{model:'codex · gpt5.5 · high',ctx:47}});
+    const composerTop=frameH-4;
+    for(let k=3;k<chatW-1;k++) this.put(b,k,composerTop+2,' ',{});
+    this.text(b,1,composerTop+2,'❯ ',{fg:P.amber,bold:true});
+    this.text(b,3,composerTop+2,'/',{fg:P.fg,bold:true}); this.put(b,4,composerTop+2,'█',{fg:P.amber,blink:true});
+    this.slashMenu(b,0,chatW,composerTop,'/',{turn:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,hint:'⚠ turn running — send disabled',
+      mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['⏎','send','dis'],['esc','cancel']]});
+    return this.render(b); }
+
   // ---- 24 chats ----
-  wsChats(w,h){ const P=this.pal; const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
+  wsChats(w,h,mode){ const P=this.pal; const b=this.mk(w,h); const frameH=h-1; const chatW=Math.round(w*0.37); const div=chatW-1;
     this.box(b,0,0,chatW,frameH,{fg:P.line,titleFg:P.faint,title:'❯ chat · codex',titleBold:false});
     this.box(b,div,0,w-div,frameH,{fg:P.line});
     this.put(b,div,0,'┬',{fg:P.line}); this.put(b,div,frameH-1,'┴',{fg:P.line});
@@ -836,29 +1022,49 @@ export class Engine {
     this.put(b,0,frameH-4,'├',{fg:P.line}); this.hline(b,1,frameH-4,chatW-2,{fg:P.line}); this.put(b,chatW-1,frameH-4,'┤',{fg:P.line});
     this.text(b,2,frameH-4,' codex · gpt5.5 · high ',{fg:P.line});
     { const tag=' ctx 42% ', rx=chatW-2-tag.length; this.text(b,rx,frameH-4,tag,{fg:P.line}); }
-    const pw=74, ph=13, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
+    const all=[
+      ['build a system monitor with cpu / mem gauges','now'],
+      ['make the process table sortable','8m ago'],
+      ['try a 256-color palette variant','1h ago'],
+      ['login screen with a centered form','yesterday'],
+      ['first draft — kanban board','2d ago'],
+      ['settings page with grouped toggles','3d ago'],
+      ['log viewer with level filters','4d ago'],
+      ['file browser · split pane','5d ago'],
+      ['deploy dashboard · 256 colors','1w ago'],
+      ['onboarding wizard copy pass','1w ago'],
+      ['metrics · sparkline row','2w ago'],
+      ['error states sweep','2w ago'],
+      ['first import from the old project','3w ago'],
+      ['scratch · palette tests','4w ago'] ];
+    const over = mode==='overflow';
+    const list = over? all : all.slice(0,6);
+    const cap=6, start = over?4:0, selAbs = over?5:0;
+    const vis=list.slice(start,start+cap);
+    const before=start, after=list.length-(start+cap);
+    const rowsH=cap+(before?1:0)+(after?1:0);
+    const pw=74, ph=rowsH+7, pxs=Math.floor((w-pw)/2), pys=Math.floor((h-ph)/2)-1;
     this.fillRect(b,pxs-1,pys,pw+2,ph+1,{ch:' ',bg:P.bg});
-    this.box(b,pxs,pys,pw,ph,{title:'chats',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
+    this.box(b,pxs,pys,pw,ph,{title:'chats · '+list.length,fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     const lx=pxs+2; let ly=pys+2;
-    this.text(b,lx,ly,this.pad('',3)+this.pad('CHAT',44)+'WHEN',{fg:P.faint,bold:true}); ly++;
-    const chats=[
-      ['build a system monitor with cpu / mem gauges','now',true],
-      ['make the process table sortable','8m ago',false],
-      ['try a 256-color palette variant','1h ago',false],
-      ['login screen with a centered form','yesterday',false],
-      ['first draft — kanban board','2d ago',false] ];
-    chats.forEach(c=>{ const sel=c[2]; if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
-      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg:sel?P.sel:P.bg,bold:true});
-      this.text(b,lx+1,ly, sel?'●':'○',{fg:sel?P.amber:P.dim,bg:sel?P.sel:P.bg});
-      this.text(b,lx+3,ly,this.pad(c[0].length>41?c[0].slice(0,40)+'…':c[0],44),{fg:sel?P.selFg:P.fg,bg:sel?P.sel:P.bg,bold:sel});
-      this.text(b,lx+47,ly,this.pad(c[1],pw-51),{fg:sel?P.selFg:P.dim,bg:sel?P.sel:P.bg}); ly++; });
-    ly++;
-    this.hline(b,pxs+1,ly,pw-2,{fg:P.line}); this.put(b,pxs,ly,'├',{fg:P.amber}); this.put(b,pxs+pw-1,ly,'┤',{fg:P.amber}); ly++;
+    this.text(b,lx,ly,this.pad('',3)+this.pad('CHAT',44)+'WHEN',{fg:P.faint,bold:true,bg:P.bg}); ly++;
+    if(before){ this.text(b,lx+1,ly,'▲ '+before+' earlier',{fg:P.amberDim,bg:P.bg}); ly++; }
+    vis.forEach((c,i)=>{ const sel=(start+i)===selAbs;
+      if(sel){ for(let k=1;k<pw-1;k++) this.put(b,pxs+k,ly,' ',{bg:P.sel}); }
+      const bg=sel?P.sel:P.bg;
+      this.put(b,lx-1,ly, sel?'▸':' ',{fg:P.amber,bg,bold:true});
+      this.text(b,lx+1,ly, sel?'●':'○',{fg:sel?P.amber:P.dim,bg});
+      const nm=c[0].length>41?c[0].slice(0,40)+'…':c[0];
+      this.text(b,lx+3,ly,this.pad(nm,44),{fg:sel?P.selFg:P.fg,bg,bold:sel});
+      this.text(b,lx+47,ly,this.pad(c[1],pw-51),{fg:sel?P.selFg:P.dim,bg}); ly++; });
+    if(after){ this.text(b,lx+1,ly,'▼ '+after+' more',{fg:P.amberDim,bg:P.bg}); ly++; }
+    const fy=pys+ph-2;
+    this.hline(b,pxs+1,fy-1,pw-2,{fg:P.line}); this.put(b,pxs,fy-1,'├',{fg:P.amber}); this.put(b,pxs+pw-1,fy-1,'┤',{fg:P.amber});
     let fx=lx;
-    this.text(b,fx,ly,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,'select',{fg:P.dim}); fx+=9;
-    this.put(b,fx,ly,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,ly,'switch',{fg:P.dim}); fx+=9;
-    this.text(b,fx,ly,'/new',{fg:P.amber,bold:true}); fx+=5; this.text(b,fx,ly,'fresh chat',{fg:P.dim}); fx+=13;
-    this.text(b,fx,ly,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,ly,' close',{fg:P.dim});
+    this.text(b,fx,fy,'↑↓',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,fy,'select',{fg:P.dim}); fx+=9;
+    this.put(b,fx,fy,'⏎',{fg:P.amber,bold:true}); fx+=2; this.text(b,fx,fy,'switch',{fg:P.dim}); fx+=9;
+    this.text(b,fx,fy,'esc',{fg:P.amber,bold:true}); fx+=3; this.text(b,fx,fy,' close',{fg:P.dim});
+    if(over){ const pos=(start+1)+'–'+(start+cap)+' of '+list.length; this.text(b,pxs+pw-2-pos.length,fy,pos,{fg:P.faint,bg:P.bg}); }
     this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
     return this.render(b); }
 
@@ -951,7 +1157,7 @@ export class Engine {
     const chatW=s.chatW, frameH=s.frameH;
     this.chatSeq(b,0,chatW,frameH,{seq:[
       {role:'❯ you'},{body:'add a gpu temperature panel'},{gap:1},
-      {role:'● codex'},{status:'⠹ generating design…',c:P.amber,bold:true},{status:'▸ writing widgets',c:P.fg},{gap:1},
+      {role:'● codex'},...this.genTurn('short'),{gap:1},
       {system:'⚑ commit now records the applied design; the new apply may land as a fresh uncommitted change'},
       {system:'Restore is disabled until the turn finishes'} ],
       attach:'local commands only — /commit-* still run', attachFg:P.amberHi,

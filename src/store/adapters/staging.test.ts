@@ -133,6 +133,45 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     }
   });
 
+  // A Gate rejection retries WITHIN the same turn, so `snapshotToCandidate` is called a second
+  // time for the SAME `turnId` — and the candidate root is keyed by `turnId` alone. Before the
+  // fix this hit `mkdirNew`'s create-new `EEXIST` and surfaced as `PERSISTENCE_FAILED`, so every
+  // gate-rejected turn died on its own retry and the documented 3-retry budget was unreachable.
+  // Observed live on 2026-07-25. The second snapshot must succeed AND show the retry's own bytes,
+  // not the first attempt's leftovers.
+  test("snapshotToCandidate() twice for the same turn (a Gate retry) succeeds and reflects the retry's bytes", async () => {
+    const sourceDir = freshSourceDir();
+    const homeSourcePath = path.join(sourceDir, "home.tsx");
+    const firstAttempt = "export const meta = { title: 'First' };\n";
+    fs.writeFileSync(homeSourcePath, firstAttempt);
+
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createStagingAdapter(deps);
+      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
+
+      const first = await adapter.snapshotToCandidate(workspace);
+      if ("code" in first) throw new Error(`fixture bug: ${first.safeMessage}`);
+
+      // The agent rewrites the page after the Gate's diagnostics, then the turn re-freezes.
+      // Written into the WORKSPACE, not the original source dir: that sandbox copy is what the
+      // agent edits and what `snapshotToCandidate` actually freezes.
+      const secondAttempt = "export const meta = { title: 'Second' };\n";
+      fs.writeFileSync(path.join(workspace.root, "pages", "home.tsx"), secondAttempt);
+
+      const second = await adapter.snapshotToCandidate(workspace);
+      if ("code" in second) throw new Error(`retry re-freeze must not fail: ${second.safeMessage}`);
+
+      expect(second.root).toBe(first.root);
+      const bytes = await adapter.readCandidateFile(second.root, "pages/home.tsx");
+      if ("code" in bytes) throw new Error(`fixture bug: ${bytes.safeMessage}`);
+      expect(new TextDecoder().decode(bytes)).toBe(secondAttempt);
+    } finally {
+      await open.close();
+    }
+  });
+
   test("readCandidateFile() returns a FailureDtoV1 for a relPath outside the candidate's own namespace grammar", async () => {
     const sourceDir = freshSourceDir();
     const homeSourcePath = path.join(sourceDir, "home.tsx");

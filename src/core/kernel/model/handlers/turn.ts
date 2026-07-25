@@ -40,6 +40,7 @@ import {
 } from "core/turns";
 import type { ChatSelection } from "entities/chat";
 import { type PageSlug, parsePageSlug } from "entities/page";
+import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type {
@@ -680,7 +681,14 @@ async function runTurnStart(
   // the authoritative selection" at the moment admission begins.
   const selection = toAdmissionSelection(context.selection());
 
+  // DIAGNOSTIC (infrastructure/debug-log): this function is a chain of `await wrap(...)` port
+  // reads, and a live run showed `turn.start` accepted followed by total silence — no event, no
+  // console line, no disk write, no agent process. Every REFUSAL below logs; a stall inside an
+  // await logs nothing at all. These step markers are what separate the two.
+  trace("kernel.turnStart", { step: "entry" });
+
   const workspaceState = await wrap(context.deps.projectStore.readWorkspaceState());
+  trace("kernel.turnStart", { step: "readWorkspaceState done" });
   if ("code" in workspaceState) {
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read workspace state: ${workspaceState.safeMessage}`,
@@ -688,6 +696,19 @@ async function runTurnStart(
     return [];
   }
   const { activeChatId, backend, model, effort, activePageSlug } = workspaceState.state;
+
+  // DIAGNOSTIC: a live run stopped between the marker above and the one below `resolveAgentSelection`,
+  // with NO console line — even though every refusal in that span is supposed to log. Record the raw
+  // inputs and each resolver's verdict so the next run names the exact branch instead of narrowing it.
+  trace("kernel.turnStart", {
+    step: "workspaceState read ok",
+    stored: { backend, model, effort },
+    activeChatId,
+    activePageSlug,
+    registryLength: context.deps.agentRegistry.list().length,
+    registryIds: context.deps.agentRegistry.list().map((b) => b.backendId),
+  });
+
   if (activeChatId === null) {
     console.warn("core/kernel/handlers/turn: turn.start refused — no active chat yet");
     return [];
@@ -698,6 +719,7 @@ async function runTurnStart(
   const admittedChatId: string = activeChatId;
 
   const agentTriple = resolveStoredOrDefaultAgentTriple(context, { backend, model, effort });
+  trace("kernel.turnStart", { step: "agentTriple resolved", agentTriple });
   if (agentTriple === null) return [];
 
   const resolvedAgent = resolveAgentSelection(
@@ -706,9 +728,16 @@ async function runTurnStart(
     agentTriple.model,
     agentTriple.effort,
   );
+  trace("kernel.turnStart", {
+    step: "resolveAgentSelection returned",
+    isNull: resolvedAgent === null,
+  });
   if (resolvedAgent === null) return [];
 
+  trace("kernel.turnStart", { step: "agent selection resolved" });
+
   const manifestSnapshot = await wrap(context.deps.projectStore.readManifestSnapshot());
+  trace("kernel.turnStart", { step: "readManifestSnapshot done" });
   if ("code" in manifestSnapshot) {
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read project.toml's snapshot: ${manifestSnapshot.safeMessage}`,
@@ -721,6 +750,7 @@ async function runTurnStart(
   // handler's own `sessionScopeId` needs below. A failure here is a LOGGED, idempotent
   // refusal, in the exact shape as the read above — never a fabricated `workspaceIdentity`.
   const manifest = await wrap(context.deps.projectStore.readManifest());
+  trace("kernel.turnStart", { step: "readManifest done" });
   if ("code" in manifest) {
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`,
@@ -729,6 +759,7 @@ async function runTurnStart(
   }
 
   const pageSlugs = await wrap(context.deps.pageReader.listSlugs());
+  trace("kernel.turnStart", { step: "listSlugs done" });
   if ("code" in pageSlugs) {
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not list page slugs: ${pageSlugs.safeMessage}`,
@@ -804,11 +835,14 @@ async function runTurnStart(
   // `selectSeed`. `sessionScopeId` folds in `workspaceIdentity` (the manifest read just
   // above) and a documented `account: null` literal — see this file's own header,
   // "`baseTask.session: SessionPlan`," for the full account/cross-restart rationale.
+  trace("kernel.turnStart", { step: "pages and pins folded", pageCount: pageSlugs.length });
+
   const sessionScopeId = resolvedAgent.agentBackend.sessionScope({
     account: null,
     model: resolvedAgent.model,
     workspaceIdentity: manifest.projectId,
   });
+  trace("kernel.turnStart", { step: "sessionScope resolved" });
   // Flat, not a nested async IIFE: an `await` on an unwrapped inner promise (even one
   // that itself calls `wrap(...)`) is its OWN unwrapped async boundary the moment it
   // resolves — `references/async-notes.md`'s "Where the async context is lost" table
@@ -821,6 +855,7 @@ async function runTurnStart(
       { chatId: activeChatId, sessionScopeId },
     ),
   );
+  trace("kernel.turnStart", { step: "evaluateSessionPlan done" });
   if ("code" in sessionPlanResult) {
     console.warn(
       `core/kernel/handlers/turn: turn.start's evaluateSessionPlan failed for chat "${activeChatId}" scope "${sessionScopeId}" — ${sessionPlanResult.safeMessage}; starting with an empty seed`,
@@ -1017,11 +1052,27 @@ async function runTurnStart(
     buildFinalizeInput,
   };
 
+  trace("kernel.turnStart", { step: "calling runTurn" });
   const result: RunTurnResultV1 = await wrap(runTurn(runTurnDeps, runTurnInput));
+  trace("kernel.turnStart", { step: "runTurn resolved", kind: result.kind });
 
   if (result.kind === "admission-rejected") {
+    // TEMPORARY DIAGNOSTIC (2026-07-26): `outcome.kind` alone says only "blocked", which is what
+    // left the last live rejection unexplained. `AdmissionOutcomeV1`'s blocked variants already
+    // carry the deciding fact — `phase` (admit | chat-append-base | workspace | read-set | fence)
+    // plus the failure itself — and it was being discarded here. This widening is the diagnostic
+    // half of the fix the spec prescribes (§1.4); the durable half is a real terminal event.
+    const detail: Record<string, unknown> = { kind: result.outcome.kind };
+    if (result.outcome.kind === "blocked") {
+      detail.phase = result.outcome.phase;
+      detail.failure =
+        "failure" in result.outcome ? result.outcome.failure : String(result.outcome.error);
+    } else if (result.outcome.kind === "illegal") {
+      detail.code = result.outcome.code;
+    }
+    trace("kernel.turnStart", { step: "admission rejected", ...detail });
     console.warn(
-      `core/kernel/handlers/turn: turn.start's admission was rejected (${result.outcome.kind})`,
+      `core/kernel/handlers/turn: turn.start's admission was rejected ${JSON.stringify(detail)}`,
     );
     return [];
   }

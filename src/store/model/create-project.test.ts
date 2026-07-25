@@ -89,7 +89,7 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       );
       expect(gitignoreOnDisk).toBe(renderProjectGitignore());
 
-      // ---- workspace.local.toml: machine-local defaults ----
+      // ---- workspace.local.toml: machine-local defaults, EXCEPT the active-chat pointer ----
       const workspaceOnDisk = fs.readFileSync(
         path.join(projectRoot, ".termcraft", WORKSPACE_STATE_FILENAME),
         "utf8",
@@ -97,13 +97,20 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       const decodedWorkspace = decodeWorkspaceLocalState(workspaceOnDisk);
       if (decodedWorkspace instanceof Error)
         throw new Error(`fixture bug: workspace state undecodable: ${decodedWorkspace.message}`);
-      expect(decodedWorkspace).toEqual(defaultWorkspaceLocalState());
 
       // ---- the first chat header ----
       const chatFiles = fs.readdirSync(path.join(projectRoot, ".termcraft", "chats"));
       expect(chatFiles).toHaveLength(1);
       const chatId = chatFiles[0]?.replace(/\.jsonl$/, "");
       if (chatId === undefined) throw new Error("fixture bug: no chat file");
+
+      // Creation mints the first chat AND points `activeChatId` at it, in the one
+      // project-creation transaction. This assertion previously compared against a bare
+      // `defaultWorkspaceLocalState()`, which pinned `activeChatId: null` — the state in which
+      // `turn.start` refuses every turn with "no active chat yet" and publishes nothing, so a
+      // brand-new project could never run its first turn. Asserted against the chat file
+      // actually on disk, not a remembered id, so a pointer aimed at the wrong chat also fails.
+      expect(decodedWorkspace).toEqual({ ...defaultWorkspaceLocalState(), activeChatId: chatId });
       const handle = await opened.chats.open(chatId);
       if (handle instanceof Error)
         throw new Error(`fixture bug: chat unopenable: ${handle.message}`);

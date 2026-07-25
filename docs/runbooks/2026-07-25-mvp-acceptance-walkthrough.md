@@ -112,15 +112,23 @@ bar. This is `project.create` completing: it creates `.termcraft/` (portable
 `project.toml`, machine-local `workspace.local.toml`, a `.gitignore`, and the first
 chat header) and opens the Workspace.
 
-**Known limitation — the Home prompt's text does NOT auto-start a turn.** `Enter` on
-Home dispatches `project.create` with your typed text carried in the command payload,
-but `handleProjectCreate` (`src/core/kernel/model/handlers/project.ts`) never reads
-that field — verified by reading the handler: it uses only `payload.creationDefaults
-.trust`. Home's local `prompt` atom and the Workspace's local `composer` atom are two
-separate pieces of UI state with no carry-over (`src/ui/app/model/deps.ts`). You will
-land in an **empty** Workspace composer, not one pre-filled with what you just typed.
-This matches `docs/architecture/flows/launch.md`'s own documented behavior, not a
-regression.
+**Known DEFECT (Gap C) — the Home prompt's text does NOT auto-start a turn.** Expect an
+**empty** chat panel, an **empty** composer, and **no** spinner or status block. Nothing
+is running and nothing tells you the text was dropped; the app looks broken here. It is
+not — it simply never started a turn. Continue to step 4 and type the text again.
+
+`Enter` on Home dispatches `project.create` with your typed text carried in the command
+payload, but `handleProjectCreate` (`src/core/kernel/model/handlers/project.ts`) never
+reads that field — verified by reading the handler: it uses only
+`payload.creationDefaults.trust`. Home's local `prompt` atom and the Workspace's local
+`composer` atom are two separate pieces of UI state with no carry-over
+(`src/ui/app/model/deps.ts`).
+
+This was originally written up as designed behavior. It is now recorded as a defect to
+fix — **Gap C** in `docs/architecture/flows/launch.md` — because it is the first
+interaction a new user has and it reads as a broken app: raised from a real run on
+2026-07-25. Required behavior is one keystroke: create, open the Workspace, append the
+typed text as the first user message, start the first turn.
 
 **On failure:** capture the on-screen error (Home surfaces creation failures inline)
 and whatever appeared in the chat panel, if the Workspace did open.

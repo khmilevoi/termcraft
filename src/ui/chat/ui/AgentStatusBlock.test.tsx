@@ -4,6 +4,7 @@ import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
+import { SPINNER_FRAMES } from "ui/spinner";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { AgentStatusBlock } from "./AgentStatusBlock";
@@ -28,7 +29,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[]}
@@ -55,7 +55,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[]}
@@ -64,8 +63,12 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     await handle.render();
     const frame = handle.capture();
 
-    const spinner = findRun(frame, "⠹ generating design…");
-    expect(spinner).toBeDefined();
+    // Frame-agnostic on purpose: the spinner animates (`ui/spinner`, 80ms), so pinning one glyph
+    // would fail whenever a slow render crossed a tick. The label is asserted here; that the
+    // leading glyph is a real member of the cycle is asserted separately below.
+    const spinner = findRun(frame, "generating design…");
+    if (spinner === undefined) throw new Error("fixture bug: no spinner line rendered");
+    expect(SPINNER_FRAMES).toContain(spinner.text.trimStart().slice(0, 1));
     expect(spinner && extractRgb(spinner.fg)).toBe<string>(SHELL_PALETTE.amber);
     expect((spinner?.attrs ?? 0) & 1).toBe(1);
   });
@@ -78,7 +81,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[
           { op: "read", target: "current design", done: true },
           { op: "writing", target: "widgets", done: false },
@@ -108,7 +110,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning="network gauge · sparkline"
         gateRetries={[]}
@@ -131,7 +132,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[]}
@@ -153,7 +153,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[{ retryNumber: 1 }]}
@@ -175,7 +174,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[{ retryNumber: 1 }, { retryNumber: 2 }, { retryNumber: 3 }]}
@@ -197,7 +195,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="turn-status"
         agentName="claude"
         connection="ratatui · connected"
-        spinner="⠹"
         steps={[]}
         reasoning={null}
         gateRetries={[]}

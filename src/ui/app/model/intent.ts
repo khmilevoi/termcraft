@@ -1,4 +1,5 @@
 import type { CommandResultV1 } from "core/protocol";
+import { trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
@@ -49,6 +50,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           creationDefaults: { trust: "trusted", workspaceIdentity: deps.env.workspaceIdentity },
           text,
         }),
+        "project.create",
       );
       return;
     }
@@ -59,10 +61,20 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.composer.set(local.composer().slice(0, -1));
       return;
     case "composer-submit": {
-      if (deps.screen() === "read-only") return;
+      // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
+      // that dies here is indistinguishable on screen from one that was never pressed. Name
+      // which guard swallowed it.
+      if (deps.screen() === "read-only") {
+        trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
+        return;
+      }
       const text = local.composer();
-      if (text.length === 0) return;
-      dispatchAndReport(dispatcher.dispatch("turn.start", { text }));
+      if (text.length === 0) {
+        trace("ui.composerSubmit.refused", { reason: "composer is empty" });
+        return;
+      }
+      trace("ui.composerSubmit.dispatching", { textLength: text.length });
+      dispatchAndReport(dispatcher.dispatch("turn.start", { text }), "turn.start");
       local.composer.set("");
       return;
     }
@@ -122,7 +134,10 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         local.chatSelection()
       ];
       if (selected === undefined) return;
-      dispatchAndReport(dispatcher.dispatch("chat.switch", { chatId: selected.chatId }));
+      dispatchAndReport(
+        dispatcher.dispatch("chat.switch", { chatId: selected.chatId }),
+        "chat.switch",
+      );
       local.overlay.set(null);
       return;
     }
@@ -143,6 +158,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           geometryToken: pendingPin.geometryToken,
           text: local.pinDraft(),
         }),
+        "pin.create",
       );
       deps.interaction.pendingPin.set(null);
       local.pinDraft.set("");
@@ -155,6 +171,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           trust: "trusted",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
+        "project.setTrust:trusted",
       );
       return;
     case "trust-decline":
@@ -163,6 +180,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           trust: "untrusted-read-only",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
+        "project.setTrust:untrusted-read-only",
       );
       return;
     case "overlay-dismiss":
@@ -200,9 +218,16 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
   }
 }
 
-function dispatchAndReport(promise: Promise<CommandResultV1 | Error>): void {
+function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: string): void {
   void promise.then((result) => {
     if (result instanceof Error) console.error("UI command dispatch failed:", result);
+    // DIAGNOSTIC (infrastructure/debug-log): this function's ONLY visible reaction is the
+    // `console.error` above, which fires just for a thrown/returned Error. A command the Kernel
+    // REJECTS comes back as a perfectly ordinary `CommandResultV1` and is discarded right here
+    // without a trace — by design ("the result surfaces through the event stream, never through
+    // the dispatch return"), which means a guard refusal is invisible to the operator. Record
+    // every outcome, accepted or refused.
+    trace("ui.dispatch.result", { kind, result });
   });
 }
 
@@ -239,10 +264,10 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
   if (execution.kind === "inert") return;
   if (execution.kind === "command") {
     if (execution.command === "chat.create") {
-      dispatchAndReport(deps.dispatcher.dispatch("chat.create", {}));
+      dispatchAndReport(deps.dispatcher.dispatch("chat.create", {}), "chat.create");
       return;
     }
-    dispatchAndReport(deps.dispatcher.dispatch("export.start", {}));
+    dispatchAndReport(deps.dispatcher.dispatch("export.start", {}), "export.start");
     return;
   }
   if (execution.effect === "fullscreen") {
@@ -291,10 +316,13 @@ function applyEsc(deps: UiDeps): void {
       return;
     case "cancel-generation":
       if (turn.phase === "running")
-        dispatchAndReport(deps.dispatcher.dispatch("turn.cancel", { turnId: turn.turnId }));
+        dispatchAndReport(
+          deps.dispatcher.dispatch("turn.cancel", { turnId: turn.turnId }),
+          "turn.cancel",
+        );
       return;
     case "deselect":
-      dispatchAndReport(deps.dispatcher.dispatch("selection.clear", {}));
+      dispatchAndReport(deps.dispatcher.dispatch("selection.clear", {}), "selection.clear");
       return;
     case "leave-history":
     case "none":

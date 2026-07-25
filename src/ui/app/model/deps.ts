@@ -16,6 +16,7 @@ import {
 import * as errore from "errore";
 
 import type { UUIDv7 } from "core/protocol";
+import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
 import type { HomeAgentHealth } from "ui/home";
@@ -227,6 +228,20 @@ export function createUiDeps(
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
       const applyEnvelope = bind((envelope: EventEnvelopeV1) => {
         const distributed = envelope as AnyEventEnvelope;
+        // DIAGNOSTIC (infrastructure/debug-log): the ONE place every Kernel event enters the UI.
+        // A command can be `accepted` and still produce nothing visible if its events never
+        // arrive here — exactly the producer/consumer seam `mirror.test.ts` pins for
+        // `turn.started`. Recording the kind is what separates "the Kernel went quiet" from
+        // "the mirror ignored what it got".
+        // The payload is recorded only for the kinds that CARRY a diagnosis — a rejection or a
+        // failure. `turn.progress` fires dozens of times per turn and its payload would bury
+        // them. Without this, a Gate rejection is visible as a bare event kind with no hint of
+        // WHAT it objected to.
+        trace("ui.event", {
+          kind: distributed.kind,
+          seq: distributed.eventSeq,
+          ...(/reject|fail/i.test(distributed.kind) ? { payload: distributed.payload } : {}),
+        });
         if (distributed.kind === "preview.geometryResult") {
           handleGeometryResult(deps, distributed);
         }

@@ -56,6 +56,7 @@ import {
   eventPayloadV1SchemaByKind,
   isUuidv7,
 } from "core/protocol";
+import { trace } from "infrastructure/debug-log";
 
 import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
@@ -663,7 +664,13 @@ export function createKernel(deps: KernelDeps): Kernel {
       label: string,
       run: () => Promise<readonly PublishableEventV1[]>,
     ): Promise<void> {
+      // DIAGNOSTIC (infrastructure/debug-log): distinguishes the two ways an operation can go
+      // quiet — it RESOLVED with an empty event list (a silent refusal deep in the handler), or
+      // it never resolved at all (a stalled await). Without this marker both look identical from
+      // outside: no event, no console line, nothing on disk.
+      trace("kernel.operation", { label, step: "run() started" });
       const events = await wrap(run());
+      trace("kernel.operation", { label, step: "run() resolved", eventCount: events.length });
       const published = publishOperationEvents({ counters, eventBus }, events);
       if (published instanceof Error) {
         console.error(

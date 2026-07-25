@@ -1,0 +1,6 @@
+format_version = 1
+project_id = "019f9ac1-0873-7000-8838-80ea7fee8c45"
+name = "clock"
+created_at = "2026-07-25T19:29:29.715Z"
+target_stack = "js-opentui"
+pages = ["time-dashboard"]

@@ -28,6 +28,12 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
     disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
     model: task.model,
     effort: task.effort,
+    // Adaptive thinking is already the SDK default for models that support it, but its DISPLAY
+    // defaults to "omitted" — measured 2026-07-26: a live turn delivered 4 `thinking` blocks,
+    // every one with a zero-length `thinking` string. Without this, `normalize.ts`'s thinking
+    // branch maps empty text forever and the reasoning line the UI shows is really the interim
+    // assistant `text` block. Asking for the summary is the only way to get reasoning content.
+    thinking: { type: "adaptive", display: "summarized" },
     systemPrompt: task.systemPrompt,
     abortController: deps.abortController,
     includePartialMessages: false,

@@ -21,6 +21,7 @@
     "design",
     "design-prompts",
     "docs/spikes",
-    "src/host/session/fixtures"
+    "src/host/session/fixtures",
+    "examples"
   ]
 }

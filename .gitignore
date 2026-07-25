@@ -8,6 +8,16 @@ node_modules/
 
 # A termcraft project created by running the app against the repository root itself (a dev
 # convenience). It is live local state — a lease, chats, transactions — never repository content.
+#
+# The leading slash is load-bearing. Example projects under examples/*/.termcraft/ ARE
+# repository content, and termcraft writes its own .termcraft/.gitignore
+# (src/store/toml/model/gitignore.ts) that already excludes the machine-local paths — the
+# lease, workspace.local.toml, transactions.local/, caches and logs. Never widen this rule
+# to an unanchored `.termcraft/`; that would silently stop tracking every example.
 /.termcraft/
 
 HANDOFF.md
+
+# The opt-in diagnostic trace (infrastructure/debug-log, TERMCRAFT_DEBUG_LOG). One file per
+# session, overwritten on every launch — a debugging artifact, never repository content.
+termcraft-debug.jsonl

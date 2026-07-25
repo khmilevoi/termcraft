@@ -42,6 +42,11 @@
     "design-prompts",
     "docs",
     "src/host/session/fixtures",
+    // Example projects hold agent-generated page sources, not repository code. Their style
+    // contract is the Gate's own lint pass (import allowlist, page contract, the five
+    // warning lints), not this repository's formatting — reformatting them here would
+    // rewrite the very artifact an example exists to show. Same reason in .oxlintrc.json.
+    "examples",
     // This single file, not the whole `src/runtime/generated` directory: it is the ONE
     // artifact in the repo emitted verbatim from TypeScript's own declaration printer
     // (scripts/gen-runtime-dts.ts), whose indentation (4-space, tsc's fixed convention)

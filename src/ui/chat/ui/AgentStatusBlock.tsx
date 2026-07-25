@@ -1,3 +1,4 @@
+import { Spinner } from "ui/spinner";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 /** One live tool step in the ephemeral agent status block. */
@@ -22,8 +23,6 @@ export interface AgentStatusBlockProps {
   readonly agentName: string;
   /** The connection meta line, e.g. `"ratatui · connected"`. */
   readonly connection: string;
-  /** A braille spinner glyph, e.g. `"⠹"`. */
-  readonly spinner: string;
   readonly steps: readonly AgentToolStep[];
   /** The single faint reasoning ticker line; `null` renders nothing. */
   readonly reasoning: string | null;
@@ -52,13 +51,15 @@ export function AgentStatusBlock(props: AgentStatusBlockProps) {
       <text id={`${props.id}-connection`} fg={SHELL_PALETTE.faint}>
         {props.connection}
       </text>
-      <text
+      {/* The shared animated spinner (`ui/spinner`) rather than a glyph threaded in as a prop:
+          it is its own `reatomComponent`, so an 80ms tick repaints this one line instead of the
+          whole status block. Colour and weight stay the design's (amber, bold). */}
+      <Spinner
         id={`${props.id}-spinner`}
+        label="generating design…"
         fg={SHELL_PALETTE.amber}
-        attributes={shellAttrs({ bold: true })}
-      >
-        {`${props.spinner} generating design…`}
-      </text>
+        bold
+      />
       {props.steps.map((step, index) => (
         // keyed intrinsic wrapper — function components carry no `key` in this
         // repo's no-@types/react environment (src/runtime/ui/list.tsx).

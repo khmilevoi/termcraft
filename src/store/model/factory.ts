@@ -1296,8 +1296,17 @@ async function createProject(
   };
   const manifestBytes = new TextEncoder().encode(encodeProjectManifest(manifest));
   const gitignoreBytes = new TextEncoder().encode(renderProjectGitignore());
+  // The freshly minted `chatId` below is ALSO this project's active chat. Writing the plain
+  // `defaultWorkspaceLocalState()` here left `activeChatId` null while the chat header itself was
+  // created two lines down, so a brand-new project had a chat on disk that nothing pointed at —
+  // and `turn.start` refuses with "no active chat yet" (`core/kernel/model/handlers/turn.ts`)
+  // before any agent runs. That refusal returns an empty event list, so the UI showed no message,
+  // no spinner and no error: every first turn in a new project failed silently and permanently.
+  // Set here rather than through a follow-up `setActiveChat` so the pointer lands in the SAME
+  // project-creation transaction as the header it points at, never as a second write that could
+  // be interrupted between the two.
   const workspaceBytes = new TextEncoder().encode(
-    encodeWorkspaceLocalState(defaultWorkspaceLocalState()),
+    encodeWorkspaceLocalState({ ...defaultWorkspaceLocalState(), activeChatId: chatId }),
   );
   const chatHeader: ChatHeader = { kind: "chat", formatVersion: 1, projectId, chatId, createdAt };
   const chatHeaderLine = encodeChatHeaderLine(chatHeader);

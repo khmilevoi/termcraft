@@ -189,6 +189,24 @@ export function createStagingAdapter(deps: StoreAdapterDeps): StagingService {
     if (source instanceof Error) return toFailureDto(source);
 
     const destRoot = candidateDestRoot(workspace.root, workspace.turnId);
+
+    // A Gate retry re-freezes WITHIN THE SAME TURN, and `destRoot` is keyed by `turnId` alone —
+    // so the second attempt aimed `mkdirNew` at the directory the first attempt had already
+    // created and died `EEXIST` -> `PERSISTENCE_FAILED`. That made every gate-rejected turn fail
+    // deterministically on its own retry: the documented 3-retry budget could never run past the
+    // first rejection. (`retireCandidate` runs only at terminalization — end of turn — so it
+    // never covered the gap BETWEEN attempts.)
+    //
+    // Retiring through `retireCandidate` rather than deleting here on the spot is deliberate: it
+    // is the one path that already enforces the containment allowlist (`liveCandidateRoots`) plus
+    // the traversal/no-follow refusals, so this adds no second recursive-delete path to audit.
+    // Guarded by the same allowlist so a `destRoot` this adapter never froze is left untouched
+    // and the create-new collision still surfaces honestly.
+    if (liveCandidateRoots.has(destRoot)) {
+      const retired = await retireCandidate(destRoot);
+      if (retired !== undefined) return retired;
+    }
+
     // `snapshotToCandidate`'s own `mkdirNew(destRoot)` is deliberately non-recursive (create-
     // new semantics for the candidate itself) — the `candidates/` PARENT under the sandbox
     // root is shared across every turn's candidate and must exist first, exactly like

@@ -374,7 +374,6 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   id="ws-agent"
                   agentName={agentLabel}
                   connection="working"
-                  spinner="⠹"
                   steps={turn.steps.map((step, index) => ({
                     op: step.op,
                     target: step.target,

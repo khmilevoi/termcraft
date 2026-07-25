@@ -2,6 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { reatomComponent, useWrap } from "@reatom/react";
 
+import { trace } from "infrastructure/debug-log";
 import { Home } from "ui/home";
 import type { HomeAgentHealth, HomeCombo } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
@@ -149,19 +150,34 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
   }
 
   const onKey = useWrap((key: KeyEvent) => {
-    applyIntent(
-      resolveKey(key, {
-        screen: deps.screen(),
-        focus: deps.local.focus(),
-        // The SAME precedence call `renderOverlay` makes above — one source of truth for which
-        // surface owns the keys, not a second independently derived export-popup check (M14 fix).
-        overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
-        composerValue: deps.local.composer(),
-        homeHealthPresent: deps.local.homeHealth().present,
-        turnRunning: deps.mirror.turn().phase === "running",
-      }),
-      deps,
-    );
+    const context = {
+      screen: deps.screen(),
+      focus: deps.local.focus(),
+      // The SAME precedence call `renderOverlay` makes above — one source of truth for which
+      // surface owns the keys, not a second independently derived export-popup check (M14 fix).
+      overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
+      composerValue: deps.local.composer(),
+      homeHealthPresent: deps.local.homeHealth().present,
+      turnRunning: deps.mirror.turn().phase === "running",
+    };
+    const intent = resolveKey(key, context);
+    // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an
+    // intent. A key that resolves to `none` here is the difference between "the app ignored me"
+    // and "the command was rejected downstream" — invisible otherwise, since the shell owns the
+    // terminal and no key path reports anything on screen.
+    trace("ui.onKey", {
+      key: { name: key.name, sequence: key.sequence, ctrl: key.ctrl },
+      context,
+      intent,
+      // The two mirror fields `deriveScreen` actually branches on. Logged here rather than
+      // inside `createScreenAtom`'s `computed`, where a side effect would violate the Reatom
+      // rules and fire on every unrelated recompute.
+      project: {
+        projectId: deps.mirror.project().projectId,
+        trust: deps.mirror.project().trust,
+      },
+    });
+    applyIntent(intent, deps);
   }, "ui.App.onKey");
   useKeyboard(onKey);
 

@@ -37,9 +37,9 @@
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
       <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">23 · Slash menu</span>
-      <span style="color:#5b544a;font-size:12px;">ws-slash-120 · ws-slash-filter-120</span>
+      <span style="color:#5b544a;font-size:12px;">ws-slash-120 · ws-slash-filter-120 · ws-slash-turn-120 · home-slash-120 · home-slash-one-80 · home-slash-none-80</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:78ch;line-height:1.5;">Typing <code style="color:#e6a23c;">/</code> as the first character of an empty composer opens an autocomplete list anchored directly above it — not a modal, no backdrop dimming, the design behind stays at full contrast. It filters as you type; Enter runs the highlighted command, Esc closes. Conversation and configuration actions (<code style="color:#e6a23c;">/new · /chats · /export · /model</code>) live here now instead of on hotkeys.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:78ch;line-height:1.5;">Typing <code style="color:#e6a23c;">/</code> as the first character of an empty primary input opens an autocomplete list anchored to it — not a modal, no backdrop dimming, the design behind stays at full contrast. It filters as you type; Enter runs the highlighted command, Esc closes. Conversation and configuration actions (<code style="color:#e6a23c;">/new · /chats · /export · /model</code>) live here now instead of on hotkeys, alongside the commit family and <code style="color:#e6a23c;">/exit</code>.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
@@ -66,6 +66,79 @@
       </div>
     </div>
   </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Row states during a turn</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">the kernel matrix is per-command, not a block</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">A running turn refuses four capabilities — <code style="color:#e6a23c;">/new</code>, <code style="color:#e6a23c;">/chats</code>, <code style="color:#e6a23c;">/export</code>, <code style="color:#e6a23c;">/model</code>. Everything else stays live: the whole <code style="color:#e6a23c;">/commit-*</code> family per Git scope, cancel, and <code style="color:#e6a23c;">/exit</code>, which carries no kernel capability at all and must never dim — a stuck turn is exactly when it gets used. The single blanket dim no longer holds, so the row treatment splits in two:</p>
+    <div style="display:flex;gap:34px;flex-wrap:wrap;margin:16px 0 0;">
+      <div style="max-width:36ch;">
+        <div style="font-size:12px;color:#8f877a;"><span style="color:#8f877a;">/export</span> &nbsp;<span style="color:#8a6d33;">locked · turn running</span></div>
+        <p style="color:#8f877a;font-size:11.5px;line-height:1.55;margin:7px 0 0;"><strong style="color:#d7d0c2;font-weight:500;">Locked — comes back.</strong> The command name holds at muted, not faint, and its description is swapped for the reason in <span style="color:#8a6d33;">amber-dim</span> — the same amber that means “in progress” everywhere else in the system. Readable, and visibly temporary.</p>
+      </div>
+      <div style="max-width:36ch;">
+        <div style="font-size:12px;color:#5b544a;"><span>/commit-infra</span> &nbsp;<span>nothing to commit</span></div>
+        <p style="color:#8f877a;font-size:11.5px;line-height:1.55;margin:7px 0 0;"><strong style="color:#d7d0c2;font-weight:500;">Unavailable — nothing to do.</strong> Name and reason both drop to faint with no amber anywhere. Waiting will not change it; the scope is simply clean. The absent <span style="color:#e6a23c;">●</span> dot already says so — the reason line makes it explicit.</p>
+      </div>
+      <div style="max-width:36ch;">
+        <div style="font-size:12px;color:#d7d0c2;"><span style="color:#e6a23c;">●</span> /commit-all &nbsp;<span style="color:#8f877a;">entire project · 7 files</span></div>
+        <p style="color:#8f877a;font-size:11.5px;line-height:1.55;margin:7px 0 0;"><strong style="color:#d7d0c2;font-weight:500;">Available.</strong> Unchanged. Selection still lands on the first available row, so the highlight is never parked on something Enter will refuse.</p>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div style="flex:none;">
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Turn running — send refused, <code style="color:#e6a23c;">/</code> still opens</div>
+      <div id="ws-slash-turn-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · commands during a turn</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-slash-turn-120</span>
+        </div>
+        {{ slashTurn120 }}
+      </div>
+    </div>
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Anchored to the Home prompt</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">one or two rows · or none at all</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">The Home prompt is a primary input, so <code style="color:#e6a23c;">/</code> opens the menu there too — the <code style="color:#5b544a;">· / model</code> hint beside the selectors has been promising it all along. It cannot hang above the box the way the composer's does; the logo and tagline sit there. It drops <strong style="color:#d7d0c2;font-weight:500;">below</strong> the box instead, left edge aligned, in the row the removed ready-health line just vacated (<a href="./01-home.dc.html">§01</a>). It is also narrower than the box: two rows in an 84-column frame would read as a mistake, so the menu takes its own 42 columns and the prompt keeps its width.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">Home's applicable set is small — commands meaningless here are hidden rather than dimmed, so five of the eight rows never appear. <code style="color:#e6a23c;">/model</code> shows dimmed against its own availability predicate (the picker is v1.0), which leaves <code style="color:#e6a23c;">/exit</code> as the one row Enter can actually run. And when a filter matches nothing, the menu does not open and does not warn: the characters stay in the prompt as ordinary text and Enter still creates the project with them. Silence is the design — a “no commands” panel would be louder than the thing it reports.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div style="flex:none;">
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Two rows — <code style="color:#e6a23c;">/</code> on the Home prompt</div>
+      <div id="home-slash-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home · slash menu</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-slash-120</span>
+        </div>
+        {{ homeSlash120 }}
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;margin-top:24px;">
+    <div style="flex:none;">
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Filtered to <code style="color:#e6a23c;">/e</code> — one row</div>
+      <div id="home-slash-one-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="flex:1;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">home-slash-one-80 · 80×24</span>
+        </div>
+        {{ homeSlashOne80 }}
+      </div>
+    </div>
+    <div style="flex:none;">
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">No match — menu does not open, <code style="color:#e6a23c;">/mo</code> is literal text</div>
+      <div id="home-slash-none-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="flex:1;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">home-slash-none-80 · 80×24</span>
+        </div>
+        {{ homeSlashNone80 }}
+      </div>
+    </div>
+  </div>
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
@@ -80,7 +153,9 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { slash120: e.wsSlash(120,36,false), slashFilter120: e.wsSlash(120,36,true) };
+    return { slash120: e.wsSlash(120,36,false), slashFilter120: e.wsSlash(120,36,true),
+      slashTurn120: e.wsSlashTurn(120,36),
+      homeSlash120: e.home(120,36,'slash'), homeSlashOne80: e.home(80,24,'slash-one'), homeSlashNone80: e.home(80,24,'slash-none') };
   }
 }
 </script>

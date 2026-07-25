@@ -96,3 +96,22 @@ If a change alters behavior or structure covered by `docs/architecture/`, update
 the affected docs before finishing — see the architecture-update skill. `Source
 anchors` in each doc list what it describes; while the project is pre-code they
 point at the design spec, and they must move to real source files as modules land.
+
+<!-- reatom-audit -->
+
+## Reatom audit
+
+This project uses Reatom, and the `reatom` plugin ships an audit that checks
+TypeScript against the Reatom rule registry.
+
+Run `/reatom-audit` when you finish a change that touched Reatom code — atoms,
+computed values, actions, async flows, effects, `reatomComponent` — and before
+you report that work as done. It audits changed TypeScript only, and it is
+incremental, so re-running it after a small follow-up edit is cheap. Skip it
+entirely for changes that touch no Reatom code.
+
+Two other forms exist: `/reatom-audit all` sweeps every TypeScript file in the
+repository, and `/reatom-audit <paths>` audits exactly the files you name,
+whether or not they changed. Both are for the operator to invoke; neither is
+part of finishing an ordinary change.
+<!-- /reatom-audit -->

@@ -28,11 +28,34 @@ Home's own submit path — creating the project itself — is a self-contained s
 ```mermaid
 flowchart TD
     home["Home: centered prompt, inline agent selectors"] -- "MVP: Enter on prompt" --> create["create-new .termcraft/ + acquire ProjectLease"]
+    home -. "the typed text is carried in the command payload and then dropped — Gap C" .-> lost["no turn starts; the Workspace opens with an empty composer"]
     home -. "v1 setup path" .-> wizard["first-run wizard: target stack, preview defaults"]
     wizard --> create
     create --> ws["Workspace"]
     ws -- "composer's first send" --> firstgen["first generation turn"]
+    create -. "REQUIRED (Gap C): the Home text should start this turn, with no second send" .-> firstgen
 ```
+
+**Gap C — Enter on Home must start the first turn, and does not.** The designer types a
+description into Home's prompt, presses Enter, and lands in a Workspace with an empty chat,
+an empty composer, and nothing running. Nothing signals that the text was discarded, so the
+app reads as broken on the very first interaction — this is a defect to fix, not the intended
+shape of the flow, and the `ws -- "composer's first send"` edge above describes only what the
+code does today.
+
+- **Required behavior:** Enter on Home creates the project, opens the Workspace, appends the
+  typed text as the first user message, and starts the first generation turn — one keystroke,
+  no re-typing.
+- **Why it does not happen:** `project.create` carries the typed text in its payload, but
+  `handleProjectCreate` (`src/core/kernel/model/handlers/project.ts`) reads only
+  `payload.creationDefaults.trust` and never that field. Independently, Home's local `prompt`
+  atom and the Workspace's local `composer` atom are two separate pieces of UI state with no
+  carry-over (`src/ui/app/model/deps.ts`), so even the weaker "pre-fill the composer" fallback
+  does not happen either.
+- **Shape of the fix:** the post-create path must reach `turn.start` with the Home text —
+  either by `runProjectReadySequence` chaining it once the project reaches ready, or by the UI
+  dispatching `turn.start` on the create completion. The turn-admission spine itself already
+  works; nothing below the Kernel needs to change.
 
 ## Walkthrough
 
@@ -123,6 +146,7 @@ flowchart TD
 - `src/entrypoint/model/bootstrap.ts` — resolves the project root from argv against the working directory, then composes the shell (`createShell`) and the running app (`runApp`).
 - `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`) — geometry/hover-pin queries stay unusable for the separate reason `flows/generation-turn.md` documents (no currently-wired handler dispatches `kernel.preview.enable`).
 - `src/core/kernel/model/handlers/project.ts` — `runProjectReadySequence`, the post-admission "reach ready" spine `project.create`/`project.open`/`project.retryOpen` share: transaction recovery, the orphan-turn scan, trust resolution (implicit grant on create; a prior durable grant honored on open, else `untrusted-read-only`), per-page Gate descriptors, durable export-pointer validation, `finishOpen`, and active-chat-tail restore (`chat.changed` + `chat.records`, from the TRUE first record). Also `project.setTrust`, the follow-up accept/decline, and the documented no-interactive-prompt gap (a one-shot open command cannot block on a prompt).
+- `src/ui/app/model/deps.ts` — Home's local `prompt` atom and the Workspace's local `composer` atom: two separate pieces of UI state with no carry-over between them, the UI half of Gap C above.
 - `src/core/capabilities/model/guards.ts` — `projectUntrustedReason`/`projectNotReadyReason`: the read-only enforcement on an untrusted project (only `project.setTrust`/`project.close`/`history.open` survive) that "execution disabled on decline" refers to, plus the pre-ready command gate.
 - `src/store/lease/model/lease.ts` — `ProjectLease`: the non-blocking Windows OS lock held for the process lifetime, and the bounded advisory record (pid, process start time, hostname, nonce) that is always diagnostic, never proof of ownership; refuses acquisition when another instance already holds the lock.
 - `src/store/model/factory.ts` — `openProject`'s existing-project launch sequence (durability pre-flight → lease → `SafeProjectFs` → journal-format gate → recover transactions → format-too-new gate → read `project.toml`/`workspace.local.toml` → orphan-turn scan → open) and `createProject`'s single project-creation transaction (durability pre-flight → create-new `.termcraft/` → mints `project.toml`, `.gitignore`, `workspace.local.toml`, and the first chat header), followed by the implicit trust grant.

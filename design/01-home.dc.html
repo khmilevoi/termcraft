@@ -37,12 +37,28 @@
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
       <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">01 · Home</span>
-      <span style="color:#5b544a;font-size:12px;">home-120 · home-80</span>
+      <span style="color:#5b544a;font-size:12px;">home-checking-120 · home-120 · home-80</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">One <span style="color:#e6a23c;">.termcraft</span> folder holds exactly one project, so Home is only ever shown before a project exists — an existing project opens straight into the Workspace. It is just the large centered prompt, the inline agent · model · effort selectors, an agent health indicator, and the status bar. No project list, no empty/populated split.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:76ch;line-height:1.5;">One <span style="color:#e6a23c;">.termcraft</span> folder holds exactly one project, so Home is only ever shown before a project exists — an existing project opens straight into the Workspace. It is the large centered prompt, the inline agent · model · effort selectors, and the status bar. No project list, no empty/populated split.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;">The green <span style="color:#5b544a;">● codex 0.34 · agent ready</span> line is <span style="color:#dd7b60;">removed</span>. The agent is already named by the combo row one line above it, a genuinely missing CLI still takes over the whole screen (<a href="./12-errors-edge-states.dc.html">§12</a>), and its only unique job — asserting <em>ready</em> — is the one claim that cannot be made while the health probe is still running. The prompt stack now centres on itself, and the row the line used to occupy is where the Home slash menu opens (<a href="./23-slash-menu.dc.html">§23</a>).</p>
+  </div>
+
+  <div style="margin:0 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Health check in flight</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">input live · submit refused · reason legible</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:76ch;line-height:1.5;">Identity, model and effort are known with no I/O, so they paint on the first frame. Health is not: the probe spawns the CLI and is bounded at 20 s. Through that window the prompt is fully live — amber <span style="color:#e6a23c;">❯</span>, real text, blinking caret — and only <span style="color:#e6a23c;">⏎</span> is refused, exactly the split the composer already uses during a turn. Two things carry the refusal: the <span style="color:#e6a23c;">⏎ create</span> affordance goes faint with the reason beside it, and the status bar takes a <span style="color:#f6c163;">⠹ checking</span> badge while its <span style="color:#e6a23c;">⏎ create</span> key renders faint instead of amber. <strong style="color:#d7d0c2;font-weight:500;">A faint key in the status bar is the system's new word for “this gesture is refused right now”</strong> — <a href="./03-workspace-generating.dc.html">§03</a> uses the same one.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:76ch;line-height:1.5;">Resolution is a state change, not a layout change: the badge drops out, the key turns amber, the hint returns to plain <span style="color:#8f877a;">⏎ create</span>. Nothing moves, nothing is added — which is only possible because the ready line is gone. If the probe fails, Home either takes on an inline notice (below) or is replaced entirely (<a href="./12-errors-edge-states.dc.html">§12</a>).</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="home-checking-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home · checking agent</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-checking-120</span>
+      </div>
+      {{ homeChecking120 }}
+    </div>
     <div id="home-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
         <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
@@ -60,6 +76,22 @@
       {{ home80 }}
     </div>
   </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The other health outcomes</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">probe finished · agent not simply “ready”</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:76ch;line-height:1.5;">The probe reports five outcomes. <span style="color:#8fb96b;">Ready</span> is now silent, and a missing CLI keeps its full-screen takeover in <a href="./12-errors-edge-states.dc.html">§12</a>. The remaining three attach a notice under the prompt box instead of replacing the screen — a failure has earned a line on Home in a way a success has not. Only <em>not signed in</em> blocks: the prompt greys out and <span style="color:#e6a23c;">⏎</span> stays faint, because a turn would be billed against a CLI that cannot answer. The other two are advisory — <span style="color:#e6a23c;">⏎</span> works — and say plainly what is unproven. The 20 s timeout in the checking state resolves here, to <em>not signed in</em>.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;">
+    <sc-for list="{{ health }}" as="it" hint-placeholder-count="3">
+      <div style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="flex:1;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">{{ it.label }}</span>
+        </div>
+        {{ it.el }}
+      </div>
+    </sc-for>
+  </div>
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
@@ -74,7 +106,12 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { home120: e.home(120,36), home80: e.home(80,24) };
+    const health = [
+      {label:'found · not signed in — blocking', el:e.homeHealth('login')},
+      {label:'exited without confirming shutdown', el:e.homeHealth('shutdown')},
+      {label:'sandbox degraded', el:e.homeHealth('sandbox')}
+    ];
+    return { homeChecking120: e.home(120,36,'checking'), home120: e.home(120,36), home80: e.home(80,24), health };
   }
 }
 </script>

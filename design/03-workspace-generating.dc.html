@@ -39,7 +39,14 @@
       <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">03 · Workspace — generating</span>
       <span style="color:#5b544a;font-size:12px;">ws-gen-120</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">Agent status streams in the chat (spinner + step lines); the preview keeps the currently applied design dimmed with a subtle generating indicator; the composer is disabled.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:76ch;line-height:1.5;">Agent status streams in the chat (spinner + step lines); the preview keeps the currently applied design dimmed with a subtle generating indicator.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;">A running turn is <strong style="color:#d7d0c2;font-weight:500;">one ordered list</strong>, not two lanes: tool steps and reasoning rows appear in the order they happened, so the block reads thought → action → thought → action. Reasoning no longer replaces itself — that ticker rule is superseded, but the compactness it protected is not, so the block is bounded (below).</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">Steps hold the left edge; reasoning hangs off a thread.</strong> A step starts with its glyph in column one (<span style="color:#8fb96b;">✓</span> done, <span style="color:#d7d0c2;">▸</span> running, <span style="color:#dd7b60;">✗</span> failed). A reasoning block puts a <span style="color:#5b544a;">│</span> rule in column one and its text one column further in, wrapping under itself, so a block of prose fuses into one vertical strand and the step glyphs stay scannable straight down the margin — indentation and <span style="color:#5b544a;">faint</span> alone stopped separating the two the moment reasoning became multi-line.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">Reasoning is prose, and only the current block gets room.</strong> Measured blocks run 248–491 characters — eight to thirteen wrapped lines in a 44-column chat pane, so three of them at full length would bury every step row. So the block the agent is on <strong style="color:#d7d0c2;font-weight:500;">tails</strong>: it wraps and keeps its last 5 lines as it streams, exactly like text scrolling in a terminal, with <span style="color:#8a6d33;">┊</span> on the first line where the head scrolled away. The moment the agent moves to the next step that block <strong style="color:#d7d0c2;font-weight:500;">collapses to its first line</strong> plus <span style="color:#5b544a;">…</span> — a bookmark, not a transcript. Every past thought costs exactly one row, so the shape of the turn stays readable no matter how verbose the model is.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">Three weights, one glance.</strong> Live block: <span style="color:#8a6d33;">amberDim</span> rule, <span style="color:#8f877a;">dim</span> text. Collapsed block: <span style="color:#2c2820;background:#1d1913;">line</span>-coloured rule, <span style="color:#5b544a;">faint</span> text. Steps stay at full weight above both. What it is doing now, what it is thinking now, what it already thought.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">The block is capped at 12 rows and folds from the top.</strong> The spinner row is pinned; everything above the tail collapses into one <span style="color:#8a6d33;">┊ ▲ 6 earlier thoughts · 5 steps</span> row — same <span style="color:#8a6d33;">▲ N earlier</span> language as chat scrollback (<a href="./08-pin-comments.dc.html">§08</a>), dashed rule to say the strand continues rather than starts, and the same dashed glyph that marks a tailed live block, because both mean the same thing: lines elided above. Folding from the top, never the bottom — the newest rows are the ones being read. See <a href="#ws-gen-long-120">ws-gen-long-120</a>, where two earlier exchanges are still on screen under a turn twenty-five rows deep.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;">Elided reasoning is <strong style="color:#d7d0c2;font-weight:500;">not recoverable in the live block</strong> — no expand key, no scroll inside the turn. The running block is a progress indicator; the finished turn still collapses to its persisted record exactly as before. <span style="color:#5b544a;">Open: if operators ask to read a scrolled-past summary in full, that wants its own surface (a reasoning pager), not an affordance crammed into this block.</span></p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:76ch;line-height:1.5;">The composer is <strong style="color:#d7d0c2;font-weight:500;">not disabled</strong> — typing and editing the next message is allowed, only sending is refused. Empty, it shows the faint <span style="color:#5b544a;">❯ generating… esc to cancel</span> placeholder with no caret. Holding a draft it looks alive, because it is: amber <span style="color:#e6a23c;">❯</span>, text in full foreground, blinking caret. The refusal is stated twice and never by greying the input — the line above the caret reads <span style="color:#f6c163;">⏎ send disabled — draft kept</span>, and the status bar renders its <span style="color:#5b544a;">⏎ send</span> key faint instead of amber while <span style="color:#e6a23c;">esc cancel</span> stays live. Same faint-key convention as the Home health check (<a href="./01-home.dc.html">§01</a>). <span style="color:#e6a23c;">/</span> on an empty composer still opens local command mode (<a href="./23-slash-menu.dc.html">§23</a>).</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
@@ -50,6 +57,22 @@
         <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-gen-120</span>
       </div>
       {{ wsGen120 }}
+    </div>
+    <div id="ws-gen-typing-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · draft held mid-turn</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-gen-typing-120</span>
+      </div>
+      {{ wsGenTyping120 }}
+    </div>
+    <div id="ws-gen-long-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · long turn, reasoning folded</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-gen-long-120</span>
+      </div>
+      {{ wsGenLong120 }}
     </div>
   </div>
 </div>
@@ -66,7 +89,7 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { wsGen120: e.workspace(120,36,'gen') };
+    return { wsGen120: e.workspace(120,36,'gen'), wsGenTyping120: e.wsGenTyping(120,36), wsGenLong120: e.wsGenLong(120,36) };
   }
 }
 </script>

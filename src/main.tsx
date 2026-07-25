@@ -12,6 +12,7 @@ import * as errore from "errore";
 
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
 import { parseHostArgs, runHostStdio } from "host/session";
+import { installConsoleTee, resetTrace, trace } from "infrastructure/debug-log";
 
 /** The `_host` stdio boundary failed — real stdin, `registerRuntimeResolver`, and a real
  *  child process are all uncontrolled code, so errore's boundary rule applies here exactly
@@ -63,6 +64,13 @@ if (import.meta.main) {
   // (mirrors `parseHostArgs`'s own "_host" scan), so there is no cost to resolving it before
   // knowing whether the `_host` branch will fire first. Both scans also decide which
   // `TerminalControl` the boundary below gets, so they have to run before it is constructed.
+  // DIAGNOSTIC (infrastructure/debug-log): opt-in, no-op unless TERMCRAFT_DEBUG_LOG is set.
+  // Installed before anything else so the tee captures the 75 files' worth of existing
+  // console.* reporting that the alternate screen would otherwise swallow.
+  resetTrace();
+  installConsoleTee();
+  trace("main.start", { argv: process.argv.slice(2), cwd: process.cwd() });
+
   const exportArgs = parseExportArgs(process.argv);
   const isHostStdio = parseHostArgs(process.argv);
 

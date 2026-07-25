@@ -396,7 +396,13 @@ describe("openProject — existing-project launch ordering (storage-identity §1
 
       const workspace = await reopened.workspaceState.read();
       if (workspace instanceof Error) throw new Error(`fixture bug: ${workspace.message}`);
-      expect(workspace.state).toEqual(defaultWorkspaceLocalState());
+      // Defaults EXCEPT `activeChatId`, which project creation points at the first chat it mints
+      // (see `create-project.test.ts` for the full rationale) — and which survives the reopen.
+      expect(workspace.state).toEqual({
+        ...defaultWorkspaceLocalState(),
+        activeChatId: workspace.state.activeChatId,
+      });
+      expect(workspace.state.activeChatId).not.toBeNull();
 
       const slugs = await reopened.pages.listSlugs();
       if (slugs instanceof Error) throw new Error(`fixture bug: ${slugs.message}`);

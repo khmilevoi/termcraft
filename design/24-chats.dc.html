@@ -37,14 +37,16 @@
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
       <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">24 · Chats</span>
-      <span style="color:#5b544a;font-size:12px;">ws-chats-120 · ws-chat-fresh-120</span>
+      <span style="color:#5b544a;font-size:12px;">ws-chats-120 · ws-chats-overflow-120 · ws-chat-fresh-120</span>
     </div>
     <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:78ch;line-height:1.5;">A project holds several chats — conversation lines only. <code style="color:#e6a23c;">/chats</code> opens the list popup over the dimmed workspace; switching swaps the chat panel and nothing else — pages, preview, selection and pins stay put. A chat's name is derived from the first line of its first message. <code style="color:#e6a23c;">/new</code> starts a fresh chat, the context-reset gesture the status bar's <code style="color:#e6a23c;">ctx%</code> segment prompts.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:78ch;line-height:1.5;">The list holds <strong style="color:#d7d0c2;font-weight:500;">every chat in the project</strong>, not just the ones the running process has seen, so it outgrows the popup quickly. The viewport stays six rows and the box grows only as far as it needs to — past that the list scrolls, borrowing the chat panel's own <code style="color:#e6a23c;">▲ N earlier</code> convention at both edges and putting the total in the title. Amber-dim on those edge rows because they are navigation, not entries. A <span style="color:#5b544a;">5–10 of 14</span> readout sits in the footer, right-aligned, for the position a two-row indicator cannot give.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:78ch;line-height:1.5;">The footer drops the <code style="color:#5b544a;">/new fresh chat</code> hint. <code style="color:#e6a23c;">/new</code> cannot be typed while the popup is open — it advertised a command this surface cannot run — and three hints leave room for the position readout.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
     <div style="flex:none;">
-      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Chat list popup — <code style="color:#e6a23c;">/chats</code></div>
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Chat list popup — <code style="color:#e6a23c;">/chats</code>, at row capacity</div>
       <div id="ws-chats-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
         <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
           <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
@@ -52,6 +54,17 @@
           <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-chats-120</span>
         </div>
         {{ chats120 }}
+      </div>
+    </div>
+    <div style="flex:none;">
+      <div style="color:#5b544a;font-size:11px;margin:0 0 8px;letter-spacing:.06em;">Beyond capacity — scrolled, 14 chats</div>
+      <div id="ws-chats-overflow-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+          <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · chats overflow</span>
+          <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-chats-overflow-120</span>
+        </div>
+        {{ chatsOverflow120 }}
       </div>
     </div>
     <div style="flex:none;">
@@ -80,7 +93,7 @@ class Component extends DCLogic {
   renderVals(){
     if (!this.state.ready) return {};
     const e = this.engine;
-    return { chats120: e.wsChats(120,36), chatFresh120: e.wsChatFresh(120,36) };
+    return { chats120: e.wsChats(120,36), chatsOverflow120: e.wsChats(120,36,'overflow'), chatFresh120: e.wsChatFresh(120,36) };
   }
 }
 </script>
