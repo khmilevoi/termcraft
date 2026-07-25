@@ -119,7 +119,7 @@ this section by reference and its tasks must obey it.
 | 5 | `agent/` | master §6.1–6.2, turn-durability §6.5, Spikes H/I |
 | 6 | `core/` | kernel-command-contract (whole), turn-durability, projections |
 | 7 | `ui/` | master §3.x, design/*.dc.html frames, kernel contract capabilities |
-| 8 | `main.ts`, build | master §4.1, Spike C build cross-check, Spike D (one-shot exit), §10 smoke, §11 criteria |
+| 8 | `main.ts`, build | master §4.1, npm packaging, Spike D (one-shot exit), §10 smoke, §11 criteria |
 
 ## Phases
 
@@ -234,19 +234,19 @@ app frame's minimum (§9); focus rules + layered `Esc`; `F2` fullscreen
 (chip/ctx hidden with composer). Action-table units, markdown-lite units,
 ephemeral block snapshots (`act()` wrapped).
 
-### Phase 8 — composition, build, smoke
+### Phase 8 — composition, npm distribution, smoke
 
 `main.ts` composition root + argv dispatch for the three entry points — the
-interactive TUI, `termcraft _host` (execPath branch for dev mode), and the
-headless `termcraft export` CLI (§3.7/§9: refuses on an untrusted project
+interactive TUI, `termcraft _host` (the installed entry run through Bun), and
+the headless `termcraft export` CLI (§3.7/§9: refuses on an untrusted project
 with the trust error); the top-level panic-equivalent handler that
 restores the terminal (raw mode off, mouse capture off, alternate screen
-exited) before printing the failure (§9); `bun build --compile` for
-`windows-x64` embedding runtime +
-OpenTUI native core + tsc assets; build-time lib cross-check
-(`askedButNotEmbedded` must be `[]`); scripted-terminal smoke test (§10:
-open → prompt → fake agent edits staging → gate → render → export); §11
-success-criteria manual walkthrough with the real Claude CLI;
+exited) before printing the failure (§9); npm packaging — a `bin` entry, a
+`files` allowlist, and a real version in `package.json`, with `typescript@7`,
+OpenTUI's native core, and React resolved as ordinary `node_modules`
+dependencies rather than build-time embedded files (master §4.1); scripted-terminal
+smoke test (§10: open → prompt → fake agent edits staging → gate → render →
+export); §11 success-criteria manual walkthrough with the real Claude CLI;
 architecture-docs Source-anchor sweep.
 
 ## Cross-phase interface registry

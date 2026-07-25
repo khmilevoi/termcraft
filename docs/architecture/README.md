@@ -30,8 +30,9 @@ document here that addresses how the source tree itself is laid out.
 > 8); `migration.*` commands route to a not-yet-implemented rejection; session resume
 > is always fresh (no durable `sessionScopeId` a `core/kernel` handler can read back
 > yet); a non-committed turn terminal still publishes a generic `turn.failed`; and the
-> compiled `dist/termcraft.exe` is not yet fully self-contained (dev `bun start` is
-> unaffected). Each document states which half of a claim is built and which is a
+> npm package (phase 8, master §4.1: an npm package run under Bun ≥1.3.14, no compiled
+> binary) is not yet fully wired end to end (dev `bun start` is unaffected). Each
+> document states which half of a claim is built and which is a
 > design target, and anchors the unbuilt half to the governing specification instead
 > of a source file; anchors keep moving to real paths as implementation proceeds (see
 > the architecture-update skill).

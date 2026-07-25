@@ -426,14 +426,21 @@ persistent button or mouse twin.
 
 ### 4.1 Components
 
-TypeScript on Bun; the shell UI is OpenTUI (React bindings). One `bun build
---compile` binary ships the shell, the design host entry, and the embedded
-`@termcraft/runtime`; its Reatom, React, and OpenTUI implementation stays
-private — the user's project folder never grows a `package.json`. OpenTUI's native
-core ships inside that binary. The TypeScript compiler does not: at `typescript@7`
-it is a per-platform native executable that cannot be spawned from a Bun embedded
-path, so it and its lib files are embedded, extracted once to a per-user directory
-on first use, and run as a subprocess — which also makes the build per-platform.
+TypeScript on Bun; the shell UI is OpenTUI (React bindings). termcraft is
+distributed as an npm package run under Bun ≥1.3.14. The user's design project
+still never grows a `package.json`: pages resolve `@termcraft/runtime` through the
+running process's `Bun.plugin` resolver, which works identically whether termcraft
+itself is a local checkout or a globally installed package. `typescript@7`'s
+per-platform native executable, OpenTUI's native core, and React are ordinary
+on-disk dependencies under `node_modules` rather than build-time embedded files —
+there is no per-platform build.
+
+Spike C (tsc extraction, lib cross-check, per-platform builds) and Spike E
+(`process.execPath` self-spawn inside a compiled binary) remain factually correct;
+their conclusions simply no longer apply to MVP distribution. Both findings
+documents are retained. See
+[`2026-07-25-mvp-phase-8-design.md`](2026-07-25-mvp-phase-8-design.md) §2 for the
+full rationale and the exact properties this decision preserves.
 
 **The TypeScript version is pinned exactly, and the major is load-bearing.**
 `typescript@7` is the native Go port: it exposes no `ts.createProgram` and no

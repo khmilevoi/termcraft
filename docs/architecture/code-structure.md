@@ -52,7 +52,7 @@ flowchart LR
     store -- imports --> infra
     host -- imports --> infra
     claude -- "owns the turn's process tree" --> infra
-    host -. "resolves the embedded facade ·<br/>the page's only import" .-> runtime
+    host -. "resolves the runtime facade ·<br/>the page's only import" .-> runtime
     main -- "constructs adapters,<br/>injects into core" --> core
     main -.-> adapters
     main -.-> ui
@@ -138,6 +138,17 @@ flowchart LR
    before; a *submodule* holding one file means the split was premature. The layer
    folders inside it are a different matter and are not optional: `CLAUDE.md` puts
    code in `model/` (or `ui/`) even when that folder holds a single file.
+
+   `src/runtime/generated/` is a sanctioned exception to that shape, not drift. It
+   still obeys "never loose at the module root" — its contents sit inside a named
+   subfolder rather than scattered at `runtime/`'s top level — and `generated/` names
+   what the folder actually holds more precisely than `model/` would: content that is
+   machine-emitted, never hand-edited, and guarded by its own drift test rather than
+   authored logic. The one file in it today, `RUNTIME_DTS` (see Source anchors), is
+   deliberately not re-exported from `src/runtime/index.ts`, the module's public
+   `@termcraft/runtime` facade an authored design page imports from (item 10):
+   folding a build artifact into that facade would widen the authored-source import
+   surface the design spec's §5.8 allowlist exists to keep narrow.
 
 3. **`entities/` holds domain types, not domain contracts.** The name is
    deliberately narrower than "domain". In classic DDD the domain layer also holds
@@ -234,40 +245,42 @@ flowchart LR
    into `createKernel` for interactive mode — the composition root this item
    describes is real, not merely a runnable root.
 
-9. **Two entry points, one binary — per platform, and not everything is inside it.**
-   `bun build --compile` ships the shell and the design-host entry together (§4.1).
-   `termcraft _host` is a second, much smaller composition root: it wires the
-   host-side protocol and the embedded runtime, and never constructs `core`,
-   `store`, or `ui`. Two qualifications the packaging story now carries. The
-   TypeScript compiler is not callable from inside the binary at the pinned major —
-   it is a per-platform native executable that `gate` extracts once to a per-user
-   directory and spawns, which makes the build itself per-platform (one build per
-   target, each carrying that platform's compiler package). And `host`'s resolution
-   of the embedded facade is a runtime resolver plugin registered before the dynamic
+9. **Three argv modes, one installed entry — resolved from `node_modules`, nothing
+   per-platform.** termcraft is an npm package run under Bun ≥1.3.14 (§4.1):
+   `src/main.tsx` is the package's `bin` target, and an argv scan on it dispatches
+   the interactive shell, the `_host --stdio` design-render child, or the headless
+   `export` CLI. `termcraft _host` is the second, much smaller composition root: it
+   wires the host-side protocol and the runtime-facade resolver, and never
+   constructs `core`, `store`, or `ui`. Two qualifications the packaging story
+   carries. The TypeScript compiler at the pinned major is still a per-platform
+   native executable, but it is no longer embedded and extracted: `gate`'s
+   `resolveCompilerPath()` (`gate/model/tsc-extract.ts`) resolves it from the
+   installed `typescript` package's own platform layout under `node_modules` — an
+   ordinary dependency npm already picked the right platform package for, so there
+   is no per-user extraction step and no per-platform build. And `host`'s resolution
+   of the runtime facade is a runtime resolver plugin registered before the dynamic
    import, serving three specifiers: `@termcraft/runtime` plus the two
    compiler-generated JSX helper subpaths, which must resolve or a real page fails to
    load. Item 10's "only import" is about what a page's *author* may write; the
    helper import is emitted by the transform.
 
-   Landed today: the compiler extraction and the three-specifier resolver both
-   match this item exactly. `main.tsx`'s first branch now recognizes a `_host
-   --stdio` argv (`parseHostArgs`) and runs `runHostStdio` against real process
-   stdio before the interactive bootstrap, so `termcraft _host --stdio` — the
-   compiled binary invoking itself via `process.execPath`, or `bun run <srcRoot>
-   _host --stdio` in dev — is a runnable second entry point. `createHostSpawnCommand`
-   (`src/host/supervisor/model/spawn-command.ts`) builds the matching compiled-vs-dev
-   argv, and `src/entrypoint/model/create-shell.ts` (WP-4) now constructs it and
-   spawns it against a real `HostSupervisor` for interactive mode — the composition-
-   root wiring this item names has landed. The compiled-vs-dev `isCompiled` flag
-   itself is detected by comparing `process.execPath`'s basename against the Bun
-   runtime's own executable names (`bun`/`bun.exe`): the installed `bun-types`
-   pin does not yet declare `Bun.isStandaloneExecutable`, the newer, more direct API
-   for this — revisit once it does.
+   Landed today: the three-specifier resolver matches this item exactly; the
+   compiler's `node_modules` resolution is phase 8's WP-1 work. `main.tsx`'s first
+   branch now recognizes a `_host --stdio` argv (`parseHostArgs`) and runs
+   `runHostStdio` against real process stdio before the interactive bootstrap, so
+   `termcraft _host --stdio` — the installed entry run through Bun (`bun <srcRoot>
+   _host --stdio`, the same shape `package.json`'s `start`/`dev` scripts use) — is a
+   runnable second entry point. `createHostSpawnCommand`
+   (`src/host/supervisor/model/spawn-command.ts`) builds that ONE argv shape — the
+   earlier compiled-vs-dev `isCompiled` branch is gone, because there is no compiled
+   artifact left to branch on (phase 8, master §4.1) — and
+   `src/entrypoint/model/create-shell.ts` (WP-4) now constructs it and spawns it
+   against a real `HostSupervisor` for interactive mode — the composition-root
+   wiring this item names has landed.
 
    A third `main.tsx` branch (M8, WP-5 Phase D) adds `termcraft export [dir]` as a
-   THIRD runnable entry point, scanned the same way as `_host` (`parseExportArgs`,
-   tolerating the argv-position shift between a compiled binary and `bun run
-   <srcRoot>`). Unlike the interactive root, it never constructs `ui` or acquires a
+   THIRD runnable entry point, scanned the same way as `_host` (`parseExportArgs`).
+   Unlike the interactive root, it never constructs `ui` or acquires a
    renderer: `src/entrypoint/model/run-export.ts`'s `runHeadlessExport` composes the
    SAME real adapter graph `create-shell.ts`'s `interactiveShell` builds, then drives
    `runExport` — dispatch `project.open`, dispatch `export.start`, await the terminal
@@ -281,7 +294,8 @@ flowchart LR
     Command/Result/Event DTOs plus the `PreviewSession` facade the Kernel hands it —
     and nothing else from any module: never `store`, never host stdio. `runtime` is a
     leaf that imports no termcraft module: it is the saved-page facade (§5), resolved
-    from the binary by design code running inside the host. It also owns the JSX
+    through the host's `Bun.plugin` runtime resolver by design code running inside
+    the host. It also owns the JSX
     helper surface the transform emits against — not authored-public, and no page may
     name it, but a contract the module cannot get wrong all the same.
 
@@ -321,6 +335,16 @@ final group's own heading spells out which is which).
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
   Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
+- `src/runtime/generated/runtime-dts.ts` — the landed example of the `generated/`
+  exception this item records: machine-emitted by `scripts/gen-runtime-dts.ts`,
+  guarded by `src/runtime/generated/runtime-dts.test.ts`'s drift check, and never
+  re-exported from `src/runtime/index.ts` (verified: that file's export list carries
+  the page contract, Reatom bindings, theme tokens, the JSX helper surface, and the
+  component catalog — no `RUNTIME_DTS`). The design spec that introduced this folder
+  names `scripts/tsc-libs.generated.ts` as the naming precedent it follows
+  (`docs/superpowers/specs/2026-07-25-mvp-phase-8-design.md`, WP-2); that file is
+  itself deleted by the same phase's distribution cleanup (WP-1), so it is cited here
+  as the convention's documented origin, not as a second surviving example
 
 **Kernel and UI boundaries (items 1, 4, 7, 8)**
 
@@ -501,18 +525,41 @@ vendor tier's own pre-split run-loop file.
   `react/jsx-dev-runtime`), not yet the single `@termcraft/runtime/jsx-runtime`
   subpath the target design names
 - `src/runtime/model/jsx.ts` — the facade-owned JSX helper surface item 10
-  describes; its own comment marks the `jsxImportSource: "@termcraft/runtime"`
-  end-to-end wiring as still pending (phase 3 + phase 8)
+  describes; `jsxImportSource: "@termcraft/runtime"` is now set on the Gate side
+  (`src/gate/model/type-check.ts`'s synthesized tsconfig), but this module's own
+  comment still marks the OTHER half — the host resolver serving a
+  `@termcraft/runtime`-qualified `jsx-runtime` subpath instead of the underlying
+  `react/jsx-runtime` specifiers — as pending (phase 7 + phase 8, see
+  `src/host/session/model/resolver.ts` below)
 - `src/runtime/index.ts` — the saved-page facade's single public entry point
-- `src/gate/model/tsc-extract.ts` — the per-platform `tsc` extraction item 9
-  describes (`materializeCompiler`: extracted once to a per-user cache, then
-  spawned)
+- `src/gate/model/tsc-extract.ts` — the `node_modules` `tsc` resolution item 9
+  describes (`resolveCompilerPath`: resolves the installed `typescript` package's
+  compiler executable; no per-user extraction)
+- `src/runtime/generated/runtime-dts.ts` — `RUNTIME_DTS`, the generated ambient
+  `@termcraft/runtime` declaration text (`scripts/gen-runtime-dts.ts` emits it from
+  `src/runtime/index.ts`'s real public surface; `src/runtime/generated/runtime-dts.test.ts`
+  is the drift test that fails the gates when the committed artifact and a fresh emit
+  disagree). Two readers exist today: that drift test, and
+  `src/gate/model/type-check.test.ts`'s `realChecker`, whose own comment names it "the
+  one place `gate` reaches into `runtime` — a TEST-ONLY edge," importing
+  `{ RUNTIME_DTS } from "runtime/generated/runtime-dts"` to type-check a fixture page
+  against the real declaration rather than a hand-written stub. Production `gate`
+  never imports `runtime`: `src/gate/model/type-check.ts`'s `TypeCheckerConfig
+  .runtimeDts: string` takes the declaration as injected configuration, and
+  `src/gate/adapters/gate-runner.ts`'s `GateRunnerAdapterDeps.runtimeDts` stays
+  unwired until the composition root supplies it — Task 7 of the phase-8 plan, not
+  landed as of this writing (`src/entrypoint/model/create-shell.ts`'s own comment:
+  "there is no production `runtimeDts` yet either"). This test-only edge is not a
+  leaf-rule violation: item 10's "`runtime` is a leaf that imports no termcraft
+  module" constrains `runtime`'s OUTGOING imports only, and item 11's
+  forbidden-shapes table carries no "X importing `runtime`" row — nothing in this
+  document restricts who may import `runtime`
 - `src/host/session/model/entry.ts` — `runHostStdio`/`parseHostArgs`: the injectable
   engine the `termcraft _host` second composition root (item 9) drives; wired to
   real process stdio by `src/main.tsx`'s first `import.meta.main` branch
 - `src/host/supervisor/model/spawn-command.ts` — `createHostSpawnCommand`: builds
-  the compiled-vs-dev argv (item 9) `HostSupervisor` spawns the `_host --stdio`
-  child with; called by `src/entrypoint/model/create-shell.ts` (WP-4)
+  the one npm-distribution argv shape (item 9) `HostSupervisor` spawns the `_host
+  --stdio` child with; called by `src/entrypoint/model/create-shell.ts` (WP-4)
 - `src/entrypoint/model/run-export.ts` — `runExport`/`runHeadlessExport`/
   `parseExportArgs`/`formatExportOutcome` (M8, WP-5 Phase D): the headless
   `termcraft export` driver `src/main.tsx`'s third argv branch calls; dispatches
@@ -523,8 +570,9 @@ vendor tier's own pre-split run-loop file.
   (its handler emits no terminal event for a zero-page project) rather than
   duplicating any guard logic
 - `src/host/protocol/model/embedded-declaration.ts` — `EMBEDDED_RUNTIME_DECLARATION`
-  / `SUPPORTED_KIT_API_VERSIONS`: this binary's ONE embedded runtime-declaration
-  bundle, read by `src/main.tsx`'s `_host` branch and by every
+  / `SUPPORTED_KIT_API_VERSIONS`: this process's ONE in-module runtime-declaration
+  bundle (an in-memory handshake-identity literal, unrelated to npm distribution),
+  read by `src/main.tsx`'s `_host` branch and by every
   `HostSupervisorDeps`/`SmokeRendererAdapterDeps`/`ExportRenderAdapterDeps.
   runtimeDeclaration` the composition root builds (WP-4), so the exact-equality
   handshake check (`handshake.ts`'s `declarationsEqual`) can never diverge from a

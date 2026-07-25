@@ -316,6 +316,64 @@ on disk.
 The "session resume fresh-only" follow-up is therefore closed **partially**, and the
 spec says so plainly.
 
+**Amendment (2026-07-25, recorded while writing the WP-7 sub-plan).** The paragraph
+above's central premise — "the ordinary relaunch path is `project.open`, where `core`
+never sees [`workspaceIdentity`]" — is **incorrect**, and the persistence step it
+justified is dropped as a result.
+
+`runProjectReadySequence` (`src/core/kernel/model/handlers/project.ts:501-610`), the
+shared post-admission sequence for BOTH `project.create` and `project.open`, reads
+`deps.projectStore.readManifest()` at its own top (`:507`) and uses `manifest.projectId`
+twice on that exact path: to resolve trust (`:531`) and as `kernel.project.finishOpen`'s
+own event metadata (`:595`). `core` therefore already sees a durable workspace identity
+on every open, not only on `create`/`setTrust`. The UI-facing value the abandoned
+payload/persistence route was trying to durably echo is, by construction, the identical
+value: `src/entrypoint/model/create-shell.ts`'s `resolveEnvWithProjectIdentity` sets
+`UiEnv.workspaceIdentity = manifest.projectId` on every shell construction, and its own
+doc comment already argues for a durable `projectId` over the raw path for exactly the
+reason this amendment relies on — "a rename/move would otherwise silently change it."
+
+The `workspace.local.toml` persistence step this section originally prescribed — a new
+`workspace_identity` TOML key, a `WorkspaceStateV1` port field, and write calls from the
+`project.create`/`project.setTrust` handlers — is **dropped**. `turn.start`
+(`core/kernel/model/handlers/turn.ts`) reads `manifest.projectId` directly, via a second
+call to the already-existing `ProjectStore.readManifest()` (distinct from the
+`readManifestSnapshot()` call it already makes for its CAS read-set baseline, which
+returns only a hash and size, never the parsed manifest). No new `core/ports` surface,
+no schema change. Three consequences:
+
+1. The `workspace.local.toml` schema/port-threading work this section implied
+   (persist-and-thread `workspaceIdentity` as its own field) is unnecessary. A copy of
+   `manifest.projectId` written into machine-local state would be a SECOND source of
+   truth for a value the portable manifest already holds authoritatively, able to drift
+   from it with no mechanism to detect the drift.
+2. The open question this section's persistence step would have created — old projects
+   never receiving a `workspaceIdentity` backfill, because only `project.create`/
+   `setTrust` wrote it — **disappears entirely**. There is nothing to backfill:
+   `projectId` is a required field of every project's manifest
+   (`ProjectManifestV1.projectId`, `core/ports/project-store.ts:39`), present since the
+   project was created, not a value that accumulates from specific commands over time.
+3. No new hazard is introduced by sourcing the value from the portable manifest instead
+   of a machine-local file. `deriveSessionScope`
+   (`src/agent/session/model/session-scope.ts:26-32`) folds `account` into the scope
+   hash alongside `workspaceIdentity`; for Claude, `account` is always the per-PROCESS
+   `UNRESUMABLE_ACCOUNT` (this section's own opening paragraph), so two machines holding
+   a copy of the same project can never collide on a scope key, regardless of where
+   `workspaceIdentity` is read from. Even for a future backend with a real, portable
+   account discriminator, the session checkpoint itself (`SessionCheckpointV1`) still
+   lives in `workspace.local.toml` — machine-local, hard-excluded from Git
+   (storage-identity §6.1) — so a scope-key match with no local checkpoint on that
+   machine still yields an honest "fresh," never a stale cross-machine resume. The
+   machine-local-vs-portable argument this section originally made is real, but it
+   argues for keeping the *checkpoint* machine-local — already true, unchanged by this
+   amendment — not for a second, machine-local COPY of an identity the portable manifest
+   already carries.
+
+This amendment changes only the MECHANISM by which `turn.start` obtains
+`workspaceIdentity` — from a new persisted field to a direct, already-available manifest
+read. The section's opening limit (cross-restart resume is unreachable for Claude) and
+its closing "closed partially" line are unaffected and still stand.
+
 ### WP-8 — Documented-debt sweep
 
 Each item is either closed or re-documented as post-MVP with a one-line reason:
