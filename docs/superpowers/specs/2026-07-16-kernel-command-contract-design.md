@@ -246,6 +246,7 @@ next process starts.
 |---|---|---|---|
 | `idle` | `kernel.turn.beginAdmission` | `admitting` | Mints `turnId`; captures target chat, valid selection, and resolvable open pins. The first per-attempt lease nonce is minted only when attempt 1 starts. |
 | `admitting` | `kernel.turn.finishAdmission` | `workspace-ready` | Requires committed user-record admission plus a verified unique per-turn workspace and complete read-set hashes. |
+| `admitting` | `kernel.turn.beginTerminalization` | `terminalizing` | A failed admission. Amended 2026-07-26 (MVP blocker fix bundle §1.1): the original table gave `admitting` no exit for the outcome that occurs most often on a real project, which stranded the turn machine for the life of the process. |
 | `workspace-ready` | `kernel.turn.beginAttempt` | `running` | Starts attempt 1 or the next Gate retry with a fresh per-attempt lease nonce. |
 | `running` | `kernel.turn.beginStopping` | `stopping` | Closes the event stream and begins normal, error, or cancellation process-tree shutdown. |
 | `stopping` | `kernel.turn.beginSnapshot` | `snapshotting` | Legal only for normal completion after confirmed process-tree exit and retired attempt fence. |

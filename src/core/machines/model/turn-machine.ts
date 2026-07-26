@@ -97,10 +97,17 @@ export const TURN_TRANSITION_TABLE: TransitionTable<TurnState, TurnAction> = {
   beginStopping: [{ from: "running", to: "stopping" }],
   // `stopping | beginSnapshot | snapshotting`
   beginSnapshot: [{ from: "stopping", to: "snapshotting" }],
+  // `admitting | beginTerminalization | terminalizing` — ADDED (fix-bundle spec §1.1, and
+  // kernel-command-contract §7.2's matching new row). §7.2's table shipped `admitting` with
+  // exactly two exits, `finishAdmission` and `requestCancel`, and `requestCancel` needs a
+  // `turnId` a rejected admission never surfaced — so a failed admission had no edge at all and
+  // stranded the machine in `admitting` for the life of the process. This is the outcome that
+  // happens most often on a real project, so the table has to model it.
   // `stopping | beginTerminalization | terminalizing`
   // `validating | beginTerminalization | terminalizing`
   // `finalizing | beginTerminalization | terminalizing`
   beginTerminalization: [
+    { from: "admitting", to: "terminalizing" },
     { from: "stopping", to: "terminalizing" },
     { from: "validating", to: "terminalizing" },
     { from: "finalizing", to: "terminalizing" },

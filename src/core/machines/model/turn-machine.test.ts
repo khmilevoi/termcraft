@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 
 import { context } from "@reatom/core";
 
@@ -74,6 +74,10 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "workspace-ready", action: "beginAttempt", to: "running" },
   { from: "running", action: "beginStopping", to: "stopping" },
   { from: "stopping", action: "beginSnapshot", to: "snapshotting" },
+  // Amended 2026-07-26 (MVP blocker fix bundle §1.1): a rejected admission had no exit —
+  // requestCancel needs a turnId a failed admission never surfaced — so admitting now also
+  // bridges to terminalizing via beginTerminalization, matching kernel-command-contract §7.2.
+  { from: "admitting", action: "beginTerminalization", to: "terminalizing" },
   { from: "stopping", action: "beginTerminalization", to: "terminalizing" },
   { from: "stopping", action: "markBackendUnhealthy", to: "backend-unhealthy" },
   { from: "snapshotting", action: "candidateCaptured", to: "validating" },
@@ -149,8 +153,8 @@ describe("reatomTurnStateMachine", () => {
     });
   });
 
-  test("the hand-counted §7.2 edge total is 25", () => {
-    expect(EXPECTED_EDGES.length).toBe(25);
+  test("the hand-counted §7.2 edge total is 26", () => {
+    expect(EXPECTED_EDGES.length).toBe(26);
   });
 
   test("every (state, action) pair matches the §7.2 table exactly", () => {
@@ -238,6 +242,16 @@ describe("reatomTurnStateMachine", () => {
         to: "terminalizing",
       });
     });
+  });
+
+  it("admitting can terminalize — a rejected admission has an exit (spec §1.1)", () => {
+    const machine = reatomTurnStateMachine();
+    expect(machine.apply("beginAdmission").kind).toBe("changed");
+    expect(machine.phase()).toBe("admitting");
+
+    const bridged = machine.apply("beginTerminalization");
+    expect(bridged.kind).toBe("changed");
+    expect(machine.phase()).toBe("terminalizing");
   });
 });
 
