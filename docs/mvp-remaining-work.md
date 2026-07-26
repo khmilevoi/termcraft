@@ -66,16 +66,46 @@ own doc comment says exactly that ("NOT yet called by any currently-wired handle
 backstop above.
 
 **So the real shape is three wirings:** apply `kernel.preview.enable` inside
-`runProjectReadySequence` (and on a later trust grant); re-point `preview-export.ts` at the
-already-composed `context.previewSessionCommands` instead of the machine plus backstop; and have
-the UI dispatch `preview.selectPage` when the active page slug becomes known or changes.
+`runProjectReadySequence` (and on a later trust grant) — **done, Task 8**; re-point
+`preview-export.ts` at the already-composed `context.previewSessionCommands` instead of the
+machine plus backstop — **mostly done, Task 10, see below**; and have the UI dispatch
+`preview.selectPage` when the active page slug becomes known or changes — **not yet, Task 21**.
 
-**Two honest unknowns.** The router's session-establishing entry points have never executed in
-production, so their first live run is the real test — this is the one item in the fix bundle
-whose cost is set by whether existing code behaves, not by a design choice. And
-`session-commands.ts`'s own header records a NAMED GAP: `FrameIdentityV1.nonce` has no source in
-this slice's narrowed ports, so the module mints a stand-in. That is a fidelity gap in frame
-identity, not a rendering blocker, but it should not be discovered twice.
+**CLOSED (mostly) 2026-07-26, Task 10.** `resize`, `setMode`, `setThemeCapabilities`,
+`queryGeometry`, `retry` and `close` all now route through `context.previewSessionCommands` for
+real; `blockedBySessionReadback` is deleted. `resolvePageSettings`'s `sourcePath` also moved from
+the agent workspace's flat `pages/<slug>.tsx` to the same canonical
+`<root>/.termcraft/pages/<slug>/page.tsx` convention Task 1 fixed on the turn path (the "Concern
+raised before starting" this document used to link here) — without it, a session the router
+DID establish would still have failed to mount in the host child. Two things did NOT close:
+
+- `selectPage`/`selectCurrent`'s own ESTABLISHING call still does not route through
+  `context.previewSessionCommands.selectPage`/`.selectCurrent` — it still calls
+  `HostSupervisorPort.preview` directly. Reason: that router method never hands the established
+  `PreviewSession` back to its caller, and `context.setActivePreviewSession` (which
+  `KernelPort.currentPreview()` — the shell's real frame source, `entrypoint/model/
+  create-shell.ts:412` — reads) needs the actual session object, not just an accepted/rejected/
+  failed disposition. Routing the establishing call through the composed router as originally
+  sketched would have left `activePreview` permanently `null` — no frame would ever reach the
+  shell, defeating this whole task. Cost of the compromise: the establishing call alone does not
+  reserve a backpressure slot the way `resize`/`setMode`/... now do. Closing it for real needs a
+  session-returning variant of `selectPage`/`selectCurrent` on `PreviewSessionCommands`, or
+  `kernel.ts` itself bridging the two — see `preview-export.ts`'s own header, "ONE NARROWER GAP
+  TASK 10 FOUND".
+- `retry` routes through the router for real but is REJECTED every time in this build. The
+  router's own `retry()` reissues the last `HostSessionSpecV1` it remembers (`lastSpec`), and
+  `lastSpec` is set ONLY by the router's own `selectPage`/`selectCurrent` — which, per the point
+  above, `selectCurrentSource` does not call. So `lastSpec` is always `null`, and every retry
+  lands on `session-commands.ts`'s own defensive "no remembered spec" branch. Not a regression
+  (retry was a permanent no-op before Task 10 too), but the machine now genuinely transitions
+  `circuit-open -> starting` before landing there and is left stranded — `preview-export.ts`'s
+  `handleRetry` reports that one real transition rather than silently dropping it, but does not
+  invent a fix for the underlying cause. Same closing move as the point above would fix this too.
+
+**One remaining honest unknown, from before Task 10, still open.** `session-commands.ts`'s own
+header records a NAMED GAP: `FrameIdentityV1.nonce` has no source in this slice's narrowed ports,
+so the module mints a stand-in. That is a fidelity gap in frame identity, not a rendering
+blocker, but it should not be discovered a third time.
 
 ### 1.2 Gap C — Enter on Home does not start the first turn
 
@@ -623,6 +653,13 @@ Added during the investigation, needs a decision before commit — see §6.
 
 ## 4. Smaller gaps, none blocking
 
+- **`FrameIdentityV1.nonce` has no real source.** **[read]** `core/preview/model/
+  session-commands.ts`'s own header: no port in this slice's narrowed surface carries a real
+  host-incarnation nonce, so the module mints its own stand-in (`mintHostNonce`) each time a
+  session is (re-)established. A fidelity gap in frame identity, not a rendering blocker —
+  recorded here (§1.1's own "Two honest unknowns" also names it) so it is not discovered a third
+  time. Closes when a later slice threads a real host-incarnation nonce through the port
+  boundary.
 - **Selection never reaches the Kernel.** **[read]** `selection.set`/`selection.clear` only emit
   `selection.changed`; they never write `context.setSelection`, so `context.selection()` stays
   `null` and every sent chat record carries an unpopulated `selection`. The admission read path

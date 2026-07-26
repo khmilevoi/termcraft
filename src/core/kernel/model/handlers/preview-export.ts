@@ -21,18 +21,20 @@ import type {
   PreviewSizePresetV1,
   WorkspaceStateV1,
 } from "core/ports";
+import type { PreviewCommandOutcomeV1 } from "core/preview";
 import {
   type CommandPayloadByKindV1,
   type FailureDtoV1,
   type Sha256Hex,
   type UUIDv7,
   canonicalHash,
+  isUuidv7,
 } from "core/protocol";
 import type { PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
-import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
+import { noOpOutcome, startedOutcome } from "./types";
 
 /**
  * `preview-export.ts` — kernel-assembly WP-1 task 9, Step B: the `preview` family's 9
@@ -41,30 +43,42 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *
  * TWO GENUINE, INDEPENDENTLY-VERIFIED CONTRACT GAPS originally bounded what this file could
  * honestly do — both reported in the family's own report (`.superpowers/sdd/
- * task9-family-preview-export-report.md`). Gap A (below) is still open. Gap B — CLOSED (MVP
- * gap closeout, `export.start` is core MVP per the maintainer decision recorded in
- * `.superpowers/sdd/task-9-report.md`'s "Gap 4 closure"/"Tasks 10-11" sections) — see
- * `handleExportStart`'s own header for the real recipe.
+ * task9-family-preview-export-report.md`). Gap B — CLOSED (MVP gap closeout, `export.start`
+ * is core MVP per the maintainer decision recorded in `.superpowers/sdd/task-9-report.md`'s
+ * "Gap 4 closure"/"Tasks 10-11" sections) — see `handleExportStart`'s own header for the
+ * real recipe. Gap A — CLOSED for all six kinds it used to block (MVP blocker fix bundle,
+ * Task 10, spec §2.3); see "GAP A — MOSTLY CLOSED" below for what closed and the one
+ * narrower gap Task 10 found and left open.
  *
- * GAP A — no way to read back the Kernel's own live `PreviewSession`. `HandlerContext`
- * declares `setActivePreviewSession(session): void` (a SETTER for `kernel.ts`'s own
- * `activePreview` closure variable) but NO corresponding getter. `core/preview/model/
- * session-commands.ts`'s already-landed `createPreviewSessionCommands` is exactly the
- * primitive that would resolve this — it holds `currentSession`/`lastSpec` in its OWN
- * closure and drives `resize`/`setMode`/`setThemeCapabilities`/`retry`/`close`/
- * `queryGeometry` directly against them — but `HandlerContext` has no field exposing a
- * constructed `PreviewSessionCommands` instance (nor the `frameBroker`/`frameTokenLedger`/
- * `geometryTokenLedger`/`backpressure` sub-primitives `SessionCommandsDeps` itself needs to
- * build one), and a `preview-export.ts`-local instance is not legal either: those are
- * PER-KERNEL stateful factories (`createPreviewSessionCommands`'s own comment: "two
- * kernels — or two tests — must never share live-session state"), and a family module may
- * hold no module-level mutable state of its own (`FamilyHandlerMap`'s own doc: "a family
- * module is re-importable and re-usable across as many `HandlerContext`s/tests as
- * needed"). Building a fresh one per call would reset `currentSession`/`lastSpec` on every
- * single command, which is worse than not having one. Six of the nine preview kinds need
- * to reach a PREVIOUSLY established session (`resize`, `setThemeCapabilities`, `setMode`,
- * `queryGeometry`, `retry`) or release its host resources (`close`) — Gap A blocks the
- * first five outright and leaves `close` only able to do its Kernel-side half (below).
+ * GAP A — MOSTLY CLOSED. The original justification ("`HandlerContext` provides no way to
+ * read the Kernel's own live `PreviewSession` back") went stale the moment
+ * `HandlerContext.currentPreviewSession`/`previewSessionCommands` landed (kernel-assembly
+ * Task 16) — this file simply never called them. `resize`, `setThemeCapabilities`,
+ * `setMode`, `retry`, `queryGeometry` and `close` now route through
+ * `context.previewSessionCommands` for real (see each handler's own header) instead of the
+ * retired `blockedBySessionReadback` no-op backstop. `retry` routes for real too, but a
+ * SEPARATE gap this task found (its own header, "TASK 10's OWN DOCUMENTED GAP") means it is
+ * rejected every time in THIS build — not a Gap A regression, a different, narrower issue.
+ *
+ * ONE NARROWER GAP TASK 10 FOUND AND DELIBERATELY DID NOT PAPER OVER: `PreviewSessionCommands
+ * .selectPage`/`.selectCurrent` (`core/preview/model/session-commands.ts`) apply the machine
+ * transition, reserve a backpressure slot, and call `HostSupervisorPort.preview` themselves,
+ * but their return type (`PreviewCommandOutcomeV1`) reports only accepted/rejected/failed —
+ * it never hands the established `PreviewSession` BACK to the caller. That session is exactly
+ * what `HandlerContext.setActivePreviewSession` needs to set `kernel.ts`'s own `activePreview`
+ * closure, which is in turn exactly what `KernelPort.currentPreview()` reads
+ * (`entrypoint/model/create-shell.ts`'s `toKernelPort().preview()`) to stream real frames to
+ * the UI. Routing `selectCurrentSource`'s ESTABLISHING call through `previewSessionCommands
+ * .selectPage` as originally sketched would leave `activePreview` permanently `null` — the
+ * preview would never actually render, the one thing this whole task exists to fix. So
+ * `selectCurrentSource` (below) keeps calling `HostSupervisorPort.preview` directly and
+ * `context.setActivePreviewSession` (which already forwards to `previewSessionCommands
+ * .noteSessionEstablished` in the real `kernel.ts` — see that function's own comment), and
+ * gets ONLY the `sourcePath` fix from this task. The cost: the ESTABLISHING call alone does
+ * not reserve a backpressure slot the way `resize`/`setMode`/... now do. Flagged, not
+ * silently dropped — closing it for real needs either a session-returning variant of
+ * `selectPage`/`selectCurrent` on `PreviewSessionCommands`, or `kernel.ts` itself bridging the
+ * two, neither of which is this task's declared file scope (`preview-export.ts` alone).
  *
  * WHAT THIS FILE DOES REAL WORK ON:
  * - `preview.selectPage`/`preview.selectCurrent` (identical routing, exactly mirroring
@@ -76,13 +90,15 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   sanctioned mutators. Best-effort page-settings resolution (see `resolvePageSettings`'s
  *   own comment for its own narrower, separately-flagged gap) degrades to a real
  *   `sessionFailed`/`preview.failed` outcome, never a fabricated size/theme/version.
- * - `preview.close`: applies `kernel.preview.disable` and clears
- *   `HandlerContext`'s own tracked session reference — the Kernel-side half of closing that
- *   Gap A does not block. The host-side half (calling the actual session's own `close()`
- *   to release its resources) is exactly what Gap A blocks; documented on the handler.
- * - Every other Gap-A-blocked kind returns the sanctioned `noOpOutcome()` (an idempotent
- *   refusal — nothing ran, matching this project's own "two outcomes only" rule) with a
- *   doc comment naming precisely which gap blocks it and why.
+ * - `preview.resize`/`setThemeCapabilities`/`setMode`/`retry`/`queryGeometry`: each a thin
+ *   `launchOperation`-wrapped delegation onto `context.previewSessionCommands`'s own
+ *   already-tested method, translating its `accepted`/`rejected`/`failed` (or, for
+ *   `queryGeometry`, `resolved`/`rejected`/`failed`) outcome into the matching real event —
+ *   never a fabricated one. See each handler's own header.
+ * - `preview.close`: calls `context.previewSessionCommands.close()` (which applies
+ *   `kernel.preview.disable`, clears the frame broker and both token ledgers, and — the
+ *   half Gap A used to block — calls the real session's own `close()`, releasing the host's
+ *   resources for real) and clears `HandlerContext`'s own tracked session reference.
  * - `export.start` composes `core/export`'s full capture/render/assemble/publish chain for
  *   real — see `handleExportStart`'s own header.
  */
@@ -108,10 +124,10 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * function never invents a theme/size/version. Once a real owner assigns and populates a
  * canonical `extractorVersion`, this placeholder is the one line to replace.
  *
- * `sourcePath` is not fabricated either: `pages/${pageSlug}.tsx` is the real staging-store
- * page-file convention already cited by `core/turns/model/candidate.ts`
- * (`store/sandbox/model/staging-store.ts`'s `stageAllFiles`), reused verbatim here rather
- * than invented a second time.
+ * `sourcePath` is not fabricated either: {@link canonicalPageSourcePath} (below) is the real
+ * CANONICAL page-storage convention the host child resolves with `Bun.file` — see that
+ * function's own doc comment for the full citation and for the substitution bug this task
+ * (MVP blocker fix bundle, Task 10) corrected here.
  */
 export interface ResolvedPageSettingsV1 {
   readonly sourceHash: Sha256Hex;
@@ -124,9 +140,22 @@ export interface ResolvedPageSettingsV1 {
 /** See {@link ResolvedPageSettingsV1}'s own doc — this file's placeholder cache-key component, not page data. */
 export const PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER = 1;
 
-/** The real staging-store page-file convention (`core/turns/model/candidate.ts`'s own citation) — never invented here. */
-function sourcePathFor(pageSlug: PageSlug): string {
-  return `pages/${pageSlug}.tsx`;
+/** The directory canonical project state lives in, under the project root (storage-identity §4). */
+const PROJECT_STATE_DIRNAME = ".termcraft";
+
+/**
+ * CANONICAL page storage, ABSOLUTE — the host child resolves this with `Bun.file(sourcePath)`
+ * inside a fresh scratch directory (`host/session/model/source-mount.ts`), so a relative path
+ * never resolves there.
+ *
+ * CORRECTED 2026-07-26 (MVP blocker fix bundle, Task 10): this used to return the agent
+ * WORKSPACE's flat `pages/<slug>.tsx` — the exact substitution Gap G made on the turn path
+ * (`handlers/turn.ts`). It was invisible because the preview router's session-establishing entry
+ * points had never executed in production. `store/safe-fs/model/limits.ts:134-135` states the
+ * distinction in prose; `core` may not import `store`, so the convention is transcribed here.
+ */
+function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
+  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
 }
 
 function pageMetaUnavailableFailure(pageSlug: PageSlug): FailureDtoV1 {
@@ -155,7 +184,7 @@ async function resolvePageSettings(
 
   return {
     sourceHash: source.sourceHash,
-    sourcePath: sourcePathFor(pageSlug),
+    sourcePath: canonicalPageSourcePath(deps.projectStore.root, pageSlug),
     kitApiVersion: cached.meta.kitApiVersion,
     minSize: cached.meta.minSize,
     theme: cached.meta.theme,
@@ -244,12 +273,22 @@ function previewStateChangedEvent(
  * async, so it must run inside `launchOperation`'s `run`, per `HandlerContext`'s own doc).
  *
  * ASYNC half (`run`): resolve the page's current-source settings (best-effort,
- * `resolvePageSettings`), derive size/theme/capabilities from `WorkspaceStateV1`, call
- * `HostSupervisorPort.preview`, and on success set the session + source-kind and emit
+ * `resolvePageSettings`, now resolving `sourcePath` through {@link canonicalPageSourcePath} —
+ * Task 10's fix), derive size/theme/capabilities from `WorkspaceStateV1`, call
+ * `HostSupervisorPort.preview` directly, and on success set the session + source-kind
+ * (`context.setActivePreviewSession`, which also seeds `context.previewSessionCommands`'s
+ * own frame-token incarnation identity — see that setter's doc in `kernel.ts`) and emit
  * `preview.sourceChanged`; on any failure (settings unresolved, workspace-state read
  * failed, or the host call itself failed) apply `sessionFailed` and emit `preview.failed`
  * — a REAL ran-and-failed outcome, never a silently dropped no-op, since the machine DID
  * transition into `starting`/`switching` synchronously above.
+ *
+ * Deliberately still calls `HostSupervisorPort.preview` directly here rather than routing
+ * through `context.previewSessionCommands.selectPage`/`.selectCurrent` — see this file's own
+ * header, "ONE NARROWER GAP TASK 10 FOUND", for why: that router never hands the established
+ * `PreviewSession` back to its caller, and this handler needs the real session object for
+ * `context.setActivePreviewSession` (the one thing `KernelPort.currentPreview()` — real frame
+ * delivery — reads).
  */
 function selectCurrentSource(
   payload: { readonly pageSlug: PageSlug },
@@ -409,63 +448,326 @@ function handleSelectHistorical(): CommandOutcomeV1 {
 }
 
 // -------------------------------------------------------------------------------------
-// preview.resize / setThemeCapabilities / setMode / queryGeometry / retry — Gap A
+// preview.resize / setThemeCapabilities / setMode / retry / queryGeometry — real, routed
+// through the composed session router (Gap A closure, spec §2.3)
 // -------------------------------------------------------------------------------------
 
 /**
- * Shared backstop for the five preview kinds Gap A blocks outright (this file's header:
- * `resize`, `setThemeCapabilities`, `setMode`, `queryGeometry`, `retry`). Each of these
- * needs to act on the Kernel's PREVIOUSLY established live `PreviewSession` (or, for
- * `retry`, the previously remembered `HostSessionSpecV1` to re-establish one) —
- * `HandlerContext` provides no way to read either back. Applying the machine's own
- * `live -> live` edge (for `resize`/`setThemeCapabilities`/`setMode`) WITHOUT the
- * corresponding session call actually succeeding would be a false record — the
- * authoritative live-session state these edges represent (§7.6) would not have actually
- * changed — so this returns the sanctioned idempotent no-op rather than a fabricated
- * "changed" transition. For `queryGeometry` specifically, the transition table's own
- * `noOp: true` edge already means the SAME shape regardless of this gap (§7.6: "do not
- * bump `stateRevision`"); what Gap A blocks there is only DELIVERING the query's own
- * result event, not the disposition.
+ * The `live -> live` self-edge every one of `resize`/`setMode`/`setThemeCapabilities` is
+ * the ONLY legal source/target pair for (`core/machines/model/preview-machine.ts`'s own
+ * table) — a real, revision-advancing transition (none of the three is marked `noOp: true`,
+ * unlike `queryGeometry`/`forwardInput`), so it is built and returned for publication
+ * whenever `context.previewSessionCommands` reports the underlying call `accepted`, never
+ * silently applied and dropped (Global Constraint: "a transition applied and an event not
+ * published desynchronises every subscriber").
  */
-function blockedBySessionReadback(): CommandOutcomeV1 {
-  return noOpOutcome();
+function liveSelfLoopEvent(
+  action: PreviewAction,
+  correlation: EventCorrelationV1,
+): PublishableEventV1<"kernel.stateChanged"> {
+  return previewStateChangedEvent(
+    action,
+    { kind: "changed", from: "live", to: "live" },
+    correlation,
+  );
+}
+
+/**
+ * Shared translation for the three simple `live -> live` preview commands
+ * (`resize`/`setMode`/`setThemeCapabilities`): call `previewSessionCommands`'s own method,
+ * publish {@link liveSelfLoopEvent} on `"accepted"`. On `"rejected"` (`OPERATION_BUSY` —
+ * defensive only, the capability guard already required a live-legal phase before dispatch
+ * ever reached this handler) or `"failed"` (a genuine host-side failure): no event kind in
+ * `core/protocol`'s closed `EventKindV1` union carries an ad-hoc command failure for a
+ * command that isn't session-establishment or geometry (checked: `preview.failed`'s own
+ * payload is scoped to `starting`/`switching`/`live`-phase SESSION failures, not a single
+ * mutating call) — an unreported refusal, but never a silent one (errore rule 21), matching
+ * `runExportStart`'s own "POST-MVP GAP" precedent for the identical shape of situation.
+ */
+async function runSimpleLiveCommand(
+  label: string,
+  action: PreviewAction,
+  correlation: EventCorrelationV1,
+  call: () => Promise<PreviewCommandOutcomeV1>,
+): Promise<readonly PublishableEventV1[]> {
+  const outcome = await wrap(call());
+  if (outcome.kind !== "accepted") {
+    console.warn(`core/kernel/handlers/preview-export: ${label} was ${outcome.kind}, not accepted`);
+    return [];
+  }
+  return [liveSelfLoopEvent(action, correlation)];
+}
+
+/** `preview.resize` — a one-line delegation onto `context.previewSessionCommands.resize`. */
+function handleResize(
+  payload: CommandPayloadByKindV1["preview.resize"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { previewSessionId: payload.previewSessionId };
+  context.launchOperation("kernel.preview.resize", () =>
+    runSimpleLiveCommand("preview.resize", "kernel.preview.resize", correlation, () =>
+      context.previewSessionCommands.resize({ w: payload.width, h: payload.height }),
+    ),
+  );
+  return startedOutcome([], operationId);
+}
+
+/** `preview.setMode` — a one-line delegation onto `context.previewSessionCommands.setMode`. */
+function handleSetMode(
+  payload: CommandPayloadByKindV1["preview.setMode"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { previewSessionId: payload.previewSessionId };
+  context.launchOperation("kernel.preview.setMode", () =>
+    runSimpleLiveCommand("preview.setMode", "kernel.preview.setMode", correlation, () =>
+      context.previewSessionCommands.setMode(payload.mode),
+    ),
+  );
+  return startedOutcome([], operationId);
+}
+
+/** `preview.setThemeCapabilities` — a one-line delegation onto `context.previewSessionCommands.setThemeCapabilities`. */
+function handleSetThemeCapabilities(
+  payload: CommandPayloadByKindV1["preview.setThemeCapabilities"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { previewSessionId: payload.previewSessionId };
+  context.launchOperation("kernel.preview.setThemeCapabilities", () =>
+    runSimpleLiveCommand(
+      "preview.setThemeCapabilities",
+      "kernel.preview.setThemeCapabilities",
+      correlation,
+      () =>
+        context.previewSessionCommands.setThemeCapabilities(
+          payload.themeId,
+          payload.terminalCapabilities,
+        ),
+    ),
+  );
+  return startedOutcome([], operationId);
+}
+
+/**
+ * `preview.retry` — routes `context.previewSessionCommands.retry()`, which internally
+ * applies TWO transitions in sequence on success (`retryCircuit`: `circuit-open ->
+ * starting`, then either `sessionReady`: `starting -> live` or `sessionFailed`:
+ * `starting -> failed`, `core/preview/model/session-commands.ts`'s own `retry`/
+ * `establishSession`) — every edge that actually applied is built and returned for
+ * publication, never collapsed into one and never silently dropped. `fromPhase` is read
+ * before the async call: `retryCircuit`'s only legal source is `circuit-open` (the
+ * capability guard already required it).
+ *
+ * TASK 10's OWN DOCUMENTED GAP, LOAD-BEARING HERE: `retryCircuit` applies (and the machine
+ * genuinely moves to `"starting"`) BEFORE `session-commands.ts`'s own `retry()` checks
+ * whether it has a remembered `HostSessionSpecV1` (its private `lastSpec`) to reissue.
+ * `lastSpec` is set ONLY by that module's own `selectSource` — and `selectCurrentSource`
+ * (above) deliberately does NOT call it (see this file's header, "ONE NARROWER GAP") — so
+ * in THIS build `lastSpec` is always `null` and `retry` ALWAYS lands on that "no remembered
+ * spec" branch, reported as `{kind: "rejected", reason: {code: "CAPABILITY_UNAVAILABLE"}}`.
+ * Collapsing that into the SAME no-op shape `blockedBySessionReadback` used to return would
+ * be a false record: the machine really did move `circuit-open -> starting` (a real,
+ * revision-advancing edge) and is now stranded there — worse than the old permanent no-op,
+ * which at least left the machine safely at `circuit-open`. So this handler compares
+ * `fromPhase` against the phase read back AFTER the call: if they differ, `retryCircuit`
+ * applied and its own `kernel.stateChanged` is published regardless of what `retry()`
+ * ultimately reports; only a phase that never moved at all (the OPERATION_BUSY-illegal
+ * case, defensive, unreachable under a correct guard) publishes nothing.
+ *
+ * On a re-establishment FAILURE (`outcome.kind === "failed"`): no `preview.failed` event is
+ * built. That payload requires `pageSlug`/`sourceHash` (§9), and this command's own payload
+ * carries only `previewSessionId` (§10.4) — the page identity retry re-uses lives ONLY in
+ * `session-commands.ts`'s private `lastSpec`, which `PreviewSessionCommands` does not
+ * re-expose. A documented, narrow gap (mirrors `runExportStart`'s own "POST-MVP GAP"), not a
+ * fabricated payload.
+ */
+function handleRetry(
+  payload: CommandPayloadByKindV1["preview.retry"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  const fromPhase = context.machines.preview.phase();
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { previewSessionId: payload.previewSessionId };
+  context.launchOperation("kernel.preview.retry", async () => {
+    const outcome = await wrap(context.previewSessionCommands.retry());
+    const toPhase = context.machines.preview.phase();
+
+    if (outcome.kind === "rejected" && toPhase === fromPhase) {
+      // `retryCircuit` itself was illegal (`OPERATION_BUSY`) — defensive only, the
+      // capability guard already required `circuit-open`. Nothing moved; nothing to
+      // publish.
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.retry was rejected (${outcome.reason.code})`,
+      );
+      return [];
+    }
+
+    // `retryCircuit` DID apply (`circuit-open -> starting`) in every remaining branch —
+    // reported even when what follows is refused or fails, so a real transition is never
+    // silently dropped (Global Constraint: an applied transition must be returned for
+    // publication).
+    const events: PublishableEventV1[] = [
+      previewStateChangedEvent(
+        "kernel.preview.retryCircuit",
+        { kind: "changed", from: fromPhase, to: "starting" },
+        correlation,
+      ),
+    ];
+
+    if (outcome.kind === "rejected") {
+      // `session-commands.ts`'s own defensive "no remembered spec to reissue" branch —
+      // see this handler's own header for why it is reachable in THIS build (Task 10's
+      // documented `lastSpec` gap) and leaves the machine stranded at `"starting"`.
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.retry had no remembered spec to reissue (${outcome.reason.code}) — the preview machine is now stranded at "starting"`,
+      );
+      return events;
+    }
+    if (outcome.kind === "failed") {
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.retry's re-established session failed: ${outcome.failure.safeMessage}`,
+      );
+      events.push(
+        previewStateChangedEvent(
+          "kernel.preview.sessionFailed",
+          { kind: "changed", from: "starting", to: toPhase },
+          correlation,
+        ),
+      );
+      return events;
+    }
+    events.push(
+      previewStateChangedEvent(
+        "kernel.preview.sessionReady",
+        { kind: "changed", from: "starting", to: toPhase },
+        correlation,
+      ),
+    );
+    return events;
+  });
+  return startedOutcome([], operationId);
+}
+
+/**
+ * `preview.queryGeometry` — verifies the frame token first (`context.frameTokenLedger
+ * .verifyCurrent`, the SAME ledger instance `context.previewSessionCommands` holds
+ * internally — §12.6 item 5's "verifies that frame token before any host request"), then
+ * routes the resolved query onto `context.previewSessionCommands.queryGeometry`. Its
+ * `noOp: true` transition-table edge (§7.6) means no `kernel.stateChanged` is built here —
+ * this kind never bumps `stateRevision` — only the query's own `preview.geometryResult`
+ * event, built ONLY on a `"resolved"` outcome, matching `blockedBySessionReadback`'s own
+ * former reasoning for this one kind ("what Gap A blocks there is only DELIVERING the
+ * query's own result event, not the disposition"). `frameIdentity` comes from the SAME
+ * `verifyCurrent` call the router redundantly repeats internally (a pure read, no side
+ * effect) — the router's own `PreviewQueryOutcomeV1` does not re-expose it.
+ */
+function handleQueryGeometry(
+  payload: CommandPayloadByKindV1["preview.queryGeometry"],
+  context: HandlerContext,
+): CommandOutcomeV1 {
+  const operationId: UUIDv7 = uuidv7();
+  context.launchOperation("kernel.preview.queryGeometry", async () => {
+    const verification = context.frameTokenLedger.verifyCurrent(payload.frameToken);
+    if (!verification.ok) {
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.queryGeometry's frame token was ${verification.code}`,
+      );
+      return [];
+    }
+
+    const outcome = await wrap(
+      context.previewSessionCommands.queryGeometry(payload.frameToken, payload.query),
+    );
+    if (outcome.kind !== "resolved") {
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.queryGeometry was ${outcome.kind}`,
+      );
+      return [];
+    }
+
+    const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
+    if (previewSessionId === null || !isUuidv7(previewSessionId)) {
+      console.warn(
+        "core/kernel/handlers/preview-export: preview.queryGeometry resolved but no valid live previewSessionId is registered",
+      );
+      return [];
+    }
+
+    const event: PublishableEventV1<"preview.geometryResult"> = {
+      kind: "preview.geometryResult",
+      payload: {
+        previewSessionId,
+        frameTokenId: payload.frameToken,
+        frameIdentity: verification.identity,
+        queryKind: payload.query.kind,
+        result: outcome.result.result,
+        geometryToken: outcome.geometryToken,
+      },
+      correlation: { previewSessionId },
+    };
+    return [event];
+  });
+  return startedOutcome([], operationId);
 }
 
 // -------------------------------------------------------------------------------------
-// preview.close — real, partial (Kernel-side half only; Gap A blocks the host-side half)
+// preview.close — real, end to end (Gap A closure)
 // -------------------------------------------------------------------------------------
 
 /**
  * `preview.close`'s guard-checked action is `kernel.preview.disable` (verified against
  * `capabilities/model/guards.ts`'s own `previewFamilyReason`: `case "preview.close": ...
- * "kernel.preview.disable"`). This handler applies that transition and clears
- * `HandlerContext`'s own tracked session reference (`setActivePreviewSession(null)`,
- * mirroring `kernel.ts`'s own `close()` — "the only legitimate caller that clears one").
+ * "kernel.preview.disable"`). Now routes through `context.previewSessionCommands.close()`,
+ * which applies that SAME transition itself, clears the frame broker and both token
+ * ledgers, and — the half Gap A used to block — calls the real `PreviewSession.close()`,
+ * releasing the host's own resources for real. Because the router owns the transition, this
+ * handler must NOT also apply it (a second `apply("kernel.preview.disable")` would be
+ * illegal, already-disabled) — `fromPhase` is only READ, before launching, purely so the
+ * eventual `kernel.stateChanged` can report it; the `toPhase` is read back after the router
+ * settles. `context.setActivePreviewSession(null)` is kept, mirroring `kernel.ts`'s own
+ * `close()` ("the only legitimate caller that clears one").
  *
- * KNOWN, DOCUMENTED GAP: it cannot also call the real `PreviewSession.close()` to release
- * the host's own resources — that needs the SAME session handle Gap A blocks reading
- * back. Until Gap A closes, closing a preview from the Kernel's own bookkeeping
- * perspective works, but the underlying host incarnation is left running until whatever
- * later mechanism (`HostSupervisorPort.stopAll`, a future fix) reaps it. No event kind
- * models "preview closed"/"preview disabled" (`core/protocol`'s closed `EventKindV1`
- * union has no such member — checked exhaustively), so the only emitted event is the
- * generic `kernel.stateChanged` for the `disable` transition.
+ * Because releasing the host session is genuinely async (`await session.close()`), this can
+ * no longer resolve synchronously — like `selectCurrentSource`, it returns a zero-event
+ * `startedOutcome` and does the real work (and publishes its own `kernel.stateChanged`)
+ * inside `launchOperation`.
  */
 function handleClose(
   payload: { readonly previewSessionId: UUIDv7 },
   context: HandlerContext,
 ): CommandOutcomeV1 {
-  const applied = context.machines.preview.apply("kernel.preview.disable");
-  if (applied.kind !== "changed") {
+  const fromPhase = context.machines.preview.phase();
+  if (!context.machines.preview.canApply("kernel.preview.disable")) {
     // Defensive only — the guard already required `disable` to be legal from the current
     // phase; see `selectCurrentSource`'s identical note.
     return noOpOutcome();
   }
-  context.setActivePreviewSession(null);
-  const event = previewStateChangedEvent("kernel.preview.disable", applied, {
-    previewSessionId: payload.previewSessionId,
+
+  const operationId: UUIDv7 = uuidv7();
+  const correlation: EventCorrelationV1 = { previewSessionId: payload.previewSessionId };
+  context.launchOperation("kernel.preview.close", async () => {
+    const outcome = await wrap(context.previewSessionCommands.close());
+    if (outcome.kind !== "accepted") {
+      // Defensive only: `canApply` already confirmed `disable` was legal from `fromPhase`
+      // synchronously above, and nothing else can move a single-slot preview machine
+      // concurrently in a correctly-wired Kernel.
+      console.warn(
+        `core/kernel/handlers/preview-export: preview.close's router call was ${outcome.kind} — defensive, should be unreachable`,
+      );
+      return [];
+    }
+    context.setActivePreviewSession(null);
+    const toPhase = context.machines.preview.phase();
+    const event = previewStateChangedEvent(
+      "kernel.preview.disable",
+      { kind: "changed", from: fromPhase, to: toPhase },
+      correlation,
+    );
+    return [event];
   });
-  return completedOutcome([event]);
+  return startedOutcome([], operationId);
 }
 
 // -------------------------------------------------------------------------------------
@@ -885,11 +1187,11 @@ export const previewHandlers: FamilyHandlerMap<"preview"> = {
   "preview.selectPage": selectCurrentSource,
   "preview.selectCurrent": selectCurrentSource,
   "preview.selectHistorical": handleSelectHistorical,
-  "preview.resize": blockedBySessionReadback,
-  "preview.setThemeCapabilities": blockedBySessionReadback,
-  "preview.setMode": blockedBySessionReadback,
-  "preview.queryGeometry": blockedBySessionReadback,
-  "preview.retry": blockedBySessionReadback,
+  "preview.resize": handleResize,
+  "preview.setThemeCapabilities": handleSetThemeCapabilities,
+  "preview.setMode": handleSetMode,
+  "preview.queryGeometry": handleQueryGeometry,
+  "preview.retry": handleRetry,
   "preview.close": handleClose,
 };
 

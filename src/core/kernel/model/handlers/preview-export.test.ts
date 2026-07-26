@@ -12,7 +12,7 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { PageReader, PreviewSession } from "core/ports";
+import type { HostSessionSpecV1, HostSupervisorPort, PageReader, PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentPromptSource,
@@ -26,6 +26,7 @@ import {
   createFakePageMetaCache,
   createFakePageStore,
   createFakePinStore,
+  createFakePreviewSession,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
   createFakeRecoveryService,
@@ -43,8 +44,13 @@ import {
   createPreviewSessionCommands,
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
-import { parsePageSlug } from "entities/page";
+import {
+  type FailureDtoV1,
+  type FrameIdentityV1,
+  type UUIDv7,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
+import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
@@ -145,6 +151,17 @@ function buildTestContext(deps: KernelDeps): TestHarness {
     };
     const frameTokenLedger = createFrameTokenLedger();
     const geometryTokenLedger = createGeometryTokenLedger({ clock: deps.clock });
+    // Hoisted (not built inline in the `HandlerContext` literal below) so `setActivePreviewSession`
+    // can close over it and mirror `kernel.ts`'s own real cross-wiring — see that mutator's
+    // comment just below.
+    const previewSessionCommands = createPreviewSessionCommands({
+      machine: machines.preview,
+      hostSupervisor: deps.hostSupervisor,
+      frameBroker: createFrameBroker(),
+      frameTokenLedger,
+      geometryTokenLedger,
+      backpressure: createPreviewBackpressure(),
+    });
 
     const handlerContext: HandlerContext = {
       deps,
@@ -174,9 +191,19 @@ function buildTestContext(deps: KernelDeps): TestHarness {
         mutatorCalls += 1;
         previewSourceKind = next;
       },
+      // Mirrors `kernel.ts`'s own real `setActivePreviewSession` — it ALSO seeds/clears
+      // `previewSessionCommands`'s own internal session tracking (`noteSessionEstablished`/
+      // `noteSessionClosed`), which is what lets `resize`/`setMode`/`setThemeCapabilities`/
+      // `retry`/`queryGeometry`/`close` (routed through `context.previewSessionCommands`
+      // since Task 10) find a real, live session to act on.
       setActivePreviewSession: (session) => {
         mutatorCalls += 1;
         activePreviewSession = session;
+        if (session === null) {
+          previewSessionCommands.noteSessionClosed();
+          return;
+        }
+        previewSessionCommands.noteSessionEstablished(session);
       },
       launchOperation: (label, run) => {
         launched.push({ label, run: run as () => Promise<readonly unknown[]> });
@@ -193,14 +220,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => activePreviewSession,
-      previewSessionCommands: createPreviewSessionCommands({
-        machine: machines.preview,
-        hostSupervisor: deps.hostSupervisor,
-        frameBroker: createFrameBroker(),
-        frameTokenLedger,
-        geometryTokenLedger,
-        backpressure: createPreviewBackpressure(),
-      }),
+      previewSessionCommands,
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
@@ -229,6 +249,20 @@ function seedPageMeta(cache: ReturnType<typeof createFakePageMetaCache>): void {
 
 function enable(machines: HandlerContext["machines"]): void {
   machines.preview.apply("kernel.preview.enable");
+}
+
+/**
+ * Dispatches `preview.selectPage` and awaits the launched async half to settle, returning
+ * its published events — the shared "establish a live session" setup every test below that
+ * needs one (real or blocked-kind routing) starts from.
+ */
+async function selectPageAndSettle(
+  harness: TestHarness,
+  payload: { readonly pageSlug: PageSlug },
+): Promise<readonly unknown[]> {
+  previewHandlers["preview.selectPage"](payload, harness.handlerContext);
+  const launchedEntry = harness.launched[harness.launched.length - 1]!;
+  return wrap(launchedEntry.run());
 }
 
 describe("previewHandlers.selectPage / selectCurrent — real, end to end", () => {
@@ -417,6 +451,38 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(session.interactionMode).toBe("interactive"); // from workspaceState.renderMode
     expect(session.identity.kitApiVersion).toBe(1); // from the cached PageMeta, not fabricated
   });
+
+  test("resolves a page's source through CANONICAL storage — the host reads it with Bun.file", async () => {
+    const specs: HostSessionSpecV1[] = [];
+    // A minimal, purpose-built `HostSupervisorPort` (not the shared `createFakeHostSupervisorPort`
+    // fake — its own `calls` log only records `pageSlug`, not the full spec this test needs to
+    // inspect) that records every spec it is called with.
+    const hostSupervisor: HostSupervisorPort = {
+      preview: async (spec) => {
+        specs.push(spec);
+        return createFakePreviewSession({
+          mode: spec.mode,
+          pageSlug: spec.pageSlug,
+          sourceHash: spec.sourceHash,
+          kitApiVersion: spec.kitApiVersion,
+          sessionId: "fake-session",
+        });
+      },
+      liveCount: () => 0,
+      stopAll: async () => {},
+      onEvent: () => () => {},
+    };
+    const deps = buildDeps({ hostSupervisor });
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+
+    expect(specs[0]?.sourcePath).toBe(
+      `${deps.projectStore.root}/.termcraft/pages/${HOME}/page.tsx`,
+    );
+  });
 });
 
 describe("previewHandlers.selectHistorical — out of MVP scope (no Git port)", () => {
@@ -436,87 +502,260 @@ describe("previewHandlers.selectHistorical — out of MVP scope (no Git port)", 
   });
 });
 
-describe("previewHandlers — blocked by Gap A (no session read-back)", () => {
-  function liveHarness(): TestHarness {
-    const harness = buildTestContext(buildDeps());
+describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry — real, routed through the composed session router (Gap A closure)", () => {
+  /** A real live session, established the same way `selectCurrentSource` does today — not a manually-forced phase. */
+  async function liveHarnessWithSession(): Promise<TestHarness> {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
     enable(harness.handlerContext.machines);
-    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
-    harness.handlerContext.machines.preview.apply("kernel.preview.sessionReady");
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
     return harness;
   }
 
-  test("resize returns the sanctioned no-op without moving the machine", () => {
-    const harness = liveHarness();
+  test("resize calls the real session's own resize and publishes a live -> live kernel.stateChanged", async () => {
+    const harness = await liveHarnessWithSession();
+    const previewSessionId = uuidv7();
+
     const outcome = previewHandlers["preview.resize"](
-      { previewSessionId: uuidv7(), width: 100, height: 30 },
+      { previewSessionId, width: 100, height: 30 },
       harness.handlerContext,
     );
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
-    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
-    expect(harness.getMutatorCalls()).toBe(0);
+    expect(outcome.disposition).toBe("started");
+    expect(harness.launched.length).toBeGreaterThan(0);
+
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[0] as { payload: unknown }).payload,
+    );
+    expect(parsed).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.resize",
+      previousTag: "live",
+      nextTag: "live",
+      metadata: {},
+    });
+    expect((events[0] as { correlation: unknown }).correlation).toEqual({ previewSessionId });
+
+    const session = harness.getActivePreviewSession() as ReturnType<
+      typeof createFakePreviewSession
+    >;
+    expect(
+      session.calls.some(
+        (call) => call.method === "resize" && call.size.w === 100 && call.size.h === 30,
+      ),
+    ).toBe(true);
   });
 
-  test("setThemeCapabilities returns the sanctioned no-op", () => {
-    const harness = liveHarness();
-    const outcome = previewHandlers["preview.setThemeCapabilities"](
-      { previewSessionId: uuidv7(), themeId: "dark", terminalCapabilities: { colorDepth: 24 } },
+  test("setMode calls the real session's own setMode and publishes a live -> live kernel.stateChanged", async () => {
+    const harness = await liveHarnessWithSession();
+    const previewSessionId = uuidv7();
+
+    previewHandlers["preview.setMode"](
+      { previewSessionId, mode: "interactive" },
       harness.handlerContext,
     );
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
-    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[0] as { payload: unknown }).payload,
+    );
+    expect(parsed.action).toBe("kernel.preview.setMode");
+
+    const session = harness.getActivePreviewSession() as ReturnType<
+      typeof createFakePreviewSession
+    >;
+    expect(
+      session.calls.some((call) => call.method === "setMode" && call.mode === "interactive"),
+    ).toBe(true);
   });
 
-  test("setMode returns the sanctioned no-op", () => {
-    const harness = liveHarness();
-    const outcome = previewHandlers["preview.setMode"](
-      { previewSessionId: uuidv7(), mode: "interactive" },
+  test("setThemeCapabilities calls the real session's own setTheme and publishes a live -> live kernel.stateChanged", async () => {
+    const harness = await liveHarnessWithSession();
+    const previewSessionId = uuidv7();
+
+    previewHandlers["preview.setThemeCapabilities"](
+      { previewSessionId, themeId: "dark", terminalCapabilities: { colorDepth: 24 } },
       harness.handlerContext,
     );
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[0] as { payload: unknown }).payload,
+    );
+    expect(parsed.action).toBe("kernel.preview.setThemeCapabilities");
+
+    const session = harness.getActivePreviewSession() as ReturnType<
+      typeof createFakePreviewSession
+    >;
+    expect(
+      session.calls.some(
+        (call) =>
+          call.method === "setTheme" &&
+          call.theme === "dark" &&
+          call.capabilities.colorDepth === 24,
+      ),
+    ).toBe(true);
   });
 
-  test("queryGeometry returns the sanctioned no-op (also matches the machine's own noOp edge)", () => {
-    const harness = liveHarness();
+  test("queryGeometry verifies the frame token, routes to the real session, and publishes preview.geometryResult", async () => {
+    const harness = await liveHarnessWithSession();
+    const identity: FrameIdentityV1 = {
+      previewSessionId: uuidv7(),
+      nonce: "a".repeat(32),
+      sourceHash: HOME_SOURCE_HASH,
+      frameSeq: "0",
+    };
+    const frameToken = harness.handlerContext.frameTokenLedger.mint(identity);
+    harness.handlerContext.frameTokenLedger.acknowledge(frameToken);
+
     const outcome = previewHandlers["preview.queryGeometry"](
+      { frameToken, query: { kind: "layout" } },
+      harness.handlerContext,
+    );
+    expect(outcome.disposition).toBe("started");
+
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["preview.geometryResult"].parse(
+      (events[0] as { payload: unknown }).payload,
+    );
+    expect(parsed.queryKind).toBe("layout");
+    expect(parsed.frameTokenId).toBe(frameToken);
+    expect(parsed.frameIdentity).toEqual(identity);
+    // `FakePreviewSession.query`'s own default (no `queueQueryResult` call in this test).
+    expect(parsed.result).toEqual({ kind: "checkHit", hit: null });
+    expect(parsed.geometryToken).toBeNull();
+  });
+
+  test("queryGeometry with an unrecognized frame token is refused before ever reaching the session", async () => {
+    const harness = await liveHarnessWithSession();
+
+    previewHandlers["preview.queryGeometry"](
       { frameToken: uuidv7(), query: { kind: "layout" } },
       harness.handlerContext,
     );
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
-  });
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(0);
 
-  test("retry returns the sanctioned no-op without moving the machine out of circuit-open", () => {
+    const session = harness.getActivePreviewSession() as ReturnType<
+      typeof createFakePreviewSession
+    >;
+    expect(session.calls.some((call) => call.method === "query")).toBe(false);
+  });
+});
+
+describe("previewHandlers.retry — real routing, and Task 10's own documented `lastSpec` gap", () => {
+  async function circuitOpenHarness(): Promise<TestHarness> {
     const harness = buildTestContext(buildDeps());
     enable(harness.handlerContext.machines);
     harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
     harness.handlerContext.machines.preview.apply("kernel.preview.sessionFailed");
     harness.handlerContext.machines.preview.apply("kernel.preview.openCircuit");
     expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+    return harness;
+  }
 
-    const outcome = previewHandlers["preview.retry"](
-      { previewSessionId: uuidv7() },
-      harness.handlerContext,
+  test('today, retry always lands on session-commands.ts\'s own "no remembered spec" branch: retryCircuit still applies for real and is still published, leaving the machine stranded at starting', async () => {
+    const harness = await circuitOpenHarness();
+    const previewSessionId = uuidv7();
+
+    const outcome = previewHandlers["preview.retry"]({ previewSessionId }, harness.handlerContext);
+    expect(outcome.disposition).toBe("started");
+
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    expect(events).toHaveLength(1);
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[0] as { payload: unknown }).payload,
     );
+    expect(parsed).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.retryCircuit",
+      previousTag: "circuit-open",
+      nextTag: "starting",
+      metadata: {},
+    });
+    // Genuinely stranded — no further transition follows without a remembered spec.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("starting");
+  });
 
-    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+  test("once the router's own lastSpec is seeded (simulating a fully-rewired selectPage), a successful retry reports both retryCircuit and sessionReady", async () => {
+    const harness = await circuitOpenHarness();
+    // Simulates the router having already established a prior session the way `selectPage`
+    // would once it also routes establishment through `previewSessionCommands` (this file's
+    // header, "ONE NARROWER GAP") — calling the router directly here, bypassing
+    // `preview-export.ts`'s own handler, purely to seed `lastSpec` for this test.
+    const spec: HostSessionSpecV1 = {
+      mode: "preview",
+      interactionMode: "static",
+      pageSlug: HOME,
+      sourcePath: "/test-root/.termcraft/pages/home/page.tsx",
+      sourceHash: HOME_SOURCE_HASH,
+      kitApiVersion: 1,
+      size: { w: 80, h: 24 },
+      theme: "dark",
+      capabilities: { colorDepth: 16 },
+    };
+    await wrap(harness.handlerContext.previewSessionCommands.selectPage(spec));
+    // `selectPage` itself just moved the machine `circuit-open -> starting -> live` (via its
+    // own internal `establishSession`) — reset back to `circuit-open` so this test can drive
+    // the SAME handler-level `preview.retry` path as the test above, now with `lastSpec` set.
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionFailed");
+    harness.handlerContext.machines.preview.apply("kernel.preview.openCircuit");
     expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+
+    const previewSessionId = uuidv7();
+    previewHandlers["preview.retry"]({ previewSessionId }, harness.handlerContext);
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+
+    expect(events).toHaveLength(2);
+    const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[0] as { payload: unknown }).payload,
+    );
+    expect(first).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.retryCircuit",
+      previousTag: "circuit-open",
+      nextTag: "starting",
+      metadata: {},
+    });
+    const second = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
+      (events[1] as { payload: unknown }).payload,
+    );
+    expect(second).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.sessionReady",
+      previousTag: "starting",
+      nextTag: "live",
+      metadata: {},
+    });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
   });
 });
 
-describe("previewHandlers.close — real, partial (Kernel-side half only)", () => {
-  test("applies disable, clears the tracked session, and emits a schema-valid kernel.stateChanged", () => {
-    const harness = buildTestContext(buildDeps());
+describe("previewHandlers.close — real, end to end (Gap A closure)", () => {
+  test("applies disable, clears the tracked session, calls the real session's own close(), and emits a schema-valid kernel.stateChanged", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
     enable(harness.handlerContext.machines);
-    harness.handlerContext.machines.preview.apply("kernel.preview.beginStart");
-    harness.handlerContext.machines.preview.apply("kernel.preview.sessionReady");
-    harness.handlerContext.setActivePreviewSession({ marker: "some-session" } as never);
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    const session = harness.getActivePreviewSession() as ReturnType<
+      typeof createFakePreviewSession
+    >;
 
     const previewSessionId = uuidv7();
     const outcome = previewHandlers["preview.close"]({ previewSessionId }, harness.handlerContext);
+    expect(outcome.disposition).toBe("started");
 
-    expect(outcome.disposition).toBe("completed");
-    expect(outcome.events).toHaveLength(1);
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+
+    expect(events).toHaveLength(1);
     const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      outcome.events[0]!.payload,
+      (events[0] as { payload: unknown }).payload,
     );
     expect(parsed).toEqual({
       modelId: "kernel.preview.state",
@@ -525,9 +764,11 @@ describe("previewHandlers.close — real, partial (Kernel-side half only)", () =
       nextTag: "disabled",
       metadata: {},
     });
-    expect(outcome.events[0]!.correlation).toEqual({ previewSessionId });
+    expect((events[0] as { correlation: unknown }).correlation).toEqual({ previewSessionId });
     expect(harness.handlerContext.machines.preview.phase()).toBe("disabled");
     expect(harness.getActivePreviewSession()).toBeNull();
+    // The host-side half Gap A used to block: the real session's own close() was called.
+    expect(session.calls.some((call) => call.method === "close")).toBe(true);
   });
 
   test("from an already-disabled phase, returns the sanctioned no-op (defensive; unreachable under a correct guard)", () => {
