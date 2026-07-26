@@ -66,7 +66,7 @@ interface ExpectedEdge {
 }
 
 // One entry per §7.2 table row, multi-source rows expanded to one edge per source, PLUS
-// the `requestCancel` edges from §7.2's prose paragraph (lines 265-269) and §8.4's
+// the `requestCancel` edges from §7.2's prose paragraph (lines 266-270) and §8.4's
 // "stopping or terminalizing returns accepted no-op for the same turn".
 const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "idle", action: "beginAdmission", to: "admitting" },
@@ -245,13 +245,15 @@ describe("reatomTurnStateMachine", () => {
   });
 
   it("admitting can terminalize — a rejected admission has an exit (spec §1.1)", () => {
-    const machine = reatomTurnStateMachine();
-    expect(machine.apply("beginAdmission").kind).toBe("changed");
-    expect(machine.phase()).toBe("admitting");
+    context.start(() => {
+      const machine = reatomTurnStateMachine();
+      expect(machine.apply("beginAdmission").kind).toBe("changed");
+      expect(machine.phase()).toBe("admitting");
 
-    const bridged = machine.apply("beginTerminalization");
-    expect(bridged.kind).toBe("changed");
-    expect(machine.phase()).toBe("terminalizing");
+      const bridged = machine.apply("beginTerminalization");
+      expect(bridged.kind).toBe("changed");
+      expect(machine.phase()).toBe("terminalizing");
+    });
   });
 });
 

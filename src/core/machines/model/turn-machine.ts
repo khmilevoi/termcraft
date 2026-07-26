@@ -68,7 +68,7 @@ export const TURN_ACTION_FULL_NAME: Readonly<Record<TurnAction, string>> = {
 
 /**
  * §7.2's table, transcribed row for row, PLUS the `requestCancel` edges from §7.2's own
- * prose paragraph (lines 265-269, restated as a permission matrix in §8.4) — that
+ * prose paragraph (lines 266-270, restated as a permission matrix in §8.4) — that
  * paragraph names sources, an action, and targets exactly like a table row, just not in
  * table syntax.
  *
