@@ -39,7 +39,7 @@ const deferred: CapabilityState = {
 // `TURN_RUNNING` renders `locked`.
 const turnRunning: CapabilityState = {
   available: false,
-  reasons: [{ code: "TURN_RUNNING", turnId: uuidv7() as never }],
+  reasons: [{ code: "TURN_RUNNING", turnId: uuidv7() }],
 };
 
 describe("SLASH_COMMANDS registry", () => {
@@ -144,23 +144,39 @@ describe("slashRowState", () => {
     expect(s.availability).toBe("unavailable");
   });
 
-  test("a null-capability row (/chats) is available when no turn runs", () => {
-    const s = slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, context());
+  // `/chats`'s own `command.capability` is `null` (the row opens a UI-local popup), but its
+  // availability is NOT unconditional — it reads `chat.switch`'s published state (review round 1
+  // fix; see `slashRowState`'s own doc comment for why).
+  test("/chats reads its availability from chat.switch's published state, not its own null capability", () => {
+    const s = slashRowState(
+      { cmd: "/chats", desc: "", order: 2, capability: null },
+      context([["chat.switch", available]]),
+    );
     expect(s.availability).toBe("available");
     expect(s.hint).toBeNull();
   });
 
-  // CORRECTED (finding §2.5, phase-8 Task 16): this used to assert the OPPOSITE for `/chats` —
-  // that it locks like every other row during a turn. `/chats` (and `/exit`) carry no Kernel
-  // capability at all, so there is nothing for the Kernel to lock; the blanket
-  // `context.turnRunning && !isCommit` rule that used to dim them is gone (see `slashRowState`'s
-  // own doc comment). `/export`'s "own reason" here is now a properly PUBLISHED `TURN_RUNNING`
-  // capability state, not the separate `context.turnRunning` bit alone.
-  test("locks rows individually — /chats stays available while a turn runs, /export locks on its own published TURN_RUNNING state", () => {
-    const running = context([["export.start", turnRunning]], { turnRunning: true });
+  test("/chats is unavailable when chat.switch has not been published (the missing-capability convention)", () => {
+    const s = slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, context());
+    expect(s.availability).toBe("unavailable");
+  });
+
+  // Design is unambiguous here: `commandRegistry` (design/termcraft-engine.js:928) gives
+  // `/chats` the SAME `lock:'locked · turn running'` as `/new`, and `wsSlashTurn` (`:1004`)
+  // draws it locked. REVIEW ROUND 1 (CRITICAL): a first pass had this test asserting `/chats`
+  // stays available during a turn — reading `turn-lock.ts:25-26`'s "local slash-command mode...
+  // no Kernel command at all" as covering this row, when that line is about the `/` INPUT MODE,
+  // not `/chats` itself. `chat.switch` (the command `/chats` exists to reach) IS one of §10.4's
+  // `TURN_LOCKED_KINDS`, so this row locks on that capability's own published state.
+  test("/chats locks during a turn — it reads chat.switch's published TURN_RUNNING state, matching design", () => {
+    const running = context([["chat.switch", turnRunning]], { turnRunning: true });
     expect(
       slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, running).availability,
-    ).toBe("available");
+    ).toBe("locked");
+  });
+
+  test("/export locks on its own published TURN_RUNNING state, and a commit row is not turn-locked at all", () => {
+    const running = context([["export.start", turnRunning]], { turnRunning: true });
     expect(
       slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, running)
         .availability,
@@ -175,8 +191,11 @@ describe("slashRowState", () => {
   });
 
   // finding §2.5 (phase-8 Task 16): `/exit` — the local action the finding names by name — stays
-  // available while a turn runs, exactly like `/chats` above; it is the one command a user with a
-  // stuck turn most wants reachable.
+  // available while a turn runs. Unlike `/chats`, `/exit` really is turn-safe: design
+  // (`design/termcraft-engine.js:934`) lists it with no `lock` at all, and it dispatches no
+  // Kernel command whatsoever (`execution: {kind:"local", effect:"exit"}` — `requestExit()`, not
+  // a `dispatcher.dispatch(...)` call). It is the one command a user with a stuck turn most wants
+  // reachable.
   test("locks rows individually — /exit stays available while a turn runs", () => {
     const running = context([["chat.create", turnRunning]], { turnRunning: true });
     expect(
@@ -249,7 +268,8 @@ describe("filterSlashRows", () => {
       "/",
       context([["chat.create", available]], { turnRunning: false }),
     );
-    // /new (chat.create) is available; /chats is available too. First available is index 0 (/new).
+    // /new (chat.create) is available and is index 0, so it wins regardless of any other row's
+    // state — this fixture does not publish chat.switch, so /chats itself reads unavailable here.
     expect(firstEnabledIndex(rows)).toBe(0);
   });
 });

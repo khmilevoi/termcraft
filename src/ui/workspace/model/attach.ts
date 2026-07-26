@@ -23,13 +23,21 @@ export interface ComposerAttachInput {
    * exact design sources; both are distinct screens, not one generic "a turn is running" line.
    */
   readonly turnRunning: boolean;
-  /**
-   * The composer's current draft text. Only its emptiness and its `/`-prefix are read here —
-   * `intent.ts`'s `slash-open` is the only path that ever sets the composer to a string starting
-   * with `/`, so this is a reliable proxy for "the slash menu is open" without threading the
-   * overlay atom into a function that is otherwise pure UI-state derivation.
-   */
+  /** The composer's current draft text. Only its emptiness is read here. */
   readonly composerValue: string;
+  /**
+   * Whether the slash-menu overlay is open (`local.overlay() === "slash-menu"`, the same read
+   * `Workspace.tsx`'s own `slashOpen` uses). REVIEW ROUND 1 FIX (finding §2.5, phase-8 Task 16):
+   * a first pass derived this from `composerValue.startsWith("/")` instead of reading the real
+   * overlay state — equivalent in the common case (`intent.ts`'s `slash-open` is the only path
+   * that sets the composer to a string starting with `/`), but a SECOND source of the same one
+   * truth, and actually wrong once the menu is dismissed (`Esc`) while a `/`-prefixed draft is
+   * still in the composer — that draft is no longer "local command mode", just an ordinary draft
+   * that happens to start with `/`, and should read the `⏎ send disabled — draft kept` line, not
+   * the slash one. Reading the real flag fixes that case as a side effect of removing the
+   * duplicate source.
+   */
+  readonly slashOpen: boolean;
 }
 
 /**
@@ -55,6 +63,16 @@ export interface ComposerAttachInput {
  *   this state, only the faint placeholder — matching the same `03-workspace-generating.dc.html`
  *   prose: "Empty, it shows the faint ❯ generating… esc to cancel placeholder with no caret."
  * - **none of the above** — `null` (Composer hides the line).
+ *
+ * GAP (finding §2.5, phase-8 Task 16, flagged not invented): design never draws open pins
+ * TOGETHER with a running turn — every pins screen (`wsPins`) is idle, and every turn-running
+ * screen (`wsGenTyping`/`wsSlashTurn`) has no pins in its scene. This function still ranks open
+ * pins above both turn-time lines (unchanged priority ordering, see below), which is a
+ * deliberate but UNDESIGNED choice for that specific combination, not one read off a screen: with
+ * pins open mid-turn, the `⏎ send disabled — draft kept`/slash line does not show even though the
+ * refusal is still real. It is defensible (the status bar's `⚠ turn running — send disabled`
+ * hint and faint `⏎ send` key keep repeating the refusal regardless of which attach line wins),
+ * but it is a gap, not a citation.
  *
  * DIVERGENCE: `Composer`'s `attach` prop renders one plain meta line (`{ text; fg }`); the
  * design's `chipTag` paints the selection chip as two tones on its own `sel` background (glyph
@@ -94,8 +112,7 @@ export function deriveComposerAttach(
   if (open.length > 0)
     return { text: `${open.length} open pins attached · sent next`, fg: "amberHi" };
   if (!input.turnRunning) return null;
-  if (input.composerValue.startsWith("/"))
-    return { text: "send refused — / still runs commands", fg: "amberHi" };
+  if (input.slashOpen) return { text: "send refused — / still runs commands", fg: "amberHi" };
   if (input.composerValue.length > 0)
     return { text: "⏎ send disabled — draft kept", fg: "amberHi" };
   return null;

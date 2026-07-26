@@ -189,28 +189,60 @@ export function capabilityHint(
 }
 
 /**
+ * Resolves a row's availability purely from ONE Kernel capability id's published state — the
+ * single authority `slashRowState` reads for every row that has a real command behind it,
+ * including `/chats` below, which is special-cased onto `chat.switch` even though its OWN
+ * `command.capability` is `null`.
+ */
+function capabilityRowState(context: ActionContext, id: CommandKindV1): ActionRowState {
+  const state = capabilityState(context, id);
+  if (state?.available === true) return { visible: true, availability: "available", hint: null };
+
+  const hint = capabilityHint(context, id);
+  const locked = hint !== null && hint.code === "TURN_RUNNING";
+  return { visible: true, availability: locked ? "locked" : "unavailable", hint };
+}
+
+/**
  * Computes one slash row's display state (design §3.10). A row is `visible: true` even while
  * not `available` — never hidden.
  *
  * CORRECTED (finding §2.5, phase-8 Task 16): this used to compute its own `turnLocked = context.
  * turnRunning && !isCommit` bit and apply it as a SECOND, independent lock authority on top of
  * the Kernel's own per-command capability state — which dimmed `/chats` AND `/exit` for the
- * whole duration of a turn even though neither carries a Kernel capability at all (`core/
- * capabilities/model/turn-lock.ts`'s own header: local slash-command mode is available during a
- * turn "because it is no Kernel command at all"). `/exit` in particular is exactly what someone
- * wants reachable when a turn is stuck. There is now exactly ONE authority:
- * - a `capability: null` row (a UI-local action — `/chats` opens a popup, `/exit` quits) is
- *   always `available`, never turn-locked, because there is no Kernel command to lock;
- * - every other row reads the PUBLISHED capability state (`context.capabilities`), which
- *   already carries `TURN_RUNNING` per kind for the exact set §10.4's `TURN_LOCKED_KINDS`
- *   names, with its own hint. `context.turnRunning` is not read here at all.
+ * whole duration of a turn even though neither carries a Kernel capability of its OWN. `/exit`
+ * really is turn-safe (design `commandRegistry`, `design/termcraft-engine.js:934`, no `lock` at
+ * all) and is exactly what someone wants reachable when a turn is stuck — dimming it was the bug
+ * this task fixes. `/chats` is NOT turn-safe: design's own registry (`:928`) gives it the
+ * IDENTICAL `lock:'locked · turn running'` as `/new`, and `wsSlashTurn` (`:1004`) draws it
+ * locked — its `command.capability` reads `null` only because the ROW itself dispatches no
+ * Kernel command (it opens a popup), but the action it exists for, switching chats, dispatches
+ * `chat.switch` from that popup (`intent.ts`'s `chat-switch` case), one of §10.4's
+ * `TURN_LOCKED_KINDS` (`core/capabilities/model/turn-lock.ts:30`). REVIEW ROUND 1 FIX: a first
+ * pass read `turn-lock.ts:25-26`'s "local slash-command mode ... no Kernel command at all" as
+ * covering `/chats` too — that line is about the `/` INPUT MODE (typing a slash opens local
+ * command mode), not this specific row, and `commandRegistry` thirteen lines from the line this
+ * fix's citation leaned on says the opposite for `/chats` itself. There is now exactly ONE
+ * authority, `capabilityRowState` above, applied per row:
+ * - a `capability: null` row that is genuinely turn-safe (`/exit`) is always `available`;
+ * - `/chats` reads `chat.switch`'s published state — the same authority that blocks `/new`;
+ * - every other row reads its own `command.capability`'s published state. `context.turnRunning`
+ *   is not read here at all.
  *
  * Priority: `unavailable` outranks `locked` (design `slashRows` `:943-945`'s `if _un … else if
  * _un … else if (o.turn && c.lock) _lk`) — a row whose capability is unavailable for its own
  * reason (e.g. `NO_PAGES`) reports that reason, never the misleading "it comes back on its own"
- * of `locked`. This falls out of reading the Kernel's own reason rather than being computed here:
- * `locked` is reported only when the primary hint's code is exactly `TURN_RUNNING`; any other
- * reason (including one that happens to coincide with a running turn) reports `unavailable`.
+ * of `locked`. What this function actually guarantees: `locked` is reported iff the PRIMARY hint
+ * (`capabilityHint`'s `primaryReason` selection) is exactly `TURN_RUNNING`; any other primary
+ * reason reports `unavailable`. This is NOT structurally guaranteed to match design's priority in
+ * every case — `core/capabilities/model/guards.ts`'s `collectReasons` (`:49-58`) can concatenate
+ * `turnLockedReason(...)` alongside a family-specific reason into ONE `state.reasons` array, and
+ * `UNAVAILABLE_REASON_PRIORITY_V1` ranks `TURN_RUNNING` (tier 3) ABOVE codes like `NO_PAGES`
+ * (tier 7) — so if a guard ever published both for the same command, `primaryReason` would pick
+ * `TURN_RUNNING` and this function would report `locked`, the opposite of design's stated
+ * priority. Today this is latent, not reachable: no `core/capabilities` guard emits `NO_PAGES` at
+ * all — its only emitter is `core/export/model/snapshot.ts:80`, a command EXECUTION result, never
+ * a published capability reason.
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
   const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
@@ -222,23 +254,24 @@ export function slashRowState(command: SlashCommand, context: ActionContext): Ac
     };
   }
 
-  // A row with no Kernel capability is a LOCAL action — `/chats` opens a popup, `/exit` quits.
-  // `core/capabilities/model/turn-lock.ts`'s own header states the rule: local slash-command mode
-  // stays available during a turn "because it is no Kernel command at all". The old blanket
-  // `turnRunning && !isCommit` dimmed these too, which left `/exit` unusable exactly when a stuck
-  // turn made someone want it (finding §2.5).
+  // `/chats`'s own `command.capability` is `null` (the row opens a UI-local popup — see
+  // `UI_ACTIONS`'s own comment on this entry), but design locks it exactly like `/new`
+  // (`design/termcraft-engine.js:928`, `wsSlashTurn:1004`) because the action it exists for,
+  // `chat.switch`, is turn-locked. Read that capability directly, not `command.capability`.
+  if (command.cmd === "/chats") return capabilityRowState(context, "chat.switch");
+
+  // Every OTHER `capability: null` row is a genuinely turn-safe LOCAL action — `/exit` quits,
+  // and design (`:934`) lists it with no `lock` at all, confirming there is really nothing here
+  // for the Kernel to block. The old blanket `turnRunning && !isCommit` dimmed it too, which left
+  // it unusable exactly when a stuck turn made someone want it (finding §2.5).
   if (command.capability === null) {
     return { visible: true, availability: "available", hint: null };
   }
 
-  // Everything else reads the PUBLISHED capability state, which already carries `TURN_RUNNING`
-  // per kind with its own hint text (§10.4's `TURN_LOCKED_KINDS`) — one authority, not two.
-  const state = capabilityState(context, command.capability);
-  if (state?.available === true) return { visible: true, availability: "available", hint: null };
-
-  const hint = capabilityHint(context, command.capability);
-  const locked = hint !== null && hint.code === "TURN_RUNNING";
-  return { visible: true, availability: locked ? "locked" : "unavailable", hint };
+  // Everything else reads its own PUBLISHED capability state (the same helper `/chats` uses
+  // above), which already carries `TURN_RUNNING` per kind with its own hint text (§10.4's
+  // `TURN_LOCKED_KINDS`) — one authority, not two.
+  return capabilityRowState(context, command.capability);
 }
 
 /**

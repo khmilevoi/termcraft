@@ -457,6 +457,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 openPins: pins,
                 turnRunning: turn.phase === "running",
                 composerValue,
+                slashOpen,
               })}
             />
             {slashOpen && (

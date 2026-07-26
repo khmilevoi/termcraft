@@ -29,6 +29,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [pin({})],
       turnRunning: true,
       composerValue: "half a sentence",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "read-only — Send disabled", fg: "red" });
   });
@@ -41,6 +42,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [],
       turnRunning: false,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
   });
@@ -53,6 +55,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [pin({}), pin({})],
       turnRunning: false,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
   });
@@ -65,6 +68,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [pin({}), pin({})],
       turnRunning: false,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "2 open pins attached · sent next", fg: "amberHi" });
   });
@@ -77,6 +81,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [pin({ status: "resolved" }), pin({ status: "resolved" })],
       turnRunning: false,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toBeNull();
   });
@@ -89,6 +94,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       openPins: [],
       turnRunning: false,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toBeNull();
   });
@@ -102,6 +108,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         openPins: [],
         turnRunning: false,
         composerValue: "",
+        slashOpen: false,
       });
       expect(result).toBeNull();
     });
@@ -114,6 +121,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         openPins: [pin({}), pin({})],
         turnRunning: false,
         composerValue: "",
+        slashOpen: false,
       });
       expect(result).toEqual({ text: "2 open pins attached · sent next", fg: "amberHi" });
     });
@@ -126,6 +134,7 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         openPins: [pin({})],
         turnRunning: false,
         composerValue: "",
+        slashOpen: false,
       });
       expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
     });
@@ -134,8 +143,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
 
 // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so its attach line
 // must now say something during one too — design draws two distinct turn-time lines (never one
-// generic "a turn is running" line), keyed on whether there is a draft and whether it is the `/`
-// local-command prefix. See `deriveComposerAttach`'s own doc comment for the exact citations.
+// generic "a turn is running" line), keyed on whether the slash-menu overlay is open and whether
+// there is a draft. See `deriveComposerAttach`'s own doc comment for the exact citations.
 describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/wsSlashTurn)", () => {
   test("an empty composer during a turn renders no attach line (design's plain drawChat gen path, :255)", () => {
     const result = deriveComposerAttach({
@@ -145,6 +154,7 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [],
       turnRunning: true,
       composerValue: "",
+      slashOpen: false,
     });
     expect(result).toBeNull();
   });
@@ -157,11 +167,12 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [],
       turnRunning: true,
       composerValue: "and label the peaks",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "⏎ send disabled — draft kept", fg: "amberHi" });
   });
 
-  test("the slash prefix during a turn renders `send refused — / still runs commands` at amberHi (wsSlashTurn :998)", () => {
+  test("the slash overlay open during a turn renders `send refused — / still runs commands` at amberHi (wsSlashTurn :998)", () => {
     const result = deriveComposerAttach({
       readOnly: false,
       selection: null,
@@ -169,6 +180,7 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [],
       turnRunning: true,
       composerValue: "/",
+      slashOpen: true,
     });
     expect(result).toEqual({ text: "send refused — / still runs commands", fg: "amberHi" });
   });
@@ -181,8 +193,26 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [],
       turnRunning: true,
       composerValue: "/exit",
+      slashOpen: true,
     });
     expect(result).toEqual({ text: "send refused — / still runs commands", fg: "amberHi" });
+  });
+
+  // REVIEW ROUND 1 regression guard (finding §2.5, phase-8 Task 16): a first pass inferred
+  // "slash mode" from `composerValue.startsWith("/")` alone — this is the exact case that got
+  // wrong. Once the overlay is dismissed (Esc), a `/`-prefixed leftover draft is an ORDINARY
+  // draft, not local-command mode, and must read the draft-kept line, not the slash line.
+  test("a /-prefixed draft with the overlay CLOSED reads as an ordinary draft, not local-command mode", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "/exit",
+      slashOpen: false,
+    });
+    expect(result).toEqual({ text: "⏎ send disabled — draft kept", fg: "amberHi" });
   });
 
   test("a selection still wins over either turn-time line", () => {
@@ -193,11 +223,16 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [],
       turnRunning: true,
       composerValue: "a draft that should stay hidden",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
   });
 
-  test("open pins still win over either turn-time line", () => {
+  // GAP flagged in `deriveComposerAttach`'s own doc comment: design never draws pins open
+  // together with a running turn. This pins this MODULE's own (undesigned but defensible)
+  // choice for that combination, so a future change to the ordering is a deliberate decision,
+  // not a silent regression.
+  test("open pins still win over either turn-time line (GAP: design does not draw this combination)", () => {
     const result = deriveComposerAttach({
       readOnly: false,
       selection: null,
@@ -205,6 +240,7 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       openPins: [pin({})],
       turnRunning: true,
       composerValue: "a draft that should stay hidden",
+      slashOpen: false,
     });
     expect(result).toEqual({ text: "1 open pins attached · sent next", fg: "amberHi" });
   });

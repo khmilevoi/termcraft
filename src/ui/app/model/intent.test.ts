@@ -233,6 +233,11 @@ describe("applyIntent — slash menu", () => {
             target: null,
             state: { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] },
           },
+          // `/chats` reads chat.switch's OWN published state, not its null `command.capability`
+          // (finding §2.5, phase-8 Task 16 review round 1) — publish it available so this
+          // fixture's "skip onto /chats" claim is actually true, not an artifact of a missing
+          // capability defaulting to unavailable.
+          { id: "chat.switch", target: null, state: { available: true } },
           { id: "export.start", target: null, state: { available: true } },
         ],
       }),
@@ -257,6 +262,9 @@ describe("applyIntent — slash menu", () => {
         trust: "trusted",
         capabilities: [
           { id: "chat.create", target: null, state: { available: true } },
+          // `/chats` reads this, not its own null `command.capability` (finding §2.5, phase-8
+          // Task 16 review round 1).
+          { id: "chat.switch", target: null, state: { available: true } },
           { id: "export.start", target: null, state: { available: true } },
           {
             id: "model.select",
@@ -285,6 +293,10 @@ describe("applyIntent — slash menu", () => {
         trust: "trusted",
         capabilities: [
           { id: "chat.create", target: null, state: { available: true } },
+          // `/chats` reads this, not its own null `command.capability` (finding §2.5, phase-8
+          // Task 16 review round 1) — required for the `/chats` submit below to actually open
+          // the chat-list popup instead of being refused as unavailable.
+          { id: "chat.switch", target: null, state: { available: true } },
           { id: "export.start", target: null, state: { available: true } },
         ],
       }),

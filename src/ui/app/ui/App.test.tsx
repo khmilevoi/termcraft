@@ -790,7 +790,13 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       activePageSlug: "main",
       activeChatId: initialChatId,
       trust: "trusted",
-      capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
+      // `chat.switch` is required for the `/chats` walk below (finding §2.5, phase-8 Task 16
+      // review round 1): the row's OWN capability is null (it opens a popup), but it now reads
+      // chat.switch's published state, not an unconditional "available".
+      capabilities: [
+        { id: "chat.create", target: null, state: { available: true } },
+        { id: "chat.switch", target: null, state: { available: true } },
+      ],
       pageDescriptors: [readyPage()],
       agentIdentity: AGENT_IDENTITY,
     });
