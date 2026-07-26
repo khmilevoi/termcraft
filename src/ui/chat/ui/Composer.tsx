@@ -7,7 +7,7 @@ export interface ComposerProps {
   readonly modelChip: string; // e.g. "claude · sonnet-4.5" — M22: sourced from agentIdentity
   readonly ctx: number | null; // ctx%; null hides the ctx tag
   readonly ctxCaution?: boolean; // ctx>=80 -> value flips to amberHi bold
-  readonly disabled?: boolean; // generating/read-only: caret faint, no cursor
+  readonly disabled?: boolean; // read-only, unfocused, or generating with an EMPTY draft: caret faint, no cursor
   readonly placeholder: string; // "Ask for changes…" / "generating… esc to cancel" / etc
   readonly value: string; // current input (empty -> show placeholder)
   readonly attach?: { readonly text: string; readonly fg: ShellToken } | null; // optional line above input
@@ -25,6 +25,17 @@ const CURSOR_GLYPH = "█";
  * ctx text painted directly onto it; this component instead renders the meta row as its own
  * flex row above a plain input block — the closest faithful mapping since OpenTUI boxes render
  * one full border, not per-glyph overlays onto a border line.
+ *
+ * Turn-time rendering (finding §2.5, phase-8 Task 16): design draws two distinct states for a
+ * running turn, both in `design/termcraft-engine.js`'s `wsGenTyping` (`:259-277`) and confirmed
+ * in prose by `design/03-workspace-generating.dc.html`'s `ws-gen-typing-120` paragraph — "Empty,
+ * it shows the faint ❯ generating… esc to cancel placeholder with no caret. Holding a draft it
+ * looks alive, because it is: amber ❯, text in full foreground, blinking caret." This component
+ * needed NO change to reproduce either state: `hasValue`/`disabled` (both already props) already
+ * select exactly this pairing — an empty value falls to the faint placeholder branch below
+ * regardless of `disabled`, and the caret/cursor already key off `disabled` alone. The caller
+ * (`Workspace.tsx`) is what changed: `disabled` is no longer forced by `turn.phase === "running"`
+ * on its own, only by a running turn WITH an empty draft — see its own comment at the call site.
  */
 export function Composer(props: ComposerProps) {
   const hasValue = props.value.length > 0;

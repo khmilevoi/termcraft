@@ -329,16 +329,24 @@ describe("resolveKey — Workspace composer", () => {
     });
   });
 
-  test("composer input and Enter-submit are inert while a turn is running, matching the disabled composer", () => {
-    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({ turnRunning: true }))).toEqual({
-      kind: "none",
+  // CORRECTED (finding §2.5, phase-8 Task 16): this test used to pin the OPPOSITE — every key
+  // resolving to `none` while `turnRunning` — matching the old blunt freeze this task removes.
+  // Master §3.2: "Typing the next message while a turn runs is allowed, but sending is
+  // disabled." `composer-submit` still resolves normally here; the refusal moves to
+  // `applyIntent` (`intent.ts`), which no-ops without clearing the draft (see `intent.test.ts`).
+  test("keeps typing, backspace, / and Enter-submit live for the whole turn (§3.2)", () => {
+    const running = ctx({ turnRunning: true, composerValue: "" });
+    expect(resolveKey(key({ name: "a", sequence: "a" }), running)).toEqual({
+      kind: "composer-input",
+      ch: "a",
     });
-    expect(resolveKey(key({ name: "return" }), ctx({ turnRunning: true }))).toEqual({
-      kind: "none",
+    expect(resolveKey(key({ name: "backspace" }), { ...running, composerValue: "ab" })).toEqual({
+      kind: "composer-backspace",
     });
-    expect(resolveKey(key({ name: "backspace" }), ctx({ turnRunning: true }))).toEqual({
-      kind: "none",
+    expect(resolveKey(key({ sequence: "/", name: "/" }), running)).toEqual({
+      kind: "slash-open",
     });
+    expect(resolveKey(key({ name: "return" }), running)).toEqual({ kind: "composer-submit" });
   });
 });
 

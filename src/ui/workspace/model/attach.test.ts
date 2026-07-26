@@ -27,6 +27,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: { pageSlug: "main", elementId: "gauge-cpu", sourceHash: TEST_SHA },
       activePageSlug: "main",
       openPins: [pin({})],
+      turnRunning: true,
+      composerValue: "half a sentence",
     });
     expect(result).toEqual({ text: "read-only — Send disabled", fg: "red" });
   });
@@ -37,6 +39,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: { pageSlug: "main", elementId: "gauge-cpu", sourceHash: TEST_SHA },
       activePageSlug: "main",
       openPins: [],
+      turnRunning: false,
+      composerValue: "",
     });
     expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
   });
@@ -47,6 +51,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: { pageSlug: "main", elementId: "gauge-cpu", sourceHash: TEST_SHA },
       activePageSlug: "main",
       openPins: [pin({}), pin({})],
+      turnRunning: false,
+      composerValue: "",
     });
     expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
   });
@@ -57,6 +63,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: null,
       activePageSlug: "main",
       openPins: [pin({}), pin({})],
+      turnRunning: false,
+      composerValue: "",
     });
     expect(result).toEqual({ text: "2 open pins attached · sent next", fg: "amberHi" });
   });
@@ -67,6 +75,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: null,
       activePageSlug: "main",
       openPins: [pin({ status: "resolved" }), pin({ status: "resolved" })],
+      turnRunning: false,
+      composerValue: "",
     });
     expect(result).toBeNull();
   });
@@ -77,6 +87,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
       selection: null,
       activePageSlug: null,
       openPins: [],
+      turnRunning: false,
+      composerValue: "",
     });
     expect(result).toBeNull();
   });
@@ -88,6 +100,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         selection: { pageSlug: "other", elementId: "gauge-cpu", sourceHash: TEST_SHA },
         activePageSlug: "main",
         openPins: [],
+        turnRunning: false,
+        composerValue: "",
       });
       expect(result).toBeNull();
     });
@@ -98,6 +112,8 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         selection: { pageSlug: "other", elementId: "gauge-cpu", sourceHash: TEST_SHA },
         activePageSlug: "main",
         openPins: [pin({}), pin({})],
+        turnRunning: false,
+        composerValue: "",
       });
       expect(result).toEqual({ text: "2 open pins attached · sent next", fg: "amberHi" });
     });
@@ -108,8 +124,88 @@ describe("deriveComposerAttach (design wsSelect chip / wsPins attach line, chatS
         selection: { pageSlug: "main", elementId: "gauge-cpu", sourceHash: TEST_SHA },
         activePageSlug: "main",
         openPins: [pin({})],
+        turnRunning: false,
+        composerValue: "",
       });
       expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
     });
+  });
+});
+
+// finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so its attach line
+// must now say something during one too — design draws two distinct turn-time lines (never one
+// generic "a turn is running" line), keyed on whether there is a draft and whether it is the `/`
+// local-command prefix. See `deriveComposerAttach`'s own doc comment for the exact citations.
+describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/wsSlashTurn)", () => {
+  test("an empty composer during a turn renders no attach line (design's plain drawChat gen path, :255)", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "",
+    });
+    expect(result).toBeNull();
+  });
+
+  test("a non-slash draft during a turn renders `⏎ send disabled — draft kept` at amberHi (wsGenTyping :268)", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "and label the peaks",
+    });
+    expect(result).toEqual({ text: "⏎ send disabled — draft kept", fg: "amberHi" });
+  });
+
+  test("the slash prefix during a turn renders `send refused — / still runs commands` at amberHi (wsSlashTurn :998)", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "/",
+    });
+    expect(result).toEqual({ text: "send refused — / still runs commands", fg: "amberHi" });
+  });
+
+  test("a typed slash command during a turn still reads as the local-command line, not the draft line", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "/exit",
+    });
+    expect(result).toEqual({ text: "send refused — / still runs commands", fg: "amberHi" });
+  });
+
+  test("a selection still wins over either turn-time line", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: { pageSlug: "main", elementId: "gauge-cpu", sourceHash: TEST_SHA },
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: true,
+      composerValue: "a draft that should stay hidden",
+    });
+    expect(result).toEqual({ text: "▣ gauge-cpu", fg: "selFg" });
+  });
+
+  test("open pins still win over either turn-time line", () => {
+    const result = deriveComposerAttach({
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [pin({})],
+      turnRunning: true,
+      composerValue: "a draft that should stay hidden",
+    });
+    expect(result).toEqual({ text: "1 open pins attached · sent next", fg: "amberHi" });
   });
 });

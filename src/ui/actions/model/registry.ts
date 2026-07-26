@@ -190,15 +190,27 @@ export function capabilityHint(
 
 /**
  * Computes one slash row's display state (design §3.10). A row is `visible: true` even while
- * not `available` — never hidden. Turn-lock: while a turn runs, every non-`/commit-*` row goes
- * `locked` (design `o.turn && !isCommit(c)`) — this also covers the `capability: null` `/chats`
- * row, whose `chat.switch` is turn-locked but which carries no capability of its own.
+ * not `available` — never hidden.
+ *
+ * CORRECTED (finding §2.5, phase-8 Task 16): this used to compute its own `turnLocked = context.
+ * turnRunning && !isCommit` bit and apply it as a SECOND, independent lock authority on top of
+ * the Kernel's own per-command capability state — which dimmed `/chats` AND `/exit` for the
+ * whole duration of a turn even though neither carries a Kernel capability at all (`core/
+ * capabilities/model/turn-lock.ts`'s own header: local slash-command mode is available during a
+ * turn "because it is no Kernel command at all"). `/exit` in particular is exactly what someone
+ * wants reachable when a turn is stuck. There is now exactly ONE authority:
+ * - a `capability: null` row (a UI-local action — `/chats` opens a popup, `/exit` quits) is
+ *   always `available`, never turn-locked, because there is no Kernel command to lock;
+ * - every other row reads the PUBLISHED capability state (`context.capabilities`), which
+ *   already carries `TURN_RUNNING` per kind for the exact set §10.4's `TURN_LOCKED_KINDS`
+ *   names, with its own hint. `context.turnRunning` is not read here at all.
  *
  * Priority: `unavailable` outranks `locked` (design `slashRows` `:943-945`'s `if _un … else if
  * _un … else if (o.turn && c.lock) _lk`) — a row whose capability is unavailable for its own
- * reason (e.g. `NO_PAGES`) reports that reason even during a turn, rather than the misleading
- * "it comes back on its own" of `locked` (a turn-locked-but-otherwise-available row is the only
- * case that reaches `locked`).
+ * reason (e.g. `NO_PAGES`) reports that reason, never the misleading "it comes back on its own"
+ * of `locked`. This falls out of reading the Kernel's own reason rather than being computed here:
+ * `locked` is reported only when the primary hint's code is exactly `TURN_RUNNING`; any other
+ * reason (including one that happens to coincide with a running turn) reports `unavailable`.
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
   const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
@@ -209,26 +221,24 @@ export function slashRowState(command: SlashCommand, context: ActionContext): Ac
       hint: command.capability === null ? null : capabilityHint(context, command.capability),
     };
   }
-  const isCommit = command.cmd.startsWith("/commit");
-  const turnLocked = context.turnRunning && !isCommit;
 
+  // A row with no Kernel capability is a LOCAL action — `/chats` opens a popup, `/exit` quits.
+  // `core/capabilities/model/turn-lock.ts`'s own header states the rule: local slash-command mode
+  // stays available during a turn "because it is no Kernel command at all". The old blanket
+  // `turnRunning && !isCommit` dimmed these too, which left `/exit` unusable exactly when a stuck
+  // turn made someone want it (finding §2.5).
   if (command.capability === null) {
-    return { visible: true, availability: turnLocked ? "locked" : "available", hint: null };
+    return { visible: true, availability: "available", hint: null };
   }
 
-  if (!isCapabilityAvailable(context, command.capability)) {
-    return {
-      visible: true,
-      availability: "unavailable",
-      hint: capabilityHint(context, command.capability),
-    };
-  }
+  // Everything else reads the PUBLISHED capability state, which already carries `TURN_RUNNING`
+  // per kind with its own hint text (§10.4's `TURN_LOCKED_KINDS`) — one authority, not two.
+  const state = capabilityState(context, command.capability);
+  if (state?.available === true) return { visible: true, availability: "available", hint: null };
 
-  return {
-    visible: true,
-    availability: turnLocked ? "locked" : "available",
-    hint: capabilityHint(context, command.capability),
-  };
+  const hint = capabilityHint(context, command.capability);
+  const locked = hint !== null && hint.code === "TURN_RUNNING";
+  return { visible: true, availability: locked ? "locked" : "unavailable", hint };
 }
 
 /**

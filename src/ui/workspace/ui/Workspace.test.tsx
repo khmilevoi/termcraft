@@ -337,6 +337,99 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
   });
 });
 
+// finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn — design draws two
+// distinct states (`wsGenTyping`/`wsSlashTurn`, `design/03-workspace-generating.dc.html`), keyed
+// on whether the composer holds a draft.
+describe("Workspace composer during a running turn (finding §2.5)", () => {
+  test("an empty composer stays visually disabled — faint placeholder, no cursor", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("generating… esc to cancel");
+    expect(text).not.toContain("█");
+    expect(text).toContain("⚠ turn running — send disabled");
+  });
+
+  test("a non-empty draft renders live — amber caret, blinking cursor, the draft text itself, and the design's draft-kept line", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    deps.local.composer.set("and label the peaks");
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("and label the peaks");
+    expect(text).toContain("█");
+    expect(text).toContain("⏎ send disabled — draft kept");
+    // Exact-text match, not substring: the chat panel's own focused title also starts with
+    // "❯ chat..." (`SHELL_PALETTE.amberHi`), which `findRun`'s `.includes` would match FIRST —
+    // the composer caret's own text node content is exactly "❯ ", nothing longer.
+    const caret = rows.flat().find((run) => run.text === "❯ ");
+    expect(caret && extractRgb(caret.fg)).toBe(SHELL_PALETTE.amber);
+  });
+
+  test("the status bar shows a faint dis'd ⏎ send and a live esc cancel, no F2, while a turn runs", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("send");
+    expect(text).toContain("cancel");
+    expect(text).not.toContain("fullscreen");
+    // The renderer merges adjacent same-style runs — the disabled `⏎`/`send` glyph+label share
+    // one faint style and collapse into a single " ⏎  send " run, so match by substring here;
+    // the LIVE `esc`/`cancel` pair does NOT merge (different styles per run), so an exact match
+    // on the glyph's own " esc " text node is unambiguous (the empty composer's own placeholder
+    // also contains the substring "esc" — "generating… esc to cancel" — which `findRun`'s
+    // `.includes` would otherwise match first).
+    const sendGlyph = rows.flat().find((run) => run.text.includes("⏎"));
+    expect(sendGlyph && extractRgb(sendGlyph.fg)).toBe(SHELL_PALETTE.faint);
+    const cancelGlyph = rows.flat().find((run) => run.text === " esc ");
+    expect(cancelGlyph && extractRgb(cancelGlyph.fg)).toBe(SHELL_PALETTE.amber);
+  });
+});
+
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });

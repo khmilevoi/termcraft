@@ -65,11 +65,16 @@ export interface KeyContext {
    */
   readonly homePrompt: string;
   /**
-   * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). The Composer renders
-   * `disabled` while this is true (`Workspace.tsx`'s `disabled={... || turn.phase === "running"
-   * || ...}`), so the key layer must refuse composer-input/composer-submit here too — otherwise
-   * keystrokes would silently accumulate behind the disabled placeholder and Enter would fire a
-   * second `turn.start` the kernel rejects (`TURN_ALREADY_ACTIVE`), discarding what was typed.
+   * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). CORRECTED (finding
+   * §2.5, phase-8 Task 16): this used to also gate `composerActive` below, freezing the whole
+   * composer — no character, no backspace, no `/` — for the entire duration of a turn. Master
+   * §3.2 only refuses *sending*: "Typing the next message while a turn runs is allowed, but
+   * sending is disabled." `resolveKey` no longer reads this field at all; the real hazard it
+   * used to guard against (a second `turn.start` the Kernel rejects, discarding the draft) is
+   * closed at its actual source instead — `applyIntent`'s `composer-submit` no-ops while a turn
+   * runs rather than dispatching. The field stays on `KeyContext` because `App.tsx`'s `onKey`
+   * still records it in every `trace("ui.onKey", ...)` call, which is genuinely useful context
+   * for diagnosing a key resolution captured during a running turn.
    */
   readonly turnRunning: boolean;
 }
@@ -195,16 +200,12 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   if (hotkey?.inert === true) return { kind: "none" };
   if (hotkey !== null) return { kind: "action-execute", actionId: hotkey.id };
 
-  // Excludes `turnRunning`: the Composer renders visually `disabled` for the whole duration of
-  // a running turn (`Workspace.tsx`'s `disabled={... || turn.phase === "running" || ...}`), so
-  // keystrokes/Enter must stop here too — otherwise typed text would silently pile up behind the
-  // "generating… esc to cancel" placeholder and Enter would fire a second rejected `turn.start`,
-  // discarding it (`applyIntent`'s `composer-submit` clears the composer unconditionally).
+  // §3.2: typing the next message WHILE a turn runs is allowed — only sending is refused. The
+  // hazard the old `!context.turnRunning` guarded against (a second `turn.start` the Kernel
+  // rejects, discarding the draft) is closed at its real source instead: `applyIntent`'s
+  // `composer-submit` no longer clears the composer, and no-ops while a turn runs.
   const composerActive =
-    context.screen === "workspace" &&
-    context.focus === "composer" &&
-    context.overlay === null &&
-    !context.turnRunning;
+    context.screen === "workspace" && context.focus === "composer" && context.overlay === null;
 
   if (context.screen === "home") {
     // The missing-CLI panel has no prompt input at all, so every key but the two the design's

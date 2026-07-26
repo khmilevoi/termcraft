@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { CommandKindV1 } from "core/protocol";
+import { uuidv7 } from "infrastructure/uuid";
 import type { CapabilityState, ScreenKind } from "ui/mirror";
 
 import type { ActionContext } from "../types";
@@ -30,6 +31,15 @@ const noPages: CapabilityState = { available: false, reasons: [{ code: "NO_PAGES
 const deferred: CapabilityState = {
   available: false,
   reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
+};
+// The PUBLISHED shape of a §10.4 `TURN_LOCKED_KINDS` capability while a turn is running (finding
+// §2.5, phase-8 Task 16) — `core/capabilities/model/turn-lock.ts`'s `turnLockedReason`. Unlike
+// `context({...}, { turnRunning: true })` alone, `slashRowState` no longer reads the context-level
+// `turnRunning` bit for a capability row at all — only a capability state whose own reason is
+// `TURN_RUNNING` renders `locked`.
+const turnRunning: CapabilityState = {
+  available: false,
+  reasons: [{ code: "TURN_RUNNING", turnId: uuidv7() as never }],
 };
 
 describe("SLASH_COMMANDS registry", () => {
@@ -140,11 +150,17 @@ describe("slashRowState", () => {
     expect(s.hint).toBeNull();
   });
 
-  test("while a turn runs, every non-commit row locks — including /chats", () => {
-    const running = context([["export.start", available]], { turnRunning: true });
+  // CORRECTED (finding §2.5, phase-8 Task 16): this used to assert the OPPOSITE for `/chats` —
+  // that it locks like every other row during a turn. `/chats` (and `/exit`) carry no Kernel
+  // capability at all, so there is nothing for the Kernel to lock; the blanket
+  // `context.turnRunning && !isCommit` rule that used to dim them is gone (see `slashRowState`'s
+  // own doc comment). `/export`'s "own reason" here is now a properly PUBLISHED `TURN_RUNNING`
+  // capability state, not the separate `context.turnRunning` bit alone.
+  test("locks rows individually — /chats stays available while a turn runs, /export locks on its own published TURN_RUNNING state", () => {
+    const running = context([["export.start", turnRunning]], { turnRunning: true });
     expect(
       slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, running).availability,
-    ).toBe("locked");
+    ).toBe("available");
     expect(
       slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, running)
         .availability,
@@ -158,8 +174,23 @@ describe("slashRowState", () => {
     expect(commit.hint).toEqual({ code: "CAPABILITY_UNAVAILABLE" });
   });
 
+  // finding §2.5 (phase-8 Task 16): `/exit` — the local action the finding names by name — stays
+  // available while a turn runs, exactly like `/chats` above; it is the one command a user with a
+  // stuck turn most wants reachable.
+  test("locks rows individually — /exit stays available while a turn runs", () => {
+    const running = context([["chat.create", turnRunning]], { turnRunning: true });
+    expect(
+      slashRowState({ cmd: "/exit", desc: "quit termcraft", order: 8, capability: null }, running)
+        .availability,
+    ).toBe("available");
+    expect(
+      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
+        .availability,
+    ).toBe("locked");
+  });
+
   test("separates kernel-locked from unavailable (design slashBox :948-949)", () => {
-    const running = context([["chat.create", available]], { turnRunning: true });
+    const running = context([["chat.create", turnRunning]], { turnRunning: true });
     expect(
       slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
         .availability,

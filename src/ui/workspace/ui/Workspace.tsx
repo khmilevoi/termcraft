@@ -59,10 +59,23 @@ function fullscreenHint(label: string): readonly StatusBarHintKey[] {
   );
 }
 
-/** The right-aligned hint keys for the current state (design `hintKeys` defaults). */
+/**
+ * The right-aligned hint keys for the current state (design `hintKeys` defaults). CORRECTED
+ * (finding §2.5, phase-8 Task 16): the running branch used to append the F2 "full" hint after
+ * "esc cancel" — the plainer `workspace(w,h,'gen')` screen's own key row
+ * (`design/termcraft-engine.js:215`) does show F2, but the dedicated, more detailed generating
+ * screens this task is about do not: `wsGenTyping` (`:275-276`) and `wsSlashTurn` (`:1005-1006`)
+ * both draw the SAME exact pair, `keys:[['⏎','send','dis'],['esc','cancel']]` — a faint,
+ * explicitly-disabled `⏎ send` alongside the live `esc cancel`, no F2 at all.
+ */
 function hintKeys(turn: TurnMirror, fullscreen: boolean): readonly StatusBarHintKey[] {
   if (fullscreen) return fullscreenHint("windowed");
-  if (turn.phase === "running") return [["esc", "cancel"], ...fullscreenHint("full")];
+  // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
+  if (turn.phase === "running")
+    return [
+      ["⏎", "send", "dis"],
+      ["esc", "cancel"],
+    ];
   return HOTKEYS.map((action) => hotkeyHint(action));
 }
 
@@ -422,7 +435,19 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               modelChip={modelChip}
               ctx={ctx}
               ctxCaution={ctx !== null && ctx >= 80}
-              disabled={props.readOnly || turn.phase === "running" || !composerFocused}
+              // finding §2.5 (phase-8 Task 16): a running turn no longer forces `disabled` on
+              // its own. `design/03-workspace-generating.dc.html`'s own prose (the `ws-gen-
+              // typing-120` paragraph) draws the line exactly here: "Empty, it shows the faint
+              // ❯ generating… esc to cancel placeholder with no caret. Holding a draft it looks
+              // alive, because it is: amber ❯, text in full foreground, blinking caret." — i.e.
+              // an EMPTY composer during a turn still reads as disabled (faint caret, no
+              // cursor), but a non-empty draft does not, matching `wsGenTyping`
+              // (`design/termcraft-engine.js:259-277`) exactly.
+              disabled={
+                props.readOnly ||
+                !composerFocused ||
+                (turn.phase === "running" && composerValue.length === 0)
+              }
               placeholder={composerPlaceholder}
               value={composerValue}
               attach={deriveComposerAttach({
@@ -430,6 +455,8 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 selection,
                 activePageSlug: project.activePageSlug,
                 openPins: pins,
+                turnRunning: turn.phase === "running",
+                composerValue,
               })}
             />
             {slashOpen && (
@@ -474,7 +501,15 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
-          props.readOnly ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" } : null
+          props.readOnly
+            ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" }
+            : // finding §2.5 (phase-8 Task 16): design/termcraft-engine.js:1005-1006 (`wsSlashTurn`)
+              // / :275-276 (`wsGenTyping`) — `hint:'⚠ turn running — send disabled'`, and
+              // `wsStatus`'s own defaults (`:494`) resolve an unstyled hint to `fg:P.amberHi,
+              // bg:P.line` exactly.
+              turn.phase === "running"
+              ? { text: "⚠ turn running — send disabled", fg: "amberHi", bg: "line" }
+              : null
         }
         hintKeys={hintKeys(turn, fullscreen)}
       />

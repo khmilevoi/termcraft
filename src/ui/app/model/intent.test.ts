@@ -121,6 +121,27 @@ describe("applyIntent — text inputs", () => {
     expect(deps.local.composer()).toBe("");
   });
 
+  // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so Enter keeps
+  // resolving to `composer-submit` (keymap.ts's `composerActive` no longer excludes
+  // `turnRunning`) — the refusal now happens here, before a second `turn.start` is ever
+  // dispatched, so the Kernel's `TURN_ALREADY_ACTIVE` rejection path is never exercised at all
+  // and the draft is never at risk. Design's own copy: `⏎ send disabled — draft kept`
+  // (design/termcraft-engine.js:268, `wsGenTyping`).
+  test("Enter during a turn does not clear the draft — `⏎ send disabled — draft kept`", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    deps.local.composer.set("half a sentence");
+
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+
+    expect(deps.local.composer()).toBe("half a sentence");
+    expect(dispatchedKinds(kernel)).not.toContain("turn.start");
+  });
+
   test("composer-submit leaves the typed text in place when the dispatch is rejected", async () => {
     const kernel = createFakeKernel();
     // The exact rejection fix round 1's Finding 2 named: `TURN_ALREADY_ACTIVE`, reachable while
