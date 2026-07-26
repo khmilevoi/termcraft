@@ -158,7 +158,7 @@ describe("slashRowState", () => {
     expect(commit.hint).toEqual({ code: "CAPABILITY_UNAVAILABLE" });
   });
 
-  test("separates kernel-locked from unavailable (design slashBox :949-950)", () => {
+  test("separates kernel-locked from unavailable (design slashBox :948-949)", () => {
     const running = context([["chat.create", available]], { turnRunning: true });
     expect(
       slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
@@ -176,6 +176,18 @@ describe("slashRowState", () => {
       slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, idle)
         .availability,
     ).toBe("available");
+  });
+
+  test("unavailable outranks locked when both apply (design slashRows :943-945: `_un` checked before `_lk`)", () => {
+    // The first turn in a fresh project: no pages yet, so export.start is unavailable for its
+    // own reason (NO_PAGES) *and* the turn is running. The row must report the real, permanent
+    // reason — not "locked", which would misleadingly promise it comes back once the turn ends.
+    const s = slashRowState(
+      { cmd: "/export", desc: "", order: 3, capability: "export.start" },
+      context([["export.start", noPages]], { turnRunning: true }),
+    );
+    expect(s.availability).toBe("unavailable");
+    expect(s.hint).toEqual({ code: "NO_PAGES" });
   });
 });
 

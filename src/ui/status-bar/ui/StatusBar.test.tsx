@@ -239,7 +239,7 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     expect((plainGlyph?.attrs ?? 0) & 1).toBe(1);
   });
 
-  test("renders an `active` hint key as an inverse amber chip (design :73)", async () => {
+  test("renders an `active` hint key as an inverse amber chip (design :74)", async () => {
     const handle = await createHeadlessRenderer({ w: 80, h: 1 });
     open = handle;
     handle.mount(

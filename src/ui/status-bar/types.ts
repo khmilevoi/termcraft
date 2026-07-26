@@ -37,7 +37,7 @@ export interface StatusBarHintBadge {
 
 /**
  * One right-aligned key hint. The third element is the design's own `k[2]`
- * (`design/termcraft-engine.js:66-73`):
+ * (`design/termcraft-engine.js:66-74`):
  *   - absent — the ordinary key: amber glyph on the status background, bold, dim label;
  *   - `true` — ACTIVE: the glyph inverts to `bg`-on-`amber`;
  *   - `"dis"` — DISABLED: glyph and label both drop to `faint`, and the glyph loses bold.

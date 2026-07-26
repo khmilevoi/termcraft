@@ -3,6 +3,15 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import type { SlashMenuProps } from "../types";
 
+// design's own literal reason for a locked row that carries no capability-sourced
+// `UnavailableReason` — `/chats` has no Kernel capability of its own to source a hint from, yet
+// every locked command in `commandRegistry()` shares this exact `lock` string
+// (`design/termcraft-engine.js:927-930`), which `slashRows()` copies verbatim into `_why` at
+// `:945` whenever a row locks (`:937-938` glosses `_lk` as "comes back on its own"). Without
+// this fallback a hint-less locked row would fall through to its plain description, which is
+// exactly the two-state `enabled`/`dimmed` bug this task exists to fix.
+const LOCKED_FALLBACK_REASON = "locked · turn running";
+
 /**
  * The non-modal slash-command autocomplete popup (design `slashMenu`,
  * `design/23-slash-menu.dc.html`). Anchored directly above the composer by the
@@ -30,12 +39,13 @@ export function SlashMenu(props: SlashMenuProps) {
         const unavailable = availability === "unavailable";
         const off = locked || unavailable;
 
-        // design/termcraft-engine.js:952-957, colour by colour:
-        //   marker  off ? faint : amber
-        //   dot     un ? faint : lk ? amberDim : sel ? selFg : amber
-        //   cmd     un ? faint : lk ? dim      : sel ? selFg : fg
-        //   text    un ? faint : lk ? amberDim : sel ? selFg : dim   (and the text itself is the
-        //           reason, not the description, whenever the row is off)
+        // design/termcraft-engine.js:953-961, colour by colour:
+        //   marker  off ? faint : amber                                            (:957)
+        //   dot     un ? faint : lk ? amberDim : sel ? selFg : amber                (:958)
+        //   cmd     un ? faint : lk ? dim      : sel ? selFg : fg                   (:959)
+        //   text    un ? faint : lk ? amberDim : sel ? selFg : dim                  (:961)
+        // — and the text itself is the reason, not the description, whenever the row is off
+        // (`:960`'s `const txt=off?c._why:c.desc`).
         const markerFg = off ? SHELL_PALETTE.faint : SHELL_PALETTE.amber;
         const dotFg = unavailable
           ? SHELL_PALETTE.faint
@@ -58,7 +68,13 @@ export function SlashMenu(props: SlashMenuProps) {
             : selected
               ? SHELL_PALETTE.selFg
               : SHELL_PALETTE.dim;
-        const descText = off && hint !== null ? reasonLabel(hint) : row.command.desc;
+        // A locked row always has a reason in the design (every `lock`-bearing command shares
+        // one string, `slashRows` :945), even when this row's own `ActionRowState.hint` is
+        // `null` (e.g. `/chats`, which has no Kernel capability to source a hint from) — fall
+        // back to the design's own lock text rather than silently showing the description.
+        const reasonText =
+          hint !== null ? reasonLabel(hint) : locked ? LOCKED_FALLBACK_REASON : null;
+        const descText = off && reasonText !== null ? reasonText : row.command.desc;
         return (
           // keyed intrinsic wrapper — function components carry no `key` in this
           // repo's no-@types/react environment; the box takes it instead.

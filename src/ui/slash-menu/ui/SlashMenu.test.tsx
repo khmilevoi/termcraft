@@ -73,7 +73,7 @@ describe("SlashMenu component (design 23-slash-menu.dc.html, slashMenu/wsSlash)"
     expect(lineText(handle.capture(), 0)).toContain("/ch");
   });
 
-  test("an unavailable row's text is fully faint, no amber (design slashBox :949-957)", async () => {
+  test("an unavailable row's text is fully faint, no amber (design slashBox :948-949, :953-961)", async () => {
     const rows = [
       makeRow(
         { cmd: "/commit-infra", desc: "infrastructure · clean", order: 6, clean: true },
@@ -91,7 +91,7 @@ describe("SlashMenu component (design 23-slash-menu.dc.html, slashMenu/wsSlash)"
     expect(descRun && extractRgb(descRun.fg)).toBe(SHELL_PALETTE.faint);
   });
 
-  test("a locked row keeps readable dim text and shows the amber reason in place of the description (design slashBox :949-957)", async () => {
+  test("a locked row keeps readable dim text and shows the amber reason in place of the description (design slashBox :948-949, :953-961)", async () => {
     const rows = [
       makeRow(
         { cmd: "/export", desc: "write the export package", order: 3, capability: "export.start" },
@@ -108,6 +108,24 @@ describe("SlashMenu component (design 23-slash-menu.dc.html, slashMenu/wsSlash)"
     expect(cmdRun && extractRgb(cmdRun.fg)).toBe(SHELL_PALETTE.dim);
     expect(reasonRun && extractRgb(reasonRun.fg)).toBe(SHELL_PALETTE.amberDim);
     expect(lineText(frame, 1)).not.toContain("write the export package");
+  });
+
+  test("a locked row with no capability-sourced hint falls back to the design's own lock text, not the description (design slashRows :937-938, :945)", async () => {
+    const rows = [
+      makeRow(
+        { cmd: "/chats", desc: "switch or list chats", order: 2, capability: null },
+        { availability: "locked", hint: null },
+      ),
+    ];
+    const handle = await createHeadlessRenderer({ w: 40, h: 4 });
+    open = handle;
+    handle.mount(<SlashMenu id="slash" typed="/" rows={rows} selectedIndex={-1} />);
+    await handle.render();
+    const frame = handle.capture();
+    const reasonRun = findRun(frame, "locked · turn running");
+    expect(reasonRun).toBeDefined();
+    expect(reasonRun && extractRgb(reasonRun.fg)).toBe(SHELL_PALETTE.amberDim);
+    expect(lineText(frame, 1)).not.toContain("switch or list chats");
   });
 
   test('the selected row shows the "▸" glyph and the sel background', async () => {

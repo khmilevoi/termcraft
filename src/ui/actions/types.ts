@@ -60,7 +60,7 @@ export interface ActionContext {
 }
 
 /**
- * A row's three availability states (design `slashBox`, `design/termcraft-engine.js:949-950`:
+ * A row's three availability states (design `slashBox`, `design/termcraft-engine.js:948-949`:
  * "Locked rows keep readable dim text with an amber reason (temporary); unavailable rows go fully
  * faint (no amber)"):
  *   - `available` — enabled;

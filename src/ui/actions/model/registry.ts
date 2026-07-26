@@ -193,6 +193,12 @@ export function capabilityHint(
  * not `available` — never hidden. Turn-lock: while a turn runs, every non-`/commit-*` row goes
  * `locked` (design `o.turn && !isCommit(c)`) — this also covers the `capability: null` `/chats`
  * row, whose `chat.switch` is turn-locked but which carries no capability of its own.
+ *
+ * Priority: `unavailable` outranks `locked` (design `slashRows` `:943-945`'s `if _un … else if
+ * _un … else if (o.turn && c.lock) _lk`) — a row whose capability is unavailable for its own
+ * reason (e.g. `NO_PAGES`) reports that reason even during a turn, rather than the misleading
+ * "it comes back on its own" of `locked` (a turn-locked-but-otherwise-available row is the only
+ * case that reaches `locked`).
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
   const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
@@ -210,18 +216,17 @@ export function slashRowState(command: SlashCommand, context: ActionContext): Ac
     return { visible: true, availability: turnLocked ? "locked" : "available", hint: null };
   }
 
-  if (turnLocked) {
+  if (!isCapabilityAvailable(context, command.capability)) {
     return {
       visible: true,
-      availability: "locked",
+      availability: "unavailable",
       hint: capabilityHint(context, command.capability),
     };
   }
 
-  const available = isCapabilityAvailable(context, command.capability);
   return {
     visible: true,
-    availability: available ? "available" : "unavailable",
+    availability: turnLocked ? "locked" : "available",
     hint: capabilityHint(context, command.capability),
   };
 }
@@ -239,7 +244,7 @@ export function filterSlashRows(typed: string, context: ActionContext): readonly
     .map((command) => ({ command, state: slashRowState(command, context) }));
 }
 
-/** The index of the first enabled row (design: selection lands on the first non-disabled row), or -1. */
+/** The index of the first `available` row (design: selection lands on the first non-disabled row), or -1. */
 export function firstEnabledIndex(rows: readonly ScoredSlashRow[]): number {
   return rows.findIndex((row) => row.state.availability === "available");
 }
