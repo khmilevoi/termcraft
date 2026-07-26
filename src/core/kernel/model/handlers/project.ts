@@ -388,7 +388,17 @@ function enablePreviewIfTrusted(
   if (trust !== "trusted") return [];
   const outcome = context.machines.preview.apply("kernel.preview.enable");
   if (outcome.kind !== "changed") {
-    // Already enabled (a second `setTrust` on an open project) is the ordinary case, not a fault.
+    // `kernel.preview.enable`'s only listed edge is `disabled -> idle` (`preview-machine.ts`'s
+    // own table) — no edge for it is flagged `noOp`, so `"no-op"` can never actually happen
+    // here; in practice this branch is always `"illegal"`. That covers EVERY phase other than
+    // `disabled` alike — `idle`, `starting`, `live`, `switching`, `failed`, `circuit-open` all
+    // land here indistinguishably. A second `setTrust` granting trust on an already-open
+    // project (already past `disabled`) is the ordinary case that hits it, not a fault — but
+    // still logged (errore rule 21: an error that is not propagated must be logged).
+    const currentPhase = outcome.kind === "illegal" ? outcome.from : outcome.phase;
+    console.warn(
+      `core/kernel/handlers/project: enablePreviewIfTrusted's kernel.preview.enable was ${outcome.kind} from "${currentPhase}"`,
+    );
     return [];
   }
   return [stateChangedEvent("kernel.preview.state", "kernel.preview.enable", outcome)];

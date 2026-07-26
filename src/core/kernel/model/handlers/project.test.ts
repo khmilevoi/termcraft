@@ -1338,4 +1338,55 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       expect(harness.machines.preview.phase()).toBe("idle");
     });
   });
+
+  test("a page-list failure after trust resolves still publishes the already-applied preview.enable transition", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({ order: [home] });
+      pageReader.failNext("listSlugs", FAILURE);
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      // The `disabled -> idle` transition already happened (a REAL machine mutation) before
+      // `listSlugs` ever failed — `runProjectReadySequence`'s `page-list-failed` exit
+      // (`[...events, ...blockOpen(...)]`) must still publish it, or the Kernel's true state
+      // (preview now `idle`) would desync from what every subscriber was told (still
+      // `disabled`). This is the invariant the hoisted `events` declaration depends on; any
+      // future early return added between the hoist and this exit must carry `events` forward
+      // the same way, or this test catches the regression.
+      expect(harness.machines.preview.phase()).toBe("idle");
+      expect(terminalEvents).toHaveLength(2);
+      expect(terminalEvents[0]!.payload).toMatchObject({
+        modelId: "kernel.preview.state",
+        action: "kernel.preview.enable",
+        previousTag: "disabled",
+        nextTag: "idle",
+      });
+      expect(terminalEvents[1]!.payload).toMatchObject({
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+      });
+      const blockedPayload = terminalEvents[1]!.payload;
+      if (blockedPayload === null || !("metadata" in blockedPayload)) {
+        throw new Error("expected a kernel.stateChanged payload");
+      }
+      expect((blockedPayload.metadata as { reason: string }).reason).toBe("page-list-failed");
+      expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
 });
