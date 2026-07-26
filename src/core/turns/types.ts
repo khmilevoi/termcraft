@@ -59,6 +59,15 @@ export interface AdmissionWorkspaceMaterialV1 {
  * re-resolve live, and the workspace-assembly material.
  */
 export interface AdmissionInputV1 {
+  /**
+   * Minted by the CALLER, in the same synchronous step that applied `beginAdmission` and
+   * recorded the id as the Kernel's active turn (fix-bundle spec §1.2). It is not minted here
+   * any more: an id born inside this function could not reach `activeTurnIdAtom` until the first
+   * `turn.attemptStarted` published, which a rejected admission never does — so every non-idle
+   * phase reached through a failed admission carried a `null` active turn id and could not be
+   * cancelled. See `core/kernel/model/handlers/turn.ts`'s `beginTurn` for the trio.
+   */
+  readonly turnId: UUIDv7;
   readonly targetChatId: string;
   readonly text: string;
   readonly selection?: ChatSelection;

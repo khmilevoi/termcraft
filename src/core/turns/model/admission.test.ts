@@ -9,9 +9,10 @@ import {
   createFakeStagingService,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
-import { type FailureDtoV1, isUuidv7 } from "core/protocol";
+import type { FailureDtoV1 } from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
 import type { AdmissionInputV1 } from "../types";
 import { type AdmissionDeps, runAdmission } from "./admission";
@@ -39,6 +40,15 @@ const PAGE_HOME = slug("home");
 const PAGE_GONE = slug("gone");
 
 const T0 = 1_700_000_000_000;
+
+/**
+ * Minted once per test run — `AdmissionInputV1.turnId` is now the CALLER's job (fix-bundle
+ * spec §1.2, `../types.ts`'s own header), never `runAdmission`'s. Every test below plays the
+ * caller's part itself: it applies `beginAdmission` on the harness's own machine BEFORE
+ * calling `runAdmission`, exactly like `core/kernel/model/handlers/turn.ts`'s `beginTurn`
+ * does in production.
+ */
+const TURN_ID = uuidv7();
 
 function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
@@ -92,6 +102,7 @@ function fakeChatAppendBaseReader(
 
 function baseInput(overrides: Partial<AdmissionInputV1> = {}): AdmissionInputV1 {
   return {
+    turnId: TURN_ID,
     targetChatId: "chat-1",
     text: "hello",
     candidatePins: [],
@@ -119,24 +130,25 @@ function harness(
 }
 
 describe("runAdmission — idle -> admitting -> workspace-ready", () => {
-  test("beginAdmission illegal from a non-idle phase: returns illegal, mints nothing, calls nothing", async () => {
+  test("is entered already admitting — the caller owns the transition (spec §1.2)", async () => {
     await context.start(async () => {
       const h = harness();
-      h.machine.apply("beginAdmission"); // already "admitting" before this run starts
+      h.machine.apply("beginAdmission"); // the caller's own beginTurn already applied this
 
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
 
-      expect(outcome).toEqual({ kind: "illegal", code: "TURN_ALREADY_ACTIVE" });
-      expect(h.turnTransactions.calls).toEqual([]);
-      expect(h.staging.calls).toEqual([]);
-      expect(h.pinReader.calls).toEqual([]);
+      expect(outcome.kind).toBe("workspace-ready");
+      if (outcome.kind !== "workspace-ready") return;
+      expect(outcome.context.turnId).toBe(TURN_ID);
+      expect(h.machine.phase()).toBe("workspace-ready");
     });
   });
 
-  test("the happy path mints a UUIDv7 turnId, captures chat/selection, commits BEFORE creating the workspace, and reaches workspace-ready", async () => {
+  test("captures chat/selection, commits BEFORE creating the workspace, and reaches workspace-ready using the CALLER-supplied turnId — it is no longer minted here (spec §1.2)", async () => {
     await context.start(async () => {
       const chatReader = fakeChatAppendBaseReader();
       const h = harness(manualClock(T0), chatReader);
+      h.machine.apply("beginAdmission");
       const selection = { pageSlug: PAGE_HOME, element: "btn-1" };
 
       const input = baseInput({ selection });
@@ -144,7 +156,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       if (outcome.kind !== "workspace-ready")
         throw new Error(`expected workspace-ready, got ${outcome.kind}`);
 
-      expect(isUuidv7(outcome.context.turnId)).toBe(true);
+      expect(outcome.context.turnId).toBe(TURN_ID);
       expect(outcome.context.targetChatId).toBe("chat-1");
       expect(outcome.context.userRecord.turnId).toBe(outcome.context.turnId);
       expect(outcome.context.userRecord.selection).toEqual(selection);
@@ -196,6 +208,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("createdAt/ts come from the injected clock, never wall time", async () => {
     await context.start(async () => {
       const h = harness(manualClock(T0));
+      h.machine.apply("beginAdmission");
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
       if (outcome.kind !== "workspace-ready")
         throw new Error(`expected workspace-ready, got ${outcome.kind}`);
@@ -209,6 +222,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("no selection and no captured pins: both optional fields are OMITTED, not present as empty/null", async () => {
     await context.start(async () => {
       const h = harness();
+      h.machine.apply("beginAdmission");
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
       if (outcome.kind !== "workspace-ready")
         throw new Error(`expected workspace-ready, got ${outcome.kind}`);
@@ -221,6 +235,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("committed user-record precondition: admit failure blocks phase 'admit'; workspace is NEVER attempted; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
+      h.machine.apply("beginAdmission");
       h.turnTransactions.failNext("admit", FAILURE);
 
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
@@ -246,6 +261,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
         details: {},
       };
       const h = harness(manualClock(T0), fakeChatAppendBaseReader(chatFailure));
+      h.machine.apply("beginAdmission");
 
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
 
@@ -261,6 +277,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("verified-workspace precondition: workspace failure blocks phase 'workspace' AFTER admission already committed; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
+      h.machine.apply("beginAdmission");
       h.staging.failNext("createTurnWorkspace", FAILURE);
 
       const outcome = await wrap(runAdmission(h.deps, baseInput()));
@@ -275,6 +292,7 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("complete-read-set-hashes precondition: a duplicate page slug blocks phase 'read-set' AFTER both admit and workspace succeeded; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
+      h.machine.apply("beginAdmission");
       const duplicatedReadSet: Omit<StagedTurnReadSetV1, "chat"> = {
         ...baseReadSet(),
         canonicalPages: [
@@ -301,35 +319,47 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
   test("an unresolvable candidate pin is simply absent from the captured set — never written, never fatal", async () => {
     await context.start(async () => {
       const h = harness();
-      // Seed page "home" with one open pin and one already-resolved pin.
-      await h.pinReader.appendStandaloneEvent(PAGE_HOME, {
-        kind: "pin:created",
-        recordId: "rec-1",
-        pinId: "pin-open",
-        element: "el-1",
-        fx: 0.1,
-        fy: 0.2,
-        text: "note",
-        ts: new Date(T0).toISOString(),
-      });
-      await h.pinReader.appendStandaloneEvent(PAGE_HOME, {
-        kind: "pin:created",
-        recordId: "rec-2",
-        pinId: "pin-resolved",
-        element: "el-2",
-        fx: 0.3,
-        fy: 0.4,
-        text: "note",
-        ts: new Date(T0).toISOString(),
-      });
-      await h.pinReader.appendStandaloneEvent(PAGE_HOME, {
-        kind: "pin:status",
-        recordId: "rec-3",
-        pinId: "pin-resolved",
-        status: "resolved",
-        turnId: "some-other-turn",
-        ts: new Date(T0).toISOString(),
-      });
+      h.machine.apply("beginAdmission");
+      // Seed page "home" with one open pin and one already-resolved pin. `await wrap(...)` —
+      // not a plain `await` — on every one of these: a plain unwrapped await here resumes
+      // outside this test's own `context.start(...)` frame, so the LATER `wrap(runAdmission(...))`
+      // call below would apply `finishAdmission` against a drifted context that never saw the
+      // `beginAdmission` applied just above (this file's own header states the identical rule
+      // for `admission.ts` itself).
+      await wrap(
+        h.pinReader.appendStandaloneEvent(PAGE_HOME, {
+          kind: "pin:created",
+          recordId: "rec-1",
+          pinId: "pin-open",
+          element: "el-1",
+          fx: 0.1,
+          fy: 0.2,
+          text: "note",
+          ts: new Date(T0).toISOString(),
+        }),
+      );
+      await wrap(
+        h.pinReader.appendStandaloneEvent(PAGE_HOME, {
+          kind: "pin:created",
+          recordId: "rec-2",
+          pinId: "pin-resolved",
+          element: "el-2",
+          fx: 0.3,
+          fy: 0.4,
+          text: "note",
+          ts: new Date(T0).toISOString(),
+        }),
+      );
+      await wrap(
+        h.pinReader.appendStandaloneEvent(PAGE_HOME, {
+          kind: "pin:status",
+          recordId: "rec-3",
+          pinId: "pin-resolved",
+          status: "resolved",
+          turnId: "some-other-turn",
+          ts: new Date(T0).toISOString(),
+        }),
+      );
       // Page "gone" will have its fold FAIL entirely — its candidate must still be dropped,
       // never propagated as an admission failure.
       h.pinReader.failNext("fold", FAILURE);

@@ -314,30 +314,57 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
 }
 
 describe('turnHandlers["turn.start"]', () => {
-  test("starts an operation synchronously, then refuses (logged) when no active chat or agent selection exists yet (Gap 4 closed, but nothing was ever selected in this fixture)", async () => {
+  test("records the active turn id in the same synchronous step as beginAdmission (spec §1.2)", () => {
+    const { handlerContext, getLaunchedOperations } = buildTestContext();
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+
+    expect(outcome.disposition).toBe("started");
+    expect(handlerContext.machines.turn.phase()).toBe("admitting");
+    // `setActiveTurnId` already landed — synchronously, before `launchOperation`'s own
+    // closure has even run (the launched operation below is still unexecuted at this point)
+    // — proving the mint/apply/record trio has no `await` between them (spec §1.2).
+    expect(handlerContext.readKernelState().turn.activeTurnId).not.toBeNull();
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    expect(operation.label).toBe("kernel.turn.run");
+  });
+
+  test("starts an operation synchronously and ADMITS before any async work runs; a later refusal (nothing selected in this fixture) still resolves with no events (Gap 4 closed)", async () => {
     const { handlerContext, getLaunchedOperations } = buildTestContext();
 
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
 
     // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
     // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
-    // precedent for "nothing about the outcome is known until the promise settles").
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // precedent for "nothing about the outcome is known until the promise settles"). `events`
+    // now carries the ONE `kernel.stateChanged` admission event `beginTurn` (spec §1.2, §1.6)
+    // applies synchronously before any of this — the OLD `events: []` expectation could not
+    // see it because admission used to transition only deep inside `runAdmission`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
     expect(operation.label).toBe("kernel.turn.run");
 
     const events = await operation.run();
     expect(events).toEqual([]);
-    // Nothing was ever admitted — the machine never left idle, and activeTurnId was never set.
-    expect(handlerContext.machines.turn.phase()).toBe("idle");
-    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+    // FLAGGED GAP, not this task's scope and NOT covered by spec §1.3/§1.4's rejected-admission
+    // path either (that path only fires once `runAdmission` itself has run and failed — this
+    // refusal returns before `runAdmission` is ever called): the machine is left stranded in
+    // "admitting" with a non-null `activeTurnId`, so a SECOND `turn.start` after this exact
+    // fixture would be rejected `TURN_ALREADY_ACTIVE` until the process restarts. Asserted here
+    // as the actual behavior, not laundered as the old "returns to idle" claim.
+    expect(handlerContext.machines.turn.phase()).toBe("admitting");
+    expect(handlerContext.readKernelState().turn.activeTurnId).not.toBeNull();
   });
 
   // Triage #13 (fixlane-K1-turn-spine.json): the cheap refusal-branch tests via
   // error-returning fakes — everything below asserts the SAME shape as the test just above
-  // (`{disposition:"started", events:[]}`, `operation.run()` resolves to `[]`, the machine
-  // never leaves "idle", `activeTurnId` stays `null`), just triggering a LATER refusal branch.
+  // (`{disposition:"started", events:[<1 admission event>]}`, `operation.run()` resolves to
+  // `[]`), just triggering a LATER refusal branch. See `assertEarlyPortRefusalStalls`'s own
+  // doc comment for the machine-phase/activeTurnId caveat these share.
 
   /** A projectStore with a real, complete agent selection already set — every test below only exercises ONE later refusal. */
   function selectedProjectStore(overrides?: {
@@ -356,18 +383,33 @@ describe('turnHandlers["turn.start"]', () => {
     });
   }
 
-  async function assertIdempotentRefusal(
+  /**
+   * Every one of these fixtures reaches a PORT failure inside `runTurnStart`, strictly BEFORE
+   * `admission`/`runAdmission` is ever built or called — `beginTurn` (`./turn.ts`) has already
+   * admitted synchronously by the time any of them run (spec §1.2), so `outcome.events` now
+   * carries the ONE `kernel.stateChanged` admission event these fixtures used to see none of.
+   *
+   * FLAGGED GAP (not this task's scope, and NOT covered by spec §1.3/§1.4's rejected-admission
+   * path either — that path only fires once `runAdmission` itself has run and failed; none of
+   * these scenarios ever reach it): the machine is left stranded in "admitting" with a
+   * non-null `activeTurnId`, so a SECOND `turn.start` after any of these would be rejected
+   * `TURN_ALREADY_ACTIVE` until the process restarts. This helper asserts the ACTUAL behavior,
+   * not the ideal one — it does not launder the gap as accepted.
+   */
+  async function assertEarlyPortRefusalStalls(
     handlerContext: HandlerContext,
     getLaunchedOperations: () => readonly LaunchedOperation[],
   ): Promise<void> {
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
     const events = await operation.run();
     expect(events).toEqual([]);
-    expect(handlerContext.machines.turn.phase()).toBe("idle");
-    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+    expect(handlerContext.machines.turn.phase()).toBe("admitting");
+    expect(handlerContext.readKernelState().turn.activeTurnId).not.toBeNull();
   }
 
   test("refuses (logged) when project.toml's manifest snapshot cannot be read", async () => {
@@ -384,7 +426,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when resolveAgentSelection finds the backend but not the requested model", async () => {
@@ -395,7 +437,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when resolveAgentSelection finds the model but not the requested effort", async () => {
@@ -406,7 +448,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when a listed page's canonical source cannot be read", async () => {
@@ -420,7 +462,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertIdempotentRefusal(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
   });
 
   test("WP-4 default agent selection: with an active chat but NO stored (backend, model, effort) triple, the turn is admitted (not refused) and the started AgentTask carries the registry's declared default model and effort", async () => {
@@ -475,7 +517,11 @@ describe('turnHandlers["turn.start"]', () => {
     // events and no launched attempt (this file's very first test, same shape minus the chat).
     // Proving `disposition: "started"` here is necessary but not sufficient — the assertions
     // below prove the refusal genuinely did not fire, by proving a REAL attempt started.
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -594,7 +640,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "please look at my pins" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -677,7 +727,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "please look at my pins" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -796,7 +850,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "make this gauge red" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -891,7 +949,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -1008,7 +1070,11 @@ describe('turnHandlers["turn.start"]', () => {
     }
 
     const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -1280,7 +1346,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -1405,7 +1475,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "please add a page" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -1511,7 +1585,11 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
@@ -2334,7 +2412,11 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
     });
 
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
-    expect(outcome).toEqual({ disposition: "started", events: [] });
+    // `beginTurn` (spec §1.2/§1.6) applies `beginAdmission` synchronously before launching —
+    // `outcome.events` carries that ONE kernel.stateChanged event, not `[]`.
+    expect(outcome.disposition).toBe("started");
+    expect(outcome.events).toHaveLength(1);
+    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
 
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected a launched operation");

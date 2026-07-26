@@ -24,9 +24,10 @@ import { toFinalizeReadSet } from "./read-set";
  * (kernel-command-contract §7.2, §12.2 item 1; turn-durability §7.2).
  *
  * §7.2's `beginAdmission` row is one bundled rule: "Mints `turnId`; captures target chat,
- * valid selection, and resolvable open pins." That bundle is exactly what runs right after
- * the `idle -> admitting` transition succeeds below — the transition is checked FIRST so a
- * rejected admission (already active) never wastes a `turnId` or touches a port.
+ * valid selection, and resolvable open pins." The MINT half moved to the caller (fix-bundle
+ * spec §1.2 — see the body); the capture half is still exactly what runs below. The caller has
+ * already proven `beginAdmission` was legal before this function is ever entered, so a turn
+ * that is already active never reaches here at all.
  *
  * `finishAdmission`'s row requires three separately provable preconditions before
  * `admitting -> workspace-ready` is legal: "committed user-record admission plus a
@@ -128,10 +129,13 @@ export async function runAdmission(
   deps: AdmissionDeps,
   input: AdmissionInputV1,
 ): Promise<AdmissionOutcomeV1> {
-  const begin = deps.machine.apply("beginAdmission");
-  if (begin.kind === "illegal") return { kind: "illegal", code: begin.code };
-
-  const turnId = uuidv7();
+  // ENTERED ALREADY `admitting` (fix-bundle spec §1.2). The `idle -> admitting` transition and
+  // `setActiveTurnId(input.turnId)` are applied together, synchronously, by
+  // `core/kernel/model/handlers/turn.ts`'s `beginTurn` — with no `await` between them, which is
+  // what the "non-idle phase implies a non-null activeTurnId" invariant actually rests on
+  // (`core/capabilities/types.ts`). This function therefore neither applies `beginAdmission` nor
+  // mints a turnId of its own; `finishAdmission` below is still its job.
+  const turnId = input.turnId;
   const createdAt = deps.clock.now().toISOString();
 
   const resolvedPinIds = await wrap(resolveOpenPins(deps.pinReader, input.candidatePins));

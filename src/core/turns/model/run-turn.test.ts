@@ -24,6 +24,7 @@ import {
 import type { FailureDtoV1 } from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
+import { uuidv7 } from "infrastructure/uuid";
 
 import type { AdmissionInputV1 } from "../types";
 import { type TurnDeadlineCheckV1, type TurnDeadlines, createTurnDeadlines } from "./deadlines";
@@ -92,8 +93,18 @@ function fakeChatAppendBaseReader(): Pick<ChatReader, "readAppendBase"> {
   return { readAppendBase: async () => ({ length: 42, prefixSha256: "f".repeat(64) }) };
 }
 
+/**
+ * Minted once per test run via `baseAdmission()` — `AdmissionInputV1.turnId` is now the
+ * CALLER's job (fix-bundle spec §1.2, `../types.ts`'s own header), never `runAdmission`'s.
+ * `harness()` below is the "caller" this file stands in for: it applies `beginAdmission`
+ * itself before `runTurn`/`runAdmission` is ever invoked, matching what
+ * `core/kernel/model/handlers/turn.ts`'s `beginTurn` now always does in production.
+ */
+const TURN_ID = uuidv7();
+
 function baseAdmission(): AdmissionInputV1 {
   return {
+    turnId: TURN_ID,
     targetChatId: "chat-1",
     text: "please add a page",
     candidatePins: [],
@@ -180,6 +191,15 @@ function harness(
   deadlines: TurnDeadlines = createTurnDeadlines({ clock }),
 ): Harness {
   const machine = reatomTurnStateMachine();
+  // `runTurn` (`run-turn.ts`) calls `runAdmission` directly and applies no transition of its
+  // own — the caller (`core/kernel/model/handlers/turn.ts`'s `beginTurn`, in production) is
+  // the one that moves `idle -> admitting` before `runTurn` is ever invoked (fix-bundle spec
+  // §1.2). This harness stands in for that caller so every test below still reaches a legal
+  // `finishAdmission`, matching `baseAdmission()`'s own `TURN_ID` above.
+  const began = machine.apply("beginAdmission");
+  if (began.kind !== "changed") {
+    throw new Error(`test setup: beginAdmission was not a real transition (${began.kind})`);
+  }
   const pinReader = createFakePinStore();
   const turnTransactions = createFakeTurnTransactionService();
   const staging = createFakeStagingService();

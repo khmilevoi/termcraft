@@ -247,13 +247,14 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *
  *   LIVE EVENTS: `RunTurnDeps.publish` maps onto `context.publishOperationEvent`
  *   (Step C3's live-publish primitive) — `turn.attemptStarted`/`turn.progress`/
- *   `turn.gateRejected` stream AS THEY HAPPEN. The very FIRST `turn.attemptStarted` this
- *   wrapper observes is also where `context.setActiveTurnId(event.payload.turnId)` fires —
- *   admission itself never surfaces a `turnId` to this driver's own caller (it is minted
- *   INSIDE `runAdmission`), but attempt 1 always starts immediately after a successful
- *   admission, so the FIRST `turn.attemptStarted` IS "admission just succeeded, with this
- *   turnId" for this purpose. `setActiveTurnId(null)` runs once `runTurn`'s own result is
- *   `terminalized`/`finalized` (never on `admission-rejected` — nothing was ever set).
+ *   `turn.gateRejected` stream AS THEY HAPPEN. `context.setActiveTurnId` no longer fires from
+ *   inside this wrapper (fix-bundle spec §1.2) — `beginTurn` (below) records the id
+ *   synchronously, alongside the `idle -> admitting` transition, BEFORE `runTurnStart` (and
+ *   therefore this whole `runTurn` composition) is ever launched. The first `turn.attemptStarted`
+ *   this wrapper observes still marks when `turn.started` synthesizes and publishes (see "TURN.
+ *   STARTED — NOW PUBLISHED" below), just not when the active turn id is set. `setActiveTurnId(null)`
+ *   still runs once `runTurn`'s own result is `terminalized`/`finalized`; `admission-rejected` is
+ *   Task 4's job (fix-bundle spec §1.3/§1.4) — this task does not clear it on that branch.
  *
  *   TURN.STARTED — NOW PUBLISHED (was: "deliberately not published"; corrected per
  *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): `ui/mirror/model
@@ -698,7 +699,8 @@ function terminalFailureDto(result: RunTurnResultV1, branch: string): FailureDto
  * which touch Reatom-adjacent state built inside `kernel.ts`'s own `context.start(...)` frame.
  */
 async function runTurnStart(
-  payload: CommandPayloadByKindV1["turn.start"],
+  turnId: UUIDv7,
+  text: string,
   context: HandlerContext,
 ): Promise<readonly PublishableEventV1[]> {
   // Captured synchronously, before any await — kernel-command-contract §12.2's "captures
@@ -889,8 +891,9 @@ async function runTurnStart(
     "code" in sessionPlanResult ? { kind: "fresh", seed: [] } : sessionPlanResult;
 
   const admission: AdmissionInputV1 = {
+    turnId,
     targetChatId: activeChatId,
-    text: payload.text,
+    text,
     ...(selection !== null ? { selection } : {}),
     candidatePins,
     workspace: {
@@ -924,7 +927,7 @@ async function runTurnStart(
     // NOW REAL (phase-8 WP-3) — see this file's header, "`baseTask.systemPrompt`," for the
     // full citation.
     systemPrompt: context.deps.agentPromptSource.systemPrompt(promptContext),
-    userMessage: payload.text,
+    userMessage: text,
     model: resolvedAgent.model,
     effort: resolvedAgent.effort,
     session: sessionPlan,
@@ -1010,19 +1013,18 @@ async function runTurnStart(
     };
   };
 
-  let capturedTurnId: UUIDv7 | null = null;
+  let startedPublished = false;
   function publish(
     event:
       | PublishableEventV1<"turn.attemptStarted">
       | PublishableEventV1<"turn.progress">
       | PublishableEventV1<"turn.gateRejected">,
   ): void {
-    if (capturedTurnId === null && event.kind === "turn.attemptStarted") {
-      capturedTurnId = event.payload.turnId;
-      context.setActiveTurnId(capturedTurnId);
-      // See this file's header, "TURN.STARTED — NOW PUBLISHED": sent strictly BEFORE the
-      // first turn.attemptStarted below, so the mirror's `case "turn.started"` moves
-      // TurnMirror into "running" before any phase==="running"-gated event can arrive.
+    if (!startedPublished && event.kind === "turn.attemptStarted") {
+      startedPublished = true;
+      // See this file's header, "TURN.STARTED — NOW PUBLISHED". `setActiveTurnId` is NOT called
+      // here any more: `beginTurn` recorded the id synchronously, before this operation ever
+      // launched (fix-bundle spec §1.2).
       // `admittedChatId` is `WorkspaceStateV1.activeChatId` (`core/ports/project-store.ts`
       // keeps it a plain `string`, not the branded `UUIDv7` the wire DTO needs) — validated,
       // never cast, matching this file's own `toAdmissionSelection`/`parsePageSlug` precedent.
@@ -1033,12 +1035,8 @@ async function runTurnStart(
       if (isUuidv7(admittedChatId)) {
         context.publishOperationEvent({
           kind: "turn.started",
-          payload: {
-            turnId: capturedTurnId,
-            chatId: admittedChatId,
-            deadline: event.payload.deadline,
-          },
-          correlation: { turnId: capturedTurnId },
+          payload: { turnId, chatId: admittedChatId, deadline: event.payload.deadline },
+          correlation: { turnId },
         });
       } else {
         console.warn(
@@ -1107,15 +1105,6 @@ async function runTurnStart(
   // trusted implicitly.
   context.turnRunner.setActiveAttempt(null);
 
-  if (capturedTurnId === null) {
-    // Unreachable given `runTurn`'s own sequencing (an attempt always starts, and therefore
-    // publishes `turn.attemptStarted`, before either `finalizeTurn` or `terminalizeTurn` can
-    // ever run) — kept explicit per this project's "never silently assume success" rule.
-    console.warn(
-      "core/kernel/handlers/turn: turn.start reached a terminal RunTurnResultV1 without ever observing turn.attemptStarted",
-    );
-    return [];
-  }
   context.setActiveTurnId(null);
   // Unconditional, exactly like `setActiveTurnId(null)` just above: `onCommitIntentRecorded`
   // may have fired `true` during the finalize step (a genuine commit), and this Kernel-wide
@@ -1130,7 +1119,7 @@ async function runTurnStart(
     // from. `capturedSessionId` is only ever `null` if `buildFinalizeInput` itself never ran,
     // which cannot happen on THIS branch (reaching a `"committed"` result requires a finalize
     // attempt to have completed) — the guard is defensive, matching this project's own "never
-    // assume success blindly" convention (see `capturedTurnId`'s identical guard just above).
+    // silently assume success" convention.
     if (capturedSessionId !== null) {
       const advanced = await wrap(
         advanceSessionCheckpoint(
@@ -1152,13 +1141,13 @@ async function runTurnStart(
       {
         kind: "turn.completed",
         payload: {
-          turnId: capturedTurnId,
+          turnId,
           outcome: "completed",
           changedPages: summary.changedPages,
           warnings: summary.gateWarnings.map((w) => ({ code: w.kind, safeMessage: w.message })),
           failure: null,
         },
-        correlation: { turnId: capturedTurnId },
+        correlation: { turnId },
       },
     ];
   }
@@ -1180,23 +1169,56 @@ async function runTurnStart(
     {
       kind: "turn.failed",
       payload: {
-        turnId: capturedTurnId,
+        turnId,
         outcome: "failed",
         changedPages: [],
         warnings: [],
         failure: propagatedFailure,
       },
-      correlation: { turnId: capturedTurnId },
+      correlation: { turnId },
     },
   ];
+}
+
+/**
+ * THE ONE ENTRY POINT INTO A TURN (fix-bundle spec §1.6). `turn.start`'s handler and
+ * `runProjectReadySequence`'s first-turn chain (spec §3.1) both call this, so "one path" is
+ * literal rather than aspirational.
+ *
+ * The three steps below run with NO `await` between them — mint the id, apply `beginAdmission`,
+ * record the id — because that atomicity IS the invariant `core/capabilities/types.ts` states
+ * (a non-idle phase always carries a non-null `activeTurnId`). The invariant survives this being
+ * called from inside an async closure (the ready sequence's case): it rests on the trio, not on
+ * being in a command handler. `./project.ts`'s `beginProjectOpen` is the exact precedent —
+ * transition applied synchronously in the handler, its own id minted beside it, `launchOperation`
+ * only afterwards.
+ *
+ * Returns the admission events the caller must publish. An illegal `beginAdmission` returns `[]`
+ * (logged) and launches nothing.
+ */
+export function beginTurn(
+  context: HandlerContext,
+  input: { readonly text: string },
+): readonly PublishableEventV1[] {
+  const turnId = uuidv7();
+  const began = context.machines.turn.apply("beginAdmission");
+  if (began.kind === "illegal") {
+    console.warn(
+      `core/kernel/handlers/turn: beginTurn refused — beginAdmission was illegal (${began.code})`,
+    );
+    return [];
+  }
+  if (began.kind !== "changed") return [];
+  context.setActiveTurnId(turnId);
+  context.launchOperation("kernel.turn.run", () => runTurnStart(turnId, input.text, context));
+  return [turnStateChangedEvent("kernel.turn.beginAdmission", began, { turnId })];
 }
 
 function handleTurnStart(
   payload: CommandPayloadByKindV1["turn.start"],
   context: HandlerContext,
 ): CommandOutcomeV1 {
-  context.launchOperation("kernel.turn.run", () => runTurnStart(payload, context));
-  return startedOutcome([]);
+  return startedOutcome(beginTurn(context, { text: payload.text }));
 }
 
 // --- turn.cancel — real, end to end -------------------------------------------------------
