@@ -16,11 +16,16 @@ const BOLD = shellAttrs({ bold: true });
  * `put(b,3+draft.length,...)`, one column past the text, not overlapping it.
  *
  * CORRECTED (this task, read every design line before citing it — this bundle's own standing
- * instruction): the brief's own citations for this rule (`:136-137` for Home, `:208-209`/
- * `:451-452` for the composer) point at unrelated code. `:136-137` is `home()`'s `checking`/
- * `typed` setup, two lines above the actual draw; `:208-209` is `workspace()`'s chat/preview
- * divider bookkeeping (`div=chatW-1`); `:451-452` is the `/model` tweaks screen's row-selection
- * paint. Re-cited above to the lines that actually draw the overlap.
+ * instruction; fix round 1 corrected the two descriptions below after review caught them
+ * mischaracterizing their targets): the brief's own citations for this rule (`:136-137` for
+ * Home, `:208-209`/`:451-452` for the composer) point at unrelated code. `:136-137` is `home()`'s
+ * `checking`/`typed` setup, two lines above the actual draw. `:208-209` is `workspace()`'s
+ * preview-panel divider rule (`this.hline(...)`; `this.put(...,'├'/'┤',...)`) plus the
+ * `const dx=div, dy=4,…` declaration that feeds `drawMonitor` — `div` itself is declared earlier,
+ * at `:200`. `:451-452` is the `/model` popup's OWN footer rule (`this.hline(...)`;
+ * `this.put(...,'├'/'┤',...)`) plus `let fx=lx` starting its key-hint row — the popup's
+ * row-selection paint is a few lines earlier, at `:444-449`. None of these four lines draws a
+ * text cursor. Re-cited above to the lines that actually draw the overlap.
  *
  * THE OLD PREMISE WAS WRONG. `Home.tsx` documented this as a knowing divergence — "Flexbox can't
  * overlap two siblings in the same cell, so the closest faithful mapping appends the cursor right
@@ -77,6 +82,14 @@ export function TextInput(props: TextInputProps) {
       <text id={`${props.id}-cursor`} fg={SHELL_PALETTE.amber} attributes={BLINK_CURSOR}>
         {CURSOR_GLYPH}
       </text>
+      {
+        // `.slice(1)` drops one UTF-16 code unit, not one grapheme — it would split a surrogate
+        // pair if a placeholder ever started with an astral character (e.g. an emoji). Every
+        // placeholder this repo passes today (`Home.tsx`'s `PLACEHOLDER`, `Composer`'s
+        // `"Ask for changes…"`/`"generating… esc to cancel"`) starts in the BMP, so this is
+        // unreachable in practice; a caller adding an astral-leading placeholder would need
+        // `Array.from(props.placeholder).slice(1).join("")` instead.
+      }
       <text id={`${props.id}-placeholder-rest`} fg={props.placeholderFg}>
         {props.placeholder.slice(1)}
       </text>

@@ -199,6 +199,12 @@ describe("Composer component (design chatSeq composer block)", () => {
     expect(placeholder).toBeDefined();
     expect(placeholder && extractRgb(placeholder.fg)).toBe<string>(SHELL_PALETTE.faint);
     expect(findRun(frame, "█")).toBeDefined();
+    // Review fix round 1 (Important): the assertions above alone pass against the OLD
+    // trailing-cursor defect too — `findRun` is a substring match, so
+    // `"Ask for changes…█"` also contains "sk for changes…" and its own `█`. This is the
+    // assertion that actually distinguishes the two: only the FIXED, overlapping render never
+    // contains the full un-split placeholder text as one run.
+    expect(findRun(frame, "Ask for changes…")).toBeUndefined();
   });
 
   test("an attach line renders above the input in its given token color", async () => {

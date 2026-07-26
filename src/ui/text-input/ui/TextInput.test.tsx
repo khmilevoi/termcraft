@@ -25,19 +25,6 @@ const findRun = (frame: Frame, needle: string): StyledRun | undefined =>
 const frameContains = (frame: Frame, needle: string): boolean =>
   findRun(frame, needle) !== undefined;
 
-/**
- * `RenderHandle`'s id-addressable geometry API (`rectOf`/`describe`/`layoutTree`) deliberately
- * carries no text — `host/render/types.ts`'s own doc comments mark that a documented gap, not an
- * oversight (the protocol boundary between "styled rows" and "id geometry" never mixes the two;
- * `layoutTree`'s nodes omit `text` for the identical reason `describe`'s `label` is unpopulated).
- * So these tests read runs the same way every other `ui` component test in this repo does —
- * `findRun`/row order over the captured frame (`Home.test.tsx`, `Composer.test.tsx`,
- * `ChatListPopup.test.tsx`) — rather than the brief's illustrative `textOf(frame, id)` /
- * `orderedIds(frame)`, which nothing in this codebase implements, and which would require
- * reaching past that documented boundary to build. The assertions below cover the identical
- * behaviour the brief's pseudocode named: the empty-and-focused overlap, the after-value cursor
- * position, and the no-cursor disabled state.
- */
 const STYLE = {
   caret: "❯ ",
   caretFg: SHELL_PALETTE.amber,
@@ -63,6 +50,19 @@ async function renderInput(overrides: Partial<TextInputProps> = {}): Promise<Fra
   return handle.capture();
 }
 
+/**
+ * `RenderHandle`'s id-addressable geometry API (`rectOf`/`describe`/`layoutTree`) deliberately
+ * carries no text — `host/render/types.ts`'s own doc comments mark that a documented gap, not an
+ * oversight (the protocol boundary between "styled rows" and "id geometry" never mixes the two;
+ * `layoutTree`'s nodes omit `text` for the identical reason `describe`'s `label` is unpopulated).
+ * So these tests read runs the same way every other `ui` component test in this repo does —
+ * `findRun`/row order over the captured frame (`Home.test.tsx`, `Composer.test.tsx`,
+ * `ChatListPopup.test.tsx`) — rather than the brief's illustrative `textOf(frame, id)` /
+ * `orderedIds(frame)`, which nothing in this codebase implements, and which would require
+ * reaching past that documented boundary to build. The assertions below cover the identical
+ * behaviour the brief's pseudocode named: the empty-and-focused overlap, the after-value cursor
+ * position, and the no-cursor disabled state.
+ */
 describe("TextInput — the shared insertion-point primitive (finding §2.6)", () => {
   test("puts the cursor OVER the placeholder's first cell while empty (design home() :145-146)", async () => {
     const frame = await renderInput({

@@ -126,6 +126,12 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     expect(rest).toBeDefined();
     expect(rest && extractRgb(rest.fg)).toBe<string>(SHELL_PALETTE.faint);
     expect(frameContains(frame, "█")).toBe(true);
+    // Review fix round 1 (Important): the two assertions above alone pass against the OLD
+    // trailing-cursor defect too — `findRun` is a substring match, so
+    // `"Describe the TUI you want to design…█"` also contains "escribe the TUI you want to
+    // design" and its own `█`. This is the assertion that actually distinguishes the two: only
+    // the FIXED, overlapping render never contains the full un-split placeholder text as one run.
+    expect(frameContains(frame, "Describe the TUI")).toBe(false);
   });
 
   test("a non-empty prompt replaces the placeholder", async () => {
