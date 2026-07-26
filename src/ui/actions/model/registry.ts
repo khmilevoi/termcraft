@@ -13,9 +13,11 @@ import type {
 
 /**
  * The slash-command registry, verbatim from design's `commandRegistry`
- * (`termcraft-engine.js:779-786`) — literal commands, descriptions, order, and commit dots —
- * PLUS the trailing `app.exit` row (order 8), which the design never drew; see that entry's
- * own comment for why it is added rather than invented silently.
+ * (`termcraft-engine.js:926-934` — CORRECTED, phase-8 Task 17: was miscited `:779-786`, a stale
+ * line range from before later design sections were inserted above it) — literal commands,
+ * descriptions, order, and commit dots — PLUS the trailing `app.exit` row (order 8), which the
+ * design never drew; see that entry's own comment for why it is added rather than invented
+ * silently.
  * `/chats` has `capability: null` because the row opens the chat-list popup (a UI-local
  * action); the actual switch is a separate `chat.switch` command issued from the popup.
  * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render `unavailable`.
@@ -24,12 +26,24 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
   {
     id: "chat.create",
     execution: { kind: "command", command: "chat.create" },
-    slash: { cmd: "/new", desc: "start a new chat", order: 1, capability: "chat.create" },
+    slash: {
+      cmd: "/new",
+      desc: "start a new chat",
+      order: 1,
+      capability: "chat.create",
+      screens: ["workspace"],
+    },
   },
   {
     id: "chat.open-list",
     execution: { kind: "local", effect: "open-chats" },
-    slash: { cmd: "/chats", desc: "switch or list chats", order: 2, capability: null },
+    slash: {
+      cmd: "/chats",
+      desc: "switch or list chats",
+      order: 2,
+      capability: null,
+      screens: ["workspace"],
+    },
   },
   {
     id: "preview.fullscreen",
@@ -66,13 +80,22 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       desc: "write the export package",
       order: 3,
       capability: "export.start",
+      screens: ["workspace"],
     },
     hotkey: { id: "export.start", key: "ctrl+e", label: "export", capability: "export.start" },
   },
   {
     id: "model.select",
     execution: { kind: "inert" },
-    slash: { cmd: "/model", desc: "agent · model · effort", order: 4, capability: "model.select" },
+    slash: {
+      cmd: "/model",
+      desc: "agent · model · effort",
+      order: 4,
+      capability: "model.select",
+      // design `commandRegistry` (`termcraft-engine.js:930`): `/model` is the one v1.0 row
+      // marked `home:true` — reachable (and rendered `unavailable`) from the Home prompt too.
+      screens: ["workspace", "home"],
+    },
   },
   {
     id: "commit.page",
@@ -83,6 +106,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       order: 5,
       capability: "commit.plan",
       dot: true,
+      screens: ["workspace"],
     },
   },
   {
@@ -94,6 +118,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       order: 6,
       capability: "commit.plan",
       clean: true,
+      screens: ["workspace"],
     },
   },
   {
@@ -105,6 +130,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       order: 7,
       capability: "commit.plan",
       dot: true,
+      screens: ["workspace"],
     },
   },
   {
@@ -118,18 +144,32 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       inert: true,
     },
   },
-  // `/exit` EXTENDS design's own command registry (`design/termcraft-engine.js:779-786`
-  // `commandRegistry()`): that list holds exactly the seven rows above and no `/exit` — the
-  // design never drew a Workspace quit affordance at all, only `q quit` on Home's status bars
-  // (`:145`, `:583`) and the too-small-terminal screen. This is a dated product decision
-  // (phase-8 WP-10, 2026-07-25) filling that gap: `/exit` is a UI-local action (no Kernel
-  // capability — quitting is not a Kernel command), reachable from both the Workspace composer
-  // and the Home prompt per master spec §3.9's slash-menu permission, ordered after the seven
-  // design rows rather than interleaved among them.
+  // `/exit` EXTENDS design's own command registry (`design/termcraft-engine.js:926-934`
+  // `commandRegistry()` — CORRECTED, phase-8 Task 17: was miscited `:779-786`, see this file's
+  // own top-of-file comment for the same fix): that list holds exactly the seven rows above and
+  // no `/exit` — the design never drew a Workspace quit affordance at all, only `q quit` on
+  // Home's status bars (`home()` `:161`, `homeErr()` `:727` — CORRECTED, phase-8 Task 17: was
+  // miscited `:145`/`:583`; `:145` draws the prompt's own typed text, not a status bar, and
+  // `:583` is inside the unrelated `chatSeq()`, the SAME stale citation `Home.tsx`'s own
+  // `homeIdleHintKeys` comment already corrected for `homeErr()`) and the too-small-terminal
+  // screen. This is a dated product decision (phase-8 WP-10, 2026-07-25) filling that gap:
+  // `/exit` is a UI-local action (no Kernel capability — quitting is not a Kernel command),
+  // reachable from both the Workspace composer and the Home prompt per master spec §3.9's
+  // slash-menu permission, ordered after the seven design rows rather than interleaved among
+  // them.
   {
     id: "app.exit",
     execution: { kind: "local", effect: "exit" },
-    slash: { cmd: "/exit", desc: "quit termcraft", order: 8, capability: null },
+    slash: {
+      cmd: "/exit",
+      desc: "quit termcraft",
+      order: 8,
+      capability: null,
+      // design `commandRegistry` (`termcraft-engine.js:934`): `/exit`'s own `home:true` flag —
+      // the one Home-reachable row the Kernel would actually accept there, since it dispatches
+      // no Kernel command at all (§3.10, phase-8 Task 17, finding §2.4).
+      screens: ["workspace", "home"],
+    },
   },
 ];
 
@@ -245,6 +285,22 @@ function capabilityRowState(context: ActionContext, id: CommandKindV1): ActionRo
  * a published capability reason.
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
+  // design `slashRows` (`termcraft-engine.js:943`): on Home, `/model` reports its own reason
+  // rather than a capability hint — it is v1.0, not turn-locked and not missing a capability.
+  // DIVERGENCE (closest faithful mapping, CLAUDE.md "design is a source of truth"): the design's
+  // OWN text here is the literal `'v1.0 — not in this build'`, but `UnavailableReason` carries no
+  // message-text field at all (kernel-command-contract §11.1: "User-facing prose is presentation
+  // data; callers branch on codes, never message text" — `core/protocol/model/unavailable-
+  // reason.ts`'s `detailsFreeReason` gives `CAPABILITY_UNAVAILABLE` a `z.strictObject({code})`
+  // with no `safeMessage`/`detail` property, so a literal carrying one does not even type-check).
+  // There is no Kernel-vocabulary code for "this feature does not exist yet" beyond the generic
+  // `CAPABILITY_UNAVAILABLE` every other deferred/v1.0 row already renders (the `/commit-*`
+  // Tier-C rows, via `capabilityHint` below) — reusing that code and its existing "unavailable"
+  // `reasonLabel` is the closest faithful mapping, not an invented message field.
+  if (context.screen === "home" && command.cmd === "/model") {
+    return { visible: true, availability: "unavailable", hint: { code: "CAPABILITY_UNAVAILABLE" } };
+  }
+
   const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
   if (execution?.kind === "inert") {
     return {
@@ -275,13 +331,17 @@ export function slashRowState(command: SlashCommand, context: ActionContext): Ac
 }
 
 /**
- * Filters and scores the slash menu for the typed prefix (design `slashMenu`): `"/"` shows
- * every command; a longer prefix keeps commands that start with it. Rows stay in fixed
- * design order.
+ * Filters and scores the slash menu for the typed prefix and screen (design `slashMenu`/
+ * `slashRows`'s `o.scope` filter, §3.10): `"/"` shows every command meaningful on the current
+ * screen; a longer prefix keeps commands that start with it AND are meaningful there. Rows stay
+ * in fixed design order.
  */
 export function filterSlashRows(typed: string, context: ActionContext): readonly ScoredSlashRow[] {
-  const rows =
-    typed === "/" ? SLASH_COMMANDS : SLASH_COMMANDS.filter((c) => c.cmd.startsWith(typed));
+  // The screen filter runs FIRST (§3.10), so "no row matches" and "the menu does not open at all"
+  // are the same condition — `design/termcraft-engine.js`'s own `home('slash-none')` frame draws
+  // exactly that: `/` stays literal text in the prompt and no box appears.
+  const onScreen = SLASH_COMMANDS.filter((c) => c.screens.includes(context.screen));
+  const rows = typed === "/" ? onScreen : onScreen.filter((c) => c.cmd.startsWith(typed));
   return [...rows]
     .sort((a, b) => a.order - b.order)
     .map((command) => ({ command, state: slashRowState(command, context) }));

@@ -1,3 +1,5 @@
+import type { ScoredSlashRow } from "ui/actions";
+
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
  * chrome-map "SURFACE: Home"). Home is only ever shown before `.termcraft/` exists; an
@@ -89,4 +91,14 @@ export interface HomeProps {
   /** Current prompt text (empty string shows the placeholder). */
   readonly prompt: string;
   readonly combo: HomeCombo;
+  /**
+   * The Home-scoped slash rows to render below the prompt box (§3.10, phase-8 Task 17), already
+   * filtered+scored by the caller via `filterSlashRows(prompt, actionContext)`. Empty whenever the
+   * slash menu is not open, matching `ui/workspace`'s own `slashOpen ? filterSlashRows(...) : []`
+   * convention (`Workspace.tsx`) — never derived inside this component, which is a plain function
+   * with no Reatom access of its own, not a `reatomComponent`.
+   */
+  readonly rows: readonly ScoredSlashRow[];
+  /** Index of the highlighted row within {@link rows} (caller lands it on the first enabled row). */
+  readonly selectedIndex: number;
 }

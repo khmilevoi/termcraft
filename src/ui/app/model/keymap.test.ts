@@ -259,6 +259,60 @@ describe("resolveKey — Home", () => {
       expect(resolveKey(key({ name: "return" }), ready)).toEqual({ kind: "home-submit" });
     });
   });
+
+  // §3.10, phase-8 Task 17 (finding §2.4): the Home prompt is a primary input, exactly like the
+  // Workspace composer — `/` on an empty one opens the slash menu.
+  describe("/ opens the slash menu (§3.10)", () => {
+    test("opens the slash menu on an empty, live Home prompt", () => {
+      expect(
+        resolveKey(key({ sequence: "/", name: "/" }), ctx({ screen: "home", homePrompt: "" })),
+      ).toEqual({ kind: "slash-open" });
+    });
+
+    test("types as literal text once the Home prompt already holds content", () => {
+      expect(
+        resolveKey(key({ sequence: "/", name: "/" }), ctx({ screen: "home", homePrompt: "abc" })),
+      ).toEqual({ kind: "home-input", ch: "/" });
+    });
+
+    // The `missing`/`blocked` branches return above this check for every key but `r`/`q`
+    // (/`backspace` for `blocked`) — `/` is none of those, so it is fully inert on both, not
+    // merely refused as a slash-open. The menu is reachable only when the prompt is genuinely
+    // live (Task 15's health gate), which this falls out of for free from branch ORDER alone.
+    test("is inert on missing/blocked — those prompts are not live", () => {
+      const missing = ctx({
+        screen: "home",
+        homeHealth: { kind: "missing", agent: "claude", detail: "x" },
+      });
+      expect(resolveKey(key({ sequence: "/", name: "/" }), missing)).toEqual({ kind: "none" });
+
+      const blocked = ctx({
+        screen: "home",
+        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        homePrompt: "",
+      });
+      expect(resolveKey(key({ sequence: "/", name: "/" }), blocked)).toEqual({ kind: "none" });
+    });
+
+    test("opens on checking and advisory too — every outcome but missing/blocked keeps a live prompt", () => {
+      const checking = ctx({
+        screen: "home",
+        homeHealth: { kind: "checking", agent: "claude" },
+        homePrompt: "",
+      });
+      expect(resolveKey(key({ sequence: "/", name: "/" }), checking)).toEqual({
+        kind: "slash-open",
+      });
+      const advisory = ctx({
+        screen: "home",
+        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+        homePrompt: "",
+      });
+      expect(resolveKey(key({ sequence: "/", name: "/" }), advisory)).toEqual({
+        kind: "slash-open",
+      });
+    });
+  });
 });
 
 describe("resolveKey — too-small-terminal (enlarge)", () => {

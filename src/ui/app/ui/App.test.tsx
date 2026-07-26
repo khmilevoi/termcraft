@@ -394,6 +394,45 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(commandRow).toBeLessThan(composerRow);
   });
 
+  // §3.10, phase-8 Task 17 (finding §2.4): typing `/` on the Home prompt now opens the SAME
+  // slash menu, filtered to the two rows meaningful there — /model (v1.0, unavailable) and
+  // /exit (the working row the acceptance runbook's step 8 relies on).
+  test("opens the slash menu from the Home prompt, filtered to /model and /exit, and /exit's submit requests shutdown", async () => {
+    const kernel = createFakeKernel();
+    let exited = false;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, () => {
+      exited = true;
+    });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
+
+    await renderer.act(() => renderer.mockInput.typeText("/"));
+    const menu = await renderer.waitForFrame(
+      (frame) => frame.includes("commands") && frame.includes("/exit"),
+    );
+    const rows = menu.split("\n");
+    expect(menu).toContain("/model");
+    expect(menu).toContain("/exit");
+    // Neither of the seven other design rows leaks onto Home.
+    expect(menu).not.toContain("/new");
+    expect(menu).not.toContain("/commit");
+    const modelRow = rows.findIndex((row) => row.includes("/model"));
+    const exitRow = rows.findIndex((row) => row.includes("/exit"));
+    expect(modelRow).toBeGreaterThanOrEqual(0);
+    expect(exitRow).toBeGreaterThan(modelRow);
+
+    // Selection already skipped unavailable /model onto /exit — Enter submits it directly.
+    await renderer.act(() => renderer.mockInput.pressEnter());
+    expect(exited).toBe(true);
+    expect(deps.local.prompt()).toBe("");
+    expect(deps.local.overlay()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
   test("centers the chat-list popup in an absolute modal layer", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });

@@ -1,3 +1,4 @@
+import { SlashMenu } from "ui/slash-menu";
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintBadge, StatusBarHintKey } from "ui/status-bar";
@@ -268,6 +269,37 @@ function HomeIdle(props: HomeProps) {
               )
             }
           </box>
+          {
+            // §3.10, design/23-slash-menu.dc.html (phase-8 Task 17, finding §2.4): anchored
+            // directly below the whole bordered "describe" block, left-edge aligned with it, at
+            // design's own rect (`home()`, `design/termcraft-engine.js:154-155` —
+            // `slashBox(b,ix,iy+boxH,Math.min(42,iw),rows,…)`: row `iy+boxH` sits immediately
+            // below the box, which in the design's absolute canvas already contains the combo
+            // selectors near its own bottom row (`:149-151`'s `yy=iy+4`, inside the box's
+            // `iy..iy+5` span) — so the closest faithful mapping in THIS flexbox translation,
+            // where the combo row is already Task 13's own sibling BELOW the border, anchors the
+            // menu below that combo row too, not between it and the border. Width
+            // `Math.min(42,iw)` verbatim; "· left-edge aligned" (23-slash-menu.dc.html's own
+            // prose) is achieved by wrapping in an outer box of width `iw` — IDENTICAL to
+            // `prompt-box`'s own width, so both are centered by the SAME parent
+            // (`alignItems="center"`) to the SAME offset — with the narrower visible anchor
+            // positioned at that outer box's own left edge (Yoga's default `alignItems:
+            // "stretch"` places a sized child at the cross-axis start, not centered within it).
+            // `rows` is empty whenever the menu is not open (§3.10: "the menu simply does not
+            // open" is the same condition as "nothing to render here").
+            props.rows.length > 0 && (
+              <box id={`${props.id}-slash-align`} width={iw} marginTop={1}>
+                <box id={`${props.id}-slash-anchor`} width={Math.min(42, iw)}>
+                  <SlashMenu
+                    id={`${props.id}-slash-menu`}
+                    typed={props.prompt}
+                    rows={props.rows}
+                    selectedIndex={props.selectedIndex}
+                  />
+                </box>
+              </box>
+            )
+          }
           {showHealthPanel && (
             <box id={`${props.id}-health-panel-slot`} marginTop={1}>
               <HomeHealthPanel id={`${props.id}-health-panel`} width={iw} health={health} />

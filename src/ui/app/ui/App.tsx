@@ -3,6 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import { trace } from "infrastructure/debug-log";
+import { filterSlashRows } from "ui/actions";
 import { Home } from "ui/home";
 import type { HomeAgentSelection, HomeCombo } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
@@ -199,6 +200,11 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
   }
 
   if (screen === "home") {
+    // §3.10, phase-8 Task 17: the SAME `slashOpen ? filterSlashRows(...) : []` convention
+    // `Workspace.tsx` already uses for its own non-modal anchor — `rows` stays empty (so Home
+    // renders nothing extra) whenever the menu is not open, rather than filtering unconditionally
+    // on whatever the prompt currently holds.
+    const homeSlashOpen = deps.local.overlay() === "slash-menu";
     return (
       <Home
         id="app-home"
@@ -207,6 +213,8 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         health={deps.local.homeHealth()}
         prompt={deps.local.prompt()}
         combo={homeCombo(deps.local.agentSelection())}
+        rows={homeSlashOpen ? filterSlashRows(deps.local.prompt(), deps.actionContext()) : []}
+        selectedIndex={deps.local.slashSelection()}
       />
     );
   }

@@ -260,10 +260,25 @@ current.json` changed at all (a failed export leaves the previous generation act
 
 ## 8. Exit termcraft
 
-Type `/exit` in the composer (or, on the Home agent-missing panel or the
-too-small-terminal screen specifically, press `q` — those two screens have no text
-input, so `q` is safe there; on the idle Home prompt and in the Workspace composer,
-`q` types a literal "q" instead, by design, so use `/exit`).
+Type `/exit` in the Workspace composer, or on the idle Home prompt — both are
+"primary inputs" for the slash menu (§3.10, phase-8 Task 17, finding §2.4): typing
+`/` opens the same non-modal menu on either one, filtered on Home to the two rows
+meaningful there (`/model`, shown but unavailable — it is v1.0 — and `/exit`, the
+one usable row); finish typing "exit" and press Enter to submit it. (On the Home
+agent-missing panel or the too-small-terminal screen specifically, press `q`
+instead — those two screens have no text input at all, so `q` is safe there; on
+the idle Home prompt and in the Workspace composer `q` still types a literal "q",
+by design, so it must not double as a quit key there — use `/exit`.)
+
+**This instruction is new as of phase-8 Task 17.** Before it, Home had no
+in-app quit affordance at all outside the agent-missing/too-small-terminal
+screens: the slash menu never opened from the Home prompt, so `/exit` was
+literal text there and Enter would create a project whose first message was
+the string `"/exit"`. The only way out of idle Home was `Ctrl+C` — which
+`runApp` does handle gracefully (cancels a running turn, awaits confirmed
+process-tree exit, no orphaned Claude CLI process) — but that is a terminal
+signal, not an in-app command, and was the only escape route this step could
+have named until now.
 
 **Expected:** if a turn is running, it is cancelled first and confirmed process-tree
 exit is awaited before the shell releases its resources and the process exits

@@ -1,4 +1,4 @@
-import { wrap } from "@reatom/core";
+import { type Atom, wrap } from "@reatom/core";
 
 import type { CommandResultV1 } from "core/protocol";
 import { trace } from "infrastructure/debug-log";
@@ -142,19 +142,31 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     }
     case "slash-open": {
-      if (deps.screen() !== "workspace") return;
-      local.composer.set("/");
+      // §3.10, phase-8 Task 17 (finding §2.4): the slash menu is reachable from either primary
+      // input — the Workspace composer OR the Home prompt (`keymap.ts`'s own two `/`-open
+      // checks, one per screen). Every other screen has no primary input to open it from at all.
+      const screen = deps.screen();
+      if (screen !== "workspace" && screen !== "home") return;
+      // §3.10's "when nothing applies the menu simply does not open" — checked BEFORE anything is
+      // written, so `/` stays literal text on a screen with no matching rows. Not reachable for
+      // either real screen today (`/model`+`/exit` always cover Home; every row covers Workspace),
+      // but the check stays screen-generic rather than assuming that forever.
+      if (filterSlashRows("/", deps.actionContext()).length === 0) return;
+      primaryInput(deps).set("/");
       local.overlay.set("slash-menu");
       return;
     }
-    case "slash-input":
+    case "slash-input": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      local.composer.set(local.composer() + intent.ch);
+      const input = primaryInput(deps);
+      input.set(input() + intent.ch);
       return;
+    }
     case "slash-backspace": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const next = local.composer().slice(0, -1);
-      local.composer.set(next);
+      const input = primaryInput(deps);
+      const next = input().slice(0, -1);
+      input.set(next);
       if (next.length === 0) {
         local.overlay.set(null);
         return;
@@ -173,7 +185,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (row === undefined || row.state.availability !== "available") return;
       const entry = resolveSlashAction(row.command);
       if (entry === null) return;
-      local.composer.set("");
+      primaryInput(deps).set("");
       local.overlay.set(null);
       executeAction(entry, deps);
       return;
@@ -314,12 +326,22 @@ function dispatchHomeSubmit(
   );
 }
 
+/**
+ * The primary text input for the current screen (§3.10 calls them both "primary input"): the
+ * Home prompt or the Workspace composer. Selects between two ALREADY-EXISTING atoms — never
+ * creates one — so calling this repeatedly within one intent handler is free.
+ */
+function primaryInput(deps: UiDeps): Atom<string> {
+  return deps.screen() === "home" ? deps.local.prompt : deps.local.composer;
+}
+
 function slashRows(deps: UiDeps) {
-  return filterSlashRows(deps.local.composer(), deps.actionContext());
+  return filterSlashRows(primaryInput(deps)(), deps.actionContext());
 }
 
 function slashMenuActive(deps: UiDeps): boolean {
-  return deps.screen() === "workspace" && deps.local.overlay() === "slash-menu";
+  const screen = deps.screen();
+  return (screen === "workspace" || screen === "home") && deps.local.overlay() === "slash-menu";
 }
 
 function closeStaleSlash(deps: UiDeps): void {

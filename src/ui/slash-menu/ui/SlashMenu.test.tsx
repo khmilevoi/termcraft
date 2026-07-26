@@ -30,7 +30,10 @@ function makeRow(
   state: Partial<ScoredSlashRow["state"]> = {},
 ): ScoredSlashRow {
   return {
-    command: { capability: null, ...command },
+    // `screens` is irrelevant to this component (it renders whatever rows it is handed,
+    // already filtered by the caller) — defaulted here purely so this fixture keeps satisfying
+    // the required `SlashCommand.screens` field (phase-8 Task 17), same as `capability` above.
+    command: { capability: null, screens: ["workspace"], ...command },
     state: { visible: true, availability: "available", hint: null, ...state },
   };
 }

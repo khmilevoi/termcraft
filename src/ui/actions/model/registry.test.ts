@@ -92,14 +92,31 @@ describe("SLASH_COMMANDS registry", () => {
       desc: "quit termcraft",
       order: 8,
       capability: null,
+      screens: ["workspace", "home"],
     });
+  });
+
+  // §3.10, phase-8 Task 17: transcribed from design's own `commandRegistry` `home:true` flags
+  // (`termcraft-engine.js:930,934`) — exactly `/model` and `/exit` are reachable from Home;
+  // every other row is Workspace-only.
+  test("screens: every row is workspace-only except /model and /exit, which also list home", () => {
+    expect(SLASH_COMMANDS.map((c) => [c.cmd, c.screens])).toEqual([
+      ["/new", ["workspace"]],
+      ["/chats", ["workspace"]],
+      ["/export", ["workspace"]],
+      ["/model", ["workspace", "home"]],
+      ["/commit-page", ["workspace"]],
+      ["/commit-infra", ["workspace"]],
+      ["/commit-all", ["workspace"]],
+      ["/exit", ["workspace", "home"]],
+    ]);
   });
 });
 
 describe("slashRowState", () => {
   test("an available capability -> available, no hint", () => {
     const s = slashRowState(
-      { cmd: "/export", desc: "", order: 3, capability: "export.start" },
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
       context([["export.start", available]]),
     );
     expect(s).toEqual({ visible: true, availability: "available", hint: null });
@@ -107,7 +124,7 @@ describe("slashRowState", () => {
 
   test("an unavailable capability -> unavailable with the primary reason as hint", () => {
     const s = slashRowState(
-      { cmd: "/export", desc: "", order: 3, capability: "export.start" },
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
       context([["export.start", noPages]]),
     );
     expect(s.availability).toBe("unavailable");
@@ -116,7 +133,14 @@ describe("slashRowState", () => {
 
   test("a deferred (Tier-C) commit row is always unavailable with CAPABILITY_UNAVAILABLE", () => {
     const s = slashRowState(
-      { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan", dot: true },
+      {
+        cmd: "/commit-page",
+        desc: "",
+        order: 5,
+        capability: "commit.plan",
+        dot: true,
+        screens: ["workspace"],
+      },
       context([["commit.plan", deferred]]),
     );
     expect(s.availability).toBe("unavailable");
@@ -125,11 +149,23 @@ describe("slashRowState", () => {
 
   test("/model and every commit action stay visible but inert even if capability is available", () => {
     const model = slashRowState(
-      { cmd: "/model", desc: "", order: 4, capability: "model.select" },
+      {
+        cmd: "/model",
+        desc: "",
+        order: 4,
+        capability: "model.select",
+        screens: ["workspace", "home"],
+      },
       context([["model.select", available]]),
     );
     const commit = slashRowState(
-      { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan" },
+      {
+        cmd: "/commit-page",
+        desc: "",
+        order: 5,
+        capability: "commit.plan",
+        screens: ["workspace"],
+      },
       context([["commit.plan", available]]),
     );
     expect(model).toMatchObject({ visible: true, availability: "unavailable" });
@@ -138,7 +174,7 @@ describe("slashRowState", () => {
 
   test("a missing capability is treated as unavailable", () => {
     const s = slashRowState(
-      { cmd: "/export", desc: "", order: 3, capability: "export.start" },
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
       context(),
     );
     expect(s.availability).toBe("unavailable");
@@ -149,7 +185,7 @@ describe("slashRowState", () => {
   // fix; see `slashRowState`'s own doc comment for why).
   test("/chats reads its availability from chat.switch's published state, not its own null capability", () => {
     const s = slashRowState(
-      { cmd: "/chats", desc: "", order: 2, capability: null },
+      { cmd: "/chats", desc: "", order: 2, capability: null, screens: ["workspace"] },
       context([["chat.switch", available]]),
     );
     expect(s.availability).toBe("available");
@@ -157,7 +193,10 @@ describe("slashRowState", () => {
   });
 
   test("/chats is unavailable when chat.switch has not been published (the missing-capability convention)", () => {
-    const s = slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, context());
+    const s = slashRowState(
+      { cmd: "/chats", desc: "", order: 2, capability: null, screens: ["workspace"] },
+      context(),
+    );
     expect(s.availability).toBe("unavailable");
   });
 
@@ -171,19 +210,29 @@ describe("slashRowState", () => {
   test("/chats locks during a turn — it reads chat.switch's published TURN_RUNNING state, matching design", () => {
     const running = context([["chat.switch", turnRunning]], { turnRunning: true });
     expect(
-      slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, running).availability,
+      slashRowState(
+        { cmd: "/chats", desc: "", order: 2, capability: null, screens: ["workspace"] },
+        running,
+      ).availability,
     ).toBe("locked");
   });
 
   test("/export locks on its own published TURN_RUNNING state, and a commit row is not turn-locked at all", () => {
     const running = context([["export.start", turnRunning]], { turnRunning: true });
-    expect(
-      slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, running)
-        .availability,
-    ).toBe("locked");
+    const exportRow = slashRowState(
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
+      running,
+    );
+    expect(exportRow.availability).toBe("locked");
     // A commit row is not turn-locked (its own deferred capability still marks it unavailable).
     const commit = slashRowState(
-      { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan" },
+      {
+        cmd: "/commit-page",
+        desc: "",
+        order: 5,
+        capability: "commit.plan",
+        screens: ["workspace"],
+      },
       context([["commit.plan", deferred]], { turnRunning: true }),
     );
     expect(commit.availability).toBe("unavailable");
@@ -198,34 +247,45 @@ describe("slashRowState", () => {
   // reachable.
   test("locks rows individually — /exit stays available while a turn runs", () => {
     const running = context([["chat.create", turnRunning]], { turnRunning: true });
-    expect(
-      slashRowState({ cmd: "/exit", desc: "quit termcraft", order: 8, capability: null }, running)
-        .availability,
-    ).toBe("available");
-    expect(
-      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
-        .availability,
-    ).toBe("locked");
+    const exitRow = slashRowState(
+      {
+        cmd: "/exit",
+        desc: "quit termcraft",
+        order: 8,
+        capability: null,
+        screens: ["workspace", "home"],
+      },
+      running,
+    );
+    expect(exitRow.availability).toBe("available");
+    const newRow = slashRowState(
+      { cmd: "/new", desc: "", order: 1, capability: "chat.create", screens: ["workspace"] },
+      running,
+    );
+    expect(newRow.availability).toBe("locked");
   });
 
   test("separates kernel-locked from unavailable (design slashBox :948-949)", () => {
     const running = context([["chat.create", turnRunning]], { turnRunning: true });
-    expect(
-      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
-        .availability,
-    ).toBe("locked");
+    const lockedNew = slashRowState(
+      { cmd: "/new", desc: "", order: 1, capability: "chat.create", screens: ["workspace"] },
+      running,
+    );
+    expect(lockedNew.availability).toBe("locked");
 
     const idleNoCap = context();
-    expect(
-      slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, idleNoCap)
-        .availability,
-    ).toBe("unavailable");
+    const unavailableExport = slashRowState(
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
+      idleNoCap,
+    );
+    expect(unavailableExport.availability).toBe("unavailable");
 
     const idle = context([["chat.create", available]], { turnRunning: false });
-    expect(
-      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, idle)
-        .availability,
-    ).toBe("available");
+    const availableNew = slashRowState(
+      { cmd: "/new", desc: "", order: 1, capability: "chat.create", screens: ["workspace"] },
+      idle,
+    );
+    expect(availableNew.availability).toBe("available");
   });
 
   test("unavailable outranks locked when both apply (design slashRows :943-945: `_un` checked before `_lk`)", () => {
@@ -233,7 +293,7 @@ describe("slashRowState", () => {
     // own reason (NO_PAGES) *and* the turn is running. The row must report the real, permanent
     // reason — not "locked", which would misleadingly promise it comes back once the turn ends.
     const s = slashRowState(
-      { cmd: "/export", desc: "", order: 3, capability: "export.start" },
+      { cmd: "/export", desc: "", order: 3, capability: "export.start", screens: ["workspace"] },
       context([["export.start", noPages]], { turnRunning: true }),
     );
     expect(s.availability).toBe("unavailable");
@@ -271,6 +331,74 @@ describe("filterSlashRows", () => {
     // /new (chat.create) is available and is index 0, so it wins regardless of any other row's
     // state — this fixture does not publish chat.switch, so /chats itself reads unavailable here.
     expect(firstEnabledIndex(rows)).toBe(0);
+  });
+});
+
+// §3.10, phase-8 Task 17 (finding §2.4): Home's applicable set is small — design's own
+// `commandRegistry` marks exactly `/model` and `/exit` `home:true` (`termcraft-engine.js:930,
+// 934`), and `slashRows`' `o.scope==='home'` filter (`:941`) hides everything else, matching
+// §3.10's "a command meaningless on the current screen is hidden."
+describe("filterSlashRows — Home scope (§3.10, phase-8 Task 17)", () => {
+  test("shows only the commands meaningful on Home, in design order", () => {
+    const rows = filterSlashRows("/", context([], { screen: "home" }));
+    expect(rows.map((r) => r.command.cmd)).toEqual(["/model", "/exit"]);
+    expect(rows[0]?.state.availability).toBe("unavailable"); // /model is v1.0
+    expect(rows[1]?.state.availability).toBe("available"); // /exit is the working row
+  });
+
+  // CORRECTED (design discrepancy found while implementing this task, verified at the source):
+  // the brief's own citation for this case is design `home('slash-none')`, whose comment reads
+  // "no row matches" for `typed='/mo'` (`termcraft-engine.js:137`) — but `/model` genuinely
+  // STARTS WITH "/mo" ("/model".indexOf("/mo") === 0), so the design engine's own `slashRows()`
+  // (`:939-941`, prefix filter then home-scope filter) actually returns ONE row (`/model`) for
+  // that input, contradicting its own "no match" label. This is a bug in the design's demo data,
+  // not a reason to weaken the real rule (§3.10: "when a filter matches nothing, the menu does
+  // not open"), which this asserts with a prefix that genuinely matches nothing Home-scoped:
+  // `/co` matches the `/commit-*` family on the FULL registry, but none of those are home:true,
+  // so it demonstrates the screen filter doing exactly the work §3.10 describes.
+  test("does not open when nothing Home-scoped matches — / stays literal text (design home('slash-none'))", () => {
+    const rows = filterSlashRows("/co", context([], { screen: "home" }));
+    expect(rows).toEqual([]);
+  });
+
+  test("a Workspace-only command never appears on Home even with a matching prefix", () => {
+    const rows = filterSlashRows("/e", context([], { screen: "home" }));
+    // "/e" matches /export (Workspace-only) and /exit (both screens) on the full registry —
+    // Home keeps only /exit.
+    expect(rows.map((r) => r.command.cmd)).toEqual(["/exit"]);
+  });
+
+  test("Home's /model reports CAPABILITY_UNAVAILABLE regardless of any published capability, unlike Workspace", () => {
+    const homeRow = slashRowState(
+      {
+        cmd: "/model",
+        desc: "",
+        order: 4,
+        capability: "model.select",
+        screens: ["workspace", "home"],
+      },
+      context([["model.select", available]], { screen: "home" }),
+    );
+    expect(homeRow).toEqual({
+      visible: true,
+      availability: "unavailable",
+      hint: { code: "CAPABILITY_UNAVAILABLE" },
+    });
+    // Workspace is untouched: it reads the plain inert-row path, which for this fixture (no
+    // published reason for `model.select`, since only "available" was published above under a
+    // key this context lookup will still find) is unavailable with no hint — the Home-only
+    // branch never fires there.
+    const workspaceRow = slashRowState(
+      {
+        cmd: "/model",
+        desc: "",
+        order: 4,
+        capability: "model.select",
+        screens: ["workspace", "home"],
+      },
+      context([["model.select", available]], { screen: "workspace" }),
+    );
+    expect(workspaceRow).toEqual({ visible: true, availability: "unavailable", hint: null });
   });
 });
 

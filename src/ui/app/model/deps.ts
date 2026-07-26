@@ -358,28 +358,37 @@ export function createUiDeps(
   );
 
   const composer = atom("", "ui.local.composer");
-  // The slash selection is state DERIVED from the typed prefix: every composer edit lands it
-  // back on the first enabled row. Owned by the atom (RTM-S02) rather than re-set by hand in
-  // each composer-writing key handler. `slash-move` still writes it directly — that is the
-  // point of `withComputed` over a plain `computed`. The action context is PEEKED, not
-  // tracked, so a capability flip or a turn starting mid-navigation never moves the user's
-  // cursor; only what they type does.
+  // Hoisted above `slashSelection` (like `composer`) so its own `withComputed` can read it
+  // directly — phase-8 Task 17 (§3.10): the Home prompt is the OTHER primary input the slash
+  // selection must re-derive from, exactly as `composer` already does for Workspace.
+  const prompt = atom("", "ui.local.prompt");
+  // The slash selection is state DERIVED from the typed prefix of whichever screen's primary
+  // input is active: every edit to it lands the selection back on the first enabled row. Owned
+  // by the atom (RTM-S02) rather than re-set by hand in each input-writing key handler.
+  // `slash-move` still writes it directly — that is the point of `withComputed` over a plain
+  // `computed`. The action context is PEEKED, not tracked, so a capability flip or a turn
+  // starting mid-navigation never moves the user's cursor; only what they type, or which
+  // screen's input that typing belongs to, does.
   const slashSelection = atom(0, "ui.local.slashSelection").extend(
     withComputed((state) => {
-      // Read the dependency BEFORE the init branch, per the upstream `page`/`search` example:
-      // returning early without reading `composer` would register no dependency at all and the
-      // atom would never recompute again.
-      const typed = composer();
+      // Read every dependency BEFORE the init branch, per the upstream `page`/`search` example:
+      // returning early without reading one would register no dependency for it at all, and the
+      // atom would never recompute again once THAT input started changing. `screen` is tracked
+      // (not peeked, unlike `actionContext` above) because a screen transition genuinely does
+      // switch which of the two inputs below is primary.
+      const composerTyped = composer();
+      const promptTyped = prompt();
+      const typed = screen() === "home" ? promptTyped : composerTyped;
       return isInit() ? state : firstEnabledIndex(filterSlashRows(typed, peek(actionContext)));
     }),
   );
-  // Prime the init computation here, while the composer is still empty. The init branch keeps
-  // the stored value and only REGISTERS the dependency, so whoever reads the atom first would
-  // otherwise consume it — and the composer edit that opened the menu would not re-derive.
+  // Prime the init computation here, while both inputs are still empty. The init branch keeps
+  // the stored value and only REGISTERS the dependencies, so whoever reads the atom first would
+  // otherwise consume it — and an edit to whichever input is primary would not re-derive.
   void slashSelection();
 
   const local: UiLocalState = {
-    prompt: atom("", "ui.local.prompt"),
+    prompt,
     composer,
     focus: atom<FocusTarget>("composer", "ui.local.focus"),
     fullscreen: atom(false, "ui.local.fullscreen"),

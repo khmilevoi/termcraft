@@ -340,6 +340,64 @@ describe("applyIntent — slash menu", () => {
   });
 });
 
+// §3.10, phase-8 Task 17 (finding §2.4): the slash menu's primary input follows the screen —
+// Home writes `local.prompt`, never `local.composer` — via `intent.ts`'s own `primaryInput`.
+describe("applyIntent — slash menu on Home (§3.10, phase-8 Task 17)", () => {
+  test("slash-open writes '/' into the Home prompt, not the Workspace composer", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    expect(deps.screen()).toBe("home");
+
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.prompt()).toBe("/");
+    expect(deps.local.composer()).toBe("");
+    expect(deps.local.overlay()).toBe("slash-menu");
+    // /model (unavailable — v1.0) is skipped; selection lands on /exit, the working row.
+    expect(deps.local.slashSelection()).toBe(1);
+  });
+
+  test("slash-input and slash-backspace edit the Home prompt while the menu stays open", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    applyIntent({ kind: "slash-open" }, deps);
+
+    applyIntent({ kind: "slash-input", ch: "e" }, deps);
+    expect(deps.local.prompt()).toBe("/e");
+    expect(deps.local.composer()).toBe("");
+
+    applyIntent({ kind: "slash-backspace" }, deps);
+    expect(deps.local.prompt()).toBe("/");
+    expect(deps.local.overlay()).toBe("slash-menu");
+  });
+
+  test("slash-submit on /exit clears the Home prompt and requests shutdown, dispatching nothing", () => {
+    const kernel = createFakeKernel();
+    let calls = 0;
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, () => {
+      calls += 1;
+    });
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.slashSelection()).toBe(1); // /exit, the one available Home row
+
+    applyIntent({ kind: "slash-submit" }, deps);
+    expect(calls).toBe(1);
+    expect(deps.local.prompt()).toBe("");
+    expect(deps.local.overlay()).toBeNull();
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("slash-move skips the unavailable /model row on Home, exactly as it skips inert rows on Workspace", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    applyIntent({ kind: "slash-open" }, deps);
+    applyIntent({ kind: "slash-move", delta: -1 }, deps);
+    // Only one enabled row (/exit) exists on Home — moving in either direction wraps to it.
+    expect(deps.local.slashSelection()).toBe(1);
+    applyIntent({ kind: "slash-move", delta: 1 }, deps);
+    expect(deps.local.slashSelection()).toBe(1);
+  });
+});
+
 describe("applyIntent — chats and trust", () => {
   test("chat navigation wraps and Enter dispatches chat.switch for the selected chatId", () => {
     const kernel = createFakeKernel();

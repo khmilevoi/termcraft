@@ -36,6 +36,13 @@ export interface SlashCommand {
   readonly dot?: boolean;
   /** `/commit-infra` is disabled whenever there is nothing to commit — design `clean:true`. */
   readonly clean?: boolean;
+  /**
+   * The screens this command is meaningful on (§3.10: "a command meaningless on the current
+   * screen is hidden"). Transcribed from the design's own `commandRegistry` `home: true` flags
+   * (`design/termcraft-engine.js:930` for `/model`, `:934` for `/exit`) — the only two of the
+   * eight design rows marked reachable from the Home prompt; every other row is Workspace-only.
+   */
+  readonly screens: readonly ScreenKind[];
 }
 
 /** A hotkey-bound action (design §3.8 hotkey tiers). */

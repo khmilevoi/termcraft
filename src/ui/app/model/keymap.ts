@@ -46,8 +46,16 @@ export interface KeyContext {
    */
   readonly homeHealth: HomeAgentHealth;
   /**
-   * Home's own prompt text (M15). Only read on `screen === "home"`, and only to guard `blocked`'s
-   * literal `q`-quits key (fix round 2, Minor finding; escape route CORRECTED fix round 3):
+   * Home's own prompt text (M15). Only read on `screen === "home"`, for two purposes now:
+   * guarding `blocked`'s literal `q`-quits key (fix round 2, Minor finding; escape route
+   * CORRECTED fix round 3, both below), and — phase-8 Task 17, §3.10 — gating the `/`-opens-
+   * the-slash-menu check the same branch also carries, the Home prompt's exact analogue of
+   * `composerValue.length === 0` gating `composerActive`'s own `/`-open check below. Reusing this
+   * field for that second purpose (rather than adding a same-valued `promptValue` sibling) keeps
+   * `KeyContext` from carrying two fields that always hold the identical `deps.local.prompt()`
+   * read.
+   *
+   * The original (fix round 2) doc for the FIRST purpose continues below:
    * `checking` keeps the prompt genuinely live and typeable, so a user can still be typing the
    * instant the health probe resolves to `blocked` mid-keystroke — without this guard, the very
    * next `q` they type (intended as a letter, not a quit gesture) would silently exit the whole
@@ -247,6 +255,14 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
       return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
     if (key.name === "backspace") return { kind: "home-backspace" };
+    // §3.10: `/` as the first character of an empty primary input opens the slash menu — the Home
+    // prompt is a primary input, exactly like the Workspace composer (`composerActive`'s own `/`
+    // check below). The overlay branch above is checked BEFORE the screen branches, so an
+    // already-open menu is served by the same code and needs nothing further here. Only reachable
+    // from this point in the function at all when `missing`/`blocked` already returned above —
+    // §3.10's "the menu is only reachable when the prompt is live" (Task 15's health gate) falls
+    // out of that ordering for free, not from a second check on `context.homeHealth` here.
+    if (key.sequence === "/" && context.homePrompt.length === 0) return { kind: "slash-open" };
     const ch = printableChar(key);
     if (ch !== null) return { kind: "home-input", ch };
     return { kind: "none" };

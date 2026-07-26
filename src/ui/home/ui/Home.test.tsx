@@ -4,6 +4,7 @@ import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
+import type { ScoredSlashRow } from "ui/actions";
 import { SHELL_PALETTE } from "ui/theme";
 
 import type { HomeProps } from "../types";
@@ -25,6 +26,10 @@ const findRun = (frame: Frame, needle: string): StyledRun | undefined =>
 
 const frameContains = (frame: Frame, needle: string): boolean =>
   findRun(frame, needle) !== undefined;
+
+/** The row index (top-to-bottom) of the first row containing `needle`, or -1. */
+const rowIndexOf = (frame: Frame, needle: string): number =>
+  frame.rows.findIndex((row) => row.some((run) => run.text.includes(needle)));
 
 /**
  * A right-aligned status-bar key hint's rendered state, read off the frame rather than asserted
@@ -55,7 +60,36 @@ const baseProps: HomeProps = {
   health: { kind: "ready", agent: "claude" },
   prompt: "",
   combo: { agent: "claude", model: "sonnet-4.5", effort: "high" },
+  rows: [],
+  selectedIndex: -1,
 };
+
+// §3.10, phase-8 Task 17: the exact two rows `filterSlashRows("/", {..., screen: "home"})`
+// produces — pinned by hand here (not imported from `ui/actions`) so this file tests Home's OWN
+// rendering of whatever rows it is given, independent of the registry's own filtering logic
+// (covered separately by `ui/actions/model/registry.test.ts`).
+const HOME_SLASH_ROWS: readonly ScoredSlashRow[] = [
+  {
+    command: {
+      cmd: "/model",
+      desc: "agent · model · effort",
+      order: 4,
+      capability: "model.select",
+      screens: ["workspace", "home"],
+    },
+    state: { visible: true, availability: "unavailable", hint: { code: "CAPABILITY_UNAVAILABLE" } },
+  },
+  {
+    command: {
+      cmd: "/exit",
+      desc: "quit termcraft",
+      order: 8,
+      capability: null,
+      screens: ["workspace", "home"],
+    },
+    state: { visible: true, availability: "available", hint: null },
+  },
+];
 
 /** Renders `Home` with `baseProps` plus overrides and returns the captured frame. */
 async function renderHome(overrides: Partial<HomeProps> = {}): Promise<Frame> {
@@ -142,6 +176,53 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     const run = findRun(frame, "· / model");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
+  });
+});
+
+describe("Home screen — slash menu (§3.10, design/23-slash-menu.dc.html, phase-8 Task 17)", () => {
+  test("renders nothing extra when rows is empty — the menu simply does not open", async () => {
+    const frame = await renderHome({ prompt: "/zzz" });
+    expect(frameContains(frame, "commands")).toBe(false);
+    expect(frameContains(frame, "/model")).toBe(false);
+    // Not a bare "/exit" check — the status bar's own `/exit  quit` hint (`homeIdleHintKeys`)
+    // legitimately contains that substring regardless of the menu; the row's DESCRIPTION text
+    // is what only the slash box itself would ever render.
+    expect(frameContains(frame, "quit termcraft")).toBe(false);
+  });
+
+  test("renders the given rows, below the combo row, once open", async () => {
+    const frame = await renderHome({ prompt: "/", rows: HOME_SLASH_ROWS, selectedIndex: 1 });
+    expect(findRun(frame, "/model")).toBeDefined();
+    expect(findRun(frame, "/exit")).toBeDefined();
+    // design/23-slash-menu.dc.html: anchored BELOW the whole bordered "describe" block, which in
+    // the design's own absolute canvas already contains the combo selectors near its bottom row
+    // (`home()`, `termcraft-engine.js:149-151` draws them at `iy+4`, still inside the box's
+    // `iy..iy+5` span) — so the menu's rows render on a LATER screen row than the combo values.
+    const comboRow = rowIndexOf(frame, "sonnet-4.5");
+    const modelRow = rowIndexOf(frame, "/model");
+    expect(comboRow).toBeGreaterThanOrEqual(0);
+    expect(modelRow).toBeGreaterThan(comboRow);
+  });
+
+  test("/model shows the design's own unavailable styling; /exit is the one selectable row", async () => {
+    const frame = await renderHome({ prompt: "/", rows: HOME_SLASH_ROWS, selectedIndex: 1 });
+    const modelCmd = findRun(frame, "/model");
+    expect(modelCmd && extractRgb(modelCmd.fg)).toBe<string>(SHELL_PALETTE.faint);
+    const exitCmd = findRun(frame, "/exit");
+    // Selected (index 1, matching firstEnabledIndex skipping the unavailable /model row).
+    expect(exitCmd && extractRgb(exitCmd.fg)).toBe<string>(SHELL_PALETTE.selFg);
+  });
+
+  test("does not render the slash menu on the agent-missing full-screen takeover", async () => {
+    // `HomeAgentMissing` never receives `rows` at all (its own props type has no such field) —
+    // this pins that the menu cannot appear there even if the caller passed non-empty rows.
+    const frame = await renderHome({
+      health: { kind: "missing", agent: "claude", detail: "claude CLI not found" },
+      rows: HOME_SLASH_ROWS,
+      selectedIndex: 1,
+    });
+    expect(frameContains(frame, "/model")).toBe(false);
+    expect(frameContains(frame, "commands")).toBe(false);
   });
 });
 
