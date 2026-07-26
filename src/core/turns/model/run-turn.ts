@@ -183,12 +183,14 @@ export interface RunTurnDeps {
    * "illegal"}` ALSO BRIDGES" for why `markCommitted`/`settle`-illegal still implies a real
    * commit). Never called `true` for `"failed"` (no write ever durably landed) or for a
    * `beginFinalization`-illegal (unreachable here). `handlers/turn.ts` is responsible for
-   * clearing it back to `false` once ITS OWN `runTurn` call settles (mirroring how it already
-   * unconditionally clears `setActiveTurnId(null)` there) — this driver does not call it with
-   * `false` itself, since nothing in its own local sequencing ever needs to "un-recall" intent
-   * for a turn that already durably committed.
+   * clearing it back to `false` once ITS OWN `runTurn` call settles — UNLIKE `onSettled` below,
+   * this bit has no settle-time hook of its own (it only ever fires `true`, never `false`), so
+   * that post-`await` clear stays this driver's caller's own job, not something `onSettled`
+   * could absorb.
    */
   readonly onCommitIntentRecorded?: (recorded: boolean) => void;
+  /** Threaded straight through to both {@link FinalizeTurnDeps.onSettled} and {@link TerminalizeTurnDeps.onSettled} — see either doc comment for the full rationale (fix-bundle spec §1.5). */
+  readonly onSettled?: () => void;
 }
 
 /** What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate. */
@@ -300,6 +302,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       machine: deps.machine,
       turnTransactions: deps.turnTransactions,
       staging: deps.staging,
+      ...(deps.onSettled !== undefined ? { onSettled: deps.onSettled } : {}),
     };
     const result = await wrap(
       terminalizeTurn(terminalizeDeps, {
@@ -514,6 +517,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       turnTransactions: deps.turnTransactions,
       deadlines: deps.deadlines,
       staging: deps.staging,
+      ...(deps.onSettled !== undefined ? { onSettled: deps.onSettled } : {}),
     };
     const finalizeMaterial = input.buildFinalizeInput({
       turnId: context.turnId,

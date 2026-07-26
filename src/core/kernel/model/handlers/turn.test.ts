@@ -2090,7 +2090,9 @@ describe('turnHandlers["turn.cancel"]', () => {
     readonly actions: readonly TurnAction[];
     readonly previousTag: TurnState;
   }[] = [
-    { name: "admitting", actions: ["beginAdmission"], previousTag: "admitting" },
+    // "admitting" is deliberately NOT listed here — see the dedicated test below (right
+    // before this array's own loop runs), which reaches it through the real `turn.start`
+    // handler instead of `admitTo`.
     {
       name: "workspace-ready",
       actions: ["beginAdmission", "finishAdmission"],
@@ -2133,6 +2135,42 @@ describe('turnHandlers["turn.cancel"]', () => {
       previousTag: "finalizing",
     },
   ];
+
+  test('from "admitting" reached via the real turn.start handler (not `admitTo` + a hand-set activeTurnId — a state production could never construct that way): requestCancel still moves to terminalizing, a completed outcome, no new launched operation', () => {
+    const { handlerContext, getLaunchedOperations } = buildTestContext();
+
+    const started = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(started.disposition).toBe("started");
+    expect(handlerContext.machines.turn.phase()).toBe("admitting");
+    const turnId = handlerContext.readKernelState().turn.activeTurnId;
+    expect(turnId).not.toBeNull();
+    if (turnId === null) return;
+
+    const cancelled = turnHandlers["turn.cancel"]({ turnId }, handlerContext);
+
+    expect(cancelled.disposition).not.toBe("no-op");
+    expect(handlerContext.machines.turn.phase()).toBe("terminalizing");
+    expect(cancelled).toEqual({
+      disposition: "completed",
+      events: [
+        {
+          kind: "kernel.stateChanged",
+          payload: {
+            modelId: "kernel.turn.state",
+            action: "kernel.turn.requestCancel",
+            previousTag: "admitting",
+            nextTag: "terminalizing",
+            metadata: {},
+          },
+          correlation: { turnId },
+        },
+      ],
+    });
+    // The ONE operation `turn.start` itself already launched (`runTurnStart`, still pending) —
+    // cancelling from "admitting" with no live attempt launches nothing new, matching every
+    // SINGLE_HOP_PHASES case below.
+    expect(getLaunchedOperations()).toHaveLength(1);
+  });
 
   for (const { name, actions, previousTag } of SINGLE_HOP_PHASES) {
     test(`from "${name}" (no live attempt): applies requestCancel to terminalizing, a completed outcome, no launched operation`, () => {
@@ -2745,5 +2783,71 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
     expect(createCall.input.pages.map((p) => p.sourcePath)).toEqual([
       `${deps.projectStore.root}/.termcraft/pages/${HOME}/page.tsx`,
     ]);
+  });
+});
+
+describe("turn.start — activeTurnId never outlives the phase that justified it (fix-bundle spec §1.5)", () => {
+  test("every non-idle phase implies a non-null activeTurnId, and idle implies null", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    const observed: { phase: string; id: string | null }[] = [];
+    const record = () =>
+      observed.push({
+        phase: handlerContext.machines.turn.phase(),
+        id: handlerContext.readKernelState().turn.activeTurnId,
+      });
+
+    // `handlerContext.machines.turn` is the narrower `HandlerMachine` view, `phaseAtom`
+    // deliberately excluded (`handlers/types.ts`'s own comment) — `turnRunner.machine` is the
+    // SAME underlying `StateMachine`, exposed FULL, so this test-only observer can subscribe.
+    handlerContext.turnRunner.machine.phaseAtom.subscribe(record);
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(outcome.disposition).toBe("started");
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200; i++) {
+      if (agentBackend.calls.some((c) => c.method === "startTurn")) break;
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    await runPromise;
+    record();
+
+    for (const sample of observed) {
+      if (sample.phase === "idle") expect(sample.id).toBeNull();
+      else expect(sample.id).not.toBeNull();
+    }
   });
 });

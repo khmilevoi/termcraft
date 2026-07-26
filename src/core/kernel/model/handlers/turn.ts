@@ -255,15 +255,25 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   therefore this whole `runTurn` composition) is ever launched. The first `turn.attemptStarted`
  *   this wrapper observes still marks when `turn.started` synthesizes and publishes (see "TURN.
  *   STARTED — NOW PUBLISHED" below), just not when the active turn id is set. `setActiveTurnId(null)`
- *   still runs once `runTurn`'s own result is `terminalized`/`finalized` — UNCONDITIONALLY, and
- *   that same unconditional-clear discipline now covers every OTHER exit this file has, not only
- *   that one (Task 4, fix-bundle spec §1.2/§1.3/§1.5's own follow-up finding): a rejected
- *   admission clears it via `terminalizeRejectedAdmission`'s own call into `terminalizeTurn`
- *   (below), and every one of the TEN early-refusal branches that returns before
- *   `admission`/`runAdmission` is ever built clears it via `abortEarlyAdmission` (Task 3's own
- *   fix; Task 4 additionally has that helper publish a `turn.failed` naming the branch's real
- *   cause — see that function's own doc comment for both). No exit from `runTurnStart` leaves
- *   `activeTurnId` non-null without also leaving the turn machine `idle`.
+ *   is NOT called here at all any more, unconditionally or otherwise (Task 5, fix-bundle spec
+ *   §1.5's own follow-up finding to Task 4's discipline below): clearing it only once `runTurn`'s
+ *   promise has resolved left a window where the turn machine had already settled to `idle` —
+ *   candidate retirement and all — while `activeTurnId` still named the just-finished turn, so a
+ *   new `turn.start` could pass the `phase === "idle"` guard and this stale handler would then
+ *   clear the NEW turn's id instead of its own. `RunTurnDeps.onSettled` (`runTurnDeps`, below)
+ *   closes that window by clearing it from INSIDE `finalizeTurn`/`terminalizeTurn`
+ *   (`core/turns/model/finalize.ts` / `terminalize.ts`), the INSTANT their own `settle` transition
+ *   applies — before either function's post-settle candidate retirement, and long before this
+ *   `runTurn` composition as a whole ever resolves. That same "clear at settle, not at resolve"
+ *   discipline now covers every OTHER exit this file has, not only the ordinary finalize/terminalize
+ *   arc (Task 4, fix-bundle spec §1.2/§1.3/§1.5's own follow-up finding): a rejected admission
+ *   clears it via `terminalizeRejectedAdmission`'s own call into `terminalizeTurn` (below, now also
+ *   wired through `onSettled` rather than an unconditional post-`await` clear), and every one of the
+ *   TEN early-refusal branches that returns before `admission`/`runAdmission` is ever built clears it
+ *   via `abortEarlyAdmission` (Task 3's own fix; Task 4 additionally has that helper publish a
+ *   `turn.failed` naming the branch's real cause — see that function's own doc comment for both). No
+ *   exit from `runTurnStart` leaves `activeTurnId` non-null without also leaving the turn machine
+ *   `idle`, and no exit clears it before the machine has actually reached `idle` either.
  *
  *   TURN.STARTED — NOW PUBLISHED (was: "deliberately not published"; corrected per
  *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): `ui/mirror/model
@@ -302,9 +312,10 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   store gives no mid-flight signal, so this can only ever be recorded post-hoc, once
  *   `finalizeTurn`'s own promise resolves — never in time to prevent the documented pre-intent
  *   cancel race itself, only to record that a commit genuinely happened). This handler clears
- *   it back to `false` UNCONDITIONALLY once `runTurn` resolves (mirroring
- *   `setActiveTurnId(null)` just above it), so the bit never leaks `true` into a LATER,
- *   unrelated turn's own `finalizing` phase.
+ *   it back to `false` UNCONDITIONALLY once `runTurn` resolves (unlike `activeTurnId`, this bit
+ *   has no `onSettled`-style hook of its own — `onCommitIntentRecorded` only ever fires `true`,
+ *   never `false`, so clearing it back down is still this caller's own post-`await` job), so the
+ *   bit never leaks `true` into a LATER, unrelated turn's own `finalizing` phase.
  *
  *   THE TERMINAL EVENT: once `runTurn` resolves, the ONE terminal batch event this operation
  *   returns is built from `RunTurnResultV1`:
@@ -839,18 +850,10 @@ function admissionFailureDto(
  * phase still leaves a durable trace, matching what the orphan-turn scan already writes on
  * restart (turn-durability §7.7).
  *
- * DEVIATION FROM THE ORIGINAL PLAN'S SKETCH: the fix-bundle plan's own sketch of this function
- * threads a `TerminalizeTurnDeps.onSettled` hook through to clear `activeTurnId` "the instant
- * `settle` applies" (spec §1.5). That hook does not exist yet — it is a LATER task's own
- * producing interface (`TerminalizeTurnDeps.onSettled?: () => void`, added once and shared by
- * `finalizeTurn`/`terminalizeTurn`/`runTurn` alike), not this one's to add pre-emptively; adding
- * it here would either duplicate or conflict with that task's own shape. This function instead
- * clears `activeTurnId` unconditionally right after `terminalizeTurn` resolves — matching
- * `runTurnStart`'s own unconditional `setActiveTurnId(null)` once `runTurn` resolves, just below.
- * For THIS call site specifically the two are not measurably different: `candidateRoot: null`
- * means `terminalizeTurn`'s own post-settle candidate retirement is a synchronous no-op (no
- * candidate was ever frozen for a turn that never reached an attempt), so nothing genuinely
- * async happens between `settle` applying and this await resolving.
+ * `activeTurnId` clears via `TerminalizeTurnDeps.onSettled` (Task 5, fix-bundle spec §1.5), the
+ * SAME hook `runTurnDeps` (below) wires for the ordinary finalize/terminalize arc — never an
+ * unconditional clear after `terminalizeTurn` resolves, which would reopen the exact
+ * mirror-image window that hook exists to close (see `runTurnStart`'s own header, "LIVE EVENTS").
  */
 async function terminalizeRejectedAdmission(
   context: HandlerContext,
@@ -879,6 +882,9 @@ async function terminalizeRejectedAdmission(
         machine: context.turnRunner.machine,
         turnTransactions: context.deps.turnTransactions,
         staging: context.deps.staging,
+        // Spec §1.5 — see this function's own header. Fires the instant `settle` applies, not
+        // once this `await` resolves.
+        onSettled: () => context.setActiveTurnId(null),
       },
       {
         turnId,
@@ -894,13 +900,16 @@ async function terminalizeRejectedAdmission(
   );
 
   if (terminalized.kind === "illegal") {
+    // Defensive only, like `beginTerminalization`'s own illegal check above — `finishTerminalization`
+    // is a legal edge from `terminalizing`, and this function's own `beginTerminalization` call
+    // just put the machine there. `terminalizeTurn` never reaches its own `settle` call on this
+    // exit, so `onSettled` never fires and `activeTurnId` is left as-is — matching every other
+    // unreachable-in-practice illegal-transition branch in this file (e.g. `applyAbortStep`),
+    // which likewise logs rather than invents a compensating clear.
     console.warn(
-      `core/kernel/handlers/turn: terminalizeTurn was illegal for turn ${turnId}'s rejected admission (${terminalized.code}) — clearing the active turn id directly so the machine is not stranded`,
+      `core/kernel/handlers/turn: terminalizeTurn was illegal for turn ${turnId}'s rejected admission (${terminalized.code})`,
     );
   }
-  // Unconditional (see this function's own "DEVIATION" note above) — mirrors
-  // `runTurnStart`'s own terminal-path `setActiveTurnId(null)`.
-  context.setActiveTurnId(null);
 
   return [
     {
@@ -1283,6 +1292,8 @@ async function runTurnStart(
     // confirmed; this handler is the one legitimate caller of `context.setCommitIntentRecorded`
     // per `handlers/types.ts`'s own doc ("the turn finalize/terminalize path").
     onCommitIntentRecorded: (recorded) => context.setCommitIntentRecorded(recorded),
+    // Spec §1.5 — the one place the active turn id is cleared on a turn that actually ran.
+    onSettled: () => context.setActiveTurnId(null),
   };
 
   const runTurnInput: RunTurnInputV1 = {
@@ -1310,8 +1321,11 @@ async function runTurnStart(
   // trusted implicitly.
   context.turnRunner.setActiveAttempt(null);
 
-  context.setActiveTurnId(null);
-  // Unconditional, exactly like `setActiveTurnId(null)` just above: `onCommitIntentRecorded`
+  // `activeTurnId` is no longer cleared here — `RunTurnDeps.onSettled` (above) already cleared
+  // it the instant the turn machine's own `settle` applied, before this `runTurn` promise even
+  // resolved (fix-bundle spec §1.5). Clearing it again here, unconditionally, after the fact
+  // would reopen exactly the mirror-image window this task closes.
+  // `setCommitIntentRecorded(false)` still fires unconditionally here, though: `onCommitIntentRecorded`
   // may have fired `true` during the finalize step (a genuine commit), and this Kernel-wide
   // atom must never leak `true` into a LATER, unrelated turn's own `finalizing` phase — see
   // `RunTurnDeps.onCommitIntentRecorded`'s own doc comment (`core/turns/model/run-turn.ts`)

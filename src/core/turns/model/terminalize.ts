@@ -73,6 +73,8 @@ export interface TerminalizeTurnDeps {
   readonly turnTransactions: TurnTransactionService;
   /** See this file's header, "CANDIDATE RETIREMENT". */
   readonly staging: StagingService;
+  /** See {@link FinalizeTurnDeps.onSettled} — the identical hook, fired at the identical instant, for this file's own `settle` call. */
+  readonly onSettled?: () => void;
 }
 
 export interface TerminalizeTurnInputV1 {
@@ -192,6 +194,9 @@ export async function terminalizeTurn(
   // Unconditional: §7.2 allows this edge on EITHER a recorded outcome or a typed
   // unrecorded condition — see this file's header.
   deps.machine.apply("settle");
+  // See `FinalizeTurnDeps.onSettled` — fired before the post-settle retirement below, so the
+  // Kernel's active turn id never outlives the phase that justified it (fix-bundle spec §1.5).
+  deps.onSettled?.();
 
   // The turn is DONE either way now — see this file's header, "CANDIDATE RETIREMENT".
   await retireIfCandidateFrozen(deps.staging, input.candidateRoot);

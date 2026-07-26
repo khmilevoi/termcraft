@@ -74,6 +74,15 @@ export interface FinalizeTurnDeps {
   readonly deadlines: TurnDeadlines;
   /** See this file's header, "CANDIDATE RETIREMENT". */
   readonly staging: StagingService;
+  /**
+   * Fired the INSTANT `settle` applies and the machine is back in `idle` — before this function's
+   * own post-settle candidate retirement (fix-bundle spec §1.5). The Kernel's `activeTurnId`
+   * clears here and nowhere else: clearing it after `finalizeTurn`/`runTurn` resolves left a
+   * window where `phase === "idle"` still carried the finished turn's id, so a new `turn.start`
+   * passed the guard and the OLD handler then cleared the NEW turn's id. Optional and additive,
+   * mirroring `RunTurnDeps.onAttemptStarted`'s own producer-hook shape.
+   */
+  readonly onSettled?: () => void;
 }
 
 export interface FinalizeTurnInputV1 {
@@ -170,6 +179,7 @@ export async function finalizeTurn(
 
   const settled = deps.machine.apply("settle");
   if (settled.kind === "illegal") return { kind: "illegal", code: settled.code };
+  deps.onSettled?.();
 
   // The commit is durable now — see this file's header, "CANDIDATE RETIREMENT".
   await retireFinalizedCandidate(deps.staging, input.candidateRoot);
