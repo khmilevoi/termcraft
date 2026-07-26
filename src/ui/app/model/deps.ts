@@ -16,6 +16,7 @@ import {
 import * as errore from "errore";
 
 import type { UUIDv7 } from "core/protocol";
+import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
@@ -295,6 +296,52 @@ export function createUiDeps(
       if (unsubscribe instanceof Error) {
         reportRuntimeError(unsubscribe, "UI Kernel subscription failed:");
       }
+      // Gap A's last wiring (phase-8 Task 21, spec §4.7). Tasks 8 and 10 brought the preview
+      // machine to `idle` and pointed the session commands at the canonical page source, but
+      // NOTHING under `src/ui` ever asked for a session — so the Workspace sat on
+      // `preparing preview…` forever. This subscriber is that ask.
+      //
+      // Owned by THIS connect hook (RTM-L01) and torn down by the cleanup below: a bare
+      // module-level `effect` would outlive the mirror it subscribes to. `bind(...)` is created
+      // here, in the hook body, before anything async — the dispatch resolves in a promise
+      // continuation, where an unbound write would land on the default context (RTM-A04).
+      let lastRequestedPageSlug: string | null = null;
+      const requestPreviewForActivePage = bind((rawPageSlug: string) => {
+        if (rawPageSlug === lastRequestedPageSlug) return;
+        // `ProjectMirror.activePageSlug` is a plain `string` (the mirror folds whatever the Kernel
+        // published), while `preview.selectPage`'s payload wants the branded `PageSlug`. Validated
+        // through the existing guard rather than cast — and a slug that does not parse is refused
+        // and logged, never sent on (errore rule 21; "never fabricate a fact").
+        const pageSlug = parsePageSlug(rawPageSlug);
+        if (pageSlug instanceof Error) {
+          lastRequestedPageSlug = rawPageSlug;
+          console.warn(
+            `UI preview.selectPage skipped — active page slug "${rawPageSlug}" is not a valid PageSlug:`,
+            pageSlug.message,
+          );
+          return;
+        }
+        lastRequestedPageSlug = rawPageSlug;
+        void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
+          if (result instanceof Error) {
+            // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
+            // failures that make the UI unusable, and a preview that did not start is not one.
+            console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
+            lastRequestedPageSlug = null;
+            return;
+          }
+          if (result.status === "rejected") {
+            // Not fatal — an untrusted project keeps preview `disabled` by design (spec §2.2),
+            // and the refusal is the honest outcome there. Clearing the memo lets a later
+            // descriptor change retry once the guard's precondition actually holds.
+            console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
+            lastRequestedPageSlug = null;
+          }
+        });
+      });
+      const unsubscribeActivePage = mirror.project.subscribe((project) => {
+        if (project.activePageSlug !== null) requestPreviewForActivePage(project.activePageSlug);
+      });
       let active = true;
       let frameIterator: AsyncIterator<UiPreviewFrame> | null = null;
       const stopFrameIterator = () => {
@@ -352,6 +399,7 @@ export function createUiDeps(
       return () => {
         active = false;
         stopFrameIterator();
+        unsubscribeActivePage();
         if (typeof unsubscribe === "function") unsubscribe();
       };
     }),

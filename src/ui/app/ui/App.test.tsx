@@ -515,8 +515,14 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     await renderer.act(() => renderer.mockInput.pressArrow("up"));
     await renderer.act(() => renderer.mockInput.pressArrow("up"));
     await renderer.act(() => renderer.mockInput.pressEnter());
-    expect(kernel.dispatched).toHaveLength(1);
-    expect((kernel.dispatched[0] as { payload: { chatId: string } }).payload).toEqual({
+    // Filtered to `chat.switch` rather than asserting the whole list's length (phase-8 Task 21):
+    // the runtime hook dispatches `preview.selectPage` on its own once an active page slug
+    // appears. The claim under test is unchanged — Enter switched to exactly the newest chat, once.
+    const chatSwitches = kernel.dispatched.filter(
+      (raw) => (raw as { kind: string }).kind === "chat.switch",
+    );
+    expect(chatSwitches).toHaveLength(1);
+    expect((chatSwitches[0] as { payload: { chatId: string } }).payload).toEqual({
       chatId: newChatId,
     });
   });
@@ -619,8 +625,13 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
     // Enter must route to the chat-list (chat-switch), not export-dismiss.
     await renderer.act(() => renderer.mockInput.pressEnter());
-    expect(kernel.dispatched).toHaveLength(1);
-    expect((kernel.dispatched[0] as { kind: string }).kind).toBe("chat.switch");
+    // The precedence claim is that Enter routed to the chat list and NOT to export-dismiss, so it
+    // is asserted as "exactly one chat.switch, and no export command" rather than as the length of
+    // the whole dispatch list — the runtime hook's own `preview.selectPage` also lands here
+    // (phase-8 Task 21).
+    const routedKinds = kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
+    expect(routedKinds.filter((kind) => kind === "chat.switch")).toHaveLength(1);
+    expect(routedKinds.filter((kind) => kind.startsWith("export."))).toHaveLength(0);
 
     // Only now that the overlay above it closed does the export popup show, and Enter dismisses
     // it — it was never dismissed by the Enter that switched chats.
@@ -810,13 +821,32 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "build a dashboard",
     );
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const projectCreate = kernel.dispatched[0] as {
+    type DispatchedCommand = {
       protocolVersion: number;
       commandId: string;
       expectedRevision: string;
       kind: string;
       payload: unknown;
     };
+    // Looked up BY KIND, not by index (phase-8 Task 21): `ui/app/model/deps.ts`'s runtime hook now
+    // dispatches `preview.selectPage` on its own the moment an active page slug appears, so the
+    // positions of the user-driven commands below are no longer fixed. Each assertion still names
+    // exactly the command it is about.
+    // Throws rather than returning `undefined`: a missing command is a fixture bug, and the
+    // message names it directly instead of surfacing as `undefined` vs an object diff. Same
+    // idiom the store fixtures use (`staging.test.ts`'s `throw new Error("fixture bug: …")`).
+    const dispatchedOf = (kind: string): DispatchedCommand => {
+      const found = kernel.dispatched.find(
+        (raw): raw is DispatchedCommand => (raw as { kind: string }).kind === kind,
+      );
+      if (found === undefined) {
+        throw new Error(
+          `fixture bug: no ${kind} was dispatched (saw ${kernel.dispatched.map((raw) => (raw as { kind: string }).kind).join(", ")})`,
+        );
+      }
+      return found;
+    };
+    const projectCreate = dispatchedOf("project.create");
     expect(projectCreate).toEqual({
       protocolVersion: 1,
       commandId: projectCreate.commandId,
@@ -859,7 +889,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "add a network panel",
     );
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const turnStart = kernel.dispatched[1] as typeof projectCreate;
+    const turnStart = dispatchedOf("turn.start");
     expect(turnStart).toEqual({
       protocolVersion: 1,
       commandId: turnStart.commandId,
@@ -905,7 +935,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     );
     expect(newChatMenu).toContain("start a new chat");
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const chatCreate = kernel.dispatched[2] as typeof projectCreate;
+    const chatCreate = dispatchedOf("chat.create");
     expect(chatCreate).toEqual({
       protocolVersion: 1,
       commandId: chatCreate.commandId,
@@ -936,7 +966,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(chatPopup).toContain("chats");
     await renderer.act(() => renderer.mockInput.pressArrow("up"));
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const chatSwitch = kernel.dispatched[3] as typeof projectCreate;
+    const chatSwitch = dispatchedOf("chat.switch");
     expect(chatSwitch).toEqual({
       protocolVersion: 1,
       commandId: chatSwitch.commandId,
@@ -963,7 +993,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
     // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
     await renderer.act(() => renderer.mockMouse.pressDown(51, 9, MouseButtons.RIGHT));
-    const geometryQuery = kernel.dispatched[4] as typeof projectCreate;
+    const geometryQuery = dispatchedOf("preview.queryGeometry");
     expect(geometryQuery).toEqual({
       protocolVersion: 1,
       commandId: geometryQuery.commandId,
@@ -996,7 +1026,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "keep this visible",
     );
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const pinCreate = kernel.dispatched[5] as typeof projectCreate;
+    const pinCreate = dispatchedOf("pin.create");
     expect(pinCreate).toEqual({
       protocolVersion: 1,
       commandId: pinCreate.commandId,
@@ -1018,7 +1048,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     );
     expect(trustFrame).toContain("/project");
     await renderer.act(() => renderer.mockInput.pressEscape());
-    const trustDecline = kernel.dispatched[6] as typeof projectCreate;
+    const trustDecline = dispatchedOf("project.setTrust");
     expect(trustDecline).toEqual({
       protocolVersion: 1,
       commandId: trustDecline.commandId,
@@ -1041,6 +1071,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(readOnlyFrame).toContain("Send · Tweaks · pins disabled");
     expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
       "project.create",
+      // phase-8 Task 21 (Gap A §4.7): the runtime hook asks for a preview session as soon as the
+      // first `page.descriptorsChanged` names an active slug — before the user's next keystroke.
+      "preview.selectPage",
       "turn.start",
       "chat.create",
       "chat.switch",

@@ -231,6 +231,66 @@ describe("createUiDeps Home health probe (M15)", () => {
   });
 });
 
+describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
+  /**
+   * `page.descriptorsChanged` is the one event that moves `ProjectMirror.activePageSlug`
+   * (`ui/mirror/model/mirror.ts`'s `case "page.descriptorsChanged"`). The descriptor list itself is
+   * irrelevant to this subscriber — only the active slug is — so it stays empty here.
+   */
+  const activePage = (activePageSlug: string | null) =>
+    event("page.descriptorsChanged", {
+      reason: "turn-apply",
+      descriptors: [],
+      changes: [],
+      activePageSlug,
+    });
+
+  const selectedPages = (kernel: ReturnType<typeof createFakeKernel>): readonly unknown[] =>
+    kernel.dispatched
+      .filter(
+        (raw): raw is { kind: string; payload: { pageSlug: string } } =>
+          typeof raw === "object" &&
+          raw !== null &&
+          "kind" in raw &&
+          raw.kind === "preview.selectPage",
+      )
+      .map((raw) => raw.payload);
+
+  test("dispatches preview.selectPage when the active page slug appears, and again when it changes", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    kernel.emit(activePage("settings"));
+    await tick();
+    // Unchanged — the subscriber must not ask the Kernel to re-establish the same session.
+    kernel.emit(activePage("settings"));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "settings" }]);
+    unsubscribe();
+  });
+
+  test("stops dispatching once the runtime disconnects (RTM-L01)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    unsubscribe();
+    await tick();
+    kernel.emit(activePage("settings"));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }]);
+  });
+});
+
 describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
   test("defaults to a no-op so every existing UiDeps construction keeps compiling", () => {
     const kernel = createFakeKernel();
