@@ -672,6 +672,7 @@ adapter:
 - `lock`;
 - `workspace.local.toml`, every `*.local` or `*.local.*` file, and every directory
   whose name ends in `.local`;
+- `chats/` <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->;
 - `transactions.local/` and all temporary transaction payloads;
 - `cache/`, `diagnostics/`, and `logs/`;
 - migration or repair backups, including defensive matches for `backup-*` and
@@ -875,8 +876,9 @@ exception.
 - Bulk, lazy, and runtime API migrations cannot prepare a rewrite before every backup copy
   is flushed, reread, and hash-verified. Git presence never changes the result.
 - `/commit-infra` includes only its two first-schema paths. `/commit-all` includes
-  portable chats, pages, pins, and exports while excluding every hard-local class,
+  portable pages, pins, and exports while excluding every hard-local class,
   even if a file is tracked or re-included by ignore rules.
+  <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
 
 ## 17. Acceptance criteria
 
@@ -886,9 +888,10 @@ This design is implemented when all of the following are true:
    turn/command/record identities and slug-only page identity. No abandoned-schema
    migration exists.
 2. Cloning or committing a project carries `project.toml`, target stack, page order,
-   chats, pins, canonical sources, and selected exports, but never active workspace
+   pins, canonical sources, and selected exports, but never active workspace
    state, sessions, trust, transactions, caches, diagnostics, logs, lock data, or
    backups.
+   <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
 3. `project.toml` contains no cached page metadata or local settings; exact
    source-hash/extractor-version cache invalidation is demonstrably rebuildable.
 4. Session resume occurs only when chat ID, opaque backend scope, record count, and

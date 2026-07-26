@@ -24,6 +24,11 @@ describe("PROJECT_GITIGNORE_RULES", () => {
     }
   });
 
+  test("git-ignores chats — they are a hard-local class (spec §2.5, storage-identity §13 amended)", () => {
+    expect(PROJECT_GITIGNORE_RULES).toContain("/chats/");
+    expect(renderProjectGitignore()).toContain("/chats/");
+  });
+
   test("is duplicate-free and deterministic in order", () => {
     expect(new Set(PROJECT_GITIGNORE_RULES).size).toBe(PROJECT_GITIGNORE_RULES.length);
     expect(PROJECT_GITIGNORE_RULES).toEqual(PROJECT_GITIGNORE_RULES);
@@ -55,11 +60,12 @@ describe("renderProjectGitignore", () => {
     expect(text).toContain("StoragePathPolicy");
   });
 
-  test("never ignores a portable path (§13: project.toml and .gitignore are commit-eligible)", () => {
+  test("never ignores a portable path (§13: project.toml, .gitignore, pages, and export are commit-eligible)", () => {
+    // chats/ is intentionally absent from this list: spec §2.5 / storage-identity §13
+    // reclassified it hard-local (AMENDED 2026-07-26), so it belongs in the ignore set now.
     for (const rule of PROJECT_GITIGNORE_RULES) {
       expect(rule).not.toBe("/project.toml");
       expect(rule).not.toBe("/.gitignore");
-      expect(rule).not.toBe("/chats/");
       expect(rule).not.toBe("/pages/");
       expect(rule).not.toBe("/export/");
     }
