@@ -330,41 +330,31 @@ describe('turnHandlers["turn.start"]', () => {
     expect(operation.label).toBe("kernel.turn.run");
   });
 
-  test("starts an operation synchronously and ADMITS before any async work runs; a later refusal (nothing selected in this fixture) still resolves with no events (Gap 4 closed)", async () => {
+  test("a second turn.start while the first is still admitting is refused as a no-op — beginTurn's own defensive illegal-beginAdmission branch (fix round 1: was covered by nothing)", () => {
     const { handlerContext, getLaunchedOperations } = buildTestContext();
 
-    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
-
-    // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
-    // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
-    // precedent for "nothing about the outcome is known until the promise settles"). `events`
-    // now carries the ONE `kernel.stateChanged` admission event `beginTurn` (spec §1.2, §1.6)
-    // applies synchronously before any of this — the OLD `events: []` expectation could not
-    // see it because admission used to transition only deep inside `runAdmission`.
-    expect(outcome.disposition).toBe("started");
-    expect(outcome.events).toHaveLength(1);
-    expect(outcome.events[0]?.kind).toBe("kernel.stateChanged");
-    const [operation] = getLaunchedOperations();
-    if (operation === undefined) throw new Error("expected exactly one launched operation");
-    expect(operation.label).toBe("kernel.turn.run");
-
-    const events = await operation.run();
-    expect(events).toEqual([]);
-    // FLAGGED GAP, not this task's scope and NOT covered by spec §1.3/§1.4's rejected-admission
-    // path either (that path only fires once `runAdmission` itself has run and failed — this
-    // refusal returns before `runAdmission` is ever called): the machine is left stranded in
-    // "admitting" with a non-null `activeTurnId`, so a SECOND `turn.start` after this exact
-    // fixture would be rejected `TURN_ALREADY_ACTIVE` until the process restarts. Asserted here
-    // as the actual behavior, not laundered as the old "returns to idle" claim.
+    const first = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(first.disposition).toBe("started");
     expect(handlerContext.machines.turn.phase()).toBe("admitting");
-    expect(handlerContext.readKernelState().turn.activeTurnId).not.toBeNull();
+
+    // `beginAdmission` is illegal from "admitting" (the table's only edge is `idle ->
+    // admitting`), so `beginTurn` returns `[]` and `handleTurnStart` maps that onto
+    // `noOpOutcome()` — never `startedOutcome([])`, which would falsely claim something
+    // started (see `handleTurnStart`'s own inline comment, `./turn.ts`).
+    const second = turnHandlers["turn.start"]({ text: "again" }, handlerContext);
+
+    expect(second).toEqual({ disposition: "no-op", events: [] });
+    // Nothing new launched — still exactly the FIRST turn's own operation.
+    expect(getLaunchedOperations()).toHaveLength(1);
+    // The first turn's own admission is untouched by the refused second attempt.
+    expect(handlerContext.machines.turn.phase()).toBe("admitting");
   });
 
   // Triage #13 (fixlane-K1-turn-spine.json): the cheap refusal-branch tests via
-  // error-returning fakes — everything below asserts the SAME shape as the test just above
-  // (`{disposition:"started", events:[<1 admission event>]}`, `operation.run()` resolves to
-  // `[]`), just triggering a LATER refusal branch. See `assertEarlyPortRefusalStalls`'s own
-  // doc comment for the machine-phase/activeTurnId caveat these share.
+  // error-returning fakes — everything below asserts the SAME shape (`{disposition:"started",
+  // events:[<1 admission event>]}`, then `operation.run()` recovers the machine to idle), just
+  // triggering a DIFFERENT refusal branch. See `assertEarlyPortRefusalRecoversToIdle`'s own
+  // doc comment for the shared assertion this whole family proves.
 
   /** A projectStore with a real, complete agent selection already set — every test below only exercises ONE later refusal. */
   function selectedProjectStore(overrides?: {
@@ -389,14 +379,16 @@ describe('turnHandlers["turn.start"]', () => {
    * admitted synchronously by the time any of them run (spec §1.2), so `outcome.events` now
    * carries the ONE `kernel.stateChanged` admission event these fixtures used to see none of.
    *
-   * FLAGGED GAP (not this task's scope, and NOT covered by spec §1.3/§1.4's rejected-admission
-   * path either — that path only fires once `runAdmission` itself has run and failed; none of
-   * these scenarios ever reach it): the machine is left stranded in "admitting" with a
-   * non-null `activeTurnId`, so a SECOND `turn.start` after any of these would be rejected
-   * `TURN_ALREADY_ACTIVE` until the process restarts. This helper asserts the ACTUAL behavior,
-   * not the ideal one — it does not launder the gap as accepted.
+   * FIX ROUND 1: `runTurnStart`'s own `abortEarlyAdmission` (`./turn.ts`) now walks the
+   * machine back out of `admitting` via the REAL `admitting -> terminalizing -> terminal ->
+   * idle` edges (`TURN_TRANSITION_TABLE`, exactly three transitions, exactly three
+   * `kernel.stateChanged` events) and clears `activeTurnId` — so `operation.run()` resolves
+   * with those three events, never `[]`, and the machine is USABLE again: a second
+   * `turn.start` is accepted, not rejected `TURN_ALREADY_ACTIVE`. Before that fix, this
+   * helper (then `assertEarlyPortRefusalStalls`) proved the opposite — a real, reported gap,
+   * not something this suite ever laundered as accepted.
    */
-  async function assertEarlyPortRefusalStalls(
+  async function assertEarlyPortRefusalRecoversToIdle(
     handlerContext: HandlerContext,
     getLaunchedOperations: () => readonly LaunchedOperation[],
   ): Promise<void> {
@@ -407,10 +399,24 @@ describe('turnHandlers["turn.start"]', () => {
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
     const events = await operation.run();
-    expect(events).toEqual([]);
-    expect(handlerContext.machines.turn.phase()).toBe("admitting");
-    expect(handlerContext.readKernelState().turn.activeTurnId).not.toBeNull();
+    expect(events).toHaveLength(3);
+    expect(events.map((e) => e.kind)).toEqual([
+      "kernel.stateChanged",
+      "kernel.stateChanged",
+      "kernel.stateChanged",
+    ]);
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
   }
+
+  test("starts an operation synchronously and ADMITS before any async work runs; a later refusal (nothing selected in this fixture) recovers to idle (Gap 4 closed, fix round 1)", async () => {
+    const { handlerContext, getLaunchedOperations } = buildTestContext();
+    // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
+    // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
+    // precedent for "nothing about the outcome is known until the promise settles").
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    expect(getLaunchedOperations()[0]?.label).toBe("kernel.turn.run");
+  });
 
   test("refuses (logged) when project.toml's manifest snapshot cannot be read", async () => {
     const projectStore = selectedProjectStore();
@@ -426,7 +432,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when resolveAgentSelection finds the backend but not the requested model", async () => {
@@ -437,7 +443,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when resolveAgentSelection finds the model but not the requested effort", async () => {
@@ -448,7 +454,7 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
   });
 
   test("refuses (logged) when a listed page's canonical source cannot be read", async () => {
@@ -462,7 +468,125 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalStalls(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+  });
+
+  // Fix round 1: the remaining five of the ten early-refusal branches — untested for recovery
+  // before, since before `beginTurn` existed none of them touched the machine at all. Each
+  // routes through the SAME `abortEarlyAdmission` the four tests above already prove recovers
+  // — these close out the full set with direct evidence rather than resting on that alone.
+
+  test("refuses (logged) when readWorkspaceState itself fails", async () => {
+    const projectStore = createFakeProjectStore({ root: "/test-root" });
+    projectStore.failNext("readWorkspaceState", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "workspace state unreadable",
+      details: {},
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({ projectStore });
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when resolveStoredOrDefaultAgentTriple finds no registered backend to default from (an active chat exists, nothing stored, the registry is empty)", async () => {
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: { activeChatId: "chat-1" }, // no stored backend/model/effort
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      agentRegistry: createFakeAgentRegistry([]),
+    });
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when pageReader.listSlugs fails", async () => {
+    const pageStore = createFakePageStore({ order: [] });
+    pageStore.failNext("listSlugs", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "page listing unreadable",
+      details: {},
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore: selectedProjectStore(),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when pinReader.fold fails for the active page", async () => {
+    const HOME = "home" as PageSlug;
+    const pinStore = createFakePinStore();
+    pinStore.failNext("fold", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "pin fold unreadable",
+      details: {},
+    });
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: {
+        backend: "claude",
+        model: "sonnet",
+        effort: "medium",
+        activeChatId: "chat-1",
+        activePageSlug: HOME,
+      },
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+  });
+
+  test("refuses (logged) when pinReader.readAppendBase fails for the active page (an open pin genuinely contributed a candidate)", async () => {
+    const HOME = "home" as PageSlug;
+    const pinStore = createFakePinStore();
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r1",
+      pinId: "pin-open",
+      element: "btn-1",
+      fx: 0.5,
+      fy: 0.5,
+      text: "note",
+      ts: "2024-01-01T00:00:00.000Z",
+    });
+    pinStore.failNext("readAppendBase", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "pin append-base unreadable",
+      details: {},
+    });
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: {
+        backend: "claude",
+        model: "sonnet",
+        effort: "medium",
+        activeChatId: "chat-1",
+        activePageSlug: HOME,
+      },
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
   });
 
   test("WP-4 default agent selection: with an active chat but NO stored (backend, model, effort) triple, the turn is admitted (not refused) and the started AgentTask carries the registry's declared default model and effort", async () => {
@@ -2148,7 +2272,13 @@ describe('turnHandlers["turn.start"] — WP-7 same-process session resume', () =
     if (operation === undefined) throw new Error("expected exactly one launched operation");
     const events = await operation.run();
 
-    expect(events).toEqual([]);
+    // `abortEarlyAdmission` (fix round 1): the refusal walks the machine back to idle instead
+    // of returning `[]` and stranding it — see `assertEarlyPortRefusalRecoversToIdle`'s own
+    // doc comment for the full citation.
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.kind === "kernel.stateChanged")).toBe(true);
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
     expect(agentBackend.calls.some((c) => c.method === "startTurn")).toBe(false);
   });
 

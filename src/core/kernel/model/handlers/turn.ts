@@ -693,6 +693,79 @@ function terminalFailureDto(result: RunTurnResultV1, branch: string): FailureDto
 }
 
 /**
+ * One step of {@link abortEarlyAdmission}'s walk-back: applies `action`, warns (never throws,
+ * never swallows) if the table rejects it, and returns the `kernel.stateChanged` event only
+ * when a real transition happened. `action` is narrowed to the three edges that walk-back
+ * actually uses — a defensive-only shape, since none of the three has a same-state `noOp` row
+ * in `TURN_TRANSITION_TABLE` (`core/machines/model/turn-machine.ts`), so `"no-op"` is
+ * unreachable here in practice but still handled rather than assumed away.
+ */
+function applyAbortStep(
+  context: HandlerContext,
+  turnId: UUIDv7,
+  action: "beginTerminalization" | "finishTerminalization" | "settle",
+): PublishableEventV1<"kernel.stateChanged"> | null {
+  const outcome = context.machines.turn.apply(action);
+  if (outcome.kind === "illegal") {
+    console.warn(
+      `core/kernel/handlers/turn: abortEarlyAdmission — ${action} was illegal for turn ${turnId} (${outcome.code})`,
+    );
+    return null;
+  }
+  if (outcome.kind !== "changed") return null;
+  return turnStateChangedEvent(`kernel.turn.${action}`, outcome, { turnId });
+}
+
+/**
+ * The give-back for every early-refusal branch inside `runTurnStart` that returns before
+ * `admission`/`runAdmission` is ever built (fix-bundle spec §1.2's own follow-up finding —
+ * fix round 1 review). `beginTurn` (below) now admits UNCONDITIONALLY, synchronously, before
+ * any of `runTurnStart`'s own port reads ever run — so a refusal that used to just `return []`
+ * left the machine permanently stranded in `"admitting"` with a non-null `activeTurnId`:
+ * `capabilities/model/guards.ts`'s own `turnStartReason` then rejects every LATER `turn.start`
+ * with `TURN_ALREADY_ACTIVE` (phase !== "idle"), and Esc cannot rescue it either — `ui/mirror`'s
+ * `TurnMirror` never reaches `"running"` without a `turn.started` event, which `publish` only
+ * ever synthesizes on the first `turn.attemptStarted`, never reached by any of these branches.
+ * Before `beginTurn` existed, `beginAdmission` lived inside `runAdmission`, downstream of every
+ * one of these refusals, so an early failure left the machine in `idle` and the user could
+ * simply retry — this helper restores that same recoverability.
+ *
+ * Walks the REAL legal edges `TURN_TRANSITION_TABLE` defines for exactly this exit —
+ * `admitting -> terminalizing` (Task 2's own row, added for precisely this case) ->
+ * `terminalizing -> terminal` -> `terminal -> idle` — never inventing a shortcut edge.
+ * Deliberately NOT `core/turns/model/terminalize.ts`'s `terminalizeTurn`: that function ALSO
+ * writes a durable `system:error` chat record and needs a `targetChatId`/`staging`/durable-write
+ * ceremony several of these branches fire before an `activeChatId` is even known (e.g. the "no
+ * active chat yet" branch itself). The durable-record/`turn.failed` story belongs to Task 4,
+ * with the fuller context it has by then — this helper's only job is that the machine and the
+ * active turn id come back to a USABLE state, and no subscriber desynchronises.
+ *
+ * Returns every `kernel.stateChanged` event a transition that actually happened produced —
+ * NEVER `[]`: the mailbox layer's `applyTransition` already advanced the Kernel's revision the
+ * moment `beginAdmission` applied inside `beginTurn`, strictly BEFORE `runTurnStart` (and this
+ * function) ever run, so a caller that returns `[]` here would desynchronise every subscriber
+ * exactly like the `admission-rejected` defect this bundle fixes elsewhere (spec §1.4) — the
+ * identical shape of bug, reintroduced here, is not an acceptable trade for a shorter return.
+ */
+function abortEarlyAdmission(
+  context: HandlerContext,
+  turnId: UUIDv7,
+): readonly PublishableEventV1[] {
+  const events: PublishableEventV1[] = [];
+  const beginEvent = applyAbortStep(context, turnId, "beginTerminalization");
+  if (beginEvent !== null) events.push(beginEvent);
+  const finishEvent = applyAbortStep(context, turnId, "finishTerminalization");
+  if (finishEvent !== null) events.push(finishEvent);
+  const settleEvent = applyAbortStep(context, turnId, "settle");
+  if (settleEvent !== null) events.push(settleEvent);
+  // Unconditional, matching `runTurnStart`'s own terminal-path `setActiveTurnId(null)`: the
+  // invariant (`core/capabilities/types.ts:93`) must hold in both directions — `idle` implies
+  // `null`, not merely "non-idle implies non-null".
+  context.setActiveTurnId(null);
+  return events;
+}
+
+/**
  * The whole `turn.start` composition, run inside `launchOperation`'s own async closure (see
  * this file's header for the full recipe). Every port call is `await wrap(...)`-ed — code
  * after each await calls `context.publishOperationEvent`/`context.setActiveTurnId`, both of
@@ -719,7 +792,7 @@ async function runTurnStart(
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read workspace state: ${workspaceState.safeMessage}`,
     );
-    return [];
+    return abortEarlyAdmission(context, turnId);
   }
   const { activeChatId, backend, model, effort, activePageSlug } = workspaceState.state;
 
@@ -737,7 +810,7 @@ async function runTurnStart(
 
   if (activeChatId === null) {
     console.warn("core/kernel/handlers/turn: turn.start refused — no active chat yet");
-    return [];
+    return abortEarlyAdmission(context, turnId);
   }
   // A fresh, explicitly-typed `const`: `publish` below is a nested closure, and TypeScript
   // does not carry the null-check narrowing above into nested function bodies — re-binding
@@ -746,7 +819,7 @@ async function runTurnStart(
 
   const agentTriple = resolveStoredOrDefaultAgentTriple(context, { backend, model, effort });
   trace("kernel.turnStart", { step: "agentTriple resolved", agentTriple });
-  if (agentTriple === null) return [];
+  if (agentTriple === null) return abortEarlyAdmission(context, turnId);
 
   const resolvedAgent = resolveAgentSelection(
     context,
@@ -758,7 +831,7 @@ async function runTurnStart(
     step: "resolveAgentSelection returned",
     isNull: resolvedAgent === null,
   });
-  if (resolvedAgent === null) return [];
+  if (resolvedAgent === null) return abortEarlyAdmission(context, turnId);
 
   trace("kernel.turnStart", { step: "agent selection resolved" });
 
@@ -768,7 +841,7 @@ async function runTurnStart(
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read project.toml's snapshot: ${manifestSnapshot.safeMessage}`,
     );
-    return [];
+    return abortEarlyAdmission(context, turnId);
   }
 
   // WP-7: a SECOND, different call to the SAME port — `readManifestSnapshot` above returns
@@ -781,7 +854,7 @@ async function runTurnStart(
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`,
     );
-    return [];
+    return abortEarlyAdmission(context, turnId);
   }
 
   const pageSlugs = await wrap(context.deps.pageReader.listSlugs());
@@ -790,7 +863,7 @@ async function runTurnStart(
     console.warn(
       `core/kernel/handlers/turn: turn.start refused — could not list page slugs: ${pageSlugs.safeMessage}`,
     );
-    return [];
+    return abortEarlyAdmission(context, turnId);
   }
 
   const pages: StagingPageSourceV1[] = [];
@@ -801,7 +874,7 @@ async function runTurnStart(
       console.warn(
         `core/kernel/handlers/turn: turn.start refused — could not read canonical page "${pageSlug}": ${source.safeMessage}`,
       );
-      return [];
+      return abortEarlyAdmission(context, turnId);
     }
     pages.push({
       pageSlug,
@@ -832,7 +905,7 @@ async function runTurnStart(
       console.warn(
         `core/kernel/handlers/turn: turn.start refused — could not fold pins for active page "${activePageSlug}": ${pins.safeMessage}`,
       );
-      return [];
+      return abortEarlyAdmission(context, turnId);
     }
     for (const pin of pins) {
       if (pin.status !== "open") continue;
@@ -850,7 +923,7 @@ async function runTurnStart(
         console.warn(
           `core/kernel/handlers/turn: turn.start refused — could not read pin append-base for active page "${activePageSlug}": ${pinsAppendBase.safeMessage}`,
         );
-        return [];
+        return abortEarlyAdmission(context, turnId);
       }
       readSetPins.push({ pageSlug: activePageSlug, base: pinsAppendBase });
     }
@@ -1208,7 +1281,15 @@ export function beginTurn(
     );
     return [];
   }
-  if (began.kind !== "changed") return [];
+  if (began.kind !== "changed") {
+    // Unreachable given `beginAdmission`'s own table (`turn-machine.ts`) has no same-state
+    // `noOp` row — kept explicit, in the same voice as the `illegal` branch just above, per
+    // this project's "never silently assume success" rule.
+    console.warn(
+      `core/kernel/handlers/turn: beginTurn refused — beginAdmission returned "${began.kind}" (phase ${began.phase}) instead of a real transition`,
+    );
+    return [];
+  }
   context.setActiveTurnId(turnId);
   context.launchOperation("kernel.turn.run", () => runTurnStart(turnId, input.text, context));
   return [turnStateChangedEvent("kernel.turn.beginAdmission", began, { turnId })];
@@ -1218,7 +1299,13 @@ function handleTurnStart(
   payload: CommandPayloadByKindV1["turn.start"],
   context: HandlerContext,
 ): CommandOutcomeV1 {
-  return startedOutcome(beginTurn(context, { text: payload.text }));
+  const events = beginTurn(context, { text: payload.text });
+  // `beginTurn` returns `[]` ONLY on its own defensive illegal/no-op branches (nothing was
+  // admitted, nothing was launched) — an empty list here is a genuine no-op, not a started
+  // operation with zero events. Matches `handleTurnCancel`'s identical illegal/no-op ->
+  // `noOpOutcome()` mapping just below.
+  if (events.length === 0) return noOpOutcome();
+  return startedOutcome(events);
 }
 
 // --- turn.cancel — real, end to end -------------------------------------------------------
