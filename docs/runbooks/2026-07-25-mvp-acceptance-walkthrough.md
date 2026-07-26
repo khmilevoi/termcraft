@@ -274,11 +274,13 @@ by design, so it must not double as a quit key there — use `/exit`.)
 in-app quit affordance at all outside the agent-missing/too-small-terminal
 screens: the slash menu never opened from the Home prompt, so `/exit` was
 literal text there and Enter would create a project whose first message was
-the string `"/exit"`. The only way out of idle Home was `Ctrl+C` — which
-`runApp` does handle gracefully (cancels a running turn, awaits confirmed
-process-tree exit, no orphaned Claude CLI process) — but that is a terminal
-signal, not an in-app command, and was the only escape route this step could
-have named until now.
+the string `"/exit"`. **Ctrl+C is not an escape route either** — a previous
+task's claim to the contrary was already investigated and retracted
+(`ui/app/model/root.tsx:70` passes `exitOnCtrlC: false` to
+`createCliRenderer`, no `ctrl+c` hotkey is registered, and raw mode disables
+`ISIG`, so a Ctrl+C keypress never reaches `run-app.ts`'s SIGINT handler at
+all — it resolves to an ordinary, ignored keystroke). Before this task there
+was no way out of idle Home at all.
 
 **Expected:** if a turn is running, it is cancelled first and confirmed process-tree
 exit is awaited before the shell releases its resources and the process exits

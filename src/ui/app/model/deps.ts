@@ -366,19 +366,26 @@ export function createUiDeps(
   // input is active: every edit to it lands the selection back on the first enabled row. Owned
   // by the atom (RTM-S02) rather than re-set by hand in each input-writing key handler.
   // `slash-move` still writes it directly — that is the point of `withComputed` over a plain
-  // `computed`. The action context is PEEKED, not tracked, so a capability flip or a turn
-  // starting mid-navigation never moves the user's cursor; only what they type, or which
-  // screen's input that typing belongs to, does.
+  // `computed`. Both `screen` and the action context are PEEKED, not tracked (review fix round 1,
+  // phase-8 Task 17 — `screen` was briefly tracked here, see below for why that was wrong): a
+  // capability flip, a turn starting, or a screen transition mid-navigation must never move the
+  // user's cursor on their own; only what they actually TYPE does. The menu is only ever opened
+  // by `intent.ts`'s `slash-open` writing `"/"` into whichever input is primary AT THAT MOMENT —
+  // that write is what recomputes this atom, and `peek(screen)` inside the SAME recompute still
+  // reads the CURRENT screen correctly, so tracking it bought nothing but an extra reactivity: a
+  // terminal resize below `MIN_FRAME` with the menu open flips `screen()` to `"enlarge"` on its
+  // own (no input write at all), which used to recompute this atom against neither primary input
+  // — `filterSlashRows` then finds no row scoped to `"enlarge"` and resets the selection to `-1`,
+  // discarding an arrow-key choice the user made before the resize, for a screen the menu was
+  // never even open on.
   const slashSelection = atom(0, "ui.local.slashSelection").extend(
     withComputed((state) => {
       // Read every dependency BEFORE the init branch, per the upstream `page`/`search` example:
       // returning early without reading one would register no dependency for it at all, and the
-      // atom would never recompute again once THAT input started changing. `screen` is tracked
-      // (not peeked, unlike `actionContext` above) because a screen transition genuinely does
-      // switch which of the two inputs below is primary.
+      // atom would never recompute again once THAT input started changing.
       const composerTyped = composer();
       const promptTyped = prompt();
-      const typed = screen() === "home" ? promptTyped : composerTyped;
+      const typed = peek(screen) === "home" ? promptTyped : composerTyped;
       return isInit() ? state : firstEnabledIndex(filterSlashRows(typed, peek(actionContext)));
     }),
   );

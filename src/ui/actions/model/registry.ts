@@ -15,9 +15,13 @@ import type {
  * The slash-command registry, verbatim from design's `commandRegistry`
  * (`termcraft-engine.js:926-934` — CORRECTED, phase-8 Task 17: was miscited `:779-786`, a stale
  * line range from before later design sections were inserted above it) — literal commands,
- * descriptions, order, and commit dots — PLUS the trailing `app.exit` row (order 8), which the
- * design never drew; see that entry's own comment for why it is added rather than invented
- * silently.
+ * descriptions, order, commit dots, and the `home:true`/no-`lock` `/exit` row (`:934`). All
+ * eight rows below come straight from design's own list, in its own order — CORRECTED, phase-8
+ * Task 17 review fix round 1: an earlier version of this comment claimed `/exit` was added
+ * "PLUS" a design registry that "never drew" it; design as it stands today already draws all
+ * eight, `/exit` included, so that claim was simply false, not merely stale. What design does
+ * NOT specify for any row — it is a static mockup with no concept of "execution" — is HOW each
+ * row is carried out; `app.exit`'s own comment below covers that mapping for `/exit`.
  * `/chats` has `capability: null` because the row opens the chat-list popup (a UI-local
  * action); the actual switch is a separate `chat.switch` command issued from the popup.
  * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render `unavailable`.
@@ -144,19 +148,18 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       inert: true,
     },
   },
-  // `/exit` EXTENDS design's own command registry (`design/termcraft-engine.js:926-934`
-  // `commandRegistry()` — CORRECTED, phase-8 Task 17: was miscited `:779-786`, see this file's
-  // own top-of-file comment for the same fix): that list holds exactly the seven rows above and
-  // no `/exit` — the design never drew a Workspace quit affordance at all, only `q quit` on
-  // Home's status bars (`home()` `:161`, `homeErr()` `:727` — CORRECTED, phase-8 Task 17: was
-  // miscited `:145`/`:583`; `:145` draws the prompt's own typed text, not a status bar, and
-  // `:583` is inside the unrelated `chatSeq()`, the SAME stale citation `Home.tsx`'s own
-  // `homeIdleHintKeys` comment already corrected for `homeErr()`) and the too-small-terminal
-  // screen. This is a dated product decision (phase-8 WP-10, 2026-07-25) filling that gap:
-  // `/exit` is a UI-local action (no Kernel capability — quitting is not a Kernel command),
+  // `/exit`'s SHAPE — cmd, desc, order-8 (trailing) position, `home:true`, no `lock` (turn-safe)
+  // — comes straight from design's own `commandRegistry()` (`design/termcraft-engine.js:934`:
+  // `{cmd:'/exit', desc:'quit termcraft', home:true}`). CORRECTED, phase-8 Task 17 review fix
+  // round 1: an earlier version of this comment claimed this row EXTENDS design's registry
+  // ("that list holds exactly the seven rows above and no `/exit` — the design never drew a
+  // Workspace quit affordance at all") — false against the design file as it stands, which
+  // already draws `/exit` as its own eighth row, field-for-field identical to this entry's own
+  // `slash` object below. What design does NOT specify — it draws no "execution" for any row —
+  // is that quitting dispatches no Kernel command at all: `/exit` is a UI-local action
+  // (`capability: null`, `execution: {kind:"local", effect:"exit"}` calling `requestExit()`),
   // reachable from both the Workspace composer and the Home prompt per master spec §3.9's
-  // slash-menu permission, ordered after the seven design rows rather than interleaved among
-  // them.
+  // slash-menu permission and design's own `home:true` flag.
   {
     id: "app.exit",
     execution: { kind: "local", effect: "exit" },
@@ -166,8 +169,9 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       order: 8,
       capability: null,
       // design `commandRegistry` (`termcraft-engine.js:934`): `/exit`'s own `home:true` flag —
-      // the one Home-reachable row the Kernel would actually accept there, since it dispatches
-      // no Kernel command at all (§3.10, phase-8 Task 17, finding §2.4).
+      // the one Home-reachable row that can always execute, since (per this entry's own comment
+      // above) it never reaches the Kernel at all, so there is nothing there to refuse it
+      // (§3.10, phase-8 Task 17, finding §2.4).
       screens: ["workspace", "home"],
     },
   },

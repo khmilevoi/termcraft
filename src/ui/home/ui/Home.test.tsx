@@ -213,6 +213,21 @@ describe("Home screen — slash menu (§3.10, design/23-slash-menu.dc.html, phas
     expect(exitCmd && extractRgb(exitCmd.fg)).toBe<string>(SHELL_PALETTE.selFg);
   });
 
+  // Review fix round 1 (Minor): pins the ACTUAL text drawn, not just its color. Design's own
+  // literal reason (`termcraft-engine.js:943`, `'v1.0 — not in this build'`) cannot survive
+  // through `UnavailableReason` (`registry.ts`'s own documented divergence, `slashRowState`) —
+  // this asserts the row renders the generic `CAPABILITY_UNAVAILABLE` label instead of either
+  // the unreachable design string OR its own normal description.
+  test("pins /model's rendered reason as the generic 'unavailable' label, replacing its description", async () => {
+    const frame = await renderHome({ prompt: "/", rows: HOME_SLASH_ROWS, selectedIndex: 1 });
+    const modelRowIndex = rowIndexOf(frame, "/model");
+    expect(modelRowIndex).toBeGreaterThanOrEqual(0);
+    const modelRowText = frame.rows[modelRowIndex]?.map((run) => run.text).join("") ?? "";
+    expect(modelRowText).toContain("unavailable");
+    expect(modelRowText).not.toContain("agent · model · effort");
+    expect(modelRowText).not.toContain("v1.0 — not in this build");
+  });
+
   test("does not render the slash menu on the agent-missing full-screen takeover", async () => {
     // `HomeAgentMissing` never receives `rows` at all (its own props type has no such field) —
     // this pins that the menu cannot appear there even if the caller passed non-empty rows.
