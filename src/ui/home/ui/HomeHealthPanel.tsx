@@ -45,15 +45,22 @@ function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisor
     };
   }
   if (health.kind === "blocked") {
-    // `panel === "latched"` — DIVERGENCE (fix round 1, Finding 3): design's `homeHealth(kind)`
-    // has exactly three panels — `login`/`shutdown`/`sandbox` (`design/termcraft-engine.js:175-
-    // 187`) — and none of them is "the backend refuses new turns until restarted"
-    // (`agent/claude/backend/model/backend.ts`'s latch). Closest faithful mapping: same
-    // red/blocking box shape as `login`. Wording is this module's own, honest about the actual
-    // (and only) unblock condition — NEVER "run {agent} login" (wrong cause) and NEVER "r to
-    // re-check" as a promised fix (re-probing from inside this same process reports the
-    // identical latched state every time; only a fresh backend instance, i.e. restarting
-    // termcraft, clears it — `agent/run/model/unconfirmed-exit-latch.ts`'s own doc comment).
+    // `panel === "latched"` — DIVERGENCE (fix round 1, Finding 3; classification corrected fix
+    // round 2). Design's `spec.shutdown` (`design/termcraft-engine.js:180-183`) uses this SAME
+    // surface wording ("exited without confirming shutdown") — but as one of "the three health
+    // outcomes with no full-screen takeover... probe ended unconfirmed, sandbox degraded (both
+    // advisory)" (`:165-166`, design's own comment, verbatim): design's classification predates
+    // — and does not know about — the backend's own latch-and-refuse behavior
+    // (`agent/claude/backend/model/backend.ts`), so it never had a panel for "the backend
+    // refuses new turns until restarted". None of design's three panels (`login`/`shutdown`/
+    // `sandbox`, `:175-187`) is that — closest faithful mapping: same red/blocking box shape as
+    // `login`, since a real turn really would be rejected here (`entrypoint/model/agent-health.ts`'s
+    // own switch has the full classification argument). Wording is this module's own, honest
+    // about the actual (and only) unblock condition — NEVER "run {agent} login" (wrong cause)
+    // and NEVER "r to re-check" as a promised fix (re-probing from inside this same process
+    // reports the identical latched state every time; only a fresh backend instance, i.e.
+    // restarting termcraft, clears it — `agent/run/model/unconfirmed-exit-latch.ts`'s own doc
+    // comment).
     return {
       title: "locked out",
       titleColor: P.red,

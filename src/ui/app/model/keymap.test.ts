@@ -13,6 +13,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   overlay: null,
   composerValue: "",
   homeHealth: READY_HEALTH,
+  homePrompt: "",
   turnRunning: false,
   ...over,
 });
@@ -100,7 +101,8 @@ describe("resolveKey — Home", () => {
   });
 
   // WP-10 (phase-8, master spec §3.9/§9): design's homeErr() status bar reads
-  // `[['r','re-check'],['q','quit']]` (design/termcraft-engine.js:583) — `q` belongs beside `r`.
+  // `[['r','re-check'],['q','quit']]` (design/termcraft-engine.js:727 — CORRECTED fix round 2,
+  // was miscited `:583`, a chat-colour branch inside `chatSeq()`) — `q` belongs beside `r`.
   test("q quits on the agent-missing panel, where no prompt is focused", () => {
     const intent = resolveKey(
       key({ name: "q", sequence: "q" }),
@@ -130,6 +132,8 @@ describe("resolveKey — Home", () => {
     // `:170-173`), so `r` silently stole a printable character from anything typed. It is now
     // fully input-inert, like `missing` — matching its own appearance.
     test("blocked refuses Enter and is input-inert — only r/q are live, matching its dimmed appearance", () => {
+      // `homePrompt: ""` (the `ctx()` default) — the empty-prompt case; the guarded non-empty
+      // case is its own test below (fix round 2, Minor finding).
       const blocked = ctx({
         screen: "home",
         homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
@@ -141,6 +145,36 @@ describe("resolveKey — Home", () => {
         kind: "home-recheck",
       });
       expect(resolveKey(key({ name: "q", sequence: "q" }), blocked)).toEqual({ kind: "exit" });
+    });
+
+    // fix round 2, Minor finding: `checking` (the outcome that precedes `blocked` on every real
+    // transition) keeps the prompt live, so a user can be mid-keystroke the instant the probe
+    // resolves to `blocked` — the very next `q` they type is a LETTER, not a quit gesture, and
+    // must not silently exit termcraft with their typed prompt still unsaved.
+    test("blocked's q does NOT exit while the prompt still holds unsaved text", () => {
+      const blockedWithPrompt = ctx({
+        screen: "home",
+        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        homePrompt: "a system monitor for my q",
+      });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), blockedWithPrompt)).toEqual({
+        kind: "none",
+      });
+      // r re-check stays live regardless — it never destroys anything.
+      expect(resolveKey(key({ name: "r", sequence: "r" }), blockedWithPrompt)).toEqual({
+        kind: "home-recheck",
+      });
+    });
+
+    test("blocked's q exits once the prompt is empty again", () => {
+      const blockedEmpty = ctx({
+        screen: "home",
+        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        homePrompt: "",
+      });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), blockedEmpty)).toEqual({
+        kind: "exit",
+      });
     });
 
     test("blocked/latched is input-inert the same way as blocked/login", () => {

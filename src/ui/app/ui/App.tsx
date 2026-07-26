@@ -158,6 +158,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
       composerValue: deps.local.composer(),
       homeHealth: deps.local.homeHealth(),
+      homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
     };
     const intent = resolveKey(key, context);

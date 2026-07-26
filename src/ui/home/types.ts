@@ -27,10 +27,14 @@
  *   (fix round 1, Finding 3 — added beyond the brief's own sketch, which had `blocked` carry no
  *   `panel` at all and so could not distinguish them): `"login"` is design's own `homeHealth
  *   ('login')` (not signed in — probing again might change the answer); `"latched"` is the
- *   backend's own confirmed unconfirmed-exit lockout (`agent/claude/backend/model/backend.ts`) —
- *   no design mock exists for it, so its panel content is a documented divergence
- *   (`HomeHealthPanel.tsx`'s own `panelSpec`). Collapsing `"latched"` into `advisory` (as this
- *   union briefly did) would tell the user Enter works when a real turn would be rejected.
+ *   backend's own confirmed unconfirmed-exit lockout (`agent/claude/backend/model/backend.ts`).
+ *   Design DOES mock this exact wording — `homeHealth('shutdown')` — but classifies it advisory
+ *   (`design/termcraft-engine.js:165-166`'s own comment, predating the backend's latch); this
+ *   union departs from that classification on purpose (`entrypoint/model/agent-health.ts`'s
+ *   switch has the full argument), so `latched`'s PANEL CONTENT is still a documented divergence
+ *   (`HomeHealthPanel.tsx`'s own `panelSpec`) even though its wording is design-adjacent.
+ *   Collapsing `"latched"` into `advisory` (as this union briefly did) would tell the user Enter
+ *   works when a real turn would be rejected.
  * - `missing` — no CLI at all. The one case that keeps the full-screen takeover (`homeErr()`).
  */
 export type HomeAgentHealth =

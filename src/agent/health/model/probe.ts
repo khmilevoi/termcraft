@@ -21,6 +21,18 @@ function describeThrown(cause: unknown): string {
  * Enter is refused when nothing established that. `probe-inconclusive` is its own honest status:
  * Home maps it to the design's own `health unconfirmed` panel, which still allows submit — a
  * timeout is not evidence a turn would fail.
+ *
+ * CONFLICTING DESIGN SOURCES ON THIS EXACT POINT (fix round 2, recorded here per this project's
+ * rule that a divergence lives in the code, not only a report): `design/01-home.dc.html:83`'s own
+ * prose reads "The 20 s timeout in the checking state resolves here, to not signed in" — i.e. a
+ * checking timeout should BLOCK. That contradicts `design/termcraft-engine.js:165-166`'s own
+ * comment, which classifies "probe ended unconfirmed" as one of "the three health outcomes with
+ * no full-screen takeover... (both advisory)" — i.e. a timeout should ALLOW submit. This code
+ * follows `termcraft-engine.js` (the engine that actually renders `homeHealth('shutdown')`, the
+ * panel a probe timeout reaches via `probe-inconclusive` above), not the `.dc.html` prose, which
+ * appears to predate or simply misstate the engine's own behavior. Also matches the Global
+ * Constraint against telling the user Enter is refused with no established cause, and the fix
+ * bundle's own review, which confirmed this reading explicitly.
  */
 function inconclusive(backendId: string): AgentInfo {
   return { backendId, health: { status: "probe-inconclusive" }, account: null };

@@ -76,11 +76,22 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
       // until restart (`agent/run/model/unconfirmed-exit-latch.ts`). That is a genuine block,
       // not an unproven reading — mapping it to `advisory` (as this switch used to) told the
       // user Enter would work when a real turn would be rejected, exactly the class of
-      // fabrication finding §2.7 exists to remove. DIVERGENCE: no design mock covers "backend
-      // latched" — `homeHealth()`'s three panels are `login`/`shutdown`/`sandbox` only
-      // (`design/termcraft-engine.js:165-195`) — so `blocked`/`panel:"latched"` is the closest
-      // faithful mapping (same refuse-and-panel-below-prompt shape as `login`); honest new
-      // wording lives in `HomeHealthPanel.tsx`'s own `panelSpec`, which documents the
+      // fabrication finding §2.7 exists to remove.
+      //
+      // DIVERGENCE, CORRECTED (fix round 2 — the round 1 comment here overclaimed): design DOES
+      // mock this exact wording, as `homeHealth('shutdown')`'s own spec
+      // (`design/termcraft-engine.js:180-183`: title `'health unconfirmed'`, line 1 `'⚠ codex
+      // exited without confirming shutdown'`) — but design classifies it ADVISORY, one of "the
+      // three health outcomes with no full-screen takeover: found-but-not-signed-in (blocking,
+      // ⏎ refused), probe ended unconfirmed, sandbox degraded (both advisory)" (`:165-166`,
+      // design's own comment, verbatim). Design's classification predates — and does not know
+      // about — the backend's own latch-and-refuse behavior this port now observes: `spec.shutdown`
+      // fits a probe that merely COULDN'T CONFIRM (see `probe-inconclusive` below, which uses
+      // exactly that design panel); it does not fit a backend that has POSITIVELY established a
+      // real turn will be rejected. Departing from design's own advisory classification for this
+      // one cause is the honest choice — `blocked`/`panel:"latched"` (a panel design never mocked
+      // at all) is the closest faithful shape (same refuse-and-panel-below-prompt as `login`);
+      // honest new wording lives in `HomeHealthPanel.tsx`'s own `panelSpec`, which documents the
       // divergence at the point it renders. Restored the pre-Task-15 wording ("locked out until
       // restarted") that names the actual, only unblock condition
       // (`unconfirmed-exit-latch.ts`'s own doc comment: "the user restarts").

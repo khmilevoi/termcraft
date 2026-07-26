@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context } from "@reatom/core";
 
 import type { PreviewFrameV1 } from "core/ports";
+import { homeSubmitAllowed } from "ui/home";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession, event } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
@@ -202,6 +203,31 @@ describe("createUiDeps Home health probe (M15)", () => {
     await tick();
 
     expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
+  });
+
+  // REGRESSION GUARD for fix round 1, Finding 1 (CRITICAL): the DEFAULT probe (no
+  // `agentHealthProbe` injected — the 4th parameter is omitted here on purpose) is REACHABLE IN
+  // PRODUCTION for demo mode and an empty catalog (`entrypoint/model/run-app.ts`'s
+  // `resolveAgentHealthProbe` returns `undefined` for both, and `ui/app/model/root.tsx` forwards
+  // that `undefined` straight into this same default parameter). It must never settle on
+  // `ready` — that would claim a passed health check with no probe ever having run, the exact
+  // fabrication finding §2.7 exists to remove, reachable from a live path this test pins.
+  // Reverting `deps.ts`'s `DEFAULT_PROBE_RESOLUTION` back to `{ kind: "ready", ... }` (its
+  // original, wrong value) fails this test.
+  test("the DEFAULT probe (none injected) settles to an honest advisory reading, never ready (fix round 1, Finding 1)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }); // no agentHealthProbe: the production demo-mode / empty-catalog path
+
+    // The synchronous pre-probe seed — honest `checking`, never `ready` (finding §2.7 itself).
+    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+
+    await tick();
+
+    const settled = deps.local.homeHealth();
+    expect(settled.kind).not.toBe("ready");
+    expect(settled.kind).toBe("advisory");
+    // Still usable — advisory permits submit — just never on a fabricated "verified" claim.
+    expect(homeSubmitAllowed(settled)).toBe(true);
   });
 });
 

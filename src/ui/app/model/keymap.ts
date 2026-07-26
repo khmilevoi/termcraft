@@ -35,12 +35,25 @@ export interface KeyContext {
   readonly composerValue: string;
   /**
    * The current Home agent-health reading (M15, finding §2.7 / phase-8 Task 15). Only
-   * meaningful on `screen === "home"`: `"missing"` renders the full-screen missing-agent panel
-   * (where `r`/`q` are the only live keys), `"blocked"` keeps the idle prompt live but adds an
-   * `r` re-check, and every other kind (`checking`/`ready`/`advisory`) keeps the idle prompt
+   * meaningful on `screen === "home"`: `"missing"` and `"blocked"` (CORRECTED fix round 1,
+   * Finding 6: `"blocked"` used to keep the idle prompt live, which let its own `r` re-check
+   * steal a printable character mid-typing) both render an input-inert prompt where only `r`/`q`
+   * are live; every other kind (`checking`/`ready`/`advisory`) keeps the idle prompt genuinely
    * live with no extra key — {@link homeSubmitAllowed} alone decides whether Enter submits.
    */
   readonly homeHealth: HomeAgentHealth;
+  /**
+   * Home's own prompt text (M15). Only read on `screen === "home"`, and only to guard `blocked`'s
+   * literal `q`-quits key (fix round 2, Minor finding): `checking` keeps the prompt genuinely
+   * live and typeable, so a user can still be typing the instant the health probe resolves to
+   * `blocked` mid-keystroke — without this guard, the very next `q` they type (intended as a
+   * letter, not a quit gesture) would silently exit the whole app and discard whatever they had
+   * typed. Guarding on non-empty `homePrompt` is the same class of fix as the `q`→`/exit`
+   * divergence elsewhere: a bare single-letter quit key must never be reachable from what reads,
+   * to the user, like ordinary typing. `Ctrl+C`/`SIGINT` (`entrypoint/model/run-app.ts`'s own
+   * shutdown signal handling) remains available regardless — this guard never strands the user.
+   */
+  readonly homePrompt: string;
   /**
    * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). The Composer renders
    * `disabled` while this is true (`Workspace.tsx`'s `disabled={... || turn.phase === "running"
@@ -202,7 +215,13 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // own `homeHealth()` hint row (`:194`, which reads literal `q` for BOTH branches).
     if (context.homeHealth.kind === "blocked") {
       if (key.sequence === "r") return { kind: "home-recheck" };
-      if (key.sequence === "q") return { kind: "exit" };
+      // GUARDED (fix round 2, Minor finding — see `KeyContext.homePrompt`'s own doc comment):
+      // `checking` (the outcome that precedes `blocked` on every real health transition) keeps
+      // the prompt genuinely live, so a user can still be mid-keystroke the instant the probe
+      // resolves to `blocked` — the very next `q` they type would otherwise silently exit
+      // termcraft and discard it. Only fires while there is nothing typed left to lose;
+      // `Ctrl+C`/`SIGINT` remains available regardless, so this never strands the user.
+      if (key.sequence === "q" && context.homePrompt.length === 0) return { kind: "exit" };
       return { kind: "none" };
     }
     // `checking`/`advisory`/`ready` keep a live prompt — design draws a blinking cursor for all

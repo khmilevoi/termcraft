@@ -114,7 +114,9 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
   });
 
   // phase-8 Task 11 / WP-10: Home had no status bar at all before this — design
-  // `home()`/`design/termcraft-engine.js:144-145` draws one; this reproduces its segments
+  // `home()`/`design/termcraft-engine.js:161` (CORRECTED fix round 2, was miscited `:144-145`,
+  // the caret draw and the `typed` ternary — see `Home.tsx`'s own `homeIdleHintKeys` for the
+  // fix round 1 correction of this exact citation) draws one; this reproduces its segments
   // through the existing `ui/status-bar` component.
   test("renders a HOME status bar naming the /exit hint, not q quit (WP-10 divergence)", async () => {
     const frame = await renderHome();
@@ -368,9 +370,11 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
   });
 
-  // phase-8 Task 11 / WP-10: design `homeErr()`'s status bar
-  // (`design/termcraft-engine.js:583`) reads `[['r','re-check'],['q','quit']]` verbatim — this
-  // screen has no text input, so `q quit` needs no divergence (unlike idle Home's `/exit`).
+  // phase-8 Task 11 / WP-10: design `homeErr()`'s status bar (`design/termcraft-engine.js:727`
+  // — CORRECTED fix round 2, was miscited `:583`, a chat-colour branch inside `chatSeq()`
+  // unrelated to Home — see `keymap.ts`'s own fix round 1 correction of this exact citation)
+  // reads `[['r','re-check'],['q','quit']]` verbatim — this screen has no text input, so `q
+  // quit` needs no divergence (unlike idle Home's `/exit`).
   test("renders a HOME status bar with the r re-check and q quit hints", async () => {
     const frame = await renderHome(errorProps);
     const mode = findRun(frame, "HOME");

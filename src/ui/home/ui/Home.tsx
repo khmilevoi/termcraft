@@ -62,9 +62,12 @@ function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
     if (health.panel === "login") {
       return { text: `✗ ${health.agent} not signed in`, fg: "bg", bg: "red" };
     }
-    // DIVERGENCE (fix round 1, Finding 3/5): `panel === "latched"` has no design mock — closest
+    // DIVERGENCE (fix round 1, Finding 3/5; corrected fix round 2): design's `homeHealth()` never
+    // treats an unconfirmed exit as blocking at all (`:165-166`'s own comment classifies it
+    // advisory — see `entrypoint/model/agent-health.ts`'s switch for the full argument for why
+    // this port departs from that), so it has no RED/blocking badge for this cause — closest
     // faithful mapping of design's own `✗ codex not signed in` badge shape (`:191`), honest
-    // wording for this cause instead of the design's (wrong, for this cause) sample text.
+    // wording for this cause instead of `login`'s (wrong, for this cause) text.
     return { text: `✗ ${health.agent} locked out`, fg: "bg", bg: "red" };
   }
   if (health.kind === "advisory") {
