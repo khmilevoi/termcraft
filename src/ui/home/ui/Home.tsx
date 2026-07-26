@@ -140,12 +140,16 @@ function HomeIdle(props: HomeProps) {
             </text>
           </box>
           {
-            // DIVERGENCE: design/termcraft-engine.js:143 draws "● codex 0.34 · agent ready" — a
-            // version segment `AgentInfo` (`core/ports/agent-backend.ts`) has never carried (see
-            // `entrypoint/model/agent-health.ts`'s own note). Phase-8 Task 13 removed the
-            // permanently-`null` `version` field from `HomeAgentHealth` entirely rather than keep
-            // threading a fact this shape can never supply; the line below drops the segment to
-            // match, never inventing a placeholder like the design's "0.34" sample.
+            // DIVERGENCE: `home()` (design/termcraft-engine.js:135-163, the idle Home screen
+            // this component renders) draws NO health line at all — the combo row at :150-152
+            // is followed directly by the slash menu and status bar, so this line is undesigned,
+            // not a verbatim design lift. The nearest real places the design shows an agent name
+            // with a version are `homeHealth('login')`'s not-signed-in panel (:177, "✗ codex
+            // 0.34 found · not signed in") and `homeErr()`'s healthy-reads legend (:726, "✓
+            // codex 0.34") — neither is this screen's idle health line, so neither is cited as
+            // this line's source. `version` is gone from `HomeAgentHealth` regardless (phase-8
+            // Task 13; `AgentInfo` has never carried one — `entrypoint/model/agent-health.ts`'s
+            // own note), so the line below never invents a placeholder like those design samples.
           }
           <text id={`${props.id}-health`} fg={SHELL_PALETTE.green} attributes={BOLD}>
             {`● ${agentName} · ${props.health.detail}`}

@@ -29,6 +29,12 @@ import { resolveActiveOverlay, resolveKey } from "../model/keymap";
  * Read from the SYNCHRONOUS selection the composition root seeds, never from the health probe:
  * `capabilities().defaultSelection` needs no I/O, and folding it into `healthCheck()`'s promise is
  * exactly what left this row empty for up to 20 seconds (finding §2.7).
+ *
+ * `selection === null` — no registry (demo mode) or an empty catalog — is the one case the
+ * design does not cover: `home()` always draws a populated combo, never an empty one. The
+ * closest faithful mapping renders the honest empty combo (`‹›` in every slot) rather than an
+ * invented identity; see `UiLocalState.agentSelection` (`ui/app/model/deps.ts`) for the same
+ * gap documented at the source.
  */
 function homeCombo(selection: HomeAgentSelection | null): HomeCombo {
   if (selection === null) return { agent: "", model: "", effort: "" };

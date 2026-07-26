@@ -128,7 +128,12 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     await handle.render();
     const frame = handle.capture();
     expect(findRun(frame, "● claude")).toBeUndefined();
-    expect(findRun(frame, " · agent ready")).toBeDefined();
+    // Two spaces between "●" and "·" — the trailing space `"● "` leaves behind plus the
+    // leading space `" · "` supplies — only render when `agentName` is the empty string; a
+    // real name (e.g. "claude") collapses this to one space ("● claude · agent ready"). A
+    // positive match on the double space is what actually pins "empty name", not merely the
+    // absence of "● claude" above (which a differently-worded line could also satisfy).
+    expect(findRun(frame, "●  · agent ready")).toBeDefined();
   });
 });
 
