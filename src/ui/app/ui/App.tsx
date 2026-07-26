@@ -157,7 +157,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
       // surface owns the keys, not a second independently derived export-popup check (M14 fix).
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
       composerValue: deps.local.composer(),
-      homeHealthPresent: deps.local.homeHealth().present,
+      homeHealth: deps.local.homeHealth(),
       turnRunning: deps.mirror.turn().phase === "running",
     };
     const intent = resolveKey(key, context);

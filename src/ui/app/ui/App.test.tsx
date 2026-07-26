@@ -59,7 +59,7 @@ const workspaceSnapshot = () =>
   });
 
 describe("App (end-to-end, FakeKernel-driven)", () => {
-  test("the startup probe surfaces a missing agent without a manual recheck, and r re-checks it (M15)", async () => {
+  test("the startup probe surfaces a missing agent without a manual recheck, and r re-checks it (M15, finding §2.7)", async () => {
     const kernel = createFakeKernel();
     // The probe itself reports the CLI missing on its first call (the startup probe
     // `createUiDeps` now fires — no manual `local.homeHealth.set` needed to reach this state,
@@ -70,16 +70,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       calls += 1;
       if (calls === 1) {
         return Promise.resolve({
-          present: false,
+          kind: "missing" as const,
           agent: "claude",
           detail: "claude CLI not found",
         });
       }
-      return Promise.resolve({
-        present: true,
-        agent: "claude",
-        detail: "agent ready",
-      });
+      return Promise.resolve({ kind: "ready" as const, agent: "claude" });
     });
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,
@@ -88,8 +84,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     open = renderer;
     await renderer.waitForFrame((frame) => frame.includes("claude CLI not found"));
     await renderer.act(() => renderer.mockInput.typeText("r"));
-    const frame = await renderer.waitForFrame((output) => output.includes("agent ready"));
-    expect(frame).toContain("agent ready");
+    // No health line exists any more (finding §2.7, phase-8 Task 15) — recovery is proven by
+    // the live idle prompt replacing the full-screen missing-agent takeover.
+    const frame = await renderer.waitForFrame((output) =>
+      output.includes("Describe the TUI you want to design"),
+    );
+    expect(frame).toContain("Describe the TUI you want to design");
     expect(frame).not.toContain("claude CLI not found");
   });
 
@@ -231,11 +231,13 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       height: 36,
     });
     open = renderer;
+    // No health line exists any more (finding §2.7, phase-8 Task 15) — the live prompt
+    // placeholder is what proves Home settled on a `ready` outcome (Enter enabled).
     const text = await renderer.waitForFrame(
-      (frame) => frame.includes("termcraft") && frame.includes("agent ready"),
+      (frame) => frame.includes("termcraft") && frame.includes("Describe the TUI"),
     );
     expect(text).toContain("termcraft");
-    expect(text).toContain("agent ready");
+    expect(text).toContain("Describe the TUI");
     // Phase-8 Task 13 (finding §2.7): `homeCombo` reads `local.agentSelection`, the synchronous
     // selection the composition root seeds — NOT the health probe (see `App.tsx`'s own doc
     // comment on `homeCombo`). This test injects no `agentSelection` (createUiDeps's sixth
@@ -272,15 +274,18 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
   test("Home's combo is driven by the injected agentSelection, never the health probe (finding §2.7, phase-8 Task 13)", async () => {
     const kernel = createFakeKernel();
-    // The health probe's own reading carries only `agent`/`detail` now — `HomeAgentHealth` has
-    // no `model`/`effort` field to fold in. `agentSelection` (createUiDeps's SIXTH parameter)
-    // supplies distinctive model/effort values instead, so a pass cannot come from the combo
-    // accidentally reading the probe or a hardcoded default anywhere in the chain.
+    // The health probe's own reading carries no `model`/`effort` field to fold in — `blocked`
+    // is chosen here (not `ready`, which renders no health text at all any more, finding §2.7
+    // phase-8 Task 15) specifically so this probe's own distinctive `detail` text shows up
+    // somewhere on screen (the `HomeHealthPanel`), proving the combo below is driven by
+    // `agentSelection` and not by anything this probe reports. `agentSelection` (createUiDeps's
+    // SIXTH parameter) supplies distinctive model/effort values, so a pass cannot come from the
+    // combo accidentally reading the probe or a hardcoded default anywhere in the chain.
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
       undefined,
-      () => Promise.resolve({ present: true, agent: "claude", detail: "probe reading" }),
+      () => Promise.resolve({ kind: "blocked", agent: "claude", detail: "probe reading" }),
       () => undefined,
       { agent: "claude", model: "probe-model", effort: "probe-effort" },
     );
@@ -738,9 +743,13 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     open = renderer;
 
     const home = await renderer.waitForFrame(
-      (frame) => frame.includes("termcraft") && frame.includes("agent ready"),
+      (frame) => frame.includes("termcraft") && frame.includes("Describe the TUI"),
     );
     expect(home).toContain("Describe the TUI you want to design");
+    // No health line exists any more (finding §2.7, phase-8 Task 15) — the placeholder above
+    // renders identically during `checking`, so Enter below needs the outcome to have actually
+    // settled to `ready` (the default test probe's resolution), not merely the first seeded frame.
+    await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
 
     await renderer.act(() => renderer.mockInput.typeText("build a dashboard"));
     expect(await renderer.waitForFrame((frame) => frame.includes("build a dashboard"))).toContain(

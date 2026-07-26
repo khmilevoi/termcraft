@@ -21,45 +21,57 @@ const CAPABILITIES = {
   defaultSelection: { model: "claude-sonnet-5", effort: "high" as const },
 };
 
-describe("homeHealthFromAgentInfo", () => {
-  test("ready is present, with the backend id", () => {
+describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes)", () => {
+  test("ready carries the backend id, and no detail at all", () => {
     const health = homeHealthFromAgentInfo({ ...base, health: { status: "ready" } });
 
-    expect(health.present).toBe(true);
-    expect(health.agent).toBe("claude");
-    expect(health.detail).toBe("agent ready");
+    expect(health).toEqual({ kind: "ready", agent: "claude" });
   });
 
-  test("not-installed is the missing-agent state", () => {
+  test("not-installed is the missing-agent state (full-screen takeover)", () => {
     const health = homeHealthFromAgentInfo({ ...base, health: { status: "not-installed" } });
 
-    expect(health.present).toBe(false);
-    expect(health.detail).toBe("claude CLI not found");
+    expect(health).toEqual({ kind: "missing", agent: "claude", detail: "claude CLI not found" });
   });
 
-  test("not-logged-in is not present, and says so honestly", () => {
+  test("not-logged-in is blocked, and says so honestly — never the version design's sample carries", () => {
     const health = homeHealthFromAgentInfo({ ...base, health: { status: "not-logged-in" } });
 
-    expect(health.present).toBe(false);
-    expect(health.detail).toBe("claude CLI found but not logged in");
+    expect(health).toEqual({
+      kind: "blocked",
+      agent: "claude",
+      detail: "claude found · not signed in",
+    });
   });
 
-  test("an unconfirmed exit is not reported as ready", () => {
+  test("an unconfirmed exit is advisory/shutdown, never ready and never blocking", () => {
     const health = homeHealthFromAgentInfo({
       ...base,
       health: { status: "unhealthy-unconfirmed-exit" },
     });
 
-    expect(health.present).toBe(false);
+    expect(health).toEqual({
+      kind: "advisory",
+      agent: "claude",
+      panel: "shutdown",
+      detail: "claude exited without confirming shutdown",
+    });
   });
 
-  test("sandbox-degraded carries the backend's own detail", () => {
+  // The design's own fixed `homeHealth('sandbox')` wording (`design/termcraft-engine.js:185`,
+  // "sandbox unavailable — {agent} runs unconfined") — NOT the backend's free-text `detail`
+  // (`"seatbelt unavailable"` here), which this outcome no longer folds in: `HomeHealthPanel`
+  // renders this exact string, and inventing a second, backend-specific wording alongside the
+  // design's own would contradict the one honest line the panel shows.
+  test("sandbox-degraded is advisory/sandbox, with design's own fixed wording", () => {
     const health = homeHealthFromAgentInfo({
       ...base,
       health: { status: "sandbox-degraded", detail: "seatbelt unavailable" },
     });
 
-    expect(health.detail).toContain("seatbelt unavailable");
+    if (health.kind !== "advisory") throw new Error("expected an advisory outcome");
+    expect(health.panel).toBe("sandbox");
+    expect(health.detail).toBe("sandbox unavailable — claude runs unconfined");
   });
 });
 
@@ -71,14 +83,10 @@ describe("createAgentHealthProbe", () => {
     const probe = createAgentHealthProbe(backend);
     const health = await probe();
 
-    expect(health).toEqual({
-      present: true,
-      agent: "claude",
-      detail: "agent ready",
-    });
+    expect(health).toEqual({ kind: "ready", agent: "claude" });
   });
 
-  test("a rejected healthCheck() becomes an honest not-present reading, never a fabricated ready, and is logged", async () => {
+  test("a rejected healthCheck() becomes advisory/shutdown, never blocked (a spawn fault is unproven), and is logged", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => undefined);
     // `startTurn`/`cancel`/`sessionScope` are typed stubs the probe must never reach — mirrors
     // `create-shell.test.ts`'s own `NEVER_SPAWN` pattern for "must not be called" doubles.
@@ -95,7 +103,8 @@ describe("createAgentHealthProbe", () => {
     const probe = createAgentHealthProbe(backend);
     const health = await probe();
 
-    expect(health.present).toBe(false);
+    if (health.kind !== "advisory") throw new Error("expected an advisory outcome");
+    expect(health.panel).toBe("shutdown");
     expect(health.agent).toBe("claude");
     expect(health.detail).toContain("spawn ENOENT");
     expect(warnSpy).toHaveBeenCalledTimes(1);

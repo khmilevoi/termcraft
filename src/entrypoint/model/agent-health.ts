@@ -15,72 +15,75 @@ import type { AgentRegistry } from "core/ports";
 import type { HomeAgentHealth } from "ui/home";
 
 /**
- * Pure map from one `AgentBackend.healthCheck()` reading to Home's `HomeAgentHealth`.
- * Exhaustive over every `AgentHealthState` variant (`agent/types.ts`, mirrored verbatim at
- * `core/ports/agent-backend.ts`) via a `switch` with no `default` arm — TypeScript's own
- * control-flow analysis makes a sixth variant added later a `tsc` failure here, not a silent
- * "ready".
+ * Pure map from one `AgentBackend.healthCheck()` reading to Home's five-outcome
+ * `HomeAgentHealth` (finding §2.7, phase-8 Task 15). Exhaustive over every `AgentHealthState`
+ * variant (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch`
+ * with no `default` arm — TypeScript's own control-flow analysis makes a sixth variant added
+ * later a `tsc` failure here, not a silent "ready".
  *
- * `HomeAgentHealth` carries no `version` field (phase-8 Task 13 removed it): `AgentInfo` never
- * had one to report (only `backendId`, `health`, `account` — `agent/types.ts`), so the field
- * was always a fabrication risk this map used to paper over by hardcoding `null` — dropping it
- * from the type is the honest fix, not a placeholder this function still needs to supply.
+ * `HomeAgentHealth` carries no `version` field: `AgentInfo` never had one to report (only
+ * `backendId`, `health`, `account` — `agent/types.ts`), so the field was always a fabrication
+ * risk; dropping it is the honest fix, not a placeholder this function still needs to supply.
  *
- * Wording sources: `design/01-home.dc.html`'s `home()`/`homeErr()`
- * (`design/termcraft-engine.js:143` and `:576`) supply verbatim text for exactly two of these
- * five states — "agent ready" (idle) and "{agent} CLI not found" (not-installed). The other
- * three states have no design mock at all (the design predates the not-logged-in /
- * unconfirmed-exit / sandbox-degraded distinctions this port actually reports), so their
- * `detail` text is this module's own honest wording — documented per branch below, never
- * silently invented.
+ * CORRECTED CITATION (carried over from phase-8 Task 13, which introduced it): this doc comment
+ * and the `ready` branch used to cite `design/termcraft-engine.js:143` for a Home "agent ready"
+ * health line. Read literally, `:143` is `this.box(b,ix,iy,iw,boxH,{title:'describe',...})` —
+ * the prompt input's own frame — and `home()` (`:135-163`) draws no health line at all; the
+ * function was renamed/restructured (phase-8 Task 15) specifically because that line never
+ * existed in the design and was false for the whole time a probe ran. The real agent-version
+ * sites in this file are `homeHealth()`'s `spec.login` line (`:177`, "✗ codex 0.34 found · not
+ * signed in") and `homeErr()`'s "healthy reads" legend (`:726`, "✓ codex 0.34") — both consumed
+ * honestly (verbatim text minus the version this port never reads) by `HomeHealthPanel.tsx` and
+ * the `not-installed` branch below, never by a "ready" line.
+ *
+ * Wording sources: `not-installed` below is verbatim design text
+ * (`design/termcraft-engine.js:576`, `homeErr()`: "✗ codex CLI not found"). `not-logged-in`
+ * matches `homeHealth('login')`'s own line (`:177`) minus the version. The other three states
+ * have no design mock naming their exact text, so their `detail` is this module's own honest
+ * wording — documented per branch below, never silently invented.
  */
 export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
   const { backendId, health } = info;
   switch (health.status) {
     case "ready":
-      // Verbatim design wording — design/termcraft-engine.js:143 (`home()`'s health line:
-      // "● codex 0.34 · agent ready").
-      return { present: true, agent: backendId, detail: "agent ready" };
+      return { kind: "ready", agent: backendId };
 
     case "not-installed":
       // Verbatim design wording pattern — design/termcraft-engine.js:576 (`homeErr()`:
       // "✗ codex CLI not found"). The ✗ glyph is static UI chrome `Home.tsx` prefixes onto
       // this `detail` string, not part of the domain value itself.
-      return { present: false, agent: backendId, detail: `${backendId} CLI not found` };
+      return { kind: "missing", agent: backendId, detail: `${backendId} CLI not found` };
 
     case "not-logged-in":
-      // DIVERGENCE: no design mock distinguishes "found but not logged in" from "not found
-      // at all" — design/01-home.dc.html's homeErr() only ever shows the CLI-absent case.
-      // Honest, undesigned wording, parallel in shape to the not-installed branch above.
-      return {
-        present: false,
-        agent: backendId,
-        detail: `${backendId} CLI found but not logged in`,
-      };
+      // Design `homeHealth('login')` (`:177`, "✗ codex 0.34 found · not signed in") minus the
+      // version `AgentInfo` never carries — a panel below the prompt (`HomeHealthPanel.tsx`),
+      // not the full-screen takeover `not-installed` above still gets.
+      return { kind: "blocked", agent: backendId, detail: `${backendId} found · not signed in` };
 
     case "unhealthy-unconfirmed-exit":
-      // DIVERGENCE: also no design mock — this is the "inconclusive probe" outcome design
-      // §WP-5 names but does not mock. Wording echoes the reasoning already logged at
+      // The probe ran and could not confirm health — never reported as blocking (finding §2.7):
+      // submit stays allowed, and Home renders design's own `health unconfirmed` panel
+      // (`homeHealth('shutdown')`, `:180-183`). Wording echoes the reasoning already logged at
       // `agent/run/model/unconfirmed-exit-latch.ts` ("run exited unconfirmed; latching this
       // backend unhealthy until it is restarted").
       return {
-        present: false,
+        kind: "advisory",
         agent: backendId,
-        detail: `${backendId} exited without confirming shutdown; locked out until restarted`,
+        panel: "shutdown",
+        detail: `${backendId} exited without confirming shutdown`,
       };
 
     case "sandbox-degraded":
       // DIVERGENCE: Codex-only, never reported for the Claude backend MVP ships (this
       // variant's own doc comment on `AgentHealthState`) — unreachable today, still handled
-      // honestly for exhaustiveness. Master spec §9 treats a degraded sandbox as the CLI
-      // still being present and usable, just under a weaker confinement guarantee, not as
-      // "missing" — unlike the three branches above, so `present` stays `true` here and the
-      // caveat rides in `detail`, which folds in the backend's own message rather than
-      // inventing one.
+      // honestly for exhaustiveness. Master spec §9 treats a degraded sandbox as the CLI still
+      // being present and usable, just under a weaker confinement guarantee — submit stays
+      // allowed, matching design's own `homeHealth('sandbox')` panel (`:184-187`).
       return {
-        present: true,
+        kind: "advisory",
         agent: backendId,
-        detail: `${backendId} sandbox degraded: ${health.detail}`,
+        panel: "sandbox",
+        detail: `sandbox unavailable — ${backendId} runs unconfined`,
       };
   }
 }
@@ -136,10 +139,11 @@ export function resolveDefaultAgentSelection(
  * probe's promise again.
  *
  * A REJECTED `healthCheck()` (the promise itself rejects — a spawn/probe fault, not a reported
- * `AgentHealthState`) becomes an honest not-present reading carrying the failure's own message
- * as `detail`, never a fabricated "ready" — the errore boundary rule (`.catch()` into a tagged
- * domain error with `cause`) plus rule 21 (an error that is not propagated past this probe must
- * still be logged).
+ * `AgentHealthState`) becomes `advisory`/`shutdown`, never `blocked` — the errore boundary rule
+ * (`.catch()` into a tagged domain error with `cause`) plus rule 21 (an error that is not
+ * propagated past this probe must still be logged). A spawn fault is UNPROVEN, not proof of a
+ * signed-out user (finding §2.7): the old `present: false` mapping made the same over-claim a
+ * probe timeout did — see `agent/health/model/probe.ts`'s `inconclusive` for the sibling fix.
  */
 export function createAgentHealthProbe(backend: AgentBackend): () => Promise<HomeAgentHealth> {
   return async () => {
@@ -154,8 +158,9 @@ export function createAgentHealthProbe(backend: AgentBackend): () => Promise<Hom
     if (info instanceof Error) {
       console.warn(info.message, info.cause);
       return {
-        present: false,
+        kind: "advisory",
         agent: backend.capabilities().backendId,
+        panel: "shutdown",
         detail: info.message,
       };
     }

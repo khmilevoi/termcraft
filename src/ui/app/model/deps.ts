@@ -167,12 +167,17 @@ export class UiPreviewStreamError extends errore.createTaggedError({
  * The Home agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
  * probe once at startup (see `refreshHomeHealth()` below), but Home's very first render happens
  * synchronously, before that probe's Promise can resolve — a component render cannot await one.
- * This value only ever shows for that first frame; it preserves the "agent ready" idle layout
- * Home showed before this task, rather than inventing a different placeholder. The real
- * CLI-checking probe IS wired by default now (phase-8 Task 9 / WP-5,
- * `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe` supplies it through
- * `agentHealthProbe` below) — this placeholder only ever paints the one synchronous frame
- * before that real probe's first resolution overwrites it.
+ * This value only ever shows for that first frame. The real CLI-checking probe IS wired by
+ * default now (phase-8 Task 9 / WP-5, `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`
+ * supplies it through `agentHealthProbe` below) — this placeholder only ever paints the one
+ * synchronous frame before that real probe's first resolution overwrites it.
+ *
+ * CORRECTED (finding §2.7, phase-8 Task 15): this used to read `{ present: true, detail: "agent
+ * ready" }` — claiming a PASSED health check before anything had been probed, indistinguishable
+ * on screen from a verified-ready agent for the whole time the real probe ran (up to
+ * `DEFAULT_PROBE_DEADLINE_MS`, 20 s). `"checking"` is the honest pre-probe state — Home renders
+ * its own faint `⏎ create` / spinner treatment for it and refuses submit ({@link
+ * homeSubmitAllowed}) until the real probe's first resolution overwrites this value.
  */
 // DIVERGENCE (design sample data, not layout): this placeholder previously read `agent: "codex"`
 // — the design's sample identity, not layout (user decision 2026-07-23). MVP ships Claude only,
@@ -180,15 +185,24 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 // mock's Codex sample; it is still overwritten by the injected probe's real reading the moment
 // it resolves (M22).
 //
-// It carries only `present`/`agent`/`detail` — `HomeAgentHealth` has had no `model`/`effort`/
-// `version` fields since phase-8 Task 13 split them out (finding §2.7): Home's combo now reads
-// the SEPARATE, synchronous `local.agentSelection` atom below, seeded directly by the
-// composition root at construction rather than riding this health probe's promise.
+// `HomeAgentHealth` has had no `model`/`effort`/`version` fields since phase-8 Task 13 split
+// them out (finding §2.7): Home's combo reads the SEPARATE, synchronous `local.agentSelection`
+// atom below, seeded directly by the composition root at construction rather than riding this
+// health probe's promise.
 const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
-  present: true,
+  kind: "checking",
   agent: "claude",
-  detail: "agent ready",
 };
+
+/**
+ * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_HOME_HEALTH}
+ * (finding §2.7, phase-8 Task 15). Those two used to be the same constant, which quietly worked
+ * only because the old placeholder already claimed `ready`; now that the seed is honestly
+ * `"checking"`, a probe that resolved to the SAME value would leave every test/demo construction
+ * that omits `agentHealthProbe` permanently stuck refusing submit — the seed is what the first
+ * synchronous frame shows, this is what "the probe eventually succeeds" resolves to by default.
+ */
+const DEFAULT_PROBE_RESOLUTION: HomeAgentHealth = { kind: "ready", agent: "claude" };
 
 /** Builds a fresh, self-consistent `UiDeps` around a `KernelPort` and an initial terminal size. */
 export function createUiDeps(
@@ -196,8 +210,11 @@ export function createUiDeps(
   initialSize: Readonly<{ w: number; h: number }>,
   env: UiEnv = { root: ".", workspaceIdentity: "local", projectExists: false },
   // The named M15 injection point: the phase-8 composition root supplies a probe that actually
-  // checks the agent CLI on PATH; tests inject a fake. The default keeps today's MVP reading.
-  agentHealthProbe: () => Promise<HomeAgentHealth> = () => Promise.resolve(DEFAULT_HOME_HEALTH),
+  // checks the agent CLI on PATH; tests inject a fake. The default resolves to a plain `ready`
+  // reading — see {@link DEFAULT_PROBE_RESOLUTION}'s own doc comment for why it is not
+  // {@link DEFAULT_HOME_HEALTH}.
+  agentHealthProbe: () => Promise<HomeAgentHealth> = () =>
+    Promise.resolve(DEFAULT_PROBE_RESOLUTION),
   // The named Task 11 / WP-10 injection point: the phase-8 composition root binds this to
   // `RunningApp.close()`. Defaults to a no-op so every existing test/demo construction of
   // `UiDeps` keeps compiling without knowing about shutdown at all.

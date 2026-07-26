@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
+import type { HomeAgentHealth } from "ui/home";
+
 import type { KeyContext, KeyLike } from "./keymap";
 import { resolveActiveOverlay, resolveKey } from "./keymap";
 
 const key = (over: Partial<KeyLike>): KeyLike => ({ name: "", ctrl: false, sequence: "", ...over });
+const READY_HEALTH: HomeAgentHealth = { kind: "ready", agent: "claude" };
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
   screen: "workspace",
   focus: "composer",
   overlay: null,
   composerValue: "",
-  homeHealthPresent: true,
+  homeHealth: READY_HEALTH,
   turnRunning: false,
   ...over,
 });
@@ -68,22 +71,25 @@ describe("resolveKey — Home", () => {
     expect(
       resolveKey(
         key({ name: "r", sequence: "r" }),
-        ctx({ screen: "home", homeHealthPresent: false }),
+        ctx({ screen: "home", homeHealth: { kind: "missing", agent: "claude", detail: "x" } }),
       ),
     ).toEqual({ kind: "home-recheck" });
   });
 
-  test("r still types into the idle Home prompt when the agent is present", () => {
+  test("r still types into the idle Home prompt when the agent is ready", () => {
     expect(
       resolveKey(
         key({ name: "r", sequence: "r" }),
-        ctx({ screen: "home", homeHealthPresent: true }),
+        ctx({ screen: "home", homeHealth: READY_HEALTH }),
       ),
     ).toEqual({ kind: "home-input", ch: "r" });
   });
 
   test("on the missing-agent error panel, only r and q are live — no submit/backspace/input affordance exists there", () => {
-    const missingAgent = ctx({ screen: "home", homeHealthPresent: false });
+    const missingAgent = ctx({
+      screen: "home",
+      homeHealth: { kind: "missing", agent: "claude", detail: "x" },
+    });
     expect(resolveKey(key({ name: "return" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "backspace" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "x", sequence: "x" }), missingAgent)).toEqual({ kind: "none" });
@@ -98,7 +104,7 @@ describe("resolveKey — Home", () => {
   test("q quits on the agent-missing panel, where no prompt is focused", () => {
     const intent = resolveKey(
       key({ name: "q", sequence: "q" }),
-      ctx({ screen: "home", homeHealthPresent: false }),
+      ctx({ screen: "home", homeHealth: { kind: "missing", agent: "claude", detail: "x" } }),
     );
     expect(intent).toEqual({ kind: "exit" });
   });
@@ -106,9 +112,70 @@ describe("resolveKey — Home", () => {
   test("q still types on the idle Home prompt", () => {
     const intent = resolveKey(
       key({ name: "q", sequence: "q" }),
-      ctx({ screen: "home", homeHealthPresent: true }),
+      ctx({ screen: "home", homeHealth: READY_HEALTH }),
     );
     expect(intent.kind).not.toBe("exit");
+  });
+
+  // finding §2.7 (phase-8 Task 15): the five health outcomes gate Enter directly through
+  // `homeSubmitAllowed`, not through a `missing`-only branch.
+  describe("Enter gating across the five health outcomes", () => {
+    test("checking refuses Enter — the probe hasn't resolved yet", () => {
+      const checking = ctx({ screen: "home", homeHealth: { kind: "checking", agent: "claude" } });
+      expect(resolveKey(key({ name: "return" }), checking)).toEqual({ kind: "none" });
+    });
+
+    test("blocked refuses Enter, but the prompt stays live for other keys", () => {
+      const blocked = ctx({
+        screen: "home",
+        homeHealth: { kind: "blocked", agent: "claude", detail: "x" },
+      });
+      expect(resolveKey(key({ name: "return" }), blocked)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "x", sequence: "x" }), blocked)).toEqual({
+        kind: "home-input",
+        ch: "x",
+      });
+      expect(resolveKey(key({ name: "backspace" }), blocked)).toEqual({ kind: "home-backspace" });
+    });
+
+    test("blocked is the ONLY outcome where r re-checks instead of typing", () => {
+      const blocked = ctx({
+        screen: "home",
+        homeHealth: { kind: "blocked", agent: "claude", detail: "x" },
+      });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), blocked)).toEqual({
+        kind: "home-recheck",
+      });
+    });
+
+    test("r types into the prompt on checking/advisory/ready — only blocked wires it to re-check", () => {
+      const checking = ctx({ screen: "home", homeHealth: { kind: "checking", agent: "claude" } });
+      const advisory = ctx({
+        screen: "home",
+        homeHealth: { kind: "advisory", agent: "claude", panel: "shutdown", detail: "x" },
+      });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), checking)).toEqual({
+        kind: "home-input",
+        ch: "r",
+      });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), advisory)).toEqual({
+        kind: "home-input",
+        ch: "r",
+      });
+    });
+
+    test("advisory allows Enter — a timeout/degraded reading proves nothing that blocks submit", () => {
+      const advisory = ctx({
+        screen: "home",
+        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+      });
+      expect(resolveKey(key({ name: "return" }), advisory)).toEqual({ kind: "home-submit" });
+    });
+
+    test("ready allows Enter", () => {
+      const ready = ctx({ screen: "home", homeHealth: READY_HEALTH });
+      expect(resolveKey(key({ name: "return" }), ready)).toEqual({ kind: "home-submit" });
+    });
   });
 });
 

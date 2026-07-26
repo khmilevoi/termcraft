@@ -179,7 +179,7 @@ describe("createUiDeps Home health probe (M15)", () => {
     let calls = 0;
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () => {
       calls += 1;
-      return Promise.resolve({ present: false, agent: "claude", detail: "claude CLI not found" });
+      return Promise.resolve({ kind: "missing", agent: "claude", detail: "claude CLI not found" });
     });
 
     await tick();
@@ -187,25 +187,21 @@ describe("createUiDeps Home health probe (M15)", () => {
     // A real probe reporting a missing agent surfaces without a manual `r` re-check.
     expect(calls).toBeGreaterThanOrEqual(1);
     expect(deps.local.homeHealth()).toEqual({
-      present: false,
+      kind: "missing",
       agent: "claude",
       detail: "claude CLI not found",
     });
   });
 
-  test("a startup probe reporting the agent present overwrites the pre-probe placeholder", async () => {
+  test("a startup probe reporting the agent ready overwrites the pre-probe placeholder", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: true, agent: "claude", detail: "agent ready" }),
+      Promise.resolve({ kind: "ready", agent: "claude" }),
     );
 
     await tick();
 
-    expect(deps.local.homeHealth()).toEqual({
-      present: true,
-      agent: "claude",
-      detail: "agent ready",
-    });
+    expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
   });
 });
 

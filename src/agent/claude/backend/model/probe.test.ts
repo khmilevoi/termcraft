@@ -200,12 +200,14 @@ test("a spawn ENOENT throw means not-installed", async () => {
   expect(info.account).toBeNull();
 });
 
-test("a stream that ends without any init or auth signal is a deliberate not-logged-in fallthrough, not ready", async () => {
+// finding §2.7 (phase-8 Task 15): a clean close with no verdict proves NOTHING — it is no longer
+// classified as an explicit auth failure (`agent/health/model/probe.ts`'s `inconclusive`).
+test("a stream that ends without any init or auth signal is a deliberate unhealthy-unconfirmed-exit fallthrough, not ready", async () => {
   const info = await probeClaudeHealth(() => fake([]), {
     abortController: new AbortController(),
     processTree: fakeTree(),
   });
-  expect(info.health.status).toBe("not-logged-in");
+  expect(info.health.status).toBe("unhealthy-unconfirmed-exit");
   expect(info.account).toBeNull();
 });
 
@@ -229,7 +231,9 @@ test("a ready verdict is not discarded even when closing the SDK generator rejec
   expect(controller.signal.aborted).toBe(true);
 });
 
-test("a CLI that connects and then emits nothing does not hang the probe — the bounded deadline reports not-logged-in instead", async () => {
+// finding §2.7: a deadline timeout proves nothing — least of all that the user is signed out —
+// so it classifies the same honest way a clean-close-no-verdict does, never `not-logged-in`.
+test("a CLI that connects and then emits nothing does not hang the probe — the bounded deadline reports unhealthy-unconfirmed-exit instead", async () => {
   const controller = new AbortController();
   const info = await probeClaudeHealth(() => hangingFake(), {
     abortController: controller,
@@ -237,7 +241,7 @@ test("a CLI that connects and then emits nothing does not hang the probe — the
     deadlineMs: 5,
     processTree: fakeTree(),
   });
-  expect(info.health.status).toBe("not-logged-in");
+  expect(info.health.status).toBe("unhealthy-unconfirmed-exit");
   expect(info.account).toBeNull();
   expect(controller.signal.aborted).toBe(true);
 });
@@ -350,7 +354,7 @@ test("the process tree is closed when the probe deadline times out — the whole
     deadlineMs: 5,
     processTree: tree,
   });
-  expect(info.health.status).toBe("not-logged-in");
+  expect(info.health.status).toBe("unhealthy-unconfirmed-exit");
   expect(closeCalls()).toBe(1);
 });
 

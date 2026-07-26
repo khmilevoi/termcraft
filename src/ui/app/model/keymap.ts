@@ -1,4 +1,6 @@
 import { resolveHotkey } from "ui/actions";
+import type { HomeAgentHealth } from "ui/home";
+import { homeSubmitAllowed } from "ui/home";
 import type { ScreenKind } from "ui/mirror";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
 
@@ -32,11 +34,13 @@ export interface KeyContext {
   readonly overlay: OverlayKind | null;
   readonly composerValue: string;
   /**
-   * The current Home agent-health reading's `present` flag (M15). Only meaningful on
-   * `screen === "home"`: `true` renders the idle prompt (where `r` types into it), `false`
-   * renders the missing-agent error panel (where `r` re-checks health instead).
+   * The current Home agent-health reading (M15, finding §2.7 / phase-8 Task 15). Only
+   * meaningful on `screen === "home"`: `"missing"` renders the full-screen missing-agent panel
+   * (where `r`/`q` are the only live keys), `"blocked"` keeps the idle prompt live but adds an
+   * `r` re-check, and every other kind (`checking`/`ready`/`advisory`) keeps the idle prompt
+   * live with no extra key — {@link homeSubmitAllowed} alone decides whether Enter submits.
    */
-  readonly homeHealthPresent: boolean;
+  readonly homeHealth: HomeAgentHealth;
   /**
    * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). The Composer renders
    * `disabled` while this is true (`Workspace.tsx`'s `disabled={... || turn.phase === "running"
@@ -180,19 +184,20 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     !context.turnRunning;
 
   if (context.screen === "home") {
-    // design/12-errors-edge-states.dc.html (homeErr): the missing-agent error panel has no
-    // prompt input at all, so every key but the two the design's own status bar names is inert
-    // there (M15) — not a fall-through to the idle prompt's input/submit/backspace handling.
-    // That status bar reads `[['r','re-check'],['q','quit']]` (design/termcraft-engine.js:583,
-    // read verbatim before writing this comment) — `r` re-checks health (above); `q` quits
-    // (phase-8 WP-10) belongs beside it for the identical reason: no text input is focused here
-    // to type a stray "q" into.
-    if (context.homeHealthPresent === false) {
+    // The missing-CLI panel has no prompt input at all, so every key but the two the design's own
+    // status bar names is inert there (design `homeErr()` :583 — `[['r','re-check'],['q','quit']]`).
+    if (context.homeHealth.kind === "missing") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q") return { kind: "exit" };
       return { kind: "none" };
     }
-    if (RETURN_NAMES.has(key.name)) return { kind: "home-submit" };
+    // `checking`/`blocked` keep a live prompt — the design still draws it — but Enter is refused
+    // (finding §2.7). `r` re-checks on the blocking panel, matching its own status bar.
+    if (key.sequence === "r" && context.homeHealth.kind === "blocked")
+      return { kind: "home-recheck" };
+    if (RETURN_NAMES.has(key.name)) {
+      return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
+    }
     if (key.name === "backspace") return { kind: "home-backspace" };
     const ch = printableChar(key);
     if (ch !== null) return { kind: "home-input", ch };

@@ -732,10 +732,11 @@ Added during the investigation, needs a decision before commit — see §6.
 - **`account` is a documented `null` literal** rather than a fresh `healthCheck()` per master §9.
 - **The system prompt cannot carry per-page source metadata or the current selection** that
   master §6.2 lists — `AgentPromptContextV1` has no channel for either.
-- **Home's agent identity never shows a version** — `AgentInfo` carries no version field, so the
-  health line reads `● claude · agent ready`. Honest rendering, not a missing probe. **Superseded
-  by §2.7:** the operator has removed that health line from Home entirely, and `version` is read
-  nowhere else, so this entry closes with it.
+- ~~**Home's agent identity never shows a version** — `AgentInfo` carries no version field, so
+  the health line reads `● claude · agent ready`. Honest rendering, not a missing probe.~~
+  **CLOSED 2026-07-26, Task 15 (finding §2.7).** The health line is gone: Home now routes on five
+  honest outcomes (`checking`/`ready`/`advisory`/`blocked`/`missing`), and `version` is read
+  nowhere in the codebase — never fabricated, never displayed.
 - **`D-Q6`** — exported `layout/<slug>.json` omits the `text` field on text nodes.
 - **Restore and migration are unwired** — `buildRestoreTransaction`/`buildMigrationTransaction`
   are built and unit-tested with no live caller.

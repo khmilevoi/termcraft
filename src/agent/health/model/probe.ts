@@ -10,8 +10,15 @@ function describeThrown(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/**
+ * A probe that ran out of time proves NOTHING — least of all that the user is signed out
+ * (finding §2.7). Reporting `not-logged-in` on deadline expiry is what locked the whole
+ * application on a slow-but-working CLI after 20 s. `unhealthy-unconfirmed-exit` is the existing
+ * variant that already means "we could not confirm", and Home maps it to the design's own
+ * `health unconfirmed` panel, which still allows submit.
+ */
 function inconclusive(backendId: string): AgentInfo {
-  return { backendId, health: { status: "not-logged-in" }, account: null };
+  return { backendId, health: { status: "unhealthy-unconfirmed-exit" }, account: null };
 }
 
 /**
@@ -26,8 +33,12 @@ function inconclusive(backendId: string): AgentInfo {
  *    skip it. Arms kill-on-close for a probe CLI that ignored the abort;
  *  - the classification of an inconclusive probe. NEVER report `ready` on
  *    ambiguity: a false-ready would let a real, paid turn start against a
- *    broken backend, so an abort with no verdict, a stream failure, and a clean
- *    close with no verdict all classify the same as an explicit auth failure.
+ *    broken backend. A deadline abort and a clean close with no verdict both
+ *    genuinely prove NOTHING (finding §2.7) — neither classifies as an auth
+ *    failure any more; both go through {@link inconclusive}'s honest
+ *    `unhealthy-unconfirmed-exit`. An actual stream failure (the read itself
+ *    threw) is more decisive than either and keeps its own not-installed/
+ *    not-logged-in split below, unaffected by this fix.
  */
 export async function runHealthProbe(
   backendId: string,

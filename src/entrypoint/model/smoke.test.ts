@@ -455,11 +455,7 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // either `await` is ever missed (this file's own `waitForEvent` doc). ------------------
       const env: UiEnv = { root, workspaceIdentity: root, projectExists: false };
       const deps = createUiDeps(port, { w: 120, h: 36 }, env, () =>
-        Promise.resolve({
-          present: true,
-          agent: "claude",
-          detail: "agent ready",
-        }),
+        Promise.resolve({ kind: "ready", agent: "claude" }),
       );
       const appElement = createElement(App, { deps }) as Parameters<
         typeof createReactTestRenderer
@@ -467,6 +463,10 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       renderer = await createReactTestRenderer(appElement, { width: 120, height: 36 });
 
       await renderer.waitForFrame((frame) => frame.includes("termcraft"));
+      // The seeded pre-probe placeholder is `checking` (finding §2.7, phase-8 Task 15), which
+      // also renders "termcraft" — Enter below needs the outcome to have actually settled to
+      // `ready` (this test's own injected probe), not merely the first seeded frame.
+      await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
 
       const projectReady = waitForEvent(
         kernel,

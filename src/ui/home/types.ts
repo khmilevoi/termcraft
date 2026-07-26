@@ -4,14 +4,45 @@
  * existing project opens straight into Workspace. No chat/preview split, no tab strip.
  */
 
-/** The mirrored agent health check Home renders (idle detail vs. missing-agent error). */
-export interface HomeAgentHealth {
-  readonly present: boolean;
-  /** e.g. "agent ready" (idle) or "claude CLI not found" (error) */
-  readonly detail: string;
-  /** The backend id (M22), e.g. "claude" — sourced from the same probe as `detail`. */
-  readonly agent?: string;
+/**
+ * The five Home health outcomes (finding §2.7). They divide by WHETHER SUBMIT IS REFUSED, not by
+ * presence — which is why the old `present: boolean` could not express them: `checking` and
+ * `blocked` both refuse while being nothing alike on screen, and `advisory` allows while being
+ * visually closer to `blocked` than to `ready`.
+ *
+ * - `checking` — the probe is in flight. Submit refused. Design `home('checking')`
+ *   (`termcraft-engine.js:139-161`): the `⏎ create` hint drops to faint, a `· ⠹ checking {agent} —
+ *   up to 20s` note sits beside it, and the status bar carries `⠹ checking {agent} — ⏎ disabled`
+ *   with the `⏎` hint key in the `dis` state.
+ * - `ready` — a real, passing probe. Submit allowed. NOTE: there is no `● {agent} … · agent ready`
+ *   line any more — the design's own `home()` no longer draws one, and it was the single assertion
+ *   that was FALSE for the whole time the probe ran.
+ * - `advisory` — the probe finished without proving the agent healthy (an unconfirmed exit, a
+ *   degraded sandbox, or a TIMEOUT). Submit ALLOWED: a timeout proves nothing — it does not prove
+ *   the user is signed out — and the design's own `⏎ works — the first turn may still fail` panel
+ *   is the honest bucket for "unproven". Design `homeHealth('shutdown'|'sandbox')`.
+ * - `blocked` — the CLI is there and the probe positively established it cannot run (not signed
+ *   in). Submit refused, but the screen is NOT seized: design `homeHealth('login')` is a panel
+ *   below a still-rendered prompt.
+ * - `missing` — no CLI at all. The one case that keeps the full-screen takeover (`homeErr()`).
+ */
+export type HomeAgentHealth =
+  | Readonly<{ kind: "checking"; agent: string }>
+  | Readonly<{ kind: "ready"; agent: string }>
+  | Readonly<{ kind: "advisory"; agent: string; panel: "shutdown" | "sandbox"; detail: string }>
+  | Readonly<{ kind: "blocked"; agent: string; detail: string }>
+  | Readonly<{ kind: "missing"; agent: string; detail: string }>;
+
+/** Submit is refused exactly while the agent is unproven-and-unusable — see {@link HomeAgentHealth}. */
+export function homeSubmitAllowed(health: HomeAgentHealth): boolean {
+  return health.kind === "ready" || health.kind === "advisory";
 }
+
+/**
+ * Alias matching this task's own interface contract (Task 15's "Produces" section) — the exact
+ * same union as {@link HomeAgentHealth}, named for downstream tasks that dispatch against it.
+ */
+export type HomeHealthOutcome = HomeAgentHealth;
 
 /**
  * The agent/model/effort triple Home's combo selectors read (finding §2.7, phase-8 Task 13). A
