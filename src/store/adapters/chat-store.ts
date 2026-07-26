@@ -2,6 +2,7 @@ import type {
   AssertConforms,
   ChatHandleV1,
   ChatHeaderV1,
+  ChatListingEntryV1,
   ChatLoadResultV1,
   ChatMutations,
   ChatPageCursorV1,
@@ -99,7 +100,13 @@ export function createChatStoreAdapter(deps: StoreAdapterDeps): ChatReader & Cha
     return undefined;
   }
 
-  return { open: open_, readAppendBase, create, switchActive };
+  async function list(): Promise<FailureDtoV1 | readonly ChatListingEntryV1[]> {
+    const result = await open.chats.list();
+    if (result instanceof Error) return toFailureDto(result);
+    return result;
+  }
+
+  return { open: open_, readAppendBase, create, switchActive, list };
 }
 
 type _Conforms = AssertConforms<

@@ -210,6 +210,9 @@ function createChatMutationsStub(): ChatReader & ChatMutations & ChatAppendLedge
         prefixSha256: fakeSha256Hex(serialized),
       };
     },
+    async list() {
+      return [];
+    },
     seedRecords(chatId: string, records: readonly ChatRecord[]): void {
       const existing = recordsByChatId.get(chatId);
       if (existing === undefined) {

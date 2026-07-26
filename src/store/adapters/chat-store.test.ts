@@ -106,4 +106,36 @@ describe("createChatStoreAdapter — contract test (fake vs. real)", () => {
       await open.close();
     }
   });
+
+  test("list() sees a freshly create()d chat with a null firstUserText (fix-bundle spec §2.1, Gap E)", async () => {
+    const fake = createFakeChatStore();
+    const fakeHeader = await fake.create();
+    if ("code" in fakeHeader) throw new Error("fixture bug: fake create() failed");
+    const fakeList = await fake.list();
+    if ("code" in fakeList) throw new Error("fixture bug: fake list() failed");
+    expect(fakeList).toEqual([
+      { chatId: fakeHeader.chatId, createdAt: fakeHeader.createdAt, firstUserText: null },
+    ]);
+
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createChatStoreAdapter(deps);
+      // The real project already has ONE chat from `createProject` (`store/model/factory.ts`'s
+      // implicit first-chat mint) — `create()` here adds a second, so `list()` must report both.
+      const header = await adapter.create();
+      if ("code" in header) throw new Error("fixture bug: create() failed");
+
+      const listed = await adapter.list();
+      if ("code" in listed) throw new Error("fixture bug: list() failed");
+      expect(listed.length).toBe(2);
+      const entry = listed.find((candidate) => candidate.chatId === header.chatId);
+      expect(entry).toEqual({
+        chatId: header.chatId,
+        createdAt: header.createdAt,
+        firstUserText: null,
+      });
+    } finally {
+      await open.close();
+    }
+  });
 });

@@ -161,6 +161,9 @@ function createChatReaderStub(
     async readAppendBase(requestedChatId: string) {
       return unknownChat(requestedChatId);
     },
+    async list() {
+      return [];
+    },
   };
 }
 
@@ -683,6 +686,9 @@ describe("chatHandlers['chat.switch']", () => {
         };
       },
       async readAppendBase() {
+        throw new Error("not used in this test");
+      },
+      async list() {
         throw new Error("not used in this test");
       },
     };

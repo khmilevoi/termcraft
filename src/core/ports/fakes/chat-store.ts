@@ -5,6 +5,7 @@ import type { Clock } from "infrastructure/clock";
 import type {
   ChatHandleV1,
   ChatHeaderV1,
+  ChatListingEntryV1,
   ChatLoadResultV1,
   ChatMutations,
   ChatPageCursorV1,
@@ -63,13 +64,27 @@ function computeAppendBase(records: readonly ChatRecord[]): ReadSetAppendBaseV1 
   };
 }
 
+/**
+ * The first `kind: "user"` record's text, or `null` if none exists yet — the SAME rule
+ * `store/model/chat-listing.ts`'s `scanChatListingPrefix` applies to the real chat log,
+ * derived here from the fake's in-memory record array instead of a bounded byte scan.
+ */
+function firstUserText(records: readonly ChatRecord[]): string | null {
+  const record = records.find(
+    (candidate): candidate is Extract<ChatRecord, { readonly kind: "user" }> =>
+      candidate.kind === "user",
+  );
+  return record?.text ?? null;
+}
+
 export type ChatStoreFailableMethod =
   | "open"
   | "create"
   | "switchActive"
   | "loadTail"
   | "loadBefore"
-  | "readAppendBase";
+  | "readAppendBase"
+  | "list";
 
 export type ChatStoreCall =
   | { readonly method: "open"; readonly chatId: string }
@@ -82,7 +97,8 @@ export type ChatStoreCall =
       readonly cursor: ChatPageCursorV1;
       readonly limit: number | undefined;
     }
-  | { readonly method: "readAppendBase"; readonly chatId: string };
+  | { readonly method: "readAppendBase"; readonly chatId: string }
+  | { readonly method: "list" };
 
 export interface FakeChatStore extends ChatReader, ChatMutations {
   readonly calls: readonly ChatStoreCall[];
@@ -104,6 +120,7 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
     loadTail: [],
     loadBefore: [],
     readAppendBase: [],
+    list: [],
   };
 
   function failNext(method: ChatStoreFailableMethod, failure: FailureDtoV1): void {
@@ -195,7 +212,24 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
     return computeAppendBase(chat.records);
   }
 
-  return { open, create, switchActive, readAppendBase, calls, seedRecords, failNext };
+  /**
+   * `[]` by default (no chat has been `create()`d/seeded yet) — `failNext("list", ...)` is
+   * this fake's one injectable override, matching every other method's convention. Beyond
+   * that, this derives its result from the SAME in-memory `chats` map every other method
+   * reads/writes, rather than a second parallel list a test would have to keep in sync.
+   */
+  async function list(): Promise<FailureDtoV1 | readonly ChatListingEntryV1[]> {
+    calls.push({ method: "list" });
+    const queued = queues.list.shift();
+    if (queued !== undefined) return queued;
+    return [...chats.values()].map(({ header, records }) => ({
+      chatId: header.chatId,
+      createdAt: header.createdAt,
+      firstUserText: firstUserText(records),
+    }));
+  }
+
+  return { open, create, switchActive, readAppendBase, list, calls, seedRecords, failNext };
 }
 
 type _ReaderConforms = AssertConforms<ChatReader, FakeChatStore>;

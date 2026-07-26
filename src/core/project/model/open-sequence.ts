@@ -49,8 +49,10 @@ import { buildTrustStatus, grantImplicitTrust, resolveTrustDecision } from "./tr
  * `FailureDtoV1` (an unparseable/schema-invalid pointer, or one whose referenced generation
  * directory is missing, D-Q4) blocks exactly like every other content-validation failure.
  *
- * CHAT ENUMERATION is likewise partial: TD step 9 says "chats" plural, but `ChatReader`
- * exposes only `open(chatId)` with no enumeration, so only the ACTIVE chat is validated.
+ * CHAT ENUMERATION is likewise partial: TD step 9 says "chats" plural, but this open sequence
+ * still validates only the ACTIVE chat. `ChatReader` gained `list()` (fix-bundle spec §2.1,
+ * Gap E) — enumeration is no longer a port-shape gap — but `validateProjectContents` below has
+ * not been updated to call it; closing that is separate work, not done here.
  * Same class of gap as the export pointer, recorded for the same reason.
  *
  * TRUST (KCC §7.1/§12.8) is NOT one of TD's ten storage steps — TD's own list never

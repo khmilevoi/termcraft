@@ -137,6 +137,9 @@ function createSeededChatStore(
     async readAppendBase(chatId: string) {
       return notSeeded(chatId);
     },
+    async list() {
+      return unsupported("list");
+    },
     async create() {
       return unsupported("create");
     },

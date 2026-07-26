@@ -132,6 +132,9 @@ function createChatReaderStub(
     async readAppendBase(requestedChatId: string) {
       return unknownChat(requestedChatId);
     },
+    async list() {
+      return [];
+    },
   };
 }
 

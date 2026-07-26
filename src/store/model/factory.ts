@@ -110,6 +110,7 @@ import type {
   AdvanceSessionCheckpointInput,
   AppendPinEventInput,
   ChatHandle,
+  ChatListEntry,
   ChatStore,
   CreateChatInput,
   CreateProjectInput,
@@ -131,6 +132,7 @@ import type {
   TxOutcome,
   WorkspaceStateStore,
 } from "../types";
+import { scanChatListingPrefix } from "./chat-listing";
 
 // `store/model/factory.ts` — the composition-root entry point (T19). Wires every already-
 // landed submodule against ONE injected `StoreDeps` bundle into the flat `Store` port
@@ -747,6 +749,11 @@ function readChatHeaderBounded(
  * cached state and takes `updateChatIndex`'s bounded-suffix fast path — bounded resident
  * pages, bounded scan buffer, and index memory that no longer regrows to O(record count) on
  * every single open, matching projections §7.1/§16.1/§16.3.
+ *
+ * `list()` (fix-bundle spec §2.1, Gap E) applies the SAME §5.2 identity check on its own
+ * bounded-prefix scan (`./chat-listing.ts`'s `scanChatListingPrefix`) rather than going
+ * through `open`'s persisted index at all — listing every chat under the project needs none
+ * of the index's incremental-append machinery, only each file's own head.
  */
 function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string): ChatStore {
   const cache = makeChatIndexCache(safeFs, deps);
@@ -850,6 +857,54 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
         },
       };
       return handle;
+    },
+
+    /**
+     * Bounded per chat: one `stat` plus one `readRange` of at most
+     * {@link CHAT_INDEX_SCAN_CHUNK_BYTES} bytes (projections §16.1's own chat scan buffer),
+     * never a whole-file read — unlike `scanOrphanTurns`, which genuinely needs every record.
+     * The first `user` record is at the file's head by construction, so this bound is generous
+     * rather than lossy; a chat whose first user record somehow sits past it lists with a `null`
+     * name and falls back to the UI's own `chatId.slice(0, 8)` label.
+     */
+    async list() {
+      const names = safeFs.list("chats");
+      if (names instanceof Error) {
+        if (names instanceof FsAccessError && isNotFound(names)) return [];
+        return names;
+      }
+
+      const entries: ChatListEntry[] = [];
+      for (const name of names) {
+        if (!name.endsWith(".jsonl")) continue;
+        const chatId = name.slice(0, -".jsonl".length);
+        const relPath = chatJsonlPath(chatId);
+
+        const stat = safeFs.stat(relPath);
+        if (stat instanceof Error) {
+          console.warn(`store: chat listing could not stat ${relPath}:`, stat.message);
+          continue;
+        }
+        const prefix = safeFs.readRange(
+          relPath,
+          0,
+          Math.min(stat.size, CHAT_INDEX_SCAN_CHUNK_BYTES),
+        );
+        if (prefix instanceof Error) {
+          console.warn(`store: chat listing could not read ${relPath}:`, prefix.message);
+          continue;
+        }
+
+        const entry = scanChatListingPrefix(prefix, chatId, projectId);
+        if (entry === null) {
+          console.warn(
+            `store: chat listing skipping ${relPath}, header identity mismatch or unreadable header`,
+          );
+          continue;
+        }
+        entries.push(entry);
+      }
+      return entries;
     },
   };
 }

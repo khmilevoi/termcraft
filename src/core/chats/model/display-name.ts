@@ -14,6 +14,19 @@ import type { ChatRecordDtoV1 } from "core/protocol";
 const DISPLAY_NAME_MAX_LENGTH = 60;
 
 /**
+ * §3.9's derivation applied to one already-selected record's text: first line, trimmed,
+ * truncated to {@link DISPLAY_NAME_MAX_LENGTH}. Split out so the chat LISTING path
+ * (`ChatReader.list()`, which returns raw `firstUserText` and never a display name) applies the
+ * identical rule as the tail-reading path below, rather than a second copy that can drift.
+ */
+export function truncateChatDisplayName(text: string | null): string | null {
+  if (text === null) return null;
+  const firstLine = (text.split("\n")[0] ?? "").trim();
+  if (firstLine === "") return null;
+  return firstLine.slice(0, DISPLAY_NAME_MAX_LENGTH);
+}
+
+/**
  * The first line of the first `kind: "user"` record's `text`, trimmed and truncated
  * to `DISPLAY_NAME_MAX_LENGTH`. `null` when no `user` record exists yet (a freshly
  * created chat), OR when one exists but its first line is blank/whitespace-only after
@@ -24,8 +37,5 @@ const DISPLAY_NAME_MAX_LENGTH = 60;
 export function deriveChatDisplayName(records: readonly ChatRecordDtoV1[]): string | null {
   const firstUserRecord = records.find((record) => record.kind === "user");
   if (firstUserRecord === undefined) return null;
-
-  const firstLine = (firstUserRecord.text.split("\n")[0] ?? "").trim();
-  if (firstLine === "") return null;
-  return firstLine.slice(0, DISPLAY_NAME_MAX_LENGTH);
+  return truncateChatDisplayName(firstUserRecord.text);
 }

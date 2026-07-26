@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { ChatRecordDtoV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { deriveChatDisplayName } from "./display-name";
+import { deriveChatDisplayName, truncateChatDisplayName } from "./display-name";
 
 const TS = "2026-07-24T00:00:00.000Z";
 
@@ -94,5 +94,23 @@ describe("deriveChatDisplayName (design §3.9)", () => {
     expect(deriveChatDisplayName([userRecord("")])).toBeNull();
     expect(deriveChatDisplayName([userRecord("   ")])).toBeNull();
     expect(deriveChatDisplayName([userRecord("\nsecond line has content")])).toBeNull();
+  });
+});
+
+describe("truncateChatDisplayName (design §3.9) — the extracted rule fix-bundle spec §2.1's chat-listing path shares with deriveChatDisplayName", () => {
+  test("returns null for a null input (a freshly minted chat with no user record yet)", () => {
+    expect(truncateChatDisplayName(null)).toBeNull();
+  });
+
+  test("returns the first line, trimmed and truncated, matching deriveChatDisplayName's own rule on the same text", () => {
+    expect(truncateChatDisplayName("Add a dark theme toggle")).toBe("Add a dark theme toggle");
+    expect(truncateChatDisplayName("   padded text   \nrest")).toBe("padded text");
+    expect(truncateChatDisplayName("x".repeat(75))).toBe("x".repeat(60));
+  });
+
+  test("returns null, not an empty string, for blank/whitespace-only text", () => {
+    expect(truncateChatDisplayName("")).toBeNull();
+    expect(truncateChatDisplayName("   ")).toBeNull();
+    expect(truncateChatDisplayName("\nsecond line has content")).toBeNull();
   });
 });

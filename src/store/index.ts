@@ -20,6 +20,7 @@ export type {
   BackupStore,
   ChangedPageOp,
   ChatHandle,
+  ChatListEntry,
   ChatStore,
   CreateChatInput,
   CreateProjectInput,

@@ -57,6 +57,19 @@ export interface ChatHandleV1 {
   ): Promise<FailureDtoV1 | ChatLoadResultV1>;
 }
 
+/**
+ * One chat's listing facts (fix-bundle spec §2.1) — the `store` surface `ChatReader.list()`
+ * exposes. `firstUserText` is the RAW text of the chat's first `user` record; deriving the ~60
+ * character display name from it is design §3.9's rule and lives in `core/chats`
+ * (`truncateChatDisplayName`), so neither this port nor the adapter behind it owns a
+ * presentation decision.
+ */
+export interface ChatListingEntryV1 {
+  readonly chatId: string;
+  readonly createdAt: string;
+  readonly firstUserText: string | null;
+}
+
 export interface ChatReader {
   open(chatId: string): Promise<FailureDtoV1 | ChatHandleV1>;
   /**
@@ -88,6 +101,19 @@ export interface ChatReader {
    * (`core/ports/staging.ts`).
    */
   readAppendBase(chatId: string): Promise<FailureDtoV1 | ReadSetAppendBaseV1>;
+
+  /**
+   * Every chat this project holds. Closes the gap `core/chats/model/chat-directory.ts`'s own
+   * comment names ("No port lists every chat") and that `handlers/project.ts` documented as a
+   * deliberate divergence: without it, `/chats` shows only what THIS process happened to learn,
+   * so three chats on disk render as one row after a restart.
+   *
+   * Independent of `open`/`readAppendBase` on purpose (spec §2.1): today one failure kills both
+   * `chat.changed` and `chat.records`, leaving the UI with neither a list nor history. A
+   * `list()` failure must cost only the extra rows; a tail failure must cost only the
+   * scrollback.
+   */
+  list(): Promise<FailureDtoV1 | readonly ChatListingEntryV1[]>;
 }
 
 export interface ChatMutations {

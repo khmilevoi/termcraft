@@ -57,6 +57,7 @@ export type {
 export type {
   ChatHandleV1,
   ChatHeaderV1,
+  ChatListingEntryV1,
   ChatLoadResultV1,
   ChatMutations,
   ChatPageCursorV1,

@@ -167,8 +167,27 @@ export interface ChatHandle {
   loadBefore(cursor: PageCursor, limit?: number, byteBudget?: number): Promise<Error | LoadResult>;
 }
 
+/**
+ * One chat's listing facts (fix-bundle spec §2.1). `firstUserText` is the RAW first `user`
+ * record's text, not a display name: the ~60-character truncation rule is design §3.9's and
+ * lives in `core/chats`'s `truncateChatDisplayName`, so `store` never owns a presentation
+ * decision.
+ */
+export interface ChatListEntry {
+  readonly chatId: string;
+  readonly createdAt: string;
+  readonly firstUserText: string | null;
+}
+
 export interface ChatStore {
   open(chatId: string): Promise<JsonlOpenError | SafeFsError | ChatHandle>;
+  /**
+   * Every chat under the project, in `SafeProjectFs.list("chats")` order. A missing `chats/`
+   * directory is an empty list, not a failure (a project can legitimately have none yet); a
+   * chat whose own bytes cannot be read, or whose header identity does not match, is logged
+   * and left out rather than failing the whole listing.
+   */
+  list(): Promise<SafeFsError | readonly ChatListEntry[]>;
 }
 
 // ---- pins (storage-identity §11.2) ------------------------------------------------
