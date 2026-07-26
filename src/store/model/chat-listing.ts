@@ -28,8 +28,15 @@ export type ChatListingScanIssue =
  * turn — so a forward scan stops within the first few lines. `core/chats`'s
  * `resolveChatDisplayName` walks `loadBefore` BACKWARDS from the tail all the way to the
  * beginning for the same fact, which is the most likely cause of the observed empty chat list on
- * a long history. With this listing supplying names, that backward walk is no longer needed at
- * all; `loadTail` remains only for the scrollback.
+ * a long history.
+ *
+ * fix-bundle Task 7 wired this listing into `runProjectReadySequence` (`handlers/project.ts`'s
+ * `listChatSummaries`), so the backward walk is no longer needed THERE — every chat's name at
+ * open, including the active one, now comes from this forward scan instead. One call site
+ * remains, and legitimately so: `chat.switch` (`handlers/chat.ts`'s `loadActiveChatTail`) already
+ * has the switched-to chat's tail in hand from its own `loadTail` call and derives that one chat's
+ * name from it directly, without a second `ChatReader.list()` round trip over the whole project —
+ * `loadTail` there is for both the scrollback AND (via the existing `loadBefore` cursor) the name.
  *
  * `null` means "this file is not a usable chat for listing purposes" — an unreadable header, or a
  * storage-identity §5.2 identity mismatch (the filename must equal the header's `chatId`, and the

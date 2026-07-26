@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import { type KernelDeps, createKernel } from "core";
 import type { EventEnvelopeV1 } from "core/mailbox";
-import type { ChatHeaderV1, ChatLoadResultV1, ChatMutations, ChatReader } from "core/ports";
+import type {
+  ChatHeaderV1,
+  ChatListingEntryV1,
+  ChatLoadResultV1,
+  ChatMutations,
+  ChatReader,
+} from "core/ports";
 import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
@@ -94,10 +100,15 @@ interface SeededChatStoreCall {
  * exercised by a relaunch (`project.open` alone) and return a loud `PERSISTENCE_FAILED`
  * failure if ever called, so an accidental call surfaces as a visible assertion failure
  * rather than silently minting a second, untested chat.
+ *
+ * `listEntries` (fix-bundle Task 7) is this project's WHOLE on-disk chat listing — not just
+ * the seeded/active chat — proving `chat.changed` now reflects `ChatReader.list()` rather
+ * than only whatever chat `project.open` happened to open a tail for.
  */
 function createSeededChatStore(
   header: ChatHeaderV1,
   tail: ChatLoadResultV1,
+  listEntries: readonly ChatListingEntryV1[],
 ): ChatReader & ChatMutations & { readonly calls: readonly SeededChatStoreCall[] } {
   const calls: SeededChatStoreCall[] = [];
 
@@ -138,7 +149,7 @@ function createSeededChatStore(
       return notSeeded(chatId);
     },
     async list() {
-      return unsupported("list");
+      return listEntries;
     },
     async create() {
       return unsupported("create");
@@ -236,7 +247,23 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
       ],
       prevCursor: null,
     };
-    const chatStore = createSeededChatStore(header, tail);
+
+    // fix-bundle Task 7 (Gap E): the project holds THREE chats on disk — not just the one
+    // `project.open` restores a tail for — proving `chat.changed` reflects the project's own
+    // full listing (`ChatReader.list()`), the exact "three chats on disk, one row after a
+    // restart" bug this task closes.
+    const otherChatB = uuidv7();
+    const otherChatC = uuidv7();
+    const listEntries: readonly ChatListingEntryV1[] = [
+      { chatId, createdAt: header.createdAt, firstUserText: "Restore my chat, please" },
+      {
+        chatId: otherChatB,
+        createdAt: "2024-05-30T00:00:00.000Z",
+        firstUserText: "a second chat on disk",
+      },
+      { chatId: otherChatC, createdAt: "2024-05-31T00:00:00.000Z", firstUserText: null },
+    ];
+    const chatStore = createSeededChatStore(header, tail, listEntries);
 
     // The on-disk workspace state a PRIOR session already wrote: an active chat is named,
     // exactly the relaunch precondition (§11: "the Workspace opens with the active chat's
@@ -310,12 +337,22 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
     const changedEnvelope = envelopes.find((e) => e.kind === "chat.changed");
     if (changedEnvelope === undefined) throw new Error("expected a chat.changed envelope");
 
-    // The exact content a `/chats` popup row (Task 9, ui-side) needs: the derived
-    // `displayName` (Task 4) computed from the first `user` record's first line.
+    // The exact content a `/chats` popup needs: ALL THREE chats the project holds on disk —
+    // not just the active one — each with its own derived `displayName` (design §3.9) computed
+    // from ITS OWN first `user` record's first line (fix-bundle Gap E, Task 7). `chat.changed`
+    // is fed entirely by `ChatReader.list()` now, so every listed chat lands in `added`.
     expect(changedEnvelope.payload).toEqual({
       activeChatId: chatId,
-      added: [],
-      updated: [{ chatId, createdAt: header.createdAt, displayName: "Restore my chat, please" }],
+      added: [
+        { chatId, createdAt: header.createdAt, displayName: "Restore my chat, please" },
+        {
+          chatId: otherChatB,
+          createdAt: "2024-05-30T00:00:00.000Z",
+          displayName: "a second chat on disk",
+        },
+        { chatId: otherChatC, createdAt: "2024-05-31T00:00:00.000Z", displayName: null },
+      ],
+      updated: [],
       removedChatIds: [],
     });
 

@@ -11,6 +11,7 @@ import {
   reatomRestoreStateMachine,
   reatomTurnStateMachine,
 } from "core/machines";
+import type { PublishableEventV1 } from "core/mailbox";
 import type { ChatHeaderV1, ChatLoadResultV1, ChatReader, PreviewSession } from "core/ports";
 import {
   createFakeAgentBackend,
@@ -44,10 +45,12 @@ import {
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import {
   type CommandPayloadByKindV1,
+  type EventKindV1,
   type FailureDtoV1,
   type UUIDv7,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import type { ChatRecord } from "entities/chat";
 import { parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -100,6 +103,11 @@ interface ChatReaderStubCall {
  * `chat.changed`/`chat.records` payloads against their real protocol schemas) needs this
  * local double instead — the same precedent `handlers/chat.test.ts`'s own
  * `createChatReaderStub` already establishes for `chat.switch`.
+ *
+ * `list()` reports this SAME chat's own facts (fix-bundle Task 7) — its `firstUserText` is
+ * derived from `loadTailResult`'s own first `user` record when `loadTailResult` is not itself
+ * a failure, `null` otherwise — rather than a second, independently-specified fixture a caller
+ * would have to keep in sync with `loadTailResult` by hand.
  */
 function createChatReaderStub(
   chatId: string,
@@ -113,6 +121,13 @@ function createChatReaderStub(
     safeMessage: `chat-reader stub only knows chatId ${chatId}, not ${requestedChatId}`,
     details: { chatId: requestedChatId },
   });
+  const firstUserText =
+    "code" in loadTailResult
+      ? null
+      : (loadTailResult.records.find(
+          (record): record is Extract<ChatRecord, { readonly kind: "user" }> =>
+            record.kind === "user",
+        )?.text ?? null);
 
   return {
     calls,
@@ -133,7 +148,7 @@ function createChatReaderStub(
       return unknownChat(requestedChatId);
     },
     async list() {
-      return [];
+      return [{ chatId, createdAt: header.createdAt, firstUserText }];
     },
   };
 }
@@ -290,6 +305,14 @@ function expectValidEvent(event: { readonly kind: string; readonly payload: unkn
       `event "${event.kind}" failed schema validation: ${JSON.stringify(parsed.error.issues)}`,
     );
   }
+}
+
+/** Finds the one event of `kind` in `events`, narrowing `.payload` to that kind's own shape — never a bare `as`. */
+function findEvent<K extends EventKindV1>(
+  events: readonly PublishableEventV1[],
+  kind: K,
+): PublishableEventV1<K> | undefined {
+  return events.find((event): event is PublishableEventV1<K> => event.kind === kind);
 }
 
 // --- project.close ---------------------------------------------------------------------------
@@ -740,8 +763,11 @@ describe("project.open", () => {
       expect(changedEvent.kind).toBe("chat.changed");
       expect(changedEvent.payload).toEqual({
         activeChatId: chatId,
-        added: [],
-        updated: [{ chatId, createdAt: header.createdAt, displayName: "Restore my chat" }],
+        // Task 7 (fix-bundle Gap E): `chat.changed` is now fed entirely by `ChatReader.list()`
+        // (`listChatSummaries`) — the project's own on-disk listing, not the tail this test's
+        // `chatReader` loaded — and that listing always reports its rows as `added`.
+        added: [{ chatId, createdAt: header.createdAt, displayName: "Restore my chat" }],
+        updated: [],
         removedChatIds: [],
       });
 
@@ -798,7 +824,7 @@ describe("project.open", () => {
     });
   });
 
-  test("a tail-load failure for the active chat is logged and still finishes open with neither chat.changed nor chat.records", async () => {
+  test("a tail-load failure for the active chat is logged, costs only chat.records — chat.changed still publishes from the listing", async () => {
     await context.start(async () => {
       const home = slug("home");
       const chatId = uuidv7();
@@ -819,16 +845,16 @@ describe("project.open", () => {
           ],
         ]),
       });
-      const chatReader = createChatReaderStub(
-        chatId,
-        { chatId, createdAt: "2024-06-01T00:00:00.000Z" },
-        {
-          code: "PERSISTENCE_FAILED",
-          retryable: false,
-          safeMessage: "disk read failed",
-          details: {},
-        },
-      );
+      const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
+      // `loadTailResult` is a failure — `createChatReaderStub`'s own `list()` therefore reports
+      // this chat with `firstUserText: null` (its documented derivation), independent of the
+      // tail failure below.
+      const chatReader = createChatReaderStub(chatId, header, {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "disk read failed",
+        details: {},
+      });
       const harness = buildTestContext({ projectStore, pageReader, chatReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
@@ -838,9 +864,167 @@ describe("project.open", () => {
       for (const event of terminalEvents) expectValidEvent(event);
 
       expect(warnSpy).toHaveBeenCalled();
-      expect(terminalEvents.some((event) => event.kind === "chat.changed")).toBe(false);
+      const changed = findEvent(terminalEvents, "chat.changed");
+      expect(changed?.payload).toEqual({
+        activeChatId: chatId,
+        added: [{ chatId, createdAt: header.createdAt, displayName: null }],
+        updated: [],
+        removedChatIds: [],
+      });
       expect(terminalEvents.some((event) => event.kind === "chat.records")).toBe(false);
       expect(harness.machines.project.phase()).toBe("ready");
+      warnSpy.mockRestore();
+    });
+  });
+
+  // --- fix-bundle Task 7 (Gap E, spec §2.1): the ready sequence publishes the real chat list ---
+
+  test("publishes one chat.changed row per chat on disk, named from each chat's first user record", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const chatA = uuidv7();
+      const chatB = uuidv7();
+      const chatC = uuidv7();
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: chatA },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const chatReader: ChatReader = {
+        ...createFakeChatStore(),
+        async list() {
+          return [
+            {
+              chatId: chatA,
+              createdAt: "2026-07-24T10:00:00.000Z",
+              firstUserText: "build a system monitor\nwith gauges",
+            },
+            { chatId: chatB, createdAt: "2026-07-25T10:00:00.000Z", firstUserText: null },
+            {
+              chatId: chatC,
+              createdAt: "2026-07-26T10:00:00.000Z",
+              firstUserText: "add a network sparkline",
+            },
+          ];
+        },
+      };
+      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      const changed = findEvent(terminalEvents, "chat.changed");
+      expect(changed?.payload.added).toEqual([
+        {
+          chatId: chatA,
+          createdAt: "2026-07-24T10:00:00.000Z",
+          displayName: "build a system monitor",
+        },
+        { chatId: chatB, createdAt: "2026-07-25T10:00:00.000Z", displayName: null },
+        {
+          chatId: chatC,
+          createdAt: "2026-07-26T10:00:00.000Z",
+          displayName: "add a network sparkline",
+        },
+      ]);
+    });
+  });
+
+  test("a tail failure costs only the scrollback — the chat list still publishes", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const chatA = uuidv7();
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: chatA },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const chatReader: ChatReader = {
+        ...createFakeChatStore(),
+        async list() {
+          return [{ chatId: chatA, createdAt: "2026-07-24T10:00:00.000Z", firstUserText: "hi" }];
+        },
+        async open() {
+          return FAILURE;
+        },
+      };
+      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(terminalEvents.some((event) => event.kind === "chat.changed")).toBe(true);
+      expect(terminalEvents.some((event) => event.kind === "chat.records")).toBe(false);
+      warnSpy.mockRestore();
+    });
+  });
+
+  test("a list() failure degrades to the active chat alone", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const activeChatId = uuidv7();
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const chatReader: ChatReader = {
+        ...createFakeChatStore(),
+        async list() {
+          return FAILURE;
+        },
+      };
+      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      const changed = findEvent(terminalEvents, "chat.changed");
+      expect(changed?.payload.added.map((summary) => summary.chatId)).toEqual([activeChatId]);
       warnSpy.mockRestore();
     });
   });
