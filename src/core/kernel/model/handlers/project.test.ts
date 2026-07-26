@@ -376,8 +376,10 @@ describe("project.setTrust", () => {
       const outcome = projectHandlers["project.setTrust"](payload, harness.handlerContext);
 
       expect(outcome.disposition).toBe("started");
-      expect(outcome.events).toHaveLength(1);
-      expectValidEvent(outcome.events[0]!);
+      // Gap A (spec §2.2): granting trust on an already-open project ALSO enables preview
+      // synchronously, in the same admission — `enablePreviewIfTrusted`'s second call site.
+      expect(outcome.events).toHaveLength(2);
+      for (const event of outcome.events) expectValidEvent(event);
       expect(outcome.events[0]!.payload).toMatchObject({
         action: "kernel.project.setTrust",
         previousTag: "ready",
@@ -388,8 +390,15 @@ describe("project.setTrust", () => {
         // `workspace` (`./project.ts`'s header).
         metadata: { workspaceIdentity: "ws-1", trust: "trusted" },
       });
+      expect(outcome.events[1]!.payload).toMatchObject({
+        modelId: "kernel.preview.state",
+        action: "kernel.preview.enable",
+        previousTag: "disabled",
+        nextTag: "idle",
+      });
       // The Kernel-visible trust flag is already flipped BEFORE the async operation runs.
       expect(harness.getTrust()).toBe("trusted");
+      expect(harness.machines.preview.phase()).toBe("idle");
 
       const launches = harness.getLaunchOperations();
       expect(launches).toHaveLength(1);
@@ -469,22 +478,32 @@ describe("project.create", () => {
 
       const terminalEvents = await wrap(launches[0]!.run());
 
-      expect(terminalEvents).toHaveLength(2);
+      // Gap A (spec §2.2): a trusted project's ready sequence now enables preview FIRST — after
+      // trust, before the page descriptors and `finishOpen` that follow it.
+      expect(terminalEvents).toHaveLength(3);
       for (const event of terminalEvents) expectValidEvent(event);
 
-      expect(terminalEvents[0]!.kind).toBe("page.descriptorsChanged");
+      expect(terminalEvents[0]!.kind).toBe("kernel.stateChanged");
       expect(terminalEvents[0]!.payload).toMatchObject({
+        modelId: "kernel.preview.state",
+        action: "kernel.preview.enable",
+        previousTag: "disabled",
+        nextTag: "idle",
+      });
+
+      expect(terminalEvents[1]!.kind).toBe("page.descriptorsChanged");
+      expect(terminalEvents[1]!.payload).toMatchObject({
         reason: "project-open",
         activePageSlug: home,
       });
-      const descriptorsPayload = terminalEvents[0]!.payload;
+      const descriptorsPayload = terminalEvents[1]!.payload;
       if (descriptorsPayload === null || !("descriptors" in descriptorsPayload)) {
         throw new Error("expected a page.descriptorsChanged payload");
       }
       expect(descriptorsPayload.descriptors).toHaveLength(1);
 
-      expect(terminalEvents[1]!.kind).toBe("kernel.stateChanged");
-      expect(terminalEvents[1]!.payload).toMatchObject({
+      expect(terminalEvents[2]!.kind).toBe("kernel.stateChanged");
+      expect(terminalEvents[2]!.payload).toMatchObject({
         action: "kernel.project.finishOpen",
         previousTag: "opening",
         nextTag: "ready",
@@ -496,6 +515,7 @@ describe("project.create", () => {
       });
 
       expect(harness.machines.project.phase()).toBe("ready");
+      expect(harness.machines.preview.phase()).toBe("idle");
       expect(harness.getTrust()).toBe("trusted");
       expect(trustGate.calls.some((call) => call.method === "grant")).toBe(true);
     });
@@ -1178,6 +1198,144 @@ describe("project.retryOpen", () => {
       // Atomicity: the project machine must NOT have moved either, even though ITS OWN
       // `retryOpen` edge was legal in isolation.
       expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
+});
+
+// --- fix-bundle Task 8 (Gap A, spec §2.2): preview enables once trust resolves ---------------
+
+describe("Gap A — enablePreviewIfTrusted", () => {
+  test("enables preview once trust resolves to trusted, before finishOpen", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.preview.phase()).toBe("idle");
+
+      // `findEvent`-style narrowing (this file's own established idiom) rather than an inline
+      // `e.payload.action` check: `PublishableEventV1[]`'s element type is one generic
+      // instantiation over the whole `EventKindV1` union, so `payload` does not narrow off a
+      // bare `kind ===` comparison without an explicit type predicate.
+      const stateChanged = terminalEvents.filter(
+        (event): event is PublishableEventV1<"kernel.stateChanged"> =>
+          event.kind === "kernel.stateChanged",
+      );
+      const enableIndex = stateChanged.findIndex(
+        (event) => event.payload.action === "kernel.preview.enable",
+      );
+      const finishIndex = stateChanged.findIndex(
+        (event) => event.payload.action === "kernel.project.finishOpen",
+      );
+      expect(enableIndex).toBeGreaterThanOrEqual(0);
+      expect(enableIndex).toBeLessThan(finishIndex);
+    });
+  });
+
+  test("leaves preview disabled for an untrusted project — preview executes design code", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "untrusted-read-only", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.preview.phase()).toBe("disabled");
+      expect(harness.machines.project.phase()).toBe("ready");
+    });
+  });
+
+  test("enables preview when a later project.setTrust grants it", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      const createPayload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "untrusted-read-only", workspaceIdentity: "ws-1" },
+        text: "hello",
+      };
+      projectHandlers["project.create"](createPayload, harness.handlerContext);
+      const createLaunches = harness.getLaunchOperations();
+      await wrap(createLaunches[0]!.run());
+      expect(harness.machines.preview.phase()).toBe("disabled");
+      expect(harness.machines.project.phase()).toBe("ready");
+
+      const setTrustPayload: CommandPayloadByKindV1["project.setTrust"] = {
+        trust: "trusted",
+        workspaceIdentity: "ws-1",
+      };
+      projectHandlers["project.setTrust"](setTrustPayload, harness.handlerContext);
+
+      expect(harness.machines.preview.phase()).toBe("idle");
     });
   });
 });

@@ -140,12 +140,17 @@ still accumulate.*
     `Kernel.acknowledgeDisplay` replaces the old unconditional
     `FrameAcknowledgeNotWiredError`, and `entrypoint/model/create-shell.ts`'s
     `toPreviewSessionHandle` pairs every frame the composition root hands the UI with a
-    ledger-minted token). Geometry/hover-pin queries still stay unusable for an unrelated,
-    pre-existing reason: no currently-wired `core/kernel` handler ever dispatches
-    `kernel.preview.enable` (`disabled → idle`), so `kernel.currentPreview()` can never
-    become non-null through `kernel.dispatch()` alone, and `preview.queryGeometry` is
-    rejected `OPERATION_BUSY` from a freshly built Kernel regardless of the acknowledgement
-    wiring above (`core/kernel/model/handlers/preview-export.ts`'s own header, "GAP A").
+    ledger-minted token). Geometry/hover-pin queries still stay unusable for a narrower,
+    pre-existing reason: `core/kernel/model/handlers/project.ts`'s `enablePreviewIfTrusted`
+    (fix-bundle Gap A, spec §2.2) now dispatches `kernel.preview.enable` (`disabled → idle`)
+    once trust resolves to `trusted`, but nothing yet dispatches `preview.selectPage`/
+    `selectCurrent` to actually establish a session — the interactive UI doesn't dispatch
+    either kind yet — so the machine never advances past `idle` to `live`, and
+    `kernel.currentPreview()` still cannot become non-null through `kernel.dispatch()` alone.
+    `preview.queryGeometry` (whose own table entry only fires from `live`) is still rejected
+    `OPERATION_BUSY` from a freshly built, even trusted, Kernel, regardless of the
+    acknowledgement wiring above (`core/kernel/model/handlers/preview-export.ts`'s own header,
+    "GAP A").
 
 ## Source anchors
 

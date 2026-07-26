@@ -38,10 +38,11 @@ document here that addresses how the source tree itself is laid out.
 > storage format version, so a migration step has nothing to migrate from or to —
 > `docs/architecture/flows/migration.md`); the composed agent system prompt cannot yet
 > carry source-extracted per-page metadata or the current selection (`agent/prompt/`,
-> phase-8 WP-3); and no currently-wired `core/kernel` handler ever dispatches
-> `kernel.preview.enable`, so a live `PreviewSession` is unreachable through
-> `kernel.dispatch()` alone and geometry/hover-to-pin queries stay unusable regardless
-> of the acknowledgement wiring above. Each
+> phase-8 WP-3); and `kernel.preview.enable` now fires once trust resolves to `trusted`
+> (fix-bundle Gap A, spec §2.2), but nothing yet dispatches `preview.selectPage`/
+> `selectCurrent` to actually establish one, so a live `PreviewSession` is still
+> unreachable through `kernel.dispatch()` alone and geometry/hover-to-pin queries stay
+> unusable regardless of the acknowledgement wiring above. Each
 > document states which half of a claim is built and which is a
 > design target, and anchors the unbuilt half to the governing specification instead
 > of a source file; anchors keep moving to real paths as implementation proceeds (see

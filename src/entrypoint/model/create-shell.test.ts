@@ -257,8 +257,12 @@ describe("createShell", () => {
  * exercise it directly (see its own doc comment in `create-shell.ts`). A real `Kernel`
  * cannot reach a live preview session through `createShell("interactive", ...)` today —
  * `kernel.test.ts`'s own "Kernel.publishFrame / Kernel.acknowledgeDisplay" suite documents
- * why (`kernel.preview.enable` is never dispatched by any currently-wired handler, a
- * pre-existing gap unrelated to this task) — so these tests use a minimal `Kernel` double
+ * why: `core/kernel/model/handlers/project.ts`'s `enablePreviewIfTrusted` now applies
+ * `kernel.preview.enable` once trust resolves to `trusted` (fix-bundle Gap A, spec §2.2),
+ * but nothing yet dispatches `preview.selectPage`/`selectCurrent` to actually establish a
+ * session — the interactive UI doesn't dispatch either kind yet, so the Preview machine
+ * advances only as far as `idle`, never `live` (a pre-existing gap, narrower now, still
+ * unrelated to this task) — so these tests use a minimal `Kernel` double
  * narrowed to exactly the two methods `toPreviewSessionHandle` calls, backed by a REAL
  * `createFrameTokenLedger()` (the exact production ledger, not a stub): this is enough to
  * prove the composition root's own wiring — no fabricated token, a genuinely minted token

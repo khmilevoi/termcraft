@@ -447,20 +447,25 @@ function testPreviewFrame(): PreviewFrameV1 {
  *
  * `kernel.preview.enable` (`disabled -> idle`) is "driven by broader project-lifecycle
  * orchestration" (kernel-command-contract §7.6; `core/preview/model/session-commands.
- * test.ts`'s own header note says the same) — no currently-wired handler anywhere under
- * `core/kernel/model/handlers` ever applies it (verified by reading every handler in that
- * family), so `preview.selectPage`/`selectCurrent` are rejected by the capability guard
- * from EVERY freshly-constructed Kernel, and `kernel.currentPreview()` can never become
- * non-null through `kernel.dispatch()` alone today. That gap is real, pre-existing, and
- * unrelated to this task (closing it means wiring project/recovery-lifecycle orchestration
- * a different family owns) — so the tests below cover exactly what is genuinely reachable
- * from OUTSIDE the Kernel's own frame right now: neither method ever fabricates a token or
- * a success when no live session exists. The mint -> acknowledge round trip itself (a REAL
+ * test.ts`'s own header note says the same) — `core/kernel/model/handlers/project.ts`'s
+ * `enablePreviewIfTrusted` now applies it once trust resolves to `trusted` (fix-bundle
+ * Gap A, spec §2.2), but `createKernel(buildDeps())` below never dispatches
+ * `project.open`/`project.create` at all, so the Preview machine stays at its initial
+ * `disabled` for these two tests regardless: `preview.selectPage`/`selectCurrent` are still
+ * rejected by the capability guard here, and `kernel.currentPreview()` still cannot become
+ * non-null through `kernel.dispatch()` alone in THIS fixture. Even for a project that DOES
+ * reach `trusted`, `kernel.currentPreview()` stays null until something drives the machine
+ * the rest of the way to `live` — no currently-wired handler ever dispatches
+ * `preview.selectPage`/`selectCurrent` for real (the interactive UI doesn't yet either), so a
+ * session is never actually established; that narrower gap is real, pre-existing, and
+ * unrelated to this task. The tests below cover exactly what is genuinely reachable from
+ * OUTSIDE the Kernel's own frame right now: neither method ever fabricates a token or a
+ * success when no live session exists. The mint -> acknowledge round trip itself (a REAL
  * token succeeding, an unknown one failing) is proven at `core/preview/model/session-
  * commands.test.ts`'s own "noteSessionEstablished/noteSessionClosed" suite — the exact
  * function `setActivePreviewSession` calls — and at `entrypoint/model/create-shell.
- * test.ts`'s own `toPreviewSessionHandle` suite, both reachable without the enable gap in
- * the way.
+ * test.ts`'s own `toPreviewSessionHandle` suite, both reachable without the session-establish
+ * gap in the way.
  */
 describe("Kernel.publishFrame / Kernel.acknowledgeDisplay", () => {
   test("publishFrame with no live preview session returns PreviewNoLiveSessionError, never a fabricated token", () => {

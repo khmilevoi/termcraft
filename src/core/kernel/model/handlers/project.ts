@@ -263,6 +263,9 @@ function projectSetTrust(
     applyOutcome,
     { workspaceIdentity: payload.workspaceIdentity, trust: payload.trust },
   );
+  // Gap A (spec §2.2): the SAME shared helper `runProjectReadySequence` uses — a later
+  // `setTrust` granting trust on an already-open project is the second of its two callers.
+  const previewEvents = enablePreviewIfTrusted(context, payload.trust);
   const operationId = uuidv7();
 
   context.launchOperation("kernel.project.setTrust", async () => {
@@ -302,7 +305,7 @@ function projectSetTrust(
     return [];
   });
 
-  return startedOutcome([admissionEvent], operationId);
+  return startedOutcome([admissionEvent, ...previewEvents], operationId);
 }
 
 // --- The shared post-admission "reach ready" sequence (project.create / project.open / --
@@ -365,6 +368,30 @@ async function resolveTrust(
   // No interactive round trip exists in this contract (see this file's header) — a prior
   // grant is honored; anything else opens safely untrusted, read-only.
   return status.granted ? "trusted" : "untrusted-read-only";
+}
+
+/**
+ * kernel-command-contract §7.6's own table fixes this precondition verbatim: `disabled` ->
+ * `kernel.preview.enable` -> `idle`, *"Requires trusted project and completed project
+ * recovery."* Those are exactly the two conditions this sequence establishes, so enabling
+ * preview is a Kernel-computed fact, not a user intent — there is no `preview.enable` command
+ * kind to add, no dispatcher, and no UI decision (fix-bundle spec §2.2).
+ *
+ * An untrusted project stays `disabled`; that IS the meaning of the state, since preview executes
+ * design code. Factored as ONE helper because two callers need it — the ready sequence below and
+ * a later `project.setTrust` that grants trust — and two copies would be two chances to diverge.
+ */
+function enablePreviewIfTrusted(
+  context: HandlerContext,
+  trust: TrustDecisionV1,
+): readonly PublishableEventV1[] {
+  if (trust !== "trusted") return [];
+  const outcome = context.machines.preview.apply("kernel.preview.enable");
+  if (outcome.kind !== "changed") {
+    // Already enabled (a second `setTrust` on an open project) is the ordinary case, not a fault.
+    return [];
+  }
+  return [stateChangedEvent("kernel.preview.state", "kernel.preview.enable", outcome)];
 }
 
 /** Reads one page's source and runs it through the Gate, mapping the result to a `PageDescriptorV1`. A source-read failure blocks the WHOLE open (matches `core/project/model/open-sequence.ts`'s own `validateProjectContents`); a Gate rejection produces an `"invalid"` descriptor for just that page. */
@@ -579,6 +606,7 @@ async function runProjectReadySequence(
     });
   }
 
+  const events: PublishableEventV1[] = [];
   const trust = await wrap(resolveTrust(context, manifest.projectId, trustSource));
   // `TrustDecisionV1` is a bare string union, not an object — `"code" in x` would throw on
   // it (unlike the object-shaped `FailureDtoV1 | T` checks elsewhere in this file), so this
@@ -588,12 +616,22 @@ async function runProjectReadySequence(
     return blockOpen(context, "trust-resolution-failed", trust);
   }
   context.setProjectTrust(trust);
+  // Placement (spec §2.2): after trust, before `finishOpen`, so the snapshot the UI sees at
+  // ready already carries preview enabled.
+  events.push(...enablePreviewIfTrusted(context, trust));
 
   const slugs = await wrap(deps.pageReader.listSlugs());
-  if ("code" in slugs) return blockOpen(context, "page-list-failed", slugs);
+  // `...events` carries forward whatever `enablePreviewIfTrusted` already applied above — the
+  // preview machine's `disabled -> idle` transition already happened (a real machine mutation,
+  // not a pending one), so a block reached AFTER it must still publish that fact rather than
+  // silently drop it: an applied-but-unpublished transition would desynchronize every
+  // subscriber from the Kernel's own true state.
+  if ("code" in slugs) return [...events, ...blockOpen(context, "page-list-failed", slugs)];
 
   const descriptors = await wrap(buildPageDescriptors(context, slugs));
-  if ("code" in descriptors) return blockOpen(context, "page-source-read-failed", descriptors);
+  if ("code" in descriptors) {
+    return [...events, ...blockOpen(context, "page-source-read-failed", descriptors)];
+  }
 
   // TD §12 step 9's "...export pointer..." (WP-5 Phase C task C4, D-Q3): this is the LIVE
   // production open path — `core/project/model/open-sequence.ts`'s own `runOpenSequence`
@@ -603,10 +641,9 @@ async function runProjectReadySequence(
   // never a block.
   const pointer = await wrap(deps.exportPublish.readPointer());
   if (pointer !== null && "code" in pointer) {
-    return blockOpen(context, "export-pointer-read-failed", pointer);
+    return [...events, ...blockOpen(context, "export-pointer-read-failed", pointer)];
   }
 
-  const events: PublishableEventV1[] = [];
   const activePageSlug = workspaceStateResult.state.activePageSlug ?? manifest.pages[0] ?? null;
   const descriptorsPayload = buildPageDescriptorsChangedPayload(
     "project-open",
