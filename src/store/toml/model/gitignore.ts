@@ -20,6 +20,11 @@ export const PROJECT_GITIGNORE_FILENAME = ".gitignore";
  * - `lock` — the `ProjectLease` file (§9).
  * - `workspace.local.toml` plus `*.local*`, covering "every `*.local` or `*.local.*` file,
  *   and every directory whose name ends in `.local`".
+ * - `chats/` — AMENDED 2026-07-26 (MVP blocker fix bundle §2.5, and storage-identity §13's own
+ *   list amended alongside it). The spec previously classified chats as portable; chat logs churn
+ *   on every turn and can carry arbitrary user text, so they move to hard-local. Nothing breaks
+ *   on the clone side: `active_chat_id` lives in `workspace.local.toml`, already hard-local via
+ *   `/workspace.local.toml` and `*.local*`, so a clone carries no pointer to a chat file it lacks.
  * - `transactions.local/` and the depth-independent `.termcraft-tx-*.tmp` glob — the two
  *   reserved names turn-durability §3.1 adds; the Git adapter rejects them independently.
  * - `cache/`, `diagnostics/`, `logs/` — the rebuildable projection and observability trees.
@@ -28,11 +33,6 @@ export const PROJECT_GITIGNORE_FILENAME = ".gitignore";
  * - `.tmp-*` at any depth — "temporary, swap, and atomic-replacement files created by
  *   ProjectStore"; this is the prefix `infrastructure/durability`'s `durableFileWrite`
  *   uses for its same-directory staging file.
- * - `chats/` — AMENDED 2026-07-26 (MVP blocker fix bundle §2.5, and storage-identity §13's own
- *   list amended alongside it). The spec previously classified chats as portable; chat logs churn
- *   on every turn and can carry arbitrary user text, so they move to hard-local. Nothing breaks
- *   on the clone side: `active_chat_id` lives in `workspace.local.toml`, already hard-local via
- *   `/workspace.local.toml` and `*.local*`, so a clone carries no pointer to a chat file it lacks.
  *
  * "Every path outside `.termcraft/`" is the last §13 exclusion; it is a policy rule about
  * scope membership, not something a `.gitignore` inside `.termcraft/` can express, so it

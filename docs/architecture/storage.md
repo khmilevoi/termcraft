@@ -9,12 +9,12 @@ flowchart TB
     subgraph tc[".termcraft/ — one folder, one project"]
         proj["project.toml — project_id · name · created_at · target_stack · pages"]
         gi[".gitignore — generated hard exclusions"]
-        chats["chats/{chat-uuid}.jsonl — portable dialog logs"]
         subgraph pg["pages/{stable-slug}/"]
             source["page.tsx — canonical Current design + static meta"]
             pins["comments.jsonl — append-only pin events"]
         end
         subgraph local["machine-local and hard-excluded"]
+            chats["chats/{chat-uuid}.jsonl — hard-local dialog logs (amended 2026-07-26, MVP blocker fix bundle §2.5)"]
             ws["workspace.local.toml — active page/chat · preview · backend/model/effort"]
             sess["workspace.local.toml also owns scoped vendor session checkpoints"]
             tx["transactions.local/ — prepared plans · payloads · commit intent"]
@@ -65,8 +65,10 @@ flowchart TB
    page's canonical source. `/commit-infra` selects `project.toml`, generated
    `.gitignore`, and future explicitly portable project-level files.
    `/commit-all` selects every eligible non-ignored portable or derived path
-   under `.termcraft/`, including chats, pin logs, pages, and export artifacts.
-   Local files, `transactions.local/`, `cache/`, `diagnostics/`, operations logs, lock
+   under `.termcraft/`, including pin logs, pages, and export artifacts.
+   Chats are hard-excluded, not portable (amended 2026-07-26, MVP blocker fix
+   bundle §2.5 — chat logs churn on every turn and can carry arbitrary user
+   text). Local files, `transactions.local/`, `cache/`, `diagnostics/`, operations logs, lock
    metadata, and backups are hard-excluded even if Git ignore inspection fails.
    (v1; not yet implemented — no `/commit-*` command and no live commit-scope
    planner exist. Only the generated `.gitignore` courtesy mirror is real code today.)

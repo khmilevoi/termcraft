@@ -223,11 +223,13 @@ workspace fields in §6.
 
 ### 5.2 Portable logs and sources
 
-`chats/{chatId}.jsonl`, `pages/{pageSlug}/comments.jsonl`, canonical page sources,
-and the active `export/` pointer plus referenced generation are portable. Export
-remains derived and is published as immutable generations, but it is eligible for
-`/commit-all` because users may intentionally version exported acceptance
-artifacts.
+`pages/{pageSlug}/comments.jsonl`, canonical page sources, and the active `export/`
+pointer plus referenced generation are portable. Export remains derived and is
+published as immutable generations, but it is eligible for `/commit-all` because
+users may intentionally version exported acceptance artifacts. `chats/{chatId}.jsonl`
+is hard-local, not portable: chat logs churn on every turn and can carry arbitrary
+user text.
+<!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
 
 The chat filename must equal the `chatId` in its header. A chat header's
 `projectId` must equal `project.toml`. A comments header's `projectId` and
@@ -662,8 +664,9 @@ repository-relative paths with no-follow filesystem checks.
   registered in `StoragePathPolicy`. In the first shipped schema the allowlist has
   exactly the first two paths. There is no `config.toml`.
 - `/commit-all` includes every changed portable path under `.termcraft/`, including
-  project state, pages, chats, comments, and export artifacts, after applying hard
+  project state, pages, comments, and export artifacts, after applying hard
   exclusions.
+  <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
 
 The following are hard-excluded from all three commands, dirty counts, status
 dots, commit previews, and staging operations performed by termcraft's Git
