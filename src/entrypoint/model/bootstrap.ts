@@ -52,11 +52,18 @@ export async function bootstrap(
  * downstream should be able to mistake it for a directory.
  */
 function resolveEnv(mode: EntrypointMode, deps: BootstrapDeps): UiEnv {
-  if (mode === "demo") return { root: DEMO_ROOT_LABEL, workspaceIdentity: "demo" };
+  if (mode === "demo") {
+    return { root: DEMO_ROOT_LABEL, workspaceIdentity: "demo", projectExists: false };
+  }
 
   const target = deps.argv.find((argument) => !argument.startsWith("-"));
   const root = path.resolve(deps.cwd(), target ?? ".");
-  return { root, workspaceIdentity: root };
+  // `projectExists` is not yet known here — `createShell` (`createShell(mode, resolveEnv(...),
+  // ...)`, this function's own caller below) overwrites it with the real open-vs-create fact
+  // once `interactiveShell` learns it (`create-shell.ts`'s `resolveEnvWithProjectIdentity`).
+  // `false` is the safe placeholder: it is never actually READ before that overwrite, since
+  // nothing dispatches on `env.projectExists` before the shell is constructed.
+  return { root, workspaceIdentity: root, projectExists: false };
 }
 
 const DEMO_ROOT_LABEL = "(demo)";

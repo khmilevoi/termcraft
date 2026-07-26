@@ -1611,3 +1611,158 @@ describe("Gap C — the first turn from create/open text", () => {
     });
   });
 });
+
+// --- fix-bundle Task 12 (Gap D, spec §2.4): an existing project opens into the Workspace -------
+//
+// The composition-root wiring (`entrypoint/model/create-shell.ts`'s `ShellLaunchV1`,
+// `entrypoint/model/run-app.ts`'s startup dispatch, `ui/app/model/intent.ts`'s `home-submit`) is
+// exercised at `create-shell.test.ts`/`run-app.test.ts`/`intent.test.ts`; these three prove the
+// KERNEL-side guarantees that wiring depends on — the fourth scenario the spec names (an
+// untrusted project chains no turn) is already covered by "Gap C"'s own
+// "chains no turn for an untrusted project" test above.
+
+describe("Gap D — an existing project opens into the Workspace", () => {
+  test("a clone — pages present, zero chats — reaches ready and publishes its pages", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        // Zero chats: no chat has ever been made active — exactly the clone shape
+        // `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose (pages
+        // present, zero chats, since `chats/` is git-ignored as of fix-bundle §2.5).
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      // The default `chatReader` (`createFakeChatStore()`, unset here) reports zero chats —
+      // matching a clone whose `chats/` directory was never checked out.
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.project.phase()).toBe("ready");
+      const descriptors = findEvent(terminalEvents, "page.descriptorsChanged");
+      expect(descriptors).toBeDefined();
+      expect(descriptors?.payload.descriptors.map((d) => d.pageSlug)).toEqual([home]);
+      // No chat ever existed to publish — this is the load-bearing half of the clone case:
+      // `hasContent` must resolve from PAGES alone, since chats never make it true here.
+      expect(terminalEvents.some((event) => event.kind === "chat.changed")).toBe(false);
+    });
+  });
+
+  test("an existing project with pages opens without any project.create", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const about = slug("about");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home, about] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home, about],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+          [
+            about,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      // The composition root's own `openOrCreateProject` (`entrypoint/model/create-shell.ts`)
+      // tries `store.openProject` first and NEVER falls back to `store.createProject` once it
+      // succeeds (Gap D) — mirrored here at the handler level: dispatching `project.open` ALONE,
+      // with no `project.create` call anywhere in this test, is sufficient to reach `ready` with
+      // the project's own pre-existing pages published.
+      const outcome = projectHandlers["project.open"](
+        { root: "/fake-root" },
+        harness.handlerContext,
+      );
+      expect(outcome.disposition).toBe("started");
+      const launches = harness.getLaunchOperations();
+      expect(launches.map((launch) => launch.label)).toEqual(["kernel.project.beginOpen"]);
+
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.project.phase()).toBe("ready");
+      const descriptors = findEvent(terminalEvents, "page.descriptorsChanged");
+      expect(descriptors?.payload.descriptors.map((d) => d.pageSlug).sort()).toEqual(
+        [about, home].sort(),
+      );
+    });
+  });
+
+  test("Enter on Home creates the project and starts the first turn in one keystroke", async () => {
+    await context.start(async () => {
+      // The OTHER branch from the two tests above (fix-bundle spec §2.4): a genuinely fresh
+      // directory. `openOrCreateProject` falls back to `store.createProject`, and
+      // `ui/app/model/intent.ts`'s `home-submit` sends `project.create` — never `project.open` —
+      // for it (`deps.env.projectExists` is `false`). This proves the CREATE branch still
+      // reaches `ready` AND chains the first turn from the SAME typed text in one dispatch,
+      // matching Home's Enter contract end to end: type a description, hit Enter, land in the
+      // Workspace already generating — no second send from the Workspace composer.
+      const home = slug("home");
+      const activeChatId = uuidv7();
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "build a system monitor",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.project.phase()).toBe("ready");
+      expect(harness.machines.turn.phase()).not.toBe("idle");
+      expect(harness.getActiveTurnId()).not.toBeNull();
+      const descriptors = findEvent(terminalEvents, "page.descriptorsChanged");
+      expect(descriptors?.payload.descriptors.map((d) => d.pageSlug)).toEqual([home]);
+    });
+  });
+});

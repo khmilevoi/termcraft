@@ -586,7 +586,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
-      { root: "/my-real-project", workspaceIdentity: "wid" },
+      { root: "/my-real-project", workspaceIdentity: "wid", projectExists: false },
     );
     const operationId = uuidv7();
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
@@ -706,7 +706,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
-      { root: "/project", workspaceIdentity: "workspace-id" },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
     );
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,

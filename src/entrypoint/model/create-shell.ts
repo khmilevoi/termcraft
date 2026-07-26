@@ -46,7 +46,7 @@ import type { OpenProject, Store, StoreAdapterDeps } from "store";
 import type { KernelPort, PreviewSessionHandle, UiEnv, UiPreviewFrame } from "ui";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession } from "ui/testing";
 
-import type { EntrypointMode, ShellWithAgentRegistry } from "../types";
+import type { EntrypointMode, ShellLaunchV1, ShellWithAgentRegistry } from "../types";
 
 /**
  * Builds the Kernel boundary one run drives.
@@ -115,10 +115,23 @@ async function interactiveShell(
   const userStateRoot = deps.userStateRoot ?? resolveDefaultUserStateRoot();
   const store = createStore(nodeStoreDeps({ userStateRoot }));
 
-  const open = await openOrCreateProject(store, env.root);
-  if (open instanceof Error) return open;
+  const prepared = await openOrCreateProject(store, env.root);
+  if (prepared instanceof Error) return prepared;
+  const { open, existing } = prepared;
 
-  const resolvedEnv = await resolveEnvWithProjectIdentity(env, open);
+  const resolvedEnv = await resolveEnvWithProjectIdentity(env, open, existing);
+
+  // Evaluated BEFORE the Kernel is constructed — it must precede the startup dispatch
+  // (`run-app.ts`'s Gap D dispatch), because `deriveScreen` keys on `projectId`, which
+  // `finishOpen` sets: by the time the command has gone, the screen is already decided (spec
+  // §3.2). `hasContent` is short-circuited to `false` for a freshly created project — a real
+  // I/O round trip through `projectHasContent` would only ever confirm what `existing` already
+  // says, since a fresh directory never held anything before `openOrCreateProject` just created
+  // it.
+  const launch: ShellLaunchV1 = {
+    existing,
+    hasContent: existing && (await projectHasContent(open)),
+  };
 
   const storeAdapterDeps: StoreAdapterDeps = { open, uuidv7, clock: systemClock };
   const projections = createProjectionsAdapter(storeAdapterDeps);
@@ -195,6 +208,7 @@ async function interactiveShell(
     port,
     env: resolvedEnv,
     agentRegistry,
+    launch,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
     // last — `open` was acquired first, so it is released last. Each step is guarded (see
@@ -280,6 +294,15 @@ export async function closeShellResources(steps: readonly ShellTeardownStep[]): 
   if (firstFailure !== undefined) throw firstFailure;
 }
 
+/** `openOrCreateProject`'s own result, pairing the `OpenProject` handle with whether it came
+ *  from `Store.openProject` succeeding (an EXISTING project) or the `Store.createProject`
+ *  fallback (a fresh directory) — the discriminator Gap D needs and the pre-fix code threw away
+ *  (see {@link ShellLaunchV1}'s own doc comment, `../types.ts`). */
+interface OpenedProjectV1 {
+  readonly open: OpenProject;
+  readonly existing: boolean;
+}
+
 /**
  * Opens the caller's project, creating it first when `root` is not one yet. `project.create`'s
  * own Kernel handler cannot perform this itself (`core/kernel/model/handlers/project.ts`'s own
@@ -291,7 +314,7 @@ export async function closeShellResources(steps: readonly ShellTeardownStep[]): 
 async function openOrCreateProject(
   store: Store,
   root: string,
-): Promise<ShellCompositionError | OpenProject> {
+): Promise<ShellCompositionError | OpenedProjectV1> {
   // Both `Store.openProject` and `Store.createProject` run a pre-flight durability probe
   // that opens `root` itself with Win32 `OPEN_EXISTING` (`store/model/factory.ts`'s own
   // header: "the flush probe targets `root` ... which is guaranteed to exist here") — a
@@ -309,7 +332,7 @@ async function openOrCreateProject(
   }
 
   const opened = await store.openProject(root);
-  if (!(opened instanceof Error)) return opened;
+  if (!(opened instanceof Error)) return { open: opened, existing: true };
 
   const created = await store.createProject({
     root,
@@ -326,7 +349,38 @@ async function openOrCreateProject(
       cause: created,
     });
   }
-  return created;
+  return { open: created, existing: false };
+}
+
+/**
+ * "At least one page, or at least one chat" (fix-bundle spec §2.4). Both signals are already
+ * available at open with no extra I/O beyond one manifest read and one chat listing:
+ * `project.toml` carries the `pages` list the open sequence reads anyway, and chat presence
+ * comes free with Gap E's listing (`ChatStore.list()`, `store/model/chat-listing.ts`).
+ *
+ * A read failure is treated as "no content" and logged (errore rule 21): the honest fallback is
+ * Home, the screen that knows how to start a project, rather than a Workspace over a project we
+ * could not confirm holds anything — this predicate must never fabricate "yes, there is content"
+ * for a filesystem it could not actually read.
+ */
+async function projectHasContent(open: OpenProject): Promise<boolean> {
+  const manifest = await open.manifest.read();
+  if (manifest instanceof Error) {
+    console.warn(
+      `termcraft: could not read the manifest to route the launch (${manifest.message}); showing Home`,
+    );
+    return false;
+  }
+  if (manifest.pages.length > 0) return true;
+
+  const chats = await open.chats.list();
+  if (chats instanceof Error) {
+    console.warn(
+      `termcraft: could not list chats to route the launch (${chats.message}); showing Home`,
+    );
+    return false;
+  }
+  return chats.length > 0;
 }
 
 /** A thrown `mkdirSync` rejection, converted to a value at this sync-boundary (errore's
@@ -358,8 +412,17 @@ function deriveProjectName(root: string): string {
  * because it is meant to name the SAME workspace across relaunches. A manifest read failing
  * immediately after a successful open/create would be a genuine bug elsewhere, not something to
  * paper over: this keeps the caller-supplied path-based value rather than inventing a projectId.
+ *
+ * `existing` (Gap D) also lands here as `UiEnv.projectExists` — the SAME open-vs-create fact
+ * `ShellLaunchV1.existing` carries, set unconditionally regardless of whether the manifest read
+ * below succeeds: it is known independently of the manifest's own content, and `home-submit`
+ * (`ui/app/model/intent.ts`) needs it to pick `project.open` over `project.create`.
  */
-async function resolveEnvWithProjectIdentity(env: UiEnv, open: OpenProject): Promise<UiEnv> {
+async function resolveEnvWithProjectIdentity(
+  env: UiEnv,
+  open: OpenProject,
+  existing: boolean,
+): Promise<UiEnv> {
   const manifest = await open.manifest.read();
   if (manifest instanceof Error) {
     // errore rule 21: this branch does not propagate the error (there is no caller left to
@@ -369,9 +432,9 @@ async function resolveEnvWithProjectIdentity(env: UiEnv, open: OpenProject): Pro
     console.warn(
       `termcraft: could not read the project manifest (${manifest.message}); keeping the path-based workspaceIdentity ${env.workspaceIdentity}`,
     );
-    return env;
+    return { ...env, projectExists: existing };
   }
-  return { ...env, workspaceIdentity: manifest.projectId };
+  return { ...env, workspaceIdentity: manifest.projectId, projectExists: existing };
 }
 
 /**
@@ -540,6 +603,9 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
     // — `run-app.ts`'s `resolveAgentHealthProbe` treats `null` as "leave `createUiDeps`'s
     // default probe in place", preserving demo's existing seeded reading exactly.
     agentRegistry: null,
+    // A demo owns no project on disk (Gap D) — never an existing project, never any content
+    // to route a startup `project.open` dispatch against.
+    launch: { existing: false, hasContent: false },
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

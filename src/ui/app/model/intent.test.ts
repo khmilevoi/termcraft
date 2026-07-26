@@ -30,7 +30,7 @@ describe("applyIntent — text inputs", () => {
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
-      { root: "/proj", workspaceIdentity: "wid" },
+      { root: "/proj", workspaceIdentity: "wid", projectExists: false },
     );
     deps.local.prompt.set("a dashboard");
     applyIntent({ kind: "home-submit" }, deps);
@@ -43,6 +43,21 @@ describe("applyIntent — text inputs", () => {
     expect(raw.payload.text).toBe("a dashboard");
     expect(raw.payload.root).toBe("/proj");
     expect(raw.payload.creationDefaults).toEqual({ trust: "trusted", workspaceIdentity: "wid" });
+  });
+
+  test("home-submit dispatches project.open carrying the prompt as text when the shell found an existing project (Gap D)", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/proj", workspaceIdentity: "wid", projectExists: true },
+    );
+    deps.local.prompt.set("add a settings page");
+    applyIntent({ kind: "home-submit" }, deps);
+    expect(kernel.dispatched).toHaveLength(1);
+    const raw = kernel.dispatched[0] as { kind: string; payload: { root: string; text: string } };
+    expect(raw.kind).toBe("project.open");
+    expect(raw.payload).toEqual({ root: "/proj", text: "add a settings page" });
   });
 
   test("home-submit on an empty prompt dispatches nothing", () => {
@@ -287,7 +302,7 @@ describe("applyIntent — chats and trust", () => {
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
-      { root: "/project", workspaceIdentity: "workspace-id" },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
     );
     applyIntent({ kind: "trust-accept" }, deps);
     applyIntent({ kind: "trust-decline" }, deps);

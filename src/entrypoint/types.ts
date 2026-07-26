@@ -28,6 +28,24 @@ export interface AppShell {
 }
 
 /**
+ * What the composition root learned while opening the caller's project, and threw away before
+ * this existed (Gap D). Both facts have to be captured INSIDE `openOrCreateProject`: by the time
+ * the UI mounts, `.termcraft/` exists on disk in both cases — the shell just created it — so
+ * nothing downstream can re-derive them.
+ *
+ * `hasContent` is the routing predicate: the project holds anything to view or edit — at least
+ * one page, or at least one chat. Its real purpose is the CLONE (pages present, zero chats, since
+ * `chats/` is git-ignored as of fix-bundle §2.5), which is exactly the case that most needs the
+ * Workspace; `createProject` always mints the first chat header, so "exists but is empty" is
+ * practically unreachable and Home stays reachable essentially only for a genuinely fresh
+ * directory.
+ */
+export interface ShellLaunchV1 {
+  readonly existing: boolean;
+  readonly hasContent: boolean;
+}
+
+/**
  * `AppShell` widened with the live agent registry Task 9's Home health probe needs
  * (`run-app.ts`'s `resolveAgentHealthProbe`). Declared here, in the module's shared `types.ts`
  * (this repository's module-shape convention — CLAUDE.md), rather than in a `model/` file —
@@ -41,6 +59,8 @@ export interface AppShell {
  */
 export interface ShellWithAgentRegistry extends AppShell {
   readonly agentRegistry: AgentRegistry | null;
+  /** The open-vs-create discriminator (Gap D) — see {@link ShellLaunchV1}'s own doc comment. */
+  readonly launch: ShellLaunchV1;
 }
 
 /**

@@ -216,6 +216,24 @@ One thing this does **not** break, checked: `active_chat_id` lives in `workspace
 and `*.local*`. A clone therefore carries no pointer to a chat file it does not have — no dangling
 `activeChatId`, and no new path into Gap E's silent-empty-list failure.
 
+**Closed 2026-07-26 — fix-bundle Task 12 (Gap D, spec §2.4).** `openOrCreateProject`
+(`entrypoint/model/create-shell.ts`) now returns the discriminator it used to throw away, as
+`existing: boolean` alongside the `OpenProject` handle; `projectHasContent` folds that with one
+manifest read and one `ChatStore.list()` (Gap E's own listing) into `ShellLaunchV1 { existing,
+hasContent }` on the returned shell's `launch` field — evaluated BEFORE the Kernel is constructed,
+since `deriveScreen` keys on `projectId`, which only a dispatched `project.*` open command sets.
+`run-app.ts`'s `runApp` dispatches `project.open` itself, once, right after `createUiRoot`
+succeeds, whenever `shell.launch.hasContent` is true — the fix for the "nothing on the interactive
+path ever dispatches `project.open`" root cause this write-up diagnosed above. Home's own Enter
+(`ui/app/model/intent.ts`'s `home-submit`) now picks `project.open` over `project.create` too, via
+`UiEnv.projectExists` (set from the same `existing` fact in `resolveEnvWithProjectIdentity`) — the
+exists-but-empty branch this write-up already called out as rare but real. Proven at the Kernel
+level (`core/kernel/model/handlers/project.test.ts`'s "Gap D" describe block: the clone case
+reaches `ready` and publishes its pages from `project.open` alone, with zero chats; an existing
+project with pages opens with no `project.create` call anywhere; Home's Enter still creates-and-
+starts-a-turn in one keystroke for a genuinely fresh directory) and at the composition-root/UI
+level (`create-shell.test.ts`, `run-app.test.ts`, `intent.test.ts`).
+
 ### 1.4 Gap E — the chat list shows one chat while three exist on disk
 
 **[verified]** Operator, on a real project: *«выбор чатов в целом поломан. я не смог открыть чат
@@ -286,10 +304,13 @@ existing capability, not inventing a port.
   straight through, so the column reads `2026-07-24T18:03:11.412Z` where the design shows relative
   time — `now`, `8m ago`, `yesterday` (`termcraft-engine.js:844-849`).
 
-**Also worth knowing:** the relaunch integration test covering this
-(`core/kernel/model/chat-relaunch.integration.test.ts`) drives `project.open` — the command the
-interactive UI never dispatches (Gap D). The production relaunch path runs through
-`project.create` instead, so the test passes without covering what actually executes.
+**Also worth knowing (updated 2026-07-26 — Gap D closed):** the relaunch integration test covering
+this (`core/kernel/model/chat-relaunch.integration.test.ts`) drives `project.open` directly at the
+Kernel. At the time this was written that command was one the interactive UI never dispatched at
+all (Gap D); since Task 12 closed Gap D, `run-app.ts`'s startup dispatch now IS a real,
+production `project.open` caller for a relaunch against a project holding content — the test's own
+coverage gap (it still bypasses the composition root itself) is narrower than it was, though it
+still does not exercise `run-app.ts`'s own dispatch wiring end to end.
 
 ### 1.5 Gap F — one rejected admission bricks the turn machine for the life of the process
 

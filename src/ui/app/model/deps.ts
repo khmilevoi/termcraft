@@ -91,6 +91,13 @@ export interface UiLocalState {
 export interface UiEnv {
   readonly root: string;
   readonly workspaceIdentity: string;
+  /**
+   * Whether `root` was ALREADY a project when this process started (Gap D). Home's Enter picks
+   * `project.open` over `project.create` for it: `create` grants trust implicitly, `open` honours
+   * a prior grant, and dispatching `create` against an existing project would silently run the
+   * wrong semantics. Defaults to `false` — a fresh directory — for every test/demo construction.
+   */
+  readonly projectExists: boolean;
 }
 
 export interface UiDeps {
@@ -190,7 +197,7 @@ const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
 export function createUiDeps(
   port: KernelPort,
   initialSize: Readonly<{ w: number; h: number }>,
-  env: UiEnv = { root: ".", workspaceIdentity: "local" },
+  env: UiEnv = { root: ".", workspaceIdentity: "local", projectExists: false },
   // The named M15 injection point: the phase-8 composition root supplies a probe that actually
   // checks the agent CLI on PATH; tests inject a fake. The default keeps today's MVP reading.
   agentHealthProbe: () => Promise<HomeAgentHealth> = () => Promise.resolve(DEFAULT_HOME_HEALTH),

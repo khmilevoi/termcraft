@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { createFakeAgentBackend, createFakeAgentRegistry } from "core/ports/fakes";
 import { uuidv7 } from "infrastructure/uuid";
@@ -54,17 +54,22 @@ function capturingAdapters(calls: string[]): {
 /** `agentRegistry` defaults to `null` — the same "no live registry" shape `create-shell.ts`'s
  *  `demoShell` returns — so every pre-existing test in this file (none of which cares about
  *  Task 9's health probe) keeps constructing the same fixture it always did. `port` defaults to
- *  a fresh `createFakeKernel()` (an idle turn model) — tests that need a running turn override it. */
+ *  a fresh `createFakeKernel()` (an idle turn model) — tests that need a running turn override it.
+ *  `launch` (Gap D) defaults to a fresh directory's `{ existing: false, hasContent: false }` —
+ *  the same "no startup dispatch" shape every pre-existing test in this file already assumes, so
+ *  only the tests that care about the startup `project.open` dispatch need to override it. */
 function fakeShell(
   calls: string[],
   agentRegistry: ShellWithAgentRegistry["agentRegistry"] = null,
   port: ShellWithAgentRegistry["port"] = createFakeKernel(),
+  launch: ShellWithAgentRegistry["launch"] = { existing: false, hasContent: false },
 ): ShellWithAgentRegistry {
   return {
     mode: "demo",
     port,
-    env: { root: "(demo)", workspaceIdentity: "demo" },
+    env: { root: "(demo)", workspaceIdentity: "demo", projectExists: false },
     agentRegistry,
+    launch,
     close: () => {
       calls.push("shell-close");
       return Promise.resolve();
@@ -192,6 +197,79 @@ describe("runApp", () => {
       // rejected startup is itself the proof `resolveAgentHealthProbe(null)` degraded to
       // `undefined` cleanly, leaving `createUiDeps`'s own default probe in place.
       await tick();
+
+      await app.close();
+    });
+  });
+
+  describe("the Gap D startup dispatch (an existing project with content opens straight into the Workspace)", () => {
+    test("dispatches project.open at startup for a project that holds content", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        adapters: recordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      const dispatchedKinds = kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
+      expect(dispatchedKinds).toContain("project.open");
+
+      await app.close();
+    });
+
+    test("dispatches nothing at startup for a fresh directory — Home owns that Enter", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: false, hasContent: false }),
+        adapters: recordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      expect(kernel.dispatched).toEqual([]);
+
+      await app.close();
+    });
+
+    test("an existing project reported as empty (existing but no content) also dispatches nothing", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: false }),
+        adapters: recordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      expect(kernel.dispatched).toEqual([]);
+
+      await app.close();
+    });
+
+    test("a rejected startup project.open is logged, not swallowed or thrown", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      kernel.setDispatchResult({
+        protocolVersion: 1,
+        commandId: "cmd-1" as never,
+        status: "rejected",
+        currentRevision: "0",
+        code: "PROJECT_UNTRUSTED",
+        reasons: [{ code: "PROJECT_UNTRUSTED" }],
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        adapters: recordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
 
       await app.close();
     });

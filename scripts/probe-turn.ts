@@ -40,7 +40,11 @@ const prompt =
 console.log(`[probe] root=${root}`);
 console.log(`[probe] prompt=${JSON.stringify(prompt)}`);
 
-const shell = await createShell("interactive", { root, workspaceIdentity: root });
+const shell = await createShell("interactive", {
+  root,
+  workspaceIdentity: root,
+  projectExists: false,
+});
 if (shell instanceof Error) {
   console.error(`[probe] shell composition failed: ${shell.message}`);
   process.exit(1);

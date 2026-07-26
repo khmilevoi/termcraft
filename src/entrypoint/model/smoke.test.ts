@@ -453,7 +453,7 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // Enter just sent. One App interaction now drives project creation AND the first turn;
       // both waits below are subscribed BEFORE that interaction, so nothing racing ahead of
       // either `await` is ever missed (this file's own `waitForEvent` doc). ------------------
-      const env: UiEnv = { root, workspaceIdentity: root };
+      const env: UiEnv = { root, workspaceIdentity: root, projectExists: false };
       const deps = createUiDeps(port, { w: 120, h: 36 }, env, () =>
         Promise.resolve({
           present: true,

@@ -7,11 +7,19 @@ import type { Kernel } from "core/kernel";
 import type { GateRunResultV1, PreviewFrameV1, PreviewIdentityV1 } from "core/ports";
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
-import type { PageSlug } from "entities/page";
+import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { uuidv7 } from "infrastructure/uuid";
-import type { EventEnvelopeV1 } from "ui";
+import { createStore, nodeStoreDeps } from "store";
+import {
+  PROJECT_MANIFEST_FILENAME,
+  WORKSPACE_STATE_FILENAME,
+  decodeProjectManifest,
+  encodeProjectManifest,
+} from "store/toml";
+import { canonicalPagePath } from "store/transaction";
+import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import {
   ShellTeardownError,
@@ -49,6 +57,71 @@ afterEach(() => {
   for (const dir of scratchDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// --- Gap D fixtures (an existing project opens straight into the Workspace) -------------------
+
+/** The `UiEnv` every `createShell("interactive", ...)` call in this file needs — `projectExists`
+ *  is never read by `createShell` itself (only `home-submit`, `ui/app/model/intent.ts`, reads
+ *  it), so a placeholder `false` here is harmless regardless of what `root` actually holds. */
+function envFor(root: string): UiEnv {
+  return { root, workspaceIdentity: root, projectExists: false };
+}
+
+/** A brand-new, never-materialized directory — `ensureRootDirectory` (`create-shell.ts`) creates
+ *  it, so `store.createProject` is the only path `openOrCreateProject` can take against it. */
+async function emptyDir(): Promise<string> {
+  const scratch = makeScratchDir("termcraft-shell-gap-d-empty-");
+  return path.join(scratch, "project");
+}
+
+/** `testShellDeps` against its own fresh scratch root — the Gap D tests don't need to share a
+ *  scratch directory with their project root, so this just wraps the existing helper. */
+function testDeps(): ShellDeps {
+  return testShellDeps(makeScratchDir("termcraft-shell-gap-d-deps-"));
+}
+
+/**
+ * A real on-disk project whose manifest lists one page and whose `chats/` directory does not
+ * exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose
+ * (fix-bundle spec §2.4/§2.5): `chats/` is git-ignored, so a project checked out from Git carries
+ * pages but zero chats. Built by creating a real project through the Store (so `.termcraft/`'s
+ * manifest/lease/durability plumbing is genuine, not hand-rolled), then editing the on-disk
+ * manifest to add a page and removing the two paths a clone never carries: `chats/` and
+ * `workspace.local.toml` (both hard-local/git-ignored, `store/toml/model/gitignore.ts`) — this is
+ * what `git clone` would actually leave behind, not what `createProject` happens to leave behind.
+ */
+async function projectWithPagesAndNoChats(): Promise<string> {
+  const scratch = makeScratchDir("termcraft-shell-gap-d-clone-");
+  const root = path.join(scratch, "project");
+  // `store.createProject`'s own durability pre-flight opens `root` with Win32 `OPEN_EXISTING`
+  // (`store/model/factory.ts`), so `root` must already exist — `create-shell.ts`'s own
+  // `openOrCreateProject` does this same `mkdirSync` first, via `ensureRootDirectory`, before
+  // either store call runs; this helper calls the Store directly, so it does the same here.
+  fs.mkdirSync(root, { recursive: true });
+  const store = createStore(nodeStoreDeps({ userStateRoot: path.join(scratch, "user-state") }));
+
+  const created = await store.createProject({ root, name: "Clone", targetStack: "js-opentui" });
+  if (created instanceof Error) throw created;
+  await created.close();
+
+  const home = parsePageSlug("home");
+  if (home instanceof Error) throw home;
+
+  const termcraftDir = path.join(root, ".termcraft");
+  const manifestPath = path.join(termcraftDir, PROJECT_MANIFEST_FILENAME);
+  const manifest = decodeProjectManifest(fs.readFileSync(manifestPath, "utf8"));
+  if (manifest instanceof Error) throw manifest;
+  fs.writeFileSync(manifestPath, encodeProjectManifest({ ...manifest, pages: [home] }));
+
+  const pagePath = path.join(termcraftDir, canonicalPagePath(home));
+  fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+  fs.writeFileSync(pagePath, "export default function Home() { return null }\n");
+
+  fs.rmSync(path.join(termcraftDir, "chats"), { recursive: true, force: true });
+  fs.rmSync(path.join(termcraftDir, WORKSPACE_STATE_FILENAME), { force: true });
+
+  return root;
+}
+
 async function firstSnapshot(port: {
   subscribe(handler: (envelope: EventEnvelopeV1) => void): Error | (() => void);
 }): Promise<Record<string, unknown>> {
@@ -63,7 +136,11 @@ async function firstSnapshot(port: {
 
 describe("createShell", () => {
   test("the demo shell seeds a trusted project so the workspace is reachable offline", async () => {
-    const shell = await createShell("demo", { root: "(demo)", workspaceIdentity: "demo" });
+    const shell = await createShell("demo", {
+      root: "(demo)",
+      workspaceIdentity: "demo",
+      projectExists: false,
+    });
     if (shell instanceof Error) throw shell;
     const payload = await firstSnapshot(shell.port);
 
@@ -76,7 +153,11 @@ describe("createShell", () => {
   });
 
   test("closing the demo shell is idempotent and ends its preview stream", async () => {
-    const shell = await createShell("demo", { root: "(demo)", workspaceIdentity: "demo" });
+    const shell = await createShell("demo", {
+      root: "(demo)",
+      workspaceIdentity: "demo",
+      projectExists: false,
+    });
     if (shell instanceof Error) throw shell;
     const handle = shell.port.preview();
     if (handle === null) throw new Error("demo shell must expose a preview handle");
@@ -93,11 +174,7 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-real-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (shell instanceof Error) throw shell;
 
     expect(shell.mode).toBe("interactive");
@@ -116,7 +193,7 @@ describe("createShell", () => {
 
     const shell = await createShell(
       "interactive",
-      { root, workspaceIdentity: "placeholder" },
+      { root, workspaceIdentity: "placeholder", projectExists: false },
       testShellDeps(scratch),
     );
     if (shell instanceof Error) throw shell;
@@ -141,11 +218,7 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-create-");
     const root = path.join(scratch, "brand-new");
 
-    const shell = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (shell instanceof Error) throw shell;
 
     expect(fs.existsSync(path.join(root, ".termcraft"))).toBe(true);
@@ -159,20 +232,12 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-reopen-");
     const root = path.join(scratch, "project");
 
-    const first = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const first = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (first instanceof Error) throw first;
     const firstIdentity = first.env.workspaceIdentity;
     await first.close();
 
-    const second = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const second = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (second instanceof Error) throw second;
 
     expect(second.env.workspaceIdentity).toBe(firstIdentity);
@@ -183,20 +248,12 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-close-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (shell instanceof Error) throw shell;
     await shell.close();
     await shell.close();
 
-    const reopened = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const reopened = await createShell("interactive", envFor(root), testShellDeps(scratch));
     expect(reopened).not.toBeInstanceOf(Error);
     if (reopened instanceof Error) throw reopened;
     await reopened.close();
@@ -206,11 +263,7 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-registry-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (shell instanceof Error) throw shell;
 
     expect(shell.agentRegistry).not.toBeNull();
@@ -222,7 +275,11 @@ describe("createShell", () => {
   });
 
   test("the demo shell exposes no agent registry — there is no real agent to probe offline", async () => {
-    const shell = await createShell("demo", { root: "(demo)", workspaceIdentity: "demo" });
+    const shell = await createShell("demo", {
+      root: "(demo)",
+      workspaceIdentity: "demo",
+      projectExists: false,
+    });
     if (shell instanceof Error) throw shell;
 
     expect(shell.agentRegistry).toBeNull();
@@ -234,13 +291,13 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-diff-");
     const root = path.join(scratch, "project");
 
-    const interactive = await createShell(
-      "interactive",
-      { root, workspaceIdentity: root },
-      testShellDeps(scratch),
-    );
+    const interactive = await createShell("interactive", envFor(root), testShellDeps(scratch));
     if (interactive instanceof Error) throw interactive;
-    const demo = await createShell("demo", { root: ".", workspaceIdentity: "a" });
+    const demo = await createShell("demo", {
+      root: ".",
+      workspaceIdentity: "a",
+      projectExists: false,
+    });
     if (demo instanceof Error) throw demo;
 
     const interactivePayload = await firstSnapshot(interactive.port);
@@ -249,6 +306,29 @@ describe("createShell", () => {
 
     await interactive.close();
     await demo.close();
+  });
+
+  // --- Gap D (fix-bundle spec §2.4): the discriminator `openOrCreateProject` throws away -----
+  // --- gets captured on `ShellLaunchV1` instead --------------------------------------------
+
+  test("reports a freshly created directory as a launch with no content", async () => {
+    const shell = await createShell("interactive", envFor(await emptyDir()), testDeps());
+    expect(shell instanceof Error).toBe(false);
+    if (shell instanceof Error) return;
+    expect(shell.launch).toEqual({ existing: false, hasContent: false });
+    await shell.close();
+  });
+
+  test("reports a clone — pages present, zero chats — as existing content", async () => {
+    const root = await projectWithPagesAndNoChats();
+    const shell = await createShell("interactive", envFor(root), testDeps());
+    if (shell instanceof Error) throw shell;
+    expect(shell.launch).toEqual({ existing: true, hasContent: true });
+    // The SAME fact lands on `UiEnv.projectExists` (`resolveEnvWithProjectIdentity`) — `ui`'s
+    // `home-submit` reads it, never `ShellLaunchV1` directly, to pick `project.open` over
+    // `project.create`.
+    expect(shell.env.projectExists).toBe(true);
+    await shell.close();
   });
 });
 
@@ -456,11 +536,7 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hello from the c
       const scratch = makeScratchDir("termcraft-shell-gate-");
       const root = path.join(scratch, "project");
 
-      const shell = await createShell(
-        "interactive",
-        { root, workspaceIdentity: root },
-        testShellDeps(scratch),
-      );
+      const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
       if (shell instanceof Error) throw shell;
 
       const typed = await runGateOnFixture({ slug: HOME_SLUG, source: TYPE_ERROR_SOURCE });

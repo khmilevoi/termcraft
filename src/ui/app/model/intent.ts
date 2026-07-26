@@ -46,6 +46,17 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "home-submit": {
       const text = local.prompt();
       if (text.length === 0) return;
+      // Gap D/§2.4: whichever command matches what the shell actually found on disk. The
+      // exists-but-empty branch is rare (project creation always mints the first chat header),
+      // but when it happens `create` would grant trust implicitly over a project whose prior
+      // grant is the authority.
+      if (deps.env.projectExists) {
+        dispatchAndReport(
+          dispatcher.dispatch("project.open", { root: deps.env.root, text }),
+          "project.open",
+        );
+        return;
+      }
       dispatchAndReport(
         dispatcher.dispatch("project.create", {
           root: deps.env.root,

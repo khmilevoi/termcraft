@@ -121,6 +121,30 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     return root instanceof AppStartupError ? root : new AppStartupError({ cause: root });
   }
 
+  // Gap D: an existing project holding pages or chats opens straight into the Workspace. This is
+  // the ONE interactive caller of `project.open` — before it, the whole of `src` had exactly one
+  // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
+  // Home no matter what was on disk.
+  //
+  // A failed startup open must SURFACE rather than silently leave Home (spec, "Error handling"):
+  // `project.retryOpen` already exists for the recovery-conflict path, and a rejection here is
+  // logged with its code so the next occurrence is diagnosable.
+  if (shell.launch.hasContent) {
+    const dispatcher = createDispatcher({
+      port: shell.port,
+      revision: () => peekStateRevision(shell.port),
+    });
+    const result = await dispatcher.dispatch("project.open", { root: shell.env.root });
+    if (result instanceof Error) {
+      console.error(
+        `termcraft: the startup project.open failed to dispatch: ${result.message}`,
+        result,
+      );
+    } else if (result.status === "rejected") {
+      console.error(`termcraft: the startup project.open was rejected (${result.code})`);
+    }
+  }
+
   const app = startShutdownPath(shell, boundary, root, exit);
   closeRef = app.close;
   return app;
@@ -251,27 +275,73 @@ async function cancelRunningTurnBeforeClose(shell: AppShell): Promise<void> {
   await settled;
 }
 
+/** The distributed envelope narrowed to `kernel.snapshot` — the ONE kind `KernelPort.subscribe`
+ *  guarantees a synchronous delivery for on registration (that method's own doc comment,
+ *  `ui/kernel/types.ts`). */
+type KernelSnapshotEnvelope = Extract<AnyEventEnvelope, { kind: "kernel.snapshot" }>;
+
+/**
+ * Subscribes just long enough to capture the synchronous bootstrap `kernel.snapshot` delivery,
+ * then unsubscribes — the ONE peek primitive {@link peekRunningTurn} (turn-cancel-before-close)
+ * and {@link peekStateRevision} (the Gap D startup dispatch) both need, factored out here so
+ * neither duplicates the subscribe/immediately-unsubscribe dance. An `Error` means the subscribe
+ * itself failed; `null` means it succeeded but delivered no `kernel.snapshot` synchronously
+ * (defensive — should be unreachable against a correctly-wired `KernelPort`). Logging is left to
+ * each caller, since only it knows what it was trying to read.
+ */
+function peekSnapshotEnvelope(port: KernelPort): Error | KernelSnapshotEnvelope | null {
+  let snapshot: KernelSnapshotEnvelope | null = null;
+  const unsubscribe = port.subscribe((envelope: EventEnvelopeV1) => {
+    if (snapshot !== null) return; // only the synchronous bootstrap delivery matters here
+    const distributed = envelope as AnyEventEnvelope;
+    if (distributed.kind === "kernel.snapshot") snapshot = distributed;
+  });
+  if (unsubscribe instanceof Error) return unsubscribe;
+  unsubscribe();
+  return snapshot;
+}
+
 /** A synchronous peek at the live turn model — see {@link cancelRunningTurnBeforeClose}'s own
  *  doc comment for why this needs no new `AppShell` seam. `null` when no cancellable turn is
  *  running, or when the peek itself could not be taken. */
 function peekRunningTurn(
   port: KernelPort,
 ): { readonly turnId: UUIDv7; readonly stateRevision: UInt64String } | null {
-  let peeked: { turnId: UUIDv7; stateRevision: UInt64String } | null = null;
-  const unsubscribe = port.subscribe((envelope: EventEnvelopeV1) => {
-    if (peeked !== null) return; // only the synchronous bootstrap delivery matters here
-    const distributed = envelope as AnyEventEnvelope;
-    if (distributed.kind !== "kernel.snapshot") return;
-    const { turn } = distributed.payload.models;
-    if (turn.phase !== "running" || turn.activeTurnId === null) return;
-    peeked = { turnId: turn.activeTurnId, stateRevision: distributed.stateRevision };
-  });
-  if (unsubscribe instanceof Error) {
-    console.warn(`termcraft: could not read turn state before exit: ${unsubscribe.message}`);
+  const snapshot = peekSnapshotEnvelope(port);
+  if (snapshot instanceof Error) {
+    console.warn(`termcraft: could not read turn state before exit: ${snapshot.message}`);
     return null;
   }
-  unsubscribe();
-  return peeked;
+  if (snapshot === null) return null;
+  const { turn } = snapshot.payload.models;
+  if (turn.phase !== "running" || turn.activeTurnId === null) return null;
+  return { turnId: turn.activeTurnId, stateRevision: snapshot.stateRevision };
+}
+
+/**
+ * A synchronous peek at the Kernel's current `stateRevision`, for the dispatcher the Gap D
+ * startup `project.open` dispatch builds before any command has run yet — shares
+ * {@link peekSnapshotEnvelope} rather than a second subscribe/unsubscribe copy. Falls back to
+ * `"0"` (the Kernel's own documented initial revision) when the peek itself could not be taken —
+ * logged here (errore rule 21: an error that is not propagated must still be logged); a wrong
+ * guess only ever causes the dispatch to be honestly REJECTED as stale, never a fabricated
+ * success.
+ */
+function peekStateRevision(port: KernelPort): UInt64String {
+  const snapshot = peekSnapshotEnvelope(port);
+  if (snapshot instanceof Error) {
+    console.warn(
+      `termcraft: could not read the Kernel's bootstrap state revision before the startup dispatch: ${snapshot.message}; falling back to "0"`,
+    );
+    return "0";
+  }
+  if (snapshot === null) {
+    console.warn(
+      'termcraft: the Kernel delivered no bootstrap snapshot before the startup dispatch; falling back to "0"',
+    );
+    return "0";
+  }
+  return snapshot.stateRevision;
 }
 
 /** Resolves once a `turn.completed`/`turn.failed`/`turn.cancelled` event names `turnId`, or once

@@ -124,7 +124,14 @@ if (import.meta.main) {
     // the resolved package directory) is computed there; this branch only resolves the
     // root against the working directory, prints, and exits.
     const root = path.resolve(process.cwd(), exportArgs.rootArg ?? ".");
-    const outcome = await runHeadlessExport({ env: { root, workspaceIdentity: root } });
+    const outcome = await runHeadlessExport({
+      // `projectExists` is never read on this headless path (`create-shell.ts`'s
+      // `resolveEnvWithProjectIdentity` overwrites it from the real open-vs-create fact before
+      // anything downstream can see it, and `run-export.ts` dispatches `project.open` directly
+      // rather than through `home-submit`, the field's only reader) — `false` is a harmless
+      // placeholder, matching `bootstrap.ts`'s own `resolveEnv`.
+      env: { root, workspaceIdentity: root, projectExists: false },
+    });
     const formatted = formatExportOutcome(outcome);
     const text = `${formatted.text}\n`;
     // Same Windows stdout/stderr-flush-before-exit concern as the `_host` branch's own

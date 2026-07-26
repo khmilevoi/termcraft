@@ -202,7 +202,12 @@ function fakeShell(
   port: ReturnType<typeof createFakeKernel>,
   close: () => Promise<void>,
 ): AppShell {
-  return { mode: "interactive", port, env: { root: ROOT, workspaceIdentity: ROOT }, close };
+  return {
+    mode: "interactive",
+    port,
+    env: { root: ROOT, workspaceIdentity: ROOT, projectExists: false },
+    close,
+  };
 }
 
 describe("runHeadlessExportOverShell", () => {
