@@ -63,22 +63,36 @@ created it, and the UI has no way to tell those two apart after the fact:
 - `openOrCreateProject` (`src/entrypoint/model/create-shell.ts`) now RETURNS the open-vs-create
   fact it always computed and threw away, as `ShellLaunchV1 { existing, hasContent }` on the
   returned shell's own `launch` field. `hasContent` — "at least one page, or at least one chat" —
-  is evaluated (`projectHasContent`, one manifest read plus one `ChatStore.list()`) BEFORE the
+  is evaluated (`probeProjectContent`, one manifest read plus one `ChatStore.list()`) BEFORE the
   Kernel is even constructed, and is the real routing predicate: its purpose is the CLONE case
   (pages present, zero chats, since `chats/` is git-ignored as of fix-bundle §2.5), which is
   exactly the case that most needs the Workspace. `createProject` always mints the first chat
-  header, so `existing: false` short-circuits `hasContent` to `false` without any extra I/O — a
-  freshly created project is never routed straight to the Workspace, only ever to Home.
-- `run-app.ts`'s `runApp` dispatches `project.open` itself, once, right after `createUiRoot`
-  succeeds and before the shutdown path is wired up, whenever `shell.launch.hasContent` is true —
-  the ONE interactive caller of `project.open` (`run-export.ts`'s headless export driver was
-  previously the only one in the whole of `src`). A rejected or failed dispatch is logged, not
+  header, so `existing: false` short-circuits the probe entirely and `hasContent` is always
+  `false` — a freshly created project is never routed straight to the Workspace, only ever to
+  Home. A read that fails resolves the probe's third outcome, `"unknown"`, not a silent
+  `"no-content"` (fix round 1, Finding 1 — the Global Constraints' "never fabricate a fact"
+  governs this over the task brief's own snippet): `resolveShellLaunch` folds `"unknown"` into
+  `hasContent: true` for an existing project, dispatching `project.open` anyway so the Kernel's
+  own open sequence gets the chance to report the real failure through the event stream, rather
+  than defaulting to Home on a fact the failed read never established.
+- `run-app.ts`'s `runApp` dispatches `project.open` itself, once, right after the shutdown path
+  is wired up (moved there in fix round 1: earlier it ran before `boundary.onSignal` registered
+  the SIGINT/SIGTERM handlers, so a Ctrl-C during the open sequence had no handler to catch it),
+  whenever `shell.launch.hasContent` is true — the ONE interactive caller of `project.open`
+  (`run-export.ts`'s headless export driver was previously the only one in the whole of `src`).
+  A rejected or failed dispatch is logged, not
   swallowed; Home would otherwise silently stay the destination with no diagnosable trace.
 - Home's own Enter (`ui/app/model/intent.ts`'s `home-submit`) now picks `project.open` over
   `project.create` for the SAME fact, carried on `UiEnv.projectExists` (set from
   `ShellLaunchV1.existing` in `resolveEnvWithProjectIdentity`): an exists-but-empty project (rare
   — creation always mints the first chat) still reaches Home, and its Enter must honor the prior
-  trust grant rather than implicitly re-granting it the way `project.create` would.
+  trust grant rather than implicitly re-granting it the way `project.create` would. Home can stay
+  mounted for up to ~30s after the startup `project.open` above is admitted (`deriveScreen` only
+  leaves Home once `finishOpen`'s metadata reaches the mirror), so typing there and hitting Enter
+  can race a second, rejected `project.open`; `home-submit` clears the typed prompt only once its
+  OWN dispatch resolves accepted, never on a rejection (fix round 1, Finding 2 — the identical
+  treatment Task 11 already gave `composer-submit`), so that race never silently discards what
+  the user typed.
 
 Trust is not a complication here: an existing project opened on the machine that created it
 resolves `trusted` and goes straight to the Workspace; a moved or copied workspace resolves
@@ -180,8 +194,8 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
 
 - `src/main.tsx` — the interactive executable root, the installed package's `bin` target run through Bun: an argv scan dispatches one of three modes of the SAME entry — `_host --stdio` runs the design-host stdio loop, `termcraft export [dir]` runs the headless export CLI, and anything else `bootstrap`s the interactive app; guarded by `import.meta.main` so importing it never seizes the terminal.
 - `src/entrypoint/model/bootstrap.ts` — resolves the project root from argv against the working directory, then composes the shell (`createShell`) and the running app (`runApp`).
-- `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, and now returns which one happened (`existing`) alongside the `OpenProject` handle; `projectHasContent` (Gap D, fix-bundle spec §2.4) folds that with one manifest read and one `ChatStore.list()` into `ShellLaunchV1 { existing, hasContent }`, exposed on the shell's own `launch` field and echoed onto `UiEnv.projectExists`. Also wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`) — geometry/hover-pin queries stay unusable for the separate reason `flows/generation-turn.md` documents (`kernel.preview.enable` now fires once trust resolves to `trusted`, but nothing yet dispatches `preview.selectPage`/`selectCurrent` to reach `live`).
-- `src/entrypoint/model/run-app.ts` — `runApp`'s Gap D startup dispatch: when `shell.launch.hasContent` is true, dispatches `project.open` at the `KernelPort` right after `createUiRoot` succeeds and before the shutdown path is wired up, using a synchronous `peekStateRevision`/`peekSnapshotEnvelope` bootstrap-snapshot peek (shared with the pre-existing `peekRunningTurn`) to build the dispatcher's `expectedRevision`; a rejection or a dispatch failure is logged, never silently left as Home.
+- `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, and now returns which one happened (`existing`) alongside the `OpenProject` handle; `probeProjectContent` (Gap D, fix-bundle spec §2.4) folds that with one manifest read and one `ChatStore.list()` into a three-way `"has-content" | "no-content" | "unknown"` outcome (fix round 1, Finding 1 — a failed read is never folded into a fabricated `"no-content"`), and `resolveShellLaunch` turns that into `ShellLaunchV1 { existing, hasContent }`, exposed on the shell's own `launch` field and echoed onto `UiEnv.projectExists`. Also wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`) — geometry/hover-pin queries stay unusable for the separate reason `flows/generation-turn.md` documents (`kernel.preview.enable` now fires once trust resolves to `trusted`, but nothing yet dispatches `preview.selectPage`/`selectCurrent` to reach `live`).
+- `src/entrypoint/model/run-app.ts` — `runApp`'s Gap D startup dispatch: when `shell.launch.hasContent` is true, dispatches `project.open` at the `KernelPort` right after the shutdown path is wired up (after `startShutdownPath`, fix round 1 — so SIGINT/SIGTERM are already handled before this awaits), using a synchronous `peekStateRevision`/`peekSnapshotEnvelope` bootstrap-snapshot peek (shared with the pre-existing `peekRunningTurn`) to build the dispatcher's `expectedRevision`; a rejection or a dispatch failure is logged, never silently left as Home.
 - `src/core/kernel/model/handlers/project.ts` — `runProjectReadySequence`, the post-admission "reach ready" spine `project.create`/`project.open`/`project.retryOpen` share: transaction recovery, the orphan-turn scan, trust resolution (implicit grant on create; a prior durable grant honored on open, else `untrusted-read-only`), `enablePreviewIfTrusted` (fix-bundle Gap A, spec §2.2 — applies `kernel.preview.enable` right after trust resolves to `trusted`, before `finishOpen`, so the Preview machine leaves `disabled` for the snapshot the UI first sees; an untrusted project stays `disabled`), per-page Gate descriptors, durable export-pointer validation, `finishOpen`, two independent chat reads (fix-bundle Gap E, `flows/chats.md` for the full picture): `listChatSummaries` publishes the project's FULL on-disk chat listing as `chat.changed`, and `restoreActiveChatTail` restores only the active chat's persisted tail as `chat.records` — a listing failure degrades to the active chat alone, a tail failure costs only the scrollback — and, last, `beginTurn` (fix-bundle Gap C, spec §3.1, closed): when `trustSource` carries a first-turn `text` and trust resolved to `"trusted"`, the SAME function `turn.start`'s own handler uses starts the first turn from it, chained after `finishOpen` and the chat-tail restore because admission reads `workspace.local.toml`'s `activeChatId`. Also `project.setTrust`, the follow-up accept/decline (which calls the SAME `enablePreviewIfTrusted` helper when it grants trust on an already-open project), and the documented no-interactive-prompt gap (a one-shot open command cannot block on a prompt).
 - `src/core/kernel/model/handlers/turn.ts` — `beginTurn`: mints the turn id, applies `beginAdmission`, and records the id as the Kernel's active turn, all three synchronously with no `await` between them, then launches the turn's async composition. Both `turn.start`'s own handler and `runProjectReadySequence`'s Gap C chain call this SAME function — there is exactly one path into a turn.
 - `src/ui/app/model/deps.ts` — Home's local `prompt` atom and the Workspace's local `composer` atom: two separate pieces of UI state with no carry-over between them; irrelevant to Gap C's fix, since the first turn now starts from the Home text directly at the Kernel, never by pre-filling or copying into the Workspace composer.

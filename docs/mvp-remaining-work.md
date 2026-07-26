@@ -218,21 +218,48 @@ and `*.local*`. A clone therefore carries no pointer to a chat file it does not 
 
 **Closed 2026-07-26 — fix-bundle Task 12 (Gap D, spec §2.4).** `openOrCreateProject`
 (`entrypoint/model/create-shell.ts`) now returns the discriminator it used to throw away, as
-`existing: boolean` alongside the `OpenProject` handle; `projectHasContent` folds that with one
-manifest read and one `ChatStore.list()` (Gap E's own listing) into `ShellLaunchV1 { existing,
-hasContent }` on the returned shell's `launch` field — evaluated BEFORE the Kernel is constructed,
-since `deriveScreen` keys on `projectId`, which only a dispatched `project.*` open command sets.
-`run-app.ts`'s `runApp` dispatches `project.open` itself, once, right after `createUiRoot`
-succeeds, whenever `shell.launch.hasContent` is true — the fix for the "nothing on the interactive
-path ever dispatches `project.open`" root cause this write-up diagnosed above. Home's own Enter
-(`ui/app/model/intent.ts`'s `home-submit`) now picks `project.open` over `project.create` too, via
-`UiEnv.projectExists` (set from the same `existing` fact in `resolveEnvWithProjectIdentity`) — the
-exists-but-empty branch this write-up already called out as rare but real. Proven at the Kernel
-level (`core/kernel/model/handlers/project.test.ts`'s "Gap D" describe block: the clone case
-reaches `ready` and publishes its pages from `project.open` alone, with zero chats; an existing
-project with pages opens with no `project.create` call anywhere; Home's Enter still creates-and-
-starts-a-turn in one keystroke for a genuinely fresh directory) and at the composition-root/UI
-level (`create-shell.test.ts`, `run-app.test.ts`, `intent.test.ts`).
+`existing: boolean` alongside the `OpenProject` handle; `probeProjectContent` folds that with one
+manifest read and one `ChatStore.list()` (Gap E's own listing) into a three-way
+`"has-content" | "no-content" | "unknown"` outcome, and `resolveShellLaunch` turns it into
+`ShellLaunchV1 { existing, hasContent }` on the returned shell's `launch` field — evaluated BEFORE
+the Kernel is constructed, since `deriveScreen` keys on `projectId`, which only a dispatched
+`project.*` open command sets. `run-app.ts`'s `runApp` dispatches `project.open` itself, once,
+after the shutdown path is wired up, whenever `shell.launch.hasContent` is true — the fix for the
+"nothing on the interactive path ever dispatches `project.open`" root cause this write-up
+diagnosed above. Home's own Enter (`ui/app/model/intent.ts`'s `home-submit`) now picks
+`project.open` over `project.create` too, via `UiEnv.projectExists` (set from the same `existing`
+fact in `resolveEnvWithProjectIdentity`) — the exists-but-empty branch this write-up already
+called out as rare but real. Proven at the Kernel level (`core/kernel/model/handlers/
+project.test.ts`'s "Gap D" describe block: the clone case reaches `ready` and publishes its pages
+from `project.open` alone, with zero chats; an existing project with pages opens with no
+`project.create` call anywhere; Home's Enter still creates-and-starts-a-turn in one keystroke for
+a genuinely fresh directory) and at the composition-root/UI level (`create-shell.test.ts`,
+`run-app.test.ts`, `intent.test.ts`).
+
+**Fix round 1 (review).** Two Important findings on the first pass, both fixed:
+
+1. The predicate substituted a definite `false` ("no content") for "the read failed" — a genuine
+   instance of the Global Constraints' "never fabricate a fact" rule, which governs over the task
+   brief's own `return false` snippet (the same override that landed in three earlier tasks of
+   this bundle). `probeProjectContent` now returns `"has-content" | "no-content" | "unknown"`;
+   `resolveShellLaunch` folds `"unknown"` into `hasContent: true` for an existing project, so the
+   Kernel's own open sequence — not a silent Home — gets the chance to surface the real failure.
+   The traced consequence (an existing project with chats and no pages, plus one transient
+   `chats.list()` failure, landing on Home with an invisible `console.warn`) is now unreachable;
+   the project's work was never actually at risk (`UiEnv.projectExists` stayed `true` regardless,
+   so Enter still sent `project.open`), but the unrequested extra round trip is gone.
+2. Home stays mounted for up to ~30s after the startup `project.open` is admitted (the Gate
+   type-check the open sequence runs), and its prompt was still live the whole time; typing and
+   hitting Enter fired a second, silently-rejected `project.open`
+   (`CAPABILITY_UNAVAILABLE` — `beginOpen` is legal only `from: "closed"`) with no visible
+   reaction and no clearing discipline of its own. `home-submit` now clears the prompt only once
+   its OWN dispatch resolves accepted, never on a rejection — the identical treatment Task 11
+   already gave `composer-submit` for the identical class of bug.
+
+Also moved the startup dispatch to run AFTER `startShutdownPath` (a Ctrl-C during the open
+sequence previously had no signal handler registered yet to catch it), and added the disk-backed
+and unit-level coverage the predicate's chats branch and the two new failure branches had none of
+before.
 
 ### 1.4 Gap E — the chat list shows one chat while three exist on disk
 

@@ -7,7 +7,7 @@ import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
 import { nextFocus, resolveEsc } from "ui/workspace";
 
-import type { UiDeps } from "./deps";
+import type { UiDeps, UiLocalState } from "./deps";
 import type { KeyIntent } from "./keymap";
 
 /**
@@ -50,20 +50,33 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // exists-but-empty branch is rare (project creation always mints the first chat header),
       // but when it happens `create` would grant trust implicitly over a project whose prior
       // grant is the authority.
+      //
+      // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
+      // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the
+      // identical reason. Home can stay mounted for up to ~30s after the composition root's own
+      // startup `project.open` (`run-app.ts`, Gap D) is admitted, because `deriveScreen` only
+      // leaves Home once `finishOpen`'s metadata reaches the mirror — typing during that window
+      // and hitting Enter fires a SECOND `project.open`, rejected `CAPABILITY_UNAVAILABLE` (the
+      // project machine is already `"opening"`, not `"closed"`). Clearing only on `accepted`
+      // means a rejection never discards what the user typed, and the ALREADY-accepted text
+      // (the startup dispatch's own first, successful attempt has no text of its own to clear —
+      // this only ever fires for `home-submit`'s OWN dispatch) does not linger to be resent.
       if (deps.env.projectExists) {
-        dispatchAndReport(
+        dispatchHomeSubmit(
           dispatcher.dispatch("project.open", { root: deps.env.root, text }),
           "project.open",
+          local,
         );
         return;
       }
-      dispatchAndReport(
+      dispatchHomeSubmit(
         dispatcher.dispatch("project.create", {
           root: deps.env.root,
           creationDefaults: { trust: "trusted", workspaceIdentity: deps.env.workspaceIdentity },
           text,
         }),
         "project.create",
+        local,
       );
       return;
     }
@@ -261,6 +274,32 @@ function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: stri
     // every outcome, accepted or refused.
     trace("ui.dispatch.result", { kind, result });
   });
+}
+
+/**
+ * `home-submit`'s own dispatch continuation (fix round 1, Finding 2) — the same shape
+ * `composer-submit` already uses (Task 11): clears `local.prompt` ONLY once the Kernel actually
+ * accepted the dispatch, never on a rejection, so a `project.open`/`project.create` attempt that
+ * loses a race against the composition root's own startup open (Gap D, `run-app.ts`) never
+ * silently discards what the user typed. `wrap` (RTM-A04) around the continuation — it touches
+ * `local.prompt`, a Reatom atom, after the dispatch's own `.then()` boundary.
+ */
+function dispatchHomeSubmit(
+  promise: Promise<CommandResultV1 | Error>,
+  kind: "project.create" | "project.open",
+  local: UiLocalState,
+): void {
+  void promise.then(
+    wrap((result) => {
+      if (result instanceof Error) {
+        console.error("UI command dispatch failed:", result);
+        trace("ui.dispatch.result", { kind, result });
+        return;
+      }
+      trace("ui.dispatch.result", { kind, result });
+      if (result.status === "accepted") local.prompt.set("");
+    }),
+  );
 }
 
 function slashRows(deps: UiDeps) {

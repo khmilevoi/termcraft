@@ -38,7 +38,11 @@ export interface AppShell {
  * `chats/` is git-ignored as of fix-bundle §2.5), which is exactly the case that most needs the
  * Workspace; `createProject` always mints the first chat header, so "exists but is empty" is
  * practically unreachable and Home stays reachable essentially only for a genuinely fresh
- * directory.
+ * directory. `true` also for an EXISTING project whose content could not actually be confirmed
+ * (a manifest or chat-listing read failed, fix round 1 Finding 1,
+ * `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing here" just because the
+ * disk could not answer; the Kernel's own open sequence gets the chance to surface the real
+ * failure instead of a silent Home.
  */
 export interface ShellLaunchV1 {
   readonly existing: boolean;

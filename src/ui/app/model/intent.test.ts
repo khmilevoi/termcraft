@@ -67,6 +67,44 @@ describe("applyIntent — text inputs", () => {
     expect(kernel.dispatched).toHaveLength(0);
   });
 
+  test("home-submit clears the prompt only once the dispatch resolves accepted (fix round 1, Finding 2)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.local.prompt.set("a dashboard");
+    applyIntent({ kind: "home-submit" }, deps);
+    expect(kernel.dispatched).toHaveLength(1);
+    // Not cleared synchronously with the dispatch call — only once it RESOLVES accepted
+    // (`createFakeKernel`'s own dispatch accepts by default), mirroring `composer-submit`'s own
+    // fix (Task 11) exactly.
+    await tick();
+    expect(deps.local.prompt()).toBe("");
+  });
+
+  test("home-submit leaves the typed text in place when the startup open is still admitting (fix round 1, Finding 2)", async () => {
+    const kernel = createFakeKernel();
+    // The exact race the finding named: the composition root's own startup `project.open`
+    // (`run-app.ts`, Gap D) is still admitting, so a second `project.open` from Home's own Enter
+    // is rejected `CAPABILITY_UNAVAILABLE` — the project machine is `"opening"`, not `"closed"`.
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "CAPABILITY_UNAVAILABLE",
+      reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
+    });
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/proj", workspaceIdentity: "wid", projectExists: true },
+    );
+    deps.local.prompt.set("add a settings page");
+    applyIntent({ kind: "home-submit" }, deps);
+    await tick();
+    // A rejection must not discard what the user typed.
+    expect(deps.local.prompt()).toBe("add a settings page");
+  });
+
   test("composer-submit dispatches turn.start and clears the composer once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });

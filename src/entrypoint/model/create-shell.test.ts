@@ -11,13 +11,17 @@ import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { uuidv7 } from "infrastructure/uuid";
-import { createStore, nodeStoreDeps } from "store";
+import { JsonlOpenError, createStore, nodeStoreDeps } from "store";
+import type { ChatListEntry, ChatStore, ManifestStore, OpenProject } from "store";
+import { FsAccessError } from "store/safe-fs";
 import {
+  ManifestCorruptError,
   PROJECT_MANIFEST_FILENAME,
   WORKSPACE_STATE_FILENAME,
   decodeProjectManifest,
   encodeProjectManifest,
 } from "store/toml";
+import type { ProjectManifest } from "store/toml";
 import { canonicalPagePath } from "store/transaction";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
@@ -26,6 +30,8 @@ import {
   buildGateRunner,
   closeShellResources,
   createShell,
+  probeProjectContent,
+  resolveShellLaunch,
   toPreviewSessionHandle,
 } from "./create-shell";
 import type { ShellDeps, ShellTeardownStep } from "./create-shell";
@@ -120,6 +126,89 @@ async function projectWithPagesAndNoChats(): Promise<string> {
   fs.rmSync(path.join(termcraftDir, WORKSPACE_STATE_FILENAME), { force: true });
 
   return root;
+}
+
+/** Creates a real project (via the Store, not `createShell`) and closes it, leaving `.termcraft/`
+ *  in place for a SECOND `createShell` call to find as `existing: true` — the shared setup both
+ *  fix-round-1 chats-branch fixtures below need. */
+async function createAndCloseRealProject(prefix: string): Promise<string> {
+  const scratch = makeScratchDir(prefix);
+  const root = path.join(scratch, "project");
+  fs.mkdirSync(root, { recursive: true });
+  const store = createStore(nodeStoreDeps({ userStateRoot: path.join(scratch, "user-state") }));
+  const created = await store.createProject({ root, name: "Fixture", targetStack: "js-opentui" });
+  if (created instanceof Error) throw created;
+  await created.close();
+  return root;
+}
+
+/**
+ * A real on-disk project with zero pages and its auto-minted FIRST CHAT still present (fix round
+ * 1: `probeProjectContent`'s chats-list branch, `create-shell.ts:376-382`, had no test at all) —
+ * "typed a message, nothing has generated yet" on a relaunch. `createProject` always mints a
+ * first chat header, so this is the ordinary state of a project between its first Enter and its
+ * first landed page — reachable on real disk with no cleanup beyond closing the first session.
+ */
+async function existingProjectWithChatOnly(): Promise<string> {
+  return createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
+}
+
+/**
+ * A real on-disk EXISTING project with zero pages AND zero chats (fix round 1) — "created
+ * yesterday, nothing generated yet", the reviewer's own words for the common relaunch this
+ * predicate's chats branch had no coverage for. Distinct from a genuinely fresh directory
+ * (`existing: false`): this project already has a `.termcraft/`, `store.openProject` succeeds on
+ * it, and the ONLY reason `hasContent` comes back `false` is that both real reads confirm there
+ * is nothing yet — `chats/` is removed after creation to delete the one thing `createProject`
+ * always seeds.
+ */
+async function existingProjectWithNothing(): Promise<string> {
+  const root = await createAndCloseRealProject("termcraft-shell-gap-d-empty-existing-");
+  fs.rmSync(path.join(root, ".termcraft", "chats"), { recursive: true, force: true });
+  return root;
+}
+
+/** A structurally valid `ProjectManifest` naming exactly the pages `probeProjectContent` (fix
+ *  round 1) actually reads — every other field is a fixed placeholder, since nothing under test
+ *  reads them. */
+function fakeManifest(pages: readonly PageSlug[]): ProjectManifest {
+  return {
+    formatVersion: 1,
+    projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
+    name: "Fake",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    targetStack: "js-opentui",
+    pages,
+  };
+}
+
+function fakeChatListEntry(chatId: string): ChatListEntry {
+  return { chatId, createdAt: "2024-01-01T00:00:00.000Z", firstUserText: null };
+}
+
+/**
+ * A minimal `Pick<OpenProject, "chats" | "manifest">` double for `probeProjectContent` (fix
+ * round 1, Finding 1) — the two failure branches it introduces need a TRANSIENT read failure
+ * occurring AFTER a successful `store.openProject`, which the real `Store` has no seam to inject
+ * honestly (see `probeProjectContent`'s own doc comment in `create-shell.ts`): a corrupt manifest
+ * would already have failed `store.openProject` itself, before this function is ever reached.
+ * `.chats.open` is never called by `probeProjectContent` but still needs a type-correct body —
+ * `ChatStore` requires it — so it returns a real, if unused, `JsonlOpenError` rather than a cast.
+ */
+function fakeContentSource(options: {
+  readonly manifest: Awaited<ReturnType<ManifestStore["read"]>>;
+  readonly chats?: Awaited<ReturnType<ChatStore["list"]>>;
+}): Pick<OpenProject, "chats" | "manifest"> {
+  return {
+    manifest: { read: () => Promise.resolve(options.manifest) },
+    chats: {
+      open: () =>
+        Promise.resolve(
+          new JsonlOpenError({ kind: "chat", id: "unused", reason: "not used by this fake" }),
+        ),
+      list: () => Promise.resolve(options.chats ?? []),
+    },
+  };
 }
 
 async function firstSnapshot(port: {
@@ -329,6 +418,103 @@ describe("createShell", () => {
     // `project.create`.
     expect(shell.env.projectExists).toBe(true);
     await shell.close();
+  });
+
+  // --- fix round 1: the predicate's chats-list branch, on real disk (previously untested) -----
+
+  test("an existing project with no pages but its first chat still present reaches the Workspace", async () => {
+    const root = await existingProjectWithChatOnly();
+    const shell = await createShell("interactive", envFor(root), testDeps());
+    if (shell instanceof Error) throw shell;
+    expect(shell.launch).toEqual({ existing: true, hasContent: true });
+    await shell.close();
+  });
+
+  test("an existing project with no pages and no chats — created yesterday, nothing generated yet — stays on Home", async () => {
+    const root = await existingProjectWithNothing();
+    const shell = await createShell("interactive", envFor(root), testDeps());
+    if (shell instanceof Error) throw shell;
+    expect(shell.launch).toEqual({ existing: true, hasContent: false });
+    await shell.close();
+  });
+});
+
+/**
+ * Fix round 1, Finding 1 — `projectHasContent` used to fold a failed read into a definite
+ * `false` ("no content"), which the Global Constraints forbid ("Never fabricate a fact ... a
+ * port that cannot answer honestly refuses (logged) rather than substituting a placeholder").
+ * `probeProjectContent` now returns a third outcome, `"unknown"`, and `resolveShellLaunch` folds
+ * it into `hasContent: true` — the Kernel's own open sequence gets the chance to report the real
+ * failure through the event stream instead of a silent Home. Both failure branches need a
+ * TRANSIENT read failure after a successful `store.openProject`, which the real `Store` has no
+ * seam to inject (see `probeProjectContent`'s own doc comment) — driven here directly against
+ * `fakeContentSource` instead.
+ */
+describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", () => {
+  const HOME = (() => {
+    const parsed = parsePageSlug("home");
+    if (parsed instanceof Error) throw parsed;
+    return parsed;
+  })();
+
+  test("has-content when the manifest lists at least one page", async () => {
+    const open = fakeContentSource({ manifest: fakeManifest([HOME]) });
+    expect(await probeProjectContent(open)).toBe("has-content");
+  });
+
+  test("has-content when pages are empty but at least one chat exists", async () => {
+    const open = fakeContentSource({
+      manifest: fakeManifest([]),
+      chats: [fakeChatListEntry(uuidv7())],
+    });
+    expect(await probeProjectContent(open)).toBe("has-content");
+  });
+
+  test("no-content only when BOTH reads succeed and both come back empty", async () => {
+    const open = fakeContentSource({ manifest: fakeManifest([]), chats: [] });
+    expect(await probeProjectContent(open)).toBe("no-content");
+  });
+
+  test("unknown, logged, when the manifest read fails — never folded into no-content", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    const open = fakeContentSource({
+      manifest: new ManifestCorruptError({
+        file: "project.toml",
+        code: "PARSE_FAILED",
+        reason: "simulated transient read failure",
+      }),
+    });
+    expect(await probeProjectContent(open)).toBe("unknown");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  test("unknown, logged, when the chat listing fails — never folded into no-content", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    const open = fakeContentSource({
+      manifest: fakeManifest([]),
+      chats: new FsAccessError({ op: "list", path: "chats", code: "EBUSY" }),
+    });
+    expect(await probeProjectContent(open)).toBe("unknown");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  test("resolveShellLaunch dispatches anyway (hasContent: true) when existing and the probe could not tell", () => {
+    expect(resolveShellLaunch(true, "unknown")).toEqual({ existing: true, hasContent: true });
+  });
+
+  test("resolveShellLaunch still reports has-content and no-content faithfully when existing", () => {
+    expect(resolveShellLaunch(true, "has-content")).toEqual({ existing: true, hasContent: true });
+    expect(resolveShellLaunch(true, "no-content")).toEqual({ existing: true, hasContent: false });
+  });
+
+  test("resolveShellLaunch never routes a fresh directory to the Workspace, whatever the probe says", () => {
+    expect(resolveShellLaunch(false, "has-content")).toEqual({
+      existing: false,
+      hasContent: false,
+    });
+    expect(resolveShellLaunch(false, "unknown")).toEqual({ existing: false, hasContent: false });
   });
 });
 

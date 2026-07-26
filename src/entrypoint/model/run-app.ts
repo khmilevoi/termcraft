@@ -121,6 +121,9 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     return root instanceof AppStartupError ? root : new AppStartupError({ cause: root });
   }
 
+  const app = startShutdownPath(shell, boundary, root, exit);
+  closeRef = app.close;
+
   // Gap D: an existing project holding pages or chats opens straight into the Workspace. This is
   // the ONE interactive caller of `project.open` — before it, the whole of `src` had exactly one
   // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
@@ -129,6 +132,13 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   // A failed startup open must SURFACE rather than silently leave Home (spec, "Error handling"):
   // `project.retryOpen` already exists for the recovery-conflict path, and a rejection here is
   // logged with its code so the next occurrence is diagnosable.
+  //
+  // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
+  // handlers this function awaits nothing before. Dispatching first, as this used to, meant a
+  // Ctrl-C during the (up to ~30s) open sequence had no handler to catch it — the still-live
+  // renderer never got torn down and the project lease never got released. Moving the dispatch
+  // below costs nothing: `closeRef` is already assigned by the time this `await` starts, so
+  // `requestExit`/a signal firing mid-dispatch tears down the shell correctly either way.
   if (shell.launch.hasContent) {
     const dispatcher = createDispatcher({
       port: shell.port,
@@ -145,8 +155,6 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     }
   }
 
-  const app = startShutdownPath(shell, boundary, root, exit);
-  closeRef = app.close;
   return app;
 }
 
