@@ -37,21 +37,31 @@ export interface KeyContext {
    * The current Home agent-health reading (M15, finding §2.7 / phase-8 Task 15). Only
    * meaningful on `screen === "home"`: `"missing"` and `"blocked"` (CORRECTED fix round 1,
    * Finding 6: `"blocked"` used to keep the idle prompt live, which let its own `r` re-check
-   * steal a printable character mid-typing) both render an input-inert prompt where only `r`/`q`
-   * are live; every other kind (`checking`/`ready`/`advisory`) keeps the idle prompt genuinely
-   * live with no extra key — {@link homeSubmitAllowed} alone decides whether Enter submits.
+   * steal a printable character mid-typing) both render a prompt with no PRINTABLE input —
+   * `blocked` additionally accepts `backspace` (fix round 3), the one way to clear text typed
+   * before the transition; `missing` has no prompt on screen at all, so it accepts neither. Only
+   * `r`/`q` (plus, for `blocked`, `backspace`) are live; every other kind (`checking`/`ready`/
+   * `advisory`) keeps the idle prompt genuinely live with no extra key —
+   * {@link homeSubmitAllowed} alone decides whether Enter submits.
    */
   readonly homeHealth: HomeAgentHealth;
   /**
    * Home's own prompt text (M15). Only read on `screen === "home"`, and only to guard `blocked`'s
-   * literal `q`-quits key (fix round 2, Minor finding): `checking` keeps the prompt genuinely
-   * live and typeable, so a user can still be typing the instant the health probe resolves to
-   * `blocked` mid-keystroke — without this guard, the very next `q` they type (intended as a
-   * letter, not a quit gesture) would silently exit the whole app and discard whatever they had
-   * typed. Guarding on non-empty `homePrompt` is the same class of fix as the `q`→`/exit`
-   * divergence elsewhere: a bare single-letter quit key must never be reachable from what reads,
-   * to the user, like ordinary typing. `Ctrl+C`/`SIGINT` (`entrypoint/model/run-app.ts`'s own
-   * shutdown signal handling) remains available regardless — this guard never strands the user.
+   * literal `q`-quits key (fix round 2, Minor finding; escape route CORRECTED fix round 3):
+   * `checking` keeps the prompt genuinely live and typeable, so a user can still be typing the
+   * instant the health probe resolves to `blocked` mid-keystroke — without this guard, the very
+   * next `q` they type (intended as a letter, not a quit gesture) would silently exit the whole
+   * app and discard whatever they had typed. Guarding on non-empty `homePrompt` is the same class
+   * of fix as the `q`→`/exit` divergence elsewhere: a bare single-letter quit key must never be
+   * reachable from what reads, to the user, like ordinary typing.
+   *
+   * CORRECTED (fix round 3): round 2 justified this guard with "`Ctrl+C`/`SIGINT` remains
+   * available regardless" — asserted, not verified, and actually false: `ui/app/model/root.tsx`
+   * passes `exitOnCtrlC: false` to `createCliRenderer`, `ui/actions/model/registry.ts` registers
+   * no `ctrl+c` hotkey, so an unhandled `ctrl+c` keypress resolves to `{kind:"none"}` here like
+   * any other — a quit key that silently does nothing, worse than the trap it replaced. The real
+   * escape route is `backspace`, which `blocked`'s own branch below now accepts specifically so
+   * a non-empty `homePrompt` is never a dead end: clear it, then `q` exits.
    */
   readonly homePrompt: string;
   /**
@@ -210,18 +220,22 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // `:170-173` — no cursor, faint caret). CORRECTED (fix round 1, Finding 6): this branch used
     // to keep accepting typed input despite the prompt reading as disabled, so `r` silently stole
     // a printable character from anything the user typed ("red dashboard" -> re-check + "ed
-    // dashboard"). It is now input-inert like `missing`, matching its own appearance exactly; `q`
-    // is safe to bind literally here too (no live prompt left to collide with), matching design's
-    // own `homeHealth()` hint row (`:194`, which reads literal `q` for BOTH branches).
+    // dashboard"). It is now inert to PRINTABLE input like `missing`, matching its own appearance
+    // for composition; `q` is safe to bind literally here too (no live typing left to collide
+    // with), matching design's own `homeHealth()` hint row (`:194`, which reads literal `q` for
+    // BOTH branches) — GUARDED, see `KeyContext.homePrompt`'s own doc comment: `q` exits only
+    // once nothing typed is left to lose.
     if (context.homeHealth.kind === "blocked") {
       if (key.sequence === "r") return { kind: "home-recheck" };
-      // GUARDED (fix round 2, Minor finding — see `KeyContext.homePrompt`'s own doc comment):
-      // `checking` (the outcome that precedes `blocked` on every real health transition) keeps
-      // the prompt genuinely live, so a user can still be mid-keystroke the instant the probe
-      // resolves to `blocked` — the very next `q` they type would otherwise silently exit
-      // termcraft and discard it. Only fires while there is nothing typed left to lose;
-      // `Ctrl+C`/`SIGINT` remains available regardless, so this never strands the user.
       if (key.sequence === "q" && context.homePrompt.length === 0) return { kind: "exit" };
+      // CORRECTED (fix round 3): `backspace` is the escape route the `q` guard above needs —
+      // without it, a prompt non-empty at the moment `checking` resolved to `blocked` could
+      // never be cleared (no printable input, `r` re-check does not touch it, and if the
+      // underlying cause persists across re-checks, never resolves on its own either), leaving
+      // `q` permanently inert and the user stuck. Backspace is the one edit that can only ever
+      // shrink the prompt toward empty, never re-introduce the printable-input-vs-`r`/`q`
+      // collision Finding 6 fixed — so it is safe to keep live here alone.
+      if (key.name === "backspace") return { kind: "home-backspace" };
       return { kind: "none" };
     }
     // `checking`/`advisory`/`ready` keep a live prompt — design draws a blinking cursor for all

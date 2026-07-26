@@ -127,20 +127,22 @@ describe("resolveKey — Home", () => {
       expect(resolveKey(key({ name: "return" }), checking)).toEqual({ kind: "none" });
     });
 
-    // CORRECTED (fix round 1, Finding 6): `blocked` used to still accept typed input despite
-    // reading as visually disabled (dimmed box, no cursor — design `homeHealth('login')`
-    // `:170-173`), so `r` silently stole a printable character from anything typed. It is now
-    // fully input-inert, like `missing` — matching its own appearance.
-    test("blocked refuses Enter and is input-inert — only r/q are live, matching its dimmed appearance", () => {
-      // `homePrompt: ""` (the `ctx()` default) — the empty-prompt case; the guarded non-empty
-      // case is its own test below (fix round 2, Minor finding).
+    // CORRECTED (fix round 1, Finding 6): `blocked` used to still accept PRINTABLE typed input
+    // despite reading as visually disabled (dimmed box, no cursor — design `homeHealth('login')`
+    // `:170-173`), so `r` silently stole a printable character from anything typed. It refuses
+    // printables and Enter like `missing` — matching its own appearance for composition — but,
+    // CORRECTED again (fix round 3), stays live for `backspace`: see the escape-route test below
+    // for why.
+    test("blocked refuses Enter/printables and is input-inert for those — only r/q/backspace are live", () => {
+      // `homePrompt: ""` (the `ctx()` default) — the empty-prompt case; the non-empty / escape
+      // route case is its own test below (fix round 2 Minor finding, corrected fix round 3).
       const blocked = ctx({
         screen: "home",
         homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
       });
       expect(resolveKey(key({ name: "return" }), blocked)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "x", sequence: "x" }), blocked)).toEqual({ kind: "none" });
-      expect(resolveKey(key({ name: "backspace" }), blocked)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "backspace" }), blocked)).toEqual({ kind: "home-backspace" });
       expect(resolveKey(key({ name: "r", sequence: "r" }), blocked)).toEqual({
         kind: "home-recheck",
       });
@@ -166,26 +168,52 @@ describe("resolveKey — Home", () => {
       });
     });
 
-    test("blocked's q exits once the prompt is empty again", () => {
-      const blockedEmpty = ctx({
-        screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
-        homePrompt: "",
-      });
-      expect(resolveKey(key({ name: "q", sequence: "q" }), blockedEmpty)).toEqual({
-        kind: "exit",
-      });
+    // REGRESSION GUARD, fix round 3: round 2's guard on its own turned `blocked` into a dead end
+    // — no printable input, no Enter, and (before this round) no backspace either, so a
+    // non-empty `homePrompt` could never shrink back to empty and `q` stayed permanently inert.
+    // "Ctrl+C remains available" (round 2's justification) does not hold: `root.tsx` passes
+    // `exitOnCtrlC: false` and no `ctrl+c` hotkey is registered, so an unhandled ctrl+c resolves
+    // to `{kind:"none"}` here like any other key. This test pins the actual finite escape
+    // sequence: `backspace` (live even while `blocked`) shrinks the prompt; once it reaches
+    // empty, `q` exits — `resolveKey` is pure/stateless, so each step is asserted against the
+    // context that step's own prior keystrokes would have produced in the real, stateful app
+    // (`intent.ts`'s `home-backspace` handler pops one character off `local.prompt` per call).
+    test("blocked has a finite escape: backspace shrinks the prompt, then q exits", () => {
+      const blockedHealth: HomeAgentHealth = {
+        kind: "blocked",
+        agent: "claude",
+        panel: "login",
+        detail: "x",
+      };
+      // Step 1: two characters typed before the transition — q is inert, but backspace works.
+      const twoChars = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "ab" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), twoChars)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "backspace" }), twoChars)).toEqual({ kind: "home-backspace" });
+
+      // Step 2: one character left (as `intent.ts`'s `home-backspace` would leave it after the
+      // first backspace above) — still inert to q, backspace still works.
+      const oneChar = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "a" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), oneChar)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "backspace" }), oneChar)).toEqual({ kind: "home-backspace" });
+
+      // Step 3: prompt now empty (after the second backspace) — q reaches the exit this whole
+      // sequence exists to prove reachable.
+      const empty = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), empty)).toEqual({ kind: "exit" });
     });
 
-    test("blocked/latched is input-inert the same way as blocked/login", () => {
+    test("blocked/latched has the same key set as blocked/login: r, q (guarded), and backspace", () => {
       const latched = ctx({
         screen: "home",
         homeHealth: { kind: "blocked", agent: "claude", panel: "latched", detail: "x" },
+        homePrompt: "x",
       });
       expect(resolveKey(key({ name: "x", sequence: "x" }), latched)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "r", sequence: "r" }), latched)).toEqual({
         kind: "home-recheck",
       });
+      expect(resolveKey(key({ name: "backspace" }), latched)).toEqual({ kind: "home-backspace" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), latched)).toEqual({ kind: "none" }); // prompt still "x"
     });
 
     test("r types into the prompt on checking/advisory/ready — only blocked wires it to re-check", () => {
