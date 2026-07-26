@@ -77,7 +77,11 @@ opens (or creates) the caller's on-disk project, composes the production adapter
 Kernel, and adapts it to `KernelPort` — `demo` mode alone still runs `ui/testing`'s in-memory
 `FakeKernel`. Live agent-health derivation now runs for real (phase-8 WP-5): the composition
 root's `createAgentHealthProbe` wraps the live `AgentBackend` and feeds Home's `r` re-check and
-startup reading. `KernelPort.preview()`'s `acknowledgeDisplay` is wired too (phase-8 Task 16):
+startup reading. Home's `agent`/`model`/`effort` combo no longer rides that probe (phase-8 Task
+13, finding §2.7): `resolveDefaultAgentSelection` reads the registry's declared default
+synchronously at composition and seeds `UiDeps.local.agentSelection` directly, so the combo
+paints on the first frame rather than waiting behind the probe's cold spawn.
+`KernelPort.preview()`'s `acknowledgeDisplay` is wired too (phase-8 Task 16):
 `Kernel`'s public surface now exposes `publishFrame`/`acknowledgeDisplay` backed by a real
 frame-token ledger, and `entrypoint/model/create-shell.ts`'s `toPreviewSessionHandle` pairs
 every frame with a genuine `FrameIdentityV1`. Still open: full preview-frame streaming (the

@@ -4,7 +4,7 @@ import { reatomComponent, useWrap } from "@reatom/react";
 
 import { trace } from "infrastructure/debug-log";
 import { Home } from "ui/home";
-import type { HomeAgentHealth, HomeCombo } from "ui/home";
+import type { HomeAgentSelection, HomeCombo } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
 import {
   ChatListPopup,
@@ -22,23 +22,17 @@ import { applyIntent } from "../model/intent";
 import { resolveActiveOverlay, resolveKey } from "../model/keymap";
 
 /**
- * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design/01-home.dc.html's `home()`). DIVERGENCE
- * (design sample data, not layout): the design hardcodes `agent ‹codex› model ‹gpt-5.5›` as
- * sample identity strings (user decision 2026-07-23). Home is shown before any project/kernel
- * snapshot exists, so `agent`/`model`/`effort` all come from the SAME M15 health probe the
- * health line below the combo already reads — never a hardcoded fallback.
+ * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design `home()`,
+ * `design/termcraft-engine.js:150-152`). DIVERGENCE (design sample data, not layout): the design
+ * hardcodes `‹codex› ‹gpt-5.5›` as sample identity (user decision 2026-07-23).
  *
- * `effort` — WP-4 (`BackendCapabilities.defaultSelection`, `core/ports/agent-backend.ts`) gives
- * the backend a real declared default (`claudeCapabilities()`: `claude-sonnet-5` at `high`).
- * Phase-8 Task 9 (WP-5) is what finishes routing it: `entrypoint/model/agent-health.ts`'s
- * `createAgentHealthProbe` folds `capabilities().defaultSelection` into the SAME
- * `HomeAgentHealth` reading `healthCheck()` produces — a SELECTION fact riding along the one
- * probe injection point Home actually has, not a fact `healthCheck()` itself reports.
- * `HomeAgentHealth.effort` (`ui/home/types.ts`) now exists to carry it, so this is a genuine
- * live read, not a literal kept in sync by hand.
+ * Read from the SYNCHRONOUS selection the composition root seeds, never from the health probe:
+ * `capabilities().defaultSelection` needs no I/O, and folding it into `healthCheck()`'s promise is
+ * exactly what left this row empty for up to 20 seconds (finding §2.7).
  */
-function homeCombo(health: HomeAgentHealth): HomeCombo {
-  return { agent: health.agent ?? "", model: health.model ?? "", effort: health.effort ?? "" };
+function homeCombo(selection: HomeAgentSelection | null): HomeCombo {
+  if (selection === null) return { agent: "", model: "", effort: "" };
+  return { agent: selection.agent, model: selection.model, effort: selection.effort };
 }
 
 /**
@@ -198,15 +192,14 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
   }
 
   if (screen === "home") {
-    const health = deps.local.homeHealth();
     return (
       <Home
         id="app-home"
         width={size.w}
         height={size.h}
-        health={health}
+        health={deps.local.homeHealth()}
         prompt={deps.local.prompt()}
-        combo={homeCombo(health)}
+        combo={homeCombo(deps.local.agentSelection())}
       />
     );
   }

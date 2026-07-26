@@ -2,7 +2,7 @@ import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import * as errore from "errore";
 
-import type { HomeAgentHealth } from "ui/home";
+import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
 import type { KernelPort } from "ui/kernel";
 
 import { App } from "../ui/App";
@@ -45,6 +45,15 @@ export interface UiRootOptions {
    * own default (a no-op) applies when this is omitted.
    */
   readonly requestExit?: () => void;
+  /**
+   * The synchronous agent/model/effort default (finding §2.7, phase-8 Task 13), resolved off
+   * the agent registry by the composition root's `resolveDefaultAgentSelection`
+   * (`entrypoint/model/agent-health.ts`) and forwarded verbatim into `createUiDeps`'s sixth
+   * parameter. Optional so every existing `createUiRoot` call keeps compiling; `createUiDeps`'s
+   * own default (`null`) applies when this is omitted — Home renders the honest empty combo,
+   * never an invented identity.
+   */
+  readonly agentSelection?: HomeAgentSelection;
 }
 
 export interface UiRootHandle {
@@ -85,6 +94,7 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
           options.env,
           options.agentHealthProbe,
           options.requestExit,
+          options.agentSelection,
         )}
       />,
     ),

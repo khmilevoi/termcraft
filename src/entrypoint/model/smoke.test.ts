@@ -458,7 +458,6 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
         Promise.resolve({
           present: true,
           agent: "claude",
-          version: "smoke-test",
           detail: "agent ready",
         }),
       );

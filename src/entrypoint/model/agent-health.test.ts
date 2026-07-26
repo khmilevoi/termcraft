@@ -1,9 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
 import type { AgentBackend } from "agent";
-import { createFakeAgentBackend } from "core/ports/fakes";
+import { createFakeAgentBackend, createFakeAgentRegistry } from "core/ports/fakes";
 
-import { createAgentHealthProbe, homeHealthFromAgentInfo } from "./agent-health";
+import {
+  createAgentHealthProbe,
+  homeHealthFromAgentInfo,
+  resolveDefaultAgentSelection,
+} from "./agent-health";
 
 // Matches the REAL `AgentInfo` shape (`agent/types.ts`) exactly — `backendId`, `health`,
 // `account` — no deviation from the plan's sketch was needed.
@@ -18,13 +22,12 @@ const CAPABILITIES = {
 };
 
 describe("homeHealthFromAgentInfo", () => {
-  test("ready is present, with the backend id and no invented version", () => {
+  test("ready is present, with the backend id", () => {
     const health = homeHealthFromAgentInfo({ ...base, health: { status: "ready" } });
 
     expect(health.present).toBe(true);
     expect(health.agent).toBe("claude");
     expect(health.detail).toBe("agent ready");
-    expect(health.version).toBeNull();
   });
 
   test("not-installed is the missing-agent state", () => {
@@ -61,7 +64,7 @@ describe("homeHealthFromAgentInfo", () => {
 });
 
 describe("createAgentHealthProbe", () => {
-  test("a successful reading folds the backend's declared default model/effort in (WP-4 + WP-5)", async () => {
+  test("a successful reading is health only — no capabilities()/model/effort folded in (phase-8 Task 13, finding §2.7)", async () => {
     const backend = createFakeAgentBackend({ capabilities: CAPABILITIES });
     backend.queueHealth({ backendId: "claude", health: { status: "ready" }, account: null });
 
@@ -72,9 +75,6 @@ describe("createAgentHealthProbe", () => {
       present: true,
       agent: "claude",
       detail: "agent ready",
-      version: null,
-      model: "claude-sonnet-5",
-      effort: "high",
     });
   });
 
@@ -98,9 +98,30 @@ describe("createAgentHealthProbe", () => {
     expect(health.present).toBe(false);
     expect(health.agent).toBe("claude");
     expect(health.detail).toContain("spawn ENOENT");
-    expect(health.model).toBe("claude-sonnet-5");
-    expect(health.effort).toBe("high");
     expect(warnSpy).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
+  });
+});
+
+describe("resolveDefaultAgentSelection (phase-8 Task 13, finding §2.7)", () => {
+  test("null for demo mode — no registry, never a fabricated identity", () => {
+    expect(resolveDefaultAgentSelection(null)).toBeNull();
+  });
+
+  test("null for an empty catalog", () => {
+    const registry = createFakeAgentRegistry([]);
+
+    expect(resolveDefaultAgentSelection(registry)).toBeNull();
+  });
+
+  test("the sole registered backend's declared default (WP-4), read synchronously off the catalog", () => {
+    const backend = createFakeAgentBackend({ capabilities: CAPABILITIES });
+    const registry = createFakeAgentRegistry([backend]);
+
+    expect(resolveDefaultAgentSelection(registry)).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+      effort: "high",
+    });
   });
 });

@@ -411,14 +411,13 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
   test("home-recheck re-runs the injected health probe and updates the health atom", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: true, agent: "claude", version: "0.99", detail: "agent ready" }),
+      Promise.resolve({ present: true, agent: "claude", detail: "agent ready" }),
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
     expect(deps.local.homeHealth()).toEqual({
       present: true,
       agent: "claude",
-      version: "0.99",
       detail: "agent ready",
     });
   });

@@ -202,6 +202,69 @@ describe("runApp", () => {
     });
   });
 
+  describe("the Task 13 / finding §2.7 synchronous agent selection wiring", () => {
+    /**
+     * Captures `deps.local.agentSelection` off the rendered React element's own props — the
+     * SAME technique `capturingAdapters` above uses for `requestExit`: `createRoot(renderer)
+     * .render(node)` here receives exactly the plain `{ type: App, props: { deps, ... } }`
+     * element `<App deps={...} />` evaluates to, so `node`'s `deps` prop IS the real `UiDeps`
+     * `createUiDeps` built from `runApp`'s own `resolveDefaultAgentSelection` call — proving the
+     * value actually reached `createUiDeps`'s sixth parameter, not merely that `runApp` compiled.
+     */
+    function selectionCapturingAdapters(calls: string[]): {
+      adapters: UiRootAdapters;
+      selection: () => unknown;
+    } {
+      let selection: unknown;
+      const adapters = recordingAdapters(calls, {
+        createRoot: () => ({
+          render: (node: unknown) => {
+            calls.push("render");
+            selection = (
+              node as { props: { deps: { local: { agentSelection: () => unknown } } } }
+            ).props.deps.local.agentSelection();
+          },
+          unmount: () => calls.push("unmount"),
+        }),
+      });
+      return { adapters, selection: () => selection };
+    }
+
+    test("a shell with a live agent registry seeds Home's combo with the registry's declared default, synchronously", async () => {
+      const calls: string[] = [];
+      const backend = createFakeAgentBackend();
+      const registry = createFakeAgentRegistry([backend]);
+      const { adapters, selection } = selectionCapturingAdapters(calls);
+      const app = await runApp({
+        shell: fakeShell(calls, registry),
+        adapters,
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      // Read synchronously, with NO `await tick()` — the whole point of finding §2.7 is that
+      // this fact is available before any probe (or any other async work) settles.
+      expect(selection()).toEqual({ agent: "fake-backend", model: "fake-model", effort: "medium" });
+
+      await app.close();
+    });
+
+    test("a shell with no live agent registry (demo mode) seeds null — the honest absence, never a fabricated identity", async () => {
+      const calls: string[] = [];
+      const { adapters, selection } = selectionCapturingAdapters(calls);
+      const app = await runApp({
+        shell: fakeShell(calls, null),
+        adapters,
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      expect(selection()).toBeNull();
+
+      await app.close();
+    });
+  });
+
   describe("the Gap D startup dispatch (an existing project with content opens straight into the Workspace)", () => {
     test("dispatches project.open at startup for a project that holds content", async () => {
       const calls: string[] = [];

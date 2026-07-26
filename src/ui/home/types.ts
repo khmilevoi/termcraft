@@ -7,23 +7,28 @@
 /** The mirrored agent health check Home renders (idle detail vs. missing-agent error). */
 export interface HomeAgentHealth {
   readonly present: boolean;
-  /** e.g. "0.34" */
-  readonly version?: string | null;
   /** e.g. "agent ready" (idle) or "claude CLI not found" (error) */
   readonly detail: string;
-  /** The backend id (M22), e.g. "claude" — sourced from the same probe as `version`/`detail`. */
+  /** The backend id (M22), e.g. "claude" — sourced from the same probe as `detail`. */
   readonly agent?: string;
-  /** The model label (M22), e.g. "sonnet-4.5" — same probe, drives the Home combo's model text. */
-  readonly model?: string;
-  /**
-   * The reasoning effort label (phase-8 Task 9 / WP-5), e.g. "high" — drives the Home combo's
-   * effort text. Unlike `agent`/`model` this is not something `AgentBackend.healthCheck()`
-   * itself reports (it carries no selection data at all); it rides along the SAME probe
-   * reading because `entrypoint/model/agent-health.ts`'s `createAgentHealthProbe` folds in
-   * `AgentBackend.capabilities().defaultSelection` (WP-4) — a SELECTION fact, not a HEALTH
-   * fact, merged here because there is exactly one probe injection point Home has.
-   */
-  readonly effort?: string;
+}
+
+/**
+ * The agent/model/effort triple Home's combo selectors read (finding §2.7, phase-8 Task 13). A
+ * synchronous fact the composition root resolves off the agent registry at construction
+ * (`entrypoint/model/agent-health.ts`'s own `HomeAgentSelection`) — mirrored here, not
+ * imported: `ui` never imports `entrypoint` (code-structure.md's DAG has the composition root
+ * importing every module, never the reverse), so the two declarations are kept structurally
+ * identical by convention, the same "verbatim lift" pattern `core/ports/agent-backend.ts`
+ * already uses for `agent/types.ts`. `HomeCombo` below is the always-concrete render-ready
+ * triple this feeds; `HomeAgentSelection | null` is the honest upstream fact — `null` only when
+ * the registry could not name a default (no registry, or an empty catalog), never a fabricated
+ * identity.
+ */
+export interface HomeAgentSelection {
+  readonly agent: string;
+  readonly model: string;
+  readonly effort: string;
 }
 
 /** The inline agent/model/effort combo selectors shown under the prompt box. */

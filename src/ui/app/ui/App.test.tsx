@@ -5,6 +5,7 @@ import { MouseButtons } from "@opentui/core/testing";
 import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
+import type { HomeAgentHealth } from "ui/home";
 import { requestGeometry } from "ui/preview";
 import {
   type ReactTestRenderer,
@@ -77,7 +78,6 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       return Promise.resolve({
         present: true,
         agent: "claude",
-        version: "0.34",
         detail: "agent ready",
       });
     });
@@ -236,32 +236,53 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     );
     expect(text).toContain("termcraft");
     expect(text).toContain("agent ready");
-    // WP-4/Task 9: `homeCombo`'s `model`/`effort` are genuine live reads of the health reading
-    // (see `App.tsx`'s own doc comment on `homeCombo`). This test injects NO probe, so it paints
-    // `createUiDeps`'s pre-probe placeholder (`DEFAULT_HOME_HEALTH`, `ui/app/model/deps.ts`),
-    // which deliberately carries NEITHER — both can only come from a probe, so the placeholder
-    // renders them honestly empty rather than briefly showing a value the probe would replace.
-    // Asserting the empty slots is what keeps a fabricated placeholder from creeping back in.
+    // Phase-8 Task 13 (finding §2.7): `homeCombo` reads `local.agentSelection`, the synchronous
+    // selection the composition root seeds — NOT the health probe (see `App.tsx`'s own doc
+    // comment on `homeCombo`). This test injects no `agentSelection` (createUiDeps's sixth
+    // parameter defaults to `null`), so `homeCombo(null)` renders the honest empty combo rather
+    // than an invented identity. Asserting the empty slots is what keeps a fabricated default
+    // from creeping back in.
     expect(text).toContain("‹›");
     expect(text).not.toContain("‹high›");
   });
 
-  test("Home's combo reads the injected probe's model and effort once it resolves", async () => {
+  test("paints agent · model · effort on the first frame, before any probe resolves (finding §2.7, phase-8 Task 13)", async () => {
     const kernel = createFakeKernel();
-    // The live path the placeholder above deliberately does not exercise: `createUiDeps`'s
-    // fourth parameter is the agent-health probe the composition root supplies
-    // (`entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`, which folds
-    // `claudeCapabilities().defaultSelection` into the reading). Distinctive values — not the
-    // real catalog's — so a pass cannot come from a hardcoded default anywhere in the chain.
-    const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({
-        present: true,
-        agent: "claude",
-        version: null,
-        detail: "probe reading",
-        model: "probe-model",
-        effort: "probe-effort",
-      }),
+    const neverResolves = () => new Promise<HomeAgentHealth>(() => {});
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 40 },
+      { root: ".", workspaceIdentity: "ws", projectExists: false },
+      neverResolves,
+      () => undefined,
+      { agent: "claude", model: "claude-sonnet-5", effort: "high" },
+    );
+
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 40,
+    });
+    open = renderer;
+    const frame = await renderer.waitForFrame((f) => f.includes("‹claude-sonnet-5›"));
+
+    expect(frame).toContain("agent ‹claude›");
+    expect(frame).toContain("model ‹claude-sonnet-5›");
+    expect(frame).toContain("effort ‹high›");
+  });
+
+  test("Home's combo is driven by the injected agentSelection, never the health probe (finding §2.7, phase-8 Task 13)", async () => {
+    const kernel = createFakeKernel();
+    // The health probe's own reading carries only `agent`/`detail` now — `HomeAgentHealth` has
+    // no `model`/`effort` field to fold in. `agentSelection` (createUiDeps's SIXTH parameter)
+    // supplies distinctive model/effort values instead, so a pass cannot come from the combo
+    // accidentally reading the probe or a hardcoded default anywhere in the chain.
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      undefined,
+      () => Promise.resolve({ present: true, agent: "claude", detail: "probe reading" }),
+      () => undefined,
+      { agent: "claude", model: "probe-model", effort: "probe-effort" },
     );
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,

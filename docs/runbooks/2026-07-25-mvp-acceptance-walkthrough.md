@@ -82,10 +82,18 @@ effort ‹high›` combo row. A status bar at the bottom reads `HOME` on the lef
 `AgentInfo` (`src/core/ports/agent-backend.ts`) carries no version field, so the
 health line reads `● claude · agent ready`, never `● claude 0.34 · agent ready` the
 way the design's Codex sample data shows. This is the honest rendering, not a missing
-probe result — verified in `src/entrypoint/model/agent-health.ts`'s
-`homeHealthFromAgentInfo`, which sets `version: null` on every one of its five
-branches with a comment explaining why. Do not treat a bare `● claude · agent ready`
-line as a bug.
+probe result — `ui/home`'s `HomeAgentHealth` (phase-8 Task 13, finding §2.7) carries
+no `version` field at all, so `src/entrypoint/model/agent-health.ts`'s
+`homeHealthFromAgentInfo` has nothing to set on any of its five branches. Do not
+treat a bare `● claude · agent ready` line as a bug.
+
+**The `agent ‹claude› model ‹claude-sonnet-5› effort ‹high›` combo paints on the
+first frame**, before the health probe resolves (finding §2.7, phase-8 Task 13):
+it is a synchronous fact — `entrypoint/model/agent-health.ts`'s
+`resolveDefaultAgentSelection` reads the agent registry's declared default at
+composition and seeds it directly into `UiDeps.local.agentSelection`, never riding
+the health probe's own promise. Do not expect the combo to be briefly empty and
+then fill in.
 
 **Failure branch — agent CLI missing or not logged in.** Home instead shows a red
 `agent` panel: `✗ claude CLI not found` (or `✗ claude CLI found but not logged in`),

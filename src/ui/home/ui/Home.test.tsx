@@ -28,7 +28,7 @@ const baseProps: HomeProps = {
   id: "home",
   width: 80,
   height: 20,
-  health: { present: true, version: "0.34", detail: "agent ready", agent: "claude" },
+  health: { present: true, detail: "agent ready", agent: "claude" },
   prompt: "",
   combo: { agent: "claude", model: "sonnet-4.5", effort: "high" },
 };
@@ -91,7 +91,7 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     open = handle;
     handle.mount(<Home {...baseProps} />);
     await handle.render();
-    const run = findRun(handle.capture(), "● claude 0.34 · agent ready");
+    const run = findRun(handle.capture(), "● claude · agent ready");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.green);
     expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
@@ -122,13 +122,13 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     open = handle;
     const noAgentProps: HomeProps = {
       ...baseProps,
-      health: { present: true, version: "0.34", detail: "agent ready" },
+      health: { present: true, detail: "agent ready" },
     };
     handle.mount(<Home {...noAgentProps} />);
     await handle.render();
     const frame = handle.capture();
     expect(findRun(frame, "● claude")).toBeUndefined();
-    expect(findRun(frame, "0.34 · agent ready")).toBeDefined();
+    expect(findRun(frame, " · agent ready")).toBeDefined();
   });
 });
 
@@ -246,6 +246,6 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
     await handle.render();
     const frame = handle.capture();
     expect(findRun(frame, "✗ claude CLI not found")).toBeUndefined();
-    expect(findRun(frame, "● claude 0.34 · agent ready")).toBeDefined();
+    expect(findRun(frame, "● claude · agent ready")).toBeDefined();
   });
 });

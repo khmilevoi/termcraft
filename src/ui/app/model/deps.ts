@@ -19,7 +19,7 @@ import type { UUIDv7 } from "core/protocol";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
-import type { HomeAgentHealth } from "ui/home";
+import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
@@ -79,6 +79,13 @@ export interface UiLocalState {
    * real reading, and again on every `home-recheck` — the SAME probe path, not a duplicated one.
    */
   readonly homeHealth: Atom<HomeAgentHealth>;
+  /**
+   * The agent/model/effort triple Home's combo renders (finding §2.7). Seeded SYNCHRONOUSLY by the
+   * composition root, because it is a synchronous fact: it must not wait behind the CLI health
+   * probe it never needed. `null` only in demo/test constructions with no registry — Home renders
+   * the honest empty combo for it, never an invented identity.
+   */
+  readonly agentSelection: Atom<HomeAgentSelection | null>;
 }
 
 /**
@@ -173,23 +180,13 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 // mock's Codex sample; it is still overwritten by the injected probe's real reading the moment
 // it resolves (M22).
 //
-// It carries ONLY what is known without probing: the one shipped backend's id, and the
-// `present`/`detail` pair that preserves the idle layout. `model`, `version` and `effort` are
-// deliberately ABSENT, because every one of them can only come from a probe:
-//   - `version`: `AgentInfo` has no version field at all, so the real reading is permanently
-//     `null` (`entrypoint/model/agent-health.ts` documents why). A placeholder "0.34" — the
-//     design's Codex sample version — would paint a number this application can NEVER show.
-//   - `model`: the real reading folds in `claudeCapabilities().defaultSelection` (`claude-sonnet-5`),
-//     so the former "sonnet-4.5" placeholder was not merely unsourced but a different string
-//     from the one that replaces it a frame later.
-//   - `effort`: same source as `model`; duplicating the backend's declared default here would
-//     put domain knowledge in `ui` where it could silently drift from the catalog.
-// `homeCombo` (`ui/app/ui/App.tsx`) already reads each of the three as `?? ""`, so their absence
-// renders an empty combo for that one synchronous frame — honestly empty rather than briefly wrong.
+// It carries only `present`/`agent`/`detail` — `HomeAgentHealth` has had no `model`/`effort`/
+// `version` fields since phase-8 Task 13 split them out (finding §2.7): Home's combo now reads
+// the SEPARATE, synchronous `local.agentSelection` atom below, seeded directly by the
+// composition root at construction rather than riding this health probe's promise.
 const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
   present: true,
   agent: "claude",
-  version: null,
   detail: "agent ready",
 };
 
@@ -205,6 +202,12 @@ export function createUiDeps(
   // `RunningApp.close()`. Defaults to a no-op so every existing test/demo construction of
   // `UiDeps` keeps compiling without knowing about shutdown at all.
   requestExit: () => void = () => undefined,
+  // The named Task 13 injection point (finding §2.7): the phase-8 composition root supplies the
+  // agent registry's synchronous default (`entrypoint/model/agent-health.ts`'s
+  // `resolveDefaultAgentSelection`), seeded here rather than fetched behind a probe. Defaults to
+  // `null` — the honest "no registry" absence every existing test/demo construction had before
+  // this parameter existed — never an invented identity.
+  agentSelection: HomeAgentSelection | null = null,
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
@@ -352,6 +355,7 @@ export function createUiDeps(
     pinDraft: atom("", "ui.local.pinDraft"),
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
+    agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
   };
 
   const refreshHomeHealth = action(async () => {

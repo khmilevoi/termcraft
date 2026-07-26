@@ -11,6 +11,7 @@
 import * as errore from "errore";
 
 import type { AgentBackend, AgentInfo } from "agent";
+import type { AgentRegistry } from "core/ports";
 import type { HomeAgentHealth } from "ui/home";
 
 /**
@@ -20,11 +21,10 @@ import type { HomeAgentHealth } from "ui/home";
  * control-flow analysis makes a sixth variant added later a `tsc` failure here, not a silent
  * "ready".
  *
- * `version` is always `null`: `AgentInfo` carries no version field at all (only `backendId`,
- * `health`, `account` — `agent/types.ts`), so reporting one would be a fabrication. The honest
- * value is the absence, per the repository's "honest values only" rule — even though
- * `HomeAgentHealth.version`'s own doc comment ("e.g. '0.34'") describes a shape this port has
- * never actually been able to supply.
+ * `HomeAgentHealth` carries no `version` field (phase-8 Task 13 removed it): `AgentInfo` never
+ * had one to report (only `backendId`, `health`, `account` — `agent/types.ts`), so the field
+ * was always a fabrication risk this map used to paper over by hardcoding `null` — dropping it
+ * from the type is the honest fix, not a placeholder this function still needs to supply.
  *
  * Wording sources: `design/01-home.dc.html`'s `home()`/`homeErr()`
  * (`design/termcraft-engine.js:143` and `:576`) supply verbatim text for exactly two of these
@@ -40,18 +40,13 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
     case "ready":
       // Verbatim design wording — design/termcraft-engine.js:143 (`home()`'s health line:
       // "● codex 0.34 · agent ready").
-      return { present: true, agent: backendId, detail: "agent ready", version: null };
+      return { present: true, agent: backendId, detail: "agent ready" };
 
     case "not-installed":
       // Verbatim design wording pattern — design/termcraft-engine.js:576 (`homeErr()`:
       // "✗ codex CLI not found"). The ✗ glyph is static UI chrome `Home.tsx` prefixes onto
       // this `detail` string, not part of the domain value itself.
-      return {
-        present: false,
-        agent: backendId,
-        detail: `${backendId} CLI not found`,
-        version: null,
-      };
+      return { present: false, agent: backendId, detail: `${backendId} CLI not found` };
 
     case "not-logged-in":
       // DIVERGENCE: no design mock distinguishes "found but not logged in" from "not found
@@ -61,7 +56,6 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
         present: false,
         agent: backendId,
         detail: `${backendId} CLI found but not logged in`,
-        version: null,
       };
 
     case "unhealthy-unconfirmed-exit":
@@ -73,7 +67,6 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
         present: false,
         agent: backendId,
         detail: `${backendId} exited without confirming shutdown; locked out until restarted`,
-        version: null,
       };
 
     case "sandbox-degraded":
@@ -88,7 +81,6 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
         present: true,
         agent: backendId,
         detail: `${backendId} sandbox degraded: ${health.detail}`,
-        version: null,
       };
   }
 }
@@ -100,22 +92,48 @@ export class AgentHealthProbeError extends errore.createTaggedError({
 }) {}
 
 /**
+ * The agent/model/effort triple Home's combo selectors read. A SELECTION fact, not a HEALTH fact
+ * — `AgentBackend.healthCheck()` reports none of it. Split out of the probe (fix-bundle §3.2,
+ * finding §2.7): `capabilities()` is synchronous on both port definitions and, for Claude, a plain
+ * object literal with no I/O at all, so riding it on `healthCheck()`'s promise made Home wait up to
+ * `DEFAULT_PROBE_DEADLINE_MS` (20 s) for a value that was available at construction.
+ */
+export interface HomeAgentSelection {
+  readonly agent: string;
+  readonly model: string;
+  readonly effort: string;
+}
+
+/**
+ * The sole registered backend's declared default. `null` for demo mode (no registry) or an empty
+ * catalog — the honest absence, never a duplicated literal: restating `claude-sonnet-5`/`high`
+ * inside `ui` or `entrypoint` would let it drift from the catalog that actually resolves a turn.
+ */
+export function resolveDefaultAgentSelection(
+  registry: AgentRegistry | null,
+): HomeAgentSelection | null {
+  if (registry === null) return null;
+  const [sole] = registry.list();
+  if (sole === undefined) return null;
+  return {
+    agent: sole.backendId,
+    model: sole.defaultSelection.model,
+    effort: sole.defaultSelection.effort,
+  };
+}
+
+/**
  * Builds the real Home health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
  * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshHomeHealth` actually calls.
  *
- * Folds together two SEPARATE facts the backend exposes, because `HomeAgentHealth` is the one
- * reading both Home's health line AND its `agent ‹…› model ‹…› effort ‹…›` combo read, and
- * there is exactly one probe injection point (`UiDeps.refreshHomeHealth`,
- * `ui/app/model/deps.ts`):
- *   - `healthCheck()` (async) — is the CLI there, logged in, healthy? Mapped through
- *     {@link homeHealthFromAgentInfo}.
- *   - `capabilities().defaultSelection` (sync, WP-4, `core/ports/agent-backend.ts`) — what
- *     model/effort would the Kernel resolve a turn against right now? `model`/`effort` were
- *     never genuinely sourced before this task (see the removed half of
- *     `ui/app/ui/App.tsx`'s `homeCombo` divergence comment) — this is what gives them one,
- *     without inventing a second probe call site. It is a SELECTION fact riding along a
- *     HEALTH reading, not something `healthCheck()` itself reports — documented here rather
- *     than folded in silently.
+ * Returns HEALTH ONLY (phase-8 Task 13, finding §2.7): is the CLI there, logged in, healthy?
+ * Mapped through {@link homeHealthFromAgentInfo}. It used to also fold in
+ * `capabilities().defaultSelection` — a SEPARATE, synchronous fact with no I/O at all — which
+ * meant Home's `agent ‹…› model ‹…› effort ‹…›` combo waited behind this probe's real cold
+ * spawn (up to `DEFAULT_PROBE_DEADLINE_MS`, 20 s) for a value that was available at
+ * construction. {@link resolveDefaultAgentSelection} now delivers that fact synchronously,
+ * straight from the composition root into `UiRootOptions.agentSelection` — it never rides this
+ * probe's promise again.
  *
  * A REJECTED `healthCheck()` (the promise itself rejects — a spawn/probe fault, not a reported
  * `AgentHealthState`) becomes an honest not-present reading carrying the failure's own message
@@ -133,18 +151,14 @@ export function createAgentHealthProbe(backend: AgentBackend): () => Promise<Hom
           cause,
         }),
     );
-    const { model, effort } = backend.capabilities().defaultSelection;
     if (info instanceof Error) {
       console.warn(info.message, info.cause);
       return {
         present: false,
         agent: backend.capabilities().backendId,
         detail: info.message,
-        version: null,
-        model,
-        effort,
       };
     }
-    return { ...homeHealthFromAgentInfo(info), model, effort };
+    return homeHealthFromAgentInfo(info);
   };
 }

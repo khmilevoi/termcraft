@@ -14,7 +14,7 @@ import type {
   ShellWithAgentRegistry,
   ShutdownSignal,
 } from "../types";
-import { createAgentHealthProbe } from "./agent-health";
+import { createAgentHealthProbe, resolveDefaultAgentSelection } from "./agent-health";
 import type { ProcessExit } from "./process-boundary";
 
 const SHUTDOWN_SIGNALS: readonly ShutdownSignal[] = ["SIGINT", "SIGTERM"];
@@ -111,6 +111,7 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     env: shell.env,
     adapters: options.adapters,
     agentHealthProbe: resolveAgentHealthProbe(shell.agentRegistry),
+    agentSelection: resolveDefaultAgentSelection(shell.agentRegistry) ?? undefined,
     requestExit,
   }).catch((cause: unknown) => new AppStartupError({ cause }));
   if (root instanceof Error) {
@@ -204,10 +205,14 @@ async function closeShell(shell: AppShell, boundary: ProcessBoundary): Promise<v
 }
 
 /**
- * Builds Home's real health probe from the shell's agent registry (phase-8 Task 9 / WP-5).
- * MVP's registry carries exactly one entry (`core/ports/agent-registry.ts`'s own header), so
- * the sole catalog entry names the backend to probe — no second, hardcoded source of truth for
- * the backend id duplicating `agent/claude`'s own `CLAUDE_BACKEND_ID`.
+ * Builds Home's real health probe from the shell's agent registry (phase-8 Task 9 / WP-5). Since
+ * phase-8 Task 13 (finding §2.7) this reports HEALTH only — the sibling synchronous fact, the
+ * registry's declared default agent/model/effort, is resolved separately by
+ * `resolveDefaultAgentSelection` (`./agent-health.ts`) and passed straight into `createUiRoot`'s
+ * `agentSelection`, not folded into this probe. MVP's registry carries exactly one entry
+ * (`core/ports/agent-registry.ts`'s own header), so the sole catalog entry names the backend to
+ * probe — no second, hardcoded source of truth for the backend id duplicating `agent/claude`'s
+ * own `CLAUDE_BACKEND_ID`.
  *
  * `undefined` only for demo mode, whose shell carries no live registry
  * (`create-shell.ts`'s `demoShell` — there is no real agent to probe in an offline demo):

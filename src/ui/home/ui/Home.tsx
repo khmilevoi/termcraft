@@ -43,7 +43,6 @@ const HOME_IDLE_HINT_KEYS: readonly StatusBarHintKey[] = [
 function HomeIdle(props: HomeProps) {
   const iw = promptBoxWidth(props.width);
   const agentName = neutralAgentName(props.health);
-  const version = props.health.version || "";
   const hasPrompt = props.prompt.length > 0;
   return (
     <box
@@ -140,8 +139,16 @@ function HomeIdle(props: HomeProps) {
               {`‹${props.combo.effort}›`}
             </text>
           </box>
+          {
+            // DIVERGENCE: design/termcraft-engine.js:143 draws "● codex 0.34 · agent ready" — a
+            // version segment `AgentInfo` (`core/ports/agent-backend.ts`) has never carried (see
+            // `entrypoint/model/agent-health.ts`'s own note). Phase-8 Task 13 removed the
+            // permanently-`null` `version` field from `HomeAgentHealth` entirely rather than keep
+            // threading a fact this shape can never supply; the line below drops the segment to
+            // match, never inventing a placeholder like the design's "0.34" sample.
+          }
           <text id={`${props.id}-health`} fg={SHELL_PALETTE.green} attributes={BOLD}>
-            {`● ${agentName} ${version} · ${props.health.detail}`}
+            {`● ${agentName} · ${props.health.detail}`}
           </text>
         </box>
         <box id={`${props.id}-content-bottom-spacer`} flexGrow={1} />

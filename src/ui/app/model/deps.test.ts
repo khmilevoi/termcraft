@@ -196,7 +196,7 @@ describe("createUiDeps Home health probe (M15)", () => {
   test("a startup probe reporting the agent present overwrites the pre-probe placeholder", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, () =>
-      Promise.resolve({ present: true, agent: "claude", version: "1.2", detail: "agent ready" }),
+      Promise.resolve({ present: true, agent: "claude", detail: "agent ready" }),
     );
 
     await tick();
@@ -204,7 +204,6 @@ describe("createUiDeps Home health probe (M15)", () => {
     expect(deps.local.homeHealth()).toEqual({
       present: true,
       agent: "claude",
-      version: "1.2",
       detail: "agent ready",
     });
   });
