@@ -2,6 +2,7 @@ import { SlashMenu } from "ui/slash-menu";
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintBadge, StatusBarHintKey } from "ui/status-bar";
+import { TextInput } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { homeSubmitAllowed } from "../types";
@@ -11,7 +12,6 @@ import { HomeHealthPanel } from "./HomeHealthPanel";
 const LOGO = "❯ termcraft";
 const TAGLINE = "design terminal UIs by describing them";
 const PLACEHOLDER = "Describe the TUI you want to design…";
-const CURSOR_GLYPH = "█";
 
 // Prompt-box width/height follow design `home()`'s `iw=min(w-16,84)` / `boxH=6`
 // constants (design/termcraft-engine.js:139 — `const iw=Math.min(w-16,84); const
@@ -22,7 +22,6 @@ const promptBoxWidth = (width: number) => Math.min(width - 16, 84);
 const PROMPT_BOX_HEIGHT = 6;
 
 const BOLD = shellAttrs({ bold: true });
-const BLINK_CURSOR = shellAttrs({ blink: true });
 
 /**
  * Whether the `· / model` hint fits after the combo row (design `home()` `:152` —
@@ -115,7 +114,6 @@ function homeIdleHintKeys(health: HomeAgentHealth): readonly StatusBarHintKey[] 
 function HomeIdle(props: HomeProps) {
   const { health } = props;
   const iw = promptBoxWidth(props.width);
-  const hasPrompt = props.prompt.length > 0;
   const checking = health.kind === "checking";
   // Design `homeHealth('login')` dims the shared "describe" prompt box itself (frame color,
   // caret, cursor) for the blocking outcome only — `checking`'s own box in `home()` stays
@@ -170,41 +168,26 @@ function HomeIdle(props: HomeProps) {
             flexDirection="column"
             padding={0}
           >
-            <box id={`${props.id}-prompt-row`} flexDirection="row">
-              <text
-                id={`${props.id}-prompt-caret`}
-                fg={blocked ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
-                attributes={BOLD}
-              >
-                {"❯ "}
-              </text>
-              <text
-                id={`${props.id}-prompt-text`}
-                fg={hasPrompt ? SHELL_PALETTE.fg : SHELL_PALETTE.faint}
-              >
-                {hasPrompt ? props.prompt : PLACEHOLDER}
-              </text>
-              {
-                // Design overlaps the blinking cursor onto the placeholder's first cell
-                // (design/termcraft-engine.js:145-146, `put` after the placeholder/typed
-                // `text`). Flexbox can't overlap two siblings in the same cell, so the closest
-                // faithful mapping appends the cursor right after the text — omitted entirely
-                // while `blocked`, matching design `homeHealth('login')`'s own
-                // `if(!blocking) this.put(...)` (`:173`), which never draws a cursor over a
-                // refused prompt. `blocked`'s own prompt is also genuinely non-interactive now
-                // (`keymap.ts`'s own comment, fix round 1 Finding 6) — appearance matches
-                // behaviour on both counts.
-                !blocked && (
-                  <text
-                    id={`${props.id}-prompt-cursor`}
-                    fg={SHELL_PALETTE.amber}
-                    attributes={BLINK_CURSOR}
-                  >
-                    {CURSOR_GLYPH}
-                  </text>
-                )
-              }
-            </box>
+            {
+              // Design overlaps the blinking cursor onto the placeholder's first cell
+              // (design/termcraft-engine.js:145-146, `put` at the SAME column as the preceding
+              // `text`) — `TextInput` (finding §2.6, phase-8 Task 18) reproduces that exactly,
+              // no absolute positioning needed. Cursor omitted entirely while `blocked`,
+              // matching design `homeHealth('login')`'s own `if(!blocking) this.put(...)`
+              // (`:173`), which never draws a cursor over a refused prompt. `blocked`'s own
+              // prompt is also genuinely non-interactive now (`keymap.ts`'s own comment, fix
+              // round 1 Finding 6) — appearance matches behaviour on both counts.
+            }
+            <TextInput
+              id={`${props.id}-prompt-row`}
+              value={props.prompt}
+              placeholder={PLACEHOLDER}
+              caret={"❯ "}
+              caretFg={blocked ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
+              valueFg={SHELL_PALETTE.fg}
+              placeholderFg={SHELL_PALETTE.faint}
+              showCursor={!blocked}
+            />
             <box id={`${props.id}-prompt-hint`} flexDirection="row">
               <text
                 id={`${props.id}-prompt-hint-create`}

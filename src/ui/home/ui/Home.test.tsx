@@ -115,11 +115,17 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.dim);
   });
 
-  test("an empty prompt shows the faint placeholder", async () => {
+  // finding §2.6 (phase-8 Task 18): the cursor overlaps the placeholder's first cell (design
+  // `home()`, `design/termcraft-engine.js:145-146` — `text(...)` then `put(...)` at the SAME
+  // column), so the "D" is the cursor glyph itself and the faint run is the REST of the
+  // placeholder, not the whole string. This replaces the old assertion that pinned the previous
+  // defect (cursor appended after the full placeholder text).
+  test("an empty prompt shows the faint placeholder, cursor overlapping its first cell", async () => {
     const frame = await renderHome();
-    const run = findRun(frame, "Describe the TUI you want to design");
-    expect(run).toBeDefined();
-    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
+    const rest = findRun(frame, "escribe the TUI you want to design");
+    expect(rest).toBeDefined();
+    expect(rest && extractRgb(rest.fg)).toBe<string>(SHELL_PALETTE.faint);
+    expect(frameContains(frame, "█")).toBe(true);
   });
 
   test("a non-empty prompt replaces the placeholder", async () => {
@@ -491,7 +497,8 @@ describe("Home screen — agent-missing error (design homeErr(), screen 12 err-a
 
     const readyFrame = await renderHome();
     expect(findRun(readyFrame, "✗ claude CLI not found")).toBeUndefined();
-    expect(findRun(readyFrame, "Describe the TUI you want to design")).toBeDefined();
+    // finding §2.6: the "D" is the overlapping cursor glyph — see the split-placeholder test above.
+    expect(findRun(readyFrame, "escribe the TUI you want to design")).toBeDefined();
   });
 });
 

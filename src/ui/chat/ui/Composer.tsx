@@ -1,3 +1,4 @@
+import { TextInput } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 import type { ShellToken } from "ui/theme";
 
@@ -14,8 +15,6 @@ export interface ComposerProps {
 }
 
 const BOLD = shellAttrs({ bold: true });
-const BLINK_CURSOR = shellAttrs({ blink: true });
-const CURSOR_GLYPH = "█";
 
 /**
  * The chat composer (design `chatSeq` composer block, `design/termcraft-engine.js:442-452`;
@@ -31,15 +30,17 @@ const CURSOR_GLYPH = "█";
  * in prose by `design/03-workspace-generating.dc.html`'s `ws-gen-typing-120` paragraph — "Empty,
  * it shows the faint ❯ generating… esc to cancel placeholder with no caret. Holding a draft it
  * looks alive, because it is: amber ❯, text in full foreground, blinking caret." This component
- * needed NO change to reproduce either state: `hasValue`/`disabled` (both already props) already
- * select exactly this pairing — an empty value falls to the faint placeholder branch below
+ * needed NO change to reproduce either state: `value`/`disabled` (both already props) already
+ * select exactly this pairing — an empty value falls to `TextInput`'s faint placeholder branch
  * regardless of `disabled`, and the caret/cursor already key off `disabled` alone. The caller
  * (`Workspace.tsx`) is what changed: `disabled` is no longer forced by `turn.phase === "running"`
  * on its own, only by a running turn WITH an empty draft — see its own comment at the call site.
+ *
+ * The input row itself is `ui/text-input`'s shared {@link TextInput} (finding §2.6, phase-8
+ * Task 18) — the caret, the value-or-placeholder, and the cursor cell come from that one
+ * component now, not a private copy.
  */
 export function Composer(props: ComposerProps) {
-  const hasValue = props.value.length > 0;
-  const showCursor = props.disabled !== true;
   const ctxValueFg = props.ctxCaution === true ? SHELL_PALETTE.amberHi : SHELL_PALETTE.fg;
 
   return (
@@ -65,23 +66,16 @@ export function Composer(props: ComposerProps) {
           {props.attach.text}
         </text>
       ) : null}
-      <box id={`${props.id}-input`} flexDirection="row">
-        <text
-          id={`${props.id}-input-caret`}
-          fg={props.disabled === true ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
-          attributes={BOLD}
-        >
-          {"❯ "}
-        </text>
-        <text id={`${props.id}-input-text`} fg={hasValue ? SHELL_PALETTE.fg : SHELL_PALETTE.faint}>
-          {hasValue ? props.value : props.placeholder}
-        </text>
-        {showCursor ? (
-          <text id={`${props.id}-input-cursor`} fg={SHELL_PALETTE.amber} attributes={BLINK_CURSOR}>
-            {CURSOR_GLYPH}
-          </text>
-        ) : null}
-      </box>
+      <TextInput
+        id={`${props.id}-input`}
+        value={props.value}
+        placeholder={props.placeholder}
+        caret={"❯ "}
+        caretFg={props.disabled === true ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
+        valueFg={SHELL_PALETTE.fg}
+        placeholderFg={SHELL_PALETTE.faint}
+        showCursor={props.disabled !== true}
+      />
     </box>
   );
 }

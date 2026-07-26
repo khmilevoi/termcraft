@@ -86,11 +86,14 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     await renderer.waitForFrame((frame) => frame.includes("claude CLI not found"));
     await renderer.act(() => renderer.mockInput.typeText("r"));
     // No health line exists any more (finding §2.7, phase-8 Task 15) — recovery is proven by
-    // the live idle prompt replacing the full-screen missing-agent takeover.
+    // the live idle prompt replacing the full-screen missing-agent takeover. finding §2.6
+    // (phase-8 Task 18): the cursor now overlaps the placeholder's first cell (design `home()`,
+    // `design/termcraft-engine.js:145-146`), so the on-screen text is the cursor glyph plus the
+    // REST of the placeholder — the leading "D" is the cursor, not a literal character.
     const frame = await renderer.waitForFrame((output) =>
-      output.includes("Describe the TUI you want to design"),
+      output.includes("escribe the TUI you want to design"),
     );
-    expect(frame).toContain("Describe the TUI you want to design");
+    expect(frame).toContain("escribe the TUI you want to design");
     expect(frame).not.toContain("claude CLI not found");
   });
 
@@ -233,12 +236,14 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     });
     open = renderer;
     // No health line exists any more (finding §2.7, phase-8 Task 15) — the live prompt
-    // placeholder is what proves Home settled on a `ready` outcome (Enter enabled).
+    // placeholder is what proves Home settled on a `ready` outcome (Enter enabled). finding §2.6
+    // (phase-8 Task 18): the cursor overlaps the placeholder's first cell, so the on-screen text
+    // is missing its literal leading "D" — matched here as "escribe the TUI" instead.
     const text = await renderer.waitForFrame(
-      (frame) => frame.includes("termcraft") && frame.includes("Describe the TUI"),
+      (frame) => frame.includes("termcraft") && frame.includes("escribe the TUI"),
     );
     expect(text).toContain("termcraft");
-    expect(text).toContain("Describe the TUI");
+    expect(text).toContain("escribe the TUI");
     // Phase-8 Task 13 (finding §2.7): `homeCombo` reads `local.agentSelection`, the synchronous
     // selection the composition root seeds — NOT the health probe (see `App.tsx`'s own doc
     // comment on `homeCombo`). This test injects no `agentSelection` (createUiDeps's sixth
@@ -788,10 +793,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     });
     open = renderer;
 
+    // finding §2.6 (phase-8 Task 18): the cursor overlaps the placeholder's first cell, so the
+    // on-screen text is missing its literal leading "D" (see the recovery test above).
     const home = await renderer.waitForFrame(
-      (frame) => frame.includes("termcraft") && frame.includes("Describe the TUI"),
+      (frame) => frame.includes("termcraft") && frame.includes("escribe the TUI"),
     );
-    expect(home).toContain("Describe the TUI you want to design");
+    expect(home).toContain("escribe the TUI you want to design");
     // No health line exists any more (finding §2.7, phase-8 Task 15) — the placeholder above
     // renders identically during `checking`, so Enter below needs the outcome to have actually
     // settled to something that allows submit (the default test probe resolves to `advisory`,
@@ -843,7 +850,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const workspaceFrame = await renderer.waitForFrame(
       (frame) => frame.includes("chat · claude") && frame.includes("preparing preview"),
     );
-    expect(workspaceFrame).toContain("Ask for changes");
+    // finding §2.6 (phase-8 Task 18): the composer is empty here, so its cursor overlaps the
+    // placeholder's first cell — the leading "A" is the cursor glyph, not a literal character.
+    expect(workspaceFrame).toContain("sk for changes");
 
     await renderer.act(() => renderer.mockInput.typeText("add a network panel"));
     expect(await renderer.waitForFrame((frame) => frame.includes("add a network panel"))).toContain(
@@ -886,7 +895,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const terminalFrame = await renderer.waitForFrame(
       (frame) => frame.includes("✓ updated main") && !frame.includes("generating design"),
     );
-    expect(terminalFrame).toContain("Ask for changes");
+    // finding §2.6 (phase-8 Task 18): the composer is empty here, so its cursor overlaps the
+    // placeholder's first cell — the leading "A" is the cursor glyph, not a literal character.
+    expect(terminalFrame).toContain("sk for changes");
 
     await renderer.act(() => renderer.mockInput.typeText("/"));
     const newChatMenu = await renderer.waitForFrame(

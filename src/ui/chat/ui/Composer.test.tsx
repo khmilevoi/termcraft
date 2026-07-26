@@ -176,7 +176,12 @@ describe("Composer component (design chatSeq composer block)", () => {
     expect(value && extractRgb(value.fg)).toBe<string>(SHELL_PALETTE.fg);
   });
 
-  test("an empty value shows the placeholder in faint", async () => {
+  // finding §2.6 (phase-8 Task 18): an enabled, empty composer overlaps the cursor onto the
+  // placeholder's first cell (design `drawChat()`, `design/termcraft-engine.js:256` — `text(...)`
+  // then `put(...)` at the SAME column), so the "A" is the cursor glyph itself and the faint run
+  // is the REST of the placeholder — replaces the old assertion that pinned the previous defect
+  // (cursor appended after the full placeholder text).
+  test("an empty value shows the placeholder in faint, cursor overlapping its first cell", async () => {
     const handle = await createHeadlessRenderer({ w: 60, h: 3 });
     open = handle;
     handle.mount(
@@ -189,9 +194,11 @@ describe("Composer component (design chatSeq composer block)", () => {
       />,
     );
     await handle.render();
-    const placeholder = findRun(handle.capture(), "Ask for changes…");
+    const frame = handle.capture();
+    const placeholder = findRun(frame, "sk for changes…");
     expect(placeholder).toBeDefined();
     expect(placeholder && extractRgb(placeholder.fg)).toBe<string>(SHELL_PALETTE.faint);
+    expect(findRun(frame, "█")).toBeDefined();
   });
 
   test("an attach line renders above the input in its given token color", async () => {

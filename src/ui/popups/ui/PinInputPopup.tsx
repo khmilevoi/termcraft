@@ -1,4 +1,4 @@
-import { SHELL_PALETTE, shellAttrs } from "ui/theme";
+import { BLINK_CURSOR, CURSOR_GLYPH, SHELL_PALETTE } from "ui/theme";
 
 /** Props for the {@link PinInputPopup} new-pin comment input box. */
 export interface PinInputPopupProps {
@@ -8,12 +8,9 @@ export interface PinInputPopupProps {
   readonly value: string;
 }
 
-const BLINK_CURSOR = shellAttrs({ blink: true });
-const CURSOR_GLYPH = "█";
-
 /**
  * The new-pin comment input box (design `wsPinInput`,
- * `design/termcraft-engine.js:489-501`; `design/08-pin-comments.dc.html`). Renders
+ * `design/termcraft-engine.js:633-643`; `design/08-pin-comments.dc.html`). Renders
  * only the input box itself — the numbered anchor badge marking the click point and
  * the dimmed workspace backdrop behind the popup are the App/overlay's concern, not
  * this component's.
@@ -23,6 +20,13 @@ const CURSOR_GLYPH = "█";
  * then `text(...,pys+3,...)`), outside the bordered frame. OpenTUI's popup here is
  * a single bordered box, so the footer folds into the same box's column layout as
  * a second row — the closest faithful mapping.
+ *
+ * This component deliberately does NOT use the shared `ui/text-input` `TextInput`
+ * (finding §2.6, phase-8 Task 18): `wsPinInput` (`:642` — CORRECTED, not the task
+ * brief's stale `:498`; verified at the source) draws the cursor one column PAST the
+ * end of a 26-character value, `this.put(b,pxs+2+26,pys+1,'█',...)`, and the mock
+ * never shows an empty state — this component already matches its own design source
+ * as-is. It only needs `TextInput`'s overlap rule if it gains a placeholder.
  */
 export function PinInputPopup(props: PinInputPopupProps) {
   return (
