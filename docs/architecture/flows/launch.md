@@ -27,35 +27,33 @@ Home's own submit path — creating the project itself — is a self-contained s
 
 ```mermaid
 flowchart TD
-    home["Home: centered prompt, inline agent selectors"] -- "MVP: Enter on prompt" --> create["create-new .termcraft/ + acquire ProjectLease"]
-    home -. "the typed text is carried in the command payload and then dropped — Gap C" .-> lost["no turn starts; the Workspace opens with an empty composer"]
+    home["Home: centered prompt, inline agent selectors"] -- "MVP: Enter on prompt" --> create["create-new .termcraft/ + acquire ProjectLease (project.create, carries the typed text)"]
     home -. "v1 setup path" .-> wizard["first-run wizard: target stack, preview defaults"]
     wizard --> create
-    create --> ws["Workspace"]
-    ws -- "composer's first send" --> firstgen["first generation turn"]
-    create -. "REQUIRED (Gap C): the Home text should start this turn, with no second send" .-> firstgen
+    create --> ready{"project reaches ready"}
+    ready -- "trusted" --> firstgen["first turn starts: the typed text becomes the first user message, no re-typing"]
+    ready -- "untrusted-read-only" --> notrust["no turn starts; Workspace opens read-only, composer available once trust is granted"]
+    firstgen --> ws["Workspace, turn already running"]
 ```
 
-**Gap C — Enter on Home must start the first turn, and does not.** The designer types a
-description into Home's prompt, presses Enter, and lands in a Workspace with an empty chat,
-an empty composer, and nothing running. Nothing signals that the text was discarded, so the
-app reads as broken on the very first interaction — this is a defect to fix, not the intended
-shape of the flow, and the `ws -- "composer's first send"` edge above describes only what the
-code does today.
-
-- **Required behavior:** Enter on Home creates the project, opens the Workspace, appends the
-  typed text as the first user message, and starts the first generation turn — one keystroke,
-  no re-typing.
-- **Why it does not happen:** `project.create` carries the typed text in its payload, but
-  `handleProjectCreate` (`src/core/kernel/model/handlers/project.ts`) reads only
-  `payload.creationDefaults.trust` and never that field. Independently, Home's local `prompt`
-  atom and the Workspace's local `composer` atom are two separate pieces of UI state with no
-  carry-over (`src/ui/app/model/deps.ts`), so even the weaker "pre-fill the composer" fallback
-  does not happen either.
-- **Shape of the fix:** the post-create path must reach `turn.start` with the Home text —
-  either by `runProjectReadySequence` chaining it once the project reaches ready, or by the UI
-  dispatching `turn.start` on the create completion. The turn-admission spine itself already
-  works; nothing below the Kernel needs to change.
+**Gap C — CLOSED (fix-bundle spec §3.1).** The designer types a description into Home's
+prompt, presses Enter, and the SAME text becomes the first user message of a running turn by
+the time the Workspace mounts — no empty composer, no second send. `project.create` already
+carried the typed text in its payload; `runProjectReadySequence`
+(`src/core/kernel/model/handlers/project.ts`) now reads it and, once the project reaches
+`ready` with `trust === "trusted"`, calls `beginTurn` — the SAME function `turn.start`'s own
+handler composes, so there is exactly one path into a turn. The chain fires LAST in the ready
+sequence, after `finishOpen` and the chat-tail restore: admission reads
+`workspace.local.toml`'s `activeChatId`, which only exists once the project is ready.
+`project.open` carries the identical optional `text` field for the same reason (a
+composition root deciding per launch whether Home's Enter means create-or-open must not have
+to fake a `project.create` against an existing project just to keep the first-turn text), but
+Home's own dispatch (`src/ui/app/model/intent.ts`) still always sends `project.create` today —
+wiring Home's Enter to choose between the two is a follow-up UI task, not this fix. An
+untrusted project (declined or not yet granted) never starts a turn: `beginTurn` is gated on
+the SAME `trust === "trusted"` condition `kernel.preview.enable` already uses, one check with
+two consequences — an untrusted project executes design code neither through preview nor
+through the agent.
 
 ## Walkthrough
 
@@ -129,10 +127,13 @@ code does today.
    `TrustSubject`, and records the machine-local implicit trust grant. The turn spine
    is now real end to end — `turn.start` composes admission → attempt → gate-retry →
    finalize, and admission durably appends the first user record before the agent
-   starts. What the interactive Home path does on submit is create the project and open
-   the Workspace via `project.create`; the first generation turn is dispatched from the
-   Workspace composer, not auto-chained from the Home prompt's own text. The v1 setup path may first run the
-   target-stack and preview-defaults wizard. Turn mechanics: `flows/generation-turn.md`.
+   starts. What the interactive Home path does on submit is create the project via
+   `project.create`, which carries the typed text; once that project reaches `ready`
+   trusted, `runProjectReadySequence` chains straight into `beginTurn` with that SAME
+   text (Gap C, spec §3.1, closed) — one keystroke on Home starts both the project and
+   its first generation turn, no second send from the Workspace composer. The v1 setup
+   path may first run the target-stack and preview-defaults wizard. Turn mechanics:
+   `flows/generation-turn.md`.
 8. Failure branch: if the agent exits unsuccessfully or the Gate rejects the proposed sources before apply, no canonical source is changed. The error is written to chat and the designer can send the next message to retry. This pre-apply guarantee does not add crash-safe atomicity to a later multi-file apply.
 9. Failure branch: if the agent CLI is missing or not logged in, the background health check — running since startup — surfaces the problem in the status bar; on Home's error state, `r` re-runs the check in place without restarting termcraft. The check itself is implemented. It runs a minimal query and reads the reply until something classifies it: the CLI announcing itself means installed and ready, an authentication signal means not logged in, and a failure to start the process at all means not installed. It is bounded by a deadline so a CLI that connects and then says nothing cannot hang startup, and it never resolves the ambiguous cases as ready — an inconclusive probe reports a problem rather than letting a paid turn start against a broken backend. It never throws, so a launch sequence cannot be taken down by it.
    - *Isolation:* the probe is confined exactly as a real turn is, because it runs before the designer has answered the trust prompt. It loads no project settings, runs in a scratch directory rather than the user's project — otherwise a project's own session-start hook could execute at launch — refuses tool calls under the same deny-by-default veto a turn uses, and has its CLI adopted into an owned process tree that is released on every outcome, so a probe process that ignores the abort is still reaped.
@@ -145,8 +146,9 @@ code does today.
 - `src/main.tsx` — the interactive executable root, the installed package's `bin` target run through Bun: an argv scan dispatches one of three modes of the SAME entry — `_host --stdio` runs the design-host stdio loop, `termcraft export [dir]` runs the headless export CLI, and anything else `bootstrap`s the interactive app; guarded by `import.meta.main` so importing it never seizes the terminal.
 - `src/entrypoint/model/bootstrap.ts` — resolves the project root from argv against the working directory, then composes the shell (`createShell`) and the running app (`runApp`).
 - `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`) — geometry/hover-pin queries stay unusable for the separate reason `flows/generation-turn.md` documents (`kernel.preview.enable` now fires once trust resolves to `trusted`, but nothing yet dispatches `preview.selectPage`/`selectCurrent` to reach `live`).
-- `src/core/kernel/model/handlers/project.ts` — `runProjectReadySequence`, the post-admission "reach ready" spine `project.create`/`project.open`/`project.retryOpen` share: transaction recovery, the orphan-turn scan, trust resolution (implicit grant on create; a prior durable grant honored on open, else `untrusted-read-only`), `enablePreviewIfTrusted` (fix-bundle Gap A, spec §2.2 — applies `kernel.preview.enable` right after trust resolves to `trusted`, before `finishOpen`, so the Preview machine leaves `disabled` for the snapshot the UI first sees; an untrusted project stays `disabled`), per-page Gate descriptors, durable export-pointer validation, `finishOpen`, and two independent chat reads (fix-bundle Gap E, `flows/chats.md` for the full picture): `listChatSummaries` publishes the project's FULL on-disk chat listing as `chat.changed`, and `restoreActiveChatTail` restores only the active chat's persisted tail as `chat.records` — a listing failure degrades to the active chat alone, a tail failure costs only the scrollback. Also `project.setTrust`, the follow-up accept/decline (which calls the SAME `enablePreviewIfTrusted` helper when it grants trust on an already-open project), and the documented no-interactive-prompt gap (a one-shot open command cannot block on a prompt).
-- `src/ui/app/model/deps.ts` — Home's local `prompt` atom and the Workspace's local `composer` atom: two separate pieces of UI state with no carry-over between them, the UI half of Gap C above.
+- `src/core/kernel/model/handlers/project.ts` — `runProjectReadySequence`, the post-admission "reach ready" spine `project.create`/`project.open`/`project.retryOpen` share: transaction recovery, the orphan-turn scan, trust resolution (implicit grant on create; a prior durable grant honored on open, else `untrusted-read-only`), `enablePreviewIfTrusted` (fix-bundle Gap A, spec §2.2 — applies `kernel.preview.enable` right after trust resolves to `trusted`, before `finishOpen`, so the Preview machine leaves `disabled` for the snapshot the UI first sees; an untrusted project stays `disabled`), per-page Gate descriptors, durable export-pointer validation, `finishOpen`, two independent chat reads (fix-bundle Gap E, `flows/chats.md` for the full picture): `listChatSummaries` publishes the project's FULL on-disk chat listing as `chat.changed`, and `restoreActiveChatTail` restores only the active chat's persisted tail as `chat.records` — a listing failure degrades to the active chat alone, a tail failure costs only the scrollback — and, last, `beginTurn` (fix-bundle Gap C, spec §3.1, closed): when `trustSource` carries a first-turn `text` and trust resolved to `"trusted"`, the SAME function `turn.start`'s own handler uses starts the first turn from it, chained after `finishOpen` and the chat-tail restore because admission reads `workspace.local.toml`'s `activeChatId`. Also `project.setTrust`, the follow-up accept/decline (which calls the SAME `enablePreviewIfTrusted` helper when it grants trust on an already-open project), and the documented no-interactive-prompt gap (a one-shot open command cannot block on a prompt).
+- `src/core/kernel/model/handlers/turn.ts` — `beginTurn`: mints the turn id, applies `beginAdmission`, and records the id as the Kernel's active turn, all three synchronously with no `await` between them, then launches the turn's async composition. Both `turn.start`'s own handler and `runProjectReadySequence`'s Gap C chain call this SAME function — there is exactly one path into a turn.
+- `src/ui/app/model/deps.ts` — Home's local `prompt` atom and the Workspace's local `composer` atom: two separate pieces of UI state with no carry-over between them; irrelevant to Gap C's fix, since the first turn now starts from the Home text directly at the Kernel, never by pre-filling or copying into the Workspace composer.
 - `src/core/capabilities/model/guards.ts` — `projectUntrustedReason`/`projectNotReadyReason`: the read-only enforcement on an untrusted project (only `project.setTrust`/`project.close`/`history.open` survive) that "execution disabled on decline" refers to, plus the pre-ready command gate.
 - `src/store/lease/model/lease.ts` — `ProjectLease`: the non-blocking Windows OS lock held for the process lifetime, and the bounded advisory record (pid, process start time, hostname, nonce) that is always diagnostic, never proof of ownership; refuses acquisition when another instance already holds the lock.
 - `src/store/model/factory.ts` — `openProject`'s existing-project launch sequence (durability pre-flight → lease → `SafeProjectFs` → journal-format gate → recover transactions → format-too-new gate → read `project.toml`/`workspace.local.toml` → orphan-turn scan → open) and `createProject`'s single project-creation transaction (durability pre-flight → create-new `.termcraft/` → mints `project.toml`, `.gitignore`, `workspace.local.toml`, and the first chat header), followed by the implicit trust grant.

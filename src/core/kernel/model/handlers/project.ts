@@ -23,6 +23,7 @@ import {
 import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
+import { beginTurn } from "./turn";
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext, HandlerMachine } from "./types";
 import { noOpOutcome, startedOutcome } from "./types";
 
@@ -311,9 +312,13 @@ function projectSetTrust(
 // --- The shared post-admission "reach ready" sequence (project.create / project.open / --
 // --- project.retryOpen's continuation) --------------------------------------------------
 
+/**
+ * What the ready sequence needs from whichever command started it: how to resolve trust, and the
+ * optional first-turn text to chain once the project reaches ready (spec §3.1).
+ */
 type TrustSource =
-  | { readonly kind: "create"; readonly trust: TrustDecisionV1 }
-  | { readonly kind: "open" };
+  | { readonly kind: "create"; readonly trust: TrustDecisionV1; readonly text?: string }
+  | { readonly kind: "open"; readonly text?: string };
 
 /** Applies `kernel.project.blockOpen` and builds its event — every failing step below funnels through this one place. */
 function blockOpen(
@@ -585,7 +590,7 @@ async function restoreActiveChatTail(
   return [{ kind: "chat.records", payload: buildChatRecordsPayload(activeChatId, loadResult) }];
 }
 
-/** The full post-admission sequence: recovery, orphan scan, trust, page descriptors, `finishOpen` — shared by `project.create`, `project.open`, and `project.retryOpen`'s continuation. */
+/** The full post-admission sequence: recovery, orphan scan, trust, page descriptors, `finishOpen`, the chat list/tail restore, and — when `trustSource` carries a first-turn `text` and trust resolved to `"trusted"` — the first turn (Gap C, spec §3.1) — shared by `project.create`, `project.open`, and `project.retryOpen`'s continuation. */
 async function runProjectReadySequence(
   context: HandlerContext,
   trustSource: TrustSource,
@@ -709,6 +714,22 @@ async function runProjectReadySequence(
   const chatTailEvents = await wrap(restoreActiveChatTail(context, activeChatId));
   events.push(...chatTailEvents);
 
+  // Gap C (spec §3.1): the typed description becomes the first turn, with no re-typing — through
+  // `beginTurn`, the SAME function `turn.start`'s own handler uses, so there is exactly one path
+  // into a turn. Chained AFTER `finishOpen` and the chat-tail restore, because admission reads
+  // `workspace.local.toml`'s `activeChatId`, which only exists once the project is ready.
+  //
+  // Gated on `trust === "trusted"` — the same condition as `kernel.preview.enable` above. One
+  // check, two consequences: an untrusted project executes design code neither through preview nor
+  // through the agent.
+  //
+  // The `beginTurn` invariant survives being called from inside this async closure: it rests on
+  // the atomicity of its own three synchronous steps, not on being in a command handler.
+  const firstTurnText = trustSource.text;
+  if (firstTurnText !== undefined && firstTurnText.length > 0 && trust === "trusted") {
+    events.push(...beginTurn(context, { text: firstTurnText }));
+  }
+
   return events;
 }
 
@@ -740,18 +761,25 @@ function projectCreate(
   context: HandlerContext,
 ): CommandOutcomeV1 {
   return beginProjectOpen(context, "beginCreate", "kernel.project.beginCreate", () =>
-    runProjectReadySequence(context, { kind: "create", trust: payload.creationDefaults.trust }),
+    runProjectReadySequence(context, {
+      kind: "create",
+      trust: payload.creationDefaults.trust,
+      text: payload.text,
+    }),
   );
 }
 
 // --- project.open ----------------------------------------------------------------------------
 
 function projectOpen(
-  _payload: CommandPayloadByKindV1["project.open"],
+  payload: CommandPayloadByKindV1["project.open"],
   context: HandlerContext,
 ): CommandOutcomeV1 {
   return beginProjectOpen(context, "beginOpen", "kernel.project.beginOpen", () =>
-    runProjectReadySequence(context, { kind: "open" }),
+    runProjectReadySequence(context, {
+      kind: "open",
+      ...(payload.text !== undefined ? { text: payload.text } : {}),
+    }),
   );
 }
 

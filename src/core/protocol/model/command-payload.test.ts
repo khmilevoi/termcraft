@@ -41,8 +41,13 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     ],
   },
   "project.open": {
-    valid: { root: "/abs/project" },
-    breaks: [{ root: "/abs/project", extra: 1 }, { root: "" }, {}],
+    valid: { root: "/abs/project", text: "build a system monitor" },
+    breaks: [
+      { root: "/abs/project", extra: 1 },
+      { root: "" },
+      {},
+      { root: "/abs/project", text: "" },
+    ],
   },
   "project.retryOpen": {
     valid: { recovery: { kind: "restore", restoreActionId: uuidv7() } },
@@ -515,6 +520,24 @@ describe("pin.create — geometryToken plus text, no other identity", () => {
     expect(
       schema.safeParse({ geometryToken: uuidv7(), text: "note", pageSlug: "dashboard" }).success,
     ).toBe(false);
+  });
+});
+
+describe("project.open — optional first-turn text (Gap C, fix-bundle spec §2.4/§3.1)", () => {
+  const schema = commandPayloadSchemas["project.open"];
+
+  test("accepts a plain project.open with no text (a relaunch carries none)", () => {
+    expect(schema.safeParse({ root: "/abs/project" }).success).toBe(true);
+  });
+
+  test("accepts project.open carrying the same optional first-turn text project.create has", () => {
+    expect(schema.safeParse({ root: "/abs/project", text: "build a system monitor" }).success).toBe(
+      true,
+    );
+  });
+
+  test("rejects an empty text, matching text's own non-empty rule everywhere else", () => {
+    expect(schema.safeParse({ root: "/abs/project", text: "" }).success).toBe(false);
   });
 });
 

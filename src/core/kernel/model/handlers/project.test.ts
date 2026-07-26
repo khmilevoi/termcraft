@@ -156,6 +156,7 @@ function createChatReaderStub(
 interface TestHarness {
   readonly handlerContext: HandlerContext;
   readonly getTrust: () => ProjectTrustV1;
+  readonly getActiveTurnId: () => UUIDv7 | null;
   readonly getPreviewSession: () => PreviewSession | null;
   readonly getLaunchOperations: () => readonly {
     readonly label: string;
@@ -289,6 +290,7 @@ function buildTestContext(options?: {
   return {
     handlerContext,
     getTrust: () => trust,
+    getActiveTurnId: () => activeTurnId,
     getPreviewSession: () => previewSession,
     getLaunchOperations: () => launchOperations,
     deps,
@@ -479,8 +481,10 @@ describe("project.create", () => {
       const terminalEvents = await wrap(launches[0]!.run());
 
       // Gap A (spec §2.2): a trusted project's ready sequence now enables preview FIRST — after
-      // trust, before the page descriptors and `finishOpen` that follow it.
-      expect(terminalEvents).toHaveLength(3);
+      // trust, before the page descriptors and `finishOpen` that follow it. Gap C (spec §3.1):
+      // a trusted create's non-empty `text` now ALSO chains the first turn, LAST — after
+      // `finishOpen` (there is no chat to restore here — `activeChatId` is null).
+      expect(terminalEvents).toHaveLength(4);
       for (const event of terminalEvents) expectValidEvent(event);
 
       expect(terminalEvents[0]!.kind).toBe("kernel.stateChanged");
@@ -514,8 +518,18 @@ describe("project.create", () => {
         metadata: { projectId: "fake-project-1", trust: "trusted" },
       });
 
+      expect(terminalEvents[3]!.kind).toBe("kernel.stateChanged");
+      expect(terminalEvents[3]!.payload).toMatchObject({
+        modelId: "kernel.turn.state",
+        action: "kernel.turn.beginAdmission",
+        previousTag: "idle",
+        nextTag: "admitting",
+      });
+
       expect(harness.machines.project.phase()).toBe("ready");
       expect(harness.machines.preview.phase()).toBe("idle");
+      expect(harness.machines.turn.phase()).toBe("admitting");
+      expect(harness.getActiveTurnId()).not.toBeNull();
       expect(harness.getTrust()).toBe("trusted");
       expect(trustGate.calls.some((call) => call.method === "grant")).toBe(true);
     });
@@ -1387,6 +1401,186 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       }
       expect((blockedPayload.metadata as { reason: string }).reason).toBe("page-list-failed");
       expect(harness.machines.project.phase()).toBe("blocked");
+    });
+  });
+});
+
+// --- fix-bundle Task 11 (Gap C, spec §3.1): the typed description becomes the first turn ------
+
+describe("Gap C — the first turn from create/open text", () => {
+  test("starts the first turn from project.create's text once the project reaches ready (Gap C)", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "trusted", workspaceIdentity: "ws-1" },
+        text: "build a system monitor",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.turn.phase()).not.toBe("idle");
+      expect(harness.getActiveTurnId()).not.toBeNull();
+
+      const stateChanged = terminalEvents.filter(
+        (event): event is PublishableEventV1<"kernel.stateChanged"> =>
+          event.kind === "kernel.stateChanged",
+      );
+      const finishIndex = stateChanged.findIndex(
+        (event) => event.payload.action === "kernel.project.finishOpen",
+      );
+      const admitIndex = stateChanged.findIndex(
+        (event) => event.payload.action === "kernel.turn.beginAdmission",
+      );
+      expect(finishIndex).toBeGreaterThanOrEqual(0);
+      expect(admitIndex).toBeGreaterThan(finishIndex);
+
+      // `beginTurn` also launches its own `kernel.turn.run` operation — proof this ready
+      // sequence chained into the SAME function `turn.start`'s own handler uses, not a
+      // second, parallel path into a turn.
+      expect(launches.some((launch) => launch.label === "kernel.turn.run")).toBe(true);
+    });
+  });
+
+  test("chains no turn for an untrusted project — one check, two consequences", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: null, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const harness = buildTestContext({ projectStore, pageReader });
+
+      const payload: CommandPayloadByKindV1["project.create"] = {
+        root: "/fake-root",
+        creationDefaults: { trust: "untrusted-read-only", workspaceIdentity: "ws-1" },
+        text: "build a system monitor",
+      };
+      projectHandlers["project.create"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.turn.phase()).toBe("idle");
+      expect(harness.machines.preview.phase()).toBe("disabled");
+      expect(harness.getActiveTurnId()).toBeNull();
+    });
+  });
+
+  test("project.open carries the same optional text", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      // Matching `describe("project.open")`'s own "resolves to trusted when a prior grant
+      // already covers this exact subject" precedent — `project.open` never grants trust
+      // implicitly, so a first turn only chains here because trust was ALREADY durably
+      // granted before this open.
+      const subject = await trustGate.buildSubject("/fake-root", "fake-project-1", null);
+      if ("code" in subject) throw new Error("unexpected failure building the fake subject");
+      await trustGate.grant(subject);
+
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      const payload: CommandPayloadByKindV1["project.open"] = {
+        root: "/fake-root",
+        text: "build a system monitor",
+      };
+      projectHandlers["project.open"](payload, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.turn.phase()).not.toBe("idle");
+      expect(harness.getActiveTurnId()).not.toBeNull();
+    });
+  });
+
+  test("a plain project.open with no text chains no turn", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const projectStore = createFakeProjectStore({
+        root: "/fake-root",
+        manifest: { projectId: "fake-project-1", pages: [home] },
+        workspaceState: { activePageSlug: home, activeChatId: null },
+      });
+      const pageReader = createFakePageStore({
+        order: [home],
+        sources: new Map([
+          [
+            home,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const trustGate = createFakeTrustGate();
+      const subject = await trustGate.buildSubject("/fake-root", "fake-project-1", null);
+      if ("code" in subject) throw new Error("unexpected failure building the fake subject");
+      await trustGate.grant(subject);
+
+      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+
+      projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
+      const launches = harness.getLaunchOperations();
+      const terminalEvents = await wrap(launches[0]!.run());
+      for (const event of terminalEvents) expectValidEvent(event);
+
+      expect(harness.machines.turn.phase()).toBe("idle");
+      expect(harness.getActiveTurnId()).toBeNull();
     });
   });
 });

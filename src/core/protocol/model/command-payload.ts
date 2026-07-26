@@ -32,9 +32,10 @@ import { frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto";
  * §10.1 copies them under *different* names — `frameTokenId` and `geometryTokenId` — so
  * the target renames the id rather than echoing the payload field. `project.setTrust`'s
  * `trust` (also §8.2-verbatim) and the `text` field chosen here for `turn.start`'s
- * "message text" (and reused by `project.create`) never reach §10.1's target at all: it
- * keeps only `workspaceIdentity` ("omit the trust decision") and states "No target
- * contains message/initial/title/pin/commit text".
+ * "message text" (and reused by `project.create`, then by `project.open` too — MVP blocker
+ * fix bundle §2.4/§3.1, Gap C) never reach §10.1's target at all: it keeps only
+ * `workspaceIdentity` ("omit the trust decision") and states "No target contains
+ * message/initial/title/pin/commit text".
  *
  * DTOs carry no `Error`, `Date`, `Map`, `Set`, class instance, function, `undefined`, or
  * `bigint` (§8.1); every schema below is built only from the JSON-safe primitives and the
@@ -68,9 +69,20 @@ const projectCreatePayloadSchema = z.strictObject({
   text: z.string().min(1),
 });
 
-/** `project.open`: "canonical root" (§8.2). */
+/**
+ * `project.open`: "canonical root" (§8.2), plus the SAME optional first-turn `text`
+ * `project.create` already carries (MVP blocker fix bundle §2.4/§3.1).
+ *
+ * Why `open` needs it too: Home's Enter is the one entry into the first turn, and the composition
+ * root decides per launch whether that Enter means create-or-open. Without this field, an Enter on
+ * a project that already exists but is empty would have to send `project.create`, and the
+ * difference is not cosmetic — `create` grants trust implicitly, `open` honours a prior grant. One
+ * optional field removes a class of "which semantics ran" ambiguity instead of hiding a special
+ * case inside `create`. Optional, never nullable: a plain `project.open` at relaunch carries none.
+ */
 const projectOpenPayloadSchema = z.strictObject({
   root: z.string().min(1),
+  text: z.string().min(1).optional(),
 });
 
 /**

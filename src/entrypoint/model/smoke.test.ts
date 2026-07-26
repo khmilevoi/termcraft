@@ -152,10 +152,15 @@ const { createElement } = createRequire(import.meta.url)("react") as {
  *    fix), and `ui/mirror/model/mirror.test.ts` (the mirror consuming it, plus `deriveScreen`
  *    genuinely leaving `"home"` — the exact condition this gap's own diagnosis named).
  *
- *    This test's own body still drives every §10 step past LINK 1 by dispatching directly
- *    at the `KernelPort`, not through the rendered App — that remains a valid, independent
- *    choice (exercising the real Kernel/store/gate chain without needing the App's own
- *    screen-routing components mounted), not a workaround for this now-fixed gap.
+ *    UPDATED (fix-bundle Task 11, Gap C, spec §3.1): this test's body used to drive LINK 2's
+ *    own chat/turn setup (`chat.create` -> `chat.switch` -> `turn.start`) by dispatching
+ *    directly at the `KernelPort` after LINK 1, because nothing yet made `project.create`'s
+ *    own typed text start a turn on its own. Now that `runProjectReadySequence` chains
+ *    `beginTurn` with that SAME text once the project reaches `ready` trusted, those three
+ *    dispatches are redundant with what LINK 1's own App interaction already does — this
+ *    test's body no longer performs a single Kernel dispatch of its own; LINK 1's rendered
+ *    App interaction is the only trigger, and everything downstream (the fake agent editing
+ *    staging, Gate, finalize) is driven by the real Kernel's own resulting turn.
  * 3. `core/export/model/publish.ts`'s own header: `ExportPublishPlanV1.operations`/`.payloads`
  *    stay HARDCODED EMPTY ("WP-5 wires `assembleExportPackage`'s real file list into
  *    operations/payloads ... until that later slice supplies the actual transaction content").
@@ -166,8 +171,6 @@ const { createElement } = createRequire(import.meta.url)("react") as {
  *    remains separate, future work (see the test body's own trailing comment for the exact
  *    shape); gap 3 is still a real blocker whenever that extension is attempted.
  */
-
-const PROTOCOL_VERSION = 1;
 
 const BACKEND_CAPABILITIES: BackendCapabilities = {
   backendId: "claude",
@@ -437,9 +440,19 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
 
     let renderer: ReactTestRenderer | null = null;
     try {
-      // ---- LINK 1: "open project" — driven through the rendered App's own Home prompt,
-      // the one interaction that does not depend on the Home -> Workspace transition this
-      // file's header documents as unreachable through the real Kernel today. ------------
+      // ---- LINK 1: "open project" -> LINK 2's own "prompt" — driven through the rendered
+      // App's own Home prompt, the one interaction that does not depend on the Home ->
+      // Workspace transition this file's header documents as unreachable through the real
+      // Kernel today. Fix-bundle Task 11 (Gap C, spec §3.1) closed the gap that used to force
+      // this test to separately dispatch `chat.create` -> `chat.switch` -> `turn.start`
+      // directly at the `KernelPort` after LINK 1: `store.createProject` already seeds
+      // `workspace.local.toml`'s `activeChatId` with the project's first chat header
+      // (`store/model/factory.ts`), and `runProjectReadySequence`
+      // (`core/kernel/model/handlers/project.ts`) now chains `beginTurn` with `project.create`'s
+      // own typed text the moment the project reaches `ready` trusted — the SAME text Home's
+      // Enter just sent. One App interaction now drives project creation AND the first turn;
+      // both waits below are subscribed BEFORE that interaction, so nothing racing ahead of
+      // either `await` is ever missed (this file's own `waitForEvent` doc). ------------------
       const env: UiEnv = { root, workspaceIdentity: root };
       const deps = createUiDeps(port, { w: 120, h: 36 }, env, () =>
         Promise.resolve({
@@ -463,9 +476,13 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
           (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
             "kernel.project.finishOpen",
       );
+      const firstAttemptStarted = waitForEvent(
+        kernel,
+        (envelope) => envelope.kind === "turn.attemptStarted",
+      );
       await renderer.act(() => renderer?.mockInput.typeText("build the home page"));
       await renderer.act(() => renderer?.mockInput.pressEnter());
-      const readyEnvelope = await projectReady;
+      await projectReady;
 
       // The real store genuinely created `.termcraft` on disk — proof "open project" ran
       // through the real store, not merely through an in-memory transition.
@@ -474,56 +491,8 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       await renderer.destroy();
       renderer = null;
 
-      // ---- LINK 2 setup: chat.create -> chat.switch, the legitimate preparatory dispatch
-      // establishing `activeChatId` (`turn.start`'s real handler requires one; the current
-      // UI never issues these from the unreachable Workspace screen — see this file's
-      // header) — dispatched directly at the KernelPort, exactly as the task brief
-      // sanctions for a §10-named kernel step the UI cannot reach today. -------------------
-      const chatCreated = waitForEvent(kernel, (envelope) => envelope.kind === "chat.changed");
-      const createResult = await port.dispatch({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: uuidv7(),
-        expectedRevision: readyEnvelope.stateRevision,
-        kind: "chat.create",
-        payload: {},
-      });
-      if (createResult instanceof Error) throw createResult;
-      expect(createResult.status).toBe("accepted");
-      const createdEnvelope = await chatCreated;
-      const createdChatId = (createdEnvelope.payload as EventPayloadByKindV1["chat.changed"])
-        .activeChatId;
-
-      const chatSwitched = waitForEvent(
-        kernel,
-        (envelope) =>
-          envelope.kind === "chat.changed" &&
-          (envelope.payload as EventPayloadByKindV1["chat.changed"]).added.length === 0,
-      );
-      const switchResult = await port.dispatch({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: uuidv7(),
-        expectedRevision: createdEnvelope.stateRevision,
-        kind: "chat.switch",
-        payload: { chatId: createdChatId },
-      });
-      if (switchResult instanceof Error) throw switchResult;
-      expect(switchResult.status).toBe("accepted");
-      const switchedEnvelope = await chatSwitched;
-
-      // ---- LINK 2: "prompt" -> "fake agent edits staging" -> "gate" -----------------------
-      const firstAttemptStarted = waitForEvent(
-        kernel,
-        (envelope) => envelope.kind === "turn.attemptStarted",
-      );
-      const turnStartResult = await port.dispatch({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: uuidv7(),
-        expectedRevision: switchedEnvelope.stateRevision,
-        kind: "turn.start",
-        payload: { text: "build the home page" },
-      });
-      if (turnStartResult instanceof Error) throw turnStartResult;
-      expect(turnStartResult.status).toBe("accepted");
+      // ---- LINK 2: "fake agent edits staging" -> "gate" — the first turn Gap C's own chain
+      // already started above; nothing left to dispatch. -------------------------------------
       await firstAttemptStarted;
 
       const startCall = agentBackend.calls.find((call) => call.method === "startTurn");
