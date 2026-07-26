@@ -556,13 +556,17 @@ describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix ro
 
 describe("mirror.apply — turn.started producer/consumer seam (fixlane-K1-turn-spine.json)", () => {
   // This mirror-side gating (turn.attemptStarted/turn.progress/turn.gateRejected all `return`
-  // unless `current.phase === "running"`, case "turn.started" — mirror.ts:230 — is the ONLY
-  // transition that sets it) was always correct; the seam bug was that NO real producer ever
-  // published `turn.started` (`core/kernel/model/handlers/turn.ts`'s own header, "deliberately
-  // not published"). These two tests pin BOTH sides: the first replays exactly what a real
-  // turn looked like to the mirror BEFORE the fix (no `turn.started` at all); the second
-  // replays the exact sequence `handlers/turn.ts`'s `publish` now emits (`turn.started`
-  // strictly before the first `turn.attemptStarted`, both same `turnId`/`deadline`).
+  // unless `current.phase === "running"`) was always correct; the seam bug was that NO real
+  // producer ever published `turn.started` (`core/kernel/model/handlers/turn.ts`'s own header,
+  // "deliberately not published"). `case "turn.started"` (mirror.ts:266) sets that phase, but
+  // — fix-bundle Task 11 fix round 1 — it is no longer the ONLY transition that does: the
+  // `kernel.turn.beginAdmission` fold (its own dedicated describe block, above) sets it first,
+  // during admission, and `turn.started` still unconditionally overwrites that moments later;
+  // neither changes the gating this seam is about. These two tests pin BOTH sides: the first
+  // replays exactly what a real turn looked like to the mirror BEFORE the fix (no `turn.started`
+  // at all); the second replays the exact sequence `handlers/turn.ts`'s `publish` now emits
+  // (`turn.started` strictly before the first `turn.attemptStarted`, both same
+  // `turnId`/`deadline`).
 
   test("WITHOUT a prior turn.started, the real event sequence (attemptStarted -> progress -> completed) never leaves idle — pins why the seam bug mattered", () => {
     const m = createMirror();

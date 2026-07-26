@@ -1480,10 +1480,15 @@ describe("Gap C — the first turn from create/open text", () => {
   test("chains no turn for an untrusted project — one check, two consequences", async () => {
     await context.start(async () => {
       const home = slug("home");
+      // Non-null `activeChatId` (fix round 2 minor 1) — with the `activeChatId !== null` gate
+      // fix round 1 added, `activeChatId: null` would ALSO block the chain on its own, leaving
+      // this test unable to isolate the ONE condition its own name claims (trust). A real id
+      // here means trust is the sole reason nothing starts.
+      const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        workspaceState: { activePageSlug: null, activeChatId: null },
+        workspaceState: { activePageSlug: null, activeChatId },
       });
       const pageReader = createFakePageStore({
         order: [home],
@@ -1567,10 +1572,15 @@ describe("Gap C — the first turn from create/open text", () => {
   test("a plain project.open with no text chains no turn", async () => {
     await context.start(async () => {
       const home = slug("home");
+      // Non-null `activeChatId` — same fix-round-2 reasoning as the untrusted test above: trust
+      // is already granted below, so without a real id here the `activeChatId !== null` gate
+      // would ALSO block the chain, and this test would no longer isolate the ONE condition its
+      // own name claims (the absent `text`).
+      const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        workspaceState: { activePageSlug: home, activeChatId: null },
+        workspaceState: { activePageSlug: home, activeChatId },
       });
       const pageReader = createFakePageStore({
         order: [home],

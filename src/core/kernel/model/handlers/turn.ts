@@ -276,14 +276,19 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   `idle`, and no exit clears it before the machine has actually reached `idle` either.
  *
  *   TURN.STARTED — NOW PUBLISHED (was: "deliberately not published"; corrected per
- *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): `ui/mirror/model
- *   /mirror.ts`'s own `case "turn.started"` is the ONLY transition that moves `TurnMirror`
- *   into `"running"` — every later `turn.attemptStarted`/`turn.progress`/`turn.gateRejected`
- *   the mirror applies is gated on `phase === "running"` already, so treating the first
- *   `turn.attemptStarted` as sufficient proof (this file's prior design) left the mirror
- *   permanently `"idle"` for the WHOLE turn: no streamed reasoning/tool steps, no gate-retry
- *   lines, and (via `actionContext.turnRunning`) no working Esc-to-cancel. `publish` (below)
- *   now synthesizes and sends a schema-valid `PublishableEventV1<"turn.started">` —
+ *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): at the time this fix
+ *   landed, `ui/mirror/model/mirror.ts`'s own `case "turn.started"` was the ONLY transition
+ *   that moved `TurnMirror` into `"running"` — every later `turn.attemptStarted`/
+ *   `turn.progress`/`turn.gateRejected` the mirror applies is gated on `phase === "running"`
+ *   already, so treating the first `turn.attemptStarted` as sufficient proof (this file's prior
+ *   design) left the mirror permanently `"idle"` for the WHOLE turn: no streamed reasoning/tool
+ *   steps, no gate-retry lines, and (via `actionContext.turnRunning`) no working Esc-to-cancel.
+ *   UPDATED (fix-bundle Task 11 fix round 1): `mirror.ts` now ALSO moves `TurnMirror` into
+ *   `"running"` from `kernel.turn.beginAdmission` — `case "turn.started"` (mirror.ts:266) is no
+ *   longer the only transition that does, though it still unconditionally overwrites whatever
+ *   that earlier fold set the moment it fires, with the real `deadline` the admission-time fold
+ *   cannot yet know. `publish` (below) now synthesizes and sends a schema-valid
+ *   `PublishableEventV1<"turn.started">` —
  *   `{turnId, chatId: activeChatId, deadline}` (`event-payload.ts`'s `TurnStartedPayloadV1`) —
  *   the MOMENT it observes the first `turn.attemptStarted`, strictly BEFORE forwarding that
  *   event itself. `deadline` is the SAME non-resettable absolute bound `attempt.ts` already
@@ -748,12 +753,16 @@ function applyAbortStep(
  * any of `runTurnStart`'s own port reads ever run — so a refusal that used to just `return []`
  * left the machine permanently stranded in `"admitting"` with a non-null `activeTurnId`:
  * `capabilities/model/guards.ts`'s own `turnStartReason` then rejects every LATER `turn.start`
- * with `TURN_ALREADY_ACTIVE` (phase !== "idle"), and Esc cannot rescue it either — `ui/mirror`'s
- * `TurnMirror` never reaches `"running"` without a `turn.started` event, which `publish` only
- * ever synthesizes on the first `turn.attemptStarted`, never reached by any of these branches.
- * Before `beginTurn` existed, `beginAdmission` lived inside `runAdmission`, downstream of every
- * one of these refusals, so an early failure left the machine in `idle` and the user could
- * simply retry — this helper restores that same recoverability.
+ * with `TURN_ALREADY_ACTIVE` (phase !== "idle"). UPDATED (fix-bundle Task 11 fix round 1):
+ * `ui/mirror`'s `TurnMirror` now reaches `"running"` the moment `kernel.turn.beginAdmission`
+ * publishes, not only on `turn.started`, so Esc CAN reach `turn.cancel` with the real admitted
+ * id during this same window (a legal `admitting -> terminalizing` row) — but that is not a
+ * substitute for this helper: every one of these ten branches resolves automatically, from a
+ * port read or a resolver refusing, well before a user could notice anything is wrong and press
+ * a key, so recoverability here must not depend on a keystroke that may never come. Before
+ * `beginTurn` existed, `beginAdmission` lived inside `runAdmission`, downstream of every one of
+ * these refusals, so an early failure left the machine in `idle` and the user could simply
+ * retry — this helper restores that same recoverability, automatically.
  *
  * Walks the REAL legal edges `TURN_TRANSITION_TABLE` defines for exactly this exit —
  * `admitting -> terminalizing` (Task 2's own row, added for precisely this case) ->
