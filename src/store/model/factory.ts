@@ -133,6 +133,7 @@ import type {
   WorkspaceStateStore,
 } from "../types";
 import { scanChatListingPrefix } from "./chat-listing";
+import type { ChatListingScanIssue } from "./chat-listing";
 
 // `store/model/factory.ts` — the composition-root entry point (T19). Wires every already-
 // landed submodule against ONE injected `StoreDeps` bundle into the flat `Store` port
@@ -885,6 +886,14 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
           console.warn(`store: chat listing could not stat ${relPath}:`, stat.message);
           continue;
         }
+        // A genuinely empty file is neither an identity mismatch nor a decode failure — it is
+        // most likely a chat header whose durable write has not landed yet — so it gets its
+        // own honest message rather than borrowing `scanChatListingPrefix`'s generic ones
+        // (review fix round 1, Minor).
+        if (stat.size === 0) {
+          console.warn(`store: chat listing skipping ${relPath}, chat file is empty`);
+          continue;
+        }
         const prefix = safeFs.readRange(
           relPath,
           0,
@@ -895,18 +904,44 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
           continue;
         }
 
-        const entry = scanChatListingPrefix(prefix, chatId, projectId);
-        if (entry === null) {
-          console.warn(
-            `store: chat listing skipping ${relPath}, header identity mismatch or unreadable header`,
-          );
-          continue;
-        }
-        entries.push(entry);
+        const entry = scanChatListingPrefix(prefix, chatId, projectId, (issue) =>
+          logChatListingIssue(relPath, issue),
+        );
+        if (entry !== null) entries.push(entry);
       }
       return entries;
     },
   };
+}
+
+/**
+ * `scanChatListingPrefix`'s `onIssue` sink (review fix round 1, Finding 1/2): every reason a
+ * row is skipped, or kept but left unnamed, is logged with the REAL cause — never a generic
+ * catch-all — matching `scanOrphanTurns`'s own precedent of logging `doc.message` rather than
+ * a fixed string (errore rule 21).
+ */
+function logChatListingIssue(relPath: string, issue: ChatListingScanIssue): void {
+  if (issue.kind === "no-header-line") {
+    console.warn(`store: chat listing skipping ${relPath}, no complete header line found`);
+    return;
+  }
+  if (issue.kind === "header-unreadable") {
+    console.warn(
+      `store: chat listing skipping ${relPath}, chat header unreadable:`,
+      issue.cause.message,
+    );
+    return;
+  }
+  if (issue.kind === "identity-mismatch") {
+    console.warn(
+      `store: chat listing skipping ${relPath}, chat header names chatId ${issue.headerChatId} projectId ${issue.headerProjectId}, which does not match its filename/project`,
+    );
+    return;
+  }
+  console.warn(
+    `store: chat listing ${relPath} has an unreadable record before its first user record — listing it without a name:`,
+    issue.cause.message,
+  );
 }
 
 // ---- orphan turn scan (turn-durability §7.7) -----------------------------------------
