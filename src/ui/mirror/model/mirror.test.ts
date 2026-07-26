@@ -546,6 +546,39 @@ describe("mirror.apply — turn timeline (fix-bundle Task 19: reasoning + tool s
     expect(turn.timeline).toEqual([]);
     expect(turn.gateRetries).toHaveLength(1);
   });
+
+  test("startedAt survives a turn.attemptStarted retry — only the timeline resets (review round 1, Minor)", () => {
+    // A counting clock, not a constant one: if `turn.attemptStarted` ever called `now()` again,
+    // this would observe 99_999 instead of the seeded 7_000, proving preservation rather than
+    // coincidence.
+    let calls = 0;
+    const now = () => {
+      calls += 1;
+      return calls === 1 ? 7_000 : 99_999;
+    };
+    const mirror = createMirror(now);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "first attempt" }));
+    mirror.apply(gateRejected(TURN_ID, 1));
+    mirror.apply(attemptStarted(TURN_ID, 2));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.startedAt).toBe(7_000);
+    expect(calls).toBe(1);
+  });
+
+  test("an empty reasoning block is dropped, never appended to the timeline (review round 1, Finding 2)", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", op: "read", target: "page.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "" }));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.timeline).toEqual([{ kind: "step", op: "read", target: "page.tsx" }]);
+  });
 });
 
 describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix round 1, Finding 2)", () => {
@@ -577,6 +610,38 @@ describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix ro
       usage: null,
       gateRetries: [],
     });
+  });
+
+  test("turn.started preserves the startedAt/timeline the beginAdmission fold already established for the SAME turnId (review round 1, Finding 1)", () => {
+    // A counting clock: if `turn.started` called `now()` again for this SAME turnId, this would
+    // observe 99_999 instead of the seeded 5_000 — proving preservation, not coincidence.
+    let calls = 0;
+    const now = () => {
+      calls += 1;
+      return calls === 1 ? 5_000 : 99_999;
+    };
+    const m = createMirror(now);
+    const turnId = uuidv7();
+    m.apply(
+      event(
+        "kernel.stateChanged",
+        {
+          modelId: "kernel.turn.state",
+          action: "kernel.turn.beginAdmission",
+          previousTag: "idle",
+          nextTag: "admitting",
+          metadata: {},
+        },
+        { correlation: { turnId } },
+      ),
+    );
+    m.apply(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
+    const turn = m.turn();
+    if (turn.phase !== "running") throw new Error("unreachable");
+    expect(turn.startedAt).toBe(5_000);
+    expect(turn.timeline).toEqual([]);
+    expect(turn.deadline).toBe(TEST_TS);
+    expect(calls).toBe(1);
   });
 
   test("turn.started still overwrites it moments later, with the real deadline", () => {

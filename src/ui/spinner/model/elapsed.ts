@@ -18,6 +18,16 @@ export const ELAPSED_INTERVAL_MS = 1_000;
  * loop is never awaited from Reatom code — the exact shape `frames.ts`'s `spinnerGlyph` already
  * uses. An `await` on an unwrapped inner promise is its own context boundary, so binding inside
  * the loop instead would write to the default context.
+ *
+ * Starts at `0`, not `Date.now()`: seeding it at MODULE-EVALUATION time would still be stale by
+ * the time any real turn starts (the module loads once at app startup; a turn can start minutes
+ * or hours later), so it would not actually fix a cold read — it would just move the same wrong
+ * value earlier. `withConnectHook`'s callback is itself enqueued as an async effect
+ * (`@reatom/core`'s `_enqueue(..., "effect")`), not run synchronously on connect, so the FIRST
+ * read after a fresh connection can still observe this `0` before `advance()` has fired. `Spinner`
+ * is the layer that neutralizes this (`Math.max(elapsedTick(), Date.now())`), because only the
+ * point of use knows what "correct for right now" means; this atom's own job is just to be the
+ * shared periodic re-render trigger holding an approximately-current instant.
  */
 export const elapsedTick = atom(0, "ui.spinner.elapsedTick").extend(
   withConnectHook(() => {

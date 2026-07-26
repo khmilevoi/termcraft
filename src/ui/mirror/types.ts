@@ -74,12 +74,19 @@ export type TurnMirror =
       /** Tool steps and reasoning blocks in one arrival-ordered list — see {@link TurnTimelineEntry}. */
       timeline: readonly TurnTimelineEntry[];
       /**
-       * When `turn.started` ARRIVED, in ms from the UI's own clock. The design's long-turn frame
-       * shows elapsed time in the spinner (`⠹ generating design… · 2m 40s`,
-       * `design/termcraft-engine.js:547`), but `turn.started` carries only an absolute `deadline`
-       * — the protocol has no "started at" fact — so elapsed is derived client-side from this. It
-       * is honestly the UI's own clock, not a Kernel fact, which is why it is named as new mirror
-       * state rather than smuggled in as a payload field.
+       * When this turn FIRST became `running`, in ms from the UI's own clock. Seeded by
+       * whichever event establishes that first — usually `kernel.turn.beginAdmission` (Task 11),
+       * since it fires before `turn.started`; but `turn.started` seeds it itself when a turn
+       * reaches the mirror with no preceding admission fold. Once set for a `turnId`, later
+       * events for that SAME turn (`turn.started` overwriting the fold, `turn.attemptStarted` on
+       * a retry) preserve it rather than reseeding — reseeding would make the elapsed-time
+       * spinner visibly jump backwards mid-turn (fix-bundle Task 19 review round 1, Finding 1;
+       * see `mirror.ts`'s `seedOrPreserveClock`). The design's long-turn frame shows elapsed time
+       * in the spinner (`⠹ generating design… · 2m 40s`, `design/termcraft-engine.js:547`), but
+       * no Kernel event carries a "started at" fact — `turn.started` carries only an absolute
+       * `deadline` — so elapsed is derived client-side from this. It is honestly the UI's own
+       * clock, not a Kernel fact, which is why it is named as new mirror state rather than
+       * smuggled in as a payload field.
        */
       startedAt: number;
       finalText: string | null;

@@ -21,6 +21,7 @@ import type {
   ProjectMirror,
   SelectionMirror,
   TurnMirror,
+  TurnTimelineEntry,
 } from "../types";
 import { agentIdentityFromSnapshot, capabilitiesFromSnapshot, projectFromSnapshot } from "./seed";
 
@@ -101,6 +102,28 @@ function readMetadataTrust(
 }
 
 /**
+ * The turn's own clock (`startedAt`) and its ordered `timeline` must not reseed just because a
+ * SECOND event establishes the same turn as running. `kernel.turn.beginAdmission` sets both
+ * first in the common case; `turn.started` fires moments later for that SAME `turnId` and used
+ * to overwrite both unconditionally — visibly snapping the elapsed-time spinner backwards once
+ * the admission window crossed a whole second (fix-bundle Task 19 review round 1, Finding 1).
+ * Returns the PRIOR `timeline`/`startedAt` when `current` is already `running` for this exact
+ * `turnId`; seeds a fresh `timeline: []`/`startedAt: now()` only when this is genuinely the
+ * first event to see the turn running — the ordinary case when `turn.started` arrives with no
+ * preceding admission fold (the producer/consumer-seam tests below cover that path).
+ */
+function seedOrPreserveClock(
+  current: TurnMirror,
+  turnId: UUIDv7,
+  now: () => number,
+): Readonly<{ timeline: readonly TurnTimelineEntry[]; startedAt: number }> {
+  if (current.phase === "running" && current.turnId === turnId) {
+    return { timeline: current.timeline, startedAt: current.startedAt };
+  }
+  return { timeline: [], startedAt: now() };
+}
+
+/**
  * `now` is injected so a test can pin `TurnMirror.startedAt` — the one value in this read-model
  * that comes from the UI's own clock rather than from an event payload (see that field's doc).
  */
@@ -140,7 +163,16 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         timeline: [...current.timeline, { kind: "step", op: content.op, target: content.target }],
       });
     } else if (content.kind === "reasoning") {
-      // Appended, never overwritten (spec §4.6): the ticker kept only the latest thought.
+      // An empty block is not a thought the agent reported — the protocol schema permits it
+      // (`event-payload.ts`'s `text: z.string()` has no `.min(1)`) and `normalize.ts` forwards
+      // any string, including `""`, because IT drops only non-string content, not empty
+      // content. Before `query-options.ts`'s `display: "summarized"` was set, EVERY `thinking`
+      // block was zero-length (the brief's own measured live run); appending one here would
+      // become a permanently empty thought block once Task 20 renders it, so the mirror is the
+      // layer that decides an empty string is not worth surfacing (fix-bundle Task 19 review
+      // round 1, Finding 2). Appended, never overwritten otherwise (spec §4.6): the old ticker
+      // kept only the latest thought.
+      if (content.text === "") return;
       turn.set({
         ...current,
         timeline: [...current.timeline, { kind: "reasoning", text: content.text }],
@@ -211,10 +243,11 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           // `turnRunning` field has the full mechanism this closes: without this fold, the
           // composer stays enabled through the whole admission window, Enter fires a second
           // `turn.start` the guard rejects `TURN_ALREADY_ACTIVE`, and the rejection surfaces
-          // nowhere). `turn.started`'s own case below unconditionally overwrites this the moment
-          // it fires, with the REAL `deadline` this branch cannot honestly report yet — see
+          // nowhere). `turn.started`'s own case below unconditionally overwrites `deadline` the
+          // moment it fires, with the REAL bound this branch cannot honestly report yet — see
           // `TurnMirror`'s own `deadline: string | null` doc comment for why it stays `null`
-          // here rather than inventing a bound.
+          // here rather than inventing a bound. `startedAt`/`timeline`, in contrast, are NOT
+          // overwritten by that later event for this same turn — see {@link seedOrPreserveClock}.
           const turnId = envelope.correlation?.turnId;
           if (turnId === undefined) {
             console.warn(
@@ -227,8 +260,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
             turnId,
             attempt: 1,
             deadline: null,
-            timeline: [],
-            startedAt: now(),
+            ...seedOrPreserveClock(turn(), turnId, now),
             finalText: null,
             errorText: null,
             usage: null,
@@ -275,13 +307,16 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         return;
       }
       case "turn.started": {
+        // `deadline` is always the fresh, real bound this event alone carries. `startedAt`/
+        // `timeline` are NOT always fresh: when `kernel.turn.beginAdmission` already put this
+        // same turnId into `running` moments earlier, this event must preserve them rather than
+        // reseed — see {@link seedOrPreserveClock} (fix-bundle Task 19 review round 1, Finding 1).
         turn.set({
           phase: "running",
           turnId: envelope.payload.turnId,
           attempt: 1,
           deadline: envelope.payload.deadline,
-          timeline: [],
-          startedAt: now(),
+          ...seedOrPreserveClock(turn(), envelope.payload.turnId, now),
           finalText: null,
           errorText: null,
           usage: null,

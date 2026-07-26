@@ -70,6 +70,38 @@ describe("Spinner (the one shared animated spinner)", () => {
     expect(run?.text).not.toContain("·");
   });
 
+  test("shows a correct elapsed value on the very first render, not a stale `0s` (review round 1 Minor)", async () => {
+    // Guards the invariant `Spinner`'s `Math.max(elapsedTick(), Date.now())` exists for: a fresh
+    // connection to the shared `elapsedTick` is not guaranteed to have ticked yet (its own connect
+    // hook is enqueued as an async effect — `@reatom/core`'s `_enqueue(..., "effect")` — not run
+    // synchronously), so a bare `elapsedTick() - startedAt` read on a cold atom would compute a
+    // negative value that `formatElapsed` clamps to a wrong `0s`. NOTE: this test could not be
+    // made to reproduce that cold read directly — `createHeadlessRenderer`'s own render pipeline
+    // gives the connect hook's enqueued effect enough async ticks to flush before the first
+    // `handle.render()` returns, in this harness, every time it was tried (verified by
+    // temporarily reverting the `Math.max` guard: this test stayed green even without it). It is
+    // kept as a standing correctness check on the rendered value rather than a proven regression
+    // pin — the guard itself is justified by reading `@reatom/core`'s `withConnectHook`
+    // implementation, not by this test catching it red.
+    const startedAt = Date.now() - 5_000;
+    const handle = await createHeadlessRenderer({ w: 60, h: 4 });
+    open = handle;
+    handle.mount(
+      <Spinner
+        id="spin"
+        label="generating design…"
+        fg={SHELL_PALETTE.amber}
+        bold
+        startedAt={startedAt}
+      />,
+    );
+    await handle.render();
+
+    const run = findRun(handle.capture(), "generating design…");
+    expect(run).toBeDefined();
+    expect(run?.text).not.toContain("· 0s");
+  });
+
   test("appends and advances a ` · <elapsed>` segment once startedAt is provided (design's `· 2m 40s` shape)", async () => {
     const startedAt = Date.now();
     const handle = await createHeadlessRenderer({ w: 60, h: 4 });
@@ -89,11 +121,18 @@ describe("Spinner (the one shared animated spinner)", () => {
     expect(first).toBeDefined();
     expect(first?.text).toContain("·");
 
-    // Long enough to cross a full elapsed tick, so the suffix must have advanced.
-    await new Promise((resolve) => setTimeout(resolve, ELAPSED_INTERVAL_MS + 250));
-    await handle.render();
+    // Poll rather than a single fixed sleep: a fixed `ELAPSED_INTERVAL_MS + 250` margin races the
+    // 1s ticker under contention (review round 1, Minor — this was the one plausibly flaky test
+    // in the original diff). This waits up to several ticks for the suffix to actually change,
+    // instead of asserting against one exact, easily-missed instant.
+    const deadline = Date.now() + ELAPSED_INTERVAL_MS * 8;
+    let later = first;
+    while (Date.now() < deadline && later?.text === first?.text) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await handle.render();
+      later = findRun(handle.capture(), "generating design…");
+    }
 
-    const later = findRun(handle.capture(), "generating design…");
     expect(later?.text).toContain("·");
     expect(later?.text).not.toBe(first?.text);
   });

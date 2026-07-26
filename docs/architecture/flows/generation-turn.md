@@ -19,7 +19,7 @@ sequenceDiagram
     G->>C: SDK run, confined to this turn workspace
     C-->>G: vendor event stream
     G-->>K: normalized AgentEvents (reasoning, tool, usage)
-    K-->>UI: ephemeral status into chat (spinner, tool steps, reasoning ticker)
+    K-->>UI: ephemeral status into chat (spinner + elapsed clock, one ordered step/reasoning timeline)
     C->>C: reads and edits staging files directly
     C-->>G: run ends
     G-->>K: confirmed process-tree exit
