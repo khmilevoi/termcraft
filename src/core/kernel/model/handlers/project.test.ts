@@ -984,6 +984,7 @@ describe("project.open", () => {
 
       expect(terminalEvents.some((event) => event.kind === "chat.changed")).toBe(true);
       expect(terminalEvents.some((event) => event.kind === "chat.records")).toBe(false);
+      expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
     });
   });
@@ -1009,12 +1010,19 @@ describe("project.open", () => {
           ],
         ]),
       });
-      const chatReader: ChatReader = {
-        ...createFakeChatStore(),
-        async list() {
-          return FAILURE;
-        },
+      const header: ChatHeaderV1 = {
+        chatId: activeChatId,
+        createdAt: "2026-07-20T08:00:00.000Z",
       };
+      // `list()` fails, but `open()` still succeeds for the active chat — `listChatSummaries`'s
+      // fallback reads `createdAt` off the SAME real header `open()` returns, never a call-time
+      // clock read (review finding, fix round 1: a fabricated "now" would render a month-old
+      // chat as brand new and jump it to the top of the newest-first `/chats` sort).
+      const chatReader = createChatReaderStub(activeChatId, header, {
+        records: [],
+        prevCursor: null,
+      });
+      chatReader.list = async () => FAILURE;
       const harness = buildTestContext({ projectStore, pageReader, chatReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
@@ -1024,7 +1032,10 @@ describe("project.open", () => {
       for (const event of terminalEvents) expectValidEvent(event);
 
       const changed = findEvent(terminalEvents, "chat.changed");
-      expect(changed?.payload.added.map((summary) => summary.chatId)).toEqual([activeChatId]);
+      expect(changed?.payload.added).toEqual([
+        { chatId: activeChatId, createdAt: header.createdAt, displayName: null },
+      ]);
+      expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
     });
   });

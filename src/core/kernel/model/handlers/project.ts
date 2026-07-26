@@ -413,6 +413,46 @@ async function buildPageDescriptors(
 }
 
 /**
+ * Whether {@link listChatSummaries}'s result can become a `chat.changed` event:
+ * `ChatChangedPayloadV1.activeChatId` is non-nullable, so the event cannot be built at all
+ * without a valid, listed active chat. Shared between the log-vs-stay-silent decision inside
+ * `listChatSummaries` and the actual publish guard in `runProjectReadySequence` so the two never
+ * drift apart.
+ */
+function canPublishChatChanged(
+  activeChatId: string | null,
+  summaries: readonly ChatSummaryV1[],
+): activeChatId is string {
+  return activeChatId !== null && isUuidv7(activeChatId) && summaries.length > 0;
+}
+
+/**
+ * The `list()`-failure fallback: still names the active chat, but HONESTLY — `createdAt` comes
+ * from `ChatReader.open`'s own header fact, never a call-time clock read. `ChatSummaryV1
+ * .createdAt`'s own doc fixes it as a fact off the chat header, and it is user-visible (the
+ * `/chats` popup's `WHEN` column, and the newest-first sort key) — a fabricated "now" would
+ * render a month-old chat as brand new and jump it to the top of the list (review finding,
+ * fix round 1). If `open` ALSO fails, no placeholder row is published at all rather than
+ * inventing one — logged either way (errore rule 21), never fabricated.
+ */
+async function buildActiveChatFallbackSummary(
+  context: HandlerContext,
+  activeChatId: string | null,
+): Promise<readonly ChatSummaryV1[]> {
+  if (activeChatId === null || !isUuidv7(activeChatId)) return [];
+
+  const handle = await wrap(context.deps.chatReader.open(activeChatId));
+  if ("code" in handle) {
+    console.warn(
+      `core/kernel/handlers/project: could not open the active chatId ${activeChatId} to build a chat-listing fallback row: ${handle.safeMessage}`,
+    );
+    return [];
+  }
+
+  return [{ chatId: activeChatId, createdAt: handle.header.createdAt, displayName: null }];
+}
+
+/**
  * Every chat the project holds, as `chat.changed.added` (fix-bundle spec §2.1). This is the
  * event that makes `/chats` a view over the PROJECT rather than over whatever this process
  * happened to learn — the reported "three chats on disk, one row after a restart".
@@ -422,14 +462,20 @@ async function buildPageDescriptors(
  * the listing and `chat.records` by the tail, so a tail failure costs the scrollback rather than
  * the whole list.
  *
- * A `list()` failure DEGRADES to today's behaviour — the active chat alone, one row, logged. No
- * "the chat directory could not be read" event is invented here: that is the same class as
- * finding §2.1 (a rejected command produces no user-visible feedback) and belongs with the
- * observability work, not with this listing.
+ * A `list()` failure DEGRADES to today's behaviour — the active chat alone, one row, logged, via
+ * {@link buildActiveChatFallbackSummary}. No "the chat directory could not be read" event is
+ * invented here: that is the same class as finding §2.1 (a rejected command produces no
+ * user-visible feedback) and belongs with the observability work, not with this listing.
  *
  * A chat id that is not a canonical UUIDv7 is dropped with a warning rather than published:
  * `chatSummaryV1Schema` requires one, and a single bad row would fail validation for the WHOLE
  * event, taking every good row down with it.
+ *
+ * A `list()` SUCCESS that still cannot become a `chat.changed` (no active chat yet, an active
+ * chat id that failed its own UUIDv7 check, or a listing that came back with nothing usable) is
+ * also logged (review finding, fix round 1) — the failure branch above already did; a good read
+ * silently producing no event is the same "error that is not propagated" errore rule 21 targets,
+ * just on the success side.
  */
 async function listChatSummaries(
   context: HandlerContext,
@@ -440,15 +486,7 @@ async function listChatSummaries(
     console.warn(
       `core/kernel/handlers/project: could not list the project's chats (${listed.safeMessage}) — falling back to the active chat alone`,
     );
-    return activeChatId !== null && isUuidv7(activeChatId)
-      ? [
-          {
-            chatId: activeChatId,
-            createdAt: context.deps.clock.now().toISOString(),
-            displayName: null,
-          },
-        ]
-      : [];
+    return await wrap(buildActiveChatFallbackSummary(context, activeChatId));
   }
 
   const summaries: ChatSummaryV1[] = [];
@@ -465,6 +503,15 @@ async function listChatSummaries(
       displayName: truncateChatDisplayName(entry.firstUserText),
     });
   }
+
+  if (!canPublishChatChanged(activeChatId, summaries)) {
+    console.warn(
+      `core/kernel/handlers/project: chat listing read ${summaries.length} row(s) but activeChatId ${
+        activeChatId === null ? "is null" : `"${activeChatId}"`
+      } — chat.changed will not publish this open`,
+    );
+  }
+
   return summaries;
 }
 
@@ -605,7 +652,7 @@ async function runProjectReadySequence(
   // independent failure modes, published as two independent events.
   const activeChatId = workspaceStateResult.state.activeChatId;
   const summaries = await wrap(listChatSummaries(context, activeChatId));
-  if (activeChatId !== null && isUuidv7(activeChatId) && summaries.length > 0) {
+  if (canPublishChatChanged(activeChatId, summaries)) {
     events.push({
       kind: "chat.changed",
       payload: { activeChatId, added: summaries, updated: [], removedChatIds: [] },
