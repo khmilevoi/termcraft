@@ -36,10 +36,12 @@ describe("runHealthProbe classification", () => {
 
   // finding §2.7 (phase-8 Task 15): a clean close with no verdict proves NOTHING — it must not
   // claim an explicit auth failure any more than a deadline timeout may (see the deadline test
-  // below). `unhealthy-unconfirmed-exit` is the honest "we could not confirm" bucket.
-  test("a clean close with no verdict is unhealthy-unconfirmed-exit, never ready, and reports account: null", async () => {
+  // below). `probe-inconclusive` is the honest "we could not confirm" bucket — CORRECTED (fix
+  // round 1, Finding 3): NOT `unhealthy-unconfirmed-exit`, which is a different, POSITIVELY
+  // established fact (`agent/claude/backend/model/backend.ts`'s own latch).
+  test("a clean close with no verdict is probe-inconclusive, never ready, and reports account: null", async () => {
     const info = await runHealthProbe("x", async () => null, deps);
-    expect(info.health).toEqual({ status: "unhealthy-unconfirmed-exit" });
+    expect(info.health).toEqual({ status: "probe-inconclusive" });
     expect(info.account).toBeNull();
   });
 
@@ -66,7 +68,7 @@ describe("runHealthProbe classification", () => {
     expect(info.health).toEqual({ status: "not-logged-in" });
   });
 
-  test("a read that rejects with an abort-flavoured error before any verdict is classified is unhealthy-unconfirmed-exit, never ready, with no account", async () => {
+  test("a read that rejects with an abort-flavoured error before any verdict is classified is probe-inconclusive, never ready, with no account", async () => {
     const info = await runHealthProbe(
       "x",
       async () => {
@@ -74,7 +76,7 @@ describe("runHealthProbe classification", () => {
       },
       deps,
     );
-    expect(info.health).toEqual({ status: "unhealthy-unconfirmed-exit" });
+    expect(info.health).toEqual({ status: "probe-inconclusive" });
     expect(info.account).toBeNull();
   });
 
@@ -131,9 +133,10 @@ describe("runHealthProbe: process tree close on the remaining paths", () => {
 
   // finding §2.7: a deadline expiry proves NOTHING — least of all that the user is signed out.
   // Reporting `not-logged-in` here is the exact bug that locked the whole application on a
-  // slow-but-working CLI after 20s; `unhealthy-unconfirmed-exit` is the honest classification,
-  // and Home maps it to an ADVISORY panel that still allows submit.
-  test("closes the process tree once when the deadline elapses before the read settles, reporting unhealthy-unconfirmed-exit with no account", async () => {
+  // slow-but-working CLI after 20s; `probe-inconclusive` is the honest classification (fix
+  // round 1, Finding 3 — NOT the backend's own `unhealthy-unconfirmed-exit` latch, a different,
+  // positively established fact), and Home maps it to an ADVISORY panel that still allows submit.
+  test("closes the process tree once when the deadline elapses before the read settles, reporting probe-inconclusive with no account", async () => {
     let closed = 0;
     const tree = {
       close: () => {
@@ -145,7 +148,7 @@ describe("runHealthProbe: process tree close on the remaining paths", () => {
       () => new Promise<AgentInfo | null>(() => {}), // never resolves — models a stalled vendor reader
       { ...deps, wait: async () => {}, deadlineMs: 5, processTree: tree },
     );
-    expect(info.health).toEqual({ status: "unhealthy-unconfirmed-exit" });
+    expect(info.health).toEqual({ status: "probe-inconclusive" });
     expect(info.account).toBeNull();
     expect(closed).toBe(1);
   });

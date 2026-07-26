@@ -1,6 +1,6 @@
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
-import type { StatusBarHintKey } from "ui/status-bar";
+import type { StatusBarHintBadge, StatusBarHintKey } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { homeSubmitAllowed } from "../types";
@@ -13,8 +13,10 @@ const PLACEHOLDER = "Describe the TUI you want to design…";
 const CURSOR_GLYPH = "█";
 
 // Prompt-box width/height follow design `home()`'s `iw=min(w-16,84)` / `boxH=6`
-// constants (design/termcraft-engine.js:130) — the box shrinks with narrow terminals
-// but never exceeds 84 cells, matching the mock's centered-prompt sizing.
+// constants (design/termcraft-engine.js:139 — `const iw=Math.min(w-16,84); const
+// ix=Math.floor((w-iw)/2); const boxH=6;`; CORRECTED fix round 1, was miscited `:130`, a blank
+// line) — the box shrinks with narrow terminals but never exceeds 84 cells, matching the mock's
+// centered-prompt sizing.
 const promptBoxWidth = (width: number) => Math.min(width - 16, 84);
 const PROMPT_BOX_HEIGHT = 6;
 
@@ -22,42 +24,86 @@ const BOLD = shellAttrs({ bold: true });
 const BLINK_CURSOR = shellAttrs({ blink: true });
 
 /**
- * Mirrors design `home()`'s `acx` running-x bookkeeping (`design/termcraft-engine.js:149-152`) to
- * decide whether the `· / model` hint fits after the combo row's own live agent/model/effort
- * text (not the design's `codex`/`gpt-5.5`/`high` sample data, which this screen never renders).
- * The design's own box-start offset (`ix`) cancels out of its `acx+10<=ix+iw-2` check — both
- * sides shift by the same amount — so only `iw` and the combo's rendered widths matter here.
+ * Whether the `· / model` hint fits after the combo row (design `home()` `:152` —
+ * `if(acx+10<=ix+iw-2) this.text(b,acx,yy,'· / model',{fg:P.faint});`). CORRECTED (fix round 1,
+ * Minor finding): this used to re-derive design's own internal `acx` gap bookkeeping (`:149-151`),
+ * which uses a DIFFERENT label/gap convention than this component's own literal strings
+ * (`"  model "`/`"  effort "` here vs. design's dynamically-advanced single-cell gaps) and
+ * under-measured real width by roughly five columns at boundary sizes. This measures THIS
+ * component's own rendered pre-hint text directly instead — a literal transcription of the JSX
+ * below, not a re-derivation of a different layout's arithmetic. `iw` stands in for the same
+ * visual budget design's own check ties the hint to; there is no literal clipping box around the
+ * combo row in this flexbox layout (unlike the bordered "describe" box above it), so this is a
+ * faithful-intent transfer, not a pixel-for-pixel corner-case match.
  */
 function fitsModelHint(iw: number, combo: HomeCombo): boolean {
-  const selWidth = (label: string, value: string) => label.length + 1 + value.length + 3;
-  const acx =
-    2 +
-    selWidth("agent", combo.agent) +
-    selWidth("model", combo.model) +
-    selWidth("effort", combo.effort);
-  return acx + 10 <= iw - 2;
+  const preHint = `agent ‹${combo.agent}›  model ‹${combo.model}›  effort ‹${combo.effort}›`;
+  const hint = "  · / model";
+  return preHint.length + hint.length <= iw;
 }
 
 /**
- * The idle Home status bar's key hints (design `home()`, `design/termcraft-engine.js:144-145`:
- * `this.statusBar(b,h-1,[...],[['⏎','create'],['q','quit']])`), extended for the checking/blocked
- * outcomes (finding §2.7, phase-8 Task 15): the `⏎` hint carries the `dis` state exactly when
- * {@link homeSubmitAllowed} refuses it (design `:161`/`:194`), and `r` re-check joins the row only
- * for `blocked` — matching `keymap.ts`'s own Home branch, which wires the `r` key exclusively
- * there (design `homeHealth('login')`'s status bar, `:194`; `checking`/`advisory` have no `r`
- * handler, so no `r` hint is shown for them). DIVERGENCE (read verbatim before writing this): the
- * design hints read `q quit`, but this screen's own frame shows a focused prompt with a blinking
- * text cursor (design/termcraft-engine.js:135-137) — `q` must type into it (keymap.ts's Home
- * branch does exactly that whenever the health outcome keeps a live prompt). Rebinding `q` to quit
- * here — "quit while the prompt happens to be empty" — would eject a user mid-keystroke into
- * "quick dashboard" or any other prompt starting with `q`. `/exit` (the quit affordance that never
- * collides with typing) names it instead, on every outcome that keeps the prompt live.
+ * The status-bar hint badge for outcomes that need one — `checking` (design `home('checking')`
+ * `:158`) and `homeHealth(kind)`'s three panels plus `blocked/latched` (`:191-192`, extended
+ * fix round 1 Finding 5). `ready` gets none — its `page` text below is the entire status-bar
+ * footprint.
+ */
+function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
+  if (health.kind === "checking") {
+    // Design draws this glyph as a static `⠹` too (`:148`,`:158` — a static mockup cannot
+    // animate) — DIVERGENCE (fix round 1, Minor finding): this component's OWN `⠹` here is
+    // static (a plain string, unlike `StatusBarHintBadge` which cannot host a live component),
+    // while the inline note beside the prompt (below) drives its `⠹` through a live `Spinner` —
+    // so after the first tick the two glyphs on screen fall out of phase with each other. Both
+    // are this component's own animation choice, not design's; design draws neither moving.
+    return { text: `⠹ checking ${health.agent} — ⏎ disabled`, fg: "amberHi", bg: "line" };
+  }
+  if (health.kind === "blocked") {
+    if (health.panel === "login") {
+      return { text: `✗ ${health.agent} not signed in`, fg: "bg", bg: "red" };
+    }
+    // DIVERGENCE (fix round 1, Finding 3/5): `panel === "latched"` has no design mock — closest
+    // faithful mapping of design's own `✗ codex not signed in` badge shape (`:191`), honest
+    // wording for this cause instead of the design's (wrong, for this cause) sample text.
+    return { text: `✗ ${health.agent} locked out`, fg: "bg", bg: "red" };
+  }
+  if (health.kind === "advisory") {
+    // Design `:192` — `' ⚠ '+(kind==='sandbox'?'sandbox degraded':'health unconfirmed')+' '`.
+    const label = health.panel === "sandbox" ? "sandbox degraded" : "health unconfirmed";
+    return { text: `⚠ ${label}`, fg: "amberHi", bg: "line" };
+  }
+  return null;
+}
+
+/**
+ * The idle Home status bar's key hints (design `home()`, `design/termcraft-engine.js:161` —
+ * `this.statusBar(b,h-1,left, checking?[['⏎','create','dis'],['q','quit']]:[['⏎','create'],
+ * ['q','quit']]);`; CORRECTED fix round 1, was miscited `:144-145`, the caret draw and the
+ * `typed` ternary), extended for the blocked outcome (finding §2.7, phase-8 Task 15): the `⏎`
+ * hint carries the `dis` state exactly when {@link homeSubmitAllowed} refuses it, and `r`
+ * re-check joins the row for `blocked` — matching `keymap.ts`'s own Home branch (design
+ * `homeHealth('login')`'s status bar, `:194`).
+ *
+ * DIVERGENCE (read verbatim before writing this): design's own hints read `q quit` on every
+ * outcome, but `checking`/`advisory`/`ready` keep a genuinely live, typeable prompt (design
+ * draws a blinking cursor for all three — `:145-146`, `:173`), so `q` must type into it there
+ * (`keymap.ts`'s Home branch does exactly that). `/exit` (the quit affordance that never
+ * collides with typing) names it instead for those three. `blocked` is DIFFERENT (fix round 1,
+ * Finding 6): its prompt is now genuinely disabled, not merely dimmed — see `keymap.ts`'s own
+ * comment — so it has no typing to collide with, and reads design's own literal `q` verbatim,
+ * matching `missing`'s existing literal `q` too.
+ *
+ * `advisory` gets NO `r` hint despite design showing one for it too (`:194`): unlike `blocked`,
+ * `advisory` keeps its prompt genuinely live (design's own cursor, `:173`) — binding bare `r`
+ * there would recreate the exact character-stealing bug `blocked` just had, and this module's
+ * own `q`→`/exit` precedent above exists specifically to avoid that class of bug. A shown-but-
+ * unwired hint would mislead, so none is shown; `keymap.ts` wires no `r` handler for `advisory`.
  */
 function homeIdleHintKeys(health: HomeAgentHealth): readonly StatusBarHintKey[] {
   const submitKey: StatusBarHintKey = homeSubmitAllowed(health)
     ? ["⏎", "create"]
     : ["⏎", "create", "dis"];
-  if (health.kind === "blocked") return [["r", "re-check"], submitKey, ["/exit", "quit"]];
+  if (health.kind === "blocked") return [["r", "re-check"], submitKey, ["q", "quit"]];
   return [submitKey, ["/exit", "quit"]];
 }
 
@@ -72,10 +118,11 @@ function HomeIdle(props: HomeProps) {
   // unconditionally amber (design/termcraft-engine.js:143), so this narrows to `blocked` alone.
   const blocked = health.kind === "blocked";
   // `⏎ create`'s inline hint (below the prompt box, NOT the status bar's own key row) drops to
-  // faint on the SAME two outcomes that refuse submit and keep a live prompt — `checking`
-  // (design `:147`) and `blocked` (design `:174`); `missing` never reaches this component.
+  // faint on the SAME two outcomes that refuse submit — `checking` (design `:147`) and `blocked`
+  // (design `:174`); `missing` never reaches this component.
   const createHintFaint = checking || blocked;
   const showHealthPanel = health.kind === "blocked" || health.kind === "advisory";
+  const badge = homeStatusBadge(health);
   return (
     <box
       id={props.id}
@@ -95,9 +142,9 @@ function HomeIdle(props: HomeProps) {
           // sibling — or `justifyContent="center"` itself — is removed). Spacer flexGrow boxes
           // achieve the identical visual centering without tripping that computation. Design
           // absolute-positions the logo/tagline/box/health line around a computed `iy`
-          // (design/termcraft-engine.js:130-143) either way — this was already the closest
-          // faithful flexbox mapping of that canvas-absolute layout, just via a different
-          // flexbox mechanism now.
+          // (design/termcraft-engine.js:139-146 — CORRECTED fix round 1, was miscited
+          // `:130-143`) either way — this was already the closest faithful flexbox mapping of
+          // that canvas-absolute layout, just via a different flexbox mechanism now.
         }
         <box id={`${props.id}-content-top-spacer`} flexGrow={1} />
         <box id={`${props.id}-content-center`} flexDirection="column" alignItems="center">
@@ -135,11 +182,14 @@ function HomeIdle(props: HomeProps) {
               </text>
               {
                 // Design overlaps the blinking cursor onto the placeholder's first cell
-                // (design/termcraft-engine.js:137, `put` after the placeholder `text`). Flexbox
-                // can't overlap two siblings in the same cell, so the closest faithful mapping
-                // appends the cursor right after the text — omitted entirely while `blocked`,
-                // matching design `homeHealth('login')`'s own `if(!blocking) this.put(...)`
-                // (`:173`), which never draws a cursor over a refused prompt.
+                // (design/termcraft-engine.js:145-146, `put` after the placeholder/typed
+                // `text`). Flexbox can't overlap two siblings in the same cell, so the closest
+                // faithful mapping appends the cursor right after the text — omitted entirely
+                // while `blocked`, matching design `homeHealth('login')`'s own
+                // `if(!blocking) this.put(...)` (`:173`), which never draws a cursor over a
+                // refused prompt. `blocked`'s own prompt is also genuinely non-interactive now
+                // (`keymap.ts`'s own comment, fix round 1 Finding 6) — appearance matches
+                // behaviour on both counts.
                 !blocked && (
                   <text
                     id={`${props.id}-prompt-cursor`}
@@ -163,7 +213,11 @@ function HomeIdle(props: HomeProps) {
                 // 20s'`, design/termcraft-engine.js:148) — a static mockup cannot animate. The
                 // real component drives the `⠹` through `ui/spinner`'s shared `Spinner` instead,
                 // so it actually ticks; `SPINNER_FRAMES`'s own phase-shift keeps frame 0
-                // pixel-identical to the design's glyph.
+                // pixel-identical to the design's glyph. DIVERGENCE (fix round 1, Minor
+                // finding): the status bar's own checking badge (`homeStatusBadge` above) is
+                // NOT similarly animated (`StatusBarHintBadge` is plain text), so the two `⠹`
+                // glyphs on screen drift out of phase after the first tick — see that
+                // function's own comment.
                 checking && (
                   <>
                     <text id={`${props.id}-prompt-hint-sep`} fg={SHELL_PALETTE.amberDim}>
@@ -225,28 +279,26 @@ function HomeIdle(props: HomeProps) {
         mode={{ text: "HOME", fg: "bg", bg: "amber" }}
         // DIVERGENCE (closest faithful mapping, documented per CLAUDE.md): design's raw
         // `statusBar()` takes an arbitrary left-segment list — here three: the mode chip, `"
-        // no project yet"` (replaced by the checking badge while checking), and `"  gpt5.5 ·
-        // high"` (design/termcraft-engine.js:144,157-160, its own sample agent/model data).
+        // no project yet"` (replaced by a badge whenever one is shown — `checking`/`blocked`/
+        // `advisory`), and `"  gpt5.5 · high"` (design/termcraft-engine.js:157-161, its own
+        // sample agent/model data — CORRECTED fix round 1, was miscited `:144`, the caret draw).
         // `StatusBarProps` has exactly one plain secondary slot (`page`), so the model/effort
         // piece lives there always, and — matching design's own REPLACEMENT (not addition) of
-        // "no project yet" — `page` drops that literal while checking rather than keeping all
-        // three segments' text simultaneously, which overflowed an 80-column bar. The checking
-        // badge lands in `hint` (below), the fixed-shape API's closest faithful mapping of
+        // "no project yet" — `page` drops that literal whenever a badge is shown, rather than
+        // keeping all three segments' text simultaneously, which overflowed an 80-column bar.
+        // The badge lands in `hint` (below), the fixed-shape API's closest faithful mapping of
         // design's own three-segment left cluster. `"no project yet"` is honest static fact
         // (Home only ever renders before a project exists); the model/effort piece is NOT the
         // design's Codex sample — it reads the SAME live `combo` this screen's own prompt-area
         // selectors already render, never an invented literal.
         page={{
-          text: checking
-            ? `${props.combo.model} · ${props.combo.effort}`
-            : `no project yet  ${props.combo.model} · ${props.combo.effort}`,
+          text:
+            health.kind === "ready"
+              ? `no project yet  ${props.combo.model} · ${props.combo.effort}`
+              : `${props.combo.model} · ${props.combo.effort}`,
           fg: "dim",
         }}
-        hint={
-          checking
-            ? { text: `⠹ checking ${health.agent} — ⏎ disabled`, fg: "amberHi", bg: "line" }
-            : null
-        }
+        hint={badge}
         hintKeys={homeIdleHintKeys(health)}
       />
     </box>
@@ -254,9 +306,10 @@ function HomeIdle(props: HomeProps) {
 }
 
 // The agent-missing status bar's key hints, verbatim (design `homeErr()`,
-// `design/termcraft-engine.js:583`: `[['r','re-check'],['q','quit']]`) — unlike idle Home,
-// this screen has no text input at all (keymap.ts's Home branch makes every key but `r`/`q`
-// inert here), so `q quit` is safe to keep exactly as drawn.
+// `design/termcraft-engine.js:727` — CORRECTED fix round 1, was miscited `:583`, a chat-colour
+// branch inside `chatSeq()` — `this.statusBar(b,h-1,[...],[['r','re-check'],['q','quit']]);`) —
+// unlike idle Home, this screen has no text input at all (keymap.ts's Home branch makes every
+// key but `r`/`q` inert here), so `q quit` is safe to keep exactly as drawn.
 const HOME_AGENT_MISSING_HINT_KEYS: readonly StatusBarHintKey[] = [
   ["r", "re-check"],
   ["q", "quit"],
@@ -309,11 +362,12 @@ function HomeAgentMissing(props: HomeAgentMissingProps) {
               // `homeHealthFromAgentInfo`) distinguishes several not-ready reasons, but only
               // `missing` (no CLI at all) reaches this full-screen takeover any more (finding
               // §2.7, phase-8 Task 15) — `blocked`/`advisory` render `HomeHealthPanel` instead.
-              // design/01-home.dc.html's `homeErr()` (design/termcraft-engine.js:576) mocks
-              // exactly this one case, as the literal "✗ codex CLI not found". The headline
-              // renders the probe's own honest `detail` text verbatim (never re-synthesized from
-              // `agent`). The ✗ glyph stays static UI chrome here — it is not part of the
-              // probe's `detail` string.
+              // design/01-home.dc.html's `homeErr()` (design/termcraft-engine.js:720 —
+              // CORRECTED fix round 1, was miscited `:576`, an unrelated `chatSeq()` branch)
+              // mocks exactly this one case, as the literal "✗ codex CLI not found". The
+              // headline renders the probe's own honest `detail` text verbatim (never
+              // re-synthesized from `agent`). The ✗ glyph stays static UI chrome here — it is
+              // not part of the probe's `detail` string.
               `✗ ${health.detail}`
             }
           </text>

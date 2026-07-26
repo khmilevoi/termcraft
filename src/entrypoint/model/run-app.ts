@@ -216,10 +216,12 @@ async function closeShell(shell: AppShell, boundary: ProcessBoundary): Promise<v
  *
  * `undefined` only for demo mode, whose shell carries no live registry
  * (`create-shell.ts`'s `demoShell` — there is no real agent to probe in an offline demo):
- * `createUiDeps`'s own default probe (`ui/app/model/deps.ts`) keeps demo's existing seeded
- * reading exactly as it was before this task. The same `undefined` fallback also covers the
- * defensive, practically-unreachable case of an interactive registry reporting zero backends —
- * an empty catalog cannot honestly be probed either.
+ * `createUiDeps`'s own default probe (`ui/app/model/deps.ts`'s `DEFAULT_PROBE_RESOLUTION`)
+ * takes over — an honest `advisory` reading, NEVER `ready` (fix-bundle Task 15 review, fix
+ * round 1, Finding 1 — CRITICAL: this exact seam is how demo mode used to reach a fabricated
+ * `ready` with no probe ever run). The same `undefined` fallback also covers the defensive,
+ * practically-unreachable case of an interactive registry reporting zero backends — an empty
+ * catalog cannot honestly be probed either.
  */
 function resolveAgentHealthProbe(
   registry: AgentRegistry | null,

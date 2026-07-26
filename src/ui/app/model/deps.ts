@@ -196,13 +196,29 @@ const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
 
 /**
  * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_HOME_HEALTH}
- * (finding §2.7, phase-8 Task 15). Those two used to be the same constant, which quietly worked
- * only because the old placeholder already claimed `ready`; now that the seed is honestly
- * `"checking"`, a probe that resolved to the SAME value would leave every test/demo construction
- * that omits `agentHealthProbe` permanently stuck refusing submit — the seed is what the first
- * synchronous frame shows, this is what "the probe eventually succeeds" resolves to by default.
+ * (finding §2.7, phase-8 Task 15), and CORRECTED to never be `ready` (fix round 1, Finding 1 —
+ * CRITICAL). This constant is the value {@link createUiDeps}'s own default `agentHealthProbe`
+ * parameter resolves to whenever NO probe is injected — and that default is REACHABLE IN
+ * PRODUCTION: `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe` returns `undefined` for
+ * demo mode (`registry === null`) and for an empty catalog, and `ui/app/model/root.tsx` passes
+ * `options.agentHealthProbe` straight through to this default. A `ready` resolution here — this
+ * constant's first version — meant demo mode landed on "a real, passing probe" with NO probe
+ * ever having run, the exact fabrication finding §2.7 exists to remove, just moved down one line
+ * instead of removed.
+ *
+ * `advisory` is the honest fix: a REAL member of the union that PERMITS submit (matching demo
+ * mode's pre-Task-15 behaviour of always being usable) without asserting anything was verified —
+ * the design's own "health unconfirmed" bucket (`homeHealth('shutdown')`) is the literal truth
+ * for "no probe ran at all", the most extreme case of "not confirmed". Never `ready` — that
+ * specific claim is reserved for an actual passing `AgentBackend.healthCheck()` reading
+ * (`entrypoint/model/agent-health.ts`'s `homeHealthFromAgentInfo`, `case "ready"`).
  */
-const DEFAULT_PROBE_RESOLUTION: HomeAgentHealth = { kind: "ready", agent: "claude" };
+const DEFAULT_PROBE_RESOLUTION: HomeAgentHealth = {
+  kind: "advisory",
+  agent: "claude",
+  panel: "shutdown",
+  detail: "no health probe ran for this session",
+};
 
 /** Builds a fresh, self-consistent `UiDeps` around a `KernelPort` and an initial terminal size. */
 export function createUiDeps(
@@ -210,9 +226,10 @@ export function createUiDeps(
   initialSize: Readonly<{ w: number; h: number }>,
   env: UiEnv = { root: ".", workspaceIdentity: "local", projectExists: false },
   // The named M15 injection point: the phase-8 composition root supplies a probe that actually
-  // checks the agent CLI on PATH; tests inject a fake. The default resolves to a plain `ready`
-  // reading — see {@link DEFAULT_PROBE_RESOLUTION}'s own doc comment for why it is not
-  // {@link DEFAULT_HOME_HEALTH}.
+  // checks the agent CLI on PATH; tests inject a fake. The default resolves to an honest
+  // `advisory` reading — NEVER `ready` (fix round 1, Finding 1) — see
+  // {@link DEFAULT_PROBE_RESOLUTION}'s own doc comment for why it must differ from both `ready`
+  // and {@link DEFAULT_HOME_HEALTH}.
   agentHealthProbe: () => Promise<HomeAgentHealth> = () =>
     Promise.resolve(DEFAULT_PROBE_RESOLUTION),
   // The named Task 11 / WP-10 injection point: the phase-8 composition root binds this to

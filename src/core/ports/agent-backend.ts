@@ -100,13 +100,26 @@ export interface AgentRun {
   readonly outcome: Promise<AgentRunOutcome>;
 }
 
-/** Health states (master §9 + turn-durability §6.5). `sandbox-degraded` is Codex-only (never Claude). */
+/**
+ * Health states (master §9 + turn-durability §6.5). `sandbox-degraded` is Codex-only (never
+ * Claude). `unhealthy-unconfirmed-exit` and `probe-inconclusive` look alike but are NOT
+ * interchangeable (fix-bundle Task 15 review, fix round 1, Finding 3): `unhealthy-unconfirmed-exit`
+ * is a POSITIVELY established fact — a prior run's exit was never confirmed, and the backend
+ * REFUSES new turns until restarted (`agent/claude/backend/model/backend.ts`'s
+ * `unhealthy.isLatched()` guard, `agent/run/model/unconfirmed-exit-latch.ts`). `probe-inconclusive`
+ * means the health PROBE ITSELF (not a turn) could not reach a verdict — a deadline, an abort, or
+ * a clean stream close with nothing classified (`agent/health/model/probe.ts`'s `inconclusive`) —
+ * which proves nothing about whether a turn would actually work. Home maps the former to
+ * `blocked` (submit refused — a real turn would be rejected) and the latter to `advisory` (submit
+ * allowed — a timeout is not evidence of failure).
+ */
 export type AgentHealthState =
   | { readonly status: "ready" }
   | { readonly status: "not-installed" }
   | { readonly status: "not-logged-in" }
   | { readonly status: "sandbox-degraded"; readonly detail: string }
-  | { readonly status: "unhealthy-unconfirmed-exit" };
+  | { readonly status: "unhealthy-unconfirmed-exit" }
+  | { readonly status: "probe-inconclusive" };
 
 /**
  * The healthCheck result (master §6.1). `account` is a NON-SECRET stable

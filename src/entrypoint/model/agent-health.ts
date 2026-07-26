@@ -15,11 +15,13 @@ import type { AgentRegistry } from "core/ports";
 import type { HomeAgentHealth } from "ui/home";
 
 /**
- * Pure map from one `AgentBackend.healthCheck()` reading to Home's five-outcome
- * `HomeAgentHealth` (finding §2.7, phase-8 Task 15). Exhaustive over every `AgentHealthState`
- * variant (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch`
- * with no `default` arm — TypeScript's own control-flow analysis makes a sixth variant added
- * later a `tsc` failure here, not a silent "ready".
+ * Map from one `AgentBackend.healthCheck()` reading to Home's five-outcome `HomeAgentHealth`
+ * (finding §2.7, phase-8 Task 15) — pure aside from one incidental diagnostic `console.warn`
+ * (the `sandbox-degraded` branch, errore rule 21: a fact this function does not propagate into
+ * its return value must still be logged). Exhaustive over every `AgentHealthState` variant
+ * (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch` with no
+ * `default` arm — TypeScript's own control-flow analysis makes a seventh variant added later a
+ * `tsc` failure here, not a silent "ready".
  *
  * `HomeAgentHealth` carries no `version` field: `AgentInfo` never had one to report (only
  * `backendId`, `health`, `account` — `agent/types.ts`), so the field was always a fabrication
@@ -36,11 +38,13 @@ import type { HomeAgentHealth } from "ui/home";
  * honestly (verbatim text minus the version this port never reads) by `HomeHealthPanel.tsx` and
  * the `not-installed` branch below, never by a "ready" line.
  *
- * Wording sources: `not-installed` below is verbatim design text
- * (`design/termcraft-engine.js:576`, `homeErr()`: "✗ codex CLI not found"). `not-logged-in`
- * matches `homeHealth('login')`'s own line (`:177`) minus the version. The other three states
- * have no design mock naming their exact text, so their `detail` is this module's own honest
- * wording — documented per branch below, never silently invented.
+ * Wording sources: `not-installed` below is verbatim design text (`design/termcraft-engine.js:720`
+ * inside `homeErr()`, `:716-728`: `this.text(b,ix+2,iy+1,'✗ codex CLI not found',...)`) — CORRECTED
+ * (fix round 1, Finding 2): previously miscited `:576`, which is
+ * `if(e.role!==undefined){ this.ctext(...)` inside `chatSeq()`, an unrelated chat-transcript
+ * branch. `not-logged-in` matches `homeHealth('login')`'s own line (`:177`) minus the version.
+ * The other states have no design mock naming their exact text, so their `detail` is this
+ * module's own honest wording — documented per branch below, never silently invented.
  */
 export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
   const { backendId, health } = info;
@@ -49,7 +53,7 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
       return { kind: "ready", agent: backendId };
 
     case "not-installed":
-      // Verbatim design wording pattern — design/termcraft-engine.js:576 (`homeErr()`:
+      // Verbatim design wording pattern — design/termcraft-engine.js:720 (`homeErr()`:
       // "✗ codex CLI not found"). The ✗ glyph is static UI chrome `Home.tsx` prefixes onto
       // this `detail` string, not part of the domain value itself.
       return { kind: "missing", agent: backendId, detail: `${backendId} CLI not found` };
@@ -58,19 +62,46 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
       // Design `homeHealth('login')` (`:177`, "✗ codex 0.34 found · not signed in") minus the
       // version `AgentInfo` never carries — a panel below the prompt (`HomeHealthPanel.tsx`),
       // not the full-screen takeover `not-installed` above still gets.
-      return { kind: "blocked", agent: backendId, detail: `${backendId} found · not signed in` };
+      return {
+        kind: "blocked",
+        agent: backendId,
+        panel: "login",
+        detail: `${backendId} found · not signed in`,
+      };
 
     case "unhealthy-unconfirmed-exit":
-      // The probe ran and could not confirm health — never reported as blocking (finding §2.7):
-      // submit stays allowed, and Home renders design's own `health unconfirmed` panel
-      // (`homeHealth('shutdown')`, `:180-183`). Wording echoes the reasoning already logged at
-      // `agent/run/model/unconfirmed-exit-latch.ts` ("run exited unconfirmed; latching this
-      // backend unhealthy until it is restarted").
+      // CORRECTED (fix round 1, Finding 3): this status is the backend's own POSITIVELY
+      // established latch (`agent/claude/backend/model/backend.ts`'s `unhealthy.isLatched()`
+      // guard) — a prior run's exit was never confirmed, and `startTurn` REFUSES new turns
+      // until restart (`agent/run/model/unconfirmed-exit-latch.ts`). That is a genuine block,
+      // not an unproven reading — mapping it to `advisory` (as this switch used to) told the
+      // user Enter would work when a real turn would be rejected, exactly the class of
+      // fabrication finding §2.7 exists to remove. DIVERGENCE: no design mock covers "backend
+      // latched" — `homeHealth()`'s three panels are `login`/`shutdown`/`sandbox` only
+      // (`design/termcraft-engine.js:165-195`) — so `blocked`/`panel:"latched"` is the closest
+      // faithful mapping (same refuse-and-panel-below-prompt shape as `login`); honest new
+      // wording lives in `HomeHealthPanel.tsx`'s own `panelSpec`, which documents the
+      // divergence at the point it renders. Restored the pre-Task-15 wording ("locked out until
+      // restarted") that names the actual, only unblock condition
+      // (`unconfirmed-exit-latch.ts`'s own doc comment: "the user restarts").
+      return {
+        kind: "blocked",
+        agent: backendId,
+        panel: "latched",
+        detail: `${backendId} exited without confirming shutdown; locked out until restarted`,
+      };
+
+    case "probe-inconclusive":
+      // The health PROBE ITSELF could not reach a verdict (deadline, abort, or a clean stream
+      // close with nothing classified — `agent/health/model/probe.ts`'s `inconclusive`) — this
+      // is the genuinely unproven case finding §2.7 names, distinct from the confirmed latch
+      // above (fix round 1, Finding 3). Submit stays allowed, and Home renders design's own
+      // `health unconfirmed` panel (`homeHealth('shutdown')`, `:180-183`).
       return {
         kind: "advisory",
         agent: backendId,
         panel: "shutdown",
-        detail: `${backendId} exited without confirming shutdown`,
+        detail: `${backendId}'s health probe ended without a confirmed verdict`,
       };
 
     case "sandbox-degraded":
@@ -78,7 +109,13 @@ export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
       // variant's own doc comment on `AgentHealthState`) — unreachable today, still handled
       // honestly for exhaustiveness. Master spec §9 treats a degraded sandbox as the CLI still
       // being present and usable, just under a weaker confinement guarantee — submit stays
-      // allowed, matching design's own `homeHealth('sandbox')` panel (`:184-187`).
+      // allowed, matching design's own `homeHealth('sandbox')` panel (`:184-187`). Design's own
+      // fixed line there has no room for the backend's own free-text `health.detail` — kept out
+      // of the visible `detail` (which stays the design's exact wording) but logged, not
+      // silently discarded (errore rule 21).
+      console.warn(
+        `agent-health: ${backendId} reported sandbox-degraded — backend detail: ${health.detail}`,
+      );
       return {
         kind: "advisory",
         agent: backendId,

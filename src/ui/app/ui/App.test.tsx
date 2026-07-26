@@ -6,6 +6,7 @@ import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import type { HomeAgentHealth } from "ui/home";
+import { homeSubmitAllowed } from "ui/home";
 import { requestGeometry } from "ui/preview";
 import {
   type ReactTestRenderer,
@@ -285,7 +286,13 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       kernel,
       { w: 120, h: 36 },
       undefined,
-      () => Promise.resolve({ kind: "blocked", agent: "claude", detail: "probe reading" }),
+      () =>
+        Promise.resolve({
+          kind: "blocked",
+          agent: "claude",
+          panel: "login",
+          detail: "probe reading",
+        }),
       () => undefined,
       { agent: "claude", model: "probe-model", effort: "probe-effort" },
     );
@@ -748,8 +755,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(home).toContain("Describe the TUI you want to design");
     // No health line exists any more (finding §2.7, phase-8 Task 15) — the placeholder above
     // renders identically during `checking`, so Enter below needs the outcome to have actually
-    // settled to `ready` (the default test probe's resolution), not merely the first seeded frame.
-    await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
+    // settled to something that allows submit (the default test probe resolves to `advisory`,
+    // never `ready` — fix round 1, Finding 1), not merely the first seeded frame.
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
 
     await renderer.act(() => renderer.mockInput.typeText("build a dashboard"));
     expect(await renderer.waitForFrame((frame) => frame.includes("build a dashboard"))).toContain(

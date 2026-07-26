@@ -184,17 +184,31 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     !context.turnRunning;
 
   if (context.screen === "home") {
-    // The missing-CLI panel has no prompt input at all, so every key but the two the design's own
-    // status bar names is inert there (design `homeErr()` :583 — `[['r','re-check'],['q','quit']]`).
+    // The missing-CLI panel has no prompt input at all, so every key but the two the design's
+    // own status bar names is inert there (design `homeErr()` `:727` — CORRECTED fix round 1,
+    // Finding 2, was miscited `:583`, a chat-colour branch inside `chatSeq()` unrelated to Home —
+    // `this.statusBar(b,h-1,[...],[['r','re-check'],['q','quit']]);`).
     if (context.homeHealth.kind === "missing") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q") return { kind: "exit" };
       return { kind: "none" };
     }
-    // `checking`/`blocked` keep a live prompt — the design still draws it — but Enter is refused
-    // (finding §2.7). `r` re-checks on the blocking panel, matching its own status bar.
-    if (key.sequence === "r" && context.homeHealth.kind === "blocked")
-      return { kind: "home-recheck" };
+    // `blocked` dims the SAME shared box `missing` doesn't even draw (design `homeHealth('login')`
+    // `:170-173` — no cursor, faint caret). CORRECTED (fix round 1, Finding 6): this branch used
+    // to keep accepting typed input despite the prompt reading as disabled, so `r` silently stole
+    // a printable character from anything the user typed ("red dashboard" -> re-check + "ed
+    // dashboard"). It is now input-inert like `missing`, matching its own appearance exactly; `q`
+    // is safe to bind literally here too (no live prompt left to collide with), matching design's
+    // own `homeHealth()` hint row (`:194`, which reads literal `q` for BOTH branches).
+    if (context.homeHealth.kind === "blocked") {
+      if (key.sequence === "r") return { kind: "home-recheck" };
+      if (key.sequence === "q") return { kind: "exit" };
+      return { kind: "none" };
+    }
+    // `checking`/`advisory`/`ready` keep a live prompt — design draws a blinking cursor for all
+    // three (`:145-146`, `:173`) — so Enter is the only thing ever refused here (finding §2.7),
+    // gated purely by `homeSubmitAllowed`. No bare `r`/`q` binding for any of them: both would
+    // steal a character from live typing, the exact bug just fixed for `blocked` above.
     if (RETURN_NAMES.has(key.name)) {
       return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
     }

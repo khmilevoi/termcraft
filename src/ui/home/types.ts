@@ -21,16 +21,23 @@
  *   degraded sandbox, or a TIMEOUT). Submit ALLOWED: a timeout proves nothing — it does not prove
  *   the user is signed out — and the design's own `⏎ works — the first turn may still fail` panel
  *   is the honest bucket for "unproven". Design `homeHealth('shutdown'|'sandbox')`.
- * - `blocked` — the CLI is there and the probe positively established it cannot run (not signed
- *   in). Submit refused, but the screen is NOT seized: design `homeHealth('login')` is a panel
- *   below a still-rendered prompt.
+ * - `blocked` — the CLI is there and something positively established it cannot run right now.
+ *   Submit refused, but the screen is NOT seized: a panel below a still-rendered (but disabled —
+ *   fix round 1, Finding 6) prompt. TWO distinct reasons share this kind, told apart by `panel`
+ *   (fix round 1, Finding 3 — added beyond the brief's own sketch, which had `blocked` carry no
+ *   `panel` at all and so could not distinguish them): `"login"` is design's own `homeHealth
+ *   ('login')` (not signed in — probing again might change the answer); `"latched"` is the
+ *   backend's own confirmed unconfirmed-exit lockout (`agent/claude/backend/model/backend.ts`) —
+ *   no design mock exists for it, so its panel content is a documented divergence
+ *   (`HomeHealthPanel.tsx`'s own `panelSpec`). Collapsing `"latched"` into `advisory` (as this
+ *   union briefly did) would tell the user Enter works when a real turn would be rejected.
  * - `missing` — no CLI at all. The one case that keeps the full-screen takeover (`homeErr()`).
  */
 export type HomeAgentHealth =
   | Readonly<{ kind: "checking"; agent: string }>
   | Readonly<{ kind: "ready"; agent: string }>
   | Readonly<{ kind: "advisory"; agent: string; panel: "shutdown" | "sandbox"; detail: string }>
-  | Readonly<{ kind: "blocked"; agent: string; detail: string }>
+  | Readonly<{ kind: "blocked"; agent: string; panel: "login" | "latched"; detail: string }>
   | Readonly<{ kind: "missing"; agent: string; detail: string }>;
 
 /** Submit is refused exactly while the agent is unproven-and-unusable — see {@link HomeAgentHealth}. */

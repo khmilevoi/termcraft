@@ -11,14 +11,19 @@ function describeThrown(cause: unknown): string {
 }
 
 /**
- * A probe that ran out of time proves NOTHING — least of all that the user is signed out
- * (finding §2.7). Reporting `not-logged-in` on deadline expiry is what locked the whole
- * application on a slow-but-working CLI after 20 s. `unhealthy-unconfirmed-exit` is the existing
- * variant that already means "we could not confirm", and Home maps it to the design's own
- * `health unconfirmed` panel, which still allows submit.
+ * A probe that ran out of time — or whose stream closed cleanly with nothing classified — proves
+ * NOTHING (finding §2.7). CORRECTED (fix round 1, Finding 3): this used to reuse
+ * `unhealthy-unconfirmed-exit`, but that status is NOT a generic "could not confirm" bucket — it
+ * is `agent/claude/backend/model/backend.ts`'s own POSITIVELY established latch, set only when a
+ * prior RUN's exit was never confirmed, and it makes `startTurn` REFUSE new turns until restart
+ * (`agent/run/model/unconfirmed-exit-latch.ts`). Reusing it here would make Home treat a
+ * genuinely unproven probe reading as though a turn were confirmed to fail — telling the user
+ * Enter is refused when nothing established that. `probe-inconclusive` is its own honest status:
+ * Home maps it to the design's own `health unconfirmed` panel, which still allows submit — a
+ * timeout is not evidence a turn would fail.
  */
 function inconclusive(backendId: string): AgentInfo {
-  return { backendId, health: { status: "unhealthy-unconfirmed-exit" }, account: null };
+  return { backendId, health: { status: "probe-inconclusive" }, account: null };
 }
 
 /**
@@ -35,10 +40,12 @@ function inconclusive(backendId: string): AgentInfo {
  *    ambiguity: a false-ready would let a real, paid turn start against a
  *    broken backend. A deadline abort and a clean close with no verdict both
  *    genuinely prove NOTHING (finding §2.7) — neither classifies as an auth
- *    failure any more; both go through {@link inconclusive}'s honest
- *    `unhealthy-unconfirmed-exit`. An actual stream failure (the read itself
- *    threw) is more decisive than either and keeps its own not-installed/
- *    not-logged-in split below, unaffected by this fix.
+ *    failure, and neither classifies as the backend's own confirmed
+ *    `unhealthy-unconfirmed-exit` latch either (fix round 1, Finding 3); both
+ *    go through {@link inconclusive}'s own honest `probe-inconclusive`. An
+ *    actual stream failure (the read itself threw) is more decisive than
+ *    either and keeps its own not-installed/not-logged-in split below,
+ *    unaffected by this fix.
  */
 export async function runHealthProbe(
   backendId: string,

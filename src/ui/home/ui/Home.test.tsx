@@ -173,10 +173,11 @@ describe("Home screen — checking outcome (design home('checking'), :139-161)",
   });
 });
 
-describe("Home screen — blocked outcome (design homeHealth('login'), :165-195)", () => {
+describe("Home screen — blocked/login outcome (design homeHealth('login'), :165-195)", () => {
   const blockedHealth: HomeProps["health"] = {
     kind: "blocked",
     agent: "claude",
+    panel: "login",
     detail: "claude found · not signed in",
   };
 
@@ -205,21 +206,68 @@ describe("Home screen — blocked outcome (design homeHealth('login'), :165-195)
     expect(findRun(frame, "⏎ stays refused until the probe passes")).toBeDefined();
   });
 
-  test("the ⏎ hint key is dis, and r re-check joins the status bar", async () => {
+  // fix round 1, Finding 5: the status-bar badge (design `:191`) and the `r re-check` hint key
+  // (design `:194`) both belong to `blocked`.
+  test("the ⏎ hint key is dis, r re-check joins the status bar, and the red badge shows", async () => {
     const frame = await renderHome({ health: blockedHealth });
     expect(hintKeyState(frame, "⏎")).toBe("dis");
     expect(homeSubmitAllowed(blockedHealth)).toBe(false);
     const reCheck = frame.rows.flat().find((run) => run.text.startsWith(" r "));
     expect(reCheck).toBeDefined();
+    const badge = findRun(frame, "✗ claude not signed in");
+    expect(badge).toBeDefined();
+    expect(badge && extractRgb(badge.fg)).toBe<string>(SHELL_PALETTE.bg);
+    expect(badge && extractRgb(badge.bg)).toBe<string>(SHELL_PALETTE.red);
+  });
+});
+
+// fix round 1, Finding 3: `blocked/latched` has no design mock — the backend's own confirmed
+// unconfirmed-exit lockout, told apart from `blocked/login` by `panel`. Closest faithful mapping
+// of design's `login` panel shape, with honest, undesigned wording (`HomeHealthPanel.tsx`'s own
+// divergence comment).
+describe("Home screen — blocked/latched outcome (no design mock, fix round 1 Finding 3)", () => {
+  const latchedHealth: HomeProps["health"] = {
+    kind: "blocked",
+    agent: "claude",
+    panel: "latched",
+    detail: "claude exited without confirming shutdown; locked out until restarted",
+  };
+
+  test("renders honest lockout wording, never the login panel's copy", async () => {
+    const frame = await renderHome({ health: latchedHealth });
+    // This detail is long enough to word-wrap inside the panel at the test's default 80-column
+    // width (verified by inspection) — the wrap is graceful, faithful rendering of real text
+    // (never truncated/fabricated), so the assertion below checks the un-wrapped prefix that is
+    // guaranteed to stay in the FIRST run rather than the full string.
+    const headline = findRun(frame, "✗ claude exited without confirming shutdown");
+    expect(headline).toBeDefined();
+    expect(headline && extractRgb(headline.fg)).toBe<string>(SHELL_PALETTE.red);
+    expect(frameContains(frame, "restarted")).toBe(true);
+    expect(findRun(frame, "restart termcraft to clear the lockout")).toBeDefined();
+    expect(findRun(frame, "⏎ stays refused until you restart")).toBeDefined();
+    // Never the login-panel's own copy — it would be actively wrong advice for this cause.
+    expect(frameContains(frame, "run claude login")).toBe(false);
+  });
+
+  test('submit is refused and the status-bar badge names the lockout, not "not signed in"', async () => {
+    const frame = await renderHome({ health: latchedHealth });
+    expect(homeSubmitAllowed(latchedHealth)).toBe(false);
+    expect(hintKeyState(frame, "⏎")).toBe("dis");
+    const badge = findRun(frame, "✗ claude locked out");
+    expect(badge).toBeDefined();
+    expect(frameContains(frame, "not signed in")).toBe(false);
   });
 });
 
 describe("Home screen — advisory outcome (design homeHealth('shutdown'|'sandbox'), :180-187)", () => {
+  // fix round 1, Finding 3: this detail now names the genuinely UNPROVEN case (the probe itself
+  // reached no verdict) — "exited without confirming shutdown" is `blocked/latched`'s own
+  // wording now (a confirmed lockout), not advisory's.
   const shutdownHealth: HomeProps["health"] = {
     kind: "advisory",
     agent: "claude",
     panel: "shutdown",
-    detail: "claude exited without confirming shutdown",
+    detail: "claude's health probe ended without a confirmed verdict",
   };
   const sandboxHealth: HomeProps["health"] = {
     kind: "advisory",
@@ -230,10 +278,12 @@ describe("Home screen — advisory outcome (design homeHealth('shutdown'|'sandbo
 
   test("shutdown renders the health-unconfirmed panel in amber, submit stays allowed", async () => {
     const frame = await renderHome({ health: shutdownHealth });
-    const headline = findRun(frame, "⚠ claude exited without confirming shutdown");
+    const headline = findRun(frame, "⚠ claude's health probe ended without a confirmed verdict");
     expect(headline).toBeDefined();
     expect(headline && extractRgb(headline.fg)).toBe<string>(SHELL_PALETTE.amberHi);
-    expect(findRun(frame, "version read · health unproven")).toBeDefined();
+    // CORRECTED (fix round 1, Finding 4): never "version read" — this runtime reads no version.
+    expect(findRun(frame, "no confirmed verdict — health unproven")).toBeDefined();
+    expect(frameContains(frame, "version read")).toBe(false);
     expect(findRun(frame, "⏎ works — the first turn may still fail")).toBeDefined();
     expect(homeSubmitAllowed(shutdownHealth)).toBe(true);
     expect(hintKeyState(frame, "⏎")).toBe("plain");
@@ -255,10 +305,23 @@ describe("Home screen — advisory outcome (design homeHealth('shutdown'|'sandbo
     expect(frameContains(frame, "█")).toBe(true);
   });
 
-  test("advisory gets no r re-check hint (keymap.ts wires r only for blocked)", async () => {
+  // fix round 1, Finding 5: the status-bar badge IS shown for advisory (design `:192`), but no
+  // `r` hint key (keymap.ts wires no `r` handler for advisory — Finding 6's own reasoning: its
+  // prompt stays genuinely live, so a bare `r` would steal a typed character).
+  test("shows the ⚠ health unconfirmed badge but no r re-check hint", async () => {
     const frame = await renderHome({ health: shutdownHealth });
+    const badge = findRun(frame, "⚠ health unconfirmed");
+    expect(badge).toBeDefined();
+    expect(badge && extractRgb(badge.fg)).toBe<string>(SHELL_PALETTE.amberHi);
+    expect(badge && extractRgb(badge.bg)).toBe<string>(SHELL_PALETTE.line);
     const reCheck = frame.rows.flat().find((run) => run.text.startsWith(" r "));
     expect(reCheck).toBeUndefined();
+  });
+
+  test("sandbox shows the ⚠ sandbox degraded badge", async () => {
+    const frame = await renderHome({ health: sandboxHealth });
+    const badge = findRun(frame, "⚠ sandbox degraded");
+    expect(badge).toBeDefined();
   });
 });
 
@@ -342,11 +405,18 @@ describe("Home screen — five health outcomes gate submit (finding §2.7, phase
 
   test("shows the login panel below the prompt without seizing the screen (design homeHealth('login'))", async () => {
     const frame = await renderHome({
-      health: { kind: "blocked", agent: "claude", detail: "claude found but not logged in" },
+      health: {
+        kind: "blocked",
+        agent: "claude",
+        panel: "login",
+        detail: "claude found but not logged in",
+      },
     });
     expect(frameContains(frame, "Describe the TUI you want to design…")).toBe(true);
     expect(frameContains(frame, "not signed in")).toBe(true);
-    expect(homeSubmitAllowed({ kind: "blocked", agent: "claude", detail: "x" })).toBe(false);
+    expect(
+      homeSubmitAllowed({ kind: "blocked", agent: "claude", panel: "login", detail: "x" }),
+    ).toBe(false);
   });
 
   test("keeps the full-screen takeover only for a missing CLI (design homeErr)", async () => {

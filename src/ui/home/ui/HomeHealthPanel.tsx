@@ -17,20 +17,23 @@ interface PanelSpec {
 
 /**
  * Transcribed verbatim from design `homeHealth(kind)`'s `spec` object
- * (`design/termcraft-engine.js:175-187`) — three lines per kind. The design's own sample agent
- * name (`codex`, sometimes suffixed `0.34`) is the standing sample-data divergence (M22): the
- * FIRST line of each kind is driven by `health.detail` instead of the literal design string,
- * because `detail` is this module's own honest, already-computed wording
- * (`entrypoint/model/agent-health.ts`'s `homeHealthFromAgentInfo`) built from the SAME pattern
- * minus a version number `AgentInfo` never carries — reusing it here (rather than re-deriving
- * `"{agent} 0.34 found · not signed in"`) is what keeps this panel from fabricating a version the
- * real probe never read (the project's hardest rule). The second/third lines carry no per-probe
- * fact, so they ARE the design's literal text, with `{agent}` substituted for `codex` wherever it
- * appears — matching the same substitution `Home.tsx`'s own agent-missing panel already documents.
+ * (`design/termcraft-engine.js:175-187`) — three lines per kind, for the `login` and `sandbox`
+ * outcomes. The design's own sample agent name (`codex`, sometimes suffixed `0.34`) is the
+ * standing sample-data divergence (M22): the FIRST line of `login`/`sandbox`/`shutdown` is
+ * driven by `health.detail` instead of the literal design string, because `detail` is this
+ * module's own honest, already-computed wording (`entrypoint/model/agent-health.ts`'s
+ * `homeHealthFromAgentInfo`) built from the SAME pattern minus a version number `AgentInfo`
+ * never carries — reusing it here (rather than re-deriving `"{agent} 0.34 found · not signed
+ * in"`) is what keeps this panel from fabricating a version the real probe never read (the
+ * project's hardest rule). The second/third lines of `login`/`sandbox` carry no per-probe fact,
+ * so they ARE the design's literal text, with `{agent}` substituted for `codex` wherever it
+ * appears — matching the same substitution `Home.tsx`'s own agent-missing panel already
+ * documents. `shutdown`'s second line and the whole of `latched` are NOT design-literal — see
+ * their own comments below for why.
  */
 function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisory" }>): PanelSpec {
   const P = SHELL_PALETTE;
-  if (health.kind === "blocked") {
+  if (health.kind === "blocked" && health.panel === "login") {
     return {
       title: "not signed in",
       titleColor: P.red,
@@ -38,6 +41,26 @@ function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisor
         { text: `✗ ${health.detail}`, fg: P.red, bold: true },
         { text: `run ${health.agent} login, then r to re-check`, fg: P.dim },
         { text: "⏎ stays refused until the probe passes", fg: P.faint },
+      ],
+    };
+  }
+  if (health.kind === "blocked") {
+    // `panel === "latched"` — DIVERGENCE (fix round 1, Finding 3): design's `homeHealth(kind)`
+    // has exactly three panels — `login`/`shutdown`/`sandbox` (`design/termcraft-engine.js:175-
+    // 187`) — and none of them is "the backend refuses new turns until restarted"
+    // (`agent/claude/backend/model/backend.ts`'s latch). Closest faithful mapping: same
+    // red/blocking box shape as `login`. Wording is this module's own, honest about the actual
+    // (and only) unblock condition — NEVER "run {agent} login" (wrong cause) and NEVER "r to
+    // re-check" as a promised fix (re-probing from inside this same process reports the
+    // identical latched state every time; only a fresh backend instance, i.e. restarting
+    // termcraft, clears it — `agent/run/model/unconfirmed-exit-latch.ts`'s own doc comment).
+    return {
+      title: "locked out",
+      titleColor: P.red,
+      lines: [
+        { text: `✗ ${health.detail}`, fg: P.red, bold: true },
+        { text: "restart termcraft to clear the lockout", fg: P.dim },
+        { text: "⏎ stays refused until you restart", fg: P.faint },
       ],
     };
   }
@@ -57,7 +80,13 @@ function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisor
     titleColor: P.amber,
     lines: [
       { text: `⚠ ${health.detail}`, fg: P.amberHi, bold: true },
-      { text: "version read · health unproven", fg: P.dim },
+      // CORRECTED (fix round 1, Finding 4): design's own line (`:182`) reads verbatim "version
+      // read · health unproven" — but this runtime never reads a version (`AgentInfo` carries
+      // none — `agent-health.ts`'s own note on `HomeAgentHealth`), so printing it would assert a
+      // read that never happened, the exact class of fabrication the "agent ready" line was
+      // removed for. Honest replacement: name what actually happened (the probe reached no
+      // verdict), never a version.
+      { text: "no confirmed verdict — health unproven", fg: P.dim },
       { text: "⏎ works — the first turn may still fail", fg: P.faint },
     ],
   };
@@ -70,9 +99,10 @@ export interface HomeHealthPanelProps {
 }
 
 /**
- * The three health outcomes with no full-screen takeover (design `homeHealth(kind)`,
- * `design/termcraft-engine.js:165-195`): `blocked` ("login" in the design — found but not signed
- * in, blocking) and `advisory`'s two panels (`shutdown`/`sandbox`, both non-blocking). Rendered
+ * The health outcomes with no full-screen takeover (design `homeHealth(kind)`,
+ * `design/termcraft-engine.js:165-195`, plus one panel design never mocked): `blocked`'s two
+ * panels (`login` — design's own, blocking; `latched` — this module's own divergence, blocking)
+ * and `advisory`'s two panels (`shutdown`/`sandbox`, both design's own, non-blocking). Rendered
  * below Home's prompt/combo, never replacing them — `Home.tsx` keeps `HomeAgentMissing`'s
  * full-screen takeover reserved for `missing` alone.
  */

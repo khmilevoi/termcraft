@@ -34,27 +34,52 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
     expect(health).toEqual({ kind: "missing", agent: "claude", detail: "claude CLI not found" });
   });
 
-  test("not-logged-in is blocked, and says so honestly — never the version design's sample carries", () => {
+  test("not-logged-in is blocked/login, and says so honestly — never the version design's sample carries", () => {
     const health = homeHealthFromAgentInfo({ ...base, health: { status: "not-logged-in" } });
 
     expect(health).toEqual({
       kind: "blocked",
       agent: "claude",
+      panel: "login",
       detail: "claude found · not signed in",
     });
   });
 
-  test("an unconfirmed exit is advisory/shutdown, never ready and never blocking", () => {
+  // CORRECTED (fix round 1, Finding 3 — Important, plan-mandated): this used to map to
+  // `advisory/shutdown`, telling the user Enter would work. `unhealthy-unconfirmed-exit` is the
+  // backend's own POSITIVELY established latch (`agent/claude/backend/model/backend.ts`) — a
+  // prior run's exit was never confirmed, and `startTurn` REFUSES new turns until restart. That
+  // is a genuine block, not an unproven reading; `advisory` said Enter worked when a real turn
+  // would be rejected. `blocked/latched` is the honest mapping — no design mock covers this
+  // cause, so `HomeHealthPanel`'s own `panelSpec` documents the divergence.
+  test("an unconfirmed exit is blocked/latched — a confirmed lockout, never advisory and never ready", () => {
     const health = homeHealthFromAgentInfo({
       ...base,
       health: { status: "unhealthy-unconfirmed-exit" },
     });
 
     expect(health).toEqual({
+      kind: "blocked",
+      agent: "claude",
+      panel: "latched",
+      detail: "claude exited without confirming shutdown; locked out until restarted",
+    });
+  });
+
+  // The genuinely unproven case (fix round 1, Finding 3): the PROBE itself could not reach a
+  // verdict (deadline/abort/clean-close — `agent/health/model/probe.ts`'s `inconclusive`), which
+  // proves nothing about whether a turn would work — unlike the confirmed latch above.
+  test("probe-inconclusive is advisory/shutdown — genuinely unproven, submit stays allowed", () => {
+    const health = homeHealthFromAgentInfo({
+      ...base,
+      health: { status: "probe-inconclusive" },
+    });
+
+    expect(health).toEqual({
       kind: "advisory",
       agent: "claude",
       panel: "shutdown",
-      detail: "claude exited without confirming shutdown",
+      detail: "claude's health probe ended without a confirmed verdict",
     });
   });
 
@@ -62,8 +87,10 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
   // "sandbox unavailable — {agent} runs unconfined") — NOT the backend's free-text `detail`
   // (`"seatbelt unavailable"` here), which this outcome no longer folds in: `HomeHealthPanel`
   // renders this exact string, and inventing a second, backend-specific wording alongside the
-  // design's own would contradict the one honest line the panel shows.
-  test("sandbox-degraded is advisory/sandbox, with design's own fixed wording", () => {
+  // design's own would contradict the one honest line the panel shows. The backend's own detail
+  // is not silently discarded, though (fix round 1, Minor finding) — it is logged.
+  test("sandbox-degraded is advisory/sandbox, with design's own fixed wording, and logs the backend's own cause", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => undefined);
     const health = homeHealthFromAgentInfo({
       ...base,
       health: { status: "sandbox-degraded", detail: "seatbelt unavailable" },
@@ -72,6 +99,9 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
     if (health.kind !== "advisory") throw new Error("expected an advisory outcome");
     expect(health.panel).toBe("sandbox");
     expect(health.detail).toBe("sandbox unavailable — claude runs unconfined");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.join(" ")).toContain("seatbelt unavailable");
+    warnSpy.mockRestore();
   });
 });
 

@@ -125,25 +125,31 @@ describe("resolveKey — Home", () => {
       expect(resolveKey(key({ name: "return" }), checking)).toEqual({ kind: "none" });
     });
 
-    test("blocked refuses Enter, but the prompt stays live for other keys", () => {
+    // CORRECTED (fix round 1, Finding 6): `blocked` used to still accept typed input despite
+    // reading as visually disabled (dimmed box, no cursor — design `homeHealth('login')`
+    // `:170-173`), so `r` silently stole a printable character from anything typed. It is now
+    // fully input-inert, like `missing` — matching its own appearance.
+    test("blocked refuses Enter and is input-inert — only r/q are live, matching its dimmed appearance", () => {
       const blocked = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", detail: "x" },
+        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
       });
       expect(resolveKey(key({ name: "return" }), blocked)).toEqual({ kind: "none" });
-      expect(resolveKey(key({ name: "x", sequence: "x" }), blocked)).toEqual({
-        kind: "home-input",
-        ch: "x",
+      expect(resolveKey(key({ name: "x", sequence: "x" }), blocked)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "backspace" }), blocked)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), blocked)).toEqual({
+        kind: "home-recheck",
       });
-      expect(resolveKey(key({ name: "backspace" }), blocked)).toEqual({ kind: "home-backspace" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), blocked)).toEqual({ kind: "exit" });
     });
 
-    test("blocked is the ONLY outcome where r re-checks instead of typing", () => {
-      const blocked = ctx({
+    test("blocked/latched is input-inert the same way as blocked/login", () => {
+      const latched = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", detail: "x" },
+        homeHealth: { kind: "blocked", agent: "claude", panel: "latched", detail: "x" },
       });
-      expect(resolveKey(key({ name: "r", sequence: "r" }), blocked)).toEqual({
+      expect(resolveKey(key({ name: "x", sequence: "x" }), latched)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), latched)).toEqual({
         kind: "home-recheck",
       });
     });
@@ -161,6 +167,20 @@ describe("resolveKey — Home", () => {
       expect(resolveKey(key({ name: "r", sequence: "r" }), advisory)).toEqual({
         kind: "home-input",
         ch: "r",
+      });
+    });
+
+    // finding §2.7, fix round 1 Finding 6: advisory's prompt stays genuinely live (design draws
+    // its own blinking cursor for it too, `:173`), so `q` must still type into it — only
+    // `blocked`/`missing`, whose prompts are genuinely disabled, get the literal `q`-quits key.
+    test("q types into the prompt on checking/advisory/ready — only blocked/missing bind it to quit", () => {
+      const advisory = ctx({
+        screen: "home",
+        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+      });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), advisory)).toEqual({
+        kind: "home-input",
+        ch: "q",
       });
     });
 
