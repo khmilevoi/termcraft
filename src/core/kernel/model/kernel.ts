@@ -778,6 +778,25 @@ export function createKernel(deps: KernelDeps): Kernel {
       return activePreview;
     }
 
+    /**
+     * Fix round 1, Finding 3: the Kernel-minted `previewSessionId` for the SAME live session
+     * `currentPreview()` returns, or `null` when none is established. `previewSessionCommands
+     * .currentPreviewSessionId()` is a plain `string` internally (that module mints it before
+     * `UUIDv7` was in scope there); re-validated with `isUuidv7` here rather than passed
+     * through unchecked — a malformed value is reported as "no id" (`null`), never a
+     * fabricated-looking pass-through. `setActivePreviewSession` (below) is the only place
+     * `activePreview` ever becomes non-null, and it always calls `previewSessionCommands
+     * .noteSessionEstablished` in the SAME synchronous step, so this and `currentPreview()`
+     * never disagree about whether a session is live — see `entrypoint/model/create-shell.ts`'s
+     * `toKernelPort().preview()`, the one caller that needs both to agree, for what happens if
+     * they ever did.
+     */
+    function currentPreviewSessionId(): UUIDv7 | null {
+      const id = previewSessionCommands.currentPreviewSessionId();
+      if (id === null || !isUuidv7(id)) return null;
+      return id;
+    }
+
     // kernel-assembly Task 16 — the Kernel's own frame-token authority surface. Both are
     // plain, synchronous delegations to `previewSessionCommands` (itself touching only
     // plain closures, never a Reatom atom — see that module's own header), so neither
@@ -813,7 +832,15 @@ export function createKernel(deps: KernelDeps): Kernel {
       if (preview !== null) await preview.close();
     }
 
-    return { dispatch, events, currentPreview, publishFrame, acknowledgeDisplay, close };
+    return {
+      dispatch,
+      events,
+      currentPreview,
+      currentPreviewSessionId,
+      publishFrame,
+      acknowledgeDisplay,
+      close,
+    };
   });
 }
 

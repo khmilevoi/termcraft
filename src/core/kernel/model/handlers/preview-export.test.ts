@@ -119,10 +119,17 @@ function buildDeps(overrides?: {
 interface TestHarness {
   readonly handlerContext: HandlerContext;
   readonly getMutatorCalls: () => number;
-  /** Every `launchOperation(label, run)` call, in order, so a test can `await` `run()` and inspect its events. */
+  /**
+   * Every `launchOperation(label, run)` call, in order, so a test can `await` `run()` and
+   * inspect its events. Typed against the SAME `PublishableEventV1[]` `HandlerContext
+   * .launchOperation`'s own `run` parameter already promises (fix round 1, Minor finding) —
+   * `run` is stored verbatim below, never cast to a widened `unknown[]`, so every call site
+   * reads `events[n]!.kind`/`.payload`/`.correlation` directly instead of bouncing through an
+   * ad-hoc `as {...}` shape.
+   */
   readonly launched: readonly {
     readonly label: string;
-    readonly run: () => Promise<readonly unknown[]>;
+    readonly run: () => Promise<readonly PublishableEventV1[]>;
   }[];
   readonly getActivePreviewSession: () => PreviewSession | null;
   /** Every `publishOperationEvent(event)` call, in order — the export family's own live-progress events land here. */
@@ -137,7 +144,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
     let commitIntentRecorded = false;
     let previewSourceKind: PreviewSourceKindV1 = null;
     let activePreviewSession: PreviewSession | null = null;
-    const launched: { label: string; run: () => Promise<readonly unknown[]> }[] = [];
+    const launched: { label: string; run: () => Promise<readonly PublishableEventV1[]> }[] = [];
     const publishedEvents: PublishableEventV1[] = [];
 
     const machines = {
@@ -206,7 +213,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
         previewSessionCommands.noteSessionEstablished(session);
       },
       launchOperation: (label, run) => {
-        launched.push({ label, run: run as () => Promise<readonly unknown[]> });
+        launched.push({ label, run });
       },
       publishOperationEvent: (event) => {
         publishedEvents.push(event);
@@ -259,7 +266,7 @@ function enable(machines: HandlerContext["machines"]): void {
 async function selectPageAndSettle(
   harness: TestHarness,
   payload: { readonly pageSlug: PageSlug },
-): Promise<readonly unknown[]> {
+): Promise<readonly PublishableEventV1[]> {
   previewHandlers["preview.selectPage"](payload, harness.handlerContext);
   const launchedEntry = harness.launched[harness.launched.length - 1]!;
   return wrap(launchedEntry.run());
@@ -326,10 +333,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(harness.handlerContext.machines.preview.phase()).toBe("live");
     expect(harness.getActivePreviewSession()).not.toBeNull();
 
-    const sourceChanged = events.find(
-      (event): event is { kind: string; payload: unknown } =>
-        (event as { kind: string }).kind === "preview.sourceChanged",
-    );
+    const sourceChanged = events.find((event) => event.kind === "preview.sourceChanged");
     expect(sourceChanged).toBeDefined();
     const parsed = eventPayloadV1SchemaByKind["preview.sourceChanged"].parse(
       sourceChanged!.payload,
@@ -337,11 +341,15 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(parsed.pageSlug).toBe(HOME);
     expect(parsed.source).toEqual({ kind: "current" });
     expect(parsed.sourceHash).toBe(HOME_SOURCE_HASH);
+    // Fix round 1, Finding 3: the id is the Kernel-tracked one `previewSessionCommands`
+    // itself now reports — never a second, independently-minted `uuidv7()` (this file's own
+    // header, "ONE NARROWER GAP" / "FIX ROUND 1, FINDING 3").
+    const trackedId = harness.handlerContext.previewSessionCommands.currentPreviewSessionId();
+    if (trackedId === null)
+      throw new Error("expected previewSessionCommands to report a live previewSessionId");
+    expect(parsed.previewSessionId).toBe(trackedId);
 
-    const stateChanged = events.find(
-      (event): event is { kind: string; payload: unknown } =>
-        (event as { kind: string }).kind === "kernel.stateChanged",
-    );
+    const stateChanged = events.find((event) => event.kind === "kernel.stateChanged");
     expect(stateChanged).toBeDefined();
     const parsedState = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
       stateChanged!.payload,
@@ -366,18 +374,14 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
     expect(harness.getActivePreviewSession()).toBeNull();
 
-    const failed = events.find((event) => (event as { kind: string }).kind === "preview.failed") as
-      | { kind: string; payload: unknown }
-      | undefined;
+    const failed = events.find((event) => event.kind === "preview.failed");
     expect(failed).toBeDefined();
     const parsed = eventPayloadV1SchemaByKind["preview.failed"].parse(failed!.payload);
     expect(parsed.pageSlug).toBe(HOME);
     expect(parsed.phase).toBe("starting");
     expect(parsed.failure.code).toBe("PERSISTENCE_FAILED");
 
-    const stateChanged = events.find(
-      (event) => (event as { kind: string }).kind === "kernel.stateChanged",
-    ) as { kind: string; payload: unknown } | undefined;
+    const stateChanged = events.find((event) => event.kind === "kernel.stateChanged");
     expect(stateChanged).toBeDefined();
     const parsedState = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
       stateChanged!.payload,
@@ -406,9 +410,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     const events = await wrap(harness.launched[0]!.run());
 
     expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
-    const failed = events.find((event) => (event as { kind: string }).kind === "preview.failed") as
-      | { kind: string; payload: unknown }
-      | undefined;
+    const failed = events.find((event) => event.kind === "preview.failed");
     const parsed = eventPayloadV1SchemaByKind["preview.failed"].parse(failed!.payload);
     expect(parsed.failure.code).toBe(hostFailure.code);
     expect(parsed.failure.safeMessage).toBe(hostFailure.safeMessage);
@@ -527,9 +529,7 @@ describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry 
 
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
     expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(parsed).toEqual({
       modelId: "kernel.preview.state",
       action: "kernel.preview.resize",
@@ -537,7 +537,7 @@ describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry 
       nextTag: "live",
       metadata: {},
     });
-    expect((events[0] as { correlation: unknown }).correlation).toEqual({ previewSessionId });
+    expect(events[0]!.correlation).toEqual({ previewSessionId });
 
     const session = harness.getActivePreviewSession() as ReturnType<
       typeof createFakePreviewSession
@@ -559,9 +559,7 @@ describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry 
     );
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
     expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(parsed.action).toBe("kernel.preview.setMode");
 
     const session = harness.getActivePreviewSession() as ReturnType<
@@ -582,9 +580,7 @@ describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry 
     );
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
     expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(parsed.action).toBe("kernel.preview.setThemeCapabilities");
 
     const session = harness.getActivePreviewSession() as ReturnType<
@@ -619,9 +615,7 @@ describe("previewHandlers — resize/setMode/setThemeCapabilities/queryGeometry 
 
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
     expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["preview.geometryResult"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const parsed = eventPayloadV1SchemaByKind["preview.geometryResult"].parse(events[0]!.payload);
     expect(parsed.queryKind).toBe("layout");
     expect(parsed.frameTokenId).toBe(frameToken);
     expect(parsed.frameIdentity).toEqual(identity);
@@ -658,7 +652,7 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     return harness;
   }
 
-  test('today, retry always lands on session-commands.ts\'s own "no remembered spec" branch: retryCircuit still applies for real and is still published, leaving the machine stranded at starting', async () => {
+  test('today, retry always lands on session-commands.ts\'s own "no remembered spec" branch: retryCircuit applies for real, and the handler recovers the machine to "failed" instead of stranding it at "starting" (fix round 1, Finding 1)', async () => {
     const harness = await circuitOpenHarness();
     const previewSessionId = uuidv7();
 
@@ -666,19 +660,33 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     expect(outcome.disposition).toBe("started");
 
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
-    expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
-    expect(parsed).toEqual({
+    expect(events).toHaveLength(2);
+    const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
+    expect(first).toEqual({
       modelId: "kernel.preview.state",
       action: "kernel.preview.retryCircuit",
       previousTag: "circuit-open",
       nextTag: "starting",
       metadata: {},
     });
-    // Genuinely stranded — no further transition follows without a remembered spec.
-    expect(harness.handlerContext.machines.preview.phase()).toBe("starting");
+    const second = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[1]!.payload);
+    expect(second).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.sessionFailed",
+      previousTag: "starting",
+      nextTag: "failed",
+      metadata: {},
+    });
+    // Recovered, not stranded: `failed` (unlike `starting`) has real exits —
+    // beginStart/beginSwitch/openCircuit are all legal again from here.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
+    expect(harness.handlerContext.machines.preview.canApply("kernel.preview.beginStart")).toBe(
+      true,
+    );
+    expect(harness.handlerContext.machines.preview.canApply("kernel.preview.openCircuit")).toBe(
+      true,
+    );
+    expect(harness.getActivePreviewSession()).toBeNull();
   });
 
   test("once the router's own lastSpec is seeded (simulating a fully-rewired selectPage), a successful retry reports both retryCircuit and sessionReady", async () => {
@@ -711,9 +719,7 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
 
     expect(events).toHaveLength(2);
-    const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(first).toEqual({
       modelId: "kernel.preview.state",
       action: "kernel.preview.retryCircuit",
@@ -721,9 +727,7 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
       nextTag: "starting",
       metadata: {},
     });
-    const second = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[1] as { payload: unknown }).payload,
-    );
+    const second = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[1]!.payload);
     expect(second).toEqual({
       modelId: "kernel.preview.state",
       action: "kernel.preview.sessionReady",
@@ -732,6 +736,76 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
       metadata: {},
     });
     expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    // Fix round 1, Finding 2: a successful retry must sync `activePreview` with whichever
+    // session the router's own `establishSession` actually left behind — the NEW one this
+    // retry established, read back via `previewSessionCommands.currentSession()` — never
+    // leave the router and `activePreview` pointing at two different sessions.
+    expect(harness.getActivePreviewSession()).not.toBeNull();
+    expect(harness.getActivePreviewSession()).toBe(
+      harness.handlerContext.previewSessionCommands.currentSession(),
+    );
+  });
+
+  test("with lastSpec seeded, a re-establishment that fails still recovers to failed and clears activePreview (fix round 1, Finding 2's failure-path symmetry)", async () => {
+    const deps = buildDeps();
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    const spec: HostSessionSpecV1 = {
+      mode: "preview",
+      interactionMode: "static",
+      pageSlug: HOME,
+      sourcePath: "/test-root/.termcraft/pages/home/page.tsx",
+      sourceHash: HOME_SOURCE_HASH,
+      kitApiVersion: 1,
+      size: { w: 80, h: 24 },
+      theme: "dark",
+      capabilities: { colorDepth: 16 },
+    };
+    // Seeds `lastSpec` the same bypass way the test above does, then drives the machine back
+    // to `circuit-open` so `preview.retry` is legal again.
+    await wrap(harness.handlerContext.previewSessionCommands.selectPage(spec));
+    harness.handlerContext.machines.preview.apply("kernel.preview.sessionFailed");
+    harness.handlerContext.machines.preview.apply("kernel.preview.openCircuit");
+    expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+
+    const hostFailure: FailureDtoV1 = {
+      code: "HOST_START_FAILED",
+      retryable: true,
+      safeMessage: "host refused to restart",
+      details: {},
+    };
+    (deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>).failNext(
+      "preview",
+      hostFailure,
+    );
+
+    const previewSessionId = uuidv7();
+    previewHandlers["preview.retry"]({ previewSessionId }, harness.handlerContext);
+    const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+
+    expect(events).toHaveLength(2);
+    const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
+    expect(first).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.retryCircuit",
+      previousTag: "circuit-open",
+      nextTag: "starting",
+      metadata: {},
+    });
+    const second = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[1]!.payload);
+    expect(second).toEqual({
+      modelId: "kernel.preview.state",
+      action: "kernel.preview.sessionFailed",
+      previousTag: "starting",
+      nextTag: "failed",
+      metadata: {},
+    });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("failed");
+    // The router's own `establishSession` already cleared its `currentSession` on failure —
+    // `activePreview` must not be left pointing at the stale prior session.
+    expect(harness.getActivePreviewSession()).toBeNull();
+    expect(harness.handlerContext.previewSessionCommands.currentSession()).toBeNull();
   });
 });
 
@@ -754,9 +828,7 @@ describe("previewHandlers.close — real, end to end (Gap A closure)", () => {
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
 
     expect(events).toHaveLength(1);
-    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(
-      (events[0] as { payload: unknown }).payload,
-    );
+    const parsed = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(parsed).toEqual({
       modelId: "kernel.preview.state",
       action: "kernel.preview.disable",
@@ -764,7 +836,7 @@ describe("previewHandlers.close — real, end to end (Gap A closure)", () => {
       nextTag: "disabled",
       metadata: {},
     });
-    expect((events[0] as { correlation: unknown }).correlation).toEqual({ previewSessionId });
+    expect(events[0]!.correlation).toEqual({ previewSessionId });
     expect(harness.handlerContext.machines.preview.phase()).toBe("disabled");
     expect(harness.getActivePreviewSession()).toBeNull();
     // The host-side half Gap A used to block: the real session's own close() was called.
@@ -817,7 +889,7 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
 
     // The terminal batch: exactly one `export.completed`.
     expect(events).toHaveLength(1);
-    const completed = events[0] as { kind: string; payload: unknown };
+    const completed = events[0]!;
     expect(completed.kind).toBe("export.completed");
     const parsedCompleted = eventPayloadV1SchemaByKind["export.completed"].parse(completed.payload);
     expect(parsedCompleted.destination).toBe(".termcraft/export");
@@ -877,7 +949,7 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     expect(exportPublish.calls).toHaveLength(0);
 
     expect(events).toHaveLength(1);
-    const failed = events[0] as { kind: string; payload: unknown };
+    const failed = events[0]!;
     expect(failed.kind).toBe("export.failed");
     const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
     expect(parsedFailed.phase).toBe("rendering");
@@ -921,7 +993,7 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     expect(exportPublish.calls).toHaveLength(0);
 
     expect(events).toHaveLength(1);
-    const failed = events[0] as { kind: string; payload: unknown };
+    const failed = events[0]!;
     expect(failed.kind).toBe("export.failed");
     const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
     expect(parsedFailed.phase).toBe("rendering");
@@ -964,7 +1036,7 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     expect(exportPublish.calls).toHaveLength(0);
 
     expect(events).toHaveLength(1);
-    const failed = events[0] as { kind: string; payload: unknown };
+    const failed = events[0]!;
     expect(failed.kind).toBe("export.failed");
     const parsedFailed = eventPayloadV1SchemaByKind["export.failed"].parse(failed.payload);
     expect(parsedFailed.phase).toBe("idle");

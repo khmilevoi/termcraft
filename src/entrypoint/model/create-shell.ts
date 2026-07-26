@@ -8,6 +8,7 @@ import { createProductionAgentPromptSource, createProductionAgentRegistry } from
 import { type KernelDeps, createKernel } from "core";
 import type { Kernel } from "core/kernel";
 import type { GateRunner, PreviewFrameV1, PreviewSession } from "core/ports";
+import type { UUIDv7 } from "core/protocol";
 import { createGateRunnerAdapter, resolveCompilerPath } from "gate";
 import type { SmokeRenderer } from "gate";
 import {
@@ -390,16 +391,28 @@ function resolveDefaultUserStateRoot(): string {
 }
 
 /**
- * Adapts the composed `Kernel` (`dispatch`/`events`/`currentPreview`/`publishFrame`/
- * `acknowledgeDisplay`) to the `KernelPort` (`dispatch`/`subscribe`/`preview`) `ui`
- * depends on. `dispatch`/`subscribe` are passed through directly — `Kernel`'s own
- * `CommandDecodeError | CanonicalHashError`/`EventBusPayloadError` return types are
- * already narrower than the port's widened `Error`, so no wrapping is needed. `preview`
- * caches the adapted `PreviewSessionHandle` by the underlying `PreviewSession` reference:
- * `ui`'s own frame-consuming loop (`ui/app/model/deps.ts`) calls `port.preview()`
- * repeatedly while the SAME session stays current, and a fresh wrapper on every call would
- * restart `frames`'s async generator each time — mirroring `FakeKernel.preview()`'s own
- * "return the same stored handle" behavior.
+ * Adapts the composed `Kernel` (`dispatch`/`events`/`currentPreview`/
+ * `currentPreviewSessionId`/`publishFrame`/`acknowledgeDisplay`) to the `KernelPort`
+ * (`dispatch`/`subscribe`/`preview`) `ui` depends on. `dispatch`/`subscribe` are passed
+ * through directly — `Kernel`'s own `CommandDecodeError | CanonicalHashError`/
+ * `EventBusPayloadError` return types are already narrower than the port's widened `Error`,
+ * so no wrapping is needed. `preview` caches the adapted `PreviewSessionHandle` by the
+ * underlying `PreviewSession` reference: `ui`'s own frame-consuming loop
+ * (`ui/app/model/deps.ts`) calls `port.preview()` repeatedly while the SAME session stays
+ * current, and a fresh wrapper on every call would restart `frames`'s async generator each
+ * time — mirroring `FakeKernel.preview()`'s own "return the same stored handle" behavior.
+ *
+ * FIX ROUND 1, FINDING 3: `previewSessionId` now comes from `kernel.currentPreviewSessionId()`
+ * — the SAME Kernel-minted id every `preview.*` event's own `previewSessionId` field carries
+ * — not `session.identity.sessionId` (the host-internal id `toPreviewSessionHandle` used to
+ * read here, which can never equal the Kernel's own id: `core/preview/model/
+ * session-commands.ts`'s own header says so explicitly). Before this fix,
+ * `ui/preview/model/interaction.ts`'s `handleGeometryResult` compared
+ * `current.handle.previewSessionId !== payload.previewSessionId` and NEVER passed for a real
+ * session, silently discarding every geometry result. If the two ever disagree now (should be
+ * unreachable — `core/kernel/model/kernel.ts`'s `currentPreviewSessionId` doc comment explains
+ * why `currentPreview()`/`currentPreviewSessionId()` always agree), this surfaces "no session"
+ * rather than build a handle with a fabricated id.
  */
 function toKernelPort(kernel: Kernel): KernelPort {
   let cachedSession: PreviewSession | null = null;
@@ -416,8 +429,17 @@ function toKernelPort(kernel: Kernel): KernelPort {
         return null;
       }
       if (session !== cachedSession) {
+        const previewSessionId = kernel.currentPreviewSessionId();
+        if (previewSessionId === null) {
+          console.warn(
+            "entrypoint: kernel.currentPreview() is non-null but currentPreviewSessionId() is null — defensive, should be unreachable; treating as no session rather than fabricating an id",
+          );
+          cachedSession = null;
+          cachedHandle = null;
+          return null;
+        }
         cachedSession = session;
-        cachedHandle = toPreviewSessionHandle(kernel, session);
+        cachedHandle = toPreviewSessionHandle(kernel, session, previewSessionId);
       }
       return cachedHandle;
     },
@@ -442,7 +464,11 @@ function toKernelPort(kernel: Kernel): KernelPort {
  *
  * `kernel` is narrowed to `Pick<Kernel, "publishFrame" | "acknowledgeDisplay">`: this
  * function never dispatches a command or reads a snapshot, so it depends on nothing
- * beyond the two frame-token methods it actually calls.
+ * beyond the two frame-token methods it actually calls. `previewSessionId` is taken as an
+ * explicit parameter (fix round 1, Finding 3) rather than read a third time from `kernel`
+ * here — `toKernelPort`'s own `preview()` already resolved and validated it once per fresh
+ * session, and re-reading it here could in principle observe a DIFFERENT value if the
+ * Kernel's own session churned between the two calls.
  *
  * A frame published with no live Kernel session (`PreviewNoLiveSessionError` — a real, if
  * narrow, race between `session.frames` yielding and the Kernel's own bookkeeping already
@@ -454,6 +480,7 @@ function toKernelPort(kernel: Kernel): KernelPort {
 export function toPreviewSessionHandle(
   kernel: Pick<Kernel, "acknowledgeDisplay" | "publishFrame">,
   session: PreviewSession,
+  previewSessionId: UUIDv7,
 ): PreviewSessionHandle {
   async function* displayFrames(): AsyncGenerator<UiPreviewFrame> {
     for await (const frame of session.frames) {
@@ -467,7 +494,7 @@ export function toPreviewSessionHandle(
   }
 
   const handle: PreviewSessionHandle = {
-    previewSessionId: session.identity.sessionId,
+    previewSessionId,
     session,
     frames: { [Symbol.asyncIterator]: displayFrames },
     acknowledgeDisplay: (frameToken) => kernel.acknowledgeDisplay(frameToken),

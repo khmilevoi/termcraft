@@ -121,6 +121,19 @@ export interface PreviewSessionCommands {
   readonly acknowledgeDisplay: (frameToken: FrameTokenV1) => FrameAckError | FrameIdentityV1;
   readonly currentPreviewSessionId: () => string | null;
   /**
+   * The Kernel-tracked live `PreviewSession` itself, for the ONE caller that needs it
+   * outside this module: `handlers/preview-export.ts`'s `handleRetry`, after a successful
+   * `retry()` call, to feed `HandlerContext.setActivePreviewSession` (fix round 1, Finding
+   * 2) — `retry()`'s own `PreviewCommandOutcomeV1` reports only accepted/rejected/failed,
+   * never the session object, mirroring `selectPage`/`selectCurrent`'s own return shape
+   * (see `handlers/preview-export.ts`'s file header, "ONE NARROWER GAP", for the identical
+   * reasoning on the `selectPage`/`selectCurrent` path, which still does not use this
+   * getter — its OWN session comes from `HostSupervisorPort.preview` directly, so it never
+   * needed one). Returns `null` whenever no session is currently tracked (before the first
+   * establish, after `close()`, or after a failed `establishSession`).
+   */
+  readonly currentSession: () => PreviewSession | null;
+  /**
    * Marks the Kernel-tracked live session as freshly established from OUTSIDE this
    * module's own `selectSource` (kernel-assembly Task 16 finding): `core/kernel/model/
    * handlers/preview-export.ts`'s `selectCurrentSource`/`handleClose` still drive session
@@ -399,6 +412,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     publishFrame,
     acknowledgeDisplay,
     currentPreviewSessionId: () => currentPreviewSessionId,
+    currentSession: () => currentSession,
     noteSessionEstablished,
     noteSessionClosed,
   };

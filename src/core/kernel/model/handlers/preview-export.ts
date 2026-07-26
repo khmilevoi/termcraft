@@ -362,7 +362,24 @@ function selectCurrentSource(
         ? [previewStateChangedEvent("kernel.preview.sessionReady", readyOutcome, correlation)]
         : [];
 
-    const previewSessionId: UUIDv7 = uuidv7();
+    // FIX ROUND 1, FINDING 3: the Kernel-minted id `setActivePreviewSession` (just above)
+    // just seeded into `previewSessionCommands` via `noteSessionEstablished` — never a
+    // second, locally-minted `uuidv7()`. That second mint was the root of three different
+    // `previewSessionId`s in circulation for one live session (this file's own header,
+    // "ONE NARROWER GAP"; `core/kernel/types.ts`'s `Kernel.currentPreviewSessionId` doc).
+    const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
+    if (previewSessionId === null || !isUuidv7(previewSessionId)) {
+      // Defensive only: `setActivePreviewSession` above always calls
+      // `noteSessionEstablished`, which mints a fresh id unconditionally — should be
+      // unreachable. The session/source-kind are already set correctly; only the
+      // `preview.sourceChanged` event (which needs a real id) is skipped here rather than
+      // built with a fabricated one.
+      console.warn(
+        "core/kernel/handlers/preview-export: selectCurrentSource established a session but previewSessionCommands has no valid live previewSessionId — preview.sourceChanged skipped",
+      );
+      return readyEvent;
+    }
+
     const sourceChangedEvent: PublishableEventV1<"preview.sourceChanged"> = {
       kind: "preview.sourceChanged",
       payload: {
@@ -483,6 +500,12 @@ function liveSelfLoopEvent(
  * payload is scoped to `starting`/`switching`/`live`-phase SESSION failures, not a single
  * mutating call) — an unreported refusal, but never a silent one (errore rule 21), matching
  * `runExportStart`'s own "POST-MVP GAP" precedent for the identical shape of situation.
+ *
+ * FIX ROUND 1, FINDING 4: the trace carries the refusal's own content — `outcome.reason.code`
+ * for `"rejected"`, `outcome.failure.safeMessage` for `"failed"` — not just `outcome.kind`.
+ * A bare `"was failed, not accepted"` satisfied rule 21's letter but not its purpose: this is
+ * the ONLY trace these three commands leave, so it has to carry a diagnosis. Matches
+ * `handleRetry`'s own logging for the identical two outcome kinds.
  */
 async function runSimpleLiveCommand(
   label: string,
@@ -491,8 +514,16 @@ async function runSimpleLiveCommand(
   call: () => Promise<PreviewCommandOutcomeV1>,
 ): Promise<readonly PublishableEventV1[]> {
   const outcome = await wrap(call());
-  if (outcome.kind !== "accepted") {
-    console.warn(`core/kernel/handlers/preview-export: ${label} was ${outcome.kind}, not accepted`);
+  if (outcome.kind === "rejected") {
+    console.warn(
+      `core/kernel/handlers/preview-export: ${label} was rejected (${outcome.reason.code})`,
+    );
+    return [];
+  }
+  if (outcome.kind === "failed") {
+    console.warn(
+      `core/kernel/handlers/preview-export: ${label} failed: ${outcome.failure.safeMessage}`,
+    );
     return [];
   }
   return [liveSelfLoopEvent(action, correlation)];
@@ -567,14 +598,41 @@ function handleSetThemeCapabilities(
  * (above) deliberately does NOT call it (see this file's header, "ONE NARROWER GAP") — so
  * in THIS build `lastSpec` is always `null` and `retry` ALWAYS lands on that "no remembered
  * spec" branch, reported as `{kind: "rejected", reason: {code: "CAPABILITY_UNAVAILABLE"}}`.
- * Collapsing that into the SAME no-op shape `blockedBySessionReadback` used to return would
- * be a false record: the machine really did move `circuit-open -> starting` (a real,
- * revision-advancing edge) and is now stranded there — worse than the old permanent no-op,
- * which at least left the machine safely at `circuit-open`. So this handler compares
- * `fromPhase` against the phase read back AFTER the call: if they differ, `retryCircuit`
- * applied and its own `kernel.stateChanged` is published regardless of what `retry()`
- * ultimately reports; only a phase that never moved at all (the OPERATION_BUSY-illegal
- * case, defensive, unreachable under a correct guard) publishes nothing.
+ * `fromPhase` is compared against the phase read back AFTER the call: if they differ,
+ * `retryCircuit` applied and its own `kernel.stateChanged` is published regardless of what
+ * `retry()` ultimately reports; only a phase that never moved at all (the
+ * OPERATION_BUSY-illegal case, defensive, unreachable under a correct guard) publishes
+ * nothing.
+ *
+ * FIX ROUND 1, FINDING 1 (CRITICAL) — RECOVER, DO NOT STRAND. Collapsing the "no remembered
+ * spec" outcome into the SAME idempotent-no-op shape `blockedBySessionReadback` used to
+ * return would be a false record (the machine really did move), but the first cut of this
+ * handler stopped there and left the machine sitting at `"starting"` — a phase with only one
+ * legal exit (`close`, to `"disabled"`), reachable by no OTHER `preview.*` command
+ * (`sessionReady`/`sessionFailed` need `starting`/`switching`/`live` as their OWN caller,
+ * never a bare retry payload driving them; `beginStart`/`beginSwitch` need `idle`/`failed`/
+ * `live`). One retry with no remembered spec would have killed preview for the life of the
+ * process the moment `kernel.preview.openCircuit` gets a real production caller. This branch
+ * now applies `kernel.preview.sessionFailed` itself (`starting -> failed` is a legal row,
+ * `preview-machine.ts`'s own table) and publishes THAT transition too, alongside
+ * `retryCircuit` — from `failed`, `beginStart`/`beginSwitch`/`openCircuit` are legal again,
+ * so a subsequent `preview.selectPage`/`selectCurrent` recovers preview normally.
+ *
+ * FIX ROUND 1, FINDING 2 — sync `activePreview` with whichever session `retry()` actually
+ * leaves behind. `context.previewSessionCommands`'s own `currentSession`/`currentSession()`
+ * already reflects the truth (`establishSession`'s own success/failure tail sets it
+ * directly), but `kernel.ts`'s `activePreview` — what `KernelPort.currentPreview()` and
+ * `create-shell.ts:412` actually stream frames from — does NOT move unless
+ * `context.setActivePreviewSession` is called. Without this, a successful retry would leave
+ * the router holding the NEW session while `activePreview` (and the UI) kept the OLD, dead
+ * one — exactly the two-owners bug this file's Step 4 deviation exists to avoid, reproduced
+ * on the retry path. So every branch that changes `session-commands.ts`'s own tracked
+ * session now calls `context.setActivePreviewSession` to match: the new session on
+ * `"accepted"`, `null` on `"failed"` or the recovered-to-`"failed"` `"rejected"` case.
+ * `setActivePreviewSession` also re-invokes `previewSessionCommands.noteSessionEstablished`
+ * on a non-null session (`kernel.ts`'s own comment) — a harmless, if redundant, SECOND
+ * re-mint of the identity `establishSession` already seeded a moment earlier (nothing reads
+ * the first mint in between; no frame is published until the caller's own frame loop runs).
  *
  * On a re-establishment FAILURE (`outcome.kind === "failed"`): no `preview.failed` event is
  * built. That payload requires `pageSlug`/`sourceHash` (§9), and this command's own payload
@@ -617,12 +675,27 @@ function handleRetry(
     ];
 
     if (outcome.kind === "rejected") {
-      // `session-commands.ts`'s own defensive "no remembered spec to reissue" branch —
-      // see this handler's own header for why it is reachable in THIS build (Task 10's
-      // documented `lastSpec` gap) and leaves the machine stranded at `"starting"`.
+      // `session-commands.ts`'s own defensive "no remembered spec to reissue" branch — see
+      // this handler's own header, "FIX ROUND 1, FINDING 1", for why this is reachable in
+      // THIS build (Task 10's documented `lastSpec` gap) and why it must recover the
+      // machine rather than leave it stranded at `"starting"`.
       console.warn(
-        `core/kernel/handlers/preview-export: preview.retry had no remembered spec to reissue (${outcome.reason.code}) — the preview machine is now stranded at "starting"`,
+        `core/kernel/handlers/preview-export: preview.retry had no remembered spec to reissue (${outcome.reason.code}) — recovering the preview machine to "failed" instead of leaving it stranded at "starting"`,
       );
+      const recovered = context.machines.preview.apply("kernel.preview.sessionFailed");
+      if (recovered.kind === "changed") {
+        events.push(
+          previewStateChangedEvent("kernel.preview.sessionFailed", recovered, correlation),
+        );
+      } else {
+        // Defensive only: `sessionFailed` is legal from `starting` per the machine's own
+        // table, and `retryCircuit` just moved it there in this same synchronous run —
+        // should be unreachable.
+        console.warn(
+          `core/kernel/handlers/preview-export: preview.retry's recovery sessionFailed was ${recovered.kind} — defensive, should be unreachable from "starting"`,
+        );
+      }
+      context.setActivePreviewSession(null);
       return events;
     }
     if (outcome.kind === "failed") {
@@ -636,6 +709,7 @@ function handleRetry(
           correlation,
         ),
       );
+      context.setActivePreviewSession(null);
       return events;
     }
     events.push(
@@ -645,6 +719,9 @@ function handleRetry(
         correlation,
       ),
     );
+    // FIX ROUND 1, FINDING 2: see this handler's own header — sync `activePreview` with the
+    // session the router's own `establishSession` already put into its private tracking.
+    context.setActivePreviewSession(context.previewSessionCommands.currentSession());
     return events;
   });
   return startedOutcome([], operationId);

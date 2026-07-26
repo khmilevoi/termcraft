@@ -232,10 +232,12 @@ function createStagingAwareAgentBackend(inner: FakeAgentBackend): FakeAgentBacke
  *  smoke test still never dispatches a query through a live preview session (gap 1, this
  *  file's header, on why "render" cannot be reached at all today), so the round trip is
  *  never actually exercised end to end here; it is real, reachable plumbing sitting idle,
- *  not a stub. */
+ *  not a stub. `previewSessionId` is now the caller-supplied Kernel-minted id (fix round 1,
+ *  Finding 3 — mirrors `create-shell.ts`'s own fix), never `session.identity.sessionId`. */
 function toRealPreviewSessionHandle(
   kernel: ReturnType<typeof createKernel>,
   session: PreviewSession,
+  previewSessionId: string,
 ): PreviewSessionHandle {
   async function* displayFrames(): AsyncGenerator<UiPreviewFrame> {
     for await (const frame of session.frames) {
@@ -248,7 +250,7 @@ function toRealPreviewSessionHandle(
     }
   }
   const handle: PreviewSessionHandle = {
-    previewSessionId: session.identity.sessionId,
+    previewSessionId,
     session,
     frames: { [Symbol.asyncIterator]: displayFrames },
     acknowledgeDisplay: (frameToken) => kernel.acknowledgeDisplay(frameToken),
@@ -276,8 +278,17 @@ function toRealKernelPort(kernel: ReturnType<typeof createKernel>): KernelPort {
         return null;
       }
       if (session !== cachedSession) {
+        const previewSessionId = kernel.currentPreviewSessionId();
+        if (previewSessionId === null) {
+          console.warn(
+            "smoke.test: kernel.currentPreview() is non-null but currentPreviewSessionId() is null — treating as no session",
+          );
+          cachedSession = null;
+          cachedHandle = null;
+          return null;
+        }
         cachedSession = session;
-        cachedHandle = toRealPreviewSessionHandle(kernel, session);
+        cachedHandle = toRealPreviewSessionHandle(kernel, session, previewSessionId);
       }
       return cachedHandle;
     },

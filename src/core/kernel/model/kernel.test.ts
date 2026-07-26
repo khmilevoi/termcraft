@@ -312,17 +312,20 @@ function buildDeps(overrides?: { readonly chatMutations?: ChatMutations }): Kern
  * real proof `bind`/`wrap` re-enter the Kernel's one Reatom frame correctly, not this file.
  */
 describe("createKernel", () => {
-  test("construction succeeds and returns the six-method Kernel surface", () => {
+  test("construction succeeds and returns the seven-method Kernel surface", () => {
     const kernel = createKernel(buildDeps());
 
     expect(typeof kernel.dispatch).toBe("function");
     expect(typeof kernel.events).toBe("function");
     expect(typeof kernel.currentPreview).toBe("function");
+    expect(typeof kernel.currentPreviewSessionId).toBe("function");
     expect(typeof kernel.publishFrame).toBe("function");
     expect(typeof kernel.acknowledgeDisplay).toBe("function");
     expect(typeof kernel.close).toBe("function");
     // No preview.* command has ever run — nothing has established a live preview session.
     expect(kernel.currentPreview()).toBeNull();
+    // Fix round 1, Finding 3's own new method — must agree with `currentPreview()` above.
+    expect(kernel.currentPreviewSessionId()).toBeNull();
   });
 
   test("an immediate subscribe delivers exactly one kernel.snapshot with the machines' initial phases", () => {
@@ -386,6 +389,7 @@ describe("createKernel", () => {
     const kernel = createKernel(buildDeps());
     await expect(kernel.close()).resolves.toBeUndefined();
     expect(kernel.currentPreview()).toBeNull();
+    expect(kernel.currentPreviewSessionId()).toBeNull();
   });
 
   test("dispatching a fresh command reaches the REAL project handler (Step C1) without throwing or warning synchronously", async () => {

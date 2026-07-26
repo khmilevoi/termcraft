@@ -277,6 +277,14 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
     sessionId: "fake-session-1",
   };
 
+  /**
+   * Fix round 1, Finding 3: the Kernel-minted id `toPreviewSessionHandle` is given as an
+   * explicit parameter — deliberately different from `IDENTITY.sessionId` above, so a
+   * regression back to reading `session.identity.sessionId` would fail the assertion below
+   * rather than pass by coincidence.
+   */
+  const PREVIEW_SESSION_ID = "0192f6f0-1111-7000-8000-000000000001";
+
   function ledgerBackedKernel(): Pick<Kernel, "acknowledgeDisplay" | "publishFrame"> {
     const ledger = createFrameTokenLedger();
     return {
@@ -305,7 +313,13 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
   test("every yielded frame carries a token the ledger recognises; acknowledging it succeeds, and a never-minted token still fails", async () => {
     const kernel = ledgerBackedKernel();
     const session = createFakePreviewSession(IDENTITY);
-    const handle = toPreviewSessionHandle(kernel, session);
+    const handle = toPreviewSessionHandle(kernel, session, PREVIEW_SESSION_ID);
+
+    // The handle carries the Kernel-minted id, never the host-internal `session.identity
+    // .sessionId` — see this describe block's own comment and `create-shell.ts`'s
+    // `toKernelPort` doc comment, "FIX ROUND 1, FINDING 3".
+    expect(handle.previewSessionId).toBe(PREVIEW_SESSION_ID);
+    expect(handle.previewSessionId).not.toBe(IDENTITY.sessionId);
 
     session.emitFrame(pushedFrame());
     session.close();
@@ -344,7 +358,7 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
       acknowledgeDisplay: () => new FrameAckError({ reason: "unused in this fixture" }),
     };
     const session = createFakePreviewSession(IDENTITY);
-    const handle = toPreviewSessionHandle(kernel, session);
+    const handle = toPreviewSessionHandle(kernel, session, PREVIEW_SESSION_ID);
 
     session.emitFrame(pushedFrame());
     session.close();

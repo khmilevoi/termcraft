@@ -32,6 +32,7 @@ import type {
   CommandResultV1,
   FrameIdentityV1,
   FrameTokenV1,
+  UUIDv7,
 } from "core/protocol";
 import type { Clock } from "infrastructure/clock";
 
@@ -89,10 +90,10 @@ export interface KernelDeps {
 /**
  * The composed Kernel object `createKernel` (Task 8) assembles from `KernelDeps` — the
  * one object `main.ts` and the composition root ultimately drive. Its shape
- * (`dispatch`/`events`/`currentPreview`/`publishFrame`/`acknowledgeDisplay`/`close`)
- * deliberately differs from `ui/kernel/types.ts`'s `KernelPort` (`dispatch`/`subscribe`/
- * `preview`): that UI-facing port is a separate boundary type the composition root adapts
- * `Kernel` into (WP-4), not built here.
+ * (`dispatch`/`events`/`currentPreview`/`currentPreviewSessionId`/`publishFrame`/
+ * `acknowledgeDisplay`/`close`) deliberately differs from `ui/kernel/types.ts`'s `KernelPort`
+ * (`dispatch`/`subscribe`/`preview`): that UI-facing port is a separate boundary type the
+ * composition root adapts `Kernel` into (WP-4), not built here.
  */
 export interface Kernel {
   /**
@@ -115,6 +116,20 @@ export interface Kernel {
   events(handler: (envelope: EventEnvelopeV1) => void): EventBusPayloadError | (() => void);
   /** The current live preview session, or `null` when no preview is established. */
   currentPreview(): PreviewSession | null;
+  /**
+   * The Kernel-minted `previewSessionId` for the SAME session `currentPreview()` returns
+   * (kernel-command-contract §7.6: "Each start/switch mints a UUIDv7 `previewSessionId`"),
+   * or `null` when none is established. Added in the MVP blocker fix bundle's Task 10 fix
+   * round 1 (Finding 3): before this, `entrypoint/model/create-shell.ts`'s
+   * `toPreviewSessionHandle` used `PreviewSession.identity.sessionId` instead — the
+   * HOST-internal id, never the one minted here — so a live session had two different
+   * `previewSessionId`s in circulation and `ui/preview/model/interaction.ts`'s own
+   * correlation check (`current.handle.previewSessionId !== payload.previewSessionId`)
+   * could never pass. This is the one Kernel-side fact that lets the composition root use
+   * the SAME id both in the `PreviewSessionHandle` it hands to `ui` and in every
+   * `preview.*` event's own `previewSessionId` field.
+   */
+  currentPreviewSessionId(): UUIDv7 | null;
   /**
    * Mints a ledger-recognized `FrameTokenV1` "beside the frame" (kernel-command-contract
    * §8.1: "For each frame-stream item, the Kernel mints a `FrameTokenV1`") for one
