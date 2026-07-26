@@ -121,12 +121,15 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *
  *   `pages: StagingPageSourceV1[]` / `readSet.canonicalPages`: one entry per
  *   `context.deps.pageReader.listSlugs()` result. Each page's `sourcePath` is built from
- *   `` `${context.deps.projectStore.root}/pages/${pageSlug}.tsx` `` (the canonical
- *   page-file layout `core/turns/model/candidate.ts`'s own `PAGE_FILE_PATTERN` already
- *   documents), and its `readSet.canonicalPages` entry's `sha256`/`size` come from the SAME
- *   `PageReader.readSource(pageSlug)` call this handler makes to resolve that fact honestly
- *   (never fabricated) — a read failure for an already-*listed* page blocks admission with a
- *   logged refusal, since `null` on that entry would falsely claim "expected absence."
+ *   `canonicalPageSourcePath(context.deps.projectStore.root, pageSlug)` (below): the CANONICAL
+ *   absolute source, `` `${projectRoot}/.termcraft/pages/<slug>/page.tsx` `` (Gap G —
+ *   `store/safe-fs/model/limits.ts:134-135`'s own prose, `store/transaction/model/wrappers.ts`'s
+ *   `canonicalPagePath`) — NOT the flat `pages/<slug>.tsx` `core/turns/model/candidate.ts`'s own
+ *   `PAGE_FILE_PATTERN` documents, which is `workspacePageRelPath`'s staged-workspace/candidate-
+ *   relative convention instead. `readSet.canonicalPages`'s own `sha256`/`size` come from the
+ *   SAME `PageReader.readSource(pageSlug)` call this handler makes to resolve that fact
+ *   honestly (never fabricated) — a read failure for an already-*listed* page blocks admission
+ *   with a logged refusal, since `null` on that entry would falsely claim "expected absence."
  *
  *   `manifestSlice: Uint8Array`: `JSON.stringify({pages: <the SAME listSlugs() result>,
  *   active: <workspaceState.activePageSlug>})`, UTF-8 encoded — the exact `ManifestSliceV1`

@@ -59,8 +59,8 @@ export interface TurnValidationPageInputV1 {
    * added to fix. FIXED (review finding #7 — corrected from an earlier, now-false claim that
    * `buildValidationInput` still stuffed the absolute path into `fileName`):
    * `core/kernel/model/handlers/turn.ts`'s `buildValidationInput` now sets `fileName` to the
-   * short `pageFileRelPath(pageSlug)` display name and `sourcePath` to the absolute staged
-   * candidate path (`${candidate.root}/${pageFileRelPath(pageSlug)}`) separately, so a
+   * short `workspacePageRelPath(pageSlug)` display name and `sourcePath` to the absolute staged
+   * candidate path (`${candidate.root}/${workspacePageRelPath(pageSlug)}`) separately, so a
    * validation Gate rejection reports the short name, never the absolute path.
    */
   readonly sourcePath?: string;
