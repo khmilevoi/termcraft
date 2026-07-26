@@ -315,6 +315,8 @@ process clears it.
 reason — which port refused, and why — was not captured. Widening that one trace line is a
 precondition for diagnosing the next occurrence.
 
+**Answered 2026-07-26 — Gap G (§1.6); the deciding fact was in the returned value the whole time.**
+
 **Why the suite is green.** Four tests assert this exact hang as the expected outcome:
 `core/turns/model/admission.test.ts:221,234,261,275` each check `phase() === "admitting"` after a
 `blocked` result. The one test exercising `turn.cancel` from `admitting`

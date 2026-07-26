@@ -26,6 +26,7 @@ import {
 import {
   type AdmissionCandidatePinV1,
   type AdmissionInputV1,
+  type AdmissionOutcomeV1,
   type RunTurnDeps,
   type RunTurnFinalizeMaterialV1,
   type RunTurnInputV1,
@@ -37,6 +38,7 @@ import {
   evaluateSessionPlan,
   foldGateDiagnosticsIntoPrompt,
   runTurn,
+  terminalizeTurn,
 } from "core/turns";
 import type { ChatSelection } from "entities/chat";
 import { type PageSlug, parsePageSlug } from "entities/page";
@@ -253,8 +255,15 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   therefore this whole `runTurn` composition) is ever launched. The first `turn.attemptStarted`
  *   this wrapper observes still marks when `turn.started` synthesizes and publishes (see "TURN.
  *   STARTED — NOW PUBLISHED" below), just not when the active turn id is set. `setActiveTurnId(null)`
- *   still runs once `runTurn`'s own result is `terminalized`/`finalized`; `admission-rejected` is
- *   Task 4's job (fix-bundle spec §1.3/§1.4) — this task does not clear it on that branch.
+ *   still runs once `runTurn`'s own result is `terminalized`/`finalized` — UNCONDITIONALLY, and
+ *   that same unconditional-clear discipline now covers every OTHER exit this file has, not only
+ *   that one (Task 4, fix-bundle spec §1.2/§1.3/§1.5's own follow-up finding): a rejected
+ *   admission clears it via `terminalizeRejectedAdmission`'s own call into `terminalizeTurn`
+ *   (below), and every one of the TEN early-refusal branches that returns before
+ *   `admission`/`runAdmission` is ever built clears it via `abortEarlyAdmission` (Task 3's own
+ *   fix; Task 4 additionally has that helper publish a `turn.failed` naming the branch's real
+ *   cause — see that function's own doc comment for both). No exit from `runTurnStart` leaves
+ *   `activeTurnId` non-null without also leaving the turn machine `idle`.
  *
  *   TURN.STARTED — NOW PUBLISHED (was: "deliberately not published"; corrected per
  *   fixlane-K1-turn-spine.json's seam finding, votes 3/notRefuted 3): `ui/mirror/model
@@ -520,11 +529,19 @@ interface StoredOrDefaultAgentTripleV1 {
  * `stored` unchanged whenever ANY of its three fields is already set (including a partially
  * set triple, which `resolveAgentSelection` below still validates and can still refuse).
  * Falls back to the single registered backend's `BackendCapabilities.defaultSelection` only
- * when ALL THREE are absent. Refuses (logged, `null`) when the registry cannot honestly
- * supply exactly one default: zero registered backends, or more than one with no picker to
- * choose between them (MVP registers Claude only — `agent-registry.ts`'s own "MVP ships
- * exactly one entry" — so this branch is a documented guard against a future registry shape,
- * not a case this build can exercise).
+ * when ALL THREE are absent. Refuses when the registry cannot honestly supply exactly one
+ * default: zero registered backends, or more than one with no picker to choose between them
+ * (MVP registers Claude only — `agent-registry.ts`'s own "MVP ships exactly one entry" — so
+ * this branch is a documented guard against a future registry shape, not a case this build
+ * can exercise).
+ *
+ * Returns a `FailureDtoV1` on refusal (Task 4, fix-bundle spec §1.3/§1.4's own follow-up
+ * finding), not a bare `null`: `runTurnStart`'s own call site now has to hand
+ * `abortEarlyAdmission` a real cause, and the ONLY honest source of that cause is whichever
+ * of the three `console.warn` lines below actually fired — never a second, reconstructed
+ * message at the call site. `code` is `"PERSISTENCE_FAILED"` for all three (no port failure
+ * exists to carry a more specific one — this is a registry-shape refusal, not a read
+ * failure), `safeMessage` is the SAME string the matching `console.warn` logs, verbatim.
  */
 function resolveStoredOrDefaultAgentTriple(
   context: HandlerContext,
@@ -533,33 +550,31 @@ function resolveStoredOrDefaultAgentTriple(
     readonly model: string | null;
     readonly effort: string | null;
   },
-): StoredOrDefaultAgentTripleV1 | null {
+): StoredOrDefaultAgentTripleV1 | FailureDtoV1 {
   if (stored.backend !== null && stored.model !== null && stored.effort !== null) {
     return { backend: stored.backend, model: stored.model, effort: stored.effort };
   }
 
   const registered = context.deps.agentRegistry.list();
   if (registered.length === 0) {
-    console.warn(
-      "core/kernel/handlers/turn: turn.start refused — no agent selection stored and no backend registered to default from",
-    );
-    return null;
+    const reason =
+      "turn.start refused — no agent selection stored and no backend registered to default from";
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   if (registered.length > 1) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — no agent selection stored and ${registered.length} backends are registered; MVP has no picker to choose a default among them`,
-    );
-    return null;
+    const reason = `turn.start refused — no agent selection stored and ${registered.length} backends are registered; MVP has no picker to choose a default among them`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const [only] = registered;
   if (only === undefined) {
     // Unreachable given the length checks above (`=== 0` and `> 1` both returned already, so
     // exactly one element remains) — kept explicit per this project's "never silently assume
     // success" rule.
-    console.warn(
-      "core/kernel/handlers/turn: turn.start refused — registry reported one backend but yielded none on read",
-    );
-    return null;
+    const reason = "turn.start refused — registry reported one backend but yielded none on read";
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   return {
     backend: only.backendId,
@@ -568,37 +583,36 @@ function resolveStoredOrDefaultAgentTriple(
   };
 }
 
+/** Same "return the real cause, not `null`" rule as {@link resolveStoredOrDefaultAgentTriple} — see its own doc comment. */
 function resolveAgentSelection(
   context: HandlerContext,
   backendId: string,
   model: string,
   effort: string,
-): ResolvedAgentSelectionV1 | null {
+): ResolvedAgentSelectionV1 | FailureDtoV1 {
   const capabilities = context.deps.agentRegistry.list().find((b) => b.backendId === backendId);
   if (capabilities === undefined) {
-    console.warn(`core/kernel/handlers/turn: turn.start refused — unknown backend "${backendId}"`);
-    return null;
+    const reason = `turn.start refused — unknown backend "${backendId}"`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const modelCapability = capabilities.models.find((m) => m.model === model);
   if (modelCapability === undefined) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — backend "${backendId}" does not offer model "${model}"`,
-    );
-    return null;
+    const reason = `turn.start refused — backend "${backendId}" does not offer model "${model}"`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const resolvedEffort = modelCapability.efforts.find((e) => e === effort);
   if (resolvedEffort === undefined) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — model "${model}" does not offer effort "${effort}"`,
-    );
-    return null;
+    const reason = `turn.start refused — model "${model}" does not offer effort "${effort}"`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const agentBackend = context.deps.agentRegistry.get(backendId);
   if (agentBackend === null) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — registry lost backend "${backendId}" between list() and get()`,
-    );
-    return null;
+    const reason = `turn.start refused — registry lost backend "${backendId}" between list() and get()`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   return { backendId, model, effort: resolvedEffort, agentBackend };
 }
@@ -736,20 +750,26 @@ function applyAbortStep(
  * Deliberately NOT `core/turns/model/terminalize.ts`'s `terminalizeTurn`: that function ALSO
  * writes a durable `system:error` chat record and needs a `targetChatId`/`staging`/durable-write
  * ceremony several of these branches fire before an `activeChatId` is even known (e.g. the "no
- * active chat yet" branch itself). The durable-record/`turn.failed` story belongs to Task 4,
- * with the fuller context it has by then — this helper's only job is that the machine and the
- * active turn id come back to a USABLE state, and no subscriber desynchronises.
+ * active chat yet" branch itself). The durable chat record stays exclusive to
+ * `terminalizeRejectedAdmission` (below), which handles the one branch that DOES already have a
+ * committed user record and a known `targetChatId` to attach it to — every one of THESE ten
+ * branches fires before that is true.
  *
- * Returns every `kernel.stateChanged` event a transition that actually happened produced —
- * NEVER `[]`: the mailbox layer's `applyTransition` already advanced the Kernel's revision the
- * moment `beginAdmission` applied inside `beginTurn`, strictly BEFORE `runTurnStart` (and this
- * function) ever run, so a caller that returns `[]` here would desynchronise every subscriber
- * exactly like the `admission-rejected` defect this bundle fixes elsewhere (spec §1.4) — the
- * identical shape of bug, reintroduced here, is not an acceptable trade for a shorter return.
+ * Returns every `kernel.stateChanged` event a transition that actually happened produced, PLUS
+ * exactly one `turn.failed` naming `failure` as its cause (Task 4, fix-bundle spec §1.4's own
+ * follow-up finding: an accepted command must reach a terminal event, and these ten branches
+ * accept — `turn.start` returns `disposition: "started"` — every bit as much as the
+ * `admission-rejected` branch this bundle's other half fixes). Never `[]`: the mailbox layer's
+ * `applyTransition` already advanced the Kernel's revision the moment `beginAdmission` applied
+ * inside `beginTurn`, strictly BEFORE `runTurnStart` (and this function) ever run, so a caller
+ * that returned nothing here would desynchronise every subscriber exactly like the
+ * `admission-rejected` defect this bundle fixes elsewhere — the identical shape of bug,
+ * reintroduced here, is not an acceptable trade for a shorter return.
  */
 function abortEarlyAdmission(
   context: HandlerContext,
   turnId: UUIDv7,
+  failure: FailureDtoV1,
 ): readonly PublishableEventV1[] {
   const events: PublishableEventV1[] = [];
   const beginEvent = applyAbortStep(context, turnId, "beginTerminalization");
@@ -762,7 +782,133 @@ function abortEarlyAdmission(
   // invariant (`core/capabilities/types.ts:93`) must hold in both directions — `idle` implies
   // `null`, not merely "non-idle implies non-null".
   context.setActiveTurnId(null);
+  events.push({
+    kind: "turn.failed",
+    payload: { turnId, outcome: "failed", changedPages: [], warnings: [], failure },
+    correlation: { turnId },
+  });
   return events;
+}
+
+/**
+ * The real cause, from the value that already carried it (fix-bundle spec §1.4).
+ * `AdmissionOutcomeV1`'s `blocked` variants carry `phase`
+ * (`admit | chat-append-base | workspace | read-set | fence`) plus either a real `FailureDtoV1`
+ * or a typed translation/fence error — all of which used to be discarded at the log line. That
+ * discard is exactly why the observed rejection went unexplained until a temporary trace widening
+ * named it on the first re-run; the durable half is this DTO.
+ *
+ * A real `FailureDtoV1` is spread verbatim so its own `code`/`details` survive — including the
+ * two codes whose wire schema demands a typed `details.part` (`APPLY_SOURCE_CHANGED`,
+ * `APPLY_STALE`), which is why this needs none of `terminalFailureDto`'s exclusion set: nothing
+ * is reconstructed here, only re-messaged.
+ */
+function admissionFailureDto(
+  outcome: Exclude<AdmissionOutcomeV1, { kind: "workspace-ready" }>,
+): FailureDtoV1 {
+  if (outcome.kind === "illegal") {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: `the turn could not be admitted (${outcome.code})`,
+      details: {},
+    };
+  }
+  if ("failure" in outcome) {
+    return {
+      ...outcome.failure,
+      safeMessage: `admission failed at the ${outcome.phase} phase: ${outcome.failure.safeMessage}`,
+    };
+  }
+  return {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: `admission failed at the ${outcome.phase} phase: ${outcome.error.message}`,
+    details: { phase: outcome.phase },
+  };
+}
+
+/**
+ * A rejected admission takes the SAME `terminalizeTurn` every other non-committing outcome
+ * already takes (fix-bundle spec §1.3): it applies `finishTerminalization`, durably writes a
+ * `system:error` chat record, and applies `settle` back to `idle`. No separate path for a failed
+ * admission exists, and none is invented here.
+ *
+ * `turnTransactions.terminalize` builds and appends its OWN record from this input — it does not
+ * depend on the turn's user record having committed — so a rejection blocked at the `admit`
+ * phase still leaves a durable trace, matching what the orphan-turn scan already writes on
+ * restart (turn-durability §7.7).
+ *
+ * DEVIATION FROM THE ORIGINAL PLAN'S SKETCH: the fix-bundle plan's own sketch of this function
+ * threads a `TerminalizeTurnDeps.onSettled` hook through to clear `activeTurnId` "the instant
+ * `settle` applies" (spec §1.5). That hook does not exist yet — it is a LATER task's own
+ * producing interface (`TerminalizeTurnDeps.onSettled?: () => void`, added once and shared by
+ * `finalizeTurn`/`terminalizeTurn`/`runTurn` alike), not this one's to add pre-emptively; adding
+ * it here would either duplicate or conflict with that task's own shape. This function instead
+ * clears `activeTurnId` unconditionally right after `terminalizeTurn` resolves — matching
+ * `runTurnStart`'s own unconditional `setActiveTurnId(null)` once `runTurn` resolves, just below.
+ * For THIS call site specifically the two are not measurably different: `candidateRoot: null`
+ * means `terminalizeTurn`'s own post-settle candidate retirement is a synchronous no-op (no
+ * candidate was ever frozen for a turn that never reached an attempt), so nothing genuinely
+ * async happens between `settle` applying and this await resolving.
+ */
+async function terminalizeRejectedAdmission(
+  context: HandlerContext,
+  turnId: UUIDv7,
+  targetChatId: string,
+  outcome: Exclude<AdmissionOutcomeV1, { kind: "workspace-ready" }>,
+): Promise<readonly PublishableEventV1[]> {
+  const failure = admissionFailureDto(outcome);
+
+  const bridged = context.machines.turn.apply("beginTerminalization");
+  if (bridged.kind === "illegal") {
+    // Defensive only — `admitting -> terminalizing` is a table row as of spec §1.1, and the
+    // machine cannot have left `admitting` while this operation owned it. Logged, never swallowed.
+    console.warn(
+      `core/kernel/handlers/turn: beginTerminalization was illegal for turn ${turnId}'s rejected admission (${bridged.code})`,
+    );
+  }
+
+  const terminalized = await wrap(
+    terminalizeTurn(
+      {
+        // The FULL `StateMachine` (`phaseAtom` included), not `context.machines.turn`'s
+        // narrower `HandlerMachine` view — `terminalizeTurn` needs the same full object
+        // `run-turn.ts`'s own `RunTurnDeps.machine: context.turnRunner.machine` already uses
+        // (this file's header: "the SAME full `StateMachine<TurnState, TurnAction>`").
+        machine: context.turnRunner.machine,
+        turnTransactions: context.deps.turnTransactions,
+        staging: context.deps.staging,
+      },
+      {
+        turnId,
+        targetChatId,
+        outcome: "failed",
+        text: failure.safeMessage,
+        reason: failure.code,
+        createdAt: context.deps.clock.now().toISOString(),
+        // No candidate has ever been frozen for a turn that never reached an attempt.
+        candidateRoot: null,
+      },
+    ),
+  );
+
+  if (terminalized.kind === "illegal") {
+    console.warn(
+      `core/kernel/handlers/turn: terminalizeTurn was illegal for turn ${turnId}'s rejected admission (${terminalized.code}) — clearing the active turn id directly so the machine is not stranded`,
+    );
+  }
+  // Unconditional (see this function's own "DEVIATION" note above) — mirrors
+  // `runTurnStart`'s own terminal-path `setActiveTurnId(null)`.
+  context.setActiveTurnId(null);
+
+  return [
+    {
+      kind: "turn.failed",
+      payload: { turnId, outcome: "failed", changedPages: [], warnings: [], failure },
+      correlation: { turnId },
+    },
+  ];
 }
 
 /**
@@ -789,10 +935,9 @@ async function runTurnStart(
   const workspaceState = await wrap(context.deps.projectStore.readWorkspaceState());
   trace("kernel.turnStart", { step: "readWorkspaceState done" });
   if ("code" in workspaceState) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — could not read workspace state: ${workspaceState.safeMessage}`,
-    );
-    return abortEarlyAdmission(context, turnId);
+    const reason = `turn.start refused — could not read workspace state: ${workspaceState.safeMessage}`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, { ...workspaceState, safeMessage: reason });
   }
   const { activeChatId, backend, model, effort, activePageSlug } = workspaceState.state;
 
@@ -809,8 +954,14 @@ async function runTurnStart(
   });
 
   if (activeChatId === null) {
-    console.warn("core/kernel/handlers/turn: turn.start refused — no active chat yet");
-    return abortEarlyAdmission(context, turnId);
+    const reason = "turn.start refused — no active chat yet";
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: reason,
+      details: {},
+    });
   }
   // A fresh, explicitly-typed `const`: `publish` below is a nested closure, and TypeScript
   // does not carry the null-check narrowing above into nested function bodies — re-binding
@@ -819,7 +970,7 @@ async function runTurnStart(
 
   const agentTriple = resolveStoredOrDefaultAgentTriple(context, { backend, model, effort });
   trace("kernel.turnStart", { step: "agentTriple resolved", agentTriple });
-  if (agentTriple === null) return abortEarlyAdmission(context, turnId);
+  if ("code" in agentTriple) return abortEarlyAdmission(context, turnId, agentTriple);
 
   const resolvedAgent = resolveAgentSelection(
     context,
@@ -829,19 +980,18 @@ async function runTurnStart(
   );
   trace("kernel.turnStart", {
     step: "resolveAgentSelection returned",
-    isNull: resolvedAgent === null,
+    refused: "code" in resolvedAgent,
   });
-  if (resolvedAgent === null) return abortEarlyAdmission(context, turnId);
+  if ("code" in resolvedAgent) return abortEarlyAdmission(context, turnId, resolvedAgent);
 
   trace("kernel.turnStart", { step: "agent selection resolved" });
 
   const manifestSnapshot = await wrap(context.deps.projectStore.readManifestSnapshot());
   trace("kernel.turnStart", { step: "readManifestSnapshot done" });
   if ("code" in manifestSnapshot) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — could not read project.toml's snapshot: ${manifestSnapshot.safeMessage}`,
-    );
-    return abortEarlyAdmission(context, turnId);
+    const reason = `turn.start refused — could not read project.toml's snapshot: ${manifestSnapshot.safeMessage}`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, { ...manifestSnapshot, safeMessage: reason });
   }
 
   // WP-7: a SECOND, different call to the SAME port — `readManifestSnapshot` above returns
@@ -851,19 +1001,17 @@ async function runTurnStart(
   const manifest = await wrap(context.deps.projectStore.readManifest());
   trace("kernel.turnStart", { step: "readManifest done" });
   if ("code" in manifest) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`,
-    );
-    return abortEarlyAdmission(context, turnId);
+    const reason = `turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, { ...manifest, safeMessage: reason });
   }
 
   const pageSlugs = await wrap(context.deps.pageReader.listSlugs());
   trace("kernel.turnStart", { step: "listSlugs done" });
   if ("code" in pageSlugs) {
-    console.warn(
-      `core/kernel/handlers/turn: turn.start refused — could not list page slugs: ${pageSlugs.safeMessage}`,
-    );
-    return abortEarlyAdmission(context, turnId);
+    const reason = `turn.start refused — could not list page slugs: ${pageSlugs.safeMessage}`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, { ...pageSlugs, safeMessage: reason });
   }
 
   const pages: StagingPageSourceV1[] = [];
@@ -871,10 +1019,9 @@ async function runTurnStart(
   for (const pageSlug of pageSlugs) {
     const source = await wrap(context.deps.pageReader.readSource(pageSlug));
     if ("code" in source) {
-      console.warn(
-        `core/kernel/handlers/turn: turn.start refused — could not read canonical page "${pageSlug}": ${source.safeMessage}`,
-      );
-      return abortEarlyAdmission(context, turnId);
+      const reason = `turn.start refused — could not read canonical page "${pageSlug}": ${source.safeMessage}`;
+      console.warn(`core/kernel/handlers/turn: ${reason}`);
+      return abortEarlyAdmission(context, turnId, { ...source, safeMessage: reason });
     }
     pages.push({
       pageSlug,
@@ -902,10 +1049,9 @@ async function runTurnStart(
   if (activePageSlug !== null) {
     const pins = await wrap(context.deps.pinReader.fold(activePageSlug));
     if ("code" in pins) {
-      console.warn(
-        `core/kernel/handlers/turn: turn.start refused — could not fold pins for active page "${activePageSlug}": ${pins.safeMessage}`,
-      );
-      return abortEarlyAdmission(context, turnId);
+      const reason = `turn.start refused — could not fold pins for active page "${activePageSlug}": ${pins.safeMessage}`;
+      console.warn(`core/kernel/handlers/turn: ${reason}`);
+      return abortEarlyAdmission(context, turnId, { ...pins, safeMessage: reason });
     }
     for (const pin of pins) {
       if (pin.status !== "open") continue;
@@ -920,10 +1066,9 @@ async function runTurnStart(
     if (candidatePins.length > 0) {
       const pinsAppendBase = await wrap(context.deps.pinReader.readAppendBase(activePageSlug));
       if ("code" in pinsAppendBase) {
-        console.warn(
-          `core/kernel/handlers/turn: turn.start refused — could not read pin append-base for active page "${activePageSlug}": ${pinsAppendBase.safeMessage}`,
-        );
-        return abortEarlyAdmission(context, turnId);
+        const reason = `turn.start refused — could not read pin append-base for active page "${activePageSlug}": ${pinsAppendBase.safeMessage}`;
+        console.warn(`core/kernel/handlers/turn: ${reason}`);
+        return abortEarlyAdmission(context, turnId, { ...pinsAppendBase, safeMessage: reason });
       }
       readSetPins.push({ pageSlug: activePageSlug, base: pinsAppendBase });
     }
@@ -1152,24 +1297,11 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "runTurn resolved", kind: result.kind });
 
   if (result.kind === "admission-rejected") {
-    // TEMPORARY DIAGNOSTIC (2026-07-26): `outcome.kind` alone says only "blocked", which is what
-    // left the last live rejection unexplained. `AdmissionOutcomeV1`'s blocked variants already
-    // carry the deciding fact — `phase` (admit | chat-append-base | workspace | read-set | fence)
-    // plus the failure itself — and it was being discarded here. This widening is the diagnostic
-    // half of the fix the spec prescribes (§1.4); the durable half is a real terminal event.
-    const detail: Record<string, unknown> = { kind: result.outcome.kind };
-    if (result.outcome.kind === "blocked") {
-      detail.phase = result.outcome.phase;
-      detail.failure =
-        "failure" in result.outcome ? result.outcome.failure : String(result.outcome.error);
-    } else if (result.outcome.kind === "illegal") {
-      detail.code = result.outcome.code;
-    }
-    trace("kernel.turnStart", { step: "admission rejected", ...detail });
-    console.warn(
-      `core/kernel/handlers/turn: turn.start's admission was rejected ${JSON.stringify(detail)}`,
-    );
-    return [];
+    // Spec §1.4: an accepted command must reach a terminal event. Returning `[]` here advanced
+    // the Kernel's revision with nothing published, which desynchronised every subscriber by
+    // construction — the `STALE_REVISION` rejection on the NEXT `turn.start` was that desync,
+    // not a second bug, and it disappears with this return value rather than a separate fix.
+    return terminalizeRejectedAdmission(context, turnId, admittedChatId, result.outcome);
   }
 
   // Clear the attempt-handle slot too — `onAttemptStarted(null)` already ran for the LAST

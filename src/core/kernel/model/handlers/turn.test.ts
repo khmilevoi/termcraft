@@ -387,10 +387,19 @@ describe('turnHandlers["turn.start"]', () => {
    * `turn.start` is accepted, not rejected `TURN_ALREADY_ACTIVE`. Before that fix, this
    * helper (then `assertEarlyPortRefusalStalls`) proved the opposite — a real, reported gap,
    * not something this suite ever laundered as accepted.
+   *
+   * TASK 4'S OWN ADDITION (fix-bundle spec §1.4's own follow-up finding — every one of these
+   * ten branches accepts the command, so it must reach a terminal event too): a FOURTH event,
+   * `turn.failed`, now follows the three `kernel.stateChanged` events — `abortEarlyAdmission`
+   * publishes it naming the branch's own refusal reason. `expectedCauseSubstring` is a
+   * fragment of that branch's own `console.warn` text (never invented prose), asserted against
+   * the published failure's `safeMessage` so each caller proves ITS OWN cause reached the wire,
+   * not just "some" `turn.failed`.
    */
   async function assertEarlyPortRefusalRecoversToIdle(
     handlerContext: HandlerContext,
     getLaunchedOperations: () => readonly LaunchedOperation[],
+    expectedCauseSubstring: string,
   ): Promise<void> {
     const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
     expect(outcome.disposition).toBe("started");
@@ -399,12 +408,19 @@ describe('turnHandlers["turn.start"]', () => {
     const [operation] = getLaunchedOperations();
     if (operation === undefined) throw new Error("expected exactly one launched operation");
     const events = await operation.run();
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(4);
     expect(events.map((e) => e.kind)).toEqual([
       "kernel.stateChanged",
       "kernel.stateChanged",
       "kernel.stateChanged",
+      "turn.failed",
     ]);
+    const [, , , failed] = events;
+    if (failed === undefined || failed.kind !== "turn.failed") {
+      throw new Error("expected the fourth event to be turn.failed");
+    }
+    const failedPayload = failed.payload as { readonly failure: { readonly safeMessage: string } };
+    expect(failedPayload.failure.safeMessage).toContain(expectedCauseSubstring);
     expect(handlerContext.machines.turn.phase()).toBe("idle");
     expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
   }
@@ -414,7 +430,11 @@ describe('turnHandlers["turn.start"]', () => {
     // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
     // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
     // precedent for "nothing about the outcome is known until the promise settles").
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "no active chat yet",
+    );
     expect(getLaunchedOperations()[0]?.label).toBe("kernel.turn.run");
   });
 
@@ -432,7 +452,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "manifest snapshot unreadable",
+    );
   });
 
   test("refuses (logged) when resolveAgentSelection finds the backend but not the requested model", async () => {
@@ -443,7 +467,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      'does not offer model "opus"',
+    );
   });
 
   test("refuses (logged) when resolveAgentSelection finds the model but not the requested effort", async () => {
@@ -454,7 +482,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      'does not offer effort "high"',
+    );
   });
 
   test("refuses (logged) when a listed page's canonical source cannot be read", async () => {
@@ -468,7 +500,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      'could not read canonical page "home"',
+    );
   });
 
   // Fix round 1: the remaining five of the ten early-refusal branches — untested for recovery
@@ -485,7 +521,11 @@ describe('turnHandlers["turn.start"]', () => {
       details: {},
     });
     const { handlerContext, getLaunchedOperations } = buildTestContext({ projectStore });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "workspace state unreadable",
+    );
   });
 
   test("refuses (logged) when resolveStoredOrDefaultAgentTriple finds no registered backend to default from (an active chat exists, nothing stored, the registry is empty)", async () => {
@@ -497,7 +537,11 @@ describe('turnHandlers["turn.start"]', () => {
       projectStore,
       agentRegistry: createFakeAgentRegistry([]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "no backend registered to default from",
+    );
   });
 
   test("refuses (logged) when pageReader.listSlugs fails", async () => {
@@ -516,7 +560,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "page listing unreadable",
+    );
   });
 
   test("refuses (logged) when pinReader.fold fails for the active page", async () => {
@@ -546,7 +594,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "pin fold unreadable",
+    );
   });
 
   test("refuses (logged) when pinReader.readAppendBase fails for the active page (an open pin genuinely contributed a candidate)", async () => {
@@ -586,7 +638,11 @@ describe('turnHandlers["turn.start"]', () => {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
     });
-    await assertEarlyPortRefusalRecoversToIdle(handlerContext, getLaunchedOperations);
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "pin append-base unreadable",
+    );
   });
 
   test("WP-4 default agent selection: with an active chat but NO stored (backend, model, effort) triple, the turn is admitted (not refused) and the started AgentTask carries the registry's declared default model and effort", async () => {
@@ -1768,6 +1824,108 @@ describe('turnHandlers["turn.start"]', () => {
   });
 });
 
+describe("turn.start — a rejected admission (Gap F)", () => {
+  // Task 4's own brief, Step 1 — a `staging.createTurnWorkspace` failure blocks
+  // `runAdmission` at phase `"workspace"` (`admission.ts`'s own `if ("code" in workspace)
+  // return {kind: "blocked", phase: "workspace", failure: workspace}`), AFTER `admit()` and
+  // the chat-append-base read already succeeded — the exact shape that used to log and
+  // return `[]`, stranding the machine in `"admitting"` forever (fix-bundle spec §1.3/§1.4;
+  // `./turn.ts`'s own `terminalizeRejectedAdmission` and `admissionFailureDto` are the fix).
+  const PERSISTENCE_FAILURE: FailureDtoV1 = {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: "filesystem open failed (ENOENT)",
+    details: {},
+  };
+
+  test("returns to idle, publishes turn.failed naming the phase, and accepts the next turn.start", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const staging = createFakeStagingService();
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      staging: { ...staging, createTurnWorkspace: async () => PERSISTENCE_FAILURE },
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(outcome.disposition).toBe("started");
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const events = await operation.run();
+
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+    expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
+
+    const failed = events.find((e) => e.kind === "turn.failed");
+    if (failed === undefined) throw new Error("expected a turn.failed event");
+    const failedPayload = failed.payload as { readonly failure: { readonly safeMessage: string } };
+    expect(failedPayload.failure.safeMessage).toContain("workspace");
+    expect(failedPayload.failure.safeMessage).toContain("ENOENT");
+
+    // The hang itself: a second start must be accepted, not TURN_ALREADY_ACTIVE.
+    const second = turnHandlers["turn.start"]({ text: "again" }, handlerContext);
+    expect(second.disposition).toBe("started");
+  });
+
+  test("writes a durable system:error chat record for the rejected admission", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const terminalized: unknown[] = [];
+    const turnTransactions: TurnTransactionService = {
+      ...createFakeTurnTransactionService(),
+      terminalize: async (input) => {
+        terminalized.push(input.record);
+        return { transactionId: "tx-1" };
+      },
+    };
+
+    const staging = createFakeStagingService();
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      staging: { ...staging, createTurnWorkspace: async () => PERSISTENCE_FAILURE },
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    await operation.run();
+
+    expect(terminalized).toHaveLength(1);
+  });
+});
+
 describe("commit-intent bit: context.setCommitIntentRecorded genuinely moves now (fixlane-K1-turn-spine.json's kernel finding)", () => {
   // Before this fix, NO production handler ever called `context.setCommitIntentRecorded`, so
   // `kernel.ts`'s `commitIntentRecordedAtom` was permanently `false` — the `CANCEL_TOO_LATE`/
@@ -2274,9 +2432,16 @@ describe('turnHandlers["turn.start"] — WP-7 same-process session resume', () =
 
     // `abortEarlyAdmission` (fix round 1): the refusal walks the machine back to idle instead
     // of returning `[]` and stranding it — see `assertEarlyPortRefusalRecoversToIdle`'s own
-    // doc comment for the full citation.
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.every((e) => e.kind === "kernel.stateChanged")).toBe(true);
+    // doc comment for the full citation. Task 4's own addition: a `turn.failed` naming this
+    // branch's real cause now follows the three `kernel.stateChanged` transition events.
+    expect(events).toHaveLength(4);
+    expect(events.slice(0, 3).every((e) => e.kind === "kernel.stateChanged")).toBe(true);
+    const failed = events[3];
+    if (failed === undefined || failed.kind !== "turn.failed") {
+      throw new Error("expected the fourth event to be turn.failed");
+    }
+    const failedPayload = failed.payload as { readonly failure: { readonly safeMessage: string } };
+    expect(failedPayload.failure.safeMessage).toContain("simulated manifest read failure");
     expect(handlerContext.machines.turn.phase()).toBe("idle");
     expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
     expect(agentBackend.calls.some((c) => c.method === "startTurn")).toBe(false);

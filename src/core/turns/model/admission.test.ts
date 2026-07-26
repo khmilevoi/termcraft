@@ -242,6 +242,8 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
 
       expect(outcome).toEqual({ kind: "blocked", phase: "admit", failure: FAILURE });
       expect(h.staging.calls).toEqual([]);
+      // The exit from `admitting` belongs to the caller now (spec §1.3) — asserted end to end in
+      // `core/kernel/model/handlers/turn.test.ts`'s "a rejected admission" describe block.
       expect(h.machine.phase()).toBe("admitting");
     });
   });
@@ -270,6 +272,8 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       expect(h.turnTransactions.calls.length).toBe(1);
       expect(h.turnTransactions.calls[0]?.method).toBe("admit");
       expect(h.staging.calls).toEqual([]);
+      // The exit from `admitting` belongs to the caller now (spec §1.3) — asserted end to end in
+      // `core/kernel/model/handlers/turn.test.ts`'s "a rejected admission" describe block.
       expect(h.machine.phase()).toBe("admitting");
     });
   });
@@ -285,6 +289,8 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       expect(outcome).toEqual({ kind: "blocked", phase: "workspace", failure: FAILURE });
       expect(h.turnTransactions.calls.length).toBe(1);
       expect(h.turnTransactions.calls[0]?.method).toBe("admit");
+      // The exit from `admitting` belongs to the caller now (spec §1.3) — asserted end to end in
+      // `core/kernel/model/handlers/turn.test.ts`'s "a rejected admission" describe block.
       expect(h.machine.phase()).toBe("admitting");
     });
   });
@@ -312,6 +318,8 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       expect(outcome.error).toBeInstanceOf(ReadSetTranslationError);
       expect(h.turnTransactions.calls.length).toBe(1);
       expect(h.staging.calls.length).toBe(1);
+      // The exit from `admitting` belongs to the caller now (spec §1.3) — asserted end to end in
+      // `core/kernel/model/handlers/turn.test.ts`'s "a rejected admission" describe block.
       expect(h.machine.phase()).toBe("admitting");
     });
   });
