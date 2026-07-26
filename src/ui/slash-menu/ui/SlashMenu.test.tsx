@@ -31,7 +31,7 @@ function makeRow(
 ): ScoredSlashRow {
   return {
     command: { capability: null, ...command },
-    state: { visible: true, enabled: true, dimmed: false, hint: null, ...state },
+    state: { visible: true, availability: "available", hint: null, ...state },
   };
 }
 
@@ -73,11 +73,11 @@ describe("SlashMenu component (design 23-slash-menu.dc.html, slashMenu/wsSlash)"
     expect(lineText(handle.capture(), 0)).toContain("/ch");
   });
 
-  test("a dimmed row's text uses the faint hex", async () => {
+  test("an unavailable row's text is fully faint, no amber (design slashBox :949-957)", async () => {
     const rows = [
       makeRow(
         { cmd: "/commit-infra", desc: "infrastructure · clean", order: 6, clean: true },
-        { enabled: false, dimmed: true },
+        { availability: "unavailable" },
       ),
     ];
     const handle = await createHeadlessRenderer({ w: 40, h: 4 });
@@ -89,6 +89,25 @@ describe("SlashMenu component (design 23-slash-menu.dc.html, slashMenu/wsSlash)"
     const descRun = findRun(frame, "infrastructure");
     expect(cmdRun && extractRgb(cmdRun.fg)).toBe(SHELL_PALETTE.faint);
     expect(descRun && extractRgb(descRun.fg)).toBe(SHELL_PALETTE.faint);
+  });
+
+  test("a locked row keeps readable dim text and shows the amber reason in place of the description (design slashBox :949-957)", async () => {
+    const rows = [
+      makeRow(
+        { cmd: "/export", desc: "write the export package", order: 3, capability: "export.start" },
+        { availability: "locked", hint: { code: "CAPABILITY_UNAVAILABLE" } },
+      ),
+    ];
+    const handle = await createHeadlessRenderer({ w: 40, h: 4 });
+    open = handle;
+    handle.mount(<SlashMenu id="slash" typed="/" rows={rows} selectedIndex={-1} />);
+    await handle.render();
+    const frame = handle.capture();
+    const cmdRun = findRun(frame, "/export");
+    const reasonRun = findRun(frame, "unavailable");
+    expect(cmdRun && extractRgb(cmdRun.fg)).toBe(SHELL_PALETTE.dim);
+    expect(reasonRun && extractRgb(reasonRun.fg)).toBe(SHELL_PALETTE.amberDim);
+    expect(lineText(frame, 1)).not.toContain("write the export package");
   });
 
   test('the selected row shows the "▸" glyph and the sel background', async () => {

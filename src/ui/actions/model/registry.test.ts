@@ -87,30 +87,29 @@ describe("SLASH_COMMANDS registry", () => {
 });
 
 describe("slashRowState", () => {
-  test("an available capability -> enabled, not dimmed, no hint", () => {
+  test("an available capability -> available, no hint", () => {
     const s = slashRowState(
       { cmd: "/export", desc: "", order: 3, capability: "export.start" },
       context([["export.start", available]]),
     );
-    expect(s).toEqual({ visible: true, enabled: true, dimmed: false, hint: null });
+    expect(s).toEqual({ visible: true, availability: "available", hint: null });
   });
 
-  test("an unavailable capability -> dimmed with the primary reason as hint", () => {
+  test("an unavailable capability -> unavailable with the primary reason as hint", () => {
     const s = slashRowState(
       { cmd: "/export", desc: "", order: 3, capability: "export.start" },
       context([["export.start", noPages]]),
     );
-    expect(s.enabled).toBe(false);
-    expect(s.dimmed).toBe(true);
+    expect(s.availability).toBe("unavailable");
     expect(s.hint).toEqual({ code: "NO_PAGES" });
   });
 
-  test("a deferred (Tier-C) commit row is always dimmed with CAPABILITY_UNAVAILABLE", () => {
+  test("a deferred (Tier-C) commit row is always unavailable with CAPABILITY_UNAVAILABLE", () => {
     const s = slashRowState(
       { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan", dot: true },
       context([["commit.plan", deferred]]),
     );
-    expect(s.enabled).toBe(false);
+    expect(s.availability).toBe("unavailable");
     expect(s.hint).toEqual({ code: "CAPABILITY_UNAVAILABLE" });
   });
 
@@ -123,8 +122,8 @@ describe("slashRowState", () => {
       { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan" },
       context([["commit.plan", available]]),
     );
-    expect(model).toMatchObject({ visible: true, enabled: false, dimmed: true });
-    expect(commit).toMatchObject({ visible: true, enabled: false, dimmed: true });
+    expect(model).toMatchObject({ visible: true, availability: "unavailable" });
+    expect(commit).toMatchObject({ visible: true, availability: "unavailable" });
   });
 
   test("a missing capability is treated as unavailable", () => {
@@ -132,30 +131,51 @@ describe("slashRowState", () => {
       { cmd: "/export", desc: "", order: 3, capability: "export.start" },
       context(),
     );
-    expect(s.enabled).toBe(false);
+    expect(s.availability).toBe("unavailable");
   });
 
-  test("a null-capability row (/chats) is enabled when no turn runs", () => {
+  test("a null-capability row (/chats) is available when no turn runs", () => {
     const s = slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, context());
-    expect(s.enabled).toBe(true);
+    expect(s.availability).toBe("available");
     expect(s.hint).toBeNull();
   });
 
-  test("while a turn runs, every non-commit row dims — including /chats", () => {
+  test("while a turn runs, every non-commit row locks — including /chats", () => {
     const running = context([["export.start", available]], { turnRunning: true });
     expect(
-      slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, running).enabled,
-    ).toBe(false);
+      slashRowState({ cmd: "/chats", desc: "", order: 2, capability: null }, running).availability,
+    ).toBe("locked");
     expect(
       slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, running)
-        .enabled,
-    ).toBe(false);
-    // A commit row is not turn-locked (its own deferred capability still dims it).
+        .availability,
+    ).toBe("locked");
+    // A commit row is not turn-locked (its own deferred capability still marks it unavailable).
     const commit = slashRowState(
       { cmd: "/commit-page", desc: "", order: 5, capability: "commit.plan" },
       context([["commit.plan", deferred]], { turnRunning: true }),
     );
+    expect(commit.availability).toBe("unavailable");
     expect(commit.hint).toEqual({ code: "CAPABILITY_UNAVAILABLE" });
+  });
+
+  test("separates kernel-locked from unavailable (design slashBox :949-950)", () => {
+    const running = context([["chat.create", available]], { turnRunning: true });
+    expect(
+      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, running)
+        .availability,
+    ).toBe("locked");
+
+    const idleNoCap = context();
+    expect(
+      slashRowState({ cmd: "/export", desc: "", order: 3, capability: "export.start" }, idleNoCap)
+        .availability,
+    ).toBe("unavailable");
+
+    const idle = context([["chat.create", available]], { turnRunning: false });
+    expect(
+      slashRowState({ cmd: "/new", desc: "", order: 1, capability: "chat.create" }, idle)
+        .availability,
+    ).toBe("available");
   });
 });
 
@@ -181,12 +201,12 @@ describe("filterSlashRows", () => {
     ]);
   });
 
-  test("firstEnabledIndex finds the first non-disabled row", () => {
+  test("firstEnabledIndex finds the first available row", () => {
     const rows = filterSlashRows(
       "/",
       context([["chat.create", available]], { turnRunning: false }),
     );
-    // /new (chat.create) is available; /chats is enabled too. First enabled is index 0 (/new).
+    // /new (chat.create) is available; /chats is available too. First available is index 0 (/new).
     expect(firstEnabledIndex(rows)).toBe(0);
   });
 });

@@ -46,7 +46,11 @@ function hotkeyGlyph(key: string): string {
 }
 
 function hotkeyHint(action: HotkeyAction, label = action.label): StatusBarHintKey {
-  return [hotkeyGlyph(action.key), label, action.inert === true];
+  // MVP-inert keys are shown but do nothing — the design's own `dis` treatment, which is also
+  // exactly what this component already rendered for them.
+  return action.inert === true
+    ? [hotkeyGlyph(action.key), label, "dis"]
+    : [hotkeyGlyph(action.key), label];
 }
 
 function fullscreenHint(label: string): readonly StatusBarHintKey[] {

@@ -35,8 +35,20 @@ export interface StatusBarHintBadge {
   readonly bg: ShellToken;
 }
 
-/** One right-aligned key hint: inert entries remain visible but use the faint treatment. */
-export type StatusBarHintKey = readonly [glyph: string, label: string, inert?: boolean];
+/**
+ * One right-aligned key hint. The third element is the design's own `k[2]`
+ * (`design/termcraft-engine.js:66-73`):
+ *   - absent — the ordinary key: amber glyph on the status background, bold, dim label;
+ *   - `true` — ACTIVE: the glyph inverts to `bg`-on-`amber`;
+ *   - `"dis"` — DISABLED: glyph and label both drop to `faint`, and the glyph loses bold.
+ *
+ * `"dis"` is required by Home while the health probe is in flight (`⏎ create`, design `:161`) and
+ * by the composer for the whole of a turn (`⏎ send`, `:276`/`:1006`) — a shared primitive, not a
+ * per-screen tweak. CORRECTED alongside it: this component previously read `true` as "inert/faint",
+ * the opposite of the design's own `active` branch. MVP-inert hotkeys (F3/F4/Ctrl+P) map to `"dis"`
+ * instead, which is the treatment they were already getting — so no rendering moves.
+ */
+export type StatusBarHintKey = readonly [glyph: string, label: string, state?: true | "dis"];
 
 /** Props for the {@link StatusBar} component. `id` is the mandatory stable id (§3.2). */
 export interface StatusBarProps {

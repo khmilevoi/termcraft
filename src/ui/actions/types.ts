@@ -52,20 +52,32 @@ export interface HotkeyAction {
   readonly inert?: boolean;
 }
 
-/** The mirror-derived inputs a row's enabled/hint computation needs. */
+/** The mirror-derived inputs a row's availability/hint computation needs. */
 export interface ActionContext {
   readonly capabilities: ReadonlyMap<CommandKindV1, CapabilityState>;
   readonly turnRunning: boolean;
   readonly screen: ScreenKind;
 }
 
+/**
+ * A row's three availability states (design `slashBox`, `design/termcraft-engine.js:949-950`:
+ * "Locked rows keep readable dim text with an amber reason (temporary); unavailable rows go fully
+ * faint (no amber)"):
+ *   - `available` — enabled;
+ *   - `locked` — locally available but kernel-locked for the duration of a turn. Readable dim with
+ *     an amber reason: "it comes back on its own" (the design's own `_lk`);
+ *   - `unavailable` — nothing here will change that. Fully faint, no amber (the design's `_un`).
+ *
+ * `enabled` + `dimmed` could not express this: both non-available states collapsed to
+ * `dimmed: true`, which is why a turn-locked row and a permanently-inert one looked identical.
+ */
+export type ActionAvailability = "available" | "locked" | "unavailable";
+
 /** The computed display state of one slash/action row. */
 export interface ActionRowState {
   readonly visible: boolean;
-  readonly enabled: boolean;
-  /** Dimmed = visible-but-disabled (design: disabled rows dim to `faint`, never hidden). */
-  readonly dimmed: boolean;
-  /** The primary unavailable reason to show as a hint, or `null` when enabled/locally disabled. */
+  readonly availability: ActionAvailability;
+  /** The reason to show in place of the description while not `available`, or `null`. */
   readonly hint: UnavailableReason | null;
 }
 

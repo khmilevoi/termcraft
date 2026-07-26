@@ -186,7 +186,7 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     expect(findRun(frame, "fullscreen")).toBeDefined();
   });
 
-  test("inert hint glyphs and labels are visible but faint and not bold", async () => {
+  test("a `dis` hint key's glyph and label are visible but faint and not bold", async () => {
     const handle = await createHeadlessRenderer({ w: 80, h: 1 });
     open = handle;
     handle.mount(
@@ -196,21 +196,66 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
         mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
         hintKeys={[
           ["F2", "fullscreen"],
-          ["F3", "tweaks", true],
+          ["F3", "tweaks", "dis"],
         ]}
       />,
     );
     await handle.render();
     const frame = handle.capture();
     const active = findRun(frame, "F2");
-    const inert = findRun(frame, "F3");
+    const disabled = findRun(frame, "F3");
     expect(active && extractRgb(active.fg)).toBe(SHELL_PALETTE.amber);
     expect((active?.attrs ?? 0) & 1).toBe(1);
-    expect(inert && extractRgb(inert.fg)).toBe(SHELL_PALETTE.faint);
-    expect((inert?.attrs ?? 0) & 1).toBe(0);
+    expect(disabled && extractRgb(disabled.fg)).toBe(SHELL_PALETTE.faint);
+    expect((disabled?.attrs ?? 0) & 1).toBe(0);
     expect(findRun(frame, "tweaks") && extractRgb(findRun(frame, "tweaks")!.fg)).toBe(
       SHELL_PALETTE.faint,
     );
+  });
+
+  test("renders a `dis` hint key faint and unbold, glyph and label alike (design :66-73)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 1 });
+    open = handle;
+    handle.mount(
+      <StatusBar
+        id="status"
+        width={80}
+        mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
+        hintKeys={[
+          ["⏎", "send", "dis"],
+          ["esc", "cancel"],
+        ]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const disGlyph = findRun(frame, "⏎");
+    const disLabel = findRun(frame, "send");
+    expect(disGlyph && extractRgb(disGlyph.fg)).toBe(SHELL_PALETTE.faint);
+    expect((disGlyph?.attrs ?? 0) & 1).toBe(0);
+    expect(disLabel && extractRgb(disLabel.fg)).toBe(SHELL_PALETTE.faint);
+    const plainGlyph = findRun(frame, "esc");
+    expect(plainGlyph && extractRgb(plainGlyph.fg)).toBe(SHELL_PALETTE.amber);
+    expect((plainGlyph?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("renders an `active` hint key as an inverse amber chip (design :73)", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 1 });
+    open = handle;
+    handle.mount(
+      <StatusBar
+        id="status"
+        width={80}
+        mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
+        hintKeys={[["⏎", "send", true]]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const glyph = findRun(frame, "⏎");
+    expect(glyph && extractRgb(glyph.fg)).toBe(SHELL_PALETTE.bg);
+    expect(glyph && extractRgb(glyph.bg)).toBe(SHELL_PALETTE.amber);
+    expect((glyph?.attrs ?? 0) & 1).toBe(1);
   });
 
   test("hint keys are trimmed to fit, keeping at least one", async () => {

@@ -142,20 +142,21 @@ export function StatusBar(props: StatusBarProps) {
       ))}
       <box id={`${props.id}-spacer`} flexGrow={1} />
       {fittedKeys.map((key, index) => {
-        const inert = key[2] === true;
+        const disabled = key[2] === "dis";
+        const active = key[2] === true;
         return (
           <box key={`${key[0]}-${index}`} id={`${props.id}-key-${index}`} flexDirection="row">
             <text
               id={`${props.id}-key-${index}-glyph`}
-              fg={inert ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
-              bg={SHELL_PALETTE.statusBg}
-              attributes={shellAttrs({ bold: !inert })}
+              fg={disabled ? SHELL_PALETTE.faint : active ? SHELL_PALETTE.bg : SHELL_PALETTE.amber}
+              bg={active ? SHELL_PALETTE.amber : SHELL_PALETTE.statusBg}
+              attributes={shellAttrs({ bold: !disabled })}
             >
               {` ${key[0]} `}
             </text>
             <text
               id={`${props.id}-key-${index}-label`}
-              fg={inert ? SHELL_PALETTE.faint : SHELL_PALETTE.dim}
+              fg={disabled ? SHELL_PALETTE.faint : SHELL_PALETTE.dim}
             >
               {` ${key[1]} `}
             </text>

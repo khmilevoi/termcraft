@@ -4,6 +4,7 @@
  * slash menu both read.
  */
 export type {
+  ActionAvailability,
   ActionContext,
   ActionRowState,
   HotkeyAction,

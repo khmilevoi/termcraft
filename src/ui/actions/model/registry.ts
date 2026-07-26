@@ -18,7 +18,7 @@ import type {
  * own comment for why it is added rather than invented silently.
  * `/chats` has `capability: null` because the row opens the chat-list popup (a UI-local
  * action); the actual switch is a separate `chat.switch` command issued from the popup.
- * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render dimmed.
+ * `/commit-*` map to the deferred `commit.plan` (Tier-C) so they always render `unavailable`.
  */
 export const UI_ACTIONS: readonly UiActionEntry[] = [
   {
@@ -189,18 +189,17 @@ export function capabilityHint(
 }
 
 /**
- * Computes one slash row's display state (design §3.10). A row is dimmed-not-hidden when
- * disabled. Turn-lock: while a turn runs, every non-`/commit-*` row dims (design
- * `o.turn && !isCommit(c)`) — this also covers the `capability: null` `/chats` row, whose
- * `chat.switch` is turn-locked but which carries no capability of its own.
+ * Computes one slash row's display state (design §3.10). A row is `visible: true` even while
+ * not `available` — never hidden. Turn-lock: while a turn runs, every non-`/commit-*` row goes
+ * `locked` (design `o.turn && !isCommit(c)`) — this also covers the `capability: null` `/chats`
+ * row, whose `chat.switch` is turn-locked but which carries no capability of its own.
  */
 export function slashRowState(command: SlashCommand, context: ActionContext): ActionRowState {
   const execution = ACTION_BY_SLASH.get(command.cmd)?.execution;
   if (execution?.kind === "inert") {
     return {
       visible: true,
-      enabled: false,
-      dimmed: true,
+      availability: "unavailable",
       hint: command.capability === null ? null : capabilityHint(context, command.capability),
     };
   }
@@ -208,15 +207,21 @@ export function slashRowState(command: SlashCommand, context: ActionContext): Ac
   const turnLocked = context.turnRunning && !isCommit;
 
   if (command.capability === null) {
-    const enabled = !turnLocked;
-    return { visible: true, enabled, dimmed: !enabled, hint: null };
+    return { visible: true, availability: turnLocked ? "locked" : "available", hint: null };
   }
 
-  const available = isCapabilityAvailable(context, command.capability) && !turnLocked;
+  if (turnLocked) {
+    return {
+      visible: true,
+      availability: "locked",
+      hint: capabilityHint(context, command.capability),
+    };
+  }
+
+  const available = isCapabilityAvailable(context, command.capability);
   return {
     visible: true,
-    enabled: available,
-    dimmed: !available,
+    availability: available ? "available" : "unavailable",
     hint: capabilityHint(context, command.capability),
   };
 }
@@ -236,5 +241,5 @@ export function filterSlashRows(typed: string, context: ActionContext): readonly
 
 /** The index of the first enabled row (design: selection lands on the first non-disabled row), or -1. */
 export function firstEnabledIndex(rows: readonly ScoredSlashRow[]): number {
-  return rows.findIndex((row) => row.state.enabled);
+  return rows.findIndex((row) => row.state.availability === "available");
 }

@@ -158,7 +158,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "slash-submit": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       const row = slashRows(deps)[local.slashSelection()];
-      if (row === undefined || !row.state.enabled) return;
+      if (row === undefined || row.state.availability !== "available") return;
       const entry = resolveSlashAction(row.command);
       if (entry === null) return;
       local.composer.set("");
@@ -323,7 +323,9 @@ function moveEnabledSelection(
   selected: number,
   delta: -1 | 1,
 ): number {
-  const enabled = rows.flatMap((row, index) => (row.state.enabled ? [index] : []));
+  const enabled = rows.flatMap((row, index) =>
+    row.state.availability === "available" ? [index] : [],
+  );
   if (enabled.length === 0) return -1;
   const position = enabled.indexOf(selected);
   if (position === -1) return enabled[0] ?? -1;
