@@ -438,10 +438,18 @@ describe("project.create", () => {
   test("started admission (beginCreate) then a full open sequence to ready", async () => {
     await context.start(async () => {
       const home = slug("home");
+      // A non-null `activeChatId` — fix round 1 minor: `createProject`'s own transaction
+      // always seeds one (`store/model/factory.ts:1398-1399`), so `activeChatId: null` here
+      // would pin a state `project.create` can never actually reach in production. This
+      // particular id is not registered with the default fake chat store, so `listChatSummaries`/
+      // `restoreActiveChatTail` still degrade to no `chat.changed`/`chat.records` (logged,
+      // tolerated — this test asserts nothing about the chat slice), matching this test's own
+      // event-count assertions unchanged from before this fixture fix.
+      const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        workspaceState: { activePageSlug: null, activeChatId: null },
+        workspaceState: { activePageSlug: null, activeChatId },
       });
       const pageReader = createFakePageStore({
         order: [home],
@@ -1411,10 +1419,15 @@ describe("Gap C — the first turn from create/open text", () => {
   test("starts the first turn from project.create's text once the project reaches ready (Gap C)", async () => {
     await context.start(async () => {
       const home = slug("home");
+      // Non-null — fix round 1 minor: `createProject` always seeds `activeChatId` in the
+      // same transaction, so this is the state `project.create` genuinely reaches; the gate
+      // added to `runProjectReadySequence` in this same fix round (`activeChatId !== null`)
+      // would otherwise never let this test's own chain fire.
+      const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        workspaceState: { activePageSlug: null, activeChatId: null },
+        workspaceState: { activePageSlug: null, activeChatId },
       });
       const pageReader = createFakePageStore({
         order: [home],
@@ -1505,10 +1518,14 @@ describe("Gap C — the first turn from create/open text", () => {
   test("project.open carries the same optional text", async () => {
     await context.start(async () => {
       const home = slug("home");
+      // Non-null — see the identical fix-round-1 comment on the `project.create` test above:
+      // a real `activeChatId` is what `runProjectReadySequence`'s own `activeChatId !== null`
+      // gate now requires before it chains a turn.
+      const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        workspaceState: { activePageSlug: home, activeChatId: null },
+        workspaceState: { activePageSlug: home, activeChatId },
       });
       const pageReader = createFakePageStore({
         order: [home],

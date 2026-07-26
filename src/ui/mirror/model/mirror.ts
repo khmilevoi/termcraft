@@ -186,10 +186,46 @@ export function createMirror(): Mirror {
         // (§10 smoke closeout, bug 2: "deriveScreen's projectId !== null condition can never
         // become true for a live subscriber"). This does NOT become the general
         // `kernel.stateChanged` handler plan D6 describes — only these three named
-        // `kernel.project.state` actions, whose real facts `handlers/project.ts` now
-        // publishes as this event's own `metadata` (that file's own header has the full
-        // rationale) for exactly this reason.
+        // `kernel.project.state` actions, plus (below) ONE named `kernel.turn.state` action
+        // (fix-bundle Task 11 fix round 1, Finding 2), whose real facts their own producers
+        // now publish as this event's own `metadata`/`correlation` for exactly this reason.
         const p = envelope.payload;
+
+        if (p.modelId === "kernel.turn.state" && p.action === "kernel.turn.beginAdmission") {
+          // The mirror must reflect a running turn from the MOMENT admission begins, not only
+          // once `turn.started` synthesizes on the first `turn.attemptStarted` — real admission
+          // (a store read, workspace staging, a durable user-record transaction) is hundreds of
+          // milliseconds or more, and every `turnRunning` derivation in `ui` reads
+          // `mirror.turn().phase === "running"` (`ui/app/model/keymap.ts`'s own doc on its
+          // `turnRunning` field has the full mechanism this closes: without this fold, the
+          // composer stays enabled through the whole admission window, Enter fires a second
+          // `turn.start` the guard rejects `TURN_ALREADY_ACTIVE`, and the rejection surfaces
+          // nowhere). `turn.started`'s own case below unconditionally overwrites this the moment
+          // it fires, with the REAL `deadline` this branch cannot honestly report yet — see
+          // `TurnMirror`'s own `deadline: string | null` doc comment for why it stays `null`
+          // here rather than inventing a bound.
+          const turnId = envelope.correlation?.turnId;
+          if (turnId === undefined) {
+            console.warn(
+              "ui/mirror: kernel.turn.beginAdmission carried no correlation.turnId — turn phase left unchanged",
+            );
+            return;
+          }
+          turn.set({
+            phase: "running",
+            turnId,
+            attempt: 1,
+            deadline: null,
+            steps: [],
+            reasoning: null,
+            finalText: null,
+            errorText: null,
+            usage: null,
+            gateRetries: [],
+          });
+          return;
+        }
+
         if (p.modelId !== "kernel.project.state") return;
         if (p.action === "kernel.project.finishOpen") {
           const projectId = readMetadataProjectId(p.metadata);

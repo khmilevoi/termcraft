@@ -497,6 +497,15 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
 
       const startCall = agentBackend.calls.find((call) => call.method === "startTurn");
       if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+
+      // GAP C'S OWN POINT (fix-bundle Task 11 fix round 1, Finding 1): proving *a* turn started
+      // is not proving the DESIGNER'S TEXT reached it — `AgentTask.userMessage` is the exact
+      // field `handlers/turn.ts`'s `baseTask` sets to `text` (`userMessage: text`, unmodified by
+      // this task), so this is the one honest place to observe that the SAME string typed into
+      // Home above ("build the home page") is what the agent actually received, not a second,
+      // independently-typed message and not a placeholder.
+      expect(startCall.task.userMessage).toBe("build the home page");
+
       const workspacePath = agentBackend.lastWorkspacePath();
       if (workspacePath === null) throw new Error("fixture bug: no workspace path captured");
 

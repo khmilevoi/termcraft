@@ -52,7 +52,7 @@ describe("applyIntent — text inputs", () => {
     expect(kernel.dispatched).toHaveLength(0);
   });
 
-  test("composer-submit dispatches turn.start and clears the composer", () => {
+  test("composer-submit dispatches turn.start and clears the composer once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.local.composer.set("make it blue");
@@ -61,7 +61,31 @@ describe("applyIntent — text inputs", () => {
     expect((kernel.dispatched[0] as { payload: { text: string } }).payload.text).toBe(
       "make it blue",
     );
+    // Fix round 1, Finding 2: the composer now clears only once the dispatch RESOLVES accepted
+    // (`createFakeKernel`'s own dispatch accepts by default) — no longer synchronously with the
+    // dispatch call itself, so a rejection has a chance to leave the text in place instead.
+    await tick();
     expect(deps.local.composer()).toBe("");
+  });
+
+  test("composer-submit leaves the typed text in place when the dispatch is rejected", async () => {
+    const kernel = createFakeKernel();
+    // The exact rejection fix round 1's Finding 2 named: `TURN_ALREADY_ACTIVE`, reachable while
+    // Gap C's own auto-started first turn is still admitting.
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "TURN_ALREADY_ACTIVE",
+      reasons: [{ code: "TURN_ALREADY_ACTIVE", turnId: uuidv7() as never }],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.local.composer.set("make it blue");
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+    // A rejection must not discard what the user typed.
+    expect(deps.local.composer()).toBe("make it blue");
   });
 });
 

@@ -723,10 +723,23 @@ async function runProjectReadySequence(
   // check, two consequences: an untrusted project executes design code neither through preview nor
   // through the agent.
   //
+  // Also gated on `activeChatId !== null` (fix round 1, Finding — minor) — the SAME value read
+  // two lines above for the chat list/tail pair. Without this, a project reaching `ready` with no
+  // active chat yet (unreachable today: `store.createProject`'s own transaction always seeds one,
+  // `store/model/factory.ts`) would still admit a turn here, only for `beginTurn`'s own async
+  // continuation (`runTurnStart`, `handlers/turn.ts`) to refuse it moments later for the identical
+  // reason — a `turn.failed` the user did nothing to earn. Free to prevent now rather than rely on
+  // a downstream refusal to catch it.
+  //
   // The `beginTurn` invariant survives being called from inside this async closure: it rests on
   // the atomicity of its own three synchronous steps, not on being in a command handler.
   const firstTurnText = trustSource.text;
-  if (firstTurnText !== undefined && firstTurnText.length > 0 && trust === "trusted") {
+  if (
+    firstTurnText !== undefined &&
+    firstTurnText.length > 0 &&
+    trust === "trusted" &&
+    activeChatId !== null
+  ) {
     events.push(...beginTurn(context, { text: firstTurnText }));
   }
 

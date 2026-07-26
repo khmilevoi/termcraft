@@ -125,6 +125,21 @@ Kernel needs to change. Written up as **Gap C** in `docs/architecture/flows/laun
 **Operator's words, verbatim:** *«это вообще не очевидно… при нажатии enter сразу должен
 начинаться чат и запускаться генерация»*.
 
+**Closed 2026-07-26 — fix-bundle Task 11 (Gap C, spec §3.1).** `runProjectReadySequence`
+(`core/kernel/model/handlers/project.ts`) now reads `project.create`'s (and `project.open`'s)
+`text` and chains `beginTurn` with it once the project reaches `ready` trusted — the same text
+Home's Enter sent, with no re-typing and no second send from the Workspace composer. Proven
+end to end (not just at the Kernel unit) by `entrypoint/model/smoke.test.ts`'s own §10
+scripted-terminal smoke: one Enter on Home now reaches a real `turn.attemptStarted` carrying
+that exact text, a real Gate pass, and a real page commit. Fix round 1 of that task's review
+additionally closed the UI-visible half of the gap this write-up did not originally name: the
+brief admission window (a store read, workspace staging, a durable user-record transaction —
+hundreds of milliseconds or more) used to leave the mirror reporting `idle` and the composer
+live, so a second Enter fired a silently-rejected `turn.start` and discarded whatever was typed
+in that window; `ui/mirror/model/mirror.ts` now folds `kernel.turn.beginAdmission` into
+`TurnMirror`'s `running` phase immediately, and `ui/app/model/intent.ts`'s `composer-submit`
+only clears the composer once the Kernel actually accepts.
+
 ### 1.3 Gap D — an existing project still opens on Home
 
 **[verified]** Relaunching termcraft in a directory that already holds a `.termcraft/` — chats,

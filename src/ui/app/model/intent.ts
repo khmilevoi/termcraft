@@ -1,3 +1,5 @@
+import { wrap } from "@reatom/core";
+
 import type { CommandResultV1 } from "core/protocol";
 import { trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
@@ -74,8 +76,27 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         return;
       }
       trace("ui.composerSubmit.dispatching", { textLength: text.length });
-      dispatchAndReport(dispatcher.dispatch("turn.start", { text }), "turn.start");
-      local.composer.set("");
+      // Clears the composer ONLY once the Kernel actually accepted the turn (fix-bundle
+      // Task 11 fix round 1, Finding 2) — a rejection (e.g. `TURN_ALREADY_ACTIVE`, reachable
+      // in the brief window while Gap C's own auto-started first turn is still admitting)
+      // must not discard what the user typed. Every other intent below keeps the ordinary
+      // fire-and-forget `dispatchAndReport` shape; this is the one handler whose own local
+      // state must survive a rejection, so it inlines the SAME tracing that helper does
+      // rather than widening it for one caller. `wrap` (RTM-A04) around the continuation —
+      // it touches `local.composer`, a Reatom atom, after the `await`/`.then()` boundary, the
+      // SAME shape `ui/preview/model/interaction.ts`'s `dispatchGeometryRequest` already uses
+      // for its own post-dispatch atom write.
+      void dispatcher.dispatch("turn.start", { text }).then(
+        wrap((result) => {
+          if (result instanceof Error) {
+            console.error("UI command dispatch failed:", result);
+            trace("ui.dispatch.result", { kind: "turn.start", result });
+            return;
+          }
+          trace("ui.dispatch.result", { kind: "turn.start", result });
+          if (result.status === "accepted") local.composer.set("");
+        }),
+      );
       return;
     }
     case "action-execute": {

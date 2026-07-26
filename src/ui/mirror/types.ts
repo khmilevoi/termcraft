@@ -52,7 +52,15 @@ export type TurnMirror =
       phase: "running";
       turnId: UUIDv7;
       attempt: number;
-      deadline: string;
+      /**
+       * `null` for the brief admission window before the real bound is known (fix-bundle
+       * Task 11 fix round 1, Finding 2) — `kernel.turn.beginAdmission` carries only the
+       * turn's id, never a deadline; `turn.started`'s own handler (below) always overwrites
+       * this with the real absolute bound moments later. Nothing in production renders this
+       * field, so the transient `null` never reaches the screen — it exists only so this
+       * union member's own honesty holds at every moment a subscriber could observe it.
+       */
+      deadline: string | null;
       /** Tool steps in arrival order — the last is the active (`▸`) step, earlier ones done (`✓`). */
       steps: readonly TurnToolStep[];
       /** The latest reasoning-ticker line (a ticker, not a log — design §3.2). */

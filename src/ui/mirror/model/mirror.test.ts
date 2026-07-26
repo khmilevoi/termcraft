@@ -246,16 +246,21 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
     }
   });
 
-  test("a kernel.stateChanged for a different model (e.g. kernel.turn.state) is ignored — narrow, targeted scope only", () => {
+  test("a kernel.stateChanged for a different model (e.g. kernel.turn.state) never touches project — narrow, targeted scope only", () => {
     const m = createMirror();
     m.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
     const before = m.project();
+    // `kernel.turn.finishAdmission`, not `kernel.turn.beginAdmission` — the latter now folds
+    // into the TURN slice (fix-bundle Task 11 fix round 1, Finding 2; see the dedicated
+    // `kernel.turn.beginAdmission` describe block above), which this test does not assert on
+    // at all — it only proves a `kernel.stateChanged` for a NON-`kernel.project.state` model
+    // never reaches the `project` slice, still true regardless of which turn action fires.
     m.apply(
       event("kernel.stateChanged", {
         modelId: "kernel.turn.state",
-        action: "kernel.turn.beginAdmission",
-        previousTag: "idle",
-        nextTag: "admitting",
+        action: "kernel.turn.finishAdmission",
+        previousTag: "admitting",
+        nextTag: "workspace-ready",
         metadata: {},
       }),
     );
@@ -456,6 +461,96 @@ describe("mirror.apply — turn lifecycle", () => {
     const turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
     expect(turn.reasoning).toBeNull();
+  });
+});
+
+describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix round 1, Finding 2)", () => {
+  test("reflects the turn as running from the moment admission begins, deadline honestly null", () => {
+    const m = createMirror();
+    const turnId = uuidv7();
+    m.apply(
+      event(
+        "kernel.stateChanged",
+        {
+          modelId: "kernel.turn.state",
+          action: "kernel.turn.beginAdmission",
+          previousTag: "idle",
+          nextTag: "admitting",
+          metadata: {},
+        },
+        { correlation: { turnId } },
+      ),
+    );
+    expect(m.turn()).toEqual({
+      phase: "running",
+      turnId,
+      attempt: 1,
+      deadline: null,
+      steps: [],
+      reasoning: null,
+      finalText: null,
+      errorText: null,
+      usage: null,
+      gateRetries: [],
+    });
+  });
+
+  test("turn.started still overwrites it moments later, with the real deadline", () => {
+    const m = createMirror();
+    const turnId = uuidv7();
+    m.apply(
+      event(
+        "kernel.stateChanged",
+        {
+          modelId: "kernel.turn.state",
+          action: "kernel.turn.beginAdmission",
+          previousTag: "idle",
+          nextTag: "admitting",
+          metadata: {},
+        },
+        { correlation: { turnId } },
+      ),
+    );
+    m.apply(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
+    const turn = m.turn();
+    if (turn.phase !== "running") throw new Error("unreachable");
+    expect(turn.deadline).toBe(TEST_TS);
+  });
+
+  test("a missing correlation.turnId is logged and dropped — never a fabricated id", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = createMirror();
+      const before = m.turn();
+      m.apply(
+        event("kernel.stateChanged", {
+          modelId: "kernel.turn.state",
+          action: "kernel.turn.beginAdmission",
+          previousTag: "idle",
+          nextTag: "admitting",
+          metadata: {},
+        }),
+      );
+      expect(m.turn()).toEqual(before);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("every OTHER kernel.turn.state action stays ignored — narrow, targeted scope only", () => {
+    const m = createMirror();
+    const before = m.turn();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.turn.state",
+        action: "kernel.turn.finishAdmission",
+        previousTag: "admitting",
+        nextTag: "workspace-ready",
+        metadata: {},
+      }),
+    );
+    expect(m.turn()).toEqual(before);
   });
 });
 
@@ -921,12 +1016,17 @@ describe("mirror.apply — out-of-scope kinds are counter-only no-ops", () => {
     const m = createMirror();
     m.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
     const before = m.project();
+    // `kernel.turn.finishAdmission` — NOT `kernel.turn.beginAdmission`, which is no longer
+    // out-of-scope (fix-bundle Task 11 fix round 1, Finding 2; see the dedicated
+    // `kernel.turn.beginAdmission` describe block, above `mirror.apply — turn.started
+    // producer/consumer seam`). This test keeps proving the GENERAL "an unhandled
+    // kernel.stateChanged is a counter-only no-op" rule with a still-genuinely-unhandled action.
     m.apply(
       event("kernel.stateChanged", {
         modelId: "kernel.turn.state",
-        action: "kernel.turn.beginAdmission",
-        previousTag: "idle",
-        nextTag: "admitting",
+        action: "kernel.turn.finishAdmission",
+        previousTag: "admitting",
+        nextTag: "workspace-ready",
         metadata: {},
       }),
     );
