@@ -152,7 +152,8 @@ a system monitor dashboard
 Press **Enter** to submit. This dispatches `turn.start` with your message.
 
 **Expected:** the chat panel shows your message, then an ephemeral status block
-(spinner / tool steps / reasoning ticker) while the turn runs. This is a real,
+(spinner, plus an ordered log of tool steps and reasoning blocks that folds into a
+counted `▲ N earlier thoughts · M steps` row on a long turn) while the turn runs. This is a real,
 metered call to the Claude Code CLI under your logged-in account — it can take from a
 few seconds to over a minute depending on what Claude decides to do.
 

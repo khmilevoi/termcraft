@@ -4,10 +4,17 @@ import { reatomComponent, useWrap } from "@reatom/react";
 import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
-import { AgentStatusBlock, ChatRecord, ChatScrollback, Composer, PinList } from "ui/chat";
-import type { AgentToolStep, MarkdownLine } from "ui/chat";
+import {
+  AgentStatusBlock,
+  ChatRecord,
+  ChatScrollback,
+  Composer,
+  PinList,
+  foldTurnTimeline,
+} from "ui/chat";
+import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
-import type { PreviewMirror, TurnMirror, TurnTimelineEntry } from "ui/mirror";
+import type { PreviewMirror, TurnMirror } from "ui/mirror";
 import {
   EmptyState,
   ErrorPanel,
@@ -90,33 +97,15 @@ function terminalRecordLines(
   return [{ spans: [{ text: `✗ ${turn.outcome}` }] }];
 }
 
-function isReasoningEntry(
-  entry: TurnTimelineEntry,
-): entry is Extract<TurnTimelineEntry, { kind: "reasoning" }> {
-  return entry.kind === "reasoning";
-}
-
 /**
- * STUB (fix-bundle Task 19/20 seam): `AgentStatusBlock`'s `steps`/`reasoning` props are
- * unchanged in this task — Task 20 replaces the ephemeral block with `timeline`/`startedAt`-aware
- * rendering, the merged reasoning+step log (spec §4.6). Until then, these two functions project
- * the mirror's new merged `timeline` back into the OLD two-collection shape so this call site
- * keeps compiling; nothing here synthesizes or reorders anything the agent did not report — it
- * is a read of the same facts, not a new one.
+ * The rows `AgentStatusBlock` always draws OUTSIDE the folded timeline — the `● agent` presence
+ * line, the connection meta line, and the spinner line (3 fixed rows; gate-retry rows are NOT
+ * counted here, since they're bounded at 3 and rare — underestimating the budget by that amount
+ * on the rare turn that has both a long timeline AND active retries just makes the fold trigger
+ * one row earlier than strictly necessary, never a layout break). Subtracted from `frameH` so the
+ * timeline's own `maxRows` budget leaves room for this block's own chrome, not just itself.
  */
-function timelineSteps(turn: Extract<TurnMirror, { phase: "running" }>): readonly AgentToolStep[] {
-  const steps = turn.timeline.filter((entry) => entry.kind === "step");
-  return steps.map((step, index) => ({
-    op: step.op,
-    target: step.target,
-    done: index < steps.length - 1,
-  }));
-}
-
-/** The latest reasoning entry's text, mirroring the old ticker's "only the last thought" view. */
-function latestReasoning(turn: Extract<TurnMirror, { phase: "running" }>): string | null {
-  return turn.timeline.findLast(isReasoningEntry)?.text ?? null;
-}
+const AGENT_BLOCK_CHROME_ROWS = 3;
 
 /**
  * Renders the ordered tab strip (design `drawTabs`, `design/18-tab-management.dc.html`):
@@ -390,9 +379,32 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             flexDirection="column"
             border
             borderStyle="rounded"
-            borderColor={composerFocused ? SHELL_PALETTE.amber : SHELL_PALETTE.line}
-            title={composerFocused ? `❯ chat${chatTitleSuffix}` : `chat${chatTitleSuffix}`}
-            titleColor={composerFocused ? SHELL_PALETTE.amberHi : SHELL_PALETTE.faint}
+            borderColor={
+              turn.phase === "running"
+                ? SHELL_PALETTE.amberDim
+                : composerFocused
+                  ? SHELL_PALETTE.amber
+                  : SHELL_PALETTE.line
+            }
+            // While a turn runs, the chat panel takes the design's own generating-frame chrome
+            // (`wsSlashTurn`, `design/termcraft-engine.js:991`: `chatTitle:'❯ chat · working'`,
+            // `chatBorderFg:P.amberDim`) — a literal title, not `agentLabel`-suffixed, and it wins
+            // over the focus-derived styling below (`paneShell`'s own `titleFg` default is
+            // `P.amber`, not `P.amberHi`, since `wsSlashTurn` never overrides `chatTitleFg`).
+            title={
+              turn.phase === "running"
+                ? "❯ chat · working"
+                : composerFocused
+                  ? `❯ chat${chatTitleSuffix}`
+                  : `chat${chatTitleSuffix}`
+            }
+            titleColor={
+              turn.phase === "running"
+                ? SHELL_PALETTE.amber
+                : composerFocused
+                  ? SHELL_PALETTE.amberHi
+                  : SHELL_PALETTE.faint
+            }
             position="relative"
           >
             <box id="ws-chat-stream" flexGrow={1} flexDirection="column">
@@ -419,11 +431,19 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   id="ws-agent"
                   agentName={agentLabel}
                   connection="working"
-                  steps={timelineSteps(turn)}
-                  reasoning={latestReasoning(turn)}
+                  startedAt={turn.startedAt}
                   gateRetries={turn.gateRetries.map((retry) => ({
                     retryNumber: retry.retryNumber,
                   }))}
+                  {...foldTurnTimeline({
+                    entries: turn.timeline,
+                    // design `chatSeq`: text is drawn at `tx+2` inside `iw = chatW-3`, and
+                    // `thinkRow` wraps at `iw-2` — so the thread's own wrap width is `chatW-5`.
+                    width: Math.max(8, chatW - 5),
+                    maxRows: Math.max(3, frameH - AGENT_BLOCK_CHROME_ROWS),
+                    // The design's `full`/`long` cap; `short`/`first` use 3/4 per frame.
+                    liveCap: 5,
+                  })}
                 />
               )}
               {turn.phase === "terminal" && (

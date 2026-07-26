@@ -6,8 +6,10 @@
 export type { MarkdownLine, MarkdownSpan } from "./model/markdown-lite";
 export { flattenMarkdownLite, parseInline } from "./model/markdown-lite";
 
-export type { AgentGateRetry, AgentStatusBlockProps, AgentToolStep } from "./ui/AgentStatusBlock";
+export type { AgentGateRetry, AgentStatusBlockProps } from "./ui/AgentStatusBlock";
 export { AgentStatusBlock } from "./ui/AgentStatusBlock";
+export type { RenderedTimelineEntry, TimelineFold } from "./model/turn-timeline";
+export { foldTurnTimeline, wrapText } from "./model/turn-timeline";
 export type { ComposerProps } from "./ui/Composer";
 export { Composer } from "./ui/Composer";
 export type { ChatRecordProps } from "./ui/ChatRecord";

@@ -29,8 +29,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[]}
       />,
     );
@@ -55,8 +56,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[]}
       />,
     );
@@ -73,6 +75,26 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     expect((spinner?.attrs ?? 0) & 1).toBe(1);
   });
 
+  test("passes startedAt through to the spinner's elapsed segment", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={Date.now() - 5_000}
+        fold={null}
+        entries={[]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const spinner = findRun(frame, "generating design…");
+    expect(spinner?.text).toContain("·");
+  });
+
   test("a done step renders green with a checkmark and the active step renders fg with a triangle", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
@@ -81,11 +103,12 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[
-          { op: "read", target: "current design", done: true },
-          { op: "writing", target: "widgets", done: false },
+        startedAt={null}
+        fold={null}
+        entries={[
+          { kind: "step", op: "read", target: "current design", done: true },
+          { kind: "step", op: "writing", target: "widgets", done: false },
         ]}
-        reasoning={null}
         gateRetries={[]}
       />,
     );
@@ -102,7 +125,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     expect(active && extractRgb(active.fg)).toBe<string>(SHELL_PALETTE.fg);
   });
 
-  test("the reasoning ticker line renders faint with a 2-space indent, no glyph", async () => {
+  test("a PAST reasoning row renders one faint line at tx+2, with a line-column gutter", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
@@ -110,21 +133,27 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning="network gauge · sparkline"
+        startedAt={null}
+        fold={null}
+        entries={[
+          { kind: "reasoning", lines: ["network gauge · sparkline…"], live: false, clipped: true },
+        ]}
         gateRetries={[]}
       />,
     );
     await handle.render();
     const frame = handle.capture();
 
-    const reasoning = findRun(frame, "network gauge · sparkline");
+    const reasoning = findRun(frame, "network gauge · sparkline…");
     expect(reasoning).toBeDefined();
-    expect(reasoning?.text.startsWith("  ")).toBe(true);
     expect(reasoning && extractRgb(reasoning.fg)).toBe<string>(SHELL_PALETTE.faint);
+    // past rows always draw the plain thread glyph, never the scrolled-head marker.
+    const gutter = findRun(frame, "│");
+    expect(gutter).toBeDefined();
+    expect(gutter && extractRgb(gutter.fg)).toBe<string>(SHELL_PALETTE.line);
   });
 
-  test("omits the reasoning line entirely when reasoning is null", async () => {
+  test("a LIVE reasoning row renders dim with an amberDim thread, and marks a clipped head ┊", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
@@ -132,8 +161,38 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[
+          { kind: "reasoning", lines: ["line one", "line two"], live: true, clipped: true },
+        ]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+
+    const first = findRun(frame, "line one");
+    const second = findRun(frame, "line two");
+    expect(first && extractRgb(first.fg)).toBe<string>(SHELL_PALETTE.dim);
+    expect(second && extractRgb(second.fg)).toBe<string>(SHELL_PALETTE.dim);
+
+    const scrolledHead = findRun(frame, "┊");
+    expect(scrolledHead).toBeDefined();
+    expect(scrolledHead && extractRgb(scrolledHead.fg)).toBe<string>(SHELL_PALETTE.amberDim);
+  });
+
+  test("renders no reasoning/step rows when entries is empty", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[]}
       />,
     );
@@ -142,7 +201,53 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     const allText = frame.rows
       .map((row: StyledRun[]) => row.map((run) => run.text).join(""))
       .join("\n");
-    expect(allText).not.toContain("  network");
+    expect(allText).not.toContain("│");
+    expect(allText).not.toContain("┊");
+  });
+
+  test("a fold row renders '▲ N earlier thoughts · M steps' in amberDim bold with a ┊ gutter", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={null}
+        fold={{ thoughts: 6, steps: 5 }}
+        entries={[]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+
+    const fold = findRun(frame, "▲ 6 earlier thoughts · 5 steps");
+    expect(fold).toBeDefined();
+    expect(fold && extractRgb(fold.fg)).toBe<string>(SHELL_PALETTE.amberDim);
+    expect((fold?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("omits the fold row entirely when fold is null", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={null}
+        fold={null}
+        entries={[]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const allText = frame.rows
+      .map((row: StyledRun[]) => row.map((run) => run.text).join(""))
+      .join("\n");
+    expect(allText).not.toContain("▲");
   });
 
   test("a gate retry renders the red retry line", async () => {
@@ -153,8 +258,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[{ retryNumber: 1 }]}
       />,
     );
@@ -174,8 +280,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[{ retryNumber: 1 }, { retryNumber: 2 }, { retryNumber: 3 }]}
       />,
     );
@@ -195,8 +302,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
         id="turn-status"
         agentName="claude"
         connection="ratatui · connected"
-        steps={[]}
-        reasoning={null}
+        startedAt={null}
+        fold={null}
+        entries={[]}
         gateRetries={[]}
       />,
     );

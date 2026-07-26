@@ -1,12 +1,7 @@
 import { Spinner } from "ui/spinner";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
-/** One live tool step in the ephemeral agent status block. */
-export interface AgentToolStep {
-  readonly op: string;
-  readonly target: string;
-  readonly done: boolean;
-}
+import type { RenderedTimelineEntry, TimelineFold } from "../model/turn-timeline";
 
 /** One Gate-rejection retry line (schema retry 1-3, design `wsErrRetry`). */
 export interface AgentGateRetry {
@@ -23,20 +18,25 @@ export interface AgentStatusBlockProps {
   readonly agentName: string;
   /** The connection meta line, e.g. `"ratatui · connected"`. */
   readonly connection: string;
-  readonly steps: readonly AgentToolStep[];
-  /** The single faint reasoning ticker line; `null` renders nothing. */
-  readonly reasoning: string | null;
+  /** Feeds the spinner's `· 2m 40s` segment (design `:547`); `null` renders the spinner alone. */
+  readonly startedAt: number | null;
+  /** The counted head row (`▲ 6 earlier thoughts · 5 steps`, design `:539`); `null` when nothing was elided. */
+  readonly fold: TimelineFold | null;
+  /** The already-folded timeline rows, in order — output of `foldTurnTimeline` (`../model/turn-timeline`). */
+  readonly entries: readonly RenderedTimelineEntry[];
   readonly gateRetries: readonly AgentGateRetry[];
 }
 
 /**
  * The ephemeral in-turn agent status block (design `drawChat`,
  * `design/03-workspace-generating.dc.html`, `design/14-first-generation.dc.html`).
- * Renders the agent presence line, the generating spinner, the live tool-step
- * stream, the single reasoning ticker line, and any Gate-retry lines — everything
- * the chat panel shows while a turn is in progress, before it either collapses into
- * a persisted record or ends in a system line. Purely presentational: the caller
- * supplies the already-derived step/retry lists from the `AgentEvent` stream.
+ * Renders the agent presence line, the generating spinner, the ordered/foldable
+ * timeline of tool steps and reasoning blocks (design `genTurn`/`thinkRow`/`foldRow`,
+ * `design/termcraft-engine.js:511-565`), and any Gate-retry lines — everything the
+ * chat panel shows while a turn is in progress, before it either collapses into a
+ * persisted record or ends in a system line. Purely presentational: the caller
+ * supplies the already-folded rows from `foldTurnTimeline` (`../model/turn-timeline`)
+ * — nothing here wraps, tails, or elides on its own.
  */
 export function AgentStatusBlock(props: AgentStatusBlockProps) {
   return (
@@ -59,27 +59,66 @@ export function AgentStatusBlock(props: AgentStatusBlockProps) {
         label="generating design…"
         fg={SHELL_PALETTE.amber}
         bold
+        startedAt={props.startedAt}
       />
-      {props.steps.map((step, index) => (
-        // keyed intrinsic wrapper — function components carry no `key` in this
-        // repo's no-@types/react environment (src/runtime/ui/list.tsx).
-        <box key={`step-${index}`} id={`${props.id}-step-${index}`}>
-          {/* divergence: design shows human-authored labels per tool call (e.g.
-              "read current design"); the mirrored AgentEvent stream only carries
-              op+target, so this renders "op target" verbatim instead. */}
+      {props.fold !== null && (
+        // `foldRow` (design `:562-564`): a `┊` gutter in `amberDim`, then the counted text
+        // two columns in (`tx+2`), also `amberDim`, bold.
+        <box id={`${props.id}-fold`} flexDirection="row">
+          <text id={`${props.id}-fold-gutter`} fg={SHELL_PALETTE.amberDim}>
+            {"┊ "}
+          </text>
           <text
-            id={`${props.id}-step-${index}-text`}
-            fg={step.done ? SHELL_PALETTE.green : SHELL_PALETTE.fg}
+            id={`${props.id}-fold-text`}
+            fg={SHELL_PALETTE.amberDim}
+            attributes={shellAttrs({ bold: true })}
           >
-            {`${step.done ? "✓ " : "▸ "}${step.op} ${step.target}`}
+            {`▲ ${props.fold.thoughts} earlier thoughts · ${props.fold.steps} steps`}
           </text>
         </box>
+      )}
+      {props.entries.map((entry, index) => (
+        // keyed intrinsic wrapper — function components carry no `key` in this
+        // repo's no-@types/react environment (src/runtime/ui/list.tsx).
+        <box key={`entry-${index}`} id={`${props.id}-entry-${index}`} flexDirection="column">
+          {entry.kind === "step" ? (
+            // step row — unchanged from today: ✓ green when done, ▸ fg when active.
+            // divergence: design shows human-authored labels per tool call (e.g.
+            // "read current design"); the mirrored AgentEvent stream only carries
+            // op+target, so this renders "op target" verbatim instead.
+            <text
+              id={`${props.id}-entry-${index}-text`}
+              fg={entry.done ? SHELL_PALETTE.green : SHELL_PALETTE.fg}
+            >
+              {`${entry.done ? "✓ " : "▸ "}${entry.op} ${entry.target}`}
+            </text>
+          ) : (
+            // reasoning row (`thinkRow`, design `:558-560`) — one row per line: `┊` gutter for
+            // the clipped head of a LIVE block, `│` otherwise; the thread colours `amberDim`/
+            // `line`, the text (two columns in) `dim`/`faint`, live vs. past.
+            entry.lines.map((line, lineIndex) => (
+              <box
+                key={`line-${lineIndex}`}
+                id={`${props.id}-entry-${index}-line-${lineIndex}`}
+                flexDirection="row"
+              >
+                <text
+                  id={`${props.id}-entry-${index}-line-${lineIndex}-gutter`}
+                  fg={entry.live ? SHELL_PALETTE.amberDim : SHELL_PALETTE.line}
+                >
+                  {entry.live && entry.clipped && lineIndex === 0 ? "┊ " : "│ "}
+                </text>
+                <text
+                  id={`${props.id}-entry-${index}-line-${lineIndex}-text`}
+                  fg={entry.live ? SHELL_PALETTE.dim : SHELL_PALETTE.faint}
+                >
+                  {line}
+                </text>
+              </box>
+            ))
+          )}
+        </box>
       ))}
-      {props.reasoning !== null ? (
-        <text id={`${props.id}-reasoning`} fg={SHELL_PALETTE.faint}>
-          {`  ${props.reasoning}`}
-        </text>
-      ) : null}
       {props.gateRetries.map((retry, index) => (
         <box key={`retry-${index}`} id={`${props.id}-retry-${index}`}>
           <text id={`${props.id}-retry-${index}-text`} fg={SHELL_PALETTE.red}>
