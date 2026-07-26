@@ -24,9 +24,10 @@ and user-confirmed Git operations except where §15 explicitly supersedes it.
 ## 2. Design principles
 
 1. **Portable intent is separate from local workspace state.** A clone receives
-   the project, pages, conversations, pins, and target stack. It does not receive
+   the project, pages, pins, and target stack. It does not receive
    active tabs, preview preferences, backend choices, credentials' session scope,
    caches, transaction journals, diagnostics, or trust grants.
+   <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
 2. **Page identity is its immutable slug.** There is no page UUID. The canonical
    source path remains the path Git follows, and recreating a removed slug
    resurrects that page identity and its reachable Git history.
@@ -108,8 +109,6 @@ canonical source path and stores full Git object IDs for commands. Chat
 .termcraft/
   .gitignore
   project.toml
-  chats/
-    {chatId}.jsonl
   pages/
     {pageSlug}/
       page.tsx
@@ -126,6 +125,9 @@ canonical source path and stores full Git object IDs for commands. Chat
 
   workspace.local.toml
   lock
+  chats/
+    {chatId}.jsonl
+  <!-- amended 2026-07-26 (MVP blocker fix bundle §2.5): chats reclassified hard-local -->
   transactions.local/
     format.json
     {transactionId}/
