@@ -7,7 +7,7 @@ import type { HotkeyAction } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, ChatScrollback, Composer, PinList } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
-import type { PreviewMirror, TurnMirror } from "ui/mirror";
+import type { PreviewMirror, TurnMirror, TurnTimelineEntry } from "ui/mirror";
 import {
   EmptyState,
   ErrorPanel,
@@ -88,6 +88,36 @@ function terminalRecordLines(
     return turn.changedPages.map((page) => ({ spans: [{ text: `✓ updated ${page.pageSlug}` }] }));
   }
   return [{ spans: [{ text: `✗ ${turn.outcome}` }] }];
+}
+
+function isReasoningEntry(
+  entry: TurnTimelineEntry,
+): entry is Extract<TurnTimelineEntry, { kind: "reasoning" }> {
+  return entry.kind === "reasoning";
+}
+
+/**
+ * STUB (fix-bundle Task 19/20 seam): `AgentStatusBlock`'s `steps`/`reasoning` props are
+ * unchanged in this task — Task 20 replaces the ephemeral block with `timeline`/`startedAt`-aware
+ * rendering, the merged reasoning+step log (spec §4.6). Until then, these two functions project
+ * the mirror's new merged `timeline` back into the OLD two-collection shape so this call site
+ * keeps compiling; nothing here synthesizes or reorders anything the agent did not report — it
+ * is a read of the same facts, not a new one.
+ */
+function timelineSteps(
+  turn: Extract<TurnMirror, { phase: "running" }>,
+): readonly { op: string; target: string; done: boolean }[] {
+  const steps = turn.timeline.filter((entry) => entry.kind === "step");
+  return steps.map((step, index) => ({
+    op: step.op,
+    target: step.target,
+    done: index < steps.length - 1,
+  }));
+}
+
+/** The latest reasoning entry's text, mirroring the old ticker's "only the last thought" view. */
+function latestReasoning(turn: Extract<TurnMirror, { phase: "running" }>): string | null {
+  return turn.timeline.findLast(isReasoningEntry)?.text ?? null;
 }
 
 /**
@@ -391,12 +421,8 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   id="ws-agent"
                   agentName={agentLabel}
                   connection="working"
-                  steps={turn.steps.map((step, index) => ({
-                    op: step.op,
-                    target: step.target,
-                    done: index < turn.steps.length - 1,
-                  }))}
-                  reasoning={turn.reasoning}
+                  steps={timelineSteps(turn)}
+                  reasoning={latestReasoning(turn)}
                   gateRetries={turn.gateRetries.map((retry) => ({
                     retryNumber: retry.retryNumber,
                   }))}

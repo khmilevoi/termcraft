@@ -6,6 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { SHELL_PALETTE } from "ui/theme";
 
+import { ELAPSED_INTERVAL_MS } from "../model/elapsed";
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../model/frames";
 import { Spinner } from "./Spinner";
 
@@ -56,5 +57,44 @@ describe("Spinner (the one shared animated spinner)", () => {
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amber);
     expect((run?.attrs ?? 0) & 1).toBe(1);
+  });
+
+  test("renders no elapsed segment when startedAt is absent (design's plain `⠹ generating…` frame)", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 4 });
+    open = handle;
+    handle.mount(<Spinner id="spin" label="generating design…" fg={SHELL_PALETTE.amber} bold />);
+    await handle.render();
+
+    const run = findRun(handle.capture(), "generating design…");
+    expect(run).toBeDefined();
+    expect(run?.text).not.toContain("·");
+  });
+
+  test("appends and advances a ` · <elapsed>` segment once startedAt is provided (design's `· 2m 40s` shape)", async () => {
+    const startedAt = Date.now();
+    const handle = await createHeadlessRenderer({ w: 60, h: 4 });
+    open = handle;
+    handle.mount(
+      <Spinner
+        id="spin"
+        label="generating design…"
+        fg={SHELL_PALETTE.amber}
+        bold
+        startedAt={startedAt}
+      />,
+    );
+    await handle.render();
+
+    const first = findRun(handle.capture(), "generating design…");
+    expect(first).toBeDefined();
+    expect(first?.text).toContain("·");
+
+    // Long enough to cross a full elapsed tick, so the suffix must have advanced.
+    await new Promise((resolve) => setTimeout(resolve, ELAPSED_INTERVAL_MS + 250));
+    await handle.render();
+
+    const later = findRun(handle.capture(), "generating design…");
+    expect(later?.text).toContain("·");
+    expect(later?.text).not.toBe(first?.text);
   });
 });

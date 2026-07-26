@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import type { FailureDtoV1 } from "core/protocol";
+import type { FailureDtoV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import { TEST_NONCE, TEST_SHA, TEST_TS, event, resetEventSeq, snapshot } from "ui/testing";
 
+import type { TurnProgressContent } from "../types";
 import { createMirror } from "./mirror";
 import { deriveScreen } from "./screen";
 
@@ -387,8 +388,10 @@ describe("mirror.apply — turn lifecycle", () => {
     );
     turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
-    expect(turn.steps).toEqual([{ kind: "tool", op: "edit", target: "main/page.tsx" }]);
-    expect(turn.reasoning).toBe("laying out gauges");
+    expect(turn.timeline).toEqual([
+      { kind: "step", op: "edit", target: "main/page.tsx" },
+      { kind: "reasoning", text: "laying out gauges" },
+    ]);
     expect(turn.usage?.contextPercent).toBe(42);
 
     m.apply(
@@ -420,7 +423,7 @@ describe("mirror.apply — turn lifecycle", () => {
     expect(turn.changedPages).toHaveLength(1);
   });
 
-  test("attemptStarted restarts steps but keeps gate-retry history", () => {
+  test("attemptStarted restarts the timeline but keeps gate-retry history", () => {
     const m = createMirror();
     const turnId = uuidv7();
     m.apply(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
@@ -443,7 +446,7 @@ describe("mirror.apply — turn lifecycle", () => {
     const turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
     expect(turn.attempt).toBe(2);
-    expect(turn.steps).toEqual([]);
+    expect(turn.timeline).toEqual([]);
     expect(turn.gateRetries).toHaveLength(1);
   });
 
@@ -460,13 +463,94 @@ describe("mirror.apply — turn lifecycle", () => {
     );
     const turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
-    expect(turn.reasoning).toBeNull();
+    expect(turn.timeline).toEqual([]);
+  });
+});
+
+describe("mirror.apply — turn timeline (fix-bundle Task 19: reasoning + tool steps merge into one ordered list, spec §4.6)", () => {
+  const TURN_ID = uuidv7();
+
+  function turnStarted(turnId: UUIDv7) {
+    return event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS });
+  }
+
+  function progress(turnId: UUIDv7, content: TurnProgressContent) {
+    return event("turn.progress", { turnId, attempt: 1, content });
+  }
+
+  function gateRejected(turnId: UUIDv7, retryNumber: number) {
+    return event("turn.gateRejected", {
+      turnId,
+      attempt: 1,
+      retryNumber,
+      diagnostics: { errors: [], warnings: [] },
+    });
+  }
+
+  function attemptStarted(turnId: UUIDv7, attempt: number) {
+    return event("turn.attemptStarted", { turnId, attempt, deadline: TEST_TS });
+  }
+
+  test("keeps reasoning and tool steps in ONE list, in arrival order", () => {
+    const mirror = createMirror(() => 1_000);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "tool", op: "read", target: "page.tsx" }));
+    mirror.apply(
+      progress(TURN_ID, { kind: "reasoning", text: "the gauges already fill the top band" }),
+    );
+    // NOT "write" (the brief's own draft used that literal, but `AgentToolOp`
+    // (`entities/turn/types.ts`) only allows read|edit|run|search|other — `normalize.test.ts`
+    // confirms the SDK's `Write` tool call itself normalizes to `edit`).
+    mirror.apply(progress(TURN_ID, { kind: "tool", op: "edit", target: "page.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "reusing the resources frame" }));
+
+    const turn = mirror.turn();
+    expect(turn.phase).toBe("running");
+    if (turn.phase !== "running") return;
+    expect(turn.timeline).toEqual([
+      { kind: "step", op: "read", target: "page.tsx" },
+      { kind: "reasoning", text: "the gauges already fill the top band" },
+      { kind: "step", op: "edit", target: "page.tsx" },
+      { kind: "reasoning", text: "reusing the resources frame" },
+    ]);
+  });
+
+  test("no longer overwrites the previous thought", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "first" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "second" }));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.timeline.filter((e) => e.kind === "reasoning")).toHaveLength(2);
+  });
+
+  test("records when the turn started, from the UI's own clock", () => {
+    const mirror = createMirror(() => 12_345);
+    mirror.apply(turnStarted(TURN_ID));
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.startedAt).toBe(12_345);
+  });
+
+  test("clears the timeline on a retry but keeps the accumulated gate-retry lines", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "first attempt" }));
+    mirror.apply(gateRejected(TURN_ID, 1));
+    mirror.apply(attemptStarted(TURN_ID, 2));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.timeline).toEqual([]);
+    expect(turn.gateRetries).toHaveLength(1);
   });
 });
 
 describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix round 1, Finding 2)", () => {
-  test("reflects the turn as running from the moment admission begins, deadline honestly null", () => {
-    const m = createMirror();
+  test("reflects the turn as running from the moment admission begins, deadline honestly null, startedAt from the UI's own clock", () => {
+    const m = createMirror(() => 5_000);
     const turnId = uuidv7();
     m.apply(
       event(
@@ -486,8 +570,8 @@ describe("mirror.apply — kernel.turn.beginAdmission (fix-bundle Task 11 fix ro
       turnId,
       attempt: 1,
       deadline: null,
-      steps: [],
-      reasoning: null,
+      timeline: [],
+      startedAt: 5_000,
       finalText: null,
       errorText: null,
       usage: null,
@@ -611,7 +695,7 @@ describe("mirror.apply — turn.started producer/consumer seam (fixlane-K1-turn-
     expect(turn.phase).toBe("running");
     if (turn.phase !== "running") throw new Error("unreachable");
     expect(turn.attempt).toBe(1);
-    expect(turn.steps).toEqual([]);
+    expect(turn.timeline).toEqual([]);
 
     // The real producer's own first turn.attemptStarted — same turnId, same deadline
     // (`handlers/turn.ts`'s `publish`: "deadline is the SAME non-resettable absolute bound").
@@ -629,7 +713,7 @@ describe("mirror.apply — turn.started producer/consumer seam (fixlane-K1-turn-
     );
     turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
-    expect(turn.reasoning).toBe("laying out gauges");
+    expect(turn.timeline).toEqual([{ kind: "reasoning", text: "laying out gauges" }]);
 
     m.apply(
       event("turn.completed", {

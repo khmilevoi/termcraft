@@ -1,3 +1,4 @@
+export { ELAPSED_INTERVAL_MS, elapsedTick, formatElapsed } from "./model/elapsed";
 export {
   SPINNER_FRAMES,
   SPINNER_INTERVAL_MS,

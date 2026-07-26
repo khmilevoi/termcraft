@@ -18,7 +18,7 @@ export type {
   TurnMirror,
   TurnProgressContent,
   TurnTerminalPayload,
-  TurnToolStep,
+  TurnTimelineEntry,
   TurnUsage,
 } from "./types";
 export type { Mirror } from "./model/mirror";

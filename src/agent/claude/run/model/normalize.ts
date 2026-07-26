@@ -7,7 +7,6 @@ import type {
 
 import { mapToolUse } from "agent/claude/tools";
 import type { AgentEvent, TokenUsage } from "entities/turn";
-import { trace } from "infrastructure/debug-log";
 
 /**
  * Compute the 0–100 context-window share, or null when no model reported a
@@ -49,22 +48,6 @@ type ContentBlock = Extract<SDKMessage, { type: "assistant" }>["message"]["conte
  * malformed block must be skipped, not emitted as `undefined` text.
  */
 function normalizeBlock(block: ContentBlock): AgentEvent | null {
-  // TEMPORARY DIAGNOSTIC (2026-07-26): answers one question — do `thinking` blocks reach us at
-  // all, and do they carry text? The SDK's own `Options.thinking` doc says `{type:'adaptive'}`
-  // is the default for models that support it (we set nothing), but the Messages API defaults
-  // thinking DISPLAY to "omitted" on Sonnet 5, which would deliver blocks whose text is empty.
-  // Only a live run separates those two. Logs the block TYPE and text LENGTH — never the text
-  // itself, so a real prompt's reasoning never lands in the trace file. Remove once answered.
-  trace("agent.block", {
-    type: block.type,
-    ...(block.type === "thinking"
-      ? { thinkingLen: typeof block.thinking === "string" ? block.thinking.length : null }
-      : {}),
-    ...(block.type === "text"
-      ? { textLen: typeof block.text === "string" ? block.text.length : null }
-      : {}),
-  });
-
   if (block.type === "thinking" && typeof block.thinking === "string") {
     return { kind: "reasoning", text: block.thinking };
   }

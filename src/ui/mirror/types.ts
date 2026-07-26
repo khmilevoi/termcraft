@@ -28,8 +28,18 @@ export type CapabilityState = CapabilityEntry["state"];
 
 /** Whole normalized turn-progress content union (reasoning | tool | final | usage | error). */
 export type TurnProgressContent = EventPayloadByKindV1["turn.progress"]["content"];
-/** One agent tool step (`✓`/`▸` line in the ephemeral block) — `{ kind:"tool", op, target }`. */
-export type TurnToolStep = Extract<TurnProgressContent, { kind: "tool" }>;
+/**
+ * One entry in the turn's SINGLE ordered timeline — the design's `genTurn`
+ * (`design/termcraft-engine.js:515-548`) returns exactly this: one array of `{status}` and
+ * `{think}` entries in the order they happened.
+ *
+ * Two parallel collections (`steps[]` plus a one-slot `reasoning` ticker) could not express it:
+ * only the latest thought survived, and its position relative to the tool calls was destroyed on
+ * arrival. Merging them makes ordering hold BY CONSTRUCTION rather than by reconciling two lists.
+ */
+export type TurnTimelineEntry =
+  | Readonly<{ kind: "step"; op: string; target: string }>
+  | Readonly<{ kind: "reasoning"; text: string }>;
 /** Normalized token usage — drives the composer ctx% indicator. */
 export type TurnUsage = Extract<TurnProgressContent, { kind: "usage" }>["tokens"];
 /** The terminal turn payload (`turn.completed`/`failed`/`cancelled` share it). */
@@ -61,10 +71,17 @@ export type TurnMirror =
        * union member's own honesty holds at every moment a subscriber could observe it.
        */
       deadline: string | null;
-      /** Tool steps in arrival order — the last is the active (`▸`) step, earlier ones done (`✓`). */
-      steps: readonly TurnToolStep[];
-      /** The latest reasoning-ticker line (a ticker, not a log — design §3.2). */
-      reasoning: string | null;
+      /** Tool steps and reasoning blocks in one arrival-ordered list — see {@link TurnTimelineEntry}. */
+      timeline: readonly TurnTimelineEntry[];
+      /**
+       * When `turn.started` ARRIVED, in ms from the UI's own clock. The design's long-turn frame
+       * shows elapsed time in the spinner (`⠹ generating design… · 2m 40s`,
+       * `design/termcraft-engine.js:547`), but `turn.started` carries only an absolute `deadline`
+       * — the protocol has no "started at" fact — so elapsed is derived client-side from this. It
+       * is honestly the UI's own clock, not a Kernel fact, which is why it is named as new mirror
+       * state rather than smuggled in as a payload field.
+       */
+      startedAt: number;
       finalText: string | null;
       errorText: string | null;
       usage: TurnUsage | null;

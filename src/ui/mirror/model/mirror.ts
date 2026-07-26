@@ -100,7 +100,11 @@ function readMetadataTrust(
   return raw === "trusted" || raw === "untrusted-read-only" ? raw : undefined;
 }
 
-export function createMirror(): Mirror {
+/**
+ * `now` is injected so a test can pin `TurnMirror.startedAt` — the one value in this read-model
+ * that comes from the UI's own clock rather than from an event payload (see that field's doc).
+ */
+export function createMirror(now: () => number = () => Date.now()): Mirror {
   const stateRevision = atom<UInt64String>("0", "ui.mirror.stateRevision");
   const eventSeq = atom<UInt64String>("0", "ui.mirror.eventSeq");
   const project = atom<ProjectMirror>(EMPTY_PROJECT, "ui.mirror.project");
@@ -131,9 +135,16 @@ export function createMirror(): Mirror {
     if (current.phase !== "running" || current.turnId !== envelope.payload.turnId) return;
     const content = envelope.payload.content;
     if (content.kind === "tool") {
-      turn.set({ ...current, steps: [...current.steps, content] });
+      turn.set({
+        ...current,
+        timeline: [...current.timeline, { kind: "step", op: content.op, target: content.target }],
+      });
     } else if (content.kind === "reasoning") {
-      turn.set({ ...current, reasoning: content.text });
+      // Appended, never overwritten (spec §4.6): the ticker kept only the latest thought.
+      turn.set({
+        ...current,
+        timeline: [...current.timeline, { kind: "reasoning", text: content.text }],
+      });
     } else if (content.kind === "final") {
       turn.set({ ...current, finalText: content.text });
     } else if (content.kind === "usage") {
@@ -216,8 +227,8 @@ export function createMirror(): Mirror {
             turnId,
             attempt: 1,
             deadline: null,
-            steps: [],
-            reasoning: null,
+            timeline: [],
+            startedAt: now(),
             finalText: null,
             errorText: null,
             usage: null,
@@ -269,8 +280,8 @@ export function createMirror(): Mirror {
           turnId: envelope.payload.turnId,
           attempt: 1,
           deadline: envelope.payload.deadline,
-          steps: [],
-          reasoning: null,
+          timeline: [],
+          startedAt: now(),
           finalText: null,
           errorText: null,
           usage: null,
@@ -281,14 +292,15 @@ export function createMirror(): Mirror {
       case "turn.attemptStarted": {
         const current = turn();
         if (current.phase !== "running" || current.turnId !== envelope.payload.turnId) return;
-        // A retry re-runs the agent: the step/reasoning stream restarts, but the accumulated
-        // gate-retry lines persist so the chat shows the full `retry 1/3 … 2/3` history.
+        // A retry re-runs the agent: the timeline restarts, but `startedAt` (the turn's own
+        // clock) and the accumulated gate-retry lines persist so the chat shows the full
+        // `retry 1/3 … 2/3` history and the elapsed-time spinner keeps counting from the
+        // turn's true start, not from this attempt's.
         turn.set({
           ...current,
           attempt: envelope.payload.attempt,
           deadline: envelope.payload.deadline,
-          steps: [],
-          reasoning: null,
+          timeline: [],
           finalText: null,
           errorText: null,
         });
