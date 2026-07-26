@@ -5,7 +5,7 @@ import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
 import { AgentStatusBlock, ChatRecord, ChatScrollback, Composer, PinList } from "ui/chat";
-import type { MarkdownLine } from "ui/chat";
+import type { AgentToolStep, MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror, TurnTimelineEntry } from "ui/mirror";
 import {
@@ -104,9 +104,7 @@ function isReasoningEntry(
  * keeps compiling; nothing here synthesizes or reorders anything the agent did not report — it
  * is a read of the same facts, not a new one.
  */
-function timelineSteps(
-  turn: Extract<TurnMirror, { phase: "running" }>,
-): readonly { op: string; target: string; done: boolean }[] {
+function timelineSteps(turn: Extract<TurnMirror, { phase: "running" }>): readonly AgentToolStep[] {
   const steps = turn.timeline.filter((entry) => entry.kind === "step");
   return steps.map((step, index) => ({
     op: step.op,
