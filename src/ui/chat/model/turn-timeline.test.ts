@@ -21,6 +21,15 @@ describe("wrapText", () => {
     ]);
     expect(wrapText("aaaaaaaaaaaaaaa", 5)).toEqual(["aaaaa", "aaaaa", "aaaaa"]);
   });
+
+  it("does not hang at width <= 0 — returns lines unsplit instead (review round 1, Finding 2)", () => {
+    // Pre-fix, `hardSplit`'s `while(remaining.length > width)` loop never shrinks `remaining`
+    // once `width` reaches 0 (or goes negative), hanging the caller forever — proved by running
+    // the pre-fix loop body under a 3s `timeout` in isolation (exit code 124, killed). The fixed
+    // `wrapText` must return promptly instead.
+    expect(wrapText("abc", 0)).toEqual(["abc"]);
+    expect(wrapText("abc", -1)).toEqual(["abc"]);
+  });
 });
 
 describe("foldTurnTimeline", () => {
@@ -110,6 +119,26 @@ describe("foldTurnTimeline", () => {
     expect(last.live).toBe(true);
     expect(last.clipped).toBe(false);
     expect(last.lines).toEqual([""]);
+  });
+
+  it("shrinks the live block below liveCap on a short frame — fold stays null, clipped stays true (review round 1, Minor: maxRows < liveCap IS reachable)", () => {
+    // Real call site: `Math.max(3, frameH - AGENT_BLOCK_CHROME_ROWS)` floors at 3, not `liveCap`
+    // (5) — a `frameH <= 7` terminal reaches `maxRows` 3 or 4, both below `liveCap`. With no
+    // OTHER entries to fold away, `fold` stays null (nothing was elided) and the live block
+    // itself absorbs the whole `maxRows` budget instead.
+    const { fold, entries } = foldTurnTimeline({
+      entries: [reasoning(LONG_PROSE)],
+      width: 40,
+      maxRows: 3,
+      liveCap: 5,
+    });
+    expect(fold).toBeNull();
+    const last = entries.at(-1);
+    expect(last?.kind).toBe("reasoning");
+    if (last?.kind !== "reasoning") return;
+    expect(last.live).toBe(true);
+    expect(last.clipped).toBe(true);
+    expect(last.lines).toHaveLength(3);
   });
 
   it("marks the last step entry active (not done) and every earlier step done", () => {

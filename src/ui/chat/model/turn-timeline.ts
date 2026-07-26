@@ -14,6 +14,12 @@ export type RenderedTimelineEntry =
 /**
  * Design `wrapLines` (`design/termcraft-engine.js:298-301`), transcribed: greedy word wrap, then a
  * hard character split for any single word still wider than `width`.
+ *
+ * `width <= 0` is NOT a design case (the design's own `wrapLines` has the identical hole: its
+ * `while(l.length>width)` loop never shrinks `l` once `width` reaches 0, hanging forever) — a
+ * transcription doesn't need to carry a hang across (review round 1, Finding 2), so `hardSplit`
+ * below returns each line unsplit rather than looping when there is no positive width to split
+ * into.
  */
 export function wrapText(text: string, width: number): readonly string[] {
   const words = text.split(" ");
@@ -29,6 +35,7 @@ export function wrapText(text: string, width: number): readonly string[] {
   const lines = packed.cur === "" ? packed.lines : [...packed.lines, packed.cur];
 
   const hardSplit = (line: string): readonly string[] => {
+    if (width <= 0) return [line];
     const out: string[] = [];
     let remaining = line;
     while (remaining.length > width) {

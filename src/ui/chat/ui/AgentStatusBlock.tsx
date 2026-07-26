@@ -28,6 +28,16 @@ export interface AgentStatusBlockProps {
 }
 
 /**
+ * English count agreement for the fold row's two nouns. The design only samples the plural case
+ * (`▲ 6 earlier thoughts · 5 steps`, `:539`) — it never shows either count at 1, so singular
+ * agreement is the closest faithful mapping, not a design fact: "1 steps" reads as a defect, and
+ * the counts are otherwise truthful (review round 1, Minor).
+ */
+function pluralize(count: number, singular: string, plural: string): string {
+  return count === 1 ? singular : plural;
+}
+
+/**
  * The ephemeral in-turn agent status block (design `drawChat`,
  * `design/03-workspace-generating.dc.html`, `design/14-first-generation.dc.html`).
  * Renders the agent presence line, the generating spinner, the ordered/foldable
@@ -73,7 +83,7 @@ export function AgentStatusBlock(props: AgentStatusBlockProps) {
             fg={SHELL_PALETTE.amberDim}
             attributes={shellAttrs({ bold: true })}
           >
-            {`▲ ${props.fold.thoughts} earlier thoughts · ${props.fold.steps} steps`}
+            {`▲ ${props.fold.thoughts} earlier ${pluralize(props.fold.thoughts, "thought", "thoughts")} · ${props.fold.steps} ${pluralize(props.fold.steps, "step", "steps")}`}
           </text>
         </box>
       )}

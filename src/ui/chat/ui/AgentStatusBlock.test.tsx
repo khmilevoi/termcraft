@@ -92,7 +92,9 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     await handle.render();
     const frame = handle.capture();
     const spinner = findRun(frame, "generating design…");
-    expect(spinner?.text).toContain("·");
+    // review round 1, Minor: `toContain("·")` would also pass for a broken `· NaNs` suffix —
+    // pin the actual format instead.
+    expect(spinner?.text).toMatch(/· \d+s/);
   });
 
   test("a done step renders green with a checkmark and the active step renders fg with a triangle", async () => {
@@ -182,6 +184,44 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     expect(scrolledHead && extractRgb(scrolledHead.fg)).toBe<string>(SHELL_PALETTE.amberDim);
   });
 
+  test("marks ONLY the clipped head's gutter ┊ — later live lines get the plain │ thread (review round 1, Minor)", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={null}
+        fold={null}
+        entries={[
+          {
+            kind: "reasoning",
+            lines: ["line one", "line two", "line three"],
+            live: true,
+            clipped: true,
+          },
+        ]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const rowOf = (needle: string) =>
+      frame.rows.find((row) => row.some((run) => run.text.includes(needle)));
+
+    const firstRow = rowOf("line one");
+    const secondRow = rowOf("line two");
+    const thirdRow = rowOf("line three");
+    expect(
+      firstRow?.some((run) => run.text === "┊ " && extractRgb(run.fg) === SHELL_PALETTE.amberDim),
+    ).toBe(true);
+    expect(secondRow?.some((run) => run.text === "┊ ")).toBe(false);
+    expect(secondRow?.some((run) => run.text === "│ ")).toBe(true);
+    expect(thirdRow?.some((run) => run.text === "┊ ")).toBe(false);
+    expect(thirdRow?.some((run) => run.text === "│ ")).toBe(true);
+  });
+
   test("renders no reasoning/step rows when entries is empty", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
@@ -226,6 +266,36 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     expect(fold).toBeDefined();
     expect(fold && extractRgb(fold.fg)).toBe<string>(SHELL_PALETTE.amberDim);
     expect((fold?.attrs ?? 0) & 1).toBe(1);
+
+    // review round 1, Minor: the title promised a `┊` gutter but the body never checked it.
+    const gutter = findRun(frame, "┊");
+    expect(gutter).toBeDefined();
+    expect(gutter && extractRgb(gutter.fg)).toBe<string>(SHELL_PALETTE.amberDim);
+  });
+
+  test("the fold row uses singular grammar for a count of 1 — never '1 thoughts'/'1 steps' (review round 1, Minor)", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        agentName="claude"
+        connection="ratatui · connected"
+        startedAt={null}
+        fold={{ thoughts: 1, steps: 1 }}
+        entries={[]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const allText = frame.rows
+      .map((row: StyledRun[]) => row.map((run) => run.text).join(""))
+      .join("");
+
+    expect(allText).toContain("▲ 1 earlier thought · 1 step");
+    expect(allText).not.toContain("1 earlier thoughts");
+    expect(allText).not.toContain("1 steps");
   });
 
   test("omits the fold row entirely when fold is null", async () => {

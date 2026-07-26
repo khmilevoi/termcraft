@@ -30,6 +30,12 @@ import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
+import {
+  agentStatusMaxRows,
+  chatScrollbackRows,
+  composerRowCount,
+  pinListRowCount,
+} from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
 import { derivePinListRows } from "../model/pins";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
@@ -102,8 +108,13 @@ function terminalRecordLines(
  * line, the connection meta line, and the spinner line (3 fixed rows; gate-retry rows are NOT
  * counted here, since they're bounded at 3 and rare — underestimating the budget by that amount
  * on the rare turn that has both a long timeline AND active retries just makes the fold trigger
- * one row earlier than strictly necessary, never a layout break). Subtracted from `frameH` so the
- * timeline's own `maxRows` budget leaves room for this block's own chrome, not just itself.
+ * one row earlier than strictly necessary, never a layout break). Fed into `agentStatusMaxRows`
+ * (`../model/agent-block-budget.ts`) alongside `frameH` and every OTHER row-consuming sibling in
+ * `ws-chat-stream` — this constant alone is NOT the whole budget calculation (review round 1,
+ * Finding 1: subtracting only this from bare `frameH`, with no upper bound, silently overflowed
+ * the panel on real terminal sizes). The design's own ceiling on the other side of that
+ * calculation is `MAX_TIMELINE_ROWS` (11) — see that constant's own doc comment for the 12-row
+ * citation this 3 does NOT independently derive from.
  */
 const AGENT_BLOCK_CHROME_ROWS = 3;
 
@@ -325,7 +336,30 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
   const pins =
     project.activePageSlug === null ? [] : (mirror.pinsByPage().get(project.activePageSlug) ?? []);
+  const pinRows = derivePinListRows(pins);
+  const records = mirror.records();
   const selection = mirror.selection();
+  const composerAttach = deriveComposerAttach({
+    readOnly: props.readOnly,
+    selection,
+    activePageSlug: project.activePageSlug,
+    openPins: pins,
+    turnRunning: turn.phase === "running",
+    composerValue,
+    slashOpen,
+  });
+  // Review round 1, Finding 1: the row budget `foldTurnTimeline` gets as `maxRows` must both cap
+  // at the design's own 11-row ceiling AND measure real remaining space inside `ws-chat-stream`
+  // — not bare `frameH`, which ignores `ws-chat`'s own border and every sibling this block shares
+  // the panel with. See `agentStatusMaxRows`'s own doc comment (`../model/agent-block-budget.ts`).
+  const agentBlockMaxRows = agentStatusMaxRows({
+    frameH,
+    chromeRows: AGENT_BLOCK_CHROME_ROWS,
+    hasAgentLine: agentLabel !== "",
+    scrollbackRows: chatScrollbackRows(records, agentLabel),
+    pinListRows: pinListRowCount(pinRows),
+    composerRows: composerRowCount(composerAttach !== null),
+  });
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
   const pendingPin = interaction.pendingPin();
@@ -421,11 +455,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                * dc.html`'s `chatSeq`/`drawChat` layering (persisted seq entries, then the live
                * `⠹ generating design…` block).
                */}
-              <ChatScrollback
-                id="ws-scrollback"
-                records={mirror.records()}
-                agentLabel={agentLabel}
-              />
+              <ChatScrollback id="ws-scrollback" records={records} agentLabel={agentLabel} />
               {turn.phase === "running" && (
                 <AgentStatusBlock
                   id="ws-agent"
@@ -440,7 +470,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                     // design `chatSeq`: text is drawn at `tx+2` inside `iw = chatW-3`, and
                     // `thinkRow` wraps at `iw-2` — so the thread's own wrap width is `chatW-5`.
                     width: Math.max(8, chatW - 5),
-                    maxRows: Math.max(3, frameH - AGENT_BLOCK_CHROME_ROWS),
+                    maxRows: agentBlockMaxRows,
                     // The design's `full`/`long` cap; `short`/`first` use 3/4 per frame.
                     liveCap: 5,
                   })}
@@ -468,11 +498,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                * resolution signal. `derivePinListRows` also numbers each open pin's badge
                * among open pins only, matching `PreviewOverlays`' own numbering.
                */}
-              <PinList
-                id="ws-pins"
-                pageSlug={project.activePageSlug ?? ""}
-                pins={derivePinListRows(pins)}
-              />
+              <PinList id="ws-pins" pageSlug={project.activePageSlug ?? ""} pins={pinRows} />
             </box>
             <Composer
               id="ws-composer"
@@ -494,15 +520,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               }
               placeholder={composerPlaceholder}
               value={composerValue}
-              attach={deriveComposerAttach({
-                readOnly: props.readOnly,
-                selection,
-                activePageSlug: project.activePageSlug,
-                openPins: pins,
-                turnRunning: turn.phase === "running",
-                composerValue,
-                slashOpen,
-              })}
+              attach={composerAttach}
             />
             {slashOpen && (
               <box id="ws-slash-anchor" position="absolute" left={0} right={0} bottom={3}>
