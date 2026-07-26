@@ -2291,3 +2291,82 @@ describe('turnHandlers["turn.start"] — WP-7 same-process session resume', () =
     await runPromise;
   });
 });
+
+describe("turn.start — canonical page source paths (Gap G)", () => {
+  test("hands staging the CANONICAL page path, not the agent workspace's flat one", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const pageStore = createFakePageStore({
+      order: [HOME],
+      sources: new Map([
+        [
+          HOME,
+          {
+            bytes: new TextEncoder().encode("home-source"),
+            sourceHash: "a".repeat(64) as Sha256Hex,
+          },
+        ],
+      ]),
+    });
+
+    const staging = createFakeStagingService();
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, deps, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      pageReader: pageStore,
+      pageMutations: pageStore,
+      staging,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    const outcome = turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected a launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200; i++) {
+      if (agentBackend.calls.some((c) => c.method === "startTurn")) break;
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+
+    // The real bug (Gap G): `pages.push`'s `sourcePath` used to be built from the agent
+    // WORKSPACE's own flat page-file convention (`pages/<slug>.tsx`, joined onto
+    // `projectStore.root`) — a path that never exists on disk, since canonical storage is
+    // `<root>/.termcraft/pages/<slug>/page.tsx` (`store/safe-fs/model/limits.ts:134-135`,
+    // `store/transaction/model/wrappers.ts`'s `canonicalPagePath`). `staging.createTurnWorkspace`
+    // is the one call that receives `admission.workspace.pages` verbatim, so its own captured
+    // `calls` array is the most direct place to prove which convention actually reached it.
+    const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
+    if (createCall?.method !== "createTurnWorkspace") {
+      throw new Error("expected a createTurnWorkspace call");
+    }
+    expect(createCall.input.pages.map((p) => p.sourcePath)).toEqual([
+      `${deps.projectStore.root}/.termcraft/pages/${HOME}/page.tsx`,
+    ]);
+  });
+});

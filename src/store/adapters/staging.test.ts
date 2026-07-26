@@ -21,6 +21,7 @@ function mustParseSlug(raw: string): PageSlug {
 }
 
 const HOME_SLUG = mustParseSlug("home");
+const MAIN_SLUG = mustParseSlug("main");
 
 /**
  * Flips the case of the last cased (letter) character found in `raw`, scanning from the end
@@ -91,6 +92,43 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
       expect(fs.readFileSync(path.join(workspace.root, "pages", "home.tsx"), "utf8")).toBe(
         "export const meta = { title: 'Home' };\n",
       );
+    } finally {
+      await open.close();
+    }
+  });
+
+  // Gap G regression: `core/kernel/handlers/turn.ts`'s `pages.push` used to build its
+  // `sourcePath` from the agent WORKSPACE's own flat layout joined onto the PROJECT root — a
+  // path that never exists on disk, since canonical page storage is
+  // `<root>/.termcraft/pages/<slug>/page.tsx` (`store/safe-fs/model/limits.ts:134-135`,
+  // `store/transaction/model/wrappers.ts`'s `canonicalPagePath`). Every other test in this
+  // file either stages zero pages or hands `buildInput` a source path from an arbitrary
+  // scratch directory, so the one construction that matters — a real canonical layout on
+  // disk — was never exercised until now.
+  test("stages a page whose source sits at the canonical <root>/.termcraft/pages/<slug>/page.tsx", async () => {
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const sourcePath = path.join(open.root, ".termcraft", "pages", "main", "page.tsx");
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, "export default 1;\n");
+
+      const adapter = createStagingAdapter(deps);
+      const workspace = await adapter.createTurnWorkspace({
+        turnId: uuidv7(),
+        targetChatId: uuidv7(),
+        pages: [{ pageSlug: MAIN_SLUG, sourcePath }],
+        manifestSlice: new TextEncoder().encode(JSON.stringify({ pages: ["main"] })),
+        runtimeDocs: [],
+        readSet: {
+          manifest: null,
+          canonicalPages: [{ pageSlug: MAIN_SLUG, snapshot: null }],
+          chat: { length: 0, prefixSha256: "0".repeat(64) },
+          pins: [],
+        },
+      });
+
+      if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
+      expect(workspace.files.some((f) => f.relPath === "pages/main.tsx")).toBe(true);
     } finally {
       await open.close();
     }

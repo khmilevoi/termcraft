@@ -404,9 +404,30 @@ function turnStateChangedEvent(
 
 // --- turn.start — real, composing `runTurn` ------------------------------------------------
 
-/** The real staging store's own page-file convention, transcribed from `core/turns/model/candidate.ts`'s identical constant (that file's own header cites `store/sandbox/model/staging-store.ts`'s `stageAllFiles`). */
-function pageFileRelPath(pageSlug: PageSlug): string {
+/**
+ * The agent WORKSPACE's own flat page-file convention (`store/sandbox/model/staging-store.ts`'s
+ * `stageAllFiles`, transcribed by `core/turns/model/candidate.ts`'s `PAGE_FILE_PATTERN`):
+ * `pages/<slug>.tsx`, relative to a STAGED workspace or candidate root — never to the project
+ * root. Named for its namespace after Gap G, where the un-namespaced old name (`pageFileRelPath`)
+ * let the same helper be joined onto `projectStore.root` and produce a path that does not exist.
+ */
+function workspacePageRelPath(pageSlug: PageSlug): string {
   return `pages/${pageSlug}.tsx`;
+}
+
+/** The directory canonical project state lives in, under the project root (storage-identity §4). */
+const PROJECT_STATE_DIRNAME = ".termcraft";
+
+/**
+ * CANONICAL page storage, absolute: `<projectRoot>/.termcraft/pages/<slug>/page.tsx`.
+ * `store/safe-fs/model/limits.ts:134-135` states the rule in prose ("deliberately NOT the
+ * agent's flat `pages/<slug>.tsx` shape") and `store/transaction/model/wrappers.ts`'s
+ * `canonicalPagePath` is its `.termcraft`-relative half. `core` may not import `store`, so the
+ * convention is transcribed here rather than shared — the same way `./preview-export.ts` already
+ * names `.termcraft/export` for its own destination.
+ */
+function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
+  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
 }
 
 const MANIFEST_SLICE_REL_PATH = "pages.json";
@@ -779,7 +800,7 @@ async function runTurnStart(
     }
     pages.push({
       pageSlug,
-      sourcePath: `${context.deps.projectStore.root}/${pageFileRelPath(pageSlug)}`,
+      sourcePath: canonicalPageSourcePath(context.deps.projectStore.root, pageSlug),
     });
     canonicalPages.push({
       pageSlug,
@@ -914,7 +935,7 @@ async function runTurnStart(
     manifestText: decodeCachedUtf8(cachingStaging, candidate.root, MANIFEST_SLICE_REL_PATH),
     pages: candidate.presentSlugs.map((pageSlug) => ({
       pageSlug,
-      source: decodeCachedUtf8(cachingStaging, candidate.root, pageFileRelPath(pageSlug)),
+      source: decodeCachedUtf8(cachingStaging, candidate.root, workspacePageRelPath(pageSlug)),
       // The absolute staged candidate path (`gate/adapters/gate-runner.ts`'s CRITICAL smoke
       // finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a page's
       // source via `Bun.file` inside a fresh scratch-directory child process, so a bare
@@ -923,8 +944,8 @@ async function runTurnStart(
       // `sourcePath`, which the Gate smoke stage resolves via `Bun.file`. `fileName` stays the
       // SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics, so a
       // turn-validation Gate rejection reports `${slug}.tsx`, never the absolute staged path.
-      fileName: pageFileRelPath(pageSlug),
-      sourcePath: `${candidate.root}/${pageFileRelPath(pageSlug)}`,
+      fileName: workspacePageRelPath(pageSlug),
+      sourcePath: `${candidate.root}/${workspacePageRelPath(pageSlug)}`,
     })),
   });
 
@@ -951,7 +972,7 @@ async function runTurnStart(
       }
       const bytes = cachingStaging.readCandidateBytes(
         candidate.root,
-        pageFileRelPath(change.pageSlug),
+        workspacePageRelPath(change.pageSlug),
       );
       if (bytes === null) {
         console.warn(
