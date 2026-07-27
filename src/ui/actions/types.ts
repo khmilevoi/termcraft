@@ -4,7 +4,13 @@ import type { CapabilityState, ScreenKind } from "ui/mirror";
 export type UiActionExecution =
   | {
       readonly kind: "local";
-      readonly effect: "fullscreen" | "open-chats" | "exit" | "compose-repair";
+      readonly effect:
+        | "fullscreen"
+        | "open-chats"
+        | "exit"
+        | "compose-repair"
+        | "page-prev"
+        | "page-next";
     }
   | {
       readonly kind: "command";
@@ -59,12 +65,32 @@ export interface HotkeyAction {
   readonly id: string;
   /** Canonical key spelling, lowercase: `"f2"`, `"f3"`, `"ctrl+e"`, … */
   readonly key: string;
+  /**
+   * Extra key spellings that resolve to this same action, lowercase.
+   *
+   * Exists for one reason (2026-07-27, HANDOFF Finding 3): a chord like `ctrl+left` reaches the
+   * app only if the terminal encodes the modifier into a CSI sequence, and not every terminal,
+   * multiplexer or ConPTY path does. A C0 control byte (`ctrl+b` = 0x02) always arrives. Binding
+   * both means the guaranteed key is canonical — it is what the label and any future hint would
+   * name — while the intuitive chord keeps working wherever it is delivered.
+   */
+  readonly aliases?: readonly string[];
   /** Label used in the status-bar hint (design `hintKeys`). */
   readonly label: string;
   /** The Kernel command this key dispatches, or `null` for a UI-local key. */
   readonly capability: CommandKindV1 | null;
   /** MVP-inert: the key is shown/known but performs no action yet (F3 tweaks, F4 interact, Ctrl+P). */
   readonly inert?: boolean;
+  /**
+   * `false` for a key that is BOUND but must not appear in the status-bar hint row.
+   *
+   * The row is a transcription of the design's own drawn key rows (`Workspace.tsx`'s `hintKeys`,
+   * design `hintKeys`/`wsStatus`), so a key the design never drew cannot be added to it without
+   * diverging from every screen in `design/*.dc.html`. The page-step keys are the only such
+   * entries today: they are a deliberate design extension (see their `UI_ACTIONS` rows), so they
+   * work without claiming to be part of the drawn design.
+   */
+  readonly hint?: false;
 }
 
 /** The mirror-derived inputs a row's availability/hint computation needs. */

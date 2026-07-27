@@ -84,6 +84,51 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: { id: "preview.repair", key: "f6", label: "repair", capability: null },
   },
   {
+    // PAGE SWITCHING FROM THE KEYBOARD — A DELIBERATE DESIGN EXTENSION (2026-07-27, maintainer
+    // decision "мышь и клава"). The design switches pages by MOUSE only: `drawTabs`
+    // (`design/termcraft-engine.js:469`) draws the strip, `design/18-tab-management.dc.html`
+    // covers its context menu, and §3.8's two hotkey tiers name no page key at all — so unlike
+    // `f5`/`f6` below, this key is NOT design-named and is recorded here as an extension rather
+    // than presented as design.
+    //
+    // WHY `ctrl+b`/`ctrl+n` CANONICAL, ARROWS AS ALIASES (CORRECTED 2026-07-27, HANDOFF Finding 3):
+    //   - it must be GLOBAL tier: the composer owns focus by default, so a single-char key
+    //     (§3.8's other tier) would steal characters from ordinary typing — exactly the bug
+    //     `keymap.ts`'s own `home-recheck` comment records for bare `r`;
+    //   - `ctrl+left`/`ctrl+right` were the original binding and were DEAD on the maintainer's
+    //     terminal: a ctrl+arrow reaches the app only when the terminal encodes the modifier into
+    //     a CSI sequence (`\x1b[1;5C`), and this one delivered a bare `\x1b[C`. `ctrl+b`/`ctrl+n`
+    //     are C0 control bytes (0x02 / 0x0E) — one byte, no encoding to get wrong;
+    //   - neither can be typed into the composer: `printableChar` rejects every code below 0x20;
+    //   - the arrows stay as aliases, so the chord still works wherever it IS encoded;
+    //   - `ctrl+e` (export) and `ctrl+p` (preview) already establish the ctrl+letter vocabulary.
+    // NOT hinted in the status bar: `Workspace.tsx`'s `hintKeys` renders the design's own key
+    // rows verbatim, and adding a key the design never drew there would diverge from every
+    // screen in `design/*.dc.html`.
+    id: "page.prev",
+    execution: { kind: "local", effect: "page-prev" },
+    hotkey: {
+      id: "page.prev",
+      key: "ctrl+b",
+      aliases: ["ctrl+left"],
+      label: "prev page",
+      capability: null,
+      hint: false,
+    },
+  },
+  {
+    id: "page.next",
+    execution: { kind: "local", effect: "page-next" },
+    hotkey: {
+      id: "page.next",
+      key: "ctrl+n",
+      aliases: ["ctrl+right"],
+      label: "next page",
+      capability: null,
+      hint: false,
+    },
+  },
+  {
     id: "preview.tweaks",
     execution: { kind: "inert" },
     hotkey: {
@@ -221,7 +266,12 @@ const ACTION_BY_SLASH: ReadonlyMap<string, UiActionEntry> = new Map(
   UI_ACTIONS.flatMap((entry) => (entry.slash ? [[entry.slash.cmd, entry] as const] : [])),
 );
 
-const HOTKEY_BY_KEY: ReadonlyMap<string, HotkeyAction> = new Map(HOTKEYS.map((h) => [h.key, h]));
+const HOTKEY_BY_KEY: ReadonlyMap<string, HotkeyAction> = new Map(
+  HOTKEYS.flatMap((h) => [
+    [h.key, h] as const,
+    ...(h.aliases ?? []).map((alias) => [alias, h] as const),
+  ]),
+);
 
 /** Resolves a canonical (lowercase) key spelling to its hotkey action, or `null`. */
 export function resolveHotkey(key: string): HotkeyAction | null {

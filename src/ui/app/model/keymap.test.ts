@@ -32,6 +32,35 @@ describe("resolveKey — global keys (design §3.8)", () => {
     });
   });
 
+  test("Ctrl+B / Ctrl+N -> the previous / next page tab, even while the composer is focused", () => {
+    // C0 control bytes (0x02 / 0x0E) — a single byte no terminal can fail to deliver, unlike a
+    // CSI-encoded ctrl+arrow chord (HANDOFF Finding 3).
+    expect(resolveKey(key({ name: "b", ctrl: true, sequence: "\x02" }), ctx({ focus: "composer" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.prev",
+    });
+    expect(resolveKey(key({ name: "n", ctrl: true, sequence: "\x0e" }), ctx({ focus: "composer" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.next",
+    });
+  });
+
+  test("Ctrl+Left / Ctrl+Right still step pages where the terminal encodes the chord", () => {
+    expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.prev",
+    });
+    expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.next",
+    });
+  });
+
+  test("unmodified arrows are NOT page switches — they stay free for in-surface navigation", () => {
+    expect(resolveKey(key({ name: "left" }), ctx({ focus: "composer" }))).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "right" }), ctx({ focus: "composer" }))).toEqual({ kind: "none" });
+  });
+
   test("Ctrl+E -> export", () => {
     expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\x05" }), ctx({}))).toEqual({
       kind: "action-execute",

@@ -57,6 +57,8 @@ describe("SLASH_COMMANDS registry", () => {
       ["preview.fullscreen", { kind: "local", effect: "fullscreen" }],
       ["preview.retry", { kind: "command", command: "preview.retry" }],
       ["preview.repair", { kind: "local", effect: "compose-repair" }],
+      ["page.prev", { kind: "local", effect: "page-prev" }],
+      ["page.next", { kind: "local", effect: "page-next" }],
       ["preview.tweaks", { kind: "inert" }],
       ["preview.interact", { kind: "inert" }],
       ["export.start", { kind: "command", command: "export.start" }],
@@ -418,5 +420,12 @@ describe("resolveHotkey", () => {
 
   test("an unknown key resolves to null", () => {
     expect(resolveHotkey("x")).toBeNull();
+  });
+
+  test("page stepping resolves from both its canonical key and its arrow alias", () => {
+    expect(resolveHotkey("ctrl+b")?.id).toBe("page.prev");
+    expect(resolveHotkey("ctrl+n")?.id).toBe("page.next");
+    expect(resolveHotkey("ctrl+left")?.id).toBe("page.prev");
+    expect(resolveHotkey("ctrl+right")?.id).toBe("page.next");
   });
 });
