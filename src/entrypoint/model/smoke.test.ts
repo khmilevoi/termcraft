@@ -18,7 +18,7 @@ import {
   createFakeExportRenderPort,
   createFakeHostSupervisorPort,
 } from "core/ports/fakes";
-import type { FakeAgentBackend } from "core/ports/fakes";
+import type { FakeAgentBackend, FakeHostSupervisorPort } from "core/ports/fakes";
 import { createGateRunnerAdapter } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { systemClock } from "infrastructure/clock";
@@ -341,6 +341,12 @@ interface RealComposition {
   readonly kernel: ReturnType<typeof createKernel>;
   readonly open: OpenProject;
   readonly agentBackend: FakeAgentBackend & { lastWorkspacePath(): string | null };
+  /**
+   * The faked host supervisor, exposed so a test can deliver the lifecycle diagnostics no fake
+   * CALL produces — above all `circuitOpened`, which a real host reaches only by crash-looping
+   * a live child (the 2026-07-27 preview render-failure regression).
+   */
+  readonly hostSupervisor: FakeHostSupervisorPort;
   readonly close: () => Promise<void>;
 }
 
@@ -417,6 +423,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
     kernel,
     open,
     agentBackend,
+    hostSupervisor,
     close: async () => {
       await kernel.close();
       await open.close();
@@ -598,4 +605,132 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       await composed.close();
     }
   }, 20_000);
+});
+
+/**
+ * THE REPORTED DEFECT'S REGRESSION GATE (2026-07-27). Opening the app showed
+ * `preparing preview…` forever whenever the current page threw while rendering: the supervisor
+ * correctly reported `PAGE_RENDER_FAILED`, restarted three times and latched its circuit open —
+ * and NOTHING consumed `HostSupervisorPort.onEvent`, so the mirror stayed `ready`, no frame ever
+ * arrived, and `Workspace` fell through to the placeholder.
+ *
+ * Driven through the REAL composition — real store, real Gate, real Kernel, real subscription,
+ * real mirror, real `Workspace` — with only the host process and the agent faked, exactly as this
+ * file's header describes. The page is created by a real committed turn, the same way the §10
+ * smoke above creates it; `hostSupervisor.emit` then stands in for the one thing a faked host
+ * cannot do on its own: die four times over on a session that is already live.
+ */
+describe("the preview render-failure regression (2026-07-27)", () => {
+  test("a host that crash-loops on a LIVE session reaches the UI as a halted preview, never an endless 'preparing preview…'", async () => {
+    const scratch = makeScratchDir("termcraft-crashloop-");
+    const root = path.join(scratch, "project");
+    const composed = await composeRealShell(root, path.join(scratch, "user-state"));
+    const { kernel, agentBackend, hostSupervisor } = composed;
+    const port = toRealKernelPort(kernel);
+
+    let renderer: ReactTestRenderer | null = null;
+    try {
+      const env: UiEnv = { root, workspaceIdentity: root, projectExists: false };
+      const deps = createUiDeps(port, { w: 120, h: 36 }, env, () =>
+        Promise.resolve({ kind: "ready", agent: "claude" }),
+      );
+
+      // ---- A real committed turn, so a real page exists to preview ------------------------
+      const appElement = createElement(App, { deps }) as Parameters<
+        typeof createReactTestRenderer
+      >[0];
+      renderer = await createReactTestRenderer(appElement, { width: 120, height: 36 });
+      await renderer.waitForFrame((frame) => frame.includes("termcraft"));
+      await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
+
+      const projectReady = waitForEvent(
+        kernel,
+        (envelope) =>
+          envelope.kind === "kernel.stateChanged" &&
+          (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+            "kernel.project.finishOpen",
+      );
+      const firstAttemptStarted = waitForEvent(kernel, (e) => e.kind === "turn.attemptStarted");
+      await renderer.act(() => renderer?.mockInput.typeText("build the home page"));
+      await renderer.act(() => renderer?.mockInput.pressEnter());
+      const readyEnvelope = await projectReady;
+      await firstAttemptStarted;
+      expect(readyEnvelope.kind).toBe("kernel.stateChanged");
+      // The App stays MOUNTED for the whole test on purpose: `createUiDeps`'s Kernel
+      // subscription is owned by an atom connect hook (RTM-L01), so unmounting would tear the
+      // mirror's only feed down and every phase below would read a stale `none`.
+
+      const startCall = agentBackend.calls.find((call) => call.method === "startTurn");
+      if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+      const workspacePath = agentBackend.lastWorkspacePath();
+      if (workspacePath === null) throw new Error("fixture bug: no workspace path captured");
+
+      fs.mkdirSync(path.join(workspacePath, "pages"), { recursive: true });
+      fs.writeFileSync(path.join(workspacePath, "pages", "home.tsx"), HOME_PAGE_SOURCE, "utf8");
+      fs.writeFileSync(
+        path.join(workspacePath, "pages.json"),
+        JSON.stringify({ pages: ["home"], active: "home" }),
+        "utf8",
+      );
+      const turnTerminal = waitForEvent(
+        kernel,
+        (envelope) => envelope.kind === "turn.completed" || envelope.kind === "turn.failed",
+      );
+      agentBackend.completeRun(startCall.fence, {
+        kind: "completed",
+        finalText: "Added the home page.",
+        usage: null,
+        sessionId: "crashloop-session",
+      });
+      const terminalEnvelope = await turnTerminal;
+      expect(terminalEnvelope.kind).toBe("turn.completed");
+
+      // ---- A live preview session on that page --------------------------------------------
+      const sessionReady = waitForEvent(kernel, (e) => e.kind === "preview.sessionReady");
+      const selectResult = await kernel.dispatch({
+        protocolVersion: 1,
+        commandId: uuidv7(),
+        expectedRevision: terminalEnvelope.stateRevision,
+        kind: "preview.selectPage",
+        payload: { pageSlug: "home" },
+      });
+      if (selectResult instanceof Error) throw selectResult;
+      const readyPayload = (await sessionReady)
+        .payload as EventPayloadByKindV1["preview.sessionReady"];
+      expect(deps.mirror.preview().phase).toBe("ready");
+
+      // ---- The host crash-loops. BEFORE THE FIX, everything below stayed frozen here ------
+      const circuitOpened = waitForEvent(kernel, (e) => e.kind === "preview.circuitOpened");
+      hostSupervisor.emit({
+        type: "circuitOpened",
+        key: `home@${readyPayload.sourceHash.slice(0, 8)}`,
+        sessionId: readyPayload.previewSessionId,
+        pageSlug: "home",
+        sourceHashPrefix: readyPayload.sourceHash.slice(0, 8),
+        attempts: 4,
+        reason: "restart budget exhausted (3 in 60000ms)",
+        failureCode: "DESIGN_RENDER_FAILED",
+        failureMessage: "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
+      });
+      await circuitOpened;
+      expect(deps.mirror.preview().phase).toBe("circuit-open");
+
+      // Settle React's pending updates, then paint once. `waitForFrame` is NOT used here: the
+      // mirror already holds the final state (asserted above), so there is nothing left to wait
+      // FOR — a predicate that never matched would time out instead of failing on the frame.
+      await renderer.act(() => Promise.resolve());
+      await renderer.renderOnce();
+      const frame = renderer.captureCharFrame();
+      expect(frame).toContain("✗ design threw while rendering");
+      expect(frame).toContain("ctx.spy is not a function");
+      // THE DEFECT, verbatim: the placeholder is gone.
+      expect(frame).not.toContain("preparing preview…");
+      // Both routes out are on screen, and the chat panel says why.
+      expect(frame).toContain("F6");
+      expect(frame).toContain("preview crashed while rendering");
+    } finally {
+      if (renderer !== null) await renderer.destroy();
+      await composed.close();
+    }
+  }, 30_000);
 });

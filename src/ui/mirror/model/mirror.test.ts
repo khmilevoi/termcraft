@@ -1580,3 +1580,40 @@ describe("mirror.previewNotice — the ephemeral halted-preview chat lines", () 
     expect(m.previewNotice()).toBeNull();
   });
 });
+
+// The audit finding this derivation closed (RTM-S02, 2026-07-27): as a hand-set atom the notice
+// was cleared on `sessionReady` and `snapshot` but NOT on `preview.failed`, leaving a stale
+// "preview crashed while rendering" line in the chat underneath the Gate panel.
+describe("mirror.previewNotice — every exit from circuit-open clears it", () => {
+  test("preview.failed clears the notice, not only sessionReady", () => {
+    const m = createMirror();
+    m.apply(
+      event("preview.circuitOpened", {
+        previewSessionId: uuidv7(),
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        attempts: 4,
+        finalFailure: {
+          code: "HOST_CIRCUIT_OPEN",
+          retryable: true,
+          safeMessage: "boom",
+          details: { pageSlug: "main", attempts: 4, hostFailureCode: "DESIGN_RENDER_FAILED" },
+        },
+        retryCapability: { available: true },
+      }),
+    );
+    expect(m.previewNotice()).not.toBeNull();
+
+    m.apply(
+      event("preview.failed", {
+        previewSessionId: uuidv7(),
+        nonce: TEST_NONCE,
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        phase: "starting",
+        failure: failure(),
+      }),
+    );
+    expect(m.previewNotice()).toBeNull();
+  });
+});

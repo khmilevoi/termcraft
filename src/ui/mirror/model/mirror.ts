@@ -1,4 +1,4 @@
-import { type Atom, atom } from "@reatom/core";
+import { type Atom, type Computed, atom, computed } from "@reatom/core";
 
 import {
   type CommandKindV1,
@@ -54,7 +54,7 @@ export interface Mirror {
    * LIVE condition, not a historical fact: it must disappear the moment the preview recovers,
    * which a persisted record could not do.
    */
-  readonly previewNotice: Atom<PreviewNoticeMirror | null>;
+  readonly previewNotice: Computed<PreviewNoticeMirror | null>;
   readonly chats: Atom<ChatsMirror>;
   /**
    * The ACTIVE chat's persisted tail (WP-10 Task 7), fed by `chat.records`. A single bulk-replace
@@ -202,7 +202,19 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
   const pageDescriptors = atom<readonly PageDescriptorV1[]>([], "ui.mirror.pageDescriptors");
   const turn = atom<TurnMirror>(IDLE_TURN, "ui.mirror.turn");
   const preview = atom<PreviewMirror>(NO_PREVIEW, "ui.mirror.preview");
-  const previewNotice = atom<PreviewNoticeMirror | null>(null, "ui.mirror.previewNotice");
+  /**
+   * DERIVED, not a second source (RTM-S02, reatom audit 2026-07-27). A first pass held this as
+   * its own atom, `.set` from three arms of `apply` — and the hand-sync was already incomplete:
+   * `preview.failed` replaced the preview state without clearing the notice, leaving a stale
+   * "preview crashed while rendering" line in the chat under the Gate panel. As a computed the
+   * notice cannot drift from the phase it describes, and every clear falls out for free.
+   */
+  const previewNotice = computed<PreviewNoticeMirror | null>(() => {
+    const current = preview();
+    return current.phase === "circuit-open"
+      ? previewNoticeFor(current.attempts, current.finalFailure)
+      : null;
+  }, "ui.mirror.previewNotice");
   const chats = atom<ChatsMirror>({ activeChatId: null, summaries: new Map() }, "ui.mirror.chats");
   const records = atom<readonly ChatRecord[]>([], "ui.mirror.records");
   const pinsByPage = atom<ReadonlyMap<string, readonly PinDtoV1[]>>(
@@ -299,7 +311,6 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         // it — there is no replay (§9), so a subscription started mid-turn simply starts idle.
         turn.set(IDLE_TURN);
         preview.set(NO_PREVIEW);
-        previewNotice.set(null);
         selection.set(null);
         exportAtom.set(IDLE_EXPORT);
         pinsByPage.set(new Map());
@@ -531,9 +542,6 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           interactionMode: p.interactionMode,
           theme: p.theme,
         });
-        // The notice describes a LIVE condition. Leaving it up once the preview recovers would
-        // make the chat claim a crash that no longer holds.
-        previewNotice.set(null);
         return;
       }
       case "preview.sourceChanged": {
@@ -572,7 +580,6 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           finalFailure: p.finalFailure,
           retryAvailable: p.retryCapability.available,
         });
-        previewNotice.set(previewNoticeFor(p.attempts, p.finalFailure));
         return;
       }
       case "chat.changed": {

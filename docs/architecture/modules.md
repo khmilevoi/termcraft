@@ -147,6 +147,12 @@ constructs a real `Kernel` for interactive mode, and `demo` mode alone still run
   `preview.retry` reachable — the retry reissues the spec the established session
   was started with and republishes the same readiness pair on success, so a
   recovered preview leaves the shell's error panel instead of streaming behind it;
+  the Kernel additionally SUBSCRIBES to `HostSupervisorPort.onEvent`, the sink that
+  had no production consumer at all, so a session that established fine and then
+  crash-looped reaches the shell as the same `preview.circuitOpened` instead of
+  latching open in silence behind an endless `preparing preview…`, carrying the
+  failing incarnation's own code so the shell can tell a page that threw from a host
+  that never ran it;
   `export.start` composes
   `core/export`'s capture → render → assemble → publish chain for real (MVP gap
   closeout, Gap B), driving `HandlerContext.exportRunner.machine` (the full export
