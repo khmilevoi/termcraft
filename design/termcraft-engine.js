@@ -1177,6 +1177,90 @@ export class Engine {
                  :[['F5','retry','dis'],['F6','repair'],['F2','full'],['F3','tweaks']]});
     return this.render(b); }
 
+  // ---- 12 host unavailable · the preview never ran ----
+  // Same end state as wsHostCrash — circuit latched open, empty pane — but the design is not
+  // implicated: the host child never got far enough to run it (spawn, handshake, mount, exit,
+  // transport, heartbeat, or a protocol-class rejection). wsHostCrash cannot be reused: its
+  // headline blames the design, its 4×/3-restart tally is false for the deterministic classes,
+  // and its F6 repair route writes a page edit that cannot fix an environment. So F6 is not
+  // named here at all, and the frame carries three distinctions that survive it alone —
+  // the title reads `preview host · unavailable`, the second line explicitly *clears* the page
+  // (✓ unchanged and not implicated, so a reader does not go edit a file that is fine), and the
+  // status mode chip reads ` NO HOST ` rather than iteration 8's ` HALTED ` (which stays as the
+  // render-crash chip). Facts drawn are only what the runtime supplies: code, optional bounded
+  // message, attempt counts, retry availability.
+  //
+  // Code + message render together as a labelled two-column slot. The code is always shown raw
+  // (it is the stable thing a user can quote) and is always followed by one derived phrase from
+  // the closed table below — implementation supplies no prose beyond this table. The runtime's
+  // own message, when it adds something, wraps under the phrase behind a ┊ gutter; when it adds
+  // nothing it is simply absent and no gutter is drawn, so nothing looks withheld.
+  //
+  // The attempt line is numeric first so it reads correctly for both classes — `4 starts ·
+  // 3 automatic restarts` (transient, budget spent) and `1 start · 0 automatic restarts`
+  // (deterministic, opened on the first failure) — with the class stated on the line under it.
+  //
+  // Routes out: F5 retry host, the only real key here, plus a plain statement that the agent
+  // cannot start a host (the composer stays enabled, but nothing written into it is a fix).
+  // o.retry===false draws F5 disabled with its reason and 'dis' in the status key row; the
+  // frame then says plainly that the preview is gone for the session rather than softening it.
+  hostFailPhrase(code){ return ({
+    SPAWN_FAILED:'the host process could not be started',
+    HANDSHAKE_TIMEOUT:'the host started but never answered',
+    MOUNT_TIMEOUT:'the host started but never reported a mount',
+    CHILD_EXITED:'the host exited before it could render',
+    TRANSPORT_ERROR:'the connection to the host broke',
+    HEARTBEAT_TIMEOUT:'the host stopped answering',
+    RUNTIME_INTEGRITY_MISMATCH:'the host runtime does not match this build',
+    KIT_API_MISMATCH:'the host speaks a different kit API',
+    SOURCE_HASH_MISMATCH:'the host loaded a different source',
+    PROTOCOL_NEGOTIATION_FAILED:'host and termcraft could not agree a protocol'
+  })[code]||'the host could not be used'; }
+
+  wsHostUnavailable(w,h,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const retry=o.retry!==false;
+    const code=o.code||'MOUNT_TIMEOUT', phrase=this.hostFailPhrase(code), msg=o.msg||'';
+    const starts=o.starts!==undefined?o.starts:4, restarts=o.restarts!==undefined?o.restarts:3;
+    const s=this.paneShell(b,w,h,{right:'main · Current design · uncommitted',rightFg:P.amberHi,rightBold:true});
+    const bw=Math.min(s.dw-6,68), col=10, cwid=bw-6-col;
+    const mLines=msg?this.wrapLines(msg,cwid):[];
+    const bh=mLines.length+18;
+    const bx=s.dx+Math.floor((s.dw-bw)/2), by=s.dy+Math.max(0,Math.floor((s.dh-bh)/2));
+    this.fillRect(b,bx,by,bw,bh,{ch:' ',bg:P.bg});
+    this.box(b,bx,by,bw,bh,{title:'preview host · unavailable',fg:P.red,titleFg:P.red,bg:P.bg});
+    const lx=bx+3; let y=by+2;
+    this.text(b,lx,y,'✗ preview host unavailable — your design was never run',{fg:P.red,bold:true,bg:P.bg}); y++;
+    this.put(b,lx,y,'✓',{fg:P.green,bg:P.bg});
+    this.text(b,lx+2,y,'main · unchanged and not implicated — nothing to fix here',{fg:P.dim,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'failure',{fg:P.dim,bg:P.bg});
+    this.text(b,lx+col,y,code,{fg:P.fg,bold:true,bg:P.bg}); y++;
+    this.text(b,lx+col,y,phrase,{fg:P.dim,bg:P.bg}); y++;
+    mLines.forEach(l=>{ this.put(b,lx+col-2,y,'┊',{fg:P.amberDim,bg:P.bg}); this.text(b,lx+col,y,l,{fg:P.fg,bg:P.bg}); y++; });
+    y++;
+    this.text(b,lx,y,'attempts',{fg:P.dim,bg:P.bg});
+    this.text(b,lx+col,y,starts+(starts===1?' start · ':' starts · ')+restarts+' automatic restart'+(restarts===1?'':'s'),{fg:P.fg,bg:P.bg}); y++;
+    this.text(b,lx+col,y,restarts?'every start failed the same way':'deterministic — a restart cannot change it',{fg:P.dim,bg:P.bg}); y+=2;
+    this.text(b,lx,y,retry?'the restart circuit is open — no preview until a host starts'
+                          :'the restart circuit is open — no preview for this session',{fg:P.dim,bg:P.bg}); y++;
+    this.hline(b,bx+1,y,bw-2,{fg:P.line}); this.put(b,bx,y,'├',{fg:P.red}); this.put(b,bx+bw-1,y,'┤',{fg:P.red}); y++;
+    this.text(b,lx,y,'F5',{fg:retry?P.amber:P.faint,bold:retry,bg:P.bg});
+    this.text(b,lx+4,y,'retry host',{fg:retry?P.amberHi:P.faint,bold:retry,bg:P.bg});
+    this.text(b,lx+20,y,retry?'start a new host and mount again':'no host can be started in this session',{fg:retry?P.dim:P.faint,bg:P.bg}); y++;
+    this.text(b,lx+20,y,retry?'the cause may still be present':'nothing in this pane will bring it back',{fg:P.faint,bg:P.bg}); y+=2;
+    this.text(b,lx,y,retry?'talking to the agent cannot start a host'
+                          :'the composer stays live — but this is not the agent\'s to fix',{fg:P.faint,bg:P.bg});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'tighten the spacing in the process table'},{gap:1},
+      {role:'● codex'},{status:'✓ wrote main/page.tsx',c:P.dim},{status:'✓ Gate accepted',c:P.dim},{gap:1},
+      {system:'✗ preview host unavailable — '+code,c:P.red},
+      {system:'the design was never run — nothing in it to repair',c:P.faint} ],
+      attach: retry?'F5 retries the host · agent can\'t fix it':'no host this session · composer is live',
+      attachFg:P.amberHi, placeholder:'ask about anything else…', composerMeta:{model:'codex · gpt5.5 · high',ctx:46}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · Current design · uncommitted',verFg:P.amberHi,verBold:true,
+      hint:'host unavailable',hintFg:P.red,hintBg:P.redDim,mode:{t:' NO HOST ',fg:P.bg,bg:P.red,bold:true},
+      keys: retry?[['F5','retry'],['F2','full'],['F3','tweaks']]
+                 :[['F5','retry','dis'],['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
   // ---- 25 commit commands (v1) ----
   // Composer shows /commit typed; the slash menu filters to the three commit commands.
   wsCommitCommands(w,h){ return this.wsSlash(w,h,'/commit',{ctx:44}); }
