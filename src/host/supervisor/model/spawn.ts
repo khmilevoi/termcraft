@@ -76,8 +76,9 @@ function removeScratchDir(directory: string): void {
 }
 
 /**
- * Delete abandoned `termcraft-host-*` directories left by earlier runs (HANDOFF Finding 5: 899 of
- * them had accumulated). Call ONCE per process, from the composition root — never per spawn.
+ * Delete abandoned `termcraft-host-*` directories left by earlier runs (HANDOFF Finding 5 flagged
+ * the accumulation; the one-time sweep run for this fix found 922 in `%TEMP%`, 336 of them not
+ * even empty). Call ONCE per process, from the composition root — never per spawn.
  *
  * A run that dies without reaping — a crash, a kill, a power loss — cannot delete its own
  * directory on exit, so the per-child cleanup below can never be complete on its own.
@@ -146,8 +147,13 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
         trace("host.spawn", { scratch, cmd: command.cmd });
         // The scratch dir is this child's cwd, so it can only go once the child is gone.
         // `exited` resolves on every ending — clean exit, SIGTERM from the supervisor's own
-        // forced stop, or a crash.
-        void proc.exited.then(() => removeScratchDir(scratch));
+        // forced stop, or a crash. Both arms of `.then` are handled, not just the fulfilled one:
+        // an unhandled rejection here would reach `process-boundary.ts`'s own
+        // `unhandledRejection` listener and take down the whole live session over housekeeping.
+        void proc.exited.then(
+          () => removeScratchDir(scratch),
+          (cause) => console.warn(`host: scratch cleanup skipped for ${scratch} — exited rejected`, cause),
+        );
         return proc as unknown as SpawnedChild;
       } catch (cause) {
         return new SupervisorError({
