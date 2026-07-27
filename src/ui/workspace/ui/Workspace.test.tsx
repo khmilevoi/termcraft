@@ -826,12 +826,14 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
     expect(allText(rows)).not.toContain("preparing preview…");
   });
 
-  test("a host that never ran the page keeps the neutral panel — it must not be accused", async () => {
-    // AWAITING DESIGN ITERATION 9. Until its frame exists this stays on the panel that has
-    // always served the state; what this pins is that `wsHostCrash` is NOT reused here.
+  test("a host that never ran the page gets wsHostUnavailable, which clears the page of blame", async () => {
     const rows = await renderWith(circuitOpened({ hostFailureCode: "SPAWN_FAILED" }));
     expect(findRun(rows, "✗ design threw while rendering")).toBeUndefined();
-    expect(findRun(rows, "preview stopped after repeated failures")).toBeDefined();
+    expect(findRun(rows, "preview host · unavailable")).toBeDefined();
+    expect(findRun(rows, "your design was never run")).toBeDefined();
+    expect(findRun(rows, "the host process could not be started")).toBeDefined();
+    // No repair is offered — no page edit could make a spawn succeed.
+    expect(allText(rows)).not.toContain("F6");
   });
 
   test("the status bar wears the HALTED chip, the render-crashed hint and both keys", async () => {
@@ -842,6 +844,18 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
     expect(findRun(rows, "render crashed")).toBeDefined();
     expect(text).toContain("F5");
     expect(text).toContain("F6");
+  });
+
+  test("a host-unavailable state wears NO HOST, its own hint, and offers no repair anywhere", async () => {
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "MOUNT_TIMEOUT" }));
+    const text = allText(rows);
+    expect(text).toContain("NO HOST");
+    expect(text).not.toContain("HALTED");
+    expect(findRun(rows, "host unavailable")).toBeDefined();
+    expect(findRun(rows, "render crashed")).toBeUndefined();
+    expect(text).toContain("F5");
+    expect(text).not.toContain("F6");
+    expect(findRun(rows, "F5 retries the host · agent can't fix it")).toBeDefined();
   });
 
   test("the composer offers the repair key, worded for whether retry survives", async () => {

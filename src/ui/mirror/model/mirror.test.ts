@@ -1537,13 +1537,19 @@ describe("mirror.previewNotice — the ephemeral halted-preview chat lines", () 
     );
   });
 
-  test("a host that never ran the page gets lines that do not blame the design", () => {
+  test("a host that never ran the page gets wsHostUnavailable's lines, naming the raw code", () => {
     const m = createMirror();
     m.apply(circuitOpened("SPAWN_FAILED", 4));
     const notice = m.previewNotice();
-    expect(notice?.headline).toBe("✗ the preview host stopped — no preview");
-    expect(notice?.detail).toBe("the design was never run; this is not a fault in the page");
+    expect(notice?.headline).toBe("✗ preview host unavailable — SPAWN_FAILED");
+    expect(notice?.detail).toBe("the design was never run — nothing in it to repair");
     expect(notice?.detail).not.toContain("Gate");
+  });
+
+  test("names UNKNOWN rather than trailing a dangling dash when no code was carried", () => {
+    const m = createMirror();
+    m.apply(circuitOpened(undefined, 4));
+    expect(m.previewNotice()?.headline).toBe("✗ preview host unavailable — UNKNOWN");
   });
 
   test("sessionReady clears it — the notice describes a live condition, not a past one", () => {

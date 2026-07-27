@@ -20,7 +20,8 @@ export {
 } from "./model/interaction";
 export type { Point, Rect, SelectionCorners } from "./model/overlay";
 export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
-export { isDesignRenderFailure } from "./model/failure-class";
+export { hostFailureCodeOf, isDesignRenderFailure } from "./model/failure-class";
+export { hostFailurePhrase } from "./model/host-failure-phrase";
 export type { RepairPromptInput } from "./model/repair-prompt";
 export { buildRepairPrompt, relativePageSourcePath } from "./model/repair-prompt";
 
@@ -34,5 +35,7 @@ export type { ErrorPanelProps } from "./ui/ErrorPanel";
 export { ErrorPanel } from "./ui/ErrorPanel";
 export type { HostCrashPanelProps } from "./ui/HostCrashPanel";
 export { HostCrashPanel } from "./ui/HostCrashPanel";
+export type { HostUnavailablePanelProps } from "./ui/HostUnavailablePanel";
+export { HostUnavailablePanel } from "./ui/HostUnavailablePanel";
 export type { EnlargePlaceholderProps, EnlargePlaceholderSize } from "./ui/EnlargePlaceholder";
 export { EnlargePlaceholder } from "./ui/EnlargePlaceholder";

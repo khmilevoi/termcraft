@@ -256,16 +256,36 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
       slashOpen: false,
     } as const;
 
-    test("a crashed preview offers the repair key, retry-aware", () => {
-      expect(deriveComposerAttach({ ...idle, previewCrashed: { retryAvailable: true } })).toEqual({
-        text: "F6 writes the fix · or type your own",
-        fg: "amberHi",
-      });
+    test("a page that threw offers the repair key, retry-aware", () => {
+      expect(
+        deriveComposerAttach({
+          ...idle,
+          previewCrashed: { retryAvailable: true, designAtFault: true },
+        }),
+      ).toEqual({ text: "F6 writes the fix · or type your own", fg: "amberHi" });
 
-      expect(deriveComposerAttach({ ...idle, previewCrashed: { retryAvailable: false } })).toEqual({
-        text: "F6 writes the fix — retry unavailable",
-        fg: "amberHi",
-      });
+      expect(
+        deriveComposerAttach({
+          ...idle,
+          previewCrashed: { retryAvailable: false, designAtFault: true },
+        }),
+      ).toEqual({ text: "F6 writes the fix — retry unavailable", fg: "amberHi" });
+    });
+
+    test("a host that never ran the page offers no repair at all (wsHostUnavailable)", () => {
+      expect(
+        deriveComposerAttach({
+          ...idle,
+          previewCrashed: { retryAvailable: true, designAtFault: false },
+        }),
+      ).toEqual({ text: "F5 retries the host · agent can't fix it", fg: "amberHi" });
+
+      expect(
+        deriveComposerAttach({
+          ...idle,
+          previewCrashed: { retryAvailable: false, designAtFault: false },
+        }),
+      ).toEqual({ text: "no host this session · composer is live", fg: "amberHi" });
     });
 
     test("a running turn outranks the crash line — it contradicts an offer to send", () => {
@@ -274,7 +294,7 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
           ...idle,
           turnRunning: true,
           composerValue: "draft",
-          previewCrashed: { retryAvailable: true },
+          previewCrashed: { retryAvailable: true, designAtFault: true },
         }),
       ).toEqual({ text: "⏎ send disabled — draft kept", fg: "amberHi" });
     });

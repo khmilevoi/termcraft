@@ -48,7 +48,11 @@ export interface ComposerAttachInput {
    * required would force fifteen unrelated fixtures to spell out a `null` that says nothing
    * about what each of them is testing.
    */
-  readonly previewCrashed?: null | { readonly retryAvailable: boolean };
+  readonly previewCrashed?: null | {
+    readonly retryAvailable: boolean;
+    /** Whether the PAGE threw (`wsHostCrash`) or the host never ran it (`wsHostUnavailable`). */
+    readonly designAtFault: boolean;
+  };
 }
 
 /**
@@ -73,11 +77,13 @@ export interface ComposerAttachInput {
  *   plainer `workspace(w,h,'gen')`/`drawChat` path (`:198-256`) shows no attach line at all for
  *   this state, only the faint placeholder — matching the same `03-workspace-generating.dc.html`
  *   prose: "Empty, it shows the faint ❯ generating… esc to cancel placeholder with no caret."
- * - **no turn running and the preview host has halted** — `F6 writes the fix · or type your own`,
- *   or `F6 writes the fix — retry unavailable` once `F5` is gone (`wsHostCrash`'s own `attach`,
- *   `design/termcraft-engine.js`). Ranked LAST deliberately: every turn-time line above it must
- *   win, because `⏎ send disabled — draft kept` contradicts a line offering to write something
- *   the user can send.
+ * - **no turn running and the preview host has halted** — one of four lines, by whether the PAGE
+ *   is at fault and whether retry survives: `F6 writes the fix · or type your own` /
+ *   `F6 writes the fix — retry unavailable` (`wsHostCrash`), or
+ *   `F5 retries the host · agent can't fix it` / `no host this session · composer is live`
+ *   (`wsHostUnavailable`, which offers no repair at all). Ranked LAST deliberately: every
+ *   turn-time line above it must win, because `⏎ send disabled — draft kept` contradicts a line
+ *   offering to write something the user can send.
  * - **none of the above** — `null` (Composer hides the line).
  *
  * GAP (finding §2.5, phase-8 Task 16, flagged not invented): design never draws open pins
@@ -136,10 +142,21 @@ export function deriveComposerAttach(
   // LAST on purpose: every branch above must win. `⏎ send disabled — draft kept` in particular
   // directly contradicts a line offering to write something the user can send.
   if (input.previewCrashed != null) {
+    const { retryAvailable, designAtFault } = input.previewCrashed;
+    if (designAtFault) {
+      return {
+        text: retryAvailable
+          ? "F6 writes the fix · or type your own"
+          : "F6 writes the fix — retry unavailable",
+        fg: "amberHi",
+      };
+    }
+    // `wsHostUnavailable`'s own attach: no repair is offered, and the second variant says so
+    // rather than softening it.
     return {
-      text: input.previewCrashed.retryAvailable
-        ? "F6 writes the fix · or type your own"
-        : "F6 writes the fix — retry unavailable",
+      text: retryAvailable
+        ? "F5 retries the host · agent can't fix it"
+        : "no host this session · composer is live",
       fg: "amberHi",
     };
   }

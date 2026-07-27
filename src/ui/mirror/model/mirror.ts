@@ -11,7 +11,7 @@ import {
   isUuidv7,
 } from "core/protocol";
 import type { AnyEventEnvelope } from "ui/kernel";
-import { isDesignRenderFailure } from "ui/preview";
+import { hostFailureCodeOf, isDesignRenderFailure } from "ui/preview";
 
 import type {
   AgentIdentity,
@@ -159,21 +159,22 @@ function seedOrPreserveClock(
 }
 
 /**
- * The chat-panel lines for a halted preview. Design `wsHostCrash`'s own `chatSeq` system entries
- * are written for the case the design drew — the page threw, after a budgeted crash-loop:
- * `✗ preview crashed while rendering — halted after 3 restarts` / `the design passed Gate; the
- * host died running it`.
+ * The chat-panel lines for a halted preview — each screen's own `chatSeq` system entries,
+ * verbatim from the design: `wsHostCrash` when the page threw, `wsHostUnavailable` when the host
+ * never ran it (spec §3.2.1).
  *
- * Neither sentence is true when the host died before it ever ran the page (spec §3.2.1), and the
- * restart count is not 3 when a deterministic failure opened the circuit on the first try. Both
- * cases get honest wording instead. The non-render-crash lines are placeholders in the same
- * sense the panel is: design iteration 9 supersedes them.
+ * The ONE thing not taken verbatim is the restart count. The design's line is written for the
+ * budgeted loop ("halted after 3 restarts"); a deterministic failure opens the circuit on the
+ * first try, and "halted after 0 restarts" would describe a loop that never happened.
  */
 function previewNoticeFor(attempts: number, finalFailure: FailureDtoV1): PreviewNoticeMirror {
   if (!isDesignRenderFailure(finalFailure)) {
+    // `wsHostUnavailable`'s own `chatSeq` system lines. The headline names the raw code, which
+    // is the stable thing a user can quote; `UNKNOWN` stands in when the event carried none
+    // rather than dropping the line's second half and leaving a dangling dash.
     return {
-      headline: "✗ the preview host stopped — no preview",
-      detail: "the design was never run; this is not a fault in the page",
+      headline: `✗ preview host unavailable — ${hostFailureCodeOf(finalFailure) ?? "UNKNOWN"}`,
+      detail: "the design was never run — nothing in it to repair",
     };
   }
   const restarts = Math.max(attempts - 1, 0);

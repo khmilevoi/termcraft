@@ -24,3 +24,13 @@ const DESIGN_RENDER_FAILED = "DESIGN_RENDER_FAILED";
 export function isDesignRenderFailure(finalFailure: FailureDtoV1): boolean {
   return finalFailure.details.hostFailureCode === DESIGN_RENDER_FAILED;
 }
+
+/**
+ * The failing incarnation's own code, or `undefined` when the event carried none. The one reader
+ * of `details.hostFailureCode` besides {@link isDesignRenderFailure} — `wsHostUnavailable` shows
+ * it raw, because a stable identifier is the thing a user can actually quote when asking for help.
+ */
+export function hostFailureCodeOf(finalFailure: FailureDtoV1): string | undefined {
+  const code = finalFailure.details.hostFailureCode;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
