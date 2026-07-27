@@ -2,6 +2,7 @@ import * as errore from "errore";
 
 import type { AgentRun, AgentRunOutcome } from "agent/types";
 import type { TurnFence } from "entities/turn";
+import { trace } from "infrastructure/debug-log";
 
 import type { NaturalOutcome, RunDeps, RunDriver, RunSink } from "../types";
 import { createEventQueue } from "./event-queue";
@@ -91,6 +92,9 @@ export function startAgentRun(
    */
   async function resolveWithExitConfirm(outcome: AgentRunOutcome): Promise<void> {
     if (await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs)) {
+      // DIAGNOSTIC (infrastructure/debug-log): the run terminal outcome, once the process tree exit
+      // is actually confirmed -- this is what run-turn.ts eventually reads as this attempt result.
+      trace("agent.run.exitConfirm", { turnId: fence.turnId, confirmed: true, outcome });
       resolveOutcome(outcome);
       return;
     }
@@ -98,6 +102,14 @@ export function startAgentRun(
       `agent/run: exit not confirmed after natural ${outcome.kind}, escalating to terminate() before reporting an outcome`,
     );
     const reconfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs);
+    // DIAGNOSTIC (infrastructure/debug-log): the run terminal outcome after escalating to a hard kill
+    // because the first poll could not confirm exit -- records whether the escalation itself confirmed,
+    // so a claimed outcome that diverges from the confirmed process exit is visible here.
+    trace("agent.run.exitConfirm", {
+      turnId: fence.turnId,
+      confirmed: reconfirmed,
+      outcome: reconfirmed ? outcome : { kind: "unconfirmed-exit" },
+    });
     resolveOutcome(reconfirmed ? outcome : { kind: "unconfirmed-exit" });
   }
 
@@ -111,6 +123,10 @@ export function startAgentRun(
     },
     complete: (outcome, finalEvents) => {
       if (!latch("natural")) return; // cancel already won (late-event drop, §6.4)
+      // DIAGNOSTIC (infrastructure/debug-log): the natural outcome a driver claimed for this fenced
+      // run, before exit confirmation -- pairs with "agent.run.exitConfirm" below to show whether the
+      // claimed outcome and the confirmed process exit ever diverged.
+      trace("agent.run.outcomeClaimed", { turnId: fence.turnId, attempt: fence.attempt, outcome });
       for (const event of finalEvents ?? []) queue.push(event);
       queue.finish();
       claimed = outcome;
@@ -131,6 +147,9 @@ export function startAgentRun(
       // Backstop only: a driver is expected to convert its own boundary throws.
       console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause));
       if (latch("natural")) {
+        // DIAGNOSTIC (infrastructure/debug-log): the driver threw past its own boundary -- a bug in the
+        // vendor adapter, not an ordinary agent failure. This backstop path is expected to be rare.
+        trace("agent.run.driverThrew", { turnId: fence.turnId, reason: describeThrown(cause) });
         const driverError = new RunDriverError({ reason: describeThrown(cause), cause });
         queue.push({ kind: "error", message: driverError.message });
         queue.finish();
@@ -228,6 +247,10 @@ export function startAgentRun(
    *     missing.
    */
   async function runCancelLadder(): Promise<void> {
+    // DIAGNOSTIC (infrastructure/debug-log): marks the moment a cancel actually starts the ladder
+    // (rung 1) -- distinct from the moment cancel() is called, since a raced natural completion can
+    // win the latch before the ladder ever runs.
+    trace("agent.run.cancelStarted", { turnId: fence.turnId });
     deps.abortController.abort(new TurnAbortError({})); // rung 1
 
     if (!latch("cancelled")) {
@@ -240,12 +263,18 @@ export function startAgentRun(
 
     if (await confirmExit(deps.processTree, deps.wait, confirmTimeoutMs)) {
       // rung 2
+      // DIAGNOSTIC (infrastructure/debug-log): rung 2 confirmed the process tree exited after a
+      // graceful abort -- the common, successful cancel path.
+      trace("agent.run.cancelResolved", { turnId: fence.turnId, rung: 2, exitConfirmed: true });
       resolveOutcome({ kind: "cancelled", exitConfirmed: true });
       return;
     }
 
     // rung 4 (hard kill) — rung 3 is the documented gap above.
     const confirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs);
+    // DIAGNOSTIC (infrastructure/debug-log): rung 4 -- the graceful path did not confirm exit
+    // within the deadline, so the ladder escalated to a hard kill; records whether that confirmed.
+    trace("agent.run.cancelResolved", { turnId: fence.turnId, rung: 4, exitConfirmed: confirmed });
     resolveOutcome(
       confirmed ? { kind: "cancelled", exitConfirmed: true } : { kind: "unconfirmed-exit" },
     );

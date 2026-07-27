@@ -8,6 +8,7 @@ import type {
   TurnTransactionService,
 } from "core/ports";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
+import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 /**
@@ -179,7 +180,17 @@ export async function terminalizeTurn(
   input: TerminalizeTurnInputV1,
 ): Promise<TerminalizeTurnResultV1> {
   const finished = deps.machine.apply("finishTerminalization");
-  if (finished.kind === "illegal") return { kind: "illegal", code: finished.code };
+  if (finished.kind === "illegal") {
+    // DIAGNOSTIC (infrastructure/debug-log): terminalize refused at its own entry transition --
+    // should be unreachable by construction (run-turn.ts own header), worth its own marker if it
+    // ever fires.
+    trace("core.turns.terminalize.outcome", {
+      turnId: input.turnId,
+      kind: "illegal",
+      code: finished.code,
+    });
+    return { kind: "illegal", code: finished.code };
+  }
 
   const record = buildTerminalRecord(input);
   const result = await wrap(
@@ -202,7 +213,28 @@ export async function terminalizeTurn(
   await retireIfCandidateFrozen(deps.staging, input.candidateRoot);
 
   if ("code" in result) {
+    // DIAGNOSTIC (infrastructure/debug-log): the terminal record's own append failed -- the turn
+    // still settled to idle, but the text below was never durably recorded; startup orphan recovery
+    // is what eventually retries this.
+    trace("core.turns.terminalize.outcome", {
+      turnId: input.turnId,
+      kind: "unrecorded",
+      outcome: input.outcome,
+      reason: input.reason,
+      text: input.text,
+      failure: result,
+    });
     return { kind: "unrecorded", failure: result, outcome: input.outcome, reason: input.reason };
   }
+  // DIAGNOSTIC (infrastructure/debug-log): the turn terminal record landed durably -- the exact
+  // text/outcome/reason this turn ended with (cancelled, error, stale, interrupted).
+  trace("core.turns.terminalize.outcome", {
+    turnId: input.turnId,
+    kind: "recorded",
+    outcome: input.outcome,
+    reason: input.reason,
+    text: input.text,
+    commit: result,
+  });
   return { kind: "recorded", commit: result, outcome: input.outcome, reason: input.reason };
 }

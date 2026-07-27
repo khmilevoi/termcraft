@@ -11,6 +11,7 @@ import type {
   BackendCapabilities,
   SessionScopeInput,
 } from "agent/types";
+import { trace } from "infrastructure/debug-log";
 import { ProcessTreeError } from "infrastructure/process";
 
 import { CLAUDE_BACKEND_ID } from "./backend-id";
@@ -37,6 +38,13 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
   return {
     startTurn(task: AgentTask): AgentRun {
       if (unhealthy.isLatched()) {
+        // DIAGNOSTIC (infrastructure/debug-log): a turn was refused outright because a prior run exit
+        // was never confirmed (§6.5) -- the turn never reaches the agent at all.
+        trace("agent.claude.backend.startTurnRefused", {
+          turnId: task.fence.turnId,
+          attempt: task.fence.attempt,
+          reason: "unhealthy-unconfirmed-exit",
+        });
         return createDegradedRun(
           task.fence,
           "backend is unhealthy: a prior run's exit was never confirmed (§6.5)",
@@ -50,6 +58,13 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
           "agent/claude-backend: processTreeFactory failed, run degraded:",
           tree.message,
         );
+        // DIAGNOSTIC (infrastructure/debug-log): a turn was refused outright because acquiring the
+        // process tree failed -- the turn never reaches the agent at all.
+        trace("agent.claude.backend.startTurnRefused", {
+          turnId: task.fence.turnId,
+          attempt: task.fence.attempt,
+          reason: "processTreeFactory failed: " + tree.message,
+        });
         return createDegradedRun(task.fence, tree.message);
       }
 
@@ -58,6 +73,17 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         processTree: tree,
         pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
         hasReparsePoint: deps.hasReparsePoint,
+      });
+
+      // DIAGNOSTIC (infrastructure/debug-log): the turn this backend is about to actually run through
+      // the SDK -- the entry point for "agent work" from the port's own perspective.
+      trace("agent.claude.backend.startTurn", {
+        turnId: task.fence.turnId,
+        attempt: task.fence.attempt,
+        model: task.model,
+        effort: task.effort,
+        sessionKind: task.session.kind,
+        workspacePath: task.workspacePath,
       });
 
       const { run, cancel } = startAgentRun(
@@ -79,6 +105,14 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
       // rejects, and it only settles AFTER exit confirmation has finished
       // reading `activeProcesses()`, so this cannot race that read.
       void run.outcome.then((outcome) => {
+        // DIAGNOSTIC (infrastructure/debug-log): this run final outcome, at the exact point the backend
+        // closes its process tree -- ties together every trace this run produced upstream
+        // (driver/engine/attempt) with what the backend itself decided to do about it.
+        trace("agent.claude.backend.runSettled", {
+          turnId: task.fence.turnId,
+          attempt: task.fence.attempt,
+          outcome,
+        });
         tree.close();
         unhealthy.noteOutcome(outcome);
       });
@@ -97,11 +131,16 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         // Report the latch instead of probing: a probe would spawn a fresh,
         // unrelated CLI that can only attest to its OWN health, never to
         // whether the stale tree is gone.
-        return Promise.resolve({
+        const info: AgentInfo = {
           backendId: CLAUDE_BACKEND_ID,
           health: { status: "unhealthy-unconfirmed-exit" },
           account: null,
-        });
+        };
+        // DIAGNOSTIC (infrastructure/debug-log): healthCheck reported the latch instead of probing --
+        // see the branch's own comment for why. `source` distinguishes this from a real probe verdict
+        // below, since all three call sites share one channel.
+        trace("agent.claude.backend.healthCheck", { source: "latched", ...info });
+        return Promise.resolve(info);
       }
       const tree = deps.processTreeFactory();
       if (tree instanceof ProcessTreeError) {
@@ -116,11 +155,20 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         return probeClaudeHealth(deps.queryFn, {
           abortController: new AbortController(),
           processTree: null,
+        }).then((info) => {
+          // DIAGNOSTIC (infrastructure/debug-log): the probe verdict for this healthCheck call, run
+          // without process-tree adoption because no tree could be created (see the branch above).
+          trace("agent.claude.backend.healthCheck", { source: "probe-no-tree", ...info });
+          return info;
         });
       }
       return probeClaudeHealth(deps.queryFn, {
         abortController: new AbortController(),
         processTree: tree,
+      }).then((info) => {
+        // DIAGNOSTIC (infrastructure/debug-log): the probe verdict for an ordinary healthCheck call.
+        trace("agent.claude.backend.healthCheck", { source: "probe", ...info });
+        return info;
       });
     },
 

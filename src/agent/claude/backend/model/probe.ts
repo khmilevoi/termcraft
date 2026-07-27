@@ -10,6 +10,7 @@ import { createConfinementPolicy } from "agent/confinement";
 import { runHealthProbe } from "agent/health";
 import type { HealthProbeDeps } from "agent/health";
 import type { AgentInfo } from "agent/types";
+import { trace } from "infrastructure/debug-log";
 
 import { CLAUDE_BACKEND_ID } from "./backend-id";
 
@@ -144,8 +145,10 @@ async function readUntilClassified(
 ): Promise<AgentInfo | null> {
   const stream = queryFn({ prompt: "ping", options: buildProbeOptions(deps) });
   let verdict: AgentInfo | null = null;
+  let messageCount = 0;
   try {
     for await (const msg of stream) {
+      messageCount++;
       verdict = classifyMessage(msg);
       if (verdict !== null) break;
     }
@@ -156,6 +159,9 @@ async function readUntilClassified(
       describeThrown(cause),
     );
   }
+  // DIAGNOSTIC (infrastructure/debug-log): the Claude-specific classification this probe reached
+  // (or did not) -- how many ping messages it took, and the verdict runHealthProbe will act on.
+  trace("agent.claude.probe.classified", { messageCount, verdict });
   // Fired only once the verdict (or a clean stream end) has fully left the
   // loop above, never while `for await` is still mid-iteration.
   if (verdict !== null) deps.abortController.abort(new ProbeClassifiedAbortError({}));

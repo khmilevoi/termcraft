@@ -3,6 +3,7 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { CLAUDE_CONFINEMENT_TABLES, CLAUDE_DISALLOWED_TOOLS } from "agent/claude/tools";
 import { createConfinementPolicy } from "agent/confinement";
 import type { AgentTask } from "agent/types";
+import { trace } from "infrastructure/debug-log";
 
 import type { QueryOptionDeps } from "../types";
 import { createCanUseTool } from "./can-use-tool";
@@ -20,7 +21,7 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
     hasReparsePoint: deps.hasReparsePoint,
   });
   const sessionOpts = planToSessionOptions(task.session);
-  return {
+  const options: Options = {
     cwd: task.workspacePath,
     additionalDirectories: [],
     settingSources: [],
@@ -44,4 +45,15 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
     canUseTool: createCanUseTool(policy),
     spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/query"),
   };
+  // DIAGNOSTIC (infrastructure/debug-log): the SDK query configuration for this attempt -- model,
+  // effort, session resume/fresh, cwd -- otherwise only inferable indirectly from its effects.
+  trace("agent.claude.queryOptions.built", {
+    model: task.model,
+    effort: task.effort,
+    sessionKind: task.session.kind,
+    workspacePath: task.workspacePath,
+    disallowedToolsCount: CLAUDE_DISALLOWED_TOOLS.length,
+    thinking: options.thinking,
+  });
+  return options;
 }

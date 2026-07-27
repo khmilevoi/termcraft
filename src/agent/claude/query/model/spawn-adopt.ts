@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 
+import { trace } from "infrastructure/debug-log";
 import type { ProcessTree } from "infrastructure/process";
 
 /**
@@ -77,6 +78,13 @@ export function createSpawnAndAdopt(
       return child;
     }
 
+    // DIAGNOSTIC (infrastructure/debug-log): the CLI process this call spawned and successfully
+    // adopted into the owned process tree -- the vendor process backing the whole agent run.
+    trace("agent.claude.spawnAdopt.adopted", {
+      logLabel,
+      pid: child.pid,
+      command: options.command,
+    });
     processTree.noteAdoptionOutcome(true);
     return child;
   };

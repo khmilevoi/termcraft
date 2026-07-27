@@ -18,6 +18,7 @@ import type {
 } from "core/ports";
 import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
 import type { PageSlug } from "entities/page";
+import { trace } from "infrastructure/debug-log";
 
 /**
  * Gate validation over one frozen candidate — the `validating` sub-phase's own work
@@ -166,6 +167,17 @@ export async function runTurnValidation(
 
   if (errors.length === 0) {
     const slice = sliceResult.slice ?? { pages: presentSlugs, active: null };
+    // DIAGNOSTIC (infrastructure/debug-log): the Gate passed this candidate -- recorded so a turn's
+    // full attempt history (pass/retry/exhausted) is reconstructable from the trace alone, including
+    // the warning text itself (not just a count), since a pass can still carry Gate warnings worth
+    // reviewing later.
+    trace("core.turns.validation.outcome", {
+      turnId: input.turnId,
+      attempt: input.attempt,
+      kind: "passed",
+      pageCount: descriptors.length,
+      warnings: warnings.map(toGateWarningDto),
+    });
     return { kind: "passed", slice, descriptors, warnings };
   }
 
@@ -191,8 +203,25 @@ export async function runTurnValidation(
         `core/turns/validation: retryAfterGate illegal (${retried.code}) for turn ${input.turnId}`,
       );
     }
+    // DIAGNOSTIC (infrastructure/debug-log): the Gate rejected this candidate but the turn still
+    // has retry budget -- the full errors/warnings the next attempt's prompt will be folded from.
+    trace("core.turns.validation.outcome", {
+      turnId: input.turnId,
+      attempt: input.attempt,
+      kind: "retry",
+      nextAttempt: nextAttemptAfter(input.attempt),
+      diagnostics,
+    });
     return { kind: "retry", nextAttempt: nextAttemptAfter(input.attempt), diagnostics };
   }
 
+  // DIAGNOSTIC (infrastructure/debug-log): the Gate rejected this candidate and the turn's retry
+  // budget is exhausted -- the turn will fail because of exactly these diagnostics.
+  trace("core.turns.validation.outcome", {
+    turnId: input.turnId,
+    attempt: input.attempt,
+    kind: "exhausted",
+    diagnostics,
+  });
   return { kind: "exhausted", failure: gateRetryExhaustedFailure(), diagnostics };
 }

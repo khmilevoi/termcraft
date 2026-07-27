@@ -12,6 +12,7 @@ import type {
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { ChatAgentRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
+import { trace } from "infrastructure/debug-log";
 
 import type { TurnDeadlines } from "./deadlines";
 import { toFinalizeReadSet } from "./read-set";
@@ -163,15 +164,41 @@ export async function finalizeTurn(
   input: FinalizeTurnInputV1,
 ): Promise<FinalizeTurnResultV1> {
   const began = deps.machine.apply("beginFinalization");
-  if (began.kind === "illegal") return { kind: "illegal", code: began.code, at: "beginFinalization" };
+  if (began.kind === "illegal") {
+    // DIAGNOSTIC (infrastructure/debug-log): finalize refused before anything was written -- no
+    // commit, no page bytes, no chat record.
+    trace("core.turns.finalize.outcome", {
+      turnId: input.turnId,
+      kind: "illegal",
+      at: "beginFinalization",
+      code: began.code,
+    });
+    return { kind: "illegal", code: began.code, at: "beginFinalization" };
+  }
 
   const deadline = deps.deadlines.check();
-  if (deadline.kind === "expired")
+  if (deadline.kind === "expired") {
+    // DIAGNOSTIC (infrastructure/debug-log): finalize's own deadline re-check tripped after
+    // beginFinalization succeeded but before any durable write was attempted.
+    trace("core.turns.finalize.outcome", {
+      turnId: input.turnId,
+      kind: "failed",
+      failure: deadlineExceededFailure(deadline.bound),
+    });
     return { kind: "failed", failure: deadlineExceededFailure(deadline.bound) };
+  }
 
   const readSet = toFinalizeReadSet(input.stagedReadSet);
-  if (readSet instanceof Error)
+  if (readSet instanceof Error) {
+    // DIAGNOSTIC (infrastructure/debug-log): the staged read-set could not translate -- an internal
+    // invariant violation, not an ordinary business rejection.
+    trace("core.turns.finalize.outcome", {
+      turnId: input.turnId,
+      kind: "failed",
+      failure: translationFailure(readSet.message),
+    });
     return { kind: "failed", failure: translationFailure(readSet.message) };
+  }
 
   const resolvedPins = resolveSentPinAppends({
     turnId: input.turnId,
@@ -193,18 +220,50 @@ export async function finalizeTurn(
       createdAt: input.createdAt,
     }),
   );
-  if ("code" in result) return { kind: "failed", failure: result };
+  if ("code" in result) {
+    // DIAGNOSTIC (infrastructure/debug-log): the durable transaction itself failed -- the turn
+    // generated changes (agentRecord/changedPages) never landed.
+    trace("core.turns.finalize.outcome", { turnId: input.turnId, kind: "failed", failure: result });
+    return { kind: "failed", failure: result };
+  }
 
   const committed = deps.machine.apply("markCommitted");
-  if (committed.kind === "illegal")
+  if (committed.kind === "illegal") {
+    // DIAGNOSTIC (infrastructure/debug-log): a durable commit exists (the call above already
+    // returned it) but the turn machine could not settle onto it -- see this file's own header.
+    trace("core.turns.finalize.outcome", {
+      turnId: input.turnId,
+      kind: "illegal",
+      at: "markCommitted",
+      code: committed.code,
+    });
     return { kind: "illegal", code: committed.code, at: "markCommitted" };
+  }
 
   const settled = deps.machine.apply("settle");
-  if (settled.kind === "illegal") return { kind: "illegal", code: settled.code, at: "settle" };
+  if (settled.kind === "illegal") {
+    // DIAGNOSTIC (infrastructure/debug-log): same durable-commit-exists concern as
+    // markCommitted above -- markCommitted itself already landed, but settle could not.
+    trace("core.turns.finalize.outcome", {
+      turnId: input.turnId,
+      kind: "illegal",
+      at: "settle",
+      code: settled.code,
+    });
+    return { kind: "illegal", code: settled.code, at: "settle" };
+  }
   deps.onSettled?.();
 
   // The commit is durable now — see this file's header, "CANDIDATE RETIREMENT".
   await retireFinalizedCandidate(deps.staging, input.candidateRoot);
 
+  // DIAGNOSTIC (infrastructure/debug-log): the turn's successful, durable commit, including the
+  // agent-generated record text -- the record this whole generation pipeline exists to produce.
+  trace("core.turns.finalize.outcome", {
+    turnId: input.turnId,
+    kind: "committed",
+    commit: result,
+    agentRecord: input.agentRecord,
+  });
   return { kind: "committed", commit: result };
 }

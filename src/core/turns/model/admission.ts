@@ -13,6 +13,7 @@ import type { ChatUserRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
 import type { Pin } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
+import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { AdmissionCandidatePinV1, AdmissionInputV1, AdmissionOutcomeV1 } from "../types";
@@ -157,14 +158,32 @@ export async function runAdmission(
     createdAt,
   };
   const admissionCommit = await wrap(deps.turnTransactions.admit(admissionInput));
-  if ("code" in admissionCommit)
+  if ("code" in admissionCommit) {
+    // DIAGNOSTIC (infrastructure/debug-log): the admission commit port call itself failed —
+    // the earliest possible admission failure, before any workspace or read-set work started.
+    trace("core.turns.admission.outcome", {
+      turnId,
+      kind: "blocked",
+      phase: "admit",
+      failure: admissionCommit,
+    });
     return { kind: "blocked", phase: "admit", failure: admissionCommit };
+  }
 
   // Read the chat's append base ONLY NOW, right after the commit above lands — see this
   // file's header, step 1b, for why any earlier read is stale by construction.
   const chatAppendBase = await wrap(deps.chatReader.readAppendBase(input.targetChatId));
-  if ("code" in chatAppendBase)
+  if ("code" in chatAppendBase) {
+    // DIAGNOSTIC (infrastructure/debug-log): the user record committed, but reading the chat
+    // append base right after failed — the workspace is never created for this turn.
+    trace("core.turns.admission.outcome", {
+      turnId,
+      kind: "blocked",
+      phase: "chat-append-base",
+      failure: chatAppendBase,
+    });
     return { kind: "blocked", phase: "chat-append-base", failure: chatAppendBase };
+  }
 
   const workspaceInput: CreateTurnWorkspaceInputV1 = {
     turnId,
@@ -175,13 +194,41 @@ export async function runAdmission(
     readSet: { ...input.workspace.readSet, chat: chatAppendBase },
   };
   const workspace = await wrap(deps.staging.createTurnWorkspace(workspaceInput));
-  if ("code" in workspace) return { kind: "blocked", phase: "workspace", failure: workspace };
+  if ("code" in workspace) {
+    // DIAGNOSTIC (infrastructure/debug-log): the turn workspace could not be created on disk.
+    trace("core.turns.admission.outcome", {
+      turnId,
+      kind: "blocked",
+      phase: "workspace",
+      failure: workspace,
+    });
+    return { kind: "blocked", phase: "workspace", failure: workspace };
+  }
 
   const readSet = toFinalizeReadSet(workspace.readSet);
-  if (readSet instanceof Error) return { kind: "blocked", phase: "read-set", error: readSet };
+  if (readSet instanceof Error) {
+    // DIAGNOSTIC (infrastructure/debug-log): the staged read-set could not translate to the
+    // finalize-time shape — an internal invariant violation.
+    trace("core.turns.admission.outcome", {
+      turnId,
+      kind: "blocked",
+      phase: "read-set",
+      error: readSet.message,
+    });
+    return { kind: "blocked", phase: "read-set", error: readSet };
+  }
 
   const fence = createTurnFence(turnId);
-  if (fence instanceof Error) return { kind: "blocked", phase: "fence", error: fence };
+  if (fence instanceof Error) {
+    // DIAGNOSTIC (infrastructure/debug-log): the attempt fence could not be minted for this turn.
+    trace("core.turns.admission.outcome", {
+      turnId,
+      kind: "blocked",
+      phase: "fence",
+      error: fence.message,
+    });
+    return { kind: "blocked", phase: "fence", error: fence };
+  }
 
   const finish = deps.machine.apply("finishAdmission");
   if (finish.kind === "illegal") {
@@ -201,9 +248,15 @@ export async function runAdmission(
         `admission: could not retire the staged workspace for cancelled turn ${turnId}: ${retired.safeMessage}`,
       );
     }
+    // DIAGNOSTIC (infrastructure/debug-log): a raced cancel landed during admission — the chat
+    // record and workspace already exist on disk/durably, but admission itself is refused.
+    trace("core.turns.admission.outcome", { turnId, kind: "illegal", code: finish.code });
     return { kind: "illegal", code: finish.code, userRecordCommitted: true };
   }
 
+  // DIAGNOSTIC (infrastructure/debug-log): admission succeeded — the turn workspace is ready
+  // and the first attempt is about to start.
+  trace("core.turns.admission.outcome", { turnId, kind: "workspace-ready" });
   return {
     kind: "workspace-ready",
     context: {

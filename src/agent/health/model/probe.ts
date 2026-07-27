@@ -1,6 +1,7 @@
 import * as errore from "errore";
 
 import type { AgentInfo } from "agent/types";
+import { trace } from "infrastructure/debug-log";
 
 import type { HealthProbeDeps, HealthProbeReader } from "../types";
 import { withProbeDeadline } from "./deadline";
@@ -77,7 +78,11 @@ export async function runHealthProbe(
 
   if (errore.isAbortError(result)) {
     console.warn("agent/health: probe aborted without a confirmed verdict:", result.message);
-    return inconclusive(backendId);
+    const info = inconclusive(backendId);
+    // DIAGNOSTIC (infrastructure/debug-log): the probe deadline aborted it before it could classify
+    // anything -- recorded as its own reason, distinct from a genuine stream failure.
+    trace("agent.health.probeResult", { backendId, reason: "aborted", info });
+    return info;
   }
 
   if (result instanceof Error) {
@@ -85,11 +90,20 @@ export async function runHealthProbe(
     // stays visible, per errore's "log what you don't propagate".
     console.warn("agent/health: probe stream failed:", result.message);
     const notInstalled = /ENOENT|not found|spawn/i.test(result.message);
-    return {
+    const info: AgentInfo = {
       backendId,
       health: { status: notInstalled ? "not-installed" : "not-logged-in" },
       account: null,
     };
+    // DIAGNOSTIC (infrastructure/debug-log): the probe's own read threw -- the message is what
+    // decides the not-installed/not-logged-in split below.
+    trace("agent.health.probeResult", {
+      backendId,
+      reason: "stream-error",
+      message: result.message,
+      info,
+    });
+    return info;
   }
 
   if (result !== null) {
@@ -100,13 +114,24 @@ export async function runHealthProbe(
       console.warn(
         `agent/health: probe verdict backendId mismatch (expected "${backendId}", got "${result.backendId}"); substituting the expected id`,
       );
-      return { ...result, backendId };
+      const info = { ...result, backendId };
+      // DIAGNOSTIC (infrastructure/debug-log): the vendor reader echoed a mismatched backendId --
+      // recording both the substitution and the verdict it wrapped.
+      trace("agent.health.probeResult", { backendId, reason: "backendId-mismatch", info });
+      return info;
     }
+    // DIAGNOSTIC (infrastructure/debug-log): the probe classified normally -- the ordinary
+    // healthCheck result every backend's own probe.ts eventually returns here.
+    trace("agent.health.probeResult", { backendId, reason: "classified", info: result });
     return result;
   }
 
   // The stream closed cleanly without ever classifying. The CLI ran without
   // throwing, so this is not "not-installed"; nothing confirmed a working
   // session either, so it must not be "ready".
-  return inconclusive(backendId);
+  const info = inconclusive(backendId);
+  // DIAGNOSTIC (infrastructure/debug-log): the stream closed cleanly without ever classifying --
+  // the CLI ran without throwing, but nothing confirmed a working session either.
+  trace("agent.health.probeResult", { backendId, reason: "inconclusive", info });
+  return info;
 }

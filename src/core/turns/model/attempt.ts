@@ -5,6 +5,7 @@ import type { PublishableEventV1, TurnBackendLeaseV1 } from "core/mailbox";
 import type { AgentBackend, AgentRunOutcome, AgentTask, FencedEvent } from "core/ports";
 import type { CommandRejectionCode, EventPayloadByKindV1 } from "core/protocol";
 import type { TokenUsage } from "entities/turn";
+import { trace } from "infrastructure/debug-log";
 
 import type { TurnDeadlines } from "./deadlines";
 import type { TurnFence, TurnFenceError } from "./fence";
@@ -130,6 +131,14 @@ export function startTurnAttempt(
 
   const fullTask: AgentTask = { ...input.task, fence: lease };
 
+  // DIAGNOSTIC (infrastructure/debug-log): the attempt this fence just minted -- turnId, attempt
+  // number, and the outgoing user message length -- before anything downstream can fail.
+  trace("core.turns.attempt.started", {
+    turnId: input.turnId,
+    attempt: lease.attempt,
+    userMessageLength: input.task.userMessage.length,
+  });
+
   // Captured ONCE here, inside the caller's active Reatom context — mirrors
   // `core/mailbox/model/dispatch.ts`'s "wrap captured once, not fresh per call": both
   // continuations below may run one or more microtasks after an `await` (the event pump's
@@ -140,6 +149,10 @@ export function startTurnAttempt(
       console.warn(
         `core/turns/attempt: dropping a stale event for turn ${input.turnId} attempt ${lease.attempt}`,
       );
+      // DIAGNOSTIC (infrastructure/debug-log): a stale event dropped by the fence check -- the
+      // console.warn above is already mirrored into the trace file by the console tee, but this gives
+      // the drop its own greppable channel alongside the rest of this attempt's own trace.
+      trace("core.turns.attempt.eventDropped", { turnId: input.turnId, attempt: lease.attempt });
       return;
     }
     deps.deadlines.noteEvent();
@@ -168,7 +181,12 @@ export function startTurnAttempt(
     // Ordering (b): retire strictly before the caller can ever freeze a candidate for
     // this attempt.
     input.fence.retire();
-    return toAttemptOutcome(raw);
+    const outcome = toAttemptOutcome(raw);
+    // DIAGNOSTIC (infrastructure/debug-log): the attempt final outcome as the turn spine sees it --
+    // completed/failed/cancelled/backend-unhealthy -- ties this attempt generation work to what
+    // core/turns/model/run-turn.ts does with it next.
+    trace("core.turns.attempt.outcome", { turnId: input.turnId, attempt: lease.attempt, outcome });
+    return outcome;
   });
 
   const run = deps.agentBackend.startTurn(fullTask);

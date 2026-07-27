@@ -18,6 +18,7 @@ import type {
   TurnTransactionService,
 } from "core/ports";
 import type { Clock } from "infrastructure/clock";
+import { trace } from "infrastructure/debug-log";
 
 import type { AdmissionInputV1, AdmissionOutcomeV1, TurnContextV1 } from "../types";
 import { type AdmissionDeps, runAdmission } from "./admission";
@@ -277,8 +278,13 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     chatReader: deps.chatReader,
   };
   const admission = await wrap(runAdmission(admissionDeps, input.admission));
-  if (admission.kind !== "workspace-ready")
+  if (admission.kind !== "workspace-ready") {
+    // DIAGNOSTIC (infrastructure/debug-log): admission refused before any attempt could
+    // start -- the turn never reaches the agent at all; recording why here is the only way
+    // to see that distinct from an attempt that started and then failed.
+    trace("core.turns.runTurn.admissionRejected", { outcome: admission });
     return { kind: "admission-rejected", outcome: admission };
+  }
 
   const context = admission.context;
   deps.onAdmitted?.(context);
@@ -334,6 +340,9 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         candidateRoot,
       }),
     );
+    // DIAGNOSTIC (infrastructure/debug-log): the turn's own terminal record -- the text and outcome
+    // this driver decided to persist, whether that write itself landed durably or not.
+    trace("core.turns.runTurn.terminalized", { turnId: context.turnId, outcome, reason, result });
     return { kind: "terminalized", result };
   }
 
@@ -351,6 +360,9 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
   let candidateRoot: string | null = null;
 
   for (;;) {
+    // DIAGNOSTIC (infrastructure/debug-log): marks the start of this turn's Nth attempt -- the retry
+    // loop otherwise leaves no record of how many times a turn actually re-ran the agent.
+    trace("core.turns.runTurn.attemptLoop", { turnId: context.turnId, attempt });
     // Defense in depth matching the brief's own loop bound — unreachable via this driver's
     // own sequencing (validation's own "retry" never yields a `nextAttempt` beyond
     // `MAX_TURN_ATTEMPTS`), but never silently trusted either.
@@ -416,6 +428,10 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     deps.onAttemptStarted?.(started.handle);
     const outcome = await wrap(started.handle.outcome);
     deps.onAttemptStarted?.(null);
+    // DIAGNOSTIC (infrastructure/debug-log): this attempt outcome as seen by the turn driver --
+    // recorded here too (not only in attempt.ts) so the branch decisions below (retry, finalize,
+    // terminalize) are traceable against the exact outcome that drove them.
+    trace("core.turns.runTurn.attemptOutcome", { turnId: context.turnId, attempt, outcome });
 
     if (outcome.kind === "cancelled") {
       bridge("beginTerminalization");
@@ -525,6 +541,14 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         bridge("requestCancel");
         return terminalize("failed", folded.message, undefined, candidateRoot);
       }
+      // DIAGNOSTIC (infrastructure/debug-log): the Gate diagnostics text folded into the next attempt
+      // prompt -- the actual content that changes what gets sent to the agent on a retry.
+      trace("core.turns.runTurn.gateRetry", {
+        turnId: context.turnId,
+        rejectedAttempt: attempt,
+        nextAttempt: validation.nextAttempt,
+        foldedAddition: folded,
+      });
       userMessage = appendPromptFold(input.baseTask.userMessage, folded);
       attempt = validation.nextAttempt;
       continue;
@@ -619,6 +643,13 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       );
     }
 
+    // DIAGNOSTIC (infrastructure/debug-log): the turn's successful finalize result -- the durable
+    // commit this attempt generation work produced.
+    trace("core.turns.runTurn.finalized", {
+      turnId: context.turnId,
+      attempt,
+      result: finalizeResult,
+    });
     return { kind: "finalized", result: finalizeResult };
   }
 }
