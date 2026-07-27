@@ -154,7 +154,7 @@ test(
       fence,
       async (sink: RunSink) => {
         sink.emit({ kind: "reasoning", text: "a" });
-        sink.emit({ kind: "tool", op: "edit", target: "pages/main.tsx" });
+        sink.emit({ kind: "tool", id: "toolu_1", op: "edit", target: "pages/main.tsx" });
         sink.complete({ kind: "completed", finalText: "done", usage: null, sessionId: "s1" });
       },
       deps(),

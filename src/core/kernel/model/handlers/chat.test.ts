@@ -281,6 +281,7 @@ function buildTestContext(overrides?: {
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => null,
+      currentPageDescriptors: () => [],
       previewSessionCommands: createPreviewSessionCommands({
         machine: machines.preview,
         hostSupervisor: deps.hostSupervisor,

@@ -32,17 +32,22 @@ document here that addresses how the source tree itself is laid out.
 > reason is available (WP-8 item 4); and termcraft ships as a real npm package — `npm
 > pack` plus a global install runs from an empty directory on all three argv paths
 > (WP-1, verified by `src/entrypoint/model/installed-package.test.ts` against an
-> installed tarball). What is still open, and documented as such in the relevant
+> installed tarball). The live preview loop is now closed end to end (Gap A, spec §2.2/§4.7):
+> `kernel.preview.enable` fires once trust resolves to `trusted`, the shell asks for a session
+> for the active page keyed on its `(slug, sourceHash)`, `preview.sessionReady` is published as
+> a real event rather than only as an internal machine transition, and a committed turn
+> republishes `page.descriptorsChanged` (`reason: "turn-apply"`) so a generated or edited page
+> reaches the shell's page model and re-keys that ask — which is what makes "describe a TUI and
+> see it" complete, and what makes geometry/hover-to-pin queries reachable. What is still open,
+> and documented as such in the relevant
 > module/flow sections rather than swept under this status block:
 > `migration.*` commands route to a deliberate post-MVP no-op (there is exactly one
 > storage format version, so a migration step has nothing to migrate from or to —
 > `docs/architecture/flows/migration.md`); the composed agent system prompt cannot yet
 > carry source-extracted per-page metadata or the current selection (`agent/prompt/`,
-> phase-8 WP-3); and `kernel.preview.enable` now fires once trust resolves to `trusted`
-> (fix-bundle Gap A, spec §2.2), but nothing yet dispatches `preview.selectPage`/
-> `selectCurrent` to actually establish one, so a live `PreviewSession` is still
-> unreachable through `kernel.dispatch()` alone and geometry/hover-to-pin queries stay
-> unusable regardless of the acknowledgement wiring above. Each
+> phase-8 WP-3); and the interactive channels layered on top of a live preview session —
+> the `F4` mode toggle, input forwarding, tweaks, and page navigation — each remain blocked
+> by their own named gap (`docs/architecture/flows/interactive-prototype.md`). Each
 > document states which half of a claim is built and which is a
 > design target, and anchors the unbuilt half to the governing specification instead
 > of a source file; anchors keep moving to real paths as implementation proceeds (see

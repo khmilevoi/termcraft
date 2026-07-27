@@ -5,6 +5,13 @@
  */
 export type { ChatListPopupProps, ChatListRow } from "./ui/ChatListPopup";
 export { ChatListPopup } from "./ui/ChatListPopup";
+export type { ChatListViewport } from "./model/chat-list";
+export {
+  CHAT_LIST_VIEWPORT_CAP,
+  FRESH_CHAT_LABEL,
+  computeChatListViewport,
+  formatChatWhen,
+} from "./model/chat-list";
 export type { PinInputPopupProps } from "./ui/PinInputPopup";
 export { PinInputPopup } from "./ui/PinInputPopup";
 export type { ExportFailurePopupProps, ExportPopupProps } from "./ui/ExportPopup";

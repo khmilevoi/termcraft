@@ -45,12 +45,12 @@ describe("ChatListPopup component (design 24-chats.dc.html, wsChats)", () => {
     expect(handle.rectOf("chats-row-chat-1")).not.toEqual(handle.rectOf("chats-row-chat-2"));
   });
 
-  test('title is "chats"', async () => {
+  test("title is \"chats · \" + the full row count (design wsChats: title:'chats · '+list.length, engine:1048)", async () => {
     const handle = await createHeadlessRenderer({ w: 74, h: 8 });
     open = handle;
     handle.mount(<ChatListPopup id="chats" rows={ROWS} selectedIndex={0} />);
     await handle.render();
-    expect(lineText(handle.capture(), 0)).toContain("chats");
+    expect(lineText(handle.capture(), 0)).toContain(`chats · ${ROWS.length}`);
   });
 
   test("the header row shows CHAT and WHEN in faint bold", async () => {
@@ -93,7 +93,11 @@ describe("ChatListPopup component (design 24-chats.dc.html, wsChats)", () => {
     expect(lineText(frame, 4)).toContain("○");
   });
 
-  test("the footer renders the select/switch/close hints", async () => {
+  // Design 24-chats.dc.html ("The footer drops the `/new fresh chat` hint. `/new` cannot be
+  // typed while the popup is open ... three hints leave room for the position readout"):
+  // `wsChats`'s own footer draw (engine:1064-1066) is exactly ↑↓ select / ⏎ switch / esc close —
+  // no `/new` hint at all.
+  test("the footer renders only the select/switch/close hints, never /new (design 24-chats.dc.html)", async () => {
     const handle = await createHeadlessRenderer({ w: 74, h: 8 });
     open = handle;
     handle.mount(<ChatListPopup id="chats" rows={ROWS} selectedIndex={0} />);
@@ -102,7 +106,88 @@ describe("ChatListPopup component (design 24-chats.dc.html, wsChats)", () => {
     const footerText = lineText(frame, 5);
     expect(footerText).toContain("select");
     expect(footerText).toContain("switch");
-    expect(footerText).toContain("fresh chat");
     expect(footerText).toContain("close");
+    expect(footerText).not.toContain("fresh chat");
+    expect(footerText).not.toContain("/new");
+  });
+
+  // Defect 1 (Important): the popup used to map over ALL rows with no slice at all.
+  describe("viewport cap (design wsChats: const cap=6, engine:1042-1067)", () => {
+    const manyRows: readonly ChatListRow[] = Array.from({ length: 14 }, (_, i) => ({
+      chatId: `chat-${i}`,
+      label: `chat number ${i}`,
+      when: `${i}d ago`,
+      active: i === 0,
+    }));
+
+    test("renders at most 6 rows even when the full list has 14", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={manyRows} selectedIndex={0} />);
+      await handle.render();
+      const rendered = manyRows.filter(
+        (row) => handle.describe(`chats-row-${row.chatId}`) !== null,
+      );
+      expect(rendered.length).toBeLessThanOrEqual(6);
+    });
+
+    test("selecting the first row shows a trailing '▼ N more' row and no leading '▲ earlier' row", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={manyRows} selectedIndex={0} />);
+      await handle.render();
+      const text = handle
+        .capture()
+        .rows.map((row) => row.map((run) => run.text).join(""))
+        .join("\n");
+      expect(text).toContain("▼ 8 more");
+      expect(text).not.toContain("▲");
+    });
+
+    test("selecting the last row shows a leading '▲ N earlier' row and no trailing '▼ more' row", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={manyRows} selectedIndex={13} />);
+      await handle.render();
+      const text = handle
+        .capture()
+        .rows.map((row) => row.map((run) => run.text).join(""))
+        .join("\n");
+      expect(text).toContain("▲ 8 earlier");
+      expect(text).not.toContain("▼");
+      expect(handle.describe("chats-row-chat-13")).not.toBeNull();
+    });
+
+    test("the viewport follows the selection: the selected row is always rendered", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={manyRows} selectedIndex={7} />);
+      await handle.render();
+      expect(handle.describe("chats-row-chat-7")).not.toBeNull();
+    });
+
+    test("right-aligns a '<start>–<end> of <total>' position readout in the footer when overflowing", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={manyRows} selectedIndex={7} />);
+      await handle.render();
+      const text = handle
+        .capture()
+        .rows.map((row) => row.map((run) => run.text).join(""))
+        .join("\n");
+      expect(text).toContain("6–11 of 14");
+    });
+
+    test("no position readout when the list fits inside the cap (no overflow)", async () => {
+      const handle = await createHeadlessRenderer({ w: 90, h: 14 });
+      open = handle;
+      handle.mount(<ChatListPopup id="chats" rows={ROWS} selectedIndex={0} />);
+      await handle.render();
+      const text = handle
+        .capture()
+        .rows.map((row) => row.map((run) => run.text).join(""))
+        .join("\n");
+      expect(text).not.toMatch(/\d+–\d+ of \d+/);
+    });
   });
 });

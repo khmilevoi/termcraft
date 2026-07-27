@@ -184,7 +184,25 @@ export async function runAdmission(
   if (fence instanceof Error) return { kind: "blocked", phase: "fence", error: fence };
 
   const finish = deps.machine.apply("finishAdmission");
-  if (finish.kind === "illegal") return { kind: "illegal", code: finish.code };
+  if (finish.kind === "illegal") {
+    // A raced `turn.cancel` is the only thing that gets here (`turn-machine.ts`:
+    // `requestCancel` is `{from:"admitting", to:"terminalizing"}`), and by now this function has
+    // already committed the user's chat record AND created a real turn workspace on disk.
+    //
+    // RETIRE IT (defect fix, 2026-07-26). This branch used to return with `workspace` simply
+    // dropped, and no caller retires it either — `retireWorkspace` had no production call site
+    // at all — so every cancel landing in this window leaked a staged workspace directory that
+    // nothing would ever clean up. A retire failure is logged, never propagated (errore rule
+    // 21): the admission is already refused, and failing to tidy up must not change what the
+    // caller reports.
+    const retired = await wrap(deps.staging.retireWorkspace(workspace));
+    if (retired !== undefined) {
+      console.warn(
+        `admission: could not retire the staged workspace for cancelled turn ${turnId}: ${retired.safeMessage}`,
+      );
+    }
+    return { kind: "illegal", code: finish.code, userRecordCommitted: true };
+  }
 
   return {
     kind: "workspace-ready",

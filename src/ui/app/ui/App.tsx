@@ -11,8 +11,10 @@ import {
   ChatListPopup,
   ExportFailurePopup,
   ExportPopup,
+  FRESH_CHAT_LABEL,
   PinInputPopup,
   TrustPrompt,
+  formatChatWhen,
 } from "ui/popups";
 import { EnlargePlaceholder } from "ui/preview";
 import { SHELL_PALETTE } from "ui/theme";
@@ -63,8 +65,12 @@ function exportPopupShowing(deps: UiDeps): boolean {
  * slash-menu) always outranks an undismissed export result for BOTH what is drawn here and which
  * surface receives Enter/Esc. `"slash-menu"` is rendered inline by `Workspace` (the non-modal
  * slash anchor), so it resolves to no modal layer here — it still outranks the export popup.
+ *
+ * `nowMs` is the App's injected clock reading (see {@link App}'s own `clock` prop) — threaded in
+ * rather than read via `Date.now()` here so the WHEN column ({@link formatChatWhen}) stays
+ * deterministic under test.
  */
-function renderOverlay(deps: UiDeps) {
+function renderOverlay(deps: UiDeps, nowMs: number) {
   const overlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
@@ -75,11 +81,16 @@ function renderOverlay(deps: UiDeps) {
       chatId: summary.chatId,
       // Design §3.9: "a chat's display name is derived… the first line of its first `user`
       // record" (Kernel-derived, `ChatSummaryV1.displayName`, WP-10 Task 4). A freshly-created
-      // chat carries `displayName: null` until its first `user` record lands; the pre-existing
-      // `chatId.slice(0, 8)` fallback for that window is unchanged — only the label SOURCE
-      // changes here, not the fallback itself (WP-10 Task 9).
-      label: summary.displayName ?? summary.chatId.slice(0, 8),
-      when: summary.createdAt,
+      // chat carries `displayName: null` until its first `user` record lands. CORRECTED
+      // (defect 3): this used to fall back to `chatId.slice(0, 8)`, citing "the design's
+      // `chatId.slice(0, 8)` fallback" — false. `wsChats`'s fourteen sample rows
+      // (design/termcraft-engine.js:1026-1039) are all descriptive names; the design has no
+      // hex-fallback row anywhere. {@link FRESH_CHAT_LABEL} is `wsChatFresh`'s OWN wording for
+      // this exact case (`design/termcraft-engine.js:1078`), the honest design-anchored label.
+      label: summary.displayName ?? FRESH_CHAT_LABEL,
+      // Defect 2 fix: the design's WHEN column (`wsChats`, engine:1026-1039) shows relative
+      // time — `now`, `8m ago`, `1h ago`, `yesterday`, … — never the raw RFC-3339 `createdAt`.
+      when: formatChatWhen(summary.createdAt, nowMs),
       active: summary.chatId === chats.activeChatId,
     }));
     return (
@@ -124,6 +135,9 @@ function renderOverlay(deps: UiDeps) {
   return null;
 }
 
+/** {@link App}'s default clock — real wall-clock time, used whenever no `clock` prop is passed. */
+const DEFAULT_CLOCK = () => Date.now();
+
 /**
  * The app root (design §3.x). Owns the Kernel subscription (feeding the mirror), tracks the
  * terminal size, consumes the live `PreviewSession` frames, wires the global keyboard through
@@ -134,9 +148,25 @@ function renderOverlay(deps: UiDeps) {
  * makes re-dimming the whole tree costly); the popups themselves match the design. Overlay
  * open-triggers beyond Esc-to-close are minimal in this MVP pass — the components and logic
  * are built and unit-tested; richer open flows are follow-up wiring.
+ *
+ * `clock` (defect 2 fix) is the injectable "now" the chat-list popup's WHEN column formats
+ * relative time against ({@link formatChatWhen}). It defaults to {@link DEFAULT_CLOCK} — real
+ * `Date.now()` — for every production mount; tests inject a fixed reading for determinism.
+ * `UiDeps` (`ui/app/model/deps.ts`) carries no clock of its own, so this is threaded as its own
+ * component prop rather than through `deps`. CORRECTED (review): it does NOT keep `Date.now()`
+ * out of the render body — `DEFAULT_CLOCK` is called from it on every render, below. What the
+ * prop buys is that the reading is INJECTABLE, which is what makes the WHEN column testable at
+ * all; it is the smallest change achieving that while staying inside this module's own files.
+ *
+ * KNOWN, ACCEPTED (MVP): the reading is a plain non-reactive read, so relative labels are
+ * correct when the popup opens and then hold until something else re-renders the tree — a row
+ * that said `2m ago` keeps saying it while the popup stays open. Making them advance needs a
+ * ticking source the UI does not have; recorded here rather than left as a silent surprise in a
+ * column whose whole point is that time passes.
  */
-export const App = reatomComponent<{ deps: UiDeps }>((props) => {
+export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((props) => {
   const { deps } = props;
+  const clock = props.clock ?? DEFAULT_CLOCK;
 
   // Activate the Kernel subscription + preview-frame consumer for this component's lifetime;
   // both are owned by the `runtime` atom's connect hook and stop when the App unmounts.
@@ -161,6 +191,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
       homeHealth: deps.local.homeHealth(),
       homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
+      projectOpening: deps.mirror.project().opening,
     };
     const intent = resolveKey(key, context);
     // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an
@@ -215,6 +246,8 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
         combo={homeCombo(deps.local.agentSelection())}
         rows={homeSlashOpen ? filterSlashRows(deps.local.prompt(), deps.actionContext()) : []}
         selectedIndex={deps.local.slashSelection()}
+        openFailure={deps.mirror.project().openFailure}
+        opening={deps.mirror.project().opening}
       />
     );
   }
@@ -238,7 +271,7 @@ export const App = reatomComponent<{ deps: UiDeps }>((props) => {
   }
 
   // Workspace owns the non-modal slash anchor; App owns only modal centered overlays.
-  const overlay = renderOverlay(deps);
+  const overlay = renderOverlay(deps, clock());
   return (
     <box
       id="app-root"

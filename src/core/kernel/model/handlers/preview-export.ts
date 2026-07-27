@@ -15,14 +15,18 @@ import {
 } from "core/export";
 import type { PreviewAction, PreviewState, TransitionOutcome } from "core/machines";
 import type { EventCorrelationV1, PublishableEventV1 } from "core/mailbox";
-import type {
-  ColorCapabilityV1,
-  HostSessionSpecV1,
-  PreviewSizePresetV1,
-  WorkspaceStateV1,
+import {
+  type ColorCapabilityV1,
+  type HostSessionSpecV1,
+  PAGE_META_EXTRACTOR_VERSION,
+  type PageMetaKeyV1,
+  type PreviewSession,
+  type PreviewSizePresetV1,
+  type WorkspaceStateV1,
 } from "core/ports";
 import type { PreviewCommandOutcomeV1 } from "core/preview";
 import {
+  type CapabilityStateV1,
   type CommandPayloadByKindV1,
   type FailureDtoV1,
   type Sha256Hex,
@@ -30,7 +34,7 @@ import {
   canonicalHash,
   isUuidv7,
 } from "core/protocol";
-import type { PageSlug, Size } from "entities/page";
+import type { PageMeta, PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
@@ -112,17 +116,16 @@ import { noOpOutcome, startedOutcome } from "./types";
  * A page's static `meta` facts (`entities/page`'s `PageMeta`) plus its readable
  * `sourcePath`, resolved for the CURRENT (non-historical) source only.
  *
- * NARROWER, SEPARATELY-FLAGGED GAP (distinct from Gap A/B above, reported alongside them):
- * `core/ports`'s `PageReader` gives only `listSlugs()`/`readSource(slug)` (bytes + a live
- * `sourceHash`, no settings); the one port that DOES carry `PageMeta` is `PageMetaCache`,
- * keyed by `{pageSlug, sourceHash, extractorVersion}` — and no `extractorVersion` constant
- * is owned anywhere reachable from `core/kernel` (not `KernelDeps`, not `HandlerContext`,
- * not a `core/gate`/`core/protocol` exported constant — checked). `PAGE_META_EXTRACTOR_
- * VERSION_PLACEHOLDER` below is this file's OWN placeholder for that missing owner, used
- * ONLY as a cache key component (never as fabricated PAGE DATA): a cache MISS (`null`) is
- * treated as a real, honest "cannot resolve this page's settings today" failure — this
- * function never invents a theme/size/version. Once a real owner assigns and populates a
- * canonical `extractorVersion`, this placeholder is the one line to replace.
+ * CLOSED (was a NARROWER, SEPARATELY-FLAGGED GAP): `core/ports`'s `PageReader` gives only
+ * `listSlugs()`/`readSource(slug)` (bytes + a live `sourceHash`, no settings), so the settings
+ * come from `PageMetaCache`, keyed by `{pageSlug, sourceHash, extractorVersion}`. That
+ * `extractorVersion` had no owner and this file carried a local
+ * `PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER` for it, with a cache miss reported as an honest
+ * "cannot resolve this page's settings today" failure. Both halves are now real:
+ * `PAGE_META_EXTRACTOR_VERSION` (`core/ports/gate-runner.ts`) is the canonical owner the
+ * placeholder's own doc anticipated, and a miss is filled from the Gate's own contract-only
+ * extraction rather than refused — see {@link extractAndCachePageMeta} for why the miss path
+ * had to become recoverable. Nothing here invents a theme/size/version either way.
  *
  * `sourcePath` is not fabricated either: {@link canonicalPageSourcePath} (below) is the real
  * CANONICAL page-storage convention the host child resolves with `Bun.file` — see that
@@ -136,9 +139,6 @@ export interface ResolvedPageSettingsV1 {
   readonly minSize: Size;
   readonly theme: string;
 }
-
-/** See {@link ResolvedPageSettingsV1}'s own doc — this file's placeholder cache-key component, not page data. */
-export const PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER = 1;
 
 /** The directory canonical project state lives in, under the project root (storage-identity §4). */
 const PROJECT_STATE_DIRNAME = ".termcraft";
@@ -158,13 +158,67 @@ function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): strin
   return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
 }
 
-function pageMetaUnavailableFailure(pageSlug: PageSlug): FailureDtoV1 {
+/**
+ * A page whose source is readable but whose static `meta` export does not parse — the ONLY
+ * remaining honest "this page has no resolvable settings" verdict now that a cache miss is
+ * recoverable (see {@link resolvePageSettings}). Carries the Gate's own first contract error
+ * so the preview error panel names the real defect in the page instead of an opaque
+ * cache-internals message the user cannot act on.
+ */
+function pageMetaUnavailableFailure(pageSlug: PageSlug, reason: string): FailureDtoV1 {
   return {
     code: "PERSISTENCE_FAILED",
     retryable: true,
-    safeMessage: `no resolved settings available for page "${pageSlug}"`,
+    safeMessage: `could not read the page contract for "${pageSlug}": ${reason}`,
     details: { pageSlug },
   };
+}
+
+/**
+ * The `PageMetaCache` MISS path: extract the page's `meta` from the source that just missed,
+ * and write it back under the SAME key the read missed on so the next call is a hit.
+ *
+ * WHY THIS EXISTS (defect fix, 2026-07-26): the cache read below used to be the ONLY meta
+ * source, and a miss was reported as a flat "no resolved settings available for page X"
+ * failure — which `Workspace.tsx` renders as "✗ could not render current design". Nothing in
+ * the production composition ever called `PageMetaCache.put` (only tests did; `entrypoint/
+ * model/smoke.test.ts` says so in as many words), so the cache was permanently empty and
+ * preview could not render ANY page, ever — this was a hard blocker, not a "known gap", and
+ * the message misdiagnosed a missing write path as a broken page.
+ *
+ * A write-through at the Gate's existing call sites (`handlers/project.ts`'s
+ * `buildPageDescriptors`) was considered and deliberately NOT chosen as the fix: it would
+ * still leave the cache a PRECONDITION rather than a cache, so any page whose entry was
+ * evicted under the store's own quota policy, or whose source changed outside a turn, would
+ * hard-fail preview again. Filling on miss makes the cache self-healing and keeps one code
+ * path; a write-through remains a valid additive warm-up later, not a correctness fix.
+ *
+ * A failed WRITE is not a failed resolution: the extraction succeeded, so the caller gets its
+ * real settings and only the caching is lost (logged, never silently swallowed — errore
+ * rule 21). Only a failed EXTRACTION is a real refusal.
+ */
+async function extractAndCachePageMeta(
+  deps: HandlerContext["deps"],
+  pageSlug: PageSlug,
+  key: PageMetaKeyV1,
+  sourceBytes: Uint8Array,
+): Promise<FailureDtoV1 | PageMeta> {
+  const extraction = await deps.gateRunner.extractPageMeta({
+    source: new TextDecoder().decode(sourceBytes),
+    slug: pageSlug,
+  });
+  if (extraction.meta === null) {
+    const reason = extraction.errors[0]?.message ?? "the page contract did not parse";
+    return pageMetaUnavailableFailure(pageSlug, reason);
+  }
+
+  const written = await deps.pageMetaCache.put({ key, meta: extraction.meta });
+  if (written !== undefined) {
+    console.warn(
+      `core/kernel/handlers/preview-export: could not cache the extracted page meta for "${pageSlug}": ${written.safeMessage}`,
+    );
+  }
+  return extraction.meta;
 }
 
 async function resolvePageSettings(
@@ -174,20 +228,26 @@ async function resolvePageSettings(
   const source = await deps.pageReader.readSource(pageSlug);
   if ("code" in source) return source;
 
-  const cached = await deps.pageMetaCache.get({
+  const key: PageMetaKeyV1 = {
     pageSlug,
     sourceHash: source.sourceHash,
-    extractorVersion: PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
-  });
+    extractorVersion: PAGE_META_EXTRACTOR_VERSION,
+  };
+  const cached = await deps.pageMetaCache.get(key);
   if (cached !== null && "code" in cached) return cached;
-  if (cached === null) return pageMetaUnavailableFailure(pageSlug);
+
+  const meta =
+    cached === null
+      ? await extractAndCachePageMeta(deps, pageSlug, key, source.bytes)
+      : cached.meta;
+  if ("code" in meta) return meta;
 
   return {
     sourceHash: source.sourceHash,
     sourcePath: canonicalPageSourcePath(deps.projectStore.root, pageSlug),
-    kitApiVersion: cached.meta.kitApiVersion,
-    minSize: cached.meta.minSize,
-    theme: cached.meta.theme,
+    kitApiVersion: meta.kitApiVersion,
+    minSize: meta.minSize,
+    theme: meta.theme,
   };
 }
 
@@ -354,7 +414,13 @@ function selectCurrentSource(
     }
 
     const readyOutcome = context.machines.preview.apply("kernel.preview.sessionReady");
-    context.setActivePreviewSession(session);
+    // DEFECT 2 CLOSURE — `spec` is the real `HostSessionSpecV1` this handler already
+    // built (just above) and handed to `hostSupervisor.preview`; threading it here is
+    // what lets `previewSessionCommands`'s own private `lastSpec` — the ONE field
+    // `preview.retry` reissues — ever become non-null in production. See
+    // `core/preview/model/session-commands.ts`'s `noteSessionEstablished` doc comment
+    // for the full "why".
+    context.setActivePreviewSession(session, spec);
     context.setPreviewSourceKind("current");
 
     const readyEvent =
@@ -367,35 +433,103 @@ function selectCurrentSource(
     // second, locally-minted `uuidv7()`. That second mint was the root of three different
     // `previewSessionId`s in circulation for one live session (this file's own header,
     // "ONE NARROWER GAP"; `core/kernel/types.ts`'s `Kernel.currentPreviewSessionId` doc).
-    const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
-    if (previewSessionId === null || !isUuidv7(previewSessionId)) {
-      // Defensive only: `setActivePreviewSession` above always calls
-      // `noteSessionEstablished`, which mints a fresh id unconditionally — should be
-      // unreachable. The session/source-kind are already set correctly; only the
-      // `preview.sourceChanged` event (which needs a real id) is skipped here rather than
-      // built with a fabricated one.
-      console.warn(
-        "core/kernel/handlers/preview-export: selectCurrentSource established a session but previewSessionCommands has no valid live previewSessionId — preview.sourceChanged skipped",
-      );
-      return readyEvent;
-    }
-
-    const sourceChangedEvent: PublishableEventV1<"preview.sourceChanged"> = {
-      kind: "preview.sourceChanged",
-      payload: {
-        previewSessionId,
-        pageSlug: payload.pageSlug,
-        source: { kind: "current" },
-        sourceHash: settings.sourceHash,
-        hostMode: session.identity.mode,
-      },
-      correlation: { ...correlation, previewSessionId },
-    };
-
-    return [...readyEvent, sourceChangedEvent];
+    // THE EVENTS THAT LET THE UI LEAVE AN ERROR STATE — see {@link sessionLiveEvents}, which
+    // both session-establishing paths now share. Every field is read from something real: the
+    // incarnation identity from the router that mints frame tokens against it, the page/source
+    // from the settings just resolved, mode and host mode from the session the host actually
+    // returned, and size/theme from the very spec it was established with.
+    return [
+      ...readyEvent,
+      ...sessionLiveEvents(
+        context,
+        {
+          pageSlug: payload.pageSlug,
+          sourceHash: settings.sourceHash,
+          hostMode: session.identity.mode,
+          interactionMode: session.interactionMode,
+          size: spec.size,
+          theme: spec.theme,
+        },
+        correlation,
+        "selectCurrentSource",
+      ),
+    ];
   });
 
   return startedOutcome([admissionEvent], operationId);
+}
+
+/**
+ * The pair of events that tells the UI a preview session is LIVE — `preview.sessionReady`
+ * followed by `preview.sourceChanged`.
+ *
+ * Shared by the two paths that establish a session (`selectCurrentSource` and, since this fix,
+ * `handleRetry`) because publishing only the machine's `kernel.stateChanged` is exactly the
+ * defect this repo already paid for once: `ui/mirror`'s reducer switches on event KIND, so a
+ * transition record cannot move `PreviewMirror` out of `{phase:"failed"}`/`{phase:"circuit-open"}`
+ * — and `Workspace.tsx`'s `renderPreviewRegion` tests both of those BEFORE it tests for a live
+ * frame. A recovery that published only the transition therefore streamed real frames behind a
+ * permanently pinned error panel.
+ *
+ * Returns `[]` (logged, never a fabricated identity) when the router has no live incarnation to
+ * name. Order is load-bearing: the mirror applies `preview.sourceChanged` only while already
+ * `ready`, so the readiness event must come first in the same batch.
+ */
+function sessionLiveEvents(
+  context: HandlerContext,
+  live: {
+    // A plain `string`, matching BOTH producers: `HostSessionSpecV1.pageSlug` and the wire
+    // payload's own `pageSlug` are unbranded, and the schema validates it on the way out.
+    readonly pageSlug: string;
+    readonly sourceHash: Sha256Hex;
+    readonly hostMode: string;
+    readonly interactionMode: PreviewSession["interactionMode"];
+    readonly size: Size;
+    readonly theme: string;
+  },
+  correlation: EventCorrelationV1,
+  origin: string,
+): readonly PublishableEventV1[] {
+  const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
+  const nonce = context.previewSessionCommands.currentNonce();
+  if (previewSessionId === null || !isUuidv7(previewSessionId) || nonce === null) {
+    console.warn(
+      `core/kernel/handlers/preview-export: ${origin} established a session but previewSessionCommands has no valid live incarnation identity — preview.sessionReady and preview.sourceChanged skipped`,
+    );
+    return [];
+  }
+  const scoped: EventCorrelationV1 = { ...correlation, previewSessionId };
+  // `initialFrameSeq` is "0" because no frame has been delivered on this incarnation yet — the
+  // host's own `frameSeq` is monotonic from "1" (`host/protocol/types.ts`), so "0" states "none
+  // yet" rather than naming a frame that does not exist.
+  return [
+    {
+      kind: "preview.sessionReady",
+      payload: {
+        previewSessionId,
+        nonce,
+        pageSlug: live.pageSlug,
+        sourceHash: live.sourceHash,
+        hostMode: live.hostMode,
+        interactionMode: live.interactionMode,
+        size: live.size,
+        theme: live.theme,
+        initialFrameSeq: "0",
+      },
+      correlation: scoped,
+    },
+    {
+      kind: "preview.sourceChanged",
+      payload: {
+        previewSessionId,
+        pageSlug: live.pageSlug,
+        source: { kind: "current" },
+        sourceHash: live.sourceHash,
+        hostMode: live.hostMode,
+      },
+      correlation: scoped,
+    },
+  ];
 }
 
 /** A fresh 32-lowercase-hex-char stand-in host nonce — mirrors `core/preview/model/session-commands.ts`'s own `mintHostNonce` for the identical documented reason (no real host nonce source exists in this port slice). */
@@ -406,11 +540,118 @@ function mintPlaceholderNonce(): string {
 }
 
 /**
+ * `preview.circuitOpened.attempts` — how many times THIS Kernel tried and failed to establish a
+ * preview session in the command that opened the circuit. That is exactly one: each
+ * `preview.select*` makes a single `HostSupervisorPort.preview()` call, and this is the branch
+ * where that one call came back `HOST_CIRCUIT_OPEN`.
+ *
+ * CORRECTED (review, 2026-07-26): this was named `..._PLACEHOLDER` and documented as a stand-in
+ * for the HOST's own restart count. That framing was wrong in both directions — it implied the
+ * published number was fabricated, and it invited reading it as a host statistic it never was.
+ * The value is a real, measured Kernel-side count; only its SCOPE is narrow, and this comment is
+ * where that scope is stated so no consumer mistakes it for the host's restart budget.
+ *
+ * THE HOST'S OWN COUNT REMAINS OUT OF REACH, and deliberately so rather than approximated:
+ * `toHostFailureDto` (`host/adapters/host-supervisor.ts`) puts only `supervisorErrorCode` into
+ * `FailureDtoV1.details`, and `core` may not import `host` to read `MAX_AUTOMATIC_RESTARTS`
+ * (this project's layering — `host` implements `core/ports`, never the reverse).
+ * `SupervisorEventV1`'s `type: "circuitOpened"` variant (`core/ports/host-supervisor.ts`) does
+ * carry a real host-side `attempts`, but only over the separate `onEvent` diagnostic channel;
+ * correlating that stream back to this specific command is a materially larger change. Until it
+ * exists, publishing this Kernel-scoped count is honest and publishing the host's would be a
+ * guess.
+ */
+const KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND = 1;
+
+/**
+ * DEFECT 1 CLOSURE — kernel-command-contract §7.6 row KCC:367: "`failed` |
+ * `kernel.preview.openCircuit` | `circuit-open` | Host restart budget is exhausted."
+ * `preview-machine.ts`'s own table fixes `openCircuit`'s only legal source as
+ * `"failed"`, which `failSession`'s own `sessionFailed` apply (its caller, just above)
+ * always reaches first. Before this fix NOTHING in production ever applied
+ * `kernel.preview.openCircuit`, so `"circuit-open"` — and therefore `preview.retry`,
+ * whose own capability guard (`core/capabilities/model/guards.ts`'s
+ * `previewFamilyReason`, `case "preview.retry"`) requires exactly that phase — was
+ * permanently unreachable. The ONE typed signal this row's own rule names is
+ * `host/adapters/host-supervisor.ts`'s `HOST_CIRCUIT_OPEN` (mapped from the host's real
+ * `CIRCUIT_OPEN` `SupervisorError`, itself `host/supervisor/model/restart-policy.ts`'s
+ * own "restart budget exhausted" — read and verified).
+ *
+ * Every field of the built `preview.circuitOpened` payload traces to something real
+ * EXCEPT `attempts` — see {@link KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND}'s own comment.
+ */
+function openCircuitEvents(
+  context: HandlerContext,
+  previewSessionId: UUIDv7,
+  pageSlug: PageSlug,
+  sourceHash: Sha256Hex,
+  correlation: EventCorrelationV1,
+  finalFailure: FailureDtoV1,
+): readonly PublishableEventV1[] {
+  const openOutcome = context.machines.preview.apply("kernel.preview.openCircuit");
+  if (openOutcome.kind !== "changed") {
+    // Defensive only: `sessionFailed` (the caller's own `failedOutcome`) just moved the
+    // machine to `"failed"` in this same synchronous step, and `openCircuit`'s only
+    // legal source per `preview-machine.ts`'s own table IS `"failed"` — should be
+    // unreachable.
+    console.warn(
+      `core/kernel/handlers/preview-export: openCircuit was ${openOutcome.kind} right after sessionFailed — defensive, should be unreachable from "failed"`,
+    );
+    return [];
+  }
+
+  const events: PublishableEventV1[] = [
+    previewStateChangedEvent("kernel.preview.openCircuit", openOutcome, correlation),
+  ];
+
+  // "retry capability state" (§9, KCC:826): read directly off the SAME machine
+  // `openCircuit` just moved — the exact check `previewFamilyReason`'s own
+  // `case "preview.retry"` performs (`isLegalTransition(..., "kernel.preview.
+  // retryCircuit")`). Always `{available: true}` in practice (`retryCircuit`'s only
+  // legal source IS `circuit-open`, which `openOutcome.kind === "changed"` just
+  // confirmed this machine reached), but read live off `canApply` rather than
+  // hardcoded, so a future transition-table change cannot silently desync this payload
+  // from the guard it is meant to describe.
+  const retryCapability: CapabilityStateV1 = context.machines.preview.canApply(
+    "kernel.preview.retryCircuit",
+  )
+    ? { available: true }
+    : { available: false, reasons: [{ code: "OPERATION_BUSY" }] };
+
+  const circuitOpenedEvent: PublishableEventV1<"preview.circuitOpened"> = {
+    kind: "preview.circuitOpened",
+    payload: {
+      previewSessionId,
+      pageSlug,
+      sourceHash,
+      attempts: KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND,
+      finalFailure,
+      retryCapability,
+    },
+    correlation: { ...correlation, previewSessionId },
+  };
+  events.push(circuitOpenedEvent);
+  return events;
+}
+
+/**
  * `sourceHash` is `null` only when `resolvePageSettings` failed before ever reading the
  * page's live source (i.e. `pageReader.readSource` itself failed) — the one case with no
  * real hash to report. `PreviewFailurePayloadV1.sourceHash` is non-nullable, so this falls
  * back to 64 zero characters, a schema-valid but clearly-not-a-real-digest placeholder,
  * documented here rather than silently passed off as a real hash.
+ *
+ * DEFECT 1 CLOSURE: when `failure.code === "HOST_CIRCUIT_OPEN"`, this also applies
+ * `kernel.preview.openCircuit` (legal from the `"failed"` this function's own
+ * `sessionFailed` just reached) and appends a schema-valid `preview.circuitOpened` —
+ * see {@link openCircuitEvents}'s own header for the full citation. Published ALONGSIDE
+ * `preview.failed` (not instead of it): both transitions genuinely applied
+ * (`sessionFailed` then `openCircuit`), and the Global Constraint that an applied
+ * transition must be returned for publication applies to `preview.failed`'s own
+ * `sessionFailed` bump the same as any other — `ui/mirror`'s own `preview.circuitOpened`
+ * case overwrites unconditionally (no prior-phase gate, unlike `sourceChanged`), so
+ * publishing both in one batch, in this order, leaves the UI at the correct final
+ * `circuit-open` state.
  */
 function failSession(
   context: HandlerContext,
@@ -427,10 +668,11 @@ function failSession(
       previewStateChangedEvent("kernel.preview.sessionFailed", failedOutcome, correlation),
     );
   }
+  const previewSessionId = uuidv7();
   const failedEvent: PublishableEventV1<"preview.failed"> = {
     kind: "preview.failed",
     payload: {
-      previewSessionId: uuidv7(),
+      previewSessionId,
       nonce: mintPlaceholderNonce(),
       pageSlug,
       sourceHash: sourceHash ?? "0".repeat(64),
@@ -440,6 +682,27 @@ function failSession(
     correlation,
   };
   events.push(failedEvent);
+
+  if (failure.code === "HOST_CIRCUIT_OPEN") {
+    if (sourceHash === null) {
+      // Defensive only: `HOST_CIRCUIT_OPEN` is a HOST-call failure code
+      // (`host/adapters/host-supervisor.ts`'s own `toHostFailureDto`) — the only
+      // `failSession` call site that can ever pass it already resolved a real
+      // `sourceHash` before ever reaching `hostSupervisor.preview` (the settings/
+      // workspace-read failure branches, the ones that CAN pass a null `sourceHash`,
+      // never carry this code). Should be unreachable; `openCircuit`/
+      // `preview.circuitOpened` are skipped rather than built with a fabricated hash —
+      // `preview.failed`'s own `sessionFailed` transition above still publishes.
+      console.warn(
+        "core/kernel/handlers/preview-export: HOST_CIRCUIT_OPEN reported with no resolved sourceHash — defensive, should be unreachable; openCircuit/preview.circuitOpened skipped",
+      );
+    } else {
+      events.push(
+        ...openCircuitEvents(context, previewSessionId, pageSlug, sourceHash, correlation, failure),
+      );
+    }
+  }
+
   return events;
 }
 
@@ -721,7 +984,39 @@ function handleRetry(
     );
     // FIX ROUND 1, FINDING 2: see this handler's own header — sync `activePreview` with the
     // session the router's own `establishSession` already put into its private tracking.
-    context.setActivePreviewSession(context.previewSessionCommands.currentSession());
+    const recoveredSession = context.previewSessionCommands.currentSession();
+    context.setActivePreviewSession(recoveredSession);
+    // ...and the source kind, which a recovery used to leave stale on `kernel.snapshot`.
+    context.setPreviewSourceKind("current");
+
+    // THE HALF THAT MADE THE RECOVERY INVISIBLE (review finding, 2026-07-26). This branch used
+    // to publish ONLY the machine transition above — so `PreviewMirror` stayed
+    // `{phase:"circuit-open"}` and `Workspace.tsx`'s `renderPreviewRegion`, which tests that
+    // phase BEFORE it tests for a live frame, kept the "preview stopped after repeated failures"
+    // panel pinned over a preview that had genuinely recovered and was streaming frames.
+    const recoveredSpec = context.previewSessionCommands.currentSpec();
+    if (recoveredSession === null || recoveredSpec === null) {
+      // Defensive: `retry()` only reports `accepted` after `establishSession` stored both.
+      console.warn(
+        "core/kernel/handlers/preview-export: preview.retry succeeded but the router reports no live session/spec — preview.sessionReady skipped, the UI will stay on its error panel",
+      );
+      return events;
+    }
+    events.push(
+      ...sessionLiveEvents(
+        context,
+        {
+          pageSlug: recoveredSpec.pageSlug,
+          sourceHash: recoveredSpec.sourceHash,
+          hostMode: recoveredSession.identity.mode,
+          interactionMode: recoveredSession.interactionMode,
+          size: recoveredSpec.size,
+          theme: recoveredSpec.theme,
+        },
+        correlation,
+        "preview.retry",
+      ),
+    );
     return events;
   });
   return startedOutcome([], operationId);

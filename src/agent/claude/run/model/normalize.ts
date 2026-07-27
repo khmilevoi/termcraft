@@ -42,6 +42,23 @@ export function deriveUsage(result: SDKResultMessage): TokenUsage | null {
 type ContentBlock = Extract<SDKMessage, { type: "assistant" }>["message"]["content"][number];
 
 /**
+ * The vendor's USER content-block union, derived the same structural way as
+ * {@link ContentBlock} above rather than importing `@anthropic-ai/sdk`'s
+ * `ContentBlockParam` directly — this file has no other reason to depend on that
+ * package. `SDKUserMessage`/`SDKUserMessageReplay` both type `message` as
+ * `MessageParam`, whose `content` is `string | Array<ContentBlockParam>`; the
+ * `Extract<..., readonly unknown[]>` narrows away the bare-string shape (a
+ * message with no blocks at all) before indexing to the element type. This is
+ * where the SDK delivers `tool_result` blocks carrying `is_error` — confirmed
+ * against `ToolResultBlockParam` in the installed
+ * `@anthropic-ai/sdk/resources/messages/messages.d.ts`.
+ */
+type UserContentBlock = Extract<
+  Extract<SDKMessage, { type: "user" }>["message"]["content"],
+  readonly unknown[]
+>[number];
+
+/**
  * Map one assistant content block to an event, or null when the block carries
  * nothing renderable. The `typeof` guards look redundant against the vendor
  * types, but this data crosses a process boundary untyped at runtime — a
@@ -54,9 +71,27 @@ function normalizeBlock(block: ContentBlock): AgentEvent | null {
   if (block.type === "text" && typeof block.text === "string") {
     return { kind: "reasoning", text: block.text };
   }
-  if (block.type === "tool_use" && typeof block.name === "string") {
+  if (block.type === "tool_use" && typeof block.name === "string" && typeof block.id === "string") {
     const { op, target } = mapToolUse(block.name, (block.input ?? {}) as Record<string, unknown>);
-    return { kind: "tool", op, target };
+    return { kind: "tool", id: block.id, op, target };
+  }
+  return null;
+}
+
+/**
+ * Map one USER content block to an event, or null when it carries nothing
+ * renderable. Only a `tool_result` block whose `is_error` is explicitly `true`
+ * yields an event (see `AgentEvent`'s own doc: successes are not mirrored) —
+ * everything else (ordinary text, an ok tool_result, a malformed block missing
+ * `tool_use_id`) is dropped silently, matching {@link normalizeBlock}'s own rule.
+ */
+function normalizeUserBlock(block: UserContentBlock): AgentEvent | null {
+  if (
+    block.type === "tool_result" &&
+    typeof block.tool_use_id === "string" &&
+    block.is_error === true
+  ) {
+    return { kind: "tool-failed", id: block.tool_use_id };
   }
   return null;
 }
@@ -90,11 +125,12 @@ function normalizeError(result: SDKResultError): AgentEvent[] {
 /**
  * Normalize one vendor `SDKMessage` into zero or more `AgentEvent`s (master
  * §6.1). Thinking blocks and interim assistant text become `reasoning`;
- * `tool_use` becomes `tool`; a success result becomes `final` + `usage`; an
- * error result becomes `error` + `usage` (when derivable). Any message with no
- * mapping yields `[]` — the SDK's message union is large and grows between
- * versions, so being forward-compatible by default is deliberate, not an
- * oversight (entities/turn: "vendor events with no mapping are dropped
+ * `tool_use` becomes `tool`; a `user` message's `tool_result` blocks with
+ * `is_error: true` become `tool-failed`; a success result becomes `final` +
+ * `usage`; an error result becomes `error` + `usage` (when derivable). Any
+ * message with no mapping yields `[]` — the SDK's message union is large and
+ * grows between versions, so being forward-compatible by default is deliberate,
+ * not an oversight (entities/turn: "vendor events with no mapping are dropped
  * silently").
  */
 export function normalizeMessage(msg: SDKMessage): AgentEvent[] {
@@ -103,6 +139,19 @@ export function normalizeMessage(msg: SDKMessage): AgentEvent[] {
     const events: AgentEvent[] = [];
     for (const block of blocks) {
       const event = normalizeBlock(block);
+      if (event !== null) events.push(event);
+    }
+    return events;
+  }
+
+  if (msg.type === "user") {
+    // A plain-string `content` (no blocks at all) carries nothing to normalize —
+    // this is the same "no mapping" case every other unrecognized shape hits.
+    const content = msg.message?.content;
+    if (!Array.isArray(content)) return [];
+    const events: AgentEvent[] = [];
+    for (const block of content) {
+      const event = normalizeUserBlock(block);
       if (event !== null) events.push(event);
     }
     return events;

@@ -35,7 +35,7 @@ import {
   createDispatch,
   createEventBus,
 } from "core/mailbox";
-import type { PreviewFrameV1, PreviewSession } from "core/ports";
+import type { HostSessionSpecV1, PreviewFrameV1, PreviewSession } from "core/ports";
 import {
   type FrameAckError,
   type PreviewNoLiveSessionError,
@@ -52,6 +52,7 @@ import {
   type EventPayloadByKindV1,
   type FrameIdentityV1,
   type FrameTokenV1,
+  type PageDescriptorV1,
   type UUIDv7,
   eventPayloadV1SchemaByKind,
   isUuidv7,
@@ -155,6 +156,17 @@ export function createKernel(deps: KernelDeps): Kernel {
     const growableActiveChatIdAtom = atom<UUIDv7 | null>(null, "kernel.growable.activeChatId");
     const growableActivePageSlugAtom = atom<string | null>(null, "kernel.growable.activePageSlug");
     let growableLivePreviewSessionId: UUIDv7 | null = null;
+    /**
+     * The descriptor list of the LAST `page.descriptorsChanged` this Kernel published — the
+     * "before" side any later producer needs to diff against, tracked here for the same reason
+     * as its `activePageSlug` sibling above: by inspecting the events this Kernel already
+     * publishes, never as a second independent source of truth.
+     *
+     * Added so `handlers/turn.ts` can publish an HONEST `turn-apply` diff after a commit.
+     * Without a real before-list its `changes` array could only have been fabricated, and §9
+     * requires that "every change carries its exact before/after source-hash binding".
+     */
+    let growablePageDescriptors: readonly PageDescriptorV1[] = [];
     // (§10 smoke closeout, bug 2) The currently-open project's id — the ONE `kernel.snapshot`
     // field with no other live source anywhere in this Kernel (unlike `activeChatId`/
     // `activePageSlug` above, both of which now have their own named atom, or `trust`, which
@@ -387,6 +399,7 @@ export function createKernel(deps: KernelDeps): Kernel {
         );
         if (!parsed.success) return warnOnGrowthPayloadMismatch(event.kind, parsed.error);
         growableActivePageSlugAtom.set(parsed.data.activePageSlug);
+        growablePageDescriptors = parsed.data.descriptors;
         return;
       }
       if (event.kind === "preview.sourceChanged") {
@@ -408,6 +421,7 @@ export function createKernel(deps: KernelDeps): Kernel {
         ) {
           growableActiveChatIdAtom.set(null);
           growableActivePageSlugAtom.set(null);
+          growablePageDescriptors = [];
           growableLivePreviewSessionId = null;
           growableProjectId = null;
           return;
@@ -583,13 +597,21 @@ export function createKernel(deps: KernelDeps): Kernel {
     // directly to establish/close a session (Gap A), never `previewSessionCommands`'s own
     // `selectPage`/`close`, so `publishFrame`/`acknowledgeDisplay` would otherwise never
     // see a live incarnation to mint/acknowledge against.
-    function setActivePreviewSession(session: PreviewSession | null): void {
+    // DEFECT 2 CLOSURE (`core/preview/model/session-commands.ts`'s own
+    // `noteSessionEstablished` doc comment has the full "why"): `spec` is forwarded
+    // verbatim, never reconstructed — the ONLY thing this function adds over its own
+    // prior shape is passing through the second parameter `handlers/preview-export.ts`
+    // now supplies.
+    function setActivePreviewSession(
+      session: PreviewSession | null,
+      spec?: HostSessionSpecV1,
+    ): void {
       activePreview = session;
       if (session === null) {
         previewSessionCommands.noteSessionClosed();
         return;
       }
-      previewSessionCommands.noteSessionEstablished(session);
+      previewSessionCommands.noteSessionEstablished(session, spec);
     }
     function currentPreviewSession(): PreviewSession | null {
       return activePreview;
@@ -744,6 +766,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       setSelection,
       selection,
       currentPreviewSession,
+      currentPageDescriptors: () => growablePageDescriptors,
       previewSessionCommands,
       frameTokenLedger,
       geometryTokenLedger,

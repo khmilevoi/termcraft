@@ -39,7 +39,7 @@ flowchart LR
 
     ui["ui/ · OpenTUI shell<br/>(phase 7 complete)"]
     runtime["runtime/ · @termcraft/runtime<br/>saved-page facade"]
-    infra["infrastructure/<br/>durability · fs-guard · framing · clock ·<br/>uuid · process (owned Job Object tree)<br/>domain-free"]
+    infra["infrastructure/<br/>durability · fs-guard · framing · clock · uuid ·<br/>debug-log · process (owned Job Object tree)<br/>domain-free"]
 
     core -- imports --> entities
     store -- "implements core ports" --> core
@@ -100,7 +100,7 @@ flowchart LR
      ui/                OpenTUI shell; imports core's boundary types only       [landed]
      runtime/           @termcraft/runtime — saved-page facade; leaf            [landed]
      infrastructure/    domain-free technical capabilities                     [landed]
-       clock/  durability/  fs-guard/  framing/  process/  uuid/
+       clock/  debug-log/  durability/  fs-guard/  framing/  process/  uuid/
    ```
 
    `agent/` splits in two on purpose. `agent/types.ts` is the port — the
@@ -477,7 +477,9 @@ vendor tier's own pre-split run-loop file.
   outcome; the terminal latch, queue, and exit confirmation now belong to the shared
   `agent/run/model/engine.ts`, not this file
 - `src/agent/claude/run/model/normalize.ts` — vendor messages into `AgentEvent`s
-  (reasoning, tool, final, error, usage), dropping anything with no mapping
+  (reasoning, tool, tool-failed, final, error, usage), dropping anything with no
+  mapping; the tool-failure kind is read off a vendor `user` message's error-marked
+  tool-result blocks
 - `src/agent/claude/errors/model/sdk-error.ts` — `ClaudeSdkError`, the internal code
   for a failure at the SDK boundary (spawn/stream), mapped to `AgentRunOutcome`/
   `AgentEvent` and never rethrown past the adapter's own surface
@@ -500,6 +502,13 @@ vendor tier's own pre-split run-loop file.
 - `src/infrastructure/process/model/job-object.ts` — the `bun:ffi` Windows Job
   Object implementation (kill-on-close limit flags, `QueryInformationJobObject`
   accounting reads, `TerminateJobObject`) plus the deterministic test double
+- `src/infrastructure/debug-log/index.ts` (`model/sink.ts`, `model/console-tee.ts`) —
+  the opt-in JSONL trace sink and console tee every layer may call: a `channel` name
+  plus an arbitrary data object per line, and no domain vocabulary of its own, so it
+  passes the same test. It exists because a TUI owns the terminal, which means a
+  `console.log` is not a diagnostic channel here — without a file to write to, a
+  producer/consumer seam like "the Kernel published the event but the mirror ignored
+  it" has nowhere to be observed
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
 

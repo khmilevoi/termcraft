@@ -109,7 +109,22 @@ export interface TurnContextV1 {
 }
 
 export type AdmissionOutcomeV1 =
-  | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
+  /**
+   * `finishAdmission` was refused because the machine had already left `admitting` — in practice
+   * always a `turn.cancel` that raced the admission's own multi-step async work
+   * (`turn-machine.ts` lists `{from:"admitting", to:"terminalizing"}` for `requestCancel`).
+   *
+   * `userRecordCommitted` says whether the user's message ALREADY landed durably before that
+   * happened, which it usually has: `runAdmission` commits it well before the transition it then
+   * fails on. Without this flag the caller reported "the turn could not be admitted" and wrote it
+   * into the chat directly beneath the user's own visible message — a status contradicted by the
+   * line above it (defect fix, 2026-07-26).
+   */
+  | {
+      readonly kind: "illegal";
+      readonly code: CommandRejectionCode;
+      readonly userRecordCommitted: boolean;
+    }
   | {
       readonly kind: "blocked";
       readonly phase: "admit" | "chat-append-base" | "workspace";

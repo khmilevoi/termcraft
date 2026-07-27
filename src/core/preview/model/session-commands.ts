@@ -121,6 +121,29 @@ export interface PreviewSessionCommands {
   readonly acknowledgeDisplay: (frameToken: FrameTokenV1) => FrameAckError | FrameIdentityV1;
   readonly currentPreviewSessionId: () => string | null;
   /**
+   * The live incarnation's host nonce — the SAME value {@link publishFrame} stamps into every
+   * `FrameIdentityV1` it mints a frame token against, never a fresh mint per read. Paired with
+   * {@link currentPreviewSessionId} because `preview.sessionReady`'s payload
+   * (`core/protocol`'s `PreviewSessionReadyPayloadV1`, kernel-command-contract §9 row KCC:820)
+   * requires "`previewSessionId`, current nonce, ...", and `handlers/preview-export.ts` builds
+   * that event from outside this module. Exposing the tracked value is what keeps that event
+   * honest: without it the handler would have to mint a second nonce that identifies nothing.
+   *
+   * `null` under exactly the same conditions as {@link currentPreviewSessionId} — the two are
+   * set and cleared together in every branch of this file.
+   */
+  readonly currentNonce: () => string | null;
+  /**
+   * The `HostSessionSpecV1` the live session was established with — the same value
+   * {@link retry} reissues. Exposed because a RE-established session's own
+   * `preview.sessionReady` event needs its `size`/`theme`, and those live nowhere else: the
+   * `PreviewSession` the host hands back carries `identity` (page, source hash, kit version) and
+   * `interactionMode`, but never the size or theme it was started at.
+   *
+   * `null` before the first establish and after `close()`.
+   */
+  readonly currentSpec: () => HostSessionSpecV1 | null;
+  /**
    * The Kernel-tracked live `PreviewSession` itself, for the ONE caller that needs it
    * outside this module: `handlers/preview-export.ts`'s `handleRetry`, after a successful
    * `retry()` call, to feed `HandlerContext.setActivePreviewSession` (fix round 1, Finding
@@ -147,8 +170,22 @@ export interface PreviewSessionCommands {
    * `setActivePreviewSession` calls this the moment a non-null session lands, seeding the
    * exact same fresh incarnation identity `establishSession` mints for its own
    * (currently unreachable) callers, over the SAME `frameTokenLedger`/`frameBroker`.
+   *
+   * **DEFECT 2 CLOSURE:** `spec` is the real `HostSessionSpecV1` the caller already has in
+   * hand (the very same one it just handed to `HostSupervisorPort.preview`) — threaded
+   * into this module's own private `lastSpec`, the ONE field `retry()` (above) reads.
+   * Before this fix `lastSpec` was set ONLY by `selectSource`, which `preview-export.ts`
+   * never calls (Gap A) — so `retry()` always took its own "no remembered spec to
+   * reissue" refusal, even once `preview.retry` became reachable via
+   * `kernel.preview.openCircuit` (defect 1's own fix). `spec` is OPTIONAL: the ONE other
+   * caller of this method, `handlers/preview-export.ts`'s `handleRetry`, re-syncs
+   * `activePreview` with the session `retry()`'s own `establishSession` already
+   * re-established (fix round 1, Finding 2) — at that point `lastSpec` already holds the
+   * exact spec `retry()` itself just reissued, so overwriting it with a reconstructed
+   * value would add nothing; omitting `spec` there deliberately leaves `lastSpec`
+   * untouched rather than requiring a caller to re-supply a value it does not have.
    */
-  readonly noteSessionEstablished: (session: PreviewSession) => void;
+  readonly noteSessionEstablished: (session: PreviewSession, spec?: HostSessionSpecV1) => void;
   /** The paired teardown hook — see {@link noteSessionEstablished}'s own comment. */
   readonly noteSessionClosed: () => void;
 }
@@ -383,10 +420,13 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
    * already-proven code for no benefit a caller of THIS module can observe. The bodies
    * below are an intentional literal mirror, not a re-use.
    */
-  function noteSessionEstablished(session: PreviewSession): void {
+  function noteSessionEstablished(session: PreviewSession, spec?: HostSessionSpecV1): void {
     currentSession = session;
     currentPreviewSessionId = uuidv7();
     currentNonce = mintHostNonce();
+    // DEFECT 2 CLOSURE — see this function's own interface-level doc comment: only
+    // overwrite `lastSpec` when the caller actually supplied one, never with `undefined`.
+    if (spec !== undefined) lastSpec = spec;
     deps.frameBroker.clear();
     deps.frameTokenLedger.invalidateCurrent();
   }
@@ -412,6 +452,8 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     publishFrame,
     acknowledgeDisplay,
     currentPreviewSessionId: () => currentPreviewSessionId,
+    currentNonce: () => currentNonce,
+    currentSpec: () => lastSpec,
     currentSession: () => currentSession,
     noteSessionEstablished,
     noteSessionClosed,

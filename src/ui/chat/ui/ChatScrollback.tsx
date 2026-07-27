@@ -1,6 +1,8 @@
 import type { ChatRecord as ChatRecordDto } from "ui/mirror";
+import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { flattenMarkdownLite } from "../model/markdown-lite";
+import { markdownLineRows } from "../model/text-rows";
 import { ChatRecord, type ChatRecordProps } from "./ChatRecord";
 
 /** The design engine's own restore-record sample data (`design/termcraft-engine.js:995`, `wsRestoreApplied`: `"⟲ restored main from a1b2c3d"`) uses a 7-char short hash, not the full commit id — the one display convention the engine actually defines for this field. */
@@ -74,6 +76,58 @@ export interface ChatScrollbackProps {
   readonly records: readonly ChatRecordDto[];
   /** The agent's display name for every agent-role header (M22) — see `ChatRecordProps.agentLabel`. */
   readonly agentLabel: string;
+  /** The inner text width records wrap against — the panel's own content width. */
+  readonly width: number;
+  /**
+   * How many terminal rows this scrollback may occupy. Required, not optional: an unbounded
+   * scrollback is precisely the defect this prop exists to prevent (see the component's doc).
+   */
+  readonly maxRows: number;
+}
+
+/**
+ * The design's own scrollback-indicator block: the `▲ N earlier messages` line plus the blank
+ * row after it (`design/termcraft-engine.js:569`'s `y += 2`).
+ */
+const INDICATOR_ROWS = 2;
+
+/** One record's true row cost: its role header plus the rows its lines wrap to at `width`. */
+function recordRowCost(record: ChatRecordDto, agentLabel: string, width: number): number {
+  return 1 + markdownLineRows(recordToChatRecordProps(record, agentLabel).lines, width);
+}
+
+/**
+ * The newest run of records that fits in `maxRows`, plus how many older ones that left behind.
+ *
+ * Tail-anchored, matching the design: `chatSeq` draws the sequence downward and simply stops at
+ * `composerTop - 1`, and the frames that overflow carry `o.scrollback: '▲ N earlier messages'` at
+ * the top (`design/termcraft-engine.js:569`, `:658`, `:737`). So the NEWEST records are the ones
+ * that survive and the older ones are summarised — never the reverse.
+ *
+ * The two-pass shape matters: the indicator only costs rows when something is actually dropped,
+ * and dropping is what the first pass discovers. Reserving its rows up front would truncate a
+ * tail that would otherwise have fit exactly.
+ */
+function selectVisibleTail(
+  records: readonly ChatRecordDto[],
+  agentLabel: string,
+  width: number,
+  maxRows: number,
+): { readonly visible: readonly ChatRecordDto[]; readonly dropped: number } {
+  const costs = records.map((record) => recordRowCost(record, agentLabel, width));
+  const total = costs.reduce((sum, cost) => sum + cost, 0);
+  if (total <= maxRows) return { visible: records, dropped: 0 };
+
+  const budget = maxRows - INDICATOR_ROWS;
+  let used = 0;
+  let firstVisible = records.length;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const cost = costs[index] ?? 0;
+    if (used + cost > budget) break;
+    used += cost;
+    firstVisible = index;
+  }
+  return { visible: records.slice(firstVisible), dropped: firstVisible };
 }
 
 /**
@@ -86,9 +140,47 @@ export interface ChatScrollbackProps {
  */
 export function ChatScrollback(props: ChatScrollbackProps) {
   if (props.records.length === 0) return null;
+  if (props.maxRows < 1) return null;
+
+  const { visible, dropped } = selectVisibleTail(
+    props.records,
+    props.agentLabel,
+    props.width,
+    props.maxRows,
+  );
+  // Nothing to say and no room to say it in — better blank than an indicator that would itself
+  // overflow the budget it exists to enforce.
+  if (visible.length === 0 && props.maxRows < INDICATOR_ROWS) return null;
+
   return (
     <box id={props.id} flexDirection="column">
-      {props.records.map((record) => {
+      {dropped > 0 && (
+        <box
+          id={`${props.id}-earlier`}
+          position="relative"
+          width={props.width}
+          height={INDICATOR_ROWS}
+        >
+          <text
+            id={`${props.id}-earlier-label`}
+            fg={SHELL_PALETTE.amberDim}
+            attributes={shellAttrs({ bold: true })}
+          >
+            {`▲ ${dropped} earlier ${dropped === 1 ? "message" : "messages"}`}
+          </text>
+          {/* The design pins a second `▲` at the strip's right edge (`this.put(b,maxX,y,'▲')`). */}
+          <text
+            id={`${props.id}-earlier-mark`}
+            position="absolute"
+            right={0}
+            top={0}
+            fg={SHELL_PALETTE.amberDim}
+          >
+            {"▲"}
+          </text>
+        </box>
+      )}
+      {visible.map((record) => {
         const recordProps = recordToChatRecordProps(record, props.agentLabel);
         return (
           // keyed intrinsic wrapper — function components carry no `key` in this repo's

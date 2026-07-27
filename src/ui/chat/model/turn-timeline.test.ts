@@ -5,7 +5,17 @@ import type { TurnTimelineEntry } from "ui/mirror";
 import { foldTurnTimeline, wrapText } from "./turn-timeline";
 
 const reasoning = (text: string): TurnTimelineEntry => ({ kind: "reasoning", text });
-const step = (op: string, target: string): TurnTimelineEntry => ({ kind: "step", op, target });
+const step = (
+  op: string,
+  target: string,
+  opts: { readonly id?: string; readonly failed?: boolean } = {},
+): TurnTimelineEntry => ({
+  kind: "step",
+  id: opts.id ?? `${op}-${target}`,
+  op,
+  target,
+  failed: opts.failed ?? false,
+});
 
 /** Design `genTurn`'s own `R.samples` (`design/termcraft-engine.js:519`) — the measured
  *  248-491-char prose the brief cites, reused here rather than an invented fixture string. */
@@ -141,14 +151,54 @@ describe("foldTurnTimeline", () => {
     expect(last.lines).toHaveLength(3);
   });
 
-  it("marks the last step entry active (not done) and every earlier step done", () => {
+  it("marks the last step entry running (not done) and every earlier step done", () => {
     const { entries } = foldTurnTimeline({
       entries: [step("read", "design"), step("write", "widgets")],
       width: 20,
       maxRows: 20,
       liveCap: 3,
     });
-    expect(entries[0]).toEqual({ kind: "step", op: "read", target: "design", done: true });
-    expect(entries[1]).toEqual({ kind: "step", op: "write", target: "widgets", done: false });
+    expect(entries[0]).toEqual({ kind: "step", op: "read", target: "design", status: "done" });
+    expect(entries[1]).toEqual({ kind: "step", op: "write", target: "widgets", status: "running" });
+  });
+
+  it("renders the design's third glyph, ✗ failed, for a step the mirror already flagged failed (03-workspace-generating.dc.html:44)", () => {
+    const { entries } = foldTurnTimeline({
+      entries: [step("read", "design", { failed: true }), step("write", "widgets")],
+      width: 20,
+      maxRows: 20,
+      liveCap: 3,
+    });
+    expect(entries[0]).toEqual({ kind: "step", op: "read", target: "design", status: "failed" });
+    expect(entries[1]).toEqual({ kind: "step", op: "write", target: "widgets", status: "running" });
+  });
+
+  it("failed wins over position — the LAST step, which position alone would call running, still reads failed", () => {
+    // THE COLLISION THIS PRECEDENCE EXISTS FOR. Both other cases put the failed step in a
+    // non-active slot, where a reversed precedence (`isActiveStep ? "running" : failed ? …`)
+    // would produce the same answer and the test would pass either way. Only the ACTIVE slot
+    // separates them — a tool that fails as the newest step is the ordinary case (the agent's
+    // last action errored), and calling it "running" would leave a spinner-adjacent row claiming
+    // work is still in flight after it already failed.
+    const { entries } = foldTurnTimeline({
+      entries: [step("read", "design"), step("write", "widgets", { failed: true })],
+      width: 20,
+      maxRows: 20,
+      liveCap: 3,
+    });
+    expect(entries[0]).toEqual({ kind: "step", op: "read", target: "design", status: "done" });
+    expect(entries[1]).toEqual({ kind: "step", op: "write", target: "widgets", status: "failed" });
+  });
+
+  it("failed wins over position — a failed step earlier in the list is NOT relabelled running just because it is chronologically last among steps kept", () => {
+    const { entries } = foldTurnTimeline({
+      entries: [step("read", "a", { failed: true }), step("edit", "b"), step("run", "build")],
+      width: 20,
+      maxRows: 20,
+      liveCap: 3,
+    });
+    expect(entries[0]).toEqual({ kind: "step", op: "read", target: "a", status: "failed" });
+    expect(entries[1]).toEqual({ kind: "step", op: "edit", target: "b", status: "done" });
+    expect(entries[2]).toEqual({ kind: "step", op: "run", target: "build", status: "running" });
   });
 });

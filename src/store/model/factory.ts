@@ -866,7 +866,7 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
      * never a whole-file read — unlike `scanOrphanTurns`, which genuinely needs every record.
      * The first `user` record is at the file's head by construction, so this bound is generous
      * rather than lossy; a chat whose first user record somehow sits past it lists with a `null`
-     * name and falls back to the UI's own `chatId.slice(0, 8)` label.
+     * name and falls back to the UI's own design-sourced `new chat — fresh context` label.
      */
     async list() {
       const names = safeFs.list("chats");

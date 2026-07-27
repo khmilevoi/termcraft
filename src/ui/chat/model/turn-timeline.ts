@@ -6,9 +6,17 @@ export interface TimelineFold {
   readonly steps: number;
 }
 
-/** One already-folded timeline row, ready to paint — no further wrapping/tailing needed. */
+/**
+ * One already-folded timeline row, ready to paint — no further wrapping/tailing needed.
+ *
+ * A step's `status` is the design's own three-state glyph (`03-workspace-generating.dc.html:44`:
+ * "✓ done, ▸ running, ✗ failed") — `"failed"` wins over position: a step the mirror already
+ * flagged failed (`ui/mirror`'s `TurnTimelineEntry.failed`, folded by tool_use id, never by
+ * position) renders failed regardless of whether it happens to be the chronologically-last step,
+ * which `"running"` is otherwise reserved for.
+ */
 export type RenderedTimelineEntry =
-  | Readonly<{ kind: "step"; op: string; target: string; done: boolean }>
+  | Readonly<{ kind: "step"; op: string; target: string; status: "done" | "running" | "failed" }>
   | Readonly<{ kind: "reasoning"; lines: readonly string[]; live: boolean; clipped: boolean }>;
 
 /**
@@ -61,7 +69,9 @@ function renderPastEntry(
   isActiveStep: boolean,
 ): RenderedTimelineEntry {
   if (entry.kind === "step") {
-    return { kind: "step", op: entry.op, target: entry.target, done: !isActiveStep };
+    // Failed wins over position — see `RenderedTimelineEntry`'s own doc comment.
+    const status = entry.failed ? "failed" : isActiveStep ? "running" : "done";
+    return { kind: "step", op: entry.op, target: entry.target, status };
   }
   const wrapped = wrapText(entry.text, width);
   const first = wrapped[0] ?? "";

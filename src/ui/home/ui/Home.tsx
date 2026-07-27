@@ -8,6 +8,7 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 import { homeSubmitAllowed } from "../types";
 import type { HomeAgentHealth, HomeCombo, HomeProps } from "../types";
 import { HomeHealthPanel } from "./HomeHealthPanel";
+import { HomeOpenFailurePanel } from "./HomeOpenFailurePanel";
 
 const LOGO = "❯ termcraft";
 const TAGLINE = "design terminal UIs by describing them";
@@ -102,10 +103,11 @@ function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
  * own `q`→`/exit` precedent above exists specifically to avoid that class of bug. A shown-but-
  * unwired hint would mislead, so none is shown; `keymap.ts` wires no `r` handler for `advisory`.
  */
-function homeIdleHintKeys(health: HomeAgentHealth): readonly StatusBarHintKey[] {
-  const submitKey: StatusBarHintKey = homeSubmitAllowed(health)
-    ? ["⏎", "create"]
-    : ["⏎", "create", "dis"];
+function homeIdleHintKeys(health: HomeAgentHealth, opening: boolean): readonly StatusBarHintKey[] {
+  // `opening` refuses submit for the same reason `checking` does — the command would be rejected
+  // — so it wears the same `dis` treatment rather than advertising a key that does nothing.
+  const submitKey: StatusBarHintKey =
+    homeSubmitAllowed(health) && !opening ? ["⏎", "create"] : ["⏎", "create", "dis"];
   if (health.kind === "blocked") return [["r", "re-check"], submitKey, ["q", "quit"]];
   return [submitKey, ["/exit", "quit"]];
 }
@@ -122,7 +124,7 @@ function HomeIdle(props: HomeProps) {
   // `⏎ create`'s inline hint (below the prompt box, NOT the status bar's own key row) drops to
   // faint on the SAME two outcomes that refuse submit — `checking` (design `:147`) and `blocked`
   // (design `:174`); `missing` never reaches this component.
-  const createHintFaint = checking || blocked;
+  const createHintFaint = checking || blocked || props.opening;
   const showHealthPanel = health.kind === "blocked" || health.kind === "advisory";
   const badge = homeStatusBadge(health);
   return (
@@ -288,6 +290,21 @@ function HomeIdle(props: HomeProps) {
               <HomeHealthPanel id={`${props.id}-health-panel`} width={iw} health={health} />
             </box>
           )}
+          {
+            // Stacked BELOW the health panel rather than replacing it: the two report unrelated
+            // facts (can the agent run / did the project open) and both can be true at once, so
+            // suppressing either would hide a cause the user needs. See
+            // {@link HomeOpenFailurePanel} for why this panel exists at all.
+            props.openFailure !== null && (
+              <box id={`${props.id}-open-failure-slot`} marginTop={1}>
+                <HomeOpenFailurePanel
+                  id={`${props.id}-open-failure`}
+                  width={iw}
+                  failure={props.openFailure}
+                />
+              </box>
+            )
+          }
         </box>
         <box id={`${props.id}-content-bottom-spacer`} flexGrow={1} />
       </box>
@@ -310,14 +327,20 @@ function HomeIdle(props: HomeProps) {
         // design's Codex sample — it reads the SAME live `combo` this screen's own prompt-area
         // selectors already render, never an invented literal.
         page={{
-          text:
-            health.kind === "ready"
+          // `"no project yet"` is only honest while nothing is opening. CORRECTED (defect fix,
+          // 2026-07-26): relaunching inside an existing project fires a startup `project.open`
+          // whose multi-step ready sequence publishes nothing until it finishes, and Home stays
+          // mounted for all of it — so this line asserted "no project yet" over a project that
+          // was actively loading, for as long as the open took.
+          text: props.opening
+            ? `opening project…  ${props.combo.model} · ${props.combo.effort}`
+            : health.kind === "ready"
               ? `no project yet  ${props.combo.model} · ${props.combo.effort}`
               : `${props.combo.model} · ${props.combo.effort}`,
           fg: "dim",
         }}
         hint={badge}
-        hintKeys={homeIdleHintKeys(health)}
+        hintKeys={homeIdleHintKeys(health, props.opening)}
       />
     </box>
   );

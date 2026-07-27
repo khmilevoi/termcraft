@@ -55,6 +55,23 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: { id: "preview.fullscreen", key: "f2", label: "fullscreen", capability: null },
   },
   {
+    // THE MISSING PRODUCER (defect fix, 2026-07-26). `Workspace.tsx`'s circuit-open ErrorPanel
+    // has always told the user to "press retry to try again", and the Kernel has always declared
+    // the `preview.retry` command — but NOTHING in `src/ui` ever dispatched it, so the sentence
+    // named an action that could not be taken.
+    //
+    // DIVERGENCE, closest faithful mapping (CLAUDE.md: flag the gap, never guess): the design
+    // specifies the affordance in prose but names no key for it — it has no circuit-open screen
+    // at all (`design/12-errors-edge-states.dc.html` enumerates its failure surface and this is
+    // not among them). `f5` is chosen because it continues the design's OWN key vocabulary for
+    // this pane (`f2` fullscreen, `f3` tweaks, `f4` interact — `termcraft-engine.js`'s `wsStatus`
+    // key rows) at the next free slot, and because a bare letter is unusable here for the same
+    // reason `q` became `/exit`: the composer is live and would swallow it as text.
+    id: "preview.retry",
+    execution: { kind: "command", command: "preview.retry" },
+    hotkey: { id: "preview.retry", key: "f5", label: "retry", capability: "preview.retry" },
+  },
+  {
     id: "preview.tweaks",
     execution: { kind: "inert" },
     hotkey: {

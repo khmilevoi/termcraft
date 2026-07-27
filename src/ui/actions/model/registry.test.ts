@@ -55,6 +55,7 @@ describe("SLASH_COMMANDS registry", () => {
       ["chat.create", { kind: "command", command: "chat.create" }],
       ["chat.open-list", { kind: "local", effect: "open-chats" }],
       ["preview.fullscreen", { kind: "local", effect: "fullscreen" }],
+      ["preview.retry", { kind: "command", command: "preview.retry" }],
       ["preview.tweaks", { kind: "inert" }],
       ["preview.interact", { kind: "inert" }],
       ["export.start", { kind: "command", command: "export.start" }],

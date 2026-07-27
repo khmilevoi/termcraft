@@ -101,8 +101,29 @@ export interface FinalizeTurnInputV1 {
   readonly candidateRoot: string;
 }
 
+/**
+ * WHICH machine transition was refused — the field that tells a caller whether a durable commit
+ * exists (defect fix, 2026-07-26).
+ *
+ * `"beginFinalization"` is refused BEFORE `turnTransactions.finalize` is ever called, so nothing
+ * was written: no commit, no page bytes, no chat record. `"markCommitted"`/`"settle"` are refused
+ * only AFTER that call has already returned a durable `TurnCommitV1`.
+ *
+ * Without this discriminator `run-turn.ts` collapsed both into one message — "the turn's commit
+ * landed durably, but the turn machine could not settle onto it" — which it then wrote verbatim
+ * into the chat as a `system:error` record. Cancelling during Gate validation reaches the FIRST
+ * case (`requestCancel` is legal from `validating`, so the machine has already left it by the
+ * time validation returns), so pressing Esc told the user their edit had been committed durably
+ * when nothing at all had been written.
+ */
+export type FinalizeIllegalAtV1 = "beginFinalization" | "markCommitted" | "settle";
+
 export type FinalizeTurnResultV1 =
-  | { readonly kind: "illegal"; readonly code: CommandRejectionCode }
+  | {
+      readonly kind: "illegal";
+      readonly code: CommandRejectionCode;
+      readonly at: FinalizeIllegalAtV1;
+    }
   | { readonly kind: "failed"; readonly failure: FailureDtoV1 }
   | { readonly kind: "committed"; readonly commit: TurnCommitV1 };
 
@@ -142,7 +163,7 @@ export async function finalizeTurn(
   input: FinalizeTurnInputV1,
 ): Promise<FinalizeTurnResultV1> {
   const began = deps.machine.apply("beginFinalization");
-  if (began.kind === "illegal") return { kind: "illegal", code: began.code };
+  if (began.kind === "illegal") return { kind: "illegal", code: began.code, at: "beginFinalization" };
 
   const deadline = deps.deadlines.check();
   if (deadline.kind === "expired")
@@ -175,10 +196,11 @@ export async function finalizeTurn(
   if ("code" in result) return { kind: "failed", failure: result };
 
   const committed = deps.machine.apply("markCommitted");
-  if (committed.kind === "illegal") return { kind: "illegal", code: committed.code };
+  if (committed.kind === "illegal")
+    return { kind: "illegal", code: committed.code, at: "markCommitted" };
 
   const settled = deps.machine.apply("settle");
-  if (settled.kind === "illegal") return { kind: "illegal", code: settled.code };
+  if (settled.kind === "illegal") return { kind: "illegal", code: settled.code, at: "settle" };
   deps.onSettled?.();
 
   // The commit is durable now — see this file's header, "CANDIDATE RETIREMENT".

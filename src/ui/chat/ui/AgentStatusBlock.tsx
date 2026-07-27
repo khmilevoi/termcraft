@@ -8,16 +8,22 @@ export interface AgentGateRetry {
   readonly retryNumber: number;
 }
 
-/** Props for `AgentStatusBlock`. `id` is the mandatory stable id (§3.2). */
+/**
+ * Props for `AgentStatusBlock`. `id` is the mandatory stable id (§3.2).
+ *
+ * NO `agentName`/`connection` (defect fix, 2026-07-26). This block used to draw its own
+ * `● {agentName}` presence row plus a connection meta row, on top of the one the chat panel
+ * already draws — so during every live turn the panel painted `● claude` twice on consecutive
+ * rows. The design has exactly one: `chatSeq` draws the presence line and its `headerMeta` on
+ * the SAME row at the top of the panel and then leaves a blank spacer
+ * (`design/termcraft-engine.js:568`, and `wsChatFresh`'s own `'● codex'` + `'ratatui · connected'`
+ * pair at `:1075` — CORRECTED from `:1078`, which is that function's `'new chat — fresh context'`
+ * placeholder, not the presence row), and the generating block below it (`genTurn`, `:511-565`) draws only the spinner,
+ * the timeline and the fold row — never a second presence line. That header belongs to the
+ * panel, so `ui/workspace`'s `ws-chat-agent` keeps it and this block no longer competes for it.
+ */
 export interface AgentStatusBlockProps {
   readonly id: string;
-  /**
-   * The agent's display name, e.g. `"claude"` (M22: sourced from the kernel snapshot's
-   * `agentIdentity`, never a hardcoded literal like the design's `codex` sample data).
-   */
-  readonly agentName: string;
-  /** The connection meta line, e.g. `"ratatui · connected"`. */
-  readonly connection: string;
   /** Feeds the spinner's `· 2m 40s` segment (design `:547`); `null` renders the spinner alone. */
   readonly startedAt: number | null;
   /** The counted head row (`▲ 6 earlier thoughts · 5 steps`, design `:539`); `null` when nothing was elided. */
@@ -40,27 +46,18 @@ function pluralize(count: number, singular: string, plural: string): string {
 /**
  * The ephemeral in-turn agent status block (design `drawChat`,
  * `design/03-workspace-generating.dc.html`, `design/14-first-generation.dc.html`).
- * Renders the agent presence line, the generating spinner, the ordered/foldable
- * timeline of tool steps and reasoning blocks (design `genTurn`/`thinkRow`/`foldRow`,
+ * Renders the generating spinner, the ordered/foldable timeline of tool steps and
+ * reasoning blocks (design `genTurn`/`thinkRow`/`foldRow`,
  * `design/termcraft-engine.js:511-565`), and any Gate-retry lines — everything the
- * chat panel shows while a turn is in progress, before it either collapses into a
- * persisted record or ends in a system line. Purely presentational: the caller
+ * chat panel adds while a turn is in progress, before it either collapses into a
+ * persisted record or ends in a system line. The presence line is NOT here — see
+ * {@link AgentStatusBlockProps}. Purely presentational: the caller
  * supplies the already-folded rows from `foldTurnTimeline` (`../model/turn-timeline`)
  * — nothing here wraps, tails, or elides on its own.
  */
 export function AgentStatusBlock(props: AgentStatusBlockProps) {
   return (
     <box id={props.id} flexDirection="column">
-      <text
-        id={`${props.id}-agent`}
-        fg={SHELL_PALETTE.green}
-        attributes={shellAttrs({ bold: true })}
-      >
-        {`● ${props.agentName}`}
-      </text>
-      <text id={`${props.id}-connection`} fg={SHELL_PALETTE.faint}>
-        {props.connection}
-      </text>
       {/* The shared animated spinner (`ui/spinner`) rather than a glyph threaded in as a prop:
           it is its own `reatomComponent`, so an 80ms tick repaints this one line instead of the
           whole status block. Colour and weight stay the design's (amber, bold). */}
@@ -92,15 +89,25 @@ export function AgentStatusBlock(props: AgentStatusBlockProps) {
         // repo's no-@types/react environment (src/runtime/ui/list.tsx).
         <box key={`entry-${index}`} id={`${props.id}-entry-${index}`} flexDirection="column">
           {entry.kind === "step" ? (
-            // step row — unchanged from today: ✓ green when done, ▸ fg when active.
+            // step row (design `03-workspace-generating.dc.html:44`): "A step starts with its
+            // glyph in column one (✓ done, ▸ running, ✗ failed)" — the three colours are the
+            // design's own, from that same sentence: done SHELL_PALETTE.green (#8fb96b), running
+            // SHELL_PALETTE.fg (#d7d0c2), failed SHELL_PALETTE.red (#dd7b60) (verified against
+            // `design/termcraft-engine.js`'s `pal` object).
             // divergence: design shows human-authored labels per tool call (e.g.
             // "read current design"); the mirrored AgentEvent stream only carries
             // op+target, so this renders "op target" verbatim instead.
             <text
               id={`${props.id}-entry-${index}-text`}
-              fg={entry.done ? SHELL_PALETTE.green : SHELL_PALETTE.fg}
+              fg={
+                entry.status === "done"
+                  ? SHELL_PALETTE.green
+                  : entry.status === "failed"
+                    ? SHELL_PALETTE.red
+                    : SHELL_PALETTE.fg
+              }
             >
-              {`${entry.done ? "✓ " : "▸ "}${entry.op} ${entry.target}`}
+              {`${entry.status === "done" ? "✓ " : entry.status === "failed" ? "✗ " : "▸ "}${entry.op} ${entry.target}`}
             </text>
           ) : (
             // reasoning row (`thinkRow`, design `:558-560`) — one row per line: `┊` gutter for

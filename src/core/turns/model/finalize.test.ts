@@ -191,7 +191,13 @@ describe("finalizeTurn", () => {
 
     const result = await call;
 
-    expect(result).toEqual({ kind: "illegal", code: "TURN_ALREADY_ACTIVE" });
+    // `at` is what lets `run-turn.ts` tell "nothing was written" from "a commit already landed"
+    // — the two used to collapse into one message claiming a durable commit either way.
+    expect(result).toEqual({
+      kind: "illegal",
+      code: "TURN_ALREADY_ACTIVE",
+      at: "beginFinalization",
+    });
     expect(turnTransactions.calls).toEqual([]);
   });
 

@@ -396,6 +396,46 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
     });
   });
 
+  test("(c2) a cancel that lands DURING Gate validation records a cancel — never 'the turn's commit landed durably'", async () => {
+    await context.start(async () => {
+      const h = harness();
+      // The race, reproduced exactly and at the exact moment it happens in production: the cancel
+      // lands WHILE the Gate is running, so it is driven from inside `runPage` itself.
+      // `requestCancel` is legal from `validating` (`turn-machine.ts`'s own table) and
+      // `runTurnValidation` never consults the machine — so validation keeps going and returns
+      // "passed" against a machine that has already left. `finalizeTurn`'s `beginFinalization` is
+      // then illegal and it returns BEFORE `turnTransactions.finalize` is ever called.
+      const cancelApplied: string[] = [];
+      const originalRunPage = h.gateRunner.runPage.bind(h.gateRunner);
+      h.gateRunner.runPage = async (input) => {
+        if (cancelApplied.length === 0) {
+          cancelApplied.push(h.deps.machine.apply("requestCancel").kind);
+        }
+        return originalRunPage(input);
+      };
+
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      const result = await wrap(runPromise);
+      expect(cancelApplied).toEqual(["changed"]); // the fixture really did cancel mid-validation
+
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      // Nothing was written: `finalize` never ran, only the admission and the terminal record.
+      expect(h.turnTransactions.calls.map((c) => c.method)).toEqual(["admit", "terminalize"]);
+
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      // THE DEFECT: this record is written verbatim into the user's chat. It used to read "the
+      // turn's commit landed durably, but the turn machine could not settle onto it" — told to a
+      // user who had just pressed Esc, about an edit that was never saved.
+      expect(terminalizeCall.input.record.kind).toBe("system:cancelled");
+      expect(JSON.stringify(terminalizeCall.input.record)).not.toContain("landed durably");
+    });
+  });
+
   test("(d) mid-attempt cancellation: terminalizeTurn with cancelled", async () => {
     await context.start(async () => {
       const h = harness();

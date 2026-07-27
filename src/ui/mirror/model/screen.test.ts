@@ -49,14 +49,28 @@ describe("deriveScreen (phase-7 plan D6)", () => {
 describe("createScreenAtom", () => {
   test("recomputes as the project slice and terminal size change", () => {
     const project = atom<ProjectMirror>(
-      { projectId: null, activePageSlug: null, activeChatId: null, trust: null },
+      {
+        projectId: null,
+        activePageSlug: null,
+        activeChatId: null,
+        trust: null,
+        openFailure: null,
+        opening: false,
+      },
       "test.project",
     );
     const terminal = atom(OK, "test.terminal");
     const screen = createScreenAtom({ project: () => project(), terminal: () => terminal() });
 
     expect(screen()).toBe("home");
-    project.set({ projectId, activePageSlug: "main", activeChatId: uuidv7(), trust: "trusted" });
+    project.set({
+      projectId,
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      openFailure: null,
+      opening: false,
+    });
     expect(screen()).toBe("workspace");
     terminal.set({ w: 40, h: 20 });
     expect(screen()).toBe("enlarge");

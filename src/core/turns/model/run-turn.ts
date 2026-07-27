@@ -19,7 +19,7 @@ import type {
 } from "core/ports";
 import type { Clock } from "infrastructure/clock";
 
-import type { AdmissionInputV1, AdmissionOutcomeV1 } from "../types";
+import type { AdmissionInputV1, AdmissionOutcomeV1, TurnContextV1 } from "../types";
 import { type AdmissionDeps, runAdmission } from "./admission";
 import { type TurnAttemptDeps, type TurnAttemptOutcomeV1, startTurnAttempt } from "./attempt";
 import {
@@ -191,6 +191,24 @@ export interface RunTurnDeps {
   readonly onCommitIntentRecorded?: (recorded: boolean) => void;
   /** Threaded straight through to both {@link FinalizeTurnDeps.onSettled} and {@link TerminalizeTurnDeps.onSettled} — see either doc comment for the full rationale (fix-bundle spec §1.5). */
   readonly onSettled?: () => void;
+  /**
+   * Called exactly once, with the admitted {@link TurnContextV1}, the moment admission
+   * succeeds — before the first attempt starts and never on a rejected admission.
+   *
+   * Exists because `RunTurnInputV1.buildFinalizeInput` receives only
+   * `{turnId, attempt, candidate, validation}`, and one field of the finalize material it must
+   * produce — `sentPins` — is knowable ONLY from admission: §12.2 item 1's "captures ... only
+   * currently open, resolvable pins" is decided inside `runAdmission`, which re-folds each
+   * candidate page and writes the surviving ids onto `context.userRecord.pins`. Without this
+   * hook the Kernel handler had no path to that set at all and hardcoded `sentPins: []`, so
+   * `resolveSentPinAppends` never had anything to resolve and a pin the agent had just
+   * addressed stayed open forever.
+   *
+   * Deliberately the whole context rather than the pin ids alone: it is the value admission
+   * already produced, and narrowing it here would invite a second, drifting definition of what
+   * "the admitted turn" is.
+   */
+  readonly onAdmitted?: (context: TurnContextV1) => void;
 }
 
 /** What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate. */
@@ -263,6 +281,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     return { kind: "admission-rejected", outcome: admission };
 
   const context = admission.context;
+  deps.onAdmitted?.(context);
 
   /** One of the three sanctioned bridging edges into `terminalizing` — see this file's header. */
   function bridge(action: "beginSnapshot" | "beginTerminalization" | "requestCancel"): void {
@@ -553,9 +572,34 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       );
     }
 
-    // `finalizeResult.kind` is `"committed"` or `"illegal"` here — both mean
-    // `turnTransactions.finalize` already returned a durable `TurnCommitV1` (see this file's
-    // header, "`{kind:"illegal"}` ALSO BRIDGES" for the one defensive, unreachable exception).
+    // CANCELLED BEFORE ANY WRITE (defect fix, 2026-07-26). `beginFinalization` is refused only
+    // when the machine has ALREADY left `validating`, and the one other edge out of that phase
+    // is `requestCancel` (`turn-machine.ts`'s table) — so this is a real user cancel that landed
+    // while the Gate was still compiling/linting/smoke-testing the candidate, which is exactly
+    // when a cancel is most likely (a multi-page validation takes real time, and the composer
+    // shows `esc cancel` throughout).
+    //
+    // `finalizeTurn` returns at that apply, BEFORE `turnTransactions.finalize` — nothing was
+    // committed, no page bytes written, no chat mutation. This branch used to fall through to
+    // the one below and record "the turn's commit landed durably" verbatim into the chat: the
+    // user pressed Esc and was told their edit had been saved. It must not touch
+    // `onCommitIntentRecorded` either — that bit means a durable commit exists.
+    if (finalizeResult.kind === "illegal" && finalizeResult.at === "beginFinalization") {
+      // No `bridge("beginTerminalization")` here, unlike the two branches around it: the only
+      // edge out of `validating` other than `beginFinalization` is `requestCancel`, which lands
+      // ON `terminalizing` — so the machine is already there, and bridging would only log a
+      // spurious "illegal" warning on an ordinary Esc.
+      return terminalize(
+        "cancelled",
+        "the turn was cancelled before its changes were written",
+        undefined,
+        candidateRoot,
+      );
+    }
+
+    // `finalizeResult.kind` is `"committed"`, or `"illegal"` at `markCommitted`/`settle` — and
+    // both of THOSE mean `turnTransactions.finalize` already returned a durable `TurnCommitV1`
+    // (see this file's header, "`{kind:"illegal"}` ALSO BRIDGES").
     deps.onCommitIntentRecorded?.(true);
 
     if (finalizeResult.kind === "illegal") {

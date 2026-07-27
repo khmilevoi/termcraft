@@ -10,6 +10,7 @@ export type { AgentGateRetry, AgentStatusBlockProps } from "./ui/AgentStatusBloc
 export { AgentStatusBlock } from "./ui/AgentStatusBlock";
 export type { RenderedTimelineEntry, TimelineFold } from "./model/turn-timeline";
 export { foldTurnTimeline, wrapText } from "./model/turn-timeline";
+export { markdownLineRows, renderedRowCount } from "./model/text-rows";
 export type { ComposerProps } from "./ui/Composer";
 export { Composer } from "./ui/Composer";
 export type { ChatRecordProps } from "./ui/ChatRecord";

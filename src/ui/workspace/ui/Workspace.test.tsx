@@ -340,6 +340,39 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
 // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn — design draws two
 // distinct states (`wsGenTyping`/`wsSlashTurn`, `design/03-workspace-generating.dc.html`), keyed
 // on whether the composer holds a draft.
+describe("Workspace chat panel header during a running turn", () => {
+  test("paints the agent presence line exactly ONCE — it used to appear twice on consecutive rows", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" },
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+
+    // Design `chatSeq` (`design/termcraft-engine.js:568`) draws the presence line once at the
+    // top of the chat panel; the generating block below it (`genTurn`, `:511-565`) never
+    // repeats it. `AgentStatusBlock` used to draw its own copy on top of `ws-chat-agent`'s.
+    const presenceRows = handle.capture().rows.filter((row) =>
+      row
+        .map((run) => run.text)
+        .join("")
+        .includes("● claude"),
+    );
+    expect(presenceRows).toHaveLength(1);
+  });
+});
+
 describe("Workspace composer during a running turn (finding §2.5)", () => {
   test("an empty composer stays visually disabled — faint placeholder, no cursor", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
@@ -513,6 +546,57 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
     const boldRun = rows[boldRow]?.find((run) => run.text.includes("page main"));
     expect((boldRun?.attrs ?? 0) & 1).toBe(1);
   });
+
+  test("a chat far taller than the panel never overdraws the composer or the panel border", async () => {
+    // The reported defect: a long agent reply grew `ws-chat-stream` past `ws-chat`, painting
+    // over the composer's own placeholder row and the panel's bottom border.
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const chatId = uuidv7();
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: chatId,
+        trust: "trusted",
+        agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" },
+      }),
+    );
+    deps.mirror.apply(
+      event("chat.records", {
+        chatId,
+        records: Array.from({ length: 40 }, (_unused, index) => ({
+          kind: "agent" as const,
+          recordId: uuidv7(),
+          turnId: uuidv7(),
+          text: `reply ${index} — ${"словомного ".repeat(20)}`,
+          changedPages: [],
+          warnings: [],
+          ts: TEST_TS,
+        })),
+        prevCursor: null,
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+
+    // The composer's own placeholder still owns its row — nothing painted over it. The needle
+    // drops the placeholder's first character on purpose: the design paints the block caret
+    // over that column (`design/termcraft-engine.js`'s `put(b,chatX+3,composerTop+2,'█')`), so
+    // the row reads `❯ █sk for changes…`.
+    const composerRow = rows.findIndex((row) => row.includes("sk for changes…"));
+    expect(composerRow).toBeGreaterThanOrEqual(0);
+
+    // Every chat body row sits ABOVE the composer; none leaked past it into the border.
+    const lastBodyRow = rows.findLastIndex((row) => row.includes("словомного"));
+    expect(lastBodyRow).toBeLessThan(composerRow);
+
+    // And the history that did not fit is summarised the way the design does it, rather than
+    // silently vanishing.
+    expect(rows.some((row) => row.includes("earlier messages"))).toBe(true);
+  });
 });
 
 describe("Workspace agent identity (M22 — data-driven, not the design's codex/gpt5.5 sample)", () => {
@@ -590,5 +674,103 @@ describe("Workspace agent identity (M22 — data-driven, not the design's codex/
     const text = allText(handle.capture().rows);
     expect(text).not.toContain("chat ·");
     expect(text).not.toContain("●");
+  });
+});
+
+// Defect 1 (Important): design/termcraft-engine.js:966 (`slashMenu(){ const rows=…;
+// if(!rows.length) return 0; …}`) and :155 (`if(rows.length) this.slashBox(...)`) both refuse to
+// draw the widget when there is nothing to show it. `SlashMenu` itself has no such guard — it
+// always opens its bordered, titled box — so the caller must supply one, matching the precedent
+// already set by `Home.tsx`'s own `props.rows.length > 0 &&` guard for the identical component.
+describe("Workspace slash menu (design termcraft-engine.js:966, :155 — do not draw on an empty row set)", () => {
+  test("typing a slash prefix that matches no command renders no slash-menu box at all", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.local.overlay.set("slash-menu");
+    // No registered command starts with this prefix (`UI_ACTIONS` in `ui/actions/model/
+    // registry.ts` — /new, /chats, /export, /model, /commit-page, /commit-infra, /commit-all,
+    // /exit), so `filterSlashRows` returns zero rows — the "forward-typed past every match" case
+    // from `intent.ts`'s `slash-input` handler, which appends every character with no re-check.
+    deps.local.composer.set("/nomatch-xyz");
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // `SlashMenu` titles its box with the typed text itself (`props.typed`), bold amberHi
+    // (`SlashMenu.tsx`'s `titleColor={SHELL_PALETTE.amberHi}`) — a run distinct from the
+    // composer's own typed-text echo, which paints at plain `fg` (`Composer.tsx`'s
+    // `valueFg={SHELL_PALETTE.fg}`). Its presence is exactly the empty bordered box this
+    // defect draws; its absence proves the guard fired.
+    const title = rows
+      .flat()
+      .find((run) => run.text === "/nomatch-xyz" && extractRgb(run.fg) === SHELL_PALETTE.amberHi);
+    expect(title).toBeUndefined();
+  });
+
+  test("typing a slash prefix that DOES match a command still opens the menu", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.local.overlay.set("slash-menu");
+    deps.local.composer.set("/e");
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("/export");
+    expect(text).toContain("/exit");
+  });
+});
+
+// Defect 2 (Minor): `AgentStatusBlockProps.connection` is documented as "The connection meta
+// line, e.g. `ratatui · connected`" (design `chatSeq`'s `headerMeta`, `design/termcraft-
+// engine.js:568`) — a DIFFERENT fact than the chat-panel title's `'❯ chat · working'` literal
+// (`design/termcraft-engine.js:262,283,991`), which Workspace already renders correctly on the
+// panel title. Passing the bare word "working" into `connection` paints it in the wrong slot.
+describe("Workspace live-turn connection line (design termcraft-engine.js:568 headerMeta vs. :991 chatTitle)", () => {
+  test("does not paint the chat-title word 'working' into the AgentStatusBlock connection line", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        agentIdentity: { backendId: "claude", modelLabel: "sonnet-4.5" },
+      }),
+    );
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // The chat panel's own title legitimately reads "❯ chat · working" (unaffected by this fix —
+    // asserted separately below); the defect is a SECOND, bare "working" run painted at
+    // `SHELL_PALETTE.faint` — the connection line's own colour (`AgentStatusBlock.tsx`'s
+    // `fg={SHELL_PALETTE.faint}` on `${props.id}-connection`) — which is what this asserts is gone.
+    const strayConnectionWord = rows
+      .flat()
+      .find((run) => run.text === "working" && extractRgb(run.fg) === SHELL_PALETTE.faint);
+    expect(strayConnectionWord).toBeUndefined();
+    const text = allText(rows);
+    expect(text).toContain("❯ chat · working");
   });
 });

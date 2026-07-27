@@ -70,23 +70,34 @@ export function ChatRecord(props: ChatRecordProps) {
         {headerText}
       </text>
       {props.lines.map((line: MarkdownLine, lineIndex) => (
-        // keyed intrinsic wrapper — function components carry no `key` in this
-        // repo's no-@types/react environment; the row box takes it instead.
-        <box key={`line-${lineIndex}`} id={`${props.id}-line-${lineIndex}`} flexDirection="row">
+        // ONE `<text>` per markdown line, spans as `<span>` children — never a
+        // `flexDirection="row"` box with one `<text>` per span. A `<text>` is a flex ITEM that
+        // word-wraps inside its OWN width (OpenTUI's `wrapMode` defaults to `"word"`), so a row
+        // of them turns one paragraph into N independently-wrapping columns: a line reading
+        // "Готово — `pages/` активен" rendered as three narrow stacks side by side, with inline
+        // code glued into the middle of unrelated words. `<span>` is a text NODE, not a flex
+        // item, so the whole line stays a single wrapping flow with per-span styling intact
+        // (`TextRenderable.add(TextNodeRenderable)`, `@opentui/react`'s `span: SpanProps`).
+        <text
+          key={`line-${lineIndex}`}
+          id={`${props.id}-line-${lineIndex}`}
+          fg={baseFg}
+          wrapMode="word"
+        >
           {line.spans.map((span, spanIndex) => {
             const style = spanStyle(span, baseFg);
             return (
-              <text
+              <span
                 key={`span-${spanIndex}`}
                 id={`${props.id}-line-${lineIndex}-span-${spanIndex}`}
                 fg={style.fg}
                 attributes={style.attrs}
               >
                 {span.text}
-              </text>
+              </span>
             );
           })}
-        </box>
+        </text>
       ))}
     </box>
   );

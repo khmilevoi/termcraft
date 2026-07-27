@@ -66,6 +66,35 @@ export interface ManifestSliceResultV1 {
   readonly slice: ManifestSliceV1 | null;
 }
 
+/**
+ * The identity of the meta-EXTRACTION algorithm, and the third component of
+ * `PageMetaCache`'s own `PageMetaKeyV1` (`core/ports/projections.ts`) — a cached entry is
+ * only valid for the extractor that produced it, so a cache read and the write that fills
+ * it must name the SAME version or every read misses forever.
+ *
+ * This is the real owner storage-identity §7 always implied and no module had claimed:
+ * `core/kernel`'s `resolvePageSettings` used to key its reads on a local
+ * `PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER` of its own, which its own doc comment named as
+ * "the one line to replace" once a canonical owner existed. It lives HERE, on the port that
+ * declares the extraction ({@link GateRunner.extractPageMeta}), rather than next to the key
+ * in `projections.ts`: the number identifies the extractor, and the cache merely keys on it.
+ *
+ * BUMP THIS whenever the Gate's page-contract meta extraction changes what it returns for
+ * unchanged source (new/renamed `PageMeta` field, changed default, changed parse semantics).
+ * Bumping it invalidates every cached entry by construction — no eviction pass is needed.
+ */
+export const PAGE_META_EXTRACTOR_VERSION = 1;
+
+/**
+ * The outcome of {@link GateRunner.extractPageMeta}: the page's static `meta` when the page
+ * contract holds, else the fatal contract errors explaining why it does not. `meta` and a
+ * non-empty `errors` are mutually exclusive — a `null` meta always carries at least one error.
+ */
+export interface PageMetaExtractionV1 {
+  readonly meta: PageMeta | null;
+  readonly errors: readonly GateErrorV1[];
+}
+
 export interface GateRunner {
   /** The turn-level manifest-slice check (master §6.3 step 1), run once per turn before the per-page stages. */
   runManifestSlice(input: {
@@ -90,4 +119,20 @@ export interface GateRunner {
      */
     readonly sourcePath?: string;
   }): Promise<GateRunResultV1>;
+  /**
+   * The page-contract stage ALONE — parses the page's static `meta` export and nothing else.
+   * Deliberately NOT `runPage`: the full pipeline additionally spawns a TypeScript compiler
+   * and a smoke-render child process, neither of which a caller that only wants the page's
+   * declared size/theme/kit version should pay for or be blocked by. A page that fails the
+   * type check still has a perfectly readable `meta`, and reporting THAT failure as "this
+   * page has no settings" would be a false diagnosis.
+   *
+   * Cheap and pure enough to run on a `PageMetaCache` miss, which is its one caller today
+   * (`core/kernel`'s `resolvePageSettings`); results cached under
+   * {@link PAGE_META_EXTRACTOR_VERSION}.
+   */
+  extractPageMeta(input: {
+    readonly source: string;
+    readonly slug: PageSlug;
+  }): Promise<PageMetaExtractionV1>;
 }

@@ -412,6 +412,62 @@ describe("createPreviewSessionCommands — retry", () => {
       expect(h.hostSupervisor.calls).toEqual([]);
     });
   });
+
+  /**
+   * DEFECT 2 CLOSURE (kernel-assembly, "make preview.retry actually work"):
+   * `noteSessionEstablished` is the external hook `handlers/preview-export.ts`'s
+   * `selectCurrentSource` drives in production (Gap A — that handler never calls this
+   * module's own `selectPage`/`selectCurrent`, so `selectSource`'s own `lastSpec = spec`
+   * assignment never runs there). Before this fix `noteSessionEstablished` never touched
+   * `lastSpec` at all, so `retry()` always took its own "no remembered spec" refusal in
+   * that production path — this test drives the SAME external hook, with the SAME
+   * optional second argument `kernel.ts`'s real `setActivePreviewSession` now forwards.
+   */
+  test("noteSessionEstablished threads spec into lastSpec, so a subsequent retry (from circuit-open) reissues the SAME spec", async () => {
+    await context.start(async () => {
+      const h = harness();
+      // Reach circuit-open the way the real Kernel does: failed, then openCircuit.
+      h.machine.apply("kernel.preview.beginStart");
+      h.machine.apply("kernel.preview.sessionFailed");
+      h.machine.apply("kernel.preview.openCircuit");
+      expect(h.machine.phase()).toBe("circuit-open");
+
+      const spec = baseSpec({ pageSlug: "about" });
+      h.commands.noteSessionEstablished(stubSession(), spec);
+
+      const outcome = await wrap(h.commands.retry());
+
+      expect(outcome).toEqual({ kind: "accepted" });
+      expect(h.machine.phase()).toBe("live");
+      expect(h.hostSupervisor.calls).toEqual([{ method: "preview", pageSlug: "about" }]);
+    });
+  });
+
+  test("noteSessionEstablished called with NO spec leaves lastSpec untouched — a later retry still reissues the earlier-threaded spec", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.machine.apply("kernel.preview.beginStart");
+      const spec = baseSpec({ pageSlug: "pricing" });
+      // First establishment: threads the real spec (mirrors `selectCurrentSource`'s own
+      // call).
+      h.commands.noteSessionEstablished(stubSession(), spec);
+      h.machine.apply("kernel.preview.sessionFailed");
+      h.machine.apply("kernel.preview.openCircuit");
+      h.machine.apply("kernel.preview.retryCircuit");
+
+      // A SECOND call with no spec — mirrors `handleRetry`'s own re-sync call
+      // (`context.setActivePreviewSession(context.previewSessionCommands.currentSession())`,
+      // no spec argument) — must not clobber the already-threaded spec with nothing.
+      h.commands.noteSessionEstablished(stubSession());
+      h.machine.apply("kernel.preview.sessionFailed");
+      h.machine.apply("kernel.preview.openCircuit");
+
+      const outcome = await wrap(h.commands.retry());
+
+      expect(outcome).toEqual({ kind: "accepted" });
+      expect(h.hostSupervisor.calls).toEqual([{ method: "preview", pageSlug: "pricing" }]);
+    });
+  });
 });
 
 describe("createPreviewSessionCommands — close", () => {

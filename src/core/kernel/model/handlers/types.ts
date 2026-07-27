@@ -17,7 +17,7 @@ import type {
   TurnState,
 } from "core/machines";
 import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
-import type { PreviewSession } from "core/ports";
+import type { HostSessionSpecV1, PreviewSession } from "core/ports";
 import type { FrameTokenLedger, GeometryTokenLedger, PreviewSessionCommands } from "core/preview";
 import type { PageRemovePlanLedger } from "core/project";
 import type {
@@ -25,6 +25,7 @@ import type {
   CommandKindV1,
   CommandPayloadByKindV1,
   EventPayloadByKindV1,
+  PageDescriptorV1,
   UUIDv7,
 } from "core/protocol";
 
@@ -390,8 +391,20 @@ export interface HandlerContext {
   readonly setActiveTurnId: (turnId: UUIDv7 | null) => void;
   readonly setCommitIntentRecorded: (recorded: boolean) => void;
   readonly setPreviewSourceKind: (sourceKind: PreviewSourceKindV1) => void;
-  /** `kernel.ts`'s own `activePreview` — see this interface's own comment above. */
-  readonly setActivePreviewSession: (session: PreviewSession | null) => void;
+  /**
+   * `kernel.ts`'s own `activePreview` — see this interface's own comment above.
+   *
+   * `spec` (DEFECT 2 CLOSURE, `core/preview/model/session-commands.ts`'s own
+   * `noteSessionEstablished` doc comment has the full "why"): OPTIONAL, forwarded
+   * verbatim to `previewSessionCommands.noteSessionEstablished` when `session` is
+   * non-null, so the router's own private `lastSpec` — the ONE field `preview.retry`
+   * reissues — is threaded from the real spec a caller already has in hand, never
+   * reconstructed from the session. Ignored when `session` is `null`.
+   */
+  readonly setActivePreviewSession: (
+    session: PreviewSession | null,
+    spec?: HostSessionSpecV1,
+  ) => void;
   /** The one sanctioned async-launch primitive — see this interface's own comment above. */
   readonly launchOperation: (
     label: string,
@@ -420,6 +433,17 @@ export interface HandlerContext {
   readonly selection: () => SelectionSnapshotV1 | null;
   /** The paired getter for `setActivePreviewSession` (Step C1) — `kernel.ts`'s own `activePreview`, read back. */
   readonly currentPreviewSession: () => PreviewSession | null;
+  /**
+   * The descriptor list carried by the LAST `page.descriptorsChanged` this Kernel published,
+   * or `[]` before the first one (and after `kernel.project.finishClose`). `kernel.ts` tracks it
+   * off its own published events — never a second source of truth — so a producer building a
+   * NEW `page.descriptorsChanged` has a real "before" list to diff against.
+   *
+   * Needed because §9 requires that "every change carries its exact before/after source-hash
+   * binding": without a real before-list, `handlers/turn.ts`'s post-commit `turn-apply` diff
+   * could only have fabricated its `changes` array.
+   */
+  readonly currentPageDescriptors: () => readonly PageDescriptorV1[];
   /**
    * `core/preview`'s already-landed command router (Step C1), composed ONCE inside
    * `kernel.ts` — never rebuilt per call (`createPreviewSessionCommands`'s own factory doc:

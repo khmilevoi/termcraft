@@ -19,6 +19,7 @@ import type {
   ExportMirror,
   PreviewMirror,
   ProjectMirror,
+  ProjectOpenFailure,
   SelectionMirror,
   TurnMirror,
   TurnTimelineEntry,
@@ -69,6 +70,8 @@ const EMPTY_PROJECT: ProjectMirror = {
   activePageSlug: null,
   activeChatId: null,
   trust: null,
+  openFailure: null,
+  opening: false,
 };
 
 /** Upserts a keyed value into a copy of `source`, returning a new immutable map. */
@@ -91,6 +94,24 @@ function withEntry<K, V>(source: ReadonlyMap<K, V>, key: K, value: V): ReadonlyM
 function readMetadataProjectId(metadata: Readonly<Record<string, unknown>>): UUIDv7 | undefined {
   const raw = metadata.projectId;
   return typeof raw === "string" && isUuidv7(raw) ? raw : undefined;
+}
+
+/**
+ * Safely reads `kernel.project.blockOpen`'s own `{reason, failure}` metadata (built by
+ * `core/kernel/model/handlers/project.ts`'s `blockOpen`) — never a cast, same rationale as
+ * {@link readMetadataProjectId}. Returns `undefined` when either half is missing or the wrong
+ * shape, so the caller leaves the previous value alone instead of showing an invented cause.
+ */
+function readMetadataOpenFailure(
+  metadata: Readonly<Record<string, unknown>>,
+): ProjectOpenFailure | undefined {
+  const reason = metadata.reason;
+  const failure = metadata.failure;
+  if (typeof reason !== "string" || reason.length === 0) return undefined;
+  if (typeof failure !== "object" || failure === null) return undefined;
+  const safeMessage = (failure as { readonly safeMessage?: unknown }).safeMessage;
+  if (typeof safeMessage !== "string" || safeMessage.length === 0) return undefined;
+  return { reason, safeMessage };
 }
 
 /** Safely reads `metadata.trust` as one of the two known decisions, never a cast — see {@link readMetadataProjectId}'s identical rationale. */
@@ -160,8 +181,31 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     if (content.kind === "tool") {
       turn.set({
         ...current,
-        timeline: [...current.timeline, { kind: "step", op: content.op, target: content.target }],
+        timeline: [
+          ...current.timeline,
+          { kind: "step", id: content.id, op: content.op, target: content.target, failed: false },
+        ],
       });
+    } else if (content.kind === "tool-failed") {
+      // Flip the ONE matching step entry (by id), leaving every other entry untouched — never
+      // guessed at by position (design `03-workspace-generating.dc.html:44`'s third glyph, ✗
+      // failed; `entities/turn`'s `AgentEvent` doc explains why only the failure is emitted).
+      // A failure naming an id this timeline never saw a `tool` step for is dropped and logged
+      // rather than fabricating a step to attach it to.
+      const index = current.timeline.findIndex(
+        (entry) => entry.kind === "step" && entry.id === content.id,
+      );
+      if (index === -1) {
+        console.warn(
+          `ui/mirror: turn.progress tool-failed named id ${content.id}, which is not a step in the current timeline — dropped`,
+        );
+        return;
+      }
+      const nextTimeline = current.timeline.map((entry, i) => {
+        if (i !== index || entry.kind !== "step") return entry;
+        return { ...entry, failed: true };
+      });
+      turn.set({ ...current, timeline: nextTimeline });
     } else if (content.kind === "reasoning") {
       // An empty block is not a thought the agent reported — the protocol schema permits it
       // (`event-payload.ts`'s `text: z.string()` has no `.min(1)`) and `normalize.ts` forwards
@@ -172,7 +216,14 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
       // layer that decides an empty string is not worth surfacing (fix-bundle Task 19 review
       // round 1, Finding 2). Appended, never overwritten otherwise (spec §4.6): the old ticker
       // kept only the latest thought.
-      if (content.text === "") return;
+      //
+      // WHITESPACE COUNTS AS EMPTY (defect fix, 2026-07-26): the test was exact `=== ""`, so a
+      // block of `"\n"` or `"   "` survived it and became a blank row in the timeline — visually
+      // identical to the empty block this guard exists to suppress, and it consumes one of the
+      // eleven rows the fold budget allows (`ui/workspace/model/agent-block-budget.ts`). The
+      // ENTRY keeps the agent's own untrimmed text; only the emptiness TEST is trimmed, so
+      // nothing the agent actually wrote is altered on its way to the screen.
+      if (content.text.trim() === "") return;
       turn.set({
         ...current,
         timeline: [...current.timeline, { kind: "reasoning", text: content.text }],
@@ -279,7 +330,44 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
             return;
           }
           const trust = readMetadataTrust(p.metadata);
-          project.set({ ...project(), projectId, ...(trust !== undefined ? { trust } : {}) });
+          project.set({
+            ...project(),
+            projectId,
+            ...(trust !== undefined ? { trust } : {}),
+            // An open that actually succeeded supersedes whatever an earlier one failed on.
+            openFailure: null,
+            opening: false,
+          });
+          return;
+        }
+        if (p.action === "kernel.project.beginOpen" || p.action === "kernel.project.beginCreate") {
+          // The ONLY signal that an open is under way. See {@link ProjectMirror.opening} for
+          // what its absence cost: a Home that claimed "no project yet" over a project actively
+          // loading, and an Enter the Kernel rejected with nothing on screen to explain it.
+          project.set({ ...project(), opening: true });
+          return;
+        }
+        if (p.action === "kernel.project.blockOpen") {
+          // WITHOUT THIS ARM THE APP DEADLOCKS SILENTLY (defect fix, 2026-07-26).
+          //
+          // `handlers/project.ts` funnels nine distinct startup failures — manifest read,
+          // workspace-state read, transaction recovery, the orphan-turn scan, a corrupt chat,
+          // trust resolution, the page list, a page source read, the export pointer — through
+          // one `blockOpen`. Nothing in `src/ui` folded it, so `projectId` stayed `null`,
+          // `deriveScreen` held Home, and Home rendered as if nothing had happened. Worse, the
+          // project machine was now in `blocked`, where `beginOpen`/`beginCreate` are both
+          // illegal — so every subsequent Enter was rejected `CAPABILITY_UNAVAILABLE` and did
+          // nothing, forever, with no message. Recording the cause here is what lets Home say
+          // what went wrong and what lets `ui/app/model/deps.ts` take the one legal exit
+          // (`project.close`, back to `closed`) so Enter works again.
+          const openFailure = readMetadataOpenFailure(p.metadata);
+          if (openFailure === undefined) {
+            console.warn(
+              "ui/mirror: kernel.project.blockOpen carried no readable {reason, failure} metadata — project.openFailure left unchanged",
+            );
+            return;
+          }
+          project.set({ ...project(), openFailure, opening: false });
           return;
         }
         if (p.action === "kernel.project.setTrust") {
@@ -296,8 +384,10 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         if (p.action === "kernel.project.finishClose") {
           // A project-scoped identity must not outlive the project it belongs to — mirrors
           // `kernel.ts`'s own `noteEventForCapabilityGrowth` clearing its growable
-          // identities on this exact same action.
-          project.set(EMPTY_PROJECT);
+          // identities on this exact same action. `openFailure` is the one field carried
+          // across: closing is how the app escapes `blocked`, so the reason must outlive the
+          // escape — see {@link ProjectMirror.openFailure}.
+          project.set({ ...EMPTY_PROJECT, openFailure: project().openFailure });
         }
         return;
       }

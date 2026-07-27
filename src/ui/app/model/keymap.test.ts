@@ -15,6 +15,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   homeHealth: READY_HEALTH,
   homePrompt: "",
   turnRunning: false,
+  projectOpening: false,
   ...over,
 });
 

@@ -7,6 +7,7 @@ import type { EventPayloadByKindV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import type { HomeAgentHealth } from "ui/home";
 import { homeSubmitAllowed } from "ui/home";
+import { FRESH_CHAT_LABEL } from "ui/popups";
 import { requestGeometry } from "ui/preview";
 import {
   type ReactTestRenderer,
@@ -363,7 +364,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
         event("turn.progress", {
           turnId,
           attempt: 1,
-          content: { kind: "tool", op: "edit", target: "main/page.tsx" },
+          content: { kind: "tool", id: "toolu_1", op: "edit", target: "main/page.tsx" },
         }),
       );
     });
@@ -471,13 +472,19 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     const oldChatId = uuidv7();
     const midChatId = uuidv7();
     const newChatId = uuidv7();
-    // uuidv7 embeds a millisecond timestamp, so three ids minted back-to-back in one test can
-    // share their first 8 hex chars (the row `label`) — identify rows by `createdAt` instead,
-    // which this test controls directly and keeps distinct.
-    const OLD_TS = "2026-07-20T00:00:00.000Z";
-    const MID_TS = "2026-07-21T00:00:00.000Z";
-    const NEW_TS = "2026-07-22T00:00:00.000Z";
-    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+    // Defect 2 fix: the WHEN column renders `formatChatWhen`'s relative-time vocabulary
+    // (design `wsChats`, engine:1026-1039), not the raw `createdAt` ISO-8601 string — so this
+    // test fixes `now` via App's injectable `clock` prop and asserts on the resulting relative
+    // labels, which stay just as distinct (and just as order-revealing) as the old raw
+    // timestamps did.
+    const NOW_MS = Date.parse("2026-07-27T12:00:00.000Z");
+    const OLD_TS = new Date(NOW_MS - 3 * 24 * 3_600_000).toISOString(); // -> "3d ago"
+    const MID_TS = new Date(NOW_MS - 25 * 3_600_000).toISOString(); // -> "yesterday"
+    const NEW_TS = new Date(NOW_MS - 2 * 3_600_000).toISOString(); // -> "2h ago"
+    const OLD_WHEN = "3d ago";
+    const MID_WHEN = "yesterday";
+    const NEW_WHEN = "2h ago";
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => NOW_MS} />, {
       width: 120,
       height: 36,
     });
@@ -498,14 +505,16 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       );
       deps.local.overlay.set("chat-list");
     });
-    const frame = await renderer.waitForFrame((output) => output.includes(NEW_TS));
+    const frame = await renderer.waitForFrame((output) => output.includes(NEW_WHEN));
+    expect(frame).not.toContain(NEW_TS);
+    expect(frame).not.toContain(OLD_TS);
     const dataRows = frame
       .split("\n")
-      .filter((row) => row.includes(OLD_TS) || row.includes(MID_TS) || row.includes(NEW_TS));
+      .filter((row) => row.includes(OLD_WHEN) || row.includes(MID_WHEN) || row.includes(NEW_WHEN));
     expect(dataRows).toHaveLength(3);
-    expect(dataRows[0]).toContain(NEW_TS);
-    expect(dataRows[1]).toContain(MID_TS);
-    expect(dataRows[2]).toContain(OLD_TS);
+    expect(dataRows[0]).toContain(NEW_WHEN);
+    expect(dataRows[1]).toContain(MID_WHEN);
+    expect(dataRows[2]).toContain(OLD_WHEN);
 
     // Default selection (index 0) already targets the top/newest row; round-trip ↓↓ then ↑↑ and
     // confirm ⏎ still switches to the newest chat — the rendered order and the selection index
@@ -557,7 +566,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(frame).not.toContain(namedChatId.slice(0, 8));
   });
 
-  test("a chat with displayName: null still falls back to chatId.slice(0, 8)", async () => {
+  // Defect 3 fix: a `displayName: null` chat (no first user record yet) shows the design's
+  // ACTUAL `wsChatFresh` wording, `'new chat — fresh context'` (design/termcraft-engine.js:1078)
+  // — not a `chatId.slice(0, 8)` hex fragment. `wsChats`'s own fourteen sample rows
+  // (engine:1026-1039) are all descriptive names; there was never a hex-fallback row in the
+  // design to fall back to.
+  test("a chat with displayName: null shows the design's fresh-chat label, never a chatId hex fragment", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     const chatId = uuidv7();
@@ -578,8 +592,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       );
       deps.local.overlay.set("chat-list");
     });
-    const frame = await renderer.waitForFrame((output) => output.includes(chatId.slice(0, 8)));
-    expect(frame).toContain(chatId.slice(0, 8));
+    const frame = await renderer.waitForFrame((output) => output.includes(FRESH_CHAT_LABEL));
+    expect(frame).toContain(FRESH_CHAT_LABEL);
+    expect(frame).not.toContain(chatId.slice(0, 8));
   });
 
   test("the chat-list overlay outranks an undismissed export popup for both render and keys (precedence bug repro)", async () => {
@@ -905,7 +920,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
         event("turn.progress", {
           turnId,
           attempt: 1,
-          content: { kind: "tool", op: "edit", target: "main/page.tsx" },
+          content: { kind: "tool", id: "toolu_1", op: "edit", target: "main/page.tsx" },
         }),
       );
     });
@@ -962,8 +977,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       ),
     ).toContain("/chats");
     await renderer.act(() => renderer.mockInput.pressEnter());
-    const chatPopup = await renderer.waitForFrame((frame) => frame.includes(newChatId.slice(0, 8)));
-    expect(chatPopup).toContain("chats");
+    // Both chats carry `displayName: null` here, so both rows now render the SAME design
+    // fresh-chat label (Defect 3 fix) rather than a distinguishing `chatId.slice(0, 8)` hex
+    // fragment — wait on the popup's title (`chats · ` + row count, design `wsChats`,
+    // engine:1048) instead, which is still a reliable "the popup actually rendered" signal.
+    const chatPopup = await renderer.waitForFrame((frame) => frame.includes("chats · 2"));
+    expect(chatPopup).toContain(FRESH_CHAT_LABEL);
     await renderer.act(() => renderer.mockInput.pressArrow("up"));
     await renderer.act(() => renderer.mockInput.pressEnter());
     const chatSwitch = dispatchedOf("chat.switch");

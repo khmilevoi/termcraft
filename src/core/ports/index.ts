@@ -138,7 +138,9 @@ export type {
   GateWarningV1,
   ManifestSliceResultV1,
   ManifestSliceV1,
+  PageMetaExtractionV1,
 } from "./gate-runner";
+export { PAGE_META_EXTRACTOR_VERSION } from "./gate-runner";
 
 // ---- preview, host supervisor, export render -----------------------------------------------
 export type {

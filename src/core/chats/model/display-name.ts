@@ -32,7 +32,8 @@ export function truncateChatDisplayName(text: string | null): string | null {
  * created chat), OR when one exists but its first line is blank/whitespace-only after
  * trimming (review finding Minor, WP-10 fix wave) — an empty string is not a name, and
  * returning `null` here (rather than `""`) lets the UI's own null-fallback
- * (`chatId.slice(0, 8)`, `App.tsx`) engage instead of rendering a blank label.
+ * (the design's own `new chat — fresh context` placeholder, `App.tsx`'s `FRESH_CHAT_LABEL`)
+ * engage instead of rendering a blank label.
  */
 export function deriveChatDisplayName(records: readonly ChatRecordDtoV1[]): string | null {
   const firstUserRecord = records.find((record) => record.kind === "user");

@@ -45,8 +45,13 @@ test("an assistant message with thinking, text, and tool_use yields reasoning, r
   expect(normalizeMessage(msg)).toEqual([
     { kind: "reasoning", text: "I will edit the gauge" },
     { kind: "reasoning", text: "Editing now" },
-    { kind: "tool", op: "edit", target: "pages/main.tsx" },
+    { kind: "tool", id: "t1", op: "edit", target: "pages/main.tsx" },
   ]);
+});
+
+test("a tool_use block missing its own id is skipped rather than emitted with an undefined id", () => {
+  const msg = assistant([{ type: "tool_use", name: "Write", input: {} }]);
+  expect(normalizeMessage(msg)).toEqual([]);
 });
 
 test("a success result yields final then usage", () => {
@@ -76,6 +81,48 @@ test("an error result yields the error event first, carrying the first reported 
   // success branch's final-then-usage ordering.
   expect(events[0]?.kind).toBe("error");
   expect(events[1]?.kind).toBe("usage");
+});
+
+function user(content: unknown[] | string): SDKMessage {
+  return {
+    type: "user",
+    session_id: "s1",
+    uuid: "u8",
+    parent_tool_use_id: null,
+    message: { role: "user", content },
+  } as unknown as SDKMessage;
+}
+
+test("a user message's tool_result block with is_error true yields tool-failed, carrying tool_use_id as id", () => {
+  const msg = user([{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }]);
+  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t1" }]);
+});
+
+test("a user message's tool_result block with is_error false (an ordinary success) yields nothing — only failures are mirrored", () => {
+  const msg = user([{ type: "tool_result", tool_use_id: "t1", content: "ok", is_error: false }]);
+  expect(normalizeMessage(msg)).toEqual([]);
+});
+
+test("a user message's tool_result block with is_error omitted yields nothing", () => {
+  const msg = user([{ type: "tool_result", tool_use_id: "t1", content: "ok" }]);
+  expect(normalizeMessage(msg)).toEqual([]);
+});
+
+test("a user message with multiple tool_result blocks keeps only the failed one, and drops a malformed sibling without dropping it", () => {
+  const msg = user([
+    { type: "tool_result", tool_use_id: "t1", content: "ok", is_error: false },
+    { type: "tool_result", tool_use_id: "t2", content: "boom", is_error: true },
+    { type: "tool_result", content: "no id", is_error: true }, // malformed: no tool_use_id
+  ]);
+  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t2" }]);
+});
+
+test("a user message whose content is a plain string (no blocks) yields no events", () => {
+  expect(normalizeMessage(user("just text"))).toEqual([]);
+});
+
+test("a user message with an empty content array yields no events", () => {
+  expect(normalizeMessage(user([]))).toEqual([]);
 });
 
 test("an unmapped system init message is dropped silently", () => {

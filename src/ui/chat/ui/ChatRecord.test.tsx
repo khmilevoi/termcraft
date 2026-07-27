@@ -6,6 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { SHELL_PALETTE } from "ui/theme";
 
+import { renderedRowCount } from "../model/text-rows";
 import { ChatRecord } from "./ChatRecord";
 
 let open: RenderHandle | null = null;
@@ -98,6 +99,70 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberHi);
     expect((run?.attrs ?? 0) & 1).toBe(0);
+  });
+
+  test("a long line with an inline code span wraps as ONE text flow, not side-by-side columns", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 6 });
+    open = handle;
+    handle.mount(
+      <ChatRecord
+        id="rec"
+        role="agent"
+        agentLabel="claude"
+        lines={[{ spans: [{ text: "alpha beta gamma delta " }, { text: "code", code: true }] }]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const rows = frame.rows
+      .map((row) => row.map((run) => run.text).join(""))
+      .filter((text) => text.trim() !== "");
+    const body = rows.slice(1); // row 0 is the `● claude` header
+
+    // The column-layout signature: each span becomes its own independently-wrapping flex
+    // item, so the code span lands on the SAME row as the paragraph's first words.
+    const codeRow = body.find((text) => text.includes("code"));
+    expect(codeRow).toBeDefined();
+    expect(codeRow).not.toContain("alpha");
+
+    // And the line reads back in source order across the wrap.
+    expect(body.join(" ").replace(/\s+/g, " ").trim()).toBe("alpha beta gamma delta code");
+  });
+
+  // The row budget (`ui/workspace/model/agent-block-budget.ts`) sizes the chat panel from
+  // `renderedRowCount` alone — it cannot mount a renderer. These cases pin that model against
+  // what the real renderer does, so an OpenTUI wrap change fails HERE instead of silently
+  // under-budgeting the scrollback into overflowing the panel again.
+  describe("renderedRowCount matches the renderer it models", () => {
+    const CASES: readonly { readonly text: string; readonly width: number }[] = [
+      { text: "alpha beta gamma delta epsilon zeta", width: 10 },
+      { text: "alpha beta gamma delta epsilon zeta", width: 12 },
+      { text: "alpha beta gamma delta epsilon zeta", width: 20 },
+      { text: "Готово — исправлено по замечаниям Gate соберём", width: 14 },
+      { text: "supercalifragilistic word", width: 8 },
+      { text: "one", width: 10 },
+      { text: "", width: 10 },
+    ];
+
+    for (const { text, width } of CASES) {
+      test(`w=${width}: ${JSON.stringify(text.slice(0, 24))}`, async () => {
+        const handle = await createHeadlessRenderer({ w: width, h: 40 });
+        open = handle;
+        handle.mount(
+          <ChatRecord id="rec" role="agent" agentLabel="X" lines={[{ spans: [{ text }] }]} />,
+        );
+        await handle.render();
+        // Row 0 is the `● X` header; the body is every row below it that the record painted.
+        const painted = handle.capture().rows.map((row) =>
+          row
+            .map((run) => run.text)
+            .join("")
+            .trimEnd(),
+        );
+        const bodyRows = painted.slice(1, painted.findLastIndex((row) => row !== "") + 1);
+        expect(Math.max(1, bodyRows.length)).toBe(renderedRowCount(text, width));
+      });
+    }
   });
 
   test("dim=true renders plain line text in the dim hue, not the default foreground", async () => {

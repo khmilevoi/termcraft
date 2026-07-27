@@ -219,6 +219,55 @@ describe("applyIntent — exit (phase-8 Task 11 / WP-10)", () => {
   });
 });
 
+describe("applyIntent — preview retry", () => {
+  const circuitOpened = (previewSessionId: string) =>
+    event("preview.circuitOpened", {
+      previewSessionId,
+      pageSlug: "main",
+      sourceHash: TEST_SHA,
+      attempts: 1,
+      finalFailure: {
+        code: "HOST_CIRCUIT_OPEN",
+        retryable: false,
+        safeMessage: "crash-loop circuit is open",
+        details: {},
+      },
+      retryCapability: { available: true },
+    });
+
+  test("dispatches preview.retry naming the circuit-open session — the panel's 'press F5' had NO producer before this", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const previewSessionId = uuidv7();
+    deps.mirror.apply(circuitOpened(previewSessionId));
+
+    applyIntent({ kind: "action-execute", actionId: "preview.retry" }, deps);
+
+    // The id is the one the Kernel published, read back from the mirror — never a fresh mint.
+    // (`dispatched` records the whole envelope, so this reads the two fields that matter.)
+    const retry = kernel.dispatched.find(
+      (raw): raw is { kind: string; payload: { previewSessionId: string } } =>
+        typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "preview.retry",
+    );
+    expect(retry).toBeDefined();
+    expect(retry?.payload.previewSessionId).toBe(previewSessionId);
+  });
+
+  test("dispatches nothing when the circuit is not open — there is no session to retry", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    applyIntent({ kind: "action-execute", actionId: "preview.retry" }, deps);
+
+    expect(
+      kernel.dispatched.filter(
+        (raw) =>
+          typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "preview.retry",
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("applyIntent — slash menu", () => {
   test("opening and typing filters rows and selects the first enabled row", () => {
     const kernel = createFakeKernel();
@@ -251,6 +300,42 @@ describe("applyIntent — slash menu", () => {
     applyIntent({ kind: "slash-input", ch: "e" }, deps);
     expect(deps.local.composer()).toBe("/e");
     expect(deps.local.slashSelection()).toBe(0);
+  });
+
+  test("typing past every match leaves slash mode instead of stranding an invisible, inert menu", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
+
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.overlay()).toBe("slash-menu");
+
+    // `/z` matches no command. The menu correctly draws nothing for an empty row set, which is
+    // exactly what made the old behaviour invisible: the overlay stayed open, Enter kept routing
+    // to `slash-submit`, and it returned silently with no row to run.
+    applyIntent({ kind: "slash-input", ch: "z" }, deps);
+
+    expect(deps.local.overlay()).toBeNull();
+    // The character is kept — leaving slash mode must not eat what the user typed.
+    expect(deps.local.composer()).toBe("/z");
+
+    // And from here the keymap resolves keys against a null overlay, so typing continues as
+    // ordinary composer input rather than as more slash input.
+    applyIntent({ kind: "composer-input", ch: "z" }, deps);
+    expect(deps.local.composer()).toBe("/zz");
+    expect(deps.local.overlay()).toBeNull();
+  });
+
+  test("a prefix that still matches keeps the menu open", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
+
+    applyIntent({ kind: "slash-open" }, deps);
+    applyIntent({ kind: "slash-input", ch: "e" }, deps);
+
+    expect(deps.local.overlay()).toBe("slash-menu");
+    expect(deps.local.composer()).toBe("/e");
   });
 
   test("arrows wrap across enabled rows and never land on inert rows", () => {

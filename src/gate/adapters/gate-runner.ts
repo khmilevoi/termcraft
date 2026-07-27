@@ -3,6 +3,7 @@ import type {
   GateRunResultV1,
   GateRunner,
   ManifestSliceResultV1,
+  PageMetaExtractionV1,
 } from "core/ports";
 import type { PageSlug } from "entities/page";
 
@@ -11,6 +12,7 @@ import type { PageSlug } from "entities/page";
 import { runGate } from "../model/gate";
 import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
+import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
 import { createTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
@@ -104,7 +106,33 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     return runGate({ source: input.source, slug: input.slug, fileName }, ports);
   }
 
-  return { runManifestSlice, runPage };
+  /**
+   * The page-contract stage alone (see the port's own doc for why this is deliberately not
+   * `runPage`). `checkPageContract` is pure and synchronous — no compiler, no smoke child,
+   * no `GatePorts` at all — so this only wraps it and re-labels its errors the way `runGate`
+   * itself does (`gate/model/gate.ts`: `kind: "contract"`, `file` set to the display name),
+   * rather than mapping them a second, divergent way.
+   */
+  async function extractPageMeta(input: {
+    readonly source: string;
+    readonly slug: PageSlug;
+  }): Promise<PageMetaExtractionV1> {
+    const fileName = `${input.slug}.tsx`;
+    const contract = checkPageContract(input.source);
+    return {
+      meta: contract.meta,
+      errors: contract.errors.map((error) => ({
+        kind: "contract" as const,
+        code: error.code,
+        message: error.message,
+        file: fileName,
+        line: error.line,
+        column: error.column,
+      })),
+    };
+  }
+
+  return { runManifestSlice, runPage, extractPageMeta };
 }
 
 type _Conforms = AssertConforms<GateRunner, ReturnType<typeof createGateRunnerAdapter>>;

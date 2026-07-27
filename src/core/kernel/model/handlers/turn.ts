@@ -1,5 +1,6 @@
 import { wrap } from "@reatom/core";
 
+import { truncateChatDisplayName } from "core/chats";
 import type { TransitionOutcome, TurnAction, TurnState } from "core/machines";
 import type { EventCorrelationV1, PublishableEventV1 } from "core/mailbox";
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "core/ports";
 import {
   type CommandPayloadByKindV1,
+  type EventPayloadByKindV1,
   type FailureDtoV1,
   type Sha256Hex,
   type UUIDv7,
@@ -45,6 +47,7 @@ import { type PageSlug, parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
+import { publishPageDescriptorsChanged } from "./page-descriptors";
 import type {
   CommandOutcomeV1,
   FamilyHandlerMap,
@@ -334,11 +337,16 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *     "FINALIZE FAILURES DO BRIDGE"/"`{kind:\"illegal\"}` ALSO BRIDGES" — so neither
  *     `{kind:"finalized", result:{kind:"failed"}}` NOR `{kind:"finalized",
  *     result:{kind:"illegal"}}` is a reachable `RunTurnResultV1` shape at all, ...): the wire
- *     `outcome` field itself still only ever publishes `"failed"` for every one of these
- *     causes — widening IT would misrepresent a guess as spec-fixed fact (§7.2 fixes the
- *     `cancelled`/`failed`/`stale`/`interrupted` vocabulary verbatim), so this driver never
- *     tries. What CAN be, and now is, more precise is `failure`, the DTO alongside it — see
- *     "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED" below.
+ *     `outcome` field carries the REAL §7.2 outcome and the event KIND matches it —
+ *     `turn.cancelled` for a cancel, `turn.failed` otherwise. CORRECTED (defect fix,
+ *     2026-07-26): this used to read "the wire `outcome` field itself still only ever publishes
+ *     `"failed"` ... widening IT would misrepresent a guess as spec-fixed fact". That was true
+ *     when written and stopped being true in this same file's own "GATE-EXHAUSTION-VS-BACKEND-
+ *     FAILURE — CLOSED" landing, which made `TerminalizeTurnResultV1` echo the requested
+ *     `TurnTerminalOutcome` back verbatim — so it is a value READ, not a guess. See
+ *     {@link terminalOutcomeCode} for what the stale literal cost the user. `failure`, the DTO
+ *     alongside it, is narrowed separately — see "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED"
+ *     below.
  *
  *     ONE SUB-CASE WAS TYPED FIRST, NOT FABRICATED (WP-8 item 4, phase-8 design's
  *     documented-debt sweep — "Generic `turn.failed`, a typed outcome instead of the
@@ -688,6 +696,38 @@ const FAILURE_CODES_NEEDING_TYPED_DETAILS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The REAL terminal outcome for a `RunTurnResultV1` that did not commit.
+ *
+ * WHY THIS EXISTS (defect fix, 2026-07-26): this composer used to publish the literal
+ * `outcome: "failed"` for every non-committed result, and both this file's header and
+ * `event-payload.ts`'s `TurnTerminalPayloadV1` doc justified it with "this composer still
+ * cannot honestly reconstruct WHICH `TurnTerminalOutcome` a turn ended on". THAT IS NO LONGER
+ * TRUE, and the fix that made it untrue is quoted in `terminalize.ts:95-107`'s own doc:
+ * `TerminalizeTurnResultV1` echoes the originally requested `TurnTerminalOutcome` back verbatim
+ * on BOTH the `"recorded"` and `"unrecorded"` variants, "added specifically so this caller
+ * could rebuild the real outcome". Nothing here is a guess — it is a value read back.
+ *
+ * The user-visible cost of the stale literal: pressing Esc during a turn is a normal, hinted
+ * action (`Workspace.tsx` draws `esc cancel` while a turn runs), and the cancel really does
+ * reach `run-turn.ts`'s `terminalize("cancelled", ...)` — but the wire said `"failed"`, so
+ * `Workspace.tsx`'s `terminalRecordLines` rendered `✗ failed` in the chat stream, giving a
+ * deliberate cancel the same treatment as a backend crash.
+ *
+ * `TurnTerminalOutcome` (`failed | cancelled | stale | interrupted`) is a strict subset of the
+ * wire's `TurnOutcomeCodeV1` (that set plus `completed`), so the echo needs no mapping table.
+ * The two branches that carry no echoed outcome — the defensive `"illegal"` variant and the
+ * practically-unreachable `"finalized"` shapes (see this file's header, "THE TERMINAL EVENT")
+ * — keep `"failed"`, which is the honest answer for "terminalization itself was refused".
+ */
+function terminalOutcomeCode(
+  result: RunTurnResultV1,
+): EventPayloadByKindV1["turn.failed"]["outcome"] {
+  if (result.kind !== "terminalized") return "failed";
+  if (result.result.kind === "illegal") return "failed";
+  return result.result.outcome;
+}
+
+/**
  * `turn.failed`'s `failure` DTO for every `RunTurnResultV1` that did not commit — this file's
  * header, "GATE-EXHAUSTION-VS-BACKEND-FAILURE — CLOSED". `"unrecorded"`'s REAL adapter-level
  * `FailureDtoV1` always wins first (unchanged from WP-8 item 4). Otherwise, a `"recorded"`
@@ -823,10 +863,72 @@ function abortEarlyAdmission(
  * `APPLY_STALE`), which is why this needs none of `terminalFailureDto`'s exclusion set: nothing
  * is reconstructed here, only re-messaged.
  */
+/**
+ * Whether the admitted chat is still UNNAMED, and if so the `createdAt` a republished summary
+ * must carry.
+ *
+ * Must run BEFORE `runTurn`: admission appends this turn's own `user` record, and once it has,
+ * every chat looks named and the "was it already named?" question can no longer be answered.
+ * Returning `null` means "leave the summary alone" — the chat already has a name (so §3.9's
+ * FIRST user record, not this one, owns it), or the read failed.
+ *
+ * `createdAt` is re-read rather than assumed: `ChatSummaryV1` requires it, and republishing a
+ * summary with a wrong one would reorder the `/chats` popup, which sorts newest-first on
+ * exactly that field (`ui/mirror/model/chats.ts`).
+ *
+ * The test is "is this chat EMPTY", not `resolveChatDisplayName`'s "what is its name". The two
+ * agree here — a chat with any content already owns a name derived from its own first record,
+ * which by definition is not this turn's — but the cheap one runs in a single `loadTail`,
+ * whereas the naming walk pages `loadBefore` backwards to the chat's very beginning. That walk
+ * is right when the answer is needed (`chat.switch`) and wrong on a path that runs on EVERY
+ * send: it would grow a turn's fixed cost with the chat's own length.
+ *
+ * Best-effort by construction: a chat naming is cosmetic next to running the turn, so a failed
+ * read is logged and skipped (errore rule 21), never propagated into the turn's own outcome.
+ */
+async function resolvePendingChatNaming(
+  context: HandlerContext,
+  chatId: string,
+): Promise<{ readonly createdAt: string } | null> {
+  const handle = await wrap(context.deps.chatReader.open(chatId));
+  if ("code" in handle) {
+    console.warn(
+      `core/kernel/handlers/turn: could not open chat "${chatId}" to check whether it still needs a name: ${handle.safeMessage}`,
+    );
+    return null;
+  }
+  const tail = await wrap(handle.loadTail());
+  if ("code" in tail) {
+    console.warn(
+      `core/kernel/handlers/turn: could not read chat "${chatId}"'s tail to check whether it still needs a name: ${tail.safeMessage}`,
+    );
+    return null;
+  }
+  // Empty tail AND no earlier page: the chat holds nothing at all, so the record admission is
+  // about to append is genuinely its first.
+  if (tail.records.length > 0 || tail.prevCursor !== null) return null;
+  return { createdAt: handle.header.createdAt };
+}
+
 function admissionFailureDto(
   outcome: Exclude<AdmissionOutcomeV1, { kind: "workspace-ready" }>,
 ): FailureDtoV1 {
   if (outcome.kind === "illegal") {
+    // NEVER "could not be admitted" once the user record IS committed (defect fix, 2026-07-26).
+    // `finishAdmission` going illegal means a `turn.cancel` raced admission's own multi-step
+    // async work — and by then `runAdmission` has already durably appended the user's message.
+    // The old flat wording was written into the chat as a `system:error` record sitting directly
+    // beneath that very message, so the app contradicted itself on screen: "the turn could not be
+    // admitted", one line under the admitted message. What actually happened is a cancel, and
+    // that is what this says.
+    if (outcome.userRecordCommitted) {
+      return {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "the turn was cancelled while it was being prepared",
+        details: {},
+      };
+    }
     return {
       code: "PERSISTENCE_FAILED",
       retryable: false,
@@ -1198,6 +1300,12 @@ async function runTurnStart(
   // Read after `runTurn` resolves, only on the `"committed"` branch below, to advance the
   // checkpoint for the scope `sessionScopeId` (Task 1) already resolved.
   let capturedSessionId: string | null = null;
+  /**
+   * The pin ids `runAdmission` confirmed still open and wrote onto this turn's durable user
+   * record (`TurnContextV1.userRecord.pins`), captured through `RunTurnDeps.onAdmitted`. Empty
+   * until admission succeeds, which is always before `buildFinalizeInput` can run.
+   */
+  let admittedPinIds: readonly string[] = [];
 
   const buildFinalizeInput: RunTurnInputV1["buildFinalizeInput"] = ({
     turnId,
@@ -1245,9 +1353,34 @@ async function runTurnStart(
         warnings: validation.warnings.map((w) => ({ kind: w.kind, message: w.message })),
         ts: context.deps.clock.now().toISOString(),
       },
-      sentPins: [],
+      // THE PINS THIS MESSAGE CARRIED (defect fix, 2026-07-26).
+      //
+      // Hardcoded `[]` until now, which made `core/pins`'s `resolveSentPinAppends` — the
+      // implementation of §12.2 item 8 / turn-durability §7.4 item 5, "sent pins are resolved
+      // by this Kernel transaction after successful apply when their page is in non-empty
+      // changedPages" — unreachable in production: it always received an empty list and always
+      // returned no appends. A pin the user attached to a message stayed open forever, even
+      // after the agent edited exactly that page in response, and had to be closed by hand.
+      //
+      // Built from the two halves that each know one field, joined here rather than either one
+      // guessing the other: `admittedPinIds` is admission's OWN verdict on which candidates
+      // were still open (the same list written to the durable user record, so what resolves is
+      // exactly what the message is recorded as having carried), and `candidatePins` is where
+      // this handler read each of those ids from, so it is the honest source of their page.
+      // An id with no candidate entry is dropped rather than assigned a guessed page — it
+      // cannot happen (every admitted id came from this very list) and is not worth inventing
+      // a page slug for if it ever does.
+      sentPins: admittedPinIds.flatMap((pinId) => {
+        const candidate = candidatePins.find((pin) => pin.pinId === pinId);
+        return candidate === undefined ? [] : [{ pinId, pageSlug: candidate.pageSlug }];
+      }),
     };
   };
+
+  // Resolved BEFORE `runTurn` runs, because afterwards the answer has already changed: this
+  // turn's own admission is what appends the record that names the chat. See
+  // {@link resolvePendingChatNaming}.
+  const pendingChatNaming = await wrap(resolvePendingChatNaming(context, admittedChatId));
 
   let startedPublished = false;
   function publish(
@@ -1279,8 +1412,46 @@ async function runTurnStart(
           `core/kernel/handlers/turn: turn.start's activeChatId "${admittedChatId}" is not a valid UUIDv7 — turn.started skipped (defensive only)`,
         );
       }
+      publishChatNaming();
     }
     context.publishOperationEvent(event);
+  }
+
+  /**
+   * Republishes the admitted chat's summary once its FIRST `user` record exists — the record
+   * admission durably appended a moment before `turn.attemptStarted` fires.
+   *
+   * WHY (defect fix, 2026-07-26): `ChatSummaryV1.displayName` is derived, never stored (design
+   * §3.9), and the Kernel filled it in exactly three places — `chat.create`, `chat.switch`,
+   * `project.open`. None of them runs when a message is SENT, and `chat.create` publishes its
+   * summary while the chat is still empty, so a chat created by `/new` kept
+   * `displayName: null` for the rest of the session and the `/chats` popup showed the
+   * design's own fresh-chat placeholder (`new chat — fresh context`) instead of the prompt the
+   * user had actually sent — where the design shows only real names
+   * (`design/termcraft-engine.js:1026-1039`, whose every sample row is a prompt). Switching
+   * away and back, or restarting, was the only way to make the name appear.
+   *
+   * The name comes from `truncateChatDisplayName(text)` — the SAME §3.9 rule
+   * `deriveChatDisplayName` applies to a loaded record, given the very text admission just
+   * wrote — rather than re-reading the tail, which would cost another round trip to re-derive a
+   * string this handler already holds.
+   */
+  function publishChatNaming(): void {
+    if (pendingChatNaming === null || !isUuidv7(admittedChatId)) return;
+    const displayName = truncateChatDisplayName(text);
+    // A blank/whitespace-only first line is not a name (`display-name.ts`'s own rule) — leave
+    // the summary alone rather than publish an empty label.
+    if (displayName === null) return;
+    context.publishOperationEvent({
+      kind: "chat.changed",
+      payload: {
+        activeChatId: admittedChatId,
+        added: [],
+        updated: [{ chatId: admittedChatId, createdAt: pendingChatNaming.createdAt, displayName }],
+        removedChatIds: [],
+      },
+      correlation: { turnId },
+    });
   }
 
   const runTurnDeps: RunTurnDeps = {
@@ -1303,6 +1474,10 @@ async function runTurnStart(
     onCommitIntentRecorded: (recorded) => context.setCommitIntentRecorded(recorded),
     // Spec §1.5 — the one place the active turn id is cleared on a turn that actually ran.
     onSettled: () => context.setActiveTurnId(null),
+    // The admission-resolved pin set — see {@link buildFinalizeInput}'s `sentPins`.
+    onAdmitted: (admitted) => {
+      admittedPinIds = admitted.userRecord.pins ?? [];
+    },
   };
 
   const runTurnInput: RunTurnInputV1 = {
@@ -1365,7 +1540,27 @@ async function runTurnStart(
       }
     }
     const summary: FinalizeSummaryV1 = finalizeSummary ?? { changedPages: [], gateWarnings: [] };
+    // THE EVENT THAT MAKES A TURN'S RESULT VISIBLE (defect fix, 2026-07-26).
+    //
+    // `page.descriptorsChanged` used to be published by `handlers/project.ts` alone, on project
+    // open — even though its own reason union has always carried a `"turn-apply"` member. The
+    // turn that actually writes a page announced nothing, and two things followed:
+    //
+    //   * `ui/mirror` sets `project.activePageSlug` from THIS event and no other. A brand-new
+    //     project opens with an empty page list and `activePageSlug: null`, so after the FIRST
+    //     turn created a page the slug was still null — and `ui/app/model/deps.ts`'s preview
+    //     subscriber only asks for a session once a non-null slug appears. The first generation
+    //     ended on "preparing preview…" forever: describe a TUI, never see it.
+    //   * Editing the page already on screen was equally invisible — same slug, and the
+    //     mirror's descriptor list kept the pre-turn `sourceHash`, so the live preview went on
+    //     rendering the old source. Against the master design's own "The preview updates after
+    //     the recoverable turn transaction commits."
+    //
+    // Ordered BEFORE `turn.completed` in the batch: a subscriber that reacts to the turn ending
+    // by reading the page model should already see the pages that turn produced.
+    const descriptorEvents = await wrap(publishPageDescriptorsChanged(context, "turn-apply"));
     return [
+      ...descriptorEvents,
       {
         kind: "turn.completed",
         payload: {
@@ -1381,24 +1576,30 @@ async function runTurnStart(
   }
 
   // See this file's header, "THE TERMINAL EVENT" / "GATE-EXHAUSTION-VS-BACKEND-FAILURE —
-  // CLOSED": the wire `outcome` field still only ever publishes `"failed"` here (widening it
-  // would misrepresent a guess as spec-fixed fact), but `failure`'s own `code` is now as
-  // precise as `TerminalizeTurnResultV1`'s echoed `reason` honestly allows — `terminalFailureDto`
-  // (above) does the narrowing.
+  // CLOSED": `failure`'s own `code` is as precise as `TerminalizeTurnResultV1`'s echoed
+  // `reason` honestly allows — `terminalFailureDto` (above) does the narrowing — and, since
+  // this fix, so is `outcome` itself.
   const branch =
     result.kind === "finalized"
       ? `finalized/${result.result.kind}`
       : `terminalized/${result.result.kind}`;
   const propagatedFailure = terminalFailureDto(result, branch);
+  const outcome = terminalOutcomeCode(result);
+  // §7.2's own vocabulary maps one-to-one onto the wire's three terminal event kinds
+  // (`event-payload.ts:65`: "`turn.completed`/`turn.failed`/`turn.cancelled` ->
+  // `TurnTerminalPayloadV1`"), so a cancel gets the kind that names it. Both consumers already
+  // handle it — `ui/mirror/model/mirror.ts`'s terminal case lists all three kinds together, and
+  // `entrypoint/model/run-app.ts`'s turn-settled wait already accepts `turn.cancelled`.
+  const kind = outcome === "cancelled" ? "turn.cancelled" : "turn.failed";
   console.warn(
-    `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing turn.failed (see ./turn.ts's header, "THE TERMINAL EVENT")`,
+    `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing ${kind} with outcome "${outcome}" (see ./turn.ts's header, "THE TERMINAL EVENT")`,
   );
   return [
     {
-      kind: "turn.failed",
+      kind,
       payload: {
         turnId,
-        outcome: "failed",
+        outcome,
         changedPages: [],
         warnings: [],
         failure: propagatedFailure,

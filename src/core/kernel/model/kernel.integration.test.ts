@@ -15,6 +15,7 @@ import type {
   ReadSetAppendBaseV1,
   TurnTransactionService,
 } from "core/ports";
+import { PAGE_META_EXTRACTOR_VERSION } from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentPromptSource,
@@ -45,8 +46,6 @@ import type { ChatRecord } from "entities/chat";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
-
-import { PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER } from "./handlers/preview-export";
 
 /**
  * Kernel-assembly WP-1 Task 11 — the package's own integration gate (the plan's §11
@@ -319,7 +318,7 @@ function buildDeps(
     key: {
       pageSlug: HOME,
       sourceHash: HOME_SOURCE_HASH,
-      extractorVersion: PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
+      extractorVersion: PAGE_META_EXTRACTOR_VERSION,
     },
     meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
   });

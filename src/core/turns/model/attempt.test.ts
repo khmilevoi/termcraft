@@ -227,6 +227,49 @@ describe("startTurnAttempt — workspace-ready -> running -> stopping", () => {
     });
   });
 
+  test("a tool-failed fenced event passes through toProgressContent verbatim, carrying the correlating id (design 03-workspace-generating.dc.html:44, the ✗ failed step)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const handle = begin(h.deps, h.fence);
+      const lease = h.fence.currentLease();
+      if (lease === null) throw new Error("expected a live lease");
+
+      h.agentBackend.emitEvent(lease, { kind: "tool", id: "t1", op: "edit", target: "page.tsx" });
+      h.agentBackend.emitEvent(lease, { kind: "tool-failed", id: "t1" });
+      await Bun.sleep(0);
+
+      expect(h.published).toEqual([
+        expect.anything(), // turn.attemptStarted
+        {
+          kind: "turn.progress",
+          payload: {
+            turnId: TURN_ID,
+            attempt: 1,
+            content: { kind: "tool", id: "t1", op: "edit", target: "page.tsx" },
+          },
+          correlation: { turnId: TURN_ID },
+        },
+        {
+          kind: "turn.progress",
+          payload: {
+            turnId: TURN_ID,
+            attempt: 1,
+            content: { kind: "tool-failed", id: "t1" },
+          },
+          correlation: { turnId: TURN_ID },
+        },
+      ]);
+
+      h.agentBackend.completeRun(lease, {
+        kind: "completed",
+        finalText: "done",
+        usage: null,
+        sessionId: "s1",
+      });
+      await wrap(handle.outcome);
+    });
+  });
+
   test("an event carrying a stale fence is dropped: no deadlines.noteEvent, no turn.progress", async () => {
     await context.start(async () => {
       const h = harness();

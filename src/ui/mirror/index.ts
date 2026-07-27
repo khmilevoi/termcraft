@@ -12,6 +12,7 @@ export type {
   ExportMirror,
   PreviewMirror,
   ProjectMirror,
+  ProjectOpenFailure,
   ScreenKind,
   SelectionMirror,
   TurnGateDiagnostics,

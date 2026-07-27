@@ -11,6 +11,7 @@ import {
   Composer,
   PinList,
   foldTurnTimeline,
+  markdownLineRows,
 } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
@@ -32,9 +33,9 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import {
   agentStatusMaxRows,
-  chatScrollbackRows,
   composerRowCount,
   pinListRowCount,
+  scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
 import { derivePinListRows } from "../model/pins";
@@ -81,7 +82,11 @@ function fullscreenHint(label: string): readonly StatusBarHintKey[] {
  * both draw the SAME exact pair, `keys:[['⏎','send','dis'],['esc','cancel']]` — a faint,
  * explicitly-disabled `⏎ send` alongside the live `esc cancel`, no F2 at all.
  */
-function hintKeys(turn: TurnMirror, fullscreen: boolean): readonly StatusBarHintKey[] {
+function hintKeys(
+  turn: TurnMirror,
+  fullscreen: boolean,
+  circuitOpen: boolean,
+): readonly StatusBarHintKey[] {
   if (fullscreen) return fullscreenHint("windowed");
   // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
   if (turn.phase === "running")
@@ -89,7 +94,14 @@ function hintKeys(turn: TurnMirror, fullscreen: boolean): readonly StatusBarHint
       ["⏎", "send", "dis"],
       ["esc", "cancel"],
     ];
-  return HOTKEYS.map((action) => hotkeyHint(action));
+  // `preview.retry`'s key is advertised ONLY while the circuit is actually open — the one phase
+  // its capability guard admits it from. Showing it unconditionally would put a live-looking
+  // `F5 retry` in the status bar for the entire session, for a command the Kernel refuses in
+  // every other phase — the same "advertised but inert" trap this file's own `dis` state and the
+  // `q`/`/exit` divergence elsewhere exist to avoid.
+  return HOTKEYS.filter((action) => action.id !== "preview.retry" || circuitOpen).map((action) =>
+    hotkeyHint(action),
+  );
 }
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
@@ -104,9 +116,15 @@ function terminalRecordLines(
 }
 
 /**
- * The rows `AgentStatusBlock` always draws OUTSIDE the folded timeline — the `● agent` presence
- * line, the connection meta line, and the spinner line (3 fixed rows; gate-retry rows are NOT
- * counted here, since they're bounded at 3 and rare — underestimating the budget by that amount
+ * The rows `AgentStatusBlock` always draws OUTSIDE the folded timeline: the spinner line, and
+ * nothing else.
+ *
+ * WAS 3 (defect fix, 2026-07-26): it also counted a `● agent` presence line and a connection
+ * meta line the block used to draw on top of the panel's OWN `ws-chat-agent` header — the
+ * duplicate `● claude` the design never has (see {@link AgentStatusBlockProps}). Those two rows
+ * are gone from the block, so budgeting for them would now under-fill the timeline by two rows
+ * on every live turn. (Gate-retry rows are still NOT counted here, since they're bounded at 3
+ * and rare — underestimating the budget by that amount
  * on the rare turn that has both a long timeline AND active retries just makes the fold trigger
  * one row earlier than strictly necessary, never a layout break). Fed into `agentStatusMaxRows`
  * (`../model/agent-block-budget.ts`) alongside `frameH` and every OTHER row-consuming sibling in
@@ -114,9 +132,9 @@ function terminalRecordLines(
  * Finding 1: subtracting only this from bare `frameH`, with no upper bound, silently overflowed
  * the panel on real terminal sizes). The design's own ceiling on the other side of that
  * calculation is `MAX_TIMELINE_ROWS` (11) — see that constant's own doc comment for the 12-row
- * citation this 3 does NOT independently derive from.
+ * citation this value does NOT independently derive from.
  */
-const AGENT_BLOCK_CHROME_ROWS = 3;
+const AGENT_BLOCK_CHROME_ROWS = 1;
 
 /**
  * Renders the ordered tab strip (design `drawTabs`, `design/18-tab-management.dc.html`):
@@ -223,7 +241,11 @@ function renderPreviewRegion(
         headline="preview stopped after repeated failures"
         cause={preview.finalFailure.safeMessage}
         nextStep={
-          preview.retryAvailable ? "press retry to try again" : "the preview is unavailable"
+          // Names the ACTUAL key (defect fix, 2026-07-26). "press retry" described an action no
+          // key was bound to — `preview.retry` had no producer anywhere in `src/ui` at all — so
+          // the panel asked for something the user could not do. `ui/actions`'s registry now
+          // binds it; see that entry for why F5, and for the design's own silence on the key.
+          preview.retryAvailable ? "press F5 to try again" : "the preview is unavailable"
         }
         restoreHint={null}
       />
@@ -352,13 +374,34 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // at the design's own 11-row ceiling AND measure real remaining space inside `ws-chat-stream`
   // — not bare `frameH`, which ignores `ws-chat`'s own border and every sibling this block shares
   // the panel with. See `agentStatusMaxRows`'s own doc comment (`../model/agent-block-budget.ts`).
+  const pinRowCount = pinListRowCount(pinRows);
+  const composerRows = composerRowCount(composerAttach !== null);
   const agentBlockMaxRows = agentStatusMaxRows({
     frameH,
     chromeRows: AGENT_BLOCK_CHROME_ROWS,
     hasAgentLine: agentLabel !== "",
-    scrollbackRows: chatScrollbackRows(records, agentLabel),
-    pinListRows: pinListRowCount(pinRows),
-    composerRows: composerRowCount(composerAttach !== null),
+    pinListRows: pinRowCount,
+    composerRows,
+  });
+  // `ws-chat`'s own inner content width: the panel's width less its left/right border. This is
+  // what every `<text>` inside `ws-chat-stream` actually wraps against, so it is what the row
+  // budget must measure with.
+  const chatContentWidth = Math.max(1, chatW - 2);
+  const terminalLines = turn.phase === "terminal" ? terminalRecordLines(turn) : [];
+  // What the ephemeral region claims this frame — the running turn's block, the finished turn's
+  // collapsed record, or nothing. The scrollback below takes whatever is left over.
+  const liveBlockRows =
+    turn.phase === "running"
+      ? AGENT_BLOCK_CHROME_ROWS + agentBlockMaxRows
+      : turn.phase === "terminal"
+        ? 1 + markdownLineRows(terminalLines, chatContentWidth)
+        : 0;
+  const scrollbackRows = scrollbackMaxRows({
+    frameH,
+    hasAgentLine: agentLabel !== "",
+    liveBlockRows,
+    pinListRows: pinRowCount,
+    composerRows,
   });
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
@@ -441,7 +484,15 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             }
             position="relative"
           >
-            <box id="ws-chat-stream" flexGrow={1} flexDirection="column">
+            {/*
+             * `overflow="hidden"` is the design's own clip, not a defensive extra: `chatSeq`
+             * stops drawing at `composerTop - 1` (`design/termcraft-engine.js:571`, and again
+             * inside every per-entry loop), so chat content physically cannot reach the composer
+             * or the panel's bottom border. Without it, any row the budget below mis-predicts
+             * paints straight over both — which is exactly how a long agent reply used to
+             * overwrite the composer's own `Ask for changes…` row.
+             */}
+            <box id="ws-chat-stream" flexGrow={1} flexDirection="column" overflow="hidden">
               {agentLabel !== "" && (
                 <text id="ws-chat-agent" fg={SHELL_PALETTE.green} attributes={BOLD}>
                   {`● ${agentLabel}`}
@@ -455,12 +506,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                * dc.html`'s `chatSeq`/`drawChat` layering (persisted seq entries, then the live
                * `⠹ generating design…` block).
                */}
-              <ChatScrollback id="ws-scrollback" records={records} agentLabel={agentLabel} />
+              <ChatScrollback
+                id="ws-scrollback"
+                records={records}
+                agentLabel={agentLabel}
+                width={chatContentWidth}
+                maxRows={scrollbackRows}
+              />
               {turn.phase === "running" && (
                 <AgentStatusBlock
                   id="ws-agent"
-                  agentName={agentLabel}
-                  connection="working"
                   startedAt={turn.startedAt}
                   gateRetries={turn.gateRetries.map((retry) => ({
                     retryNumber: retry.retryNumber,
@@ -482,7 +537,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   role="agent"
                   agentLabel={agentLabel}
                   dim
-                  lines={terminalRecordLines(turn)}
+                  lines={terminalLines}
                 />
               )}
               {/*
@@ -522,16 +577,27 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               value={composerValue}
               attach={composerAttach}
             />
-            {slashOpen && (
-              <box id="ws-slash-anchor" position="absolute" left={0} right={0} bottom={3}>
-                <SlashMenu
-                  id="ws-slash-menu"
-                  typed={composerValue}
-                  rows={slashRows}
-                  selectedIndex={local.slashSelection()}
-                />
-              </box>
-            )}
+            {
+              // design/termcraft-engine.js:966 (`slashMenu(){ const rows=…; if(!rows.length)
+              // return 0; …}`) and :155 (`if(rows.length) this.slashBox(...)`) both refuse to
+              // draw the widget at all once there is nothing to show — `SlashMenu` itself always
+              // opens its bordered, titled box unconditionally, so the guard belongs here.
+              // Without it, typing a slash prefix past every match (e.g. `/commit-x`) left an
+              // empty amber-bordered box titled with whatever was typed, because `intent.ts`'s
+              // `slash-input` case appends every character with no re-check and only
+              // `slash-backspace` at length 0 closes the overlay. Matches `Home.tsx`'s own
+              // `props.rows.length > 0 &&` guard for the identical component.
+              slashOpen && slashRows.length > 0 && (
+                <box id="ws-slash-anchor" position="absolute" left={0} right={0} bottom={3}>
+                  <SlashMenu
+                    id="ws-slash-menu"
+                    typed={composerValue}
+                    rows={slashRows}
+                    selectedIndex={local.slashSelection()}
+                  />
+                </box>
+              )
+            }
           </box>
         )}
         <box
@@ -574,7 +640,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               ? { text: "⚠ turn running — send disabled", fg: "amberHi", bg: "line" }
               : null
         }
-        hintKeys={hintKeys(turn, fullscreen)}
+        hintKeys={hintKeys(turn, fullscreen, preview.phase === "circuit-open")}
       />
     </box>
   );

@@ -36,9 +36,16 @@ export type TurnProgressContent = EventPayloadByKindV1["turn.progress"]["content
  * Two parallel collections (`steps[]` plus a one-slot `reasoning` ticker) could not express it:
  * only the latest thought survived, and its position relative to the tool calls was destroyed on
  * arrival. Merging them makes ordering hold BY CONSTRUCTION rather than by reconciling two lists.
+ *
+ * A step entry carries the vendor's own `tool_use` id and a `failed` flag (design's third step
+ * glyph, `03-workspace-generating.dc.html:44`: "✓ done, ▸ running, ✗ failed"). `id` is what lets
+ * `mirror.ts` fold a later `tool-failed` event onto the exact step it names, by id — never by
+ * position — so a failure that arrives after later steps have already started still marks its
+ * own step, not whichever one happens to be newest. `failed` starts `false` and is flipped to
+ * `true` in place; it never reverts.
  */
 export type TurnTimelineEntry =
-  | Readonly<{ kind: "step"; op: string; target: string }>
+  | Readonly<{ kind: "step"; id: string; op: string; target: string; failed: boolean }>
   | Readonly<{ kind: "reasoning"; text: string }>;
 /** Normalized token usage — drives the composer ctx% indicator. */
 export type TurnUsage = Extract<TurnProgressContent, { kind: "usage" }>["tokens"];
@@ -47,12 +54,46 @@ export type TurnTerminalPayload = EventPayloadByKindV1["turn.completed"];
 /** Bounded Gate diagnostics carried on a `turn.gateRejected`. */
 export type TurnGateDiagnostics = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
 
+/**
+ * Why an open ended in the project machine's `blocked` state — the `reason` slug and the
+ * `safeMessage` `handlers/project.ts`'s own `blockOpen` publishes as this action's `metadata`.
+ * Both are read from that metadata, never synthesized: a malformed metadata bag leaves the
+ * previous value untouched rather than inventing a cause.
+ */
+export interface ProjectOpenFailure {
+  readonly reason: string;
+  readonly safeMessage: string;
+}
+
 /** The project identity/active-selection slice, seeded from `kernel.snapshot`. */
 export interface ProjectMirror {
   readonly projectId: UUIDv7 | null;
   readonly activePageSlug: string | null;
   readonly activeChatId: UUIDv7 | null;
   readonly trust: "trusted" | "untrusted-read-only" | null;
+  /**
+   * Set by `kernel.project.blockOpen`, cleared by a later successful `kernel.project.finishOpen`.
+   *
+   * Deliberately SURVIVES `kernel.project.finishClose`, unlike every other field here: closing is
+   * how the UI escapes `blocked` (`beginClose` is one of that state's only two legal exits), so
+   * wiping the cause on the very transition that recovers from it would put the user back on a
+   * Home that never explains why their project did not open. It is cleared by the next open that
+   * actually succeeds.
+   */
+  readonly openFailure: ProjectOpenFailure | null;
+  /**
+   * Whether a `project.create`/`project.open` is in flight right now — set by
+   * `kernel.project.beginCreate`/`beginOpen`, cleared by whichever outcome ends it
+   * (`finishOpen`, `blockOpen`, `finishClose`).
+   *
+   * Exists because `projectId` alone cannot tell "no project" from "a project is opening": the
+   * Kernel's ready sequence is a long multi-step read (manifest, transaction recovery, the
+   * orphan-turn scan, every page's source, the chat tail) that publishes nothing until it ends,
+   * and `deriveScreen` keys only on `projectId`. So a relaunch inside an existing project sat on
+   * a fully live Home for the whole open, whose status bar said "no project yet" — false — and
+   * whose Enter fired a SECOND `project.open` that the machine rejects from `opening`, silently.
+   */
+  readonly opening: boolean;
 }
 
 /** The turn slice — the ephemeral agent status block reads this. */

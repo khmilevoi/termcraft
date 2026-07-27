@@ -24,6 +24,7 @@ export type {
   Mirror,
   PreviewMirror,
   ProjectMirror,
+  ProjectOpenFailure,
   ScreenInput,
   ScreenKind,
   SelectionMirror,

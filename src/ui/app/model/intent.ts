@@ -160,6 +160,19 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       const input = primaryInput(deps);
       input.set(input() + intent.ch);
+      // TYPING PAST EVERY MATCH LEAVES SLASH MODE (defect fix, 2026-07-26).
+      //
+      // Nothing used to close the menu on a forward-typed miss — only `slash-backspace` at
+      // length 0 did — so `/commit-x` left the overlay open with an empty row set. The renderers
+      // correctly draw nothing for that (design's own rule: `slashMenu()` returns early when
+      // `!rows.length`, `design/termcraft-engine.js:966`), which made the dead end INVISIBLE:
+      // Enter still routed to `slash-submit`, found no row, and returned silently, so the user
+      // pressed Enter on their typed text and absolutely nothing happened, with no cue at all.
+      //
+      // §3.10's rule is the same in both directions — "when nothing applies the menu simply does
+      // not open" — so a prefix that matches nothing is just text. Dropping the overlay restores
+      // exactly that: the characters stay in the input, and Enter submits them the ordinary way.
+      if (filterSlashRows(input(), deps.actionContext()).length === 0) local.overlay.set(null);
       return;
     }
     case "slash-backspace": {
@@ -372,6 +385,20 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
   if (execution.kind === "command") {
     if (execution.command === "chat.create") {
       dispatchAndReport(deps.dispatcher.dispatch("chat.create", {}), "chat.create");
+      return;
+    }
+    if (execution.command === "preview.retry") {
+      // The ONLY command here whose payload names something: the session being retried. It comes
+      // from the mirror's own `preview.circuitOpened` fold — the same id the Kernel published —
+      // never a fresh mint. With no circuit-open session there is nothing to retry, and the
+      // capability guard would refuse it anyway, so this returns rather than dispatching a
+      // request naming a session that does not exist.
+      const preview = deps.mirror.preview();
+      if (preview.phase !== "circuit-open") return;
+      dispatchAndReport(
+        deps.dispatcher.dispatch("preview.retry", { previewSessionId: preview.previewSessionId }),
+        "preview.retry",
+      );
       return;
     }
     dispatchAndReport(deps.dispatcher.dispatch("export.start", {}), "export.start");

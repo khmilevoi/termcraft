@@ -274,6 +274,7 @@ function buildTestContext(options?: {
     setSelection: () => {},
     selection: () => null,
     currentPreviewSession: () => previewSession,
+    currentPageDescriptors: () => [],
     previewSessionCommands: createPreviewSessionCommands({
       machine: machines.preview,
       hostSupervisor: deps.hostSupervisor,

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context } from "@reatom/core";
 
 import type { PreviewFrameV1 } from "core/ports";
+import type { HomeAgentHealth } from "ui/home";
 import { homeSubmitAllowed } from "ui/home";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession, event } from "ui/testing";
 
@@ -274,6 +275,46 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
     unsubscribe();
   });
 
+  /** The same event, but carrying a real descriptor for the active page — what the Kernel publishes after a turn commits. */
+  const activePageWithHash = (activePageSlug: string, sourceHash: string) =>
+    event("page.descriptorsChanged", {
+      reason: "turn-apply",
+      descriptors: [
+        {
+          status: "ready",
+          pageSlug: activePageSlug,
+          sourceHash,
+          title: activePageSlug,
+          minSize: { w: 80, h: 24 },
+          theme: "dark",
+          kitApiVersion: 1,
+        },
+      ],
+      changes: [],
+      activePageSlug,
+    });
+
+  test("re-selects the SAME page when a turn changes its source — the memo is keyed on content, not just the slug", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePageWithHash("main", "a".repeat(64)));
+    await tick();
+    // The user asks the agent to change the page they are already looking at: same slug, new
+    // bytes. A slug-keyed memo returned early here and the live session went on rendering the
+    // pre-turn source — the user's own change was invisible.
+    kernel.emit(activePageWithHash("main", "b".repeat(64)));
+    await tick();
+    // ...and an unchanged republish must still NOT re-establish a session.
+    kernel.emit(activePageWithHash("main", "b".repeat(64)));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "main" }]);
+    unsubscribe();
+  });
+
   test("stops dispatching once the runtime disconnects (RTM-L01)", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
@@ -288,6 +329,126 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
     await tick();
 
     expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }]);
+  });
+});
+
+describe("createUiDeps refreshHomeHealth", () => {
+  test("re-enters `checking` while the probe runs, so a manual `r` re-check is visible", async () => {
+    // A hand-driven probe: each call hands back a promise this test settles when it chooses,
+    // so the mid-probe state is observable rather than raced against.
+    const pending: ((value: HomeAgentHealth) => void)[] = [];
+    const probe = () =>
+      new Promise<HomeAgentHealth>((resolve) => {
+        pending.push(resolve);
+      });
+    const settle = (value: HomeAgentHealth) => {
+      const resolve = pending.shift();
+      if (resolve === undefined) throw new Error("fixture bug: no probe in flight to settle");
+      resolve(value);
+    };
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, probe);
+    await tick();
+
+    // Settle the startup probe on a BLOCKING verdict — the state a user would be looking at
+    // when they fix the cause and press `r`.
+    settle({ kind: "blocked", agent: "claude", panel: "login", detail: "not signed in" });
+    await tick();
+    expect(deps.local.homeHealth().kind).toBe("blocked");
+
+    // The re-check itself. Without this fix the stale `blocked` verdict stayed on screen for the
+    // probe's entire run (up to 20s), with nothing to say a re-check was happening at all.
+    void deps.refreshHomeHealth();
+    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+
+    settle({ kind: "ready", agent: "claude" });
+    await tick();
+    expect(deps.local.homeHealth().kind).toBe("ready");
+  });
+});
+
+describe("createUiDeps blocked-open recovery", () => {
+  /**
+   * `handlers/project.ts`'s own `blockOpen` shape: the action, plus the `{reason, failure}` it
+   * publishes as this transition's `metadata`.
+   */
+  const blockOpen = (reason: string, safeMessage: string) =>
+    event("kernel.stateChanged", {
+      modelId: "kernel.project.state",
+      action: "kernel.project.blockOpen",
+      previousTag: "opening",
+      nextTag: "blocked",
+      metadata: {
+        reason,
+        failure: { code: "PERSISTENCE_FAILED", retryable: true, safeMessage, details: {} },
+      },
+    });
+
+  const closes = (kernel: ReturnType<typeof createFakeKernel>): number =>
+    kernel.dispatched.filter(
+      (raw) =>
+        typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "project.close",
+    ).length;
+
+  test("closes the blocked project so Home's Enter becomes legal again", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(blockOpen("manifest-read-failed", "project.toml could not be read"));
+    await tick();
+
+    // Without this dispatch the project machine stays in `blocked`, where `beginOpen`/
+    // `beginCreate` are both illegal — so every Enter on Home is rejected silently, forever.
+    expect(closes(kernel)).toBe(1);
+    expect(deps.mirror.project().openFailure).toEqual({
+      reason: "manifest-read-failed",
+      safeMessage: "project.toml could not be read",
+    });
+    unsubscribe();
+  });
+
+  test("does not loop: the recovery's own finishClose preserves the reason but re-dispatches nothing", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(blockOpen("page-list-failed", "pages/ could not be listed"));
+    await tick();
+    // `finishClose` leaves `projectId` null and DELIBERATELY keeps `openFailure` — exactly the
+    // pair the subscriber tests, so a value-blind guard would dispatch `project.close` again
+    // (illegal from `closed`) on every project write from here on.
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+        metadata: { projectId: null },
+      }),
+    );
+    await tick();
+
+    expect(closes(kernel)).toBe(1);
+    // The panel outlives the recovery — that is the whole point of carrying it across.
+    expect(deps.mirror.project().openFailure).not.toBeNull();
+    unsubscribe();
+  });
+
+  test("a SECOND block recovers again — the latch is per failure, not once per process", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(blockOpen("page-list-failed", "pages/ could not be listed"));
+    await tick();
+    kernel.emit(blockOpen("page-list-failed", "pages/ could not be listed"));
+    await tick();
+
+    expect(closes(kernel)).toBe(2);
+    unsubscribe();
   });
 });
 

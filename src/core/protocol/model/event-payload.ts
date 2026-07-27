@@ -734,7 +734,17 @@ const AGENT_TOOL_OPS_V1 = [
 
 const turnProgressContentV1Schema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("reasoning"), text: z.string() }),
-  z.strictObject({ kind: z.literal("tool"), op: z.enum(AGENT_TOOL_OPS_V1), target: z.string() }),
+  z.strictObject({
+    kind: z.literal("tool"),
+    id: z.string(),
+    op: z.enum(AGENT_TOOL_OPS_V1),
+    target: z.string(),
+  }),
+  // `tool-failed` correlates back to the `tool` step it failed by `id` (never by
+  // position — see `entities/turn`'s `AgentEvent` doc for why only the failure,
+  // never a paired success, is emitted). Design's third step glyph, verbatim
+  // (`design/03-workspace-generating.dc.html:44`: "✓ done, ▸ running, ✗ failed").
+  z.strictObject({ kind: z.literal("tool-failed"), id: z.string() }),
   z.strictObject({ kind: z.literal("final"), text: z.string() }),
   z.strictObject({
     kind: z.literal("usage"),
@@ -875,11 +885,21 @@ const turnWarningV1Schema = z.strictObject({
  *
  * WP-8 item 4 ("Generic `turn.failed` — a typed outcome instead of the catch-all",
  * phase-8 design's documented-debt sweep) plus its own gate-exhaustion-vs-backend-failure
- * follow-up: `handlers/turn.ts`'s own composer still cannot honestly reconstruct WHICH
- * `TurnTerminalOutcome` (`cancelled`/`failed`/`stale`/`interrupted`) a turn ended on — so
- * `outcome` still only ever carries `"failed"` for every non-completed cause today; widening
- * `outcome` itself would misrepresent a guess as spec-fixed fact (§7.2 fixes this vocabulary
- * verbatim). What DID change, across both landings: `failure` is no longer unconditionally a
+ * follow-up.
+ *
+ * CORRECTED (defect fix, 2026-07-26): this paragraph used to state that "`handlers/turn.ts`'s
+ * own composer still cannot honestly reconstruct WHICH `TurnTerminalOutcome` a turn ended on —
+ * so `outcome` still only ever carries `"failed"`". That claim outlived its own cause. The
+ * gate-exhaustion follow-up below made `TerminalizeTurnResultV1` echo the originally requested
+ * `TurnTerminalOutcome` back verbatim on BOTH its `"recorded"` and `"unrecorded"` variants
+ * (`core/turns/model/terminalize.ts`'s own doc says it was added "so this caller could rebuild
+ * the real outcome"), so the composer reads a measured value rather than guessing one:
+ * `handlers/turn.ts`'s `terminalOutcomeCode` now publishes the real `cancelled`/`stale`/
+ * `interrupted`/`failed`, and picks the matching event KIND with it. `"failed"` survives only
+ * for the two branches that genuinely carry no echoed outcome (a refused terminalization and
+ * the practically-unreachable `"finalized"` shapes). Until then a user pressing Esc — a hinted,
+ * ordinary action — saw their deliberate cancel rendered as `✗ failed`, indistinguishable from
+ * a backend crash. What ALSO changed, across both landings: `failure` is no longer a
  * fabricated `PERSISTENCE_FAILED` DTO — when the terminal chat record itself failed to
  * persist, `failure` carries the REAL adapter-level `FailureDtoV1` the store produced,
  * propagated verbatim (WP-8 item 4); and an ORDINARY `"recorded"` termination now surfaces a
@@ -1609,7 +1629,12 @@ export const previewCircuitOpenedPayloadV1Schema = z.strictObject({
  * ~60 chars") — the Kernel fills it via `core/chats`'s `deriveChatDisplayName`
  * whenever it has loaded a chat's tail (`chat.create`/`chat.switch`/`project.open`);
  * `null` until that chat's first `user` record exists, in which case the UI renders
- * the design's `chatId.slice(0, 8)` fallback (`App.tsx`). Capped at 80 chars in this
+ * the design's own fresh-chat placeholder instead (`new chat — fresh context`,
+ * `design/termcraft-engine.js:1078`'s `wsChatFresh`; `App.tsx`'s `FRESH_CHAT_LABEL`).
+ * CORRECTED (2026-07-26): this used to name a `chatId.slice(0, 8)` hex fragment and call it
+ * "the design's fallback" — the design has no such fallback and no unnamed row at all
+ * (`wsChats`'s fourteen sample rows, `:1026-1039`, are every one a real name).
+ * Capped at 80 chars in this
  * schema — a small margin over §3.9's ~60-char target, since the Kernel does the
  * actual truncation and this bound only guards the DTO from an unbounded string.
  */

@@ -21,46 +21,29 @@ const findRun = (frame: { rows: StyledRun[][] }, needle: string) =>
   frame.rows.flat().find((run) => run.text.includes(needle));
 
 describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)", () => {
-  test("renders the agent presence dot and connection meta on their own lines", async () => {
+  test("draws NO agent presence line — the chat panel owns that header, and drawing it here painted it twice", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
-      <AgentStatusBlock
-        id="status"
-        agentName="claude"
-        connection="ratatui · connected"
-        startedAt={null}
-        fold={null}
-        entries={[]}
-        gateRetries={[]}
-      />,
+      <AgentStatusBlock id="status" startedAt={null} fold={null} entries={[]} gateRetries={[]} />,
     );
     await handle.render();
     const frame = handle.capture();
 
-    const agent = findRun(frame, "● claude");
-    expect(agent).toBeDefined();
-    expect(agent && extractRgb(agent.fg)).toBe<string>(SHELL_PALETTE.green);
-    expect((agent?.attrs ?? 0) & 1).toBe(1);
-
-    const connection = findRun(frame, "ratatui · connected");
-    expect(connection).toBeDefined();
-    expect(connection && extractRgb(connection.fg)).toBe<string>(SHELL_PALETTE.faint);
+    // `ui/workspace`'s `ws-chat-agent` already draws `● {agent}` at the top of the panel, and
+    // design `chatSeq` (`design/termcraft-engine.js:568`) draws that header exactly once — the
+    // generating block below it (`genTurn`, `:511-565`) never repeats it. This block used to,
+    // so a live turn showed `● claude` on two consecutive rows.
+    expect(findRun(frame, "●")).toBeUndefined();
+    // The spinner IS this block's own first row.
+    expect(findRun(frame, "generating design")).toBeDefined();
   });
 
   test("renders the bold amber spinner line", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
-      <AgentStatusBlock
-        id="status"
-        agentName="claude"
-        connection="ratatui · connected"
-        startedAt={null}
-        fold={null}
-        entries={[]}
-        gateRetries={[]}
-      />,
+      <AgentStatusBlock id="status" startedAt={null} fold={null} entries={[]} gateRetries={[]} />,
     );
     await handle.render();
     const frame = handle.capture();
@@ -81,8 +64,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={Date.now() - 5_000}
         fold={null}
         entries={[]}
@@ -103,13 +84,11 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[
-          { kind: "step", op: "read", target: "current design", done: true },
-          { kind: "step", op: "writing", target: "widgets", done: false },
+          { kind: "step", op: "read", target: "current design", status: "done" },
+          { kind: "step", op: "writing", target: "widgets", status: "running" },
         ]}
         gateRetries={[]}
       />,
@@ -127,14 +106,46 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     expect(active && extractRgb(active.fg)).toBe<string>(SHELL_PALETTE.fg);
   });
 
+  // design `03-workspace-generating.dc.html:44`: "A step starts with its glyph in column one
+  // (✓ done, ▸ running, ✗ failed)" — the third state, made real end to end (entities/turn's
+  // AgentEvent tool-failed -> core/protocol -> ui/mirror's TurnTimelineEntry.failed ->
+  // turn-timeline's RenderedTimelineEntry.status -> this glyph/colour).
+  test("a failed step renders red with a ✗, regardless of whether it is the active (last) step", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 8 });
+    open = handle;
+    handle.mount(
+      <AgentStatusBlock
+        id="status"
+        startedAt={null}
+        fold={null}
+        entries={[
+          { kind: "step", op: "read", target: "current design", status: "done" },
+          { kind: "step", op: "run", target: "gate check", status: "failed" },
+          { kind: "step", op: "writing", target: "widgets", status: "running" },
+        ]}
+        gateRetries={[]}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+
+    const failed = findRun(frame, "✗ run gate check");
+    expect(failed).toBeDefined();
+    expect(failed && extractRgb(failed.fg)).toBe<string>(SHELL_PALETTE.red);
+
+    // its neighbors are unaffected — done stays green, the genuinely active step stays fg.
+    const done = findRun(frame, "✓ read current design");
+    expect(done && extractRgb(done.fg)).toBe<string>(SHELL_PALETTE.green);
+    const active = findRun(frame, "▸ writing widgets");
+    expect(active && extractRgb(active.fg)).toBe<string>(SHELL_PALETTE.fg);
+  });
+
   test("a PAST reasoning row renders one faint line at tx+2, with a line-column gutter", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[
@@ -161,8 +172,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[
@@ -190,8 +199,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[
@@ -226,15 +233,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
-      <AgentStatusBlock
-        id="status"
-        agentName="claude"
-        connection="ratatui · connected"
-        startedAt={null}
-        fold={null}
-        entries={[]}
-        gateRetries={[]}
-      />,
+      <AgentStatusBlock id="status" startedAt={null} fold={null} entries={[]} gateRetries={[]} />,
     );
     await handle.render();
     const frame = handle.capture();
@@ -251,8 +250,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={{ thoughts: 6, steps: 5 }}
         entries={[]}
@@ -279,8 +276,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={{ thoughts: 1, steps: 1 }}
         entries={[]}
@@ -302,15 +297,7 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     const handle = await createHeadlessRenderer({ w: 40, h: 8 });
     open = handle;
     handle.mount(
-      <AgentStatusBlock
-        id="status"
-        agentName="claude"
-        connection="ratatui · connected"
-        startedAt={null}
-        fold={null}
-        entries={[]}
-        gateRetries={[]}
-      />,
+      <AgentStatusBlock id="status" startedAt={null} fold={null} entries={[]} gateRetries={[]} />,
     );
     await handle.render();
     const frame = handle.capture();
@@ -326,8 +313,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[]}
@@ -348,8 +333,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[]}
@@ -370,8 +353,6 @@ describe("AgentStatusBlock component (design drawChat, ephemeral in-turn status)
     handle.mount(
       <AgentStatusBlock
         id="turn-status"
-        agentName="claude"
-        connection="ratatui · connected"
         startedAt={null}
         fold={null}
         entries={[]}

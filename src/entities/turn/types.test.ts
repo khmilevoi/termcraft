@@ -8,7 +8,9 @@ function describeEvent(event: AgentEvent): string {
     case "reasoning":
       return `reasoning:${event.text}`;
     case "tool":
-      return `tool:${event.op}:${event.target}`;
+      return `tool:${event.id}:${event.op}:${event.target}`;
+    case "tool-failed":
+      return `tool-failed:${event.id}`;
     case "final":
       return `final:${event.text}`;
     case "usage":
@@ -22,7 +24,8 @@ describe("AgentEvent", () => {
   test("narrows every variant of the §6.1 taxonomy", () => {
     const events: AgentEvent[] = [
       { kind: "reasoning", text: "planning" },
-      { kind: "tool", op: "edit", target: "pages/main.tsx" },
+      { kind: "tool", id: "toolu_1", op: "edit", target: "pages/main.tsx" },
+      { kind: "tool-failed", id: "toolu_1" },
       { kind: "final", text: "done" },
       {
         kind: "usage",
@@ -32,7 +35,8 @@ describe("AgentEvent", () => {
     ];
     expect(events.map(describeEvent)).toEqual([
       "reasoning:planning",
-      "tool:edit:pages/main.tsx",
+      "tool:toolu_1:edit:pages/main.tsx",
+      "tool-failed:toolu_1",
       "final:done",
       "usage:10/5",
       "error:boom",

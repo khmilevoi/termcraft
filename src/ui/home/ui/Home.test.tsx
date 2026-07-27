@@ -62,6 +62,8 @@ const baseProps: HomeProps = {
   combo: { agent: "claude", model: "sonnet-4.5", effort: "high" },
   rows: [],
   selectedIndex: -1,
+  openFailure: null,
+  opening: false,
 };
 
 // §3.10, phase-8 Task 17: the exact two rows `filterSlashRows("/", {..., screen: "home"})`
@@ -549,5 +551,64 @@ describe("Home screen — five health outcomes gate submit (finding §2.7, phase
   test("no longer claims `agent ready` before anything has been probed", async () => {
     const frame = await renderHome({ health: { kind: "checking", agent: "claude" } });
     expect(frameContains(frame, "agent ready")).toBe(false);
+  });
+});
+
+describe("Home screen — while a project is opening", () => {
+  test("stops claiming 'no project yet' over a project that is actively loading", async () => {
+    const opening = await renderHome({ opening: true });
+    expect(frameContains(opening, "no project yet")).toBe(false);
+    expect(frameContains(opening, "opening project…")).toBe(true);
+
+    // ...and says it again once nothing is in flight, so the fix is a real branch and not a
+    // permanent removal.
+    const idle = await renderHome();
+    expect(frameContains(idle, "no project yet")).toBe(true);
+  });
+
+  test("marks ⏎ create disabled — the Kernel refuses a second open, and now the screen says so first", async () => {
+    const frame = await renderHome({ opening: true });
+    expect(hintKeyState(frame, "⏎")).toBe("dis");
+  });
+});
+
+describe("Home screen — a project that failed to open", () => {
+  const FAILURE = {
+    reason: "manifest-read-failed",
+    safeMessage: "project.toml could not be read",
+  } as const;
+
+  test("names the Kernel's own cause instead of rendering an untouched, healthy-looking Home", async () => {
+    const frame = await renderHome({ height: 32, openFailure: FAILURE });
+    // The panel says what happened...
+    expect(frameContains(frame, "✗ this folder's project could not be opened")).toBe(true);
+    // ...in the Kernel's own words, never a paraphrase.
+    expect(frameContains(frame, FAILURE.safeMessage)).toBe(true);
+    // ...and names the specific step that failed.
+    expect(frameContains(frame, FAILURE.reason)).toBe(true);
+  });
+
+  test("the headline is the design's red, matching homeErr()'s own failure box", async () => {
+    const frame = await renderHome({ height: 32, openFailure: FAILURE });
+    const run = findRun(frame, "could not be opened");
+    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.red);
+    expect((run?.attrs ?? 0) & BOLD).toBe(BOLD);
+  });
+
+  test("renders nothing extra when no open has failed — the ordinary case", async () => {
+    const frame = await renderHome({ height: 32 });
+    expect(frameContains(frame, "could not be opened")).toBe(false);
+  });
+
+  test("stacks below the health panel — the two report unrelated facts and both can apply", async () => {
+    const frame = await renderHome({
+      height: 40,
+      health: { kind: "blocked", agent: "claude", panel: "login", detail: "claude not signed in" },
+      openFailure: FAILURE,
+    });
+    const healthRow = rowIndexOf(frame, "claude not signed in");
+    const openFailureRow = rowIndexOf(frame, "could not be opened");
+    expect(healthRow).toBeGreaterThanOrEqual(0);
+    expect(openFailureRow).toBeGreaterThan(healthRow);
   });
 });

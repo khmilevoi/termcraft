@@ -1,9 +1,14 @@
 import type { ScoredSlashRow } from "ui/actions";
+import type { ProjectOpenFailure } from "ui/mirror";
 
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
- * chrome-map "SURFACE: Home"). Home is only ever shown before `.termcraft/` exists; an
- * existing project opens straight into Workspace. No chat/preview split, no tab strip.
+ * chrome-map "SURFACE: Home"). Normally shown only before `.termcraft/` exists; an existing
+ * project opens straight into Workspace (Gap D). CORRECTED: that is not the ONLY way Home is
+ * reached with a project on disk — an open that ends in the project machine's `blocked` state
+ * leaves `projectId` null, so `deriveScreen` holds Home over a folder that does have a project.
+ * {@link HomeProps.openFailure} is what makes that case legible instead of silent. No
+ * chat/preview split, no tab strip.
  */
 
 /**
@@ -101,4 +106,18 @@ export interface HomeProps {
   readonly rows: readonly ScoredSlashRow[];
   /** Index of the highlighted row within {@link rows} (caller lands it on the first enabled row). */
   readonly selectedIndex: number;
+  /**
+   * Why the project on disk failed to open, when one did — `ProjectMirror.openFailure`, straight
+   * through. `null` is the ordinary case (nothing has failed to open). Independent of
+   * {@link HomeProps.health}: the agent can be perfectly healthy and the project still unopenable,
+   * and both panels render together when both apply.
+   */
+  readonly openFailure: ProjectOpenFailure | null;
+  /**
+   * Whether a `project.create`/`project.open` is in flight (`ProjectMirror.opening`). Home stays
+   * mounted throughout — `deriveScreen` only leaves it once `finishOpen`'s metadata lands — so
+   * this is what stops the screen claiming "no project yet" over a project that is actively
+   * loading, and what makes the refused Enter visible before it is pressed.
+   */
+  readonly opening: boolean;
 }

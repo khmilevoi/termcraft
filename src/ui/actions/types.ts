@@ -3,7 +3,12 @@ import type { CapabilityState, ScreenKind } from "ui/mirror";
 
 export type UiActionExecution =
   | { readonly kind: "local"; readonly effect: "fullscreen" | "open-chats" | "exit" }
-  | { readonly kind: "command"; readonly command: "chat.create" | "export.start" }
+  | {
+      readonly kind: "command";
+      // `preview.retry` is the one member whose payload is not `{}` — it names the session it
+      // retries, which `intent.ts` reads from the mirror rather than inventing.
+      readonly command: "chat.create" | "export.start" | "preview.retry";
+    }
   | { readonly kind: "inert" };
 
 /** One source row from which slash commands and hotkeys are projected. */

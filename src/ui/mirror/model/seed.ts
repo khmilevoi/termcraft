@@ -11,6 +11,13 @@ export function projectFromSnapshot(payload: SnapshotPayload): ProjectMirror {
     activePageSlug: payload.activePageSlug,
     activeChatId: payload.activeChatId,
     trust: payload.trust,
+    // A snapshot carries no failure field — it describes the Kernel's CURRENT state, and a
+    // `blocked` open's cause reaches the UI only as `kernel.project.blockOpen`'s own metadata.
+    // Seeding `null` states "nothing known to have failed", never "nothing failed".
+    openFailure: null,
+    // A snapshot is a CURRENT-state description; the Kernel has no "an open is in flight" field
+    // on it, and this fact reaches the UI only as `kernel.project.beginOpen`/`beginCreate`.
+    opening: false,
   };
 }
 

@@ -12,7 +12,13 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { HostSessionSpecV1, HostSupervisorPort, PageReader, PreviewSession } from "core/ports";
+import {
+  type HostSessionSpecV1,
+  type HostSupervisorPort,
+  PAGE_META_EXTRACTOR_VERSION,
+  type PageReader,
+  type PreviewSession,
+} from "core/ports";
 import {
   createFakeAgentBackend,
   createFakeAgentPromptSource,
@@ -55,11 +61,7 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
-import {
-  PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
-  exportHandlers,
-  previewHandlers,
-} from "./preview-export";
+import { exportHandlers, previewHandlers } from "./preview-export";
 import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
 
 function slug(value: string) {
@@ -202,15 +204,17 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       // `previewSessionCommands`'s own internal session tracking (`noteSessionEstablished`/
       // `noteSessionClosed`), which is what lets `resize`/`setMode`/`setThemeCapabilities`/
       // `retry`/`queryGeometry`/`close` (routed through `context.previewSessionCommands`
-      // since Task 10) find a real, live session to act on.
-      setActivePreviewSession: (session) => {
+      // since Task 10) find a real, live session to act on. `spec` (DEFECT 2 CLOSURE) is
+      // forwarded verbatim, exactly like `kernel.ts`'s own real implementation — never
+      // reconstructed here either.
+      setActivePreviewSession: (session, spec) => {
         mutatorCalls += 1;
         activePreviewSession = session;
         if (session === null) {
           previewSessionCommands.noteSessionClosed();
           return;
         }
-        previewSessionCommands.noteSessionEstablished(session);
+        previewSessionCommands.noteSessionEstablished(session, spec);
       },
       launchOperation: (label, run) => {
         launched.push({ label, run });
@@ -227,6 +231,7 @@ function buildTestContext(deps: KernelDeps): TestHarness {
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => activePreviewSession,
+      currentPageDescriptors: () => [],
       previewSessionCommands,
       frameTokenLedger,
       geometryTokenLedger,
@@ -248,7 +253,7 @@ function seedPageMeta(cache: ReturnType<typeof createFakePageMetaCache>): void {
     key: {
       pageSlug: HOME,
       sourceHash: HOME_SOURCE_HASH,
-      extractorVersion: PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER,
+      extractorVersion: PAGE_META_EXTRACTOR_VERSION,
     },
     meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
   });
@@ -363,8 +368,85 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     });
   });
 
-  test("async completion, page-meta cache MISS: sessionFailed + a schema-valid preview.failed, never a fabricated setting", async () => {
+  test("publishes an event of KIND preview.sessionReady — the only arm that lets the UI leave an error state", async () => {
+    const deps = buildDeps({
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: { themeOverride: "light", renderMode: "interactive" },
+      }),
+    });
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    // The machine's own `kernel.stateChanged{action:"kernel.preview.sessionReady"}` is NOT
+    // this event: `ui/mirror`'s reducer switches on event KIND, so a transition record can
+    // never move `PreviewMirror` out of `{phase:"failed"}` — and `Workspace.tsx` tests
+    // `failed` before it tests for a live frame, pinning the error panel over a streaming
+    // preview forever.
+    const readyIndex = events.findIndex((event) => event.kind === "preview.sessionReady");
+    expect(readyIndex).toBeGreaterThanOrEqual(0);
+
+    const parsed = eventPayloadV1SchemaByKind["preview.sessionReady"].parse(
+      events[readyIndex]!.payload,
+    );
+    // Every field traced back to something real, never minted for the event.
+    const commands = harness.handlerContext.previewSessionCommands;
+    expect(parsed.previewSessionId).toBe(commands.currentPreviewSessionId()!);
+    expect(parsed.nonce).toBe(commands.currentNonce()!);
+    expect(parsed.pageSlug).toBe(HOME);
+    expect(parsed.sourceHash).toBe(HOME_SOURCE_HASH);
+    expect(parsed.interactionMode).toBe("interactive"); // workspaceState.renderMode
+    expect(parsed.theme).toBe("light"); // workspaceState.themeOverride, not the PageMeta default
+    expect(parsed.initialFrameSeq).toBe("0"); // host frameSeq is monotonic from "1": none yet
+
+    // Order is load-bearing — `ui/mirror` applies `preview.sourceChanged` only while already
+    // `ready`, so a sourceChanged published first would be dropped.
+    const sourceChangedIndex = events.findIndex((event) => event.kind === "preview.sourceChanged");
+    expect(sourceChangedIndex).toBeGreaterThan(readyIndex);
+  });
+
+  test("async completion, page-meta cache MISS: extracts the page's meta through the Gate, establishes the session, and caches the entry", async () => {
     const deps = buildDeps(); // pageMetaCache left empty — a genuine miss
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    // A miss is a CACHE miss, not a "this page has no settings" verdict: the Gate's own
+    // contract-only extraction is the real source, so the session comes up for real.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    expect(harness.getActivePreviewSession()).not.toBeNull();
+    expect(events.some((event) => event.kind === "preview.sourceChanged")).toBe(true);
+
+    // The extraction is written back under the SAME key the read missed on, so the next
+    // preview of this unchanged source is a hit and never re-extracts.
+    const cache = deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>;
+    const put = cache.calls.find((call) => call.method === "put");
+    expect(put).toBeDefined();
+    expect(put!.key).toEqual({
+      pageSlug: HOME,
+      sourceHash: HOME_SOURCE_HASH,
+      extractorVersion: PAGE_META_EXTRACTOR_VERSION,
+    });
+  });
+
+  test("async completion, cache MISS and the page contract does not parse: sessionFailed + a preview.failed naming the real contract error", async () => {
+    const deps = buildDeps(); // pageMetaCache left empty — a genuine miss
+    (deps.gateRunner as ReturnType<typeof createFakeGateRunner>).queueExtractPageMetaResult({
+      meta: null,
+      errors: [
+        {
+          kind: "contract",
+          code: "MISSING_META_FIELD",
+          message: 'meta is missing the required "theme" field',
+        },
+      ],
+    });
     const harness = buildTestContext(deps);
     enable(harness.handlerContext.machines);
 
@@ -380,6 +462,13 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(parsed.pageSlug).toBe(HOME);
     expect(parsed.phase).toBe("starting");
     expect(parsed.failure.code).toBe("PERSISTENCE_FAILED");
+    // The panel must name the defect in the page, not an opaque cache-internals message.
+    expect(parsed.failure.safeMessage).toContain('meta is missing the required "theme" field');
+
+    // An unresolvable contract is never cached — a later fix to the page must not be shadowed
+    // by a poisoned entry.
+    const cache = deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>;
+    expect(cache.calls.some((call) => call.method === "put")).toBe(false);
 
     const stateChanged = events.find((event) => event.kind === "kernel.stateChanged");
     expect(stateChanged).toBeDefined();
@@ -660,6 +749,8 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     expect(outcome.disposition).toBe("started");
 
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
+    // A refused retry recovers the machine and publishes only its two transitions — there is no
+    // live session to announce.
     expect(events).toHaveLength(2);
     const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(first).toEqual({
@@ -718,7 +809,24 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     previewHandlers["preview.retry"]({ previewSessionId }, harness.handlerContext);
     const events = await wrap(harness.launched[harness.launched.length - 1]!.run());
 
-    expect(events).toHaveLength(2);
+    // The two machine transitions PLUS the pair that actually moves the UI out of its error
+    // panel — `preview.sessionReady` then `preview.sourceChanged`. Publishing only the
+    // transitions left `PreviewMirror` on `{phase:"circuit-open"}`, and `Workspace.tsx` tests
+    // that phase before it tests for a live frame, so a recovered preview streamed frames behind
+    // a permanently pinned "preview stopped after repeated failures" panel.
+    expect(events.map((event) => event.kind)).toEqual([
+      "kernel.stateChanged",
+      "kernel.stateChanged",
+      "preview.sessionReady",
+      "preview.sourceChanged",
+    ]);
+    const ready = eventPayloadV1SchemaByKind["preview.sessionReady"].parse(events[2]!.payload);
+    // Read from the re-established session and the spec it was reissued with — never minted.
+    expect(ready.previewSessionId).toBe(
+      harness.handlerContext.previewSessionCommands.currentPreviewSessionId()!,
+    );
+    expect(ready.nonce).toBe(harness.handlerContext.previewSessionCommands.currentNonce()!);
+    expect(ready.pageSlug).toBe(HOME);
     const first = eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(events[0]!.payload);
     expect(first).toEqual({
       modelId: "kernel.preview.state",
@@ -806,6 +914,108 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
     // `activePreview` must not be left pointing at the stale prior session.
     expect(harness.getActivePreviewSession()).toBeNull();
     expect(harness.handlerContext.previewSessionCommands.currentSession()).toBeNull();
+  });
+});
+
+/**
+ * DEFECTS 1+2 CLOSURE — the whole route, end to end: a real host failure carrying
+ * `HOST_CIRCUIT_OPEN` must actually open the circuit and publish a schema-valid
+ * `preview.circuitOpened` (defect 1 — `openCircuit` was never applied by production
+ * code, so `circuit-open`, and therefore `preview.retry`, was unreachable), and a
+ * subsequent `preview.retry` must actually succeed by reissuing the spec the router
+ * remembers (defect 2 — `noteSessionEstablished` never threaded the spec `preview-export
+ * .ts`'s own `selectCurrentSource` already has in hand, so `lastSpec` stayed `null`
+ * forever in production and `retry()` always refused). Neither fix alone closes the
+ * feature: this test drives both, in the order production actually reaches them.
+ */
+describe("previewHandlers — DEFECTS 1+2 CLOSURE: HOST_CIRCUIT_OPEN -> circuit-open + preview.circuitOpened -> preview.retry -> a re-established live session", () => {
+  test("a live session's later establishment failure carrying HOST_CIRCUIT_OPEN opens the circuit and publishes preview.circuitOpened; preview.retry then reissues the remembered spec and re-establishes a live session", async () => {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    // First establishment succeeds — DEFECT 2's fix threads the real spec into
+    // `previewSessionCommands`'s own `lastSpec` via `setActivePreviewSession(session, spec)`.
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+
+    // A second establishment attempt for the SAME page — this time the host reports the
+    // real `HOST_CIRCUIT_OPEN` code `host/adapters/host-supervisor.ts`'s own
+    // `toHostFailureDto` maps from `SupervisorError`'s `CIRCUIT_OPEN`.
+    // NOT annotated `: FailureDtoV1` — that interface's `code` is the wide 30-member
+    // `OperationalFailureCode` union, which loses the `"HOST_CIRCUIT_OPEN"` literal and
+    // makes the `toEqual(circuitFailure)` comparison below fail to typecheck against
+    // `failureDtoV1Schema`'s own discriminated-union inference. `satisfies` keeps the
+    // literal while still checking structural conformance to `FailureDtoV1`.
+    const circuitFailure = {
+      code: "HOST_CIRCUIT_OPEN",
+      retryable: false,
+      safeMessage: "restart budget exhausted (3 in 60000ms)",
+      details: { supervisorErrorCode: "CIRCUIT_OPEN" },
+    } as const satisfies FailureDtoV1;
+    (deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>).failNext(
+      "preview",
+      circuitFailure,
+    );
+
+    previewHandlers["preview.selectCurrent"]({ pageSlug: HOME }, harness.handlerContext);
+    const failEvents = await wrap(harness.launched[harness.launched.length - 1]!.run());
+
+    // DEFECT 1: `openCircuit` really applied — the machine actually reaches circuit-open.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+
+    const stateChanges = failEvents.filter((e) => e.kind === "kernel.stateChanged");
+    const actions = stateChanges.map(
+      (e) => eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(e.payload).action,
+    );
+    expect(actions).toEqual(["kernel.preview.sessionFailed", "kernel.preview.openCircuit"]);
+
+    // preview.failed still publishes too (the sessionFailed transition genuinely applied).
+    expect(failEvents.some((e) => e.kind === "preview.failed")).toBe(true);
+
+    const circuitOpened = failEvents.find((e) => e.kind === "preview.circuitOpened");
+    expect(circuitOpened).toBeDefined();
+    const parsedCircuit = eventPayloadV1SchemaByKind["preview.circuitOpened"].parse(
+      circuitOpened!.payload,
+    );
+    expect(parsedCircuit.pageSlug).toBe(HOME);
+    expect(parsedCircuit.sourceHash).toBe(HOME_SOURCE_HASH);
+    expect(parsedCircuit.finalFailure).toEqual(circuitFailure);
+    // `retryCircuit` is legal from `circuit-open` (the machine just reached it) — a real,
+    // live read off the machine, never hardcoded.
+    expect(parsedCircuit.retryCapability).toEqual({ available: true });
+
+    // DEFECT 2: preview.retry now actually succeeds — `lastSpec` (seeded by the FIRST,
+    // successful establishment above) is reissued, never refused for "no remembered spec".
+    const previewSessionId = uuidv7();
+    const retryOutcome = previewHandlers["preview.retry"](
+      { previewSessionId },
+      harness.handlerContext,
+    );
+    expect(retryOutcome.disposition).toBe("started");
+    const retryEvents = await wrap(harness.launched[harness.launched.length - 1]!.run());
+
+    const retryActions = retryEvents
+      .filter((e) => e.kind === "kernel.stateChanged")
+      .map((e) => eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(e.payload).action);
+    expect(retryActions).toEqual(["kernel.preview.retryCircuit", "kernel.preview.sessionReady"]);
+
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    expect(harness.getActivePreviewSession()).not.toBeNull();
+    expect(harness.getActivePreviewSession()).toBe(
+      harness.handlerContext.previewSessionCommands.currentSession(),
+    );
+
+    // The host actually saw two `preview()` calls with the SAME reissued page: the failed
+    // one and the retry's own re-establishment — proving the SAME spec was reissued, not a
+    // reconstructed stand-in.
+    const fakeHost = deps.hostSupervisor as ReturnType<typeof createFakeHostSupervisorPort>;
+    expect(fakeHost.calls.filter((c) => c.method === "preview").map((c) => c.pageSlug)).toEqual([
+      HOME,
+      HOME,
+      HOME,
+    ]);
   });
 });
 

@@ -1,6 +1,11 @@
 import type { PageSlug } from "entities/page";
 
-import type { GateRunResultV1, GateRunner, ManifestSliceResultV1 } from "../gate-runner";
+import type {
+  GateRunResultV1,
+  GateRunner,
+  ManifestSliceResultV1,
+  PageMetaExtractionV1,
+} from "../gate-runner";
 import type { AssertConforms } from "../index";
 
 /**
@@ -13,7 +18,8 @@ import type { AssertConforms } from "../index";
 
 export type GateRunnerCall =
   | { readonly method: "runManifestSlice"; readonly presentSlugCount: number }
-  | { readonly method: "runPage"; readonly slug: PageSlug };
+  | { readonly method: "runPage"; readonly slug: PageSlug }
+  | { readonly method: "extractPageMeta"; readonly slug: PageSlug };
 
 export interface FakeGateRunner extends GateRunner {
   readonly calls: readonly GateRunnerCall[];
@@ -21,15 +27,22 @@ export interface FakeGateRunner extends GateRunner {
   queueRunPageResult(result: GateRunResultV1): void;
   /** Queues the next `runManifestSlice()` result (FIFO), one shot. */
   queueRunManifestSliceResult(result: ManifestSliceResultV1): void;
+  /** Queues the next `extractPageMeta()` result (FIFO), one shot — a failing extraction is one with `meta: null` and a non-empty `errors`. */
+  queueExtractPageMetaResult(result: PageMetaExtractionV1): void;
 }
 
 export function createFakeGateRunner(): FakeGateRunner {
   const calls: GateRunnerCall[] = [];
   const pageResults: GateRunResultV1[] = [];
   const manifestResults: ManifestSliceResultV1[] = [];
+  const extractionResults: PageMetaExtractionV1[] = [];
 
   function queueRunPageResult(result: GateRunResultV1): void {
     pageResults.push(result);
+  }
+
+  function queueExtractPageMetaResult(result: PageMetaExtractionV1): void {
+    extractionResults.push(result);
   }
 
   function queueRunManifestSliceResult(result: ManifestSliceResultV1): void {
@@ -67,7 +80,28 @@ export function createFakeGateRunner(): FakeGateRunner {
     };
   }
 
-  return { runManifestSlice, runPage, calls, queueRunPageResult, queueRunManifestSliceResult };
+  async function extractPageMeta(input: {
+    source: string;
+    slug: PageSlug;
+  }): Promise<PageMetaExtractionV1> {
+    calls.push({ method: "extractPageMeta", slug: input.slug });
+    const queued = extractionResults.shift();
+    if (queued !== undefined) return queued;
+    return {
+      meta: { kitApiVersion: 1, title: input.slug, minSize: { w: 80, h: 24 }, theme: "default" },
+      errors: [],
+    };
+  }
+
+  return {
+    runManifestSlice,
+    runPage,
+    extractPageMeta,
+    calls,
+    queueRunPageResult,
+    queueRunManifestSliceResult,
+    queueExtractPageMetaResult,
+  };
 }
 
 type _Conforms = AssertConforms<GateRunner, FakeGateRunner>;

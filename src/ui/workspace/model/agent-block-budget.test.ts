@@ -2,37 +2,16 @@ import { describe, expect, it } from "bun:test";
 
 import { uuidv7 } from "infrastructure/uuid";
 import type { PinListRow } from "ui/chat";
-import type { ChatRecord } from "ui/mirror";
 
 import {
   MAX_TIMELINE_ROWS,
   agentStatusMaxRows,
-  chatScrollbackRows,
   composerRowCount,
   pinListRowCount,
+  scrollbackMaxRows,
 } from "./agent-block-budget";
 
 const TEST_TS = "2026-07-26T00:00:00.000Z";
-
-const userRecord = (text: string): ChatRecord => ({
-  kind: "user",
-  recordId: uuidv7(),
-  turnId: uuidv7(),
-  text,
-  selection: null,
-  pins: [],
-  ts: TEST_TS,
-});
-
-const agentRecord = (text: string): ChatRecord => ({
-  kind: "agent",
-  recordId: uuidv7(),
-  turnId: uuidv7(),
-  text,
-  changedPages: [],
-  warnings: [],
-  ts: TEST_TS,
-});
 
 const pinRow = (): PinListRow => ({
   pin: {
@@ -49,22 +28,6 @@ const pinRow = (): PinListRow => ({
   },
   index: 0,
   visible: true,
-});
-
-describe("chatScrollbackRows", () => {
-  it("is 0 for an empty scrollback", () => {
-    expect(chatScrollbackRows([], "claude")).toBe(0);
-  });
-
-  it("counts one header row plus each record's own flattened line count", () => {
-    // single-line "build a system monitor" -> 1 header + 1 line = 2
-    // two-line "line one\nline two" -> 1 header + 2 lines = 3
-    const rows = chatScrollbackRows(
-      [userRecord("build a system monitor"), agentRecord("line one\nline two")],
-      "claude",
-    );
-    expect(rows).toBe(2 + 3);
-  });
 });
 
 describe("pinListRowCount", () => {
@@ -96,7 +59,6 @@ describe("agentStatusMaxRows", () => {
       frameH: 39, // a 40-row terminal, status bar takes the last row (h - 1)
       chromeRows: 3,
       hasAgentLine: true,
-      scrollbackRows: 0,
       pinListRows: 0,
       composerRows: 2,
     });
@@ -104,14 +66,13 @@ describe("agentStatusMaxRows", () => {
   });
 
   it("measures from the interior available inside ws-chat-stream, not bare frameH (Finding 1)", () => {
-    // frameH=20, minus 2 (ws-chat's own border), minus 1 (agent line), minus 6 (scrollback),
+    // frameH=14, minus 2 (ws-chat's own border), minus 1 (agent line),
     // minus 4 (pins: 1 header + 3 rows), minus 3 (composer w/ attach), minus 3 (chrome)
-    // = 20 - 2 - 1 - 6 - 4 - 3 - 3 = 1, floored to the 3-row minimum.
+    // = 14 - 2 - 1 - 4 - 3 - 3 = 1, floored to the 3-row minimum.
     const rows = agentStatusMaxRows({
-      frameH: 20,
+      frameH: 14,
       chromeRows: 3,
       hasAgentLine: true,
-      scrollbackRows: 6,
       pinListRows: 4,
       composerRows: 3,
     });
@@ -123,7 +84,6 @@ describe("agentStatusMaxRows", () => {
       frameH: 8,
       chromeRows: 3,
       hasAgentLine: true,
-      scrollbackRows: 20,
       pinListRows: 20,
       composerRows: 3,
     });
@@ -135,10 +95,43 @@ describe("agentStatusMaxRows", () => {
       frameH: 500,
       chromeRows: 3,
       hasAgentLine: false,
-      scrollbackRows: 0,
       pinListRows: 0,
       composerRows: 2,
     });
     expect(rows).toBe(MAX_TIMELINE_ROWS);
+  });
+
+  it("no longer shrinks as the scrollback grows — the scrollback yields to it instead", () => {
+    // The inversion the overflow fix turns on: the live block's budget is a function of the
+    // panel's pinned chrome alone, so an ever-growing history can never squeeze it.
+    const input = { frameH: 39, chromeRows: 3, hasAgentLine: true, composerRows: 2 } as const;
+    expect(agentStatusMaxRows({ ...input, pinListRows: 0 })).toBe(MAX_TIMELINE_ROWS);
+  });
+});
+
+describe("scrollbackMaxRows", () => {
+  it("is what remains once the border, agent line, live block, pins and composer are taken", () => {
+    // 39 - 2 (border) - 1 (agent line) - 14 (live block) - 4 (pins) - 2 (composer) = 16
+    expect(
+      scrollbackMaxRows({
+        frameH: 39,
+        hasAgentLine: true,
+        liveBlockRows: 14,
+        pinListRows: 4,
+        composerRows: 2,
+      }),
+    ).toBe(16);
+  });
+
+  it("never goes negative on a frame with no room left", () => {
+    expect(
+      scrollbackMaxRows({
+        frameH: 6,
+        hasAgentLine: true,
+        liveBlockRows: 14,
+        pinListRows: 4,
+        composerRows: 2,
+      }),
+    ).toBe(0);
   });
 });

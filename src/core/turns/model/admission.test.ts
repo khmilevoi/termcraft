@@ -205,6 +205,44 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
     });
   });
 
+  test("a cancel that races admission: retires the staged workspace and reports the user record as already committed", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.machine.apply("beginAdmission");
+
+      // The race: `requestCancel` is legal from `admitting` (`turn-machine.ts`), and admission's
+      // own work is a long chain of awaits, so a user pressing Esc lands here routinely. Driven
+      // from inside `createTurnWorkspace` so the cancel falls in the real window — after the user
+      // record has durably committed, before `finishAdmission`.
+      const originalCreate = h.staging.createTurnWorkspace.bind(h.staging);
+      const cancelKinds: string[] = [];
+      h.staging.createTurnWorkspace = (input) => {
+        // Applied SYNCHRONOUSLY, before delegating: a `machine.apply` after an `await` would
+        // resume outside this test's own `context.start(...)` frame and land on a different atom
+        // instance (this file's own header states the rule). The window is the same either way —
+        // `admit()` has already committed, `finishAdmission` has not run yet.
+        cancelKinds.push(h.machine.apply("requestCancel").kind);
+        return originalCreate(input);
+      };
+
+      const outcome = await wrap(runAdmission(h.deps, baseInput()));
+
+      expect(cancelKinds).toEqual(["changed"]); // the fixture really did cancel mid-admission
+      if (outcome.kind !== "illegal") throw new Error(`expected illegal, got ${outcome.kind}`);
+      // The user's message IS on disk — `admit` ran long before this. Saying otherwise put a
+      // "could not be admitted" record in the chat directly under the admitted message.
+      expect(outcome.userRecordCommitted).toBe(true);
+      expect(h.turnTransactions.calls.some((call) => call.method === "admit")).toBe(true);
+
+      // And the workspace this admission created is retired rather than leaked — before the fix
+      // nothing in production ever called `retireWorkspace`.
+      expect(h.staging.calls.map((call) => call.method)).toEqual([
+        "createTurnWorkspace",
+        "retireWorkspace",
+      ]);
+    });
+  });
+
   test("createdAt/ts come from the injected clock, never wall time", async () => {
     await context.start(async () => {
       const h = harness(manualClock(T0));

@@ -73,6 +73,18 @@ export interface KeyContext {
    */
   readonly homePrompt: string;
   /**
+   * Whether a `project.create`/`project.open` is already in flight (`ProjectMirror.opening`).
+   *
+   * Enter is refused while it is. Not a new restriction — the Kernel ALREADY refuses it, because
+   * `beginOpen`/`beginCreate` are legal only from the project machine's `closed` phase — but it
+   * used to refuse it invisibly: `deriveScreen` keeps Home mounted for the whole (multi-second)
+   * open, so the user pressed Enter on a live-looking prompt and the dispatch came back
+   * `CAPABILITY_UNAVAILABLE` with nothing on screen to show for it. Refusing here instead lets
+   * `Home.tsx` draw the `⏎ create` hint in its `dis` state for the same window, so the refusal
+   * is visible BEFORE the key is pressed. The typed text is untouched either way.
+   */
+  readonly projectOpening: boolean;
+  /**
    * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). CORRECTED (finding
    * §2.5, phase-8 Task 16): this used to also gate `composerActive` below, freezing the whole
    * composer — no character, no backspace, no `/` — for the entire duration of a turn. Master
@@ -252,6 +264,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // gated purely by `homeSubmitAllowed`. No bare `r`/`q` binding for any of them: both would
     // steal a character from live typing, the exact bug just fixed for `blocked` above.
     if (RETURN_NAMES.has(key.name)) {
+      if (context.projectOpening) return { kind: "none" };
       return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
     if (key.name === "backspace") return { kind: "home-backspace" };

@@ -438,7 +438,8 @@ describe("turnProgressPayloadV1Schema", () => {
   test("accepts every normalized AgentEvent kind", () => {
     const contents = [
       { kind: "reasoning", text: "t" },
-      { kind: "tool", op: "read", target: "main.tsx" },
+      { kind: "tool", id: "t1", op: "read", target: "main.tsx" },
+      { kind: "tool-failed", id: "t1" },
       { kind: "final", text: "done" },
       { kind: "usage", tokens: { inputTokens: 1, outputTokens: 2, contextPercent: null } },
       { kind: "error", message: "boom" },
@@ -446,6 +447,24 @@ describe("turnProgressPayloadV1Schema", () => {
     for (const content of contents) {
       expect(turnProgressPayloadV1Schema.safeParse({ ...valid, content }).success).toBe(true);
     }
+  });
+
+  test("rejects a tool content missing its correlation id — a step failure could never be matched back", () => {
+    expect(
+      turnProgressPayloadV1Schema.safeParse({
+        ...valid,
+        content: { kind: "tool", op: "read", target: "main.tsx" },
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects a tool-failed content with an unexpected extra field (strict object)", () => {
+    expect(
+      turnProgressPayloadV1Schema.safeParse({
+        ...valid,
+        content: { kind: "tool-failed", id: "t1", message: "boom" },
+      }).success,
+    ).toBe(false);
   });
 
   test("rejects an unnormalized progress kind", () => {

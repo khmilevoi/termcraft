@@ -29,7 +29,13 @@ import {
   type UiPreviewFrame,
   createDispatcher,
 } from "ui/kernel";
-import { type Mirror, type ScreenKind, createMirror, createScreenAtom } from "ui/mirror";
+import {
+  type Mirror,
+  type ProjectOpenFailure,
+  type ScreenKind,
+  createMirror,
+  createScreenAtom,
+} from "ui/mirror";
 import {
   type PreviewInteractionState,
   createPreviewInteractionState,
@@ -305,29 +311,43 @@ export function createUiDeps(
       // module-level `effect` would outlive the mirror it subscribes to. `bind(...)` is created
       // here, in the hook body, before anything async — the dispatch resolves in a promise
       // continuation, where an unbound write would land on the default context (RTM-A04).
-      let lastRequestedPageSlug: string | null = null;
-      const requestPreviewForActivePage = bind((rawPageSlug: string) => {
-        if (rawPageSlug === lastRequestedPageSlug) return;
+      // THE MEMO IS KEYED ON CONTENT, NOT JUST IDENTITY (defect fix, 2026-07-26).
+      //
+      // It used to be `lastRequestedPageSlug`, a bare slug. Asking the agent to change the page
+      // already on screen — the single most common thing a user does here — does not change that
+      // slug, so this returned early and the live session went on rendering the pre-turn source
+      // forever. The user's own change was invisible unless they switched pages and back, which
+      // a one-page project (the state every project starts in) cannot even do.
+      //
+      // The page's `sourceHash` is the honest key: it is what actually decides whether the host
+      // is rendering the right bytes, and the Kernel now republishes it after every commit
+      // (`core/kernel/model/handlers/page-descriptors.ts`). A page with no descriptor yet falls
+      // back to the slug alone rather than inventing a hash — one redundant re-select is
+      // cheaper than a preview stuck on stale content.
+      let lastRequestedPageKey: string | null = null;
+      const requestPreviewForActivePage = bind((rawPageSlug: string, sourceHash: string | null) => {
+        const pageKey = `${rawPageSlug}@${sourceHash ?? ""}`;
+        if (pageKey === lastRequestedPageKey) return;
         // `ProjectMirror.activePageSlug` is a plain `string` (the mirror folds whatever the Kernel
         // published), while `preview.selectPage`'s payload wants the branded `PageSlug`. Validated
         // through the existing guard rather than cast — and a slug that does not parse is refused
         // and logged, never sent on (errore rule 21; "never fabricate a fact").
         const pageSlug = parsePageSlug(rawPageSlug);
         if (pageSlug instanceof Error) {
-          lastRequestedPageSlug = rawPageSlug;
+          lastRequestedPageKey = pageKey;
           console.warn(
             `UI preview.selectPage skipped — active page slug "${rawPageSlug}" is not a valid PageSlug:`,
             pageSlug.message,
           );
           return;
         }
-        lastRequestedPageSlug = rawPageSlug;
+        lastRequestedPageKey = pageKey;
         void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
           if (result instanceof Error) {
             // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
             // failures that make the UI unusable, and a preview that did not start is not one.
             console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
-            lastRequestedPageSlug = null;
+            lastRequestedPageKey = null;
             return;
           }
           if (result.status === "rejected") {
@@ -335,12 +355,68 @@ export function createUiDeps(
             // and the refusal is the honest outcome there. Clearing the memo lets a later
             // descriptor change retry once the guard's precondition actually holds.
             console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
-            lastRequestedPageSlug = null;
+            lastRequestedPageKey = null;
+          }
+        });
+      });
+      // THE ESCAPE FROM A BLOCKED OPEN (defect fix, 2026-07-26).
+      //
+      // `handlers/project.ts` funnels nine startup failures through `blockOpen`, which leaves the
+      // project machine in `blocked`. That state has exactly two legal exits (`core/machines/
+      // model/project-machine.ts`'s table): `retryOpen`, which needs a recovery domain and action
+      // id no UI path has, and `beginClose`. Without one of them the app was permanently stuck —
+      // `deriveScreen` held Home (projectId still null), and Home's Enter dispatches
+      // `project.open`/`project.create`, both illegal from `blocked`, so every press was rejected
+      // `CAPABILITY_UNAVAILABLE` and did nothing, with no message, forever.
+      //
+      // Closing is the honest recovery, not a workaround: the project never became ready, so
+      // there is no state to lose, and `project.close` releases the store lease the failed open
+      // took. It lands the machine back in `closed`, where Home's own Enter is legal again — so
+      // "⏎ retries the open" (what `HomeOpenFailurePanel` tells the user) is true. The panel
+      // itself survives the close on purpose: `ProjectMirror.openFailure` is the one field
+      // `finishClose` does not reset, so the reason stays on screen after the recovery.
+      // Latched by REFERENCE, not by value: every `blockOpen` fold builds a fresh
+      // `openFailure` object, so a second block — even one with the identical reason — is a
+      // different reference and is recovered again, while the many project writes that merely
+      // carry the same object forward (`page.descriptorsChanged`, `chat.changed`, and
+      // `finishClose`, which deliberately preserves it) are all skipped. Without this the
+      // recovery's own `finishClose` would re-satisfy the condition below and dispatch
+      // `project.close` in a loop, illegally, from `closed`.
+      let recoveredFailure: ProjectOpenFailure | null = null;
+      const recoverFromBlockedOpen = bind((failure: ProjectOpenFailure) => {
+        if (recoveredFailure === failure) return;
+        recoveredFailure = failure;
+        void dispatcher.dispatch("project.close", {}).then((result) => {
+          if (result instanceof Error) {
+            // Logged, never swallowed (errore rule 21). `runtimeError` stays reserved for
+            // failures that make the UI unusable; the user can still read the panel and quit.
+            console.warn("UI project.close (blocked-open recovery) dispatch failed:", result);
+            return;
+          }
+          if (result.status === "rejected") {
+            console.warn(
+              `UI project.close (blocked-open recovery) was rejected (${result.code}) — Home's Enter may stay refused`,
+            );
           }
         });
       });
       const unsubscribeActivePage = mirror.project.subscribe((project) => {
-        if (project.activePageSlug !== null) requestPreviewForActivePage(project.activePageSlug);
+        if (project.activePageSlug !== null) {
+          // Read from the descriptor list, not from a second event: `page.descriptorsChanged` is
+          // the ONE producer of both `activePageSlug` and the descriptors, and `ui/mirror`'s own
+          // case writes the descriptors first — so by the time this subscriber runs, the list is
+          // already the one that arrived with this slug.
+          const active = mirror
+            .pageDescriptors()
+            .find((descriptor) => descriptor.pageSlug === project.activePageSlug);
+          requestPreviewForActivePage(project.activePageSlug, active?.sourceHash ?? null);
+        }
+        // `projectId === null` is what says the open never finished: `finishOpen` clears
+        // `openFailure` anyway, so this pair only ever holds for a genuinely blocked open — never
+        // for the panel lingering after a successful recovery, which has already been closed.
+        if (project.openFailure !== null && project.projectId === null) {
+          recoverFromBlockedOpen(project.openFailure);
+        }
       });
       let active = true;
       let frameIterator: AsyncIterator<UiPreviewFrame> | null = null;
@@ -457,6 +533,17 @@ export function createUiDeps(
   };
 
   const refreshHomeHealth = action(async () => {
+    // SHOW THAT THE PROBE IS RUNNING (defect fix, 2026-07-26). Startup already looked right,
+    // because `homeHealth` is SEEDED `checking` — but a manual `r` re-check only ever wrote the
+    // RESULT, so the previous verdict (`✗ claude not signed in`, say) sat unchanged on screen
+    // for the probe's whole run, up to the 20s timeout. A user who fixed the cause and pressed
+    // `r` had no way to tell whether anything was happening. Re-entering `checking` first reuses
+    // the state the design already draws for exactly this — spinner, `⏎ disabled` badge
+    // (`design/termcraft-engine.js:139-161`, `home('checking')`) — rather than adding a new one.
+    //
+    // The agent name is carried over from the reading being replaced: it is the same agent being
+    // re-probed, and every member of the union carries it, so nothing is invented here.
+    local.homeHealth.set({ kind: "checking", agent: local.homeHealth().agent });
     const result = await wrap(agentHealthProbe());
     local.homeHealth.set(result);
   }, "ui.app.refreshHomeHealth").extend(withAsync());

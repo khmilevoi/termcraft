@@ -181,6 +181,20 @@ describe("runTurnValidation", () => {
         async runManifestSlice(input) {
           return { errors: [], slice: { pages: input.presentSlugs, active: null } };
         },
+        // Never reached on this path — this double implements only the two calls the test
+        // drives. A loud refusal rather than a fabricated meta.
+        async extractPageMeta() {
+          return {
+            meta: null,
+            errors: [
+              {
+                kind: "contract" as const,
+                code: "NOT_STUBBED",
+                message: "extractPageMeta is not stubbed here",
+              },
+            ],
+          };
+        },
         async runPage(input) {
           runPageCalls.push({ fileName: input.fileName, sourcePath: input.sourcePath });
           return {

@@ -39,6 +39,8 @@ describe("mirror.apply — kernel.snapshot seeds project/capabilities/pages/chat
       activePageSlug: "main",
       activeChatId: chatId,
       trust: "trusted",
+      openFailure: null,
+      opening: false,
     });
     expect(m.chats().activeChatId).toBe(chatId);
   });
@@ -147,6 +149,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
       activePageSlug: null,
       activeChatId: null,
       trust: "trusted",
+      openFailure: null,
+      opening: false,
     });
     expect(
       deriveScreen({
@@ -186,6 +190,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
       activePageSlug: null,
       activeChatId: null,
       trust: null,
+      openFailure: null,
+      opening: false,
     });
     expect(
       deriveScreen({
@@ -194,6 +200,143 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         terminal: TERMINAL,
       }),
     ).toBe("home");
+  });
+
+  test("kernel.project.blockOpen records the reason, survives finishClose, and clears on a later finishOpen", () => {
+    const m = createMirror();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+        metadata: {
+          reason: "orphan-turn-chat-corrupt",
+          failure: {
+            code: "PERSISTENCE_FAILED",
+            retryable: true,
+            safeMessage: "chat 019f… could not be decoded",
+            details: {},
+          },
+        },
+      }),
+    );
+    expect(m.project().openFailure).toEqual({
+      reason: "orphan-turn-chat-corrupt",
+      safeMessage: "chat 019f… could not be decoded",
+    });
+    // Still Home — that is exactly the silent state this fold exists to make legible.
+    expect(m.project().projectId).toBeNull();
+
+    // Closing is how the UI escapes `blocked`; wiping the reason on that same transition would
+    // return the user to a Home that never says why the project did not open.
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+        metadata: { projectId: null },
+      }),
+    );
+    expect(m.project().openFailure).not.toBeNull();
+
+    const projectId = uuidv7();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId, trust: "trusted" },
+      }),
+    );
+    expect(m.project().openFailure).toBeNull();
+  });
+
+  test("a blockOpen with unreadable metadata is logged and dropped — never an invented cause", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const m = createMirror();
+      m.apply(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.blockOpen",
+          previousTag: "opening",
+          nextTag: "blocked",
+          metadata: { reason: "page-list-failed" }, // no `failure` half
+        }),
+      );
+      expect(m.project().openFailure).toBeNull();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("kernel.project.beginOpen marks the project as opening, and finishOpen clears it", () => {
+    const m = createMirror();
+    expect(m.project().opening).toBe(false);
+
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.beginOpen",
+        previousTag: "closed",
+        nextTag: "opening",
+        metadata: {},
+      }),
+    );
+    // The whole window this fold exists for: `projectId` is still null (so `deriveScreen` keeps
+    // Home mounted) but a project IS opening — the fact Home needs to stop saying "no project
+    // yet" and to stop offering an Enter the Kernel will reject.
+    expect(m.project().opening).toBe(true);
+    expect(m.project().projectId).toBeNull();
+
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+    expect(m.project().opening).toBe(false);
+  });
+
+  test("a blocked open clears `opening` too — the window must not outlive its own failure", () => {
+    const m = createMirror();
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.beginCreate",
+        previousTag: "closed",
+        nextTag: "opening",
+        metadata: {},
+      }),
+    );
+    expect(m.project().opening).toBe(true);
+
+    m.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.blockOpen",
+        previousTag: "opening",
+        nextTag: "blocked",
+        metadata: {
+          reason: "manifest-read-failed",
+          failure: {
+            code: "PERSISTENCE_FAILED",
+            retryable: true,
+            safeMessage: "project.toml could not be read",
+            details: {},
+          },
+        },
+      }),
+    );
+    expect(m.project().opening).toBe(false);
+    expect(m.project().openFailure).not.toBeNull();
   });
 
   test("a malformed metadata.projectId is logged and dropped — never fabricated, prior value untouched", () => {
@@ -366,7 +509,7 @@ describe("mirror.apply — turn lifecycle", () => {
       event("turn.progress", {
         turnId,
         attempt: 1,
-        content: { kind: "tool", op: "edit", target: "main/page.tsx" },
+        content: { kind: "tool", id: "t1", op: "edit", target: "main/page.tsx" },
       }),
     );
     m.apply(
@@ -389,7 +532,7 @@ describe("mirror.apply — turn lifecycle", () => {
     turn = m.turn();
     if (turn.phase !== "running") throw new Error("unreachable");
     expect(turn.timeline).toEqual([
-      { kind: "step", op: "edit", target: "main/page.tsx" },
+      { kind: "step", id: "t1", op: "edit", target: "main/page.tsx", failed: false },
       { kind: "reasoning", text: "laying out gauges" },
     ]);
     expect(turn.usage?.contextPercent).toBe(42);
@@ -431,7 +574,7 @@ describe("mirror.apply — turn lifecycle", () => {
       event("turn.progress", {
         turnId,
         attempt: 1,
-        content: { kind: "tool", op: "read", target: "x" },
+        content: { kind: "tool", id: "t1", op: "read", target: "x" },
       }),
     );
     m.apply(
@@ -494,23 +637,23 @@ describe("mirror.apply — turn timeline (fix-bundle Task 19: reasoning + tool s
   test("keeps reasoning and tool steps in ONE list, in arrival order", () => {
     const mirror = createMirror(() => 1_000);
     mirror.apply(turnStarted(TURN_ID));
-    mirror.apply(progress(TURN_ID, { kind: "tool", op: "read", target: "page.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "page.tsx" }));
     mirror.apply(
       progress(TURN_ID, { kind: "reasoning", text: "the gauges already fill the top band" }),
     );
     // NOT "write" (the brief's own draft used that literal, but `AgentToolOp`
     // (`entities/turn/types.ts`) only allows read|edit|run|search|other — `normalize.test.ts`
     // confirms the SDK's `Write` tool call itself normalizes to `edit`).
-    mirror.apply(progress(TURN_ID, { kind: "tool", op: "edit", target: "page.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t2", op: "edit", target: "page.tsx" }));
     mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "reusing the resources frame" }));
 
     const turn = mirror.turn();
     expect(turn.phase).toBe("running");
     if (turn.phase !== "running") return;
     expect(turn.timeline).toEqual([
-      { kind: "step", op: "read", target: "page.tsx" },
+      { kind: "step", id: "t1", op: "read", target: "page.tsx", failed: false },
       { kind: "reasoning", text: "the gauges already fill the top band" },
-      { kind: "step", op: "edit", target: "page.tsx" },
+      { kind: "step", id: "t2", op: "edit", target: "page.tsx", failed: false },
       { kind: "reasoning", text: "reusing the resources frame" },
     ]);
   });
@@ -524,6 +667,21 @@ describe("mirror.apply — turn timeline (fix-bundle Task 19: reasoning + tool s
     const turn = mirror.turn();
     if (turn.phase !== "running") return;
     expect(turn.timeline.filter((e) => e.kind === "reasoning")).toHaveLength(2);
+  });
+
+  test("drops a whitespace-only reasoning block — it would render as a blank timeline row", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "   " }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "\n\t" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "  a real thought  " }));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    // Only the real one survives — and it keeps the agent's own text verbatim: the trim decides
+    // emptiness, it does not edit what is shown.
+    expect(turn.timeline).toEqual([{ kind: "reasoning", text: "  a real thought  " }]);
   });
 
   test("records when the turn started, from the UI's own clock", () => {
@@ -572,12 +730,81 @@ describe("mirror.apply — turn timeline (fix-bundle Task 19: reasoning + tool s
     const mirror = createMirror(() => 0);
     mirror.apply(turnStarted(TURN_ID));
     mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "" }));
-    mirror.apply(progress(TURN_ID, { kind: "tool", op: "read", target: "page.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "page.tsx" }));
     mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "" }));
 
     const turn = mirror.turn();
     if (turn.phase !== "running") return;
-    expect(turn.timeline).toEqual([{ kind: "step", op: "read", target: "page.tsx" }]);
+    expect(turn.timeline).toEqual([
+      { kind: "step", id: "t1", op: "read", target: "page.tsx", failed: false },
+    ]);
+  });
+});
+
+describe("mirror.apply — tool-failed folds onto its matching step by id (design 03-workspace-generating.dc.html:44, the ✗ failed glyph)", () => {
+  const TURN_ID = uuidv7();
+
+  function turnStarted(turnId: UUIDv7) {
+    return event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS });
+  }
+
+  function progress(turnId: UUIDv7, content: TurnProgressContent) {
+    return event("turn.progress", { turnId, attempt: 1, content });
+  }
+
+  test("marks the matching step failed, leaving every other entry untouched", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "a.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "trying b now" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t2", op: "edit", target: "b.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t2" }));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.timeline).toEqual([
+      { kind: "step", id: "t1", op: "read", target: "a.tsx", failed: false },
+      { kind: "reasoning", text: "trying b now" },
+      { kind: "step", id: "t2", op: "edit", target: "b.tsx", failed: true },
+    ]);
+  });
+
+  test("marks the step by id even when it is NOT the last step — never guessed at by position", () => {
+    const mirror = createMirror(() => 0);
+    mirror.apply(turnStarted(TURN_ID));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "a.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t2", op: "edit", target: "b.tsx" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool", id: "t3", op: "run", target: "build" }));
+    // t1 fails AFTER t2 and t3 already started — a positional "last step" rule would wrongly
+    // land this on t3.
+    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t1" }));
+
+    const turn = mirror.turn();
+    if (turn.phase !== "running") return;
+    expect(turn.timeline).toEqual([
+      { kind: "step", id: "t1", op: "read", target: "a.tsx", failed: true },
+      { kind: "step", id: "t2", op: "edit", target: "b.tsx", failed: false },
+      { kind: "step", id: "t3", op: "run", target: "build", failed: false },
+    ]);
+  });
+
+  test("a tool-failed naming an id not in the timeline is dropped and logged, never guessed at", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const mirror = createMirror(() => 0);
+      mirror.apply(turnStarted(TURN_ID));
+      mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "a.tsx" }));
+      mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "does-not-exist" }));
+
+      const turn = mirror.turn();
+      if (turn.phase !== "running") return;
+      expect(turn.timeline).toEqual([
+        { kind: "step", id: "t1", op: "read", target: "a.tsx", failed: false },
+      ]);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -844,6 +1071,60 @@ describe("mirror.apply — preview", () => {
     expect(circuit.phase).toBe("circuit-open");
     if (circuit.phase !== "circuit-open") throw new Error("unreachable");
     expect(circuit.retryAvailable).toBe(true);
+  });
+
+  test("a later sessionReady clears a failed preview — the error panel is not permanent", () => {
+    const m = createMirror();
+    m.apply(
+      event("preview.failed", {
+        previewSessionId: uuidv7(),
+        nonce: TEST_NONCE,
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        phase: "starting",
+        failure: failure(),
+      }),
+    );
+    expect(m.preview().phase).toBe("failed");
+
+    // `Workspace.tsx`'s `renderPreviewRegion` tests `phase === "failed"` BEFORE it tests for a
+    // live frame, so as long as the mirror stays `failed` the "✗ could not render current
+    // design" panel covers the preview column even while frames stream in behind it. This arm
+    // is the ONLY route out — which is why `handlers/preview-export.ts` must publish an event
+    // of KIND `preview.sessionReady`, not just the machine's own transition record.
+    const previewSessionId = uuidv7();
+    m.apply(
+      event("preview.sessionReady", {
+        previewSessionId,
+        nonce: TEST_NONCE,
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        hostMode: "static",
+        interactionMode: "static",
+        size: { w: 120, h: 40 },
+        theme: "dark-default",
+        initialFrameSeq: "0",
+      }),
+    );
+    const ready = m.preview();
+    expect(ready.phase).toBe("ready");
+    if (ready.phase !== "ready") throw new Error("unreachable");
+    expect(ready.previewSessionId).toBe(previewSessionId);
+
+    // And `preview.sourceChanged` — gated on `phase === "ready"` — starts applying again, so a
+    // later turn landing a new page updates the mirrored page instead of being dropped.
+    m.apply(
+      event("preview.sourceChanged", {
+        previewSessionId,
+        pageSlug: "dashboard",
+        source: { kind: "current" },
+        sourceHash: TEST_SHA,
+        hostMode: "static",
+      }),
+    );
+    const moved = m.preview();
+    if (moved.phase !== "ready") throw new Error("unreachable");
+    expect(moved.pageSlug).toBe("dashboard");
   });
 });
 

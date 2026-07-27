@@ -17,12 +17,11 @@ import {
   type CommandPayloadByKindV1,
   type FailureDtoV1,
   type KernelStateChangedPayloadV1,
-  type PageDescriptorV1,
   isUuidv7,
 } from "core/protocol";
-import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
+import { buildPageDescriptors } from "./page-descriptors";
 import { beginTurn } from "./turn";
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext, HandlerMachine } from "./types";
 import { noOpOutcome, startedOutcome } from "./types";
@@ -407,51 +406,6 @@ function enablePreviewIfTrusted(
     return [];
   }
   return [stateChangedEvent("kernel.preview.state", "kernel.preview.enable", outcome)];
-}
-
-/** Reads one page's source and runs it through the Gate, mapping the result to a `PageDescriptorV1`. A source-read failure blocks the WHOLE open (matches `core/project/model/open-sequence.ts`'s own `validateProjectContents`); a Gate rejection produces an `"invalid"` descriptor for just that page. */
-async function buildPageDescriptors(
-  context: HandlerContext,
-  slugs: readonly PageSlug[],
-): Promise<FailureDtoV1 | readonly PageDescriptorV1[]> {
-  const descriptors: PageDescriptorV1[] = [];
-  for (const pageSlug of slugs) {
-    const source = await wrap(context.deps.pageReader.readSource(pageSlug));
-    if ("code" in source) return source;
-
-    const result = await wrap(
-      context.deps.gateRunner.runPage({
-        source: new TextDecoder().decode(source.bytes),
-        slug: pageSlug,
-      }),
-    );
-
-    if (result.ok && result.descriptor !== null) {
-      const { meta } = result.descriptor;
-      descriptors.push({
-        status: "ready",
-        pageSlug,
-        sourceHash: source.sourceHash,
-        title: meta.title,
-        minSize: meta.minSize,
-        theme: meta.theme,
-        kitApiVersion: meta.kitApiVersion,
-      });
-      continue;
-    }
-
-    const firstError = result.errors[0];
-    descriptors.push({
-      status: "invalid",
-      pageSlug,
-      sourceHash: source.sourceHash,
-      error:
-        firstError !== undefined
-          ? { code: firstError.code, safeMessage: firstError.message }
-          : { code: "GATE_REJECTED", safeMessage: "page failed Gate validation" },
-    });
-  }
-  return descriptors;
 }
 
 /**

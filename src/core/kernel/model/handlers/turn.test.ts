@@ -286,6 +286,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       setSelection: () => {},
       selection: () => null,
       currentPreviewSession: () => null,
+      currentPageDescriptors: () => [],
       previewSessionCommands: createPreviewSessionCommands({
         machine: machines.preview,
         hostSupervisor: deps.hostSupervisor,
@@ -733,8 +734,83 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
+  });
+
+  test("a committed turn announces the pages it produced — page.descriptorsChanged names them and makes the first one active, so a fresh project's very first generation reaches the preview", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    // The page the turn "wrote": present on disk by the time the post-commit announcement
+    // re-reads the project. The workspace state deliberately has NO activePageSlug — the state
+    // a brand-new project is in, and the exact case that used to leave `activePageSlug` null
+    // forever, so `ui/app/model/deps.ts`'s preview subscriber never asked for a session and the
+    // Workspace sat on "preparing preview…".
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      pageReader: createFakePageStore({
+        order: [HOME],
+        sources: new Map([
+          [
+            HOME,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: "c".repeat(64),
+            },
+          ],
+        ]),
+      }),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: null,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "build me a clock" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200 && !agentBackend.calls.some((c) => c.method === "startTurn"); i++) {
+      await wrap(Bun.sleep(0));
+    }
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    const events = await runPromise;
+    const announced = events.find((event) => event.kind === "page.descriptorsChanged");
+    if (announced === undefined) {
+      throw new Error("expected the committed batch to announce the pages the turn produced");
+    }
+    const payload = eventPayloadV1SchemaByKind["page.descriptorsChanged"].parse(announced.payload);
+    expect(payload.reason).toBe("turn-apply");
+    expect(payload.descriptors.map((descriptor) => descriptor.pageSlug)).toEqual([HOME]);
+    // The whole point: with no stored active page, the announcement names the project's first
+    // page — the same `?? manifest.pages[0]` rule the open path already applies — so the UI has
+    // a slug to ask a preview session for.
+    expect(payload.activePageSlug).toBe(HOME);
   });
 
   test('candidatePins: an OPEN pin on the active page reaches admission as a candidate, keyed by that page\'s slug — a RESOLVED pin on the same page does not (kernel-command-contract §12.2 item 1: "only currently open, resolvable pins")', async () => {
@@ -849,13 +925,111 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
 
     expect(capturedUserRecords).toHaveLength(1);
     const [userRecord] = capturedUserRecords;
     if (userRecord === undefined) throw new Error("expected exactly one captured user record");
     expect(userRecord.pins).toEqual([OPEN_PIN_ID]);
+  });
+
+  test("sentPins: a pin the message carried is auto-resolved once the turn commits a change to its page (§12.2 item 8) — it used to stay open forever", async () => {
+    const HOME = "home" as PageSlug;
+    const OPEN_PIN_ID = "pin-open";
+
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const pinStore = createFakePinStore();
+    await pinStore.appendStandaloneEvent(HOME, {
+      kind: "pin:created",
+      recordId: "r1",
+      pinId: OPEN_PIN_ID,
+      element: "btn-1",
+      fx: 0.5,
+      fy: 0.5,
+      text: "make this button green",
+      ts: "2024-01-01T00:00:00.000Z",
+    });
+
+    // The raw fake is kept alongside the wrapper so its `calls` log stays readable — the
+    // wrapper's return type is the narrow port, which carries no log.
+    const fakeTransactions = createFakeTurnTransactionService();
+    const turnTransactions = withHonestChatAppendBase(fakeTransactions, chatStore);
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions,
+      pinReader: pinStore,
+      pinMutations: pinStore,
+      // The pinned page has to actually exist for the turn to produce a diff that touches it —
+      // "an empty design diff resolves none" is the rule this test's precondition rests on.
+      pageReader: createFakePageStore({
+        order: [HOME],
+        sources: new Map([
+          [
+            HOME,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: "d".repeat(64),
+            },
+          ],
+        ]),
+      }),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "make the button green" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200; i++) {
+      if (getPublishedEvents().some((e) => e.kind === "turn.attemptStarted")) break;
+      await wrap(Bun.sleep(0));
+    }
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+
+    const finalizeCall = fakeTransactions.calls.find((call) => call.method === "finalize");
+    if (finalizeCall?.method !== "finalize") throw new Error("expected a finalize call");
+    // The turn genuinely changed the pinned page — the precondition §12.2 item 8 attaches the
+    // resolution to ("an empty design diff resolves none").
+    expect(finalizeCall.input.changedPages.map((page) => page.pageSlug)).toContain(HOME);
+    // THE FIX: `buildFinalizeInput` used to hardcode `sentPins: []`, so `resolveSentPinAppends`
+    // always returned nothing and the pin the agent had just addressed stayed open forever.
+    expect(
+      finalizeCall.input.resolvedPins.map((resolved) => ({
+        pinId: resolved.event.pinId,
+        pageSlug: resolved.pageSlug,
+        status: resolved.event.status,
+      })),
+    ).toEqual([{ pinId: OPEN_PIN_ID, pageSlug: HOME, status: "resolved" }]);
+    // ...and the transaction really applied it, rather than filtering it back out.
+    expect(finalizeCall.appliedResolvedPins).toHaveLength(1);
   });
 
   test("readSet.pins: an OPEN pin on the active page carries a readSet.pins entry sourced from PinReader.readAppendBase — not the honest-empty [] placeholder (phase-8 WP-6)", async () => {
@@ -936,8 +1110,10 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
 
     const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
     if (createCall?.method !== "createTurnWorkspace") {
@@ -1059,8 +1235,10 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
 
     // The prompt library was called with the honest AgentPromptContextV1 this handler holds.
     const promptCall = fakePrompts.calls.find((c) => c.method === "systemPrompt");
@@ -1178,10 +1356,14 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    const [terminalEvent] = events;
-    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
-    expect(terminalEvent.kind).toBe("turn.completed");
+    // The committed batch leads with the post-commit `page.descriptorsChanged`
+    // (defect fix, 2026-07-26) and ends with the terminal event.
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
+    const terminalEvent = events.find((event) => event.kind === "turn.completed");
+    if (terminalEvent === undefined) throw new Error("expected a turn.completed event");
     expect(
       eventPayloadV1SchemaByKind["turn.completed"].safeParse(terminalEvent.payload).success,
     ).toBe(true);
@@ -1383,6 +1565,69 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.machines.turn.phase()).toBe("idle");
   });
 
+  test("a CANCELLED turn publishes turn.cancelled with outcome 'cancelled' — never the catch-all turn.failed/'failed' a deliberate Esc used to be reported as", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    // `AgentRunOutcome`'s own `"cancelled"` case (`core/ports/agent-backend.ts:93`) — exactly
+    // what `agent/run/model/engine.ts` resolves when the user presses Esc; `attempt.ts` maps it
+    // onto `TurnAttemptOutcomeV1`'s cancel, driving `run-turn.ts`'s `terminalize("cancelled", …)`.
+    agentBackend.completeRun(firstStart.fence, { kind: "cancelled", exitConfirmed: true });
+
+    const events = await runPromise;
+    const [terminalEvent] = events;
+    if (terminalEvent === undefined) throw new Error("expected exactly one terminal event");
+    const firstAttemptStarted = getPublishedEvents().find((e) => e.kind === "turn.attemptStarted");
+    if (firstAttemptStarted === undefined) throw new Error("expected a turn.attemptStarted event");
+    const turnId = (firstAttemptStarted.payload as { readonly turnId: string }).turnId;
+
+    // Both halves matter to the user. The KIND is what `entrypoint/model/run-app.ts`'s
+    // turn-settled wait and `ui/mirror` see; the OUTCOME is what `Workspace.tsx`'s
+    // `terminalRecordLines` prints — it renders `✗ ${outcome}` for anything but "completed",
+    // so `"failed"` here put a deliberate cancel on screen as an error.
+    expect(terminalEvent.kind).toBe("turn.cancelled");
+    expect(
+      eventPayloadV1SchemaByKind["turn.cancelled"].safeParse(terminalEvent.payload).success,
+    ).toBe(true);
+    expect((terminalEvent.payload as { readonly outcome: string }).outcome).toBe("cancelled");
+    expect((terminalEvent.payload as { readonly turnId: string }).turnId).toBe(turnId);
+    expect(handlerContext.machines.turn.phase()).toBe("idle");
+  });
+
   test("when the terminal record itself fails to persist ('unrecorded'), turn.failed propagates the REAL failure DTO from turnTransactions.terminalize instead of the generic bucket a reason-less recorded termination would still fall into (WP-8 item 4: a typed outcome instead of the catch-all)", async () => {
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
@@ -1478,6 +1723,15 @@ describe('turnHandlers["turn.start"]', () => {
         errors: [],
         slice: { pages: input.presentSlugs, active: null },
       }),
+      // Never reached on this path — this double implements only the two calls the test
+      // drives. A loud refusal rather than a fabricated meta, so a future caller fails here
+      // instead of silently passing on invented page settings.
+      extractPageMeta: async () => ({
+        meta: null,
+        errors: [
+          { kind: "contract", code: "NOT_STUBBED", message: "extractPageMeta is not stubbed here" },
+        ],
+      }),
       runPage: async (input) => {
         capturedRunPageInputs.push(input);
         return {
@@ -1559,17 +1813,22 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
 
     // The real bug (`fixlane-K1-turn-spine.json`'s smoke-sourcePath finding): the Gate's
     // per-page `runPage()` call must resolve to the staged candidate's real file on disk, not
     // a bare `${slug}.tsx` the real host's fresh scratch child process cwd can never find.
     // Finding #6 fix: that absolute path now travels in `sourcePath`, never in `fileName` —
     // `fileName` stays the short display name Gate echoes into a diagnostic's `file` field.
-    expect(capturedRunPageInputs).toHaveLength(1);
+    // The VALIDATION call is the first one. A second `runPage` follows it for the same page:
+    // the post-commit `page.descriptorsChanged` (defect fix, 2026-07-26) rebuilds descriptors
+    // from the committed sources, and a descriptor is only obtainable by running the Gate over
+    // the page — the same second pass `handlers/project.ts` already makes on every open.
     const [call] = capturedRunPageInputs;
-    if (call === undefined) throw new Error("expected exactly one captured runPage() call");
+    if (call === undefined) throw new Error("expected a captured runPage() call");
     expect(call.slug).toBe(HOME);
     expect(call.fileName).toBe("pages/home.tsx");
     expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/pages/home.tsx`);
@@ -1587,6 +1846,13 @@ describe('turnHandlers["turn.start"]', () => {
       runManifestSlice: async (input) => ({
         errors: [],
         slice: { pages: input.presentSlugs, active: null },
+      }),
+      // Never reached on this path — see the sibling double above.
+      extractPageMeta: async () => ({
+        meta: null,
+        errors: [
+          { kind: "contract", code: "NOT_STUBBED", message: "extractPageMeta is not stubbed here" },
+        ],
       }),
       runPage: async (input) => {
         pageCallCount += 1;
@@ -1714,8 +1980,10 @@ describe('turnHandlers["turn.start"]', () => {
     });
 
     const events = await runPromise;
-    expect(events).toHaveLength(1);
-    expect(events[0]?.kind).toBe("turn.completed");
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
   });
 
   test("publishes a schema-valid turn.started BEFORE the first turn.attemptStarted, carrying the real chatId and the SAME absolute deadline (fixlane-K1-turn-spine.json's seam finding — the mirror only leaves 'idle' on turn.started)", async () => {
@@ -1820,7 +2088,90 @@ describe('turnHandlers["turn.start"]', () => {
       sessionId: "s1",
     });
     const events = await runPromise;
-    expect(events).toHaveLength(1);
+    // The committed batch leads with the post-commit `page.descriptorsChanged`
+    // (defect fix, 2026-07-26) and ends with the terminal event.
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
+  });
+
+  test("names a still-unnamed chat from the turn's own first line, so /chats stops showing the fresh-chat placeholder", async () => {
+    // A chat created by `/new` carries `displayName: null` until its first `user` record
+    // exists. Admission appends exactly that record — but nothing republished the summary, so
+    // the `/chats` popup kept showing the fresh-chat placeholder for the whole session.
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const internalChatId: string = chatHeader.chatId;
+    const REAL_CHAT_ID = uuidv7();
+    function resolveId(id: string): string {
+      return id === REAL_CHAT_ID ? internalChatId : id;
+    }
+    const aliasedChatStore: FakeChatStore = {
+      ...chatStore,
+      open: (id) => chatStore.open(resolveId(id)),
+      readAppendBase: (id) => chatStore.readAppendBase(resolveId(id)),
+      switchActive: (id) => chatStore.switchActive(resolveId(id)),
+      seedRecords: (id, records) => chatStore.seedRecords(resolveId(id), records),
+    };
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
+      chatReader: aliasedChatStore,
+      chatMutations: aliasedChatStore,
+      turnTransactions: withHonestChatAppendBase(
+        createFakeTurnTransactionService(),
+        aliasedChatStore,
+      ),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: REAL_CHAT_ID,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner: createFakeGateRunner(),
+    });
+
+    turnHandlers["turn.start"](
+      { text: "Сделай дашборд с выводом времени\nвторая строка игнорируется" },
+      handlerContext,
+    );
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200; i++) {
+      if (getPublishedEvents().some((e) => e.kind === "chat.changed")) break;
+      await wrap(Bun.sleep(0));
+    }
+
+    const changed = getPublishedEvents().find((e) => e.kind === "chat.changed");
+    expect(changed).toBeDefined();
+    expect(eventPayloadV1SchemaByKind["chat.changed"].safeParse(changed!.payload).success).toBe(
+      true,
+    );
+    const payload = changed!.payload as {
+      readonly updated: readonly { readonly chatId: string; readonly displayName: string }[];
+    };
+    expect(payload.updated).toHaveLength(1);
+    expect(payload.updated[0]?.chatId).toBe(REAL_CHAT_ID);
+    // Design §3.9: the FIRST LINE of the first user record, never the whole message.
+    expect(payload.updated[0]?.displayName).toBe("Сделай дашборд с выводом времени");
+
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
   });
 });
 
@@ -2009,7 +2360,12 @@ describe("commit-intent bit: context.setCommitIntentRecorded genuinely moves now
     });
 
     const events = await runPromise;
-    expect(events[0]?.kind).toBe("turn.completed");
+    // The committed batch leads with the post-commit `page.descriptorsChanged`
+    // (defect fix, 2026-07-26) and ends with the terminal event.
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
     expect(getCommitIntentRecordedHistory()).toEqual([true, false]);
   });
 
@@ -2545,7 +2901,12 @@ describe('turnHandlers["turn.start"] — WP-7 same-process session resume', () =
       sessionId: "sess-first",
     });
     const events = await runPromise;
-    expect(events[0]?.kind).toBe("turn.completed");
+    // The committed batch leads with the post-commit `page.descriptorsChanged`
+    // (defect fix, 2026-07-26) and ends with the terminal event.
+    expect(events.map((event) => event.kind)).toEqual([
+      "page.descriptorsChanged",
+      "turn.completed",
+    ]);
 
     const scopeId = agentBackend.sessionScope({
       account: null,
