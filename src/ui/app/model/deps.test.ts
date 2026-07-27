@@ -5,11 +5,19 @@ import { context } from "@reatom/core";
 import type { PreviewFrameV1 } from "core/ports";
 import type { HomeAgentHealth } from "ui/home";
 import { homeSubmitAllowed } from "ui/home";
-import { TEST_SHA, createFakeKernel, createFakePreviewSession, event } from "ui/testing";
+import {
+  TEST_NONCE,
+  TEST_SHA,
+  createFakeKernel,
+  createFakePreviewSession,
+  event,
+} from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Longer than the frame loop's own `FRAME_POLL_MS`, so a poll-and-retry cycle can complete. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
 
 function frame(sessionId: string): PreviewFrameV1 {
   return {
@@ -90,6 +98,47 @@ describe("createUiDeps runtime", () => {
     expect(latest?.frame).toBe(displayed);
     expect(latest?.frameToken).toBe(preview.frameTokenFor(displayed));
     expect(latest?.handle).toBe(preview.handle);
+  });
+
+  test("follows a replacement session whose predecessor's frame stream never ends", async () => {
+    // REGRESSION (2026-07-27): `preview.retry` (F5) and a source change both install a NEW
+    // `PreviewSession`. The predecessor is left open — nothing closes its frame stream — so a
+    // loop that only re-reads `port.preview()` when the current stream ENDS stays parked on the
+    // dead session forever. The preview then sits on `preparing preview…` with no frame.
+    const first = createFakePreviewSession();
+    const second = createFakePreviewSession();
+    const kernel = createFakeKernel();
+    kernel.setPreview(first.handle);
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    expect(first.activeFrameConsumers()).toBe(1);
+
+    // Exactly what the Kernel does on a page edit or an F5 retry: install the successor, then
+    // announce it. `selectCurrentSource` sets the active session BEFORE returning its events,
+    // so by the time this envelope lands `port.preview()` already reports the successor.
+    kernel.setPreview(second.handle);
+    kernel.emit(
+      event("preview.sessionReady", {
+        previewSessionId: second.handle.previewSessionId,
+        nonce: TEST_NONCE,
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        hostMode: "static",
+        interactionMode: "static",
+        size: { w: 120, h: 40 },
+        theme: "dark-default",
+        initialFrameSeq: "1",
+      }),
+    );
+    const displayed = frame(second.handle.previewSessionId);
+    second.pushFrame(displayed);
+    await settle();
+    const latest = deps.previewFrame();
+    unsubscribe();
+
+    expect(latest?.frame).toBe(displayed);
   });
 
   test("keeps an asynchronously received frame in the runtime's scoped context", async () => {

@@ -608,12 +608,36 @@ export function createKernel(deps: KernelDeps): Kernel {
       session: PreviewSession | null,
       spec?: HostSessionSpecV1,
     ): void {
+      const previous = activePreview;
       activePreview = session;
       if (session === null) {
         previewSessionCommands.noteSessionClosed();
         return;
       }
       previewSessionCommands.noteSessionEstablished(session, spec);
+      // DEFECT FIX (2026-07-27): this used to overwrite `activePreview` and walk away, so the
+      // session it displaced was never closed by ANYONE. `HostSupervisor.preview` keys by page
+      // + source hash, so every page edit mints a new key, a new relay and a new session — the
+      // displaced one kept its host subprocess alive against the §13 ≤10 global limit (about
+      // ten edits then fail with `HOST_CAPACITY`) and, because a relay only ends on close, kept
+      // its frame stream open forever. The UI's frame loop leaves a stream only when it ENDS,
+      // so an abandoned predecessor froze the preview on `preparing preview…` for the rest of
+      // the run — the whole agent-edits-the-page loop, dead.
+      //
+      // Identity-guarded: `HostSupervisor.preview` returns the SAME stable session for an
+      // unchanged key (a mere size/theme change re-selects without a swap), and closing that
+      // would tear down the live preview this call is establishing.
+      //
+      // Fire-and-forget with a logged failure, never a swallowed one (errore rule 21): this
+      // setter is synchronous by contract — every `HandlerContext` mutator is — and the
+      // establishing path must not block on the predecessor's teardown. `preview.close`'s own
+      // path closes through `previewSessionCommands.close()` and then lands here with `null`,
+      // which is why the null branch above deliberately closes nothing a second time.
+      if (previous !== null && previous !== session) {
+        void previous.close().catch((cause: unknown) => {
+          console.warn("kernel: closing the replaced preview session failed:", cause);
+        });
+      }
     }
     function currentPreviewSession(): PreviewSession | null {
       return activePreview;

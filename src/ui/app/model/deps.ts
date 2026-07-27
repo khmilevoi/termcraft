@@ -26,6 +26,7 @@ import {
   type Dispatcher,
   type EventEnvelopeV1,
   type KernelPort,
+  type PreviewSessionHandle,
   type UiPreviewFrame,
   createDispatcher,
 } from "ui/kernel";
@@ -277,6 +278,43 @@ export function createUiDeps(
       });
       const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
+      // The frame loop's attachment point. Declared HERE, above `applyEnvelope` — which reads
+      // it through `resyncPreviewSession` — because `port.subscribe` below may deliver an
+      // envelope synchronously, and a `let` declared further down would still be in its
+      // temporal dead zone when that first event lands.
+      let active = true;
+      let frameIterator: AsyncIterator<UiPreviewFrame> | null = null;
+      let frameHandle: PreviewSessionHandle | null = null;
+      const stopFrameIterator = () => {
+        const iterator = frameIterator;
+        frameIterator = null;
+        frameHandle = null;
+        if (iterator?.return === undefined) return;
+        void iterator.return().catch((cause) => {
+          console.error("UI preview frame iterator cleanup failed:", cause);
+        });
+      };
+      /**
+       * REGRESSION FIX (2026-07-27) — leave a session the Kernel has already replaced.
+       *
+       * The loop below re-reads `port.preview()` only when the CURRENT frame stream ends, so a
+       * replacement session is picked up only if the predecessor's stream closes. Every page
+       * edit produces one: `HostSupervisor.preview` keys by page + source hash, so a new hash
+       * is a new key, a new relay, and a new `PreviewSession` object. `kernel.ts`'s
+       * `setActivePreviewSession` now closes the predecessor, which ends its stream — this is
+       * the UI's own half of that guarantee, so a producer that ever abandons a session
+       * silently again costs one stale frame instead of freezing the preview on
+       * `preparing preview…` for the rest of the run.
+       *
+       * Returning the iterator is deliberately the SAME exit the loop already handles: it
+       * resolves the parked `next()` with `done`, the inner loop breaks, and the outer loop
+       * re-reads `port.preview()`. No second code path, no second way to be wrong.
+       */
+      const resyncPreviewSession = () => {
+        if (frameHandle === null) return;
+        if (port.preview() === frameHandle) return;
+        stopFrameIterator();
+      };
       const applyEnvelope = bind((envelope: EventEnvelopeV1) => {
         const distributed = envelope as AnyEventEnvelope;
         // DIAGNOSTIC (infrastructure/debug-log): the ONE place every Kernel event enters the UI.
@@ -297,6 +335,10 @@ export function createUiDeps(
           handleGeometryResult(deps, distributed);
         }
         mirror.apply(distributed);
+        // AFTER the mirror fold, not before: `preview.sessionReady`/`preview.sourceChanged` are
+        // what make `port.preview()` report the successor, and the fold is what the rest of the
+        // UI reads. Cheap — a reference comparison per event.
+        resyncPreviewSession();
       });
       const unsubscribe = port.subscribe(applyEnvelope);
       if (unsubscribe instanceof Error) {
@@ -418,16 +460,6 @@ export function createUiDeps(
           recoverFromBlockedOpen(project.openFailure);
         }
       });
-      let active = true;
-      let frameIterator: AsyncIterator<UiPreviewFrame> | null = null;
-      const stopFrameIterator = () => {
-        const iterator = frameIterator;
-        frameIterator = null;
-        if (iterator?.return === undefined) return;
-        void iterator.return().catch((cause) => {
-          console.error("UI preview frame iterator cleanup failed:", cause);
-        });
-      };
       void (async () => {
         // Frames flow through the PreviewSession facade, not the event stream (§7.6). Iterate
         // the current session's frames; when none exists, poll until one appears; when a
@@ -447,6 +479,7 @@ export function createUiDeps(
           }
           const iterator = handle.frames[Symbol.asyncIterator]();
           frameIterator = iterator;
+          frameHandle = handle;
           while (active) {
             const next = await nextFrame(iterator).catch(
               (cause) => new UiPreviewStreamError({ cause }),
@@ -459,7 +492,10 @@ export function createUiDeps(
             if (next.done) break;
             setPreviewFrame(next.value);
           }
-          if (frameIterator === iterator) frameIterator = null;
+          if (frameIterator === iterator) {
+            frameIterator = null;
+            frameHandle = null;
+          }
           if (active) {
             const delayed = await waitForFramePoll().catch(
               (cause) => new UiPreviewStreamError({ cause }),

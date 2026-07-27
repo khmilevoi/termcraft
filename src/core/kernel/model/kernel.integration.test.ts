@@ -689,9 +689,13 @@ describe("the Kernel's supervisor subscription (preview render-failure repair, 2
       payload: { pageSlug: HOME },
     });
     if (selectResult instanceof Error) throw selectResult;
-    await sessionReady;
+    const previewReadyEnvelope = await sessionReady;
 
-    return { kernel, supervisor: deps.hostSupervisor as FakeHostSupervisorPort };
+    return {
+      kernel,
+      supervisor: deps.hostSupervisor as FakeHostSupervisorPort,
+      previewReadyEnvelope,
+    };
   }
 
   test("a circuitOpened for the live session publishes preview.circuitOpened carrying the host's own message, code and attempt count", async () => {
@@ -777,5 +781,33 @@ describe("the Kernel's supervisor subscription (preview render-failure repair, 2
 
     expect(envelopes.filter((e) => e.kind === "preview.circuitOpened")).toHaveLength(0);
     unsubscribe();
+  });
+
+  test("re-selecting a page closes the session it displaces instead of leaking its host", async () => {
+    // DEFECT (2026-07-27): `setActivePreviewSession` overwrote `activePreview` and walked away.
+    // Nothing else closes the displaced session, so every page edit — the agent's whole reason
+    // to exist — left a host subprocess running against the §13 ≤10 global limit AND left its
+    // frame relay open, which is what froze the UI's frame loop on the dead predecessor.
+    const { kernel, supervisor, previewReadyEnvelope } = await livePreviewKernel();
+    expect(supervisor.liveCount()).toBe(1);
+
+    const sessionReady = waitForEvent(
+      kernel,
+      (envelope) => envelope.kind === "preview.sessionReady",
+    );
+    const reselect = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: previewReadyEnvelope.stateRevision,
+      kind: "preview.selectPage",
+      payload: { pageSlug: HOME },
+    });
+    if (reselect instanceof Error) throw reselect;
+    await sessionReady;
+    // The close is fire-and-forget by contract (the setter is synchronous); let it settle.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(supervisor.liveCount()).toBe(1);
   });
 });
