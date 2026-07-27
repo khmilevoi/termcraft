@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { SpawnCommand, SpawnFn, SpawnedChild } from "../types";
-import { SupervisorError } from "./errors";
+import { SupervisorError, osFailureReason } from "./errors";
 
 /**
  * The §13 environment allowlist: explicit locale + timezone, no inherited API
@@ -43,6 +43,11 @@ function defaultScratchDir(): string {
  * spawn call is wrapped in a raw try/catch IIFE mapping ANY throw to a typed
  * `SupervisorError("SPAWN_FAILED")` with the OS code (D1 — the throw is Error
  * here, but never depend on that).
+ *
+ * Both reasons go through `osFailureReason` rather than the throw's own message: the scratch
+ * directory IS an absolute temp path, so libuv's message for a failed `mkdtemp` names it, and
+ * a `SupervisorError.reason` is a §13 diagnostic that promises none. The full throw survives
+ * on `cause`.
  */
 export function createBunSpawn(options?: { makeScratchDir?: () => string }): SpawnFn {
   const makeScratchDir = options?.makeScratchDir ?? defaultScratchDir;
@@ -53,7 +58,7 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
       } catch (cause) {
         return new SupervisorError({
           code: "SPAWN_FAILED",
-          reason: `scratch dir creation failed: ${describe(cause)}`,
+          reason: `scratch dir creation failed: ${osFailureReason(cause)}`,
           cause: asError(cause),
         });
       }
@@ -74,18 +79,12 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
       } catch (cause) {
         return new SupervisorError({
           code: "SPAWN_FAILED",
-          reason: describe(cause),
+          reason: osFailureReason(cause),
           cause: asError(cause),
         });
       }
     })();
   };
-}
-
-function describe(cause: unknown): string {
-  const code = (cause as { code?: unknown })?.code;
-  const message = (cause as { message?: unknown })?.message ?? cause;
-  return code === undefined ? String(message) : `${String(code)}: ${String(message)}`;
 }
 
 function asError(cause: unknown): Error | undefined {

@@ -2,7 +2,7 @@ import { FrameDecoder } from "infrastructure/framing";
 
 import { ProtocolError } from "../../protocol";
 import type { FloodMonitor, SpawnedChild } from "../types";
-import { SupervisorError } from "./errors";
+import { SupervisorError, osFailureReason } from "./errors";
 
 /** One decoded outer frame from the child's stdout (framing §5). */
 export interface InboundMessage {
@@ -35,7 +35,7 @@ export async function writeFramed(
     } catch (cause) {
       return new SupervisorError({
         code: "TRANSPORT_ERROR",
-        reason: `stdin write failed: ${String((cause as { message?: unknown })?.message ?? cause)}`,
+        reason: `stdin write failed: ${osFailureReason(cause)}`,
         cause: cause instanceof Error ? cause : undefined,
       });
     }
@@ -69,7 +69,7 @@ export async function* readInbound(
   } catch (cause) {
     yield new SupervisorError({
       code: "TRANSPORT_ERROR",
-      reason: `stdout read failed: ${String((cause as { message?: unknown })?.message ?? cause)}`,
+      reason: `stdout read failed: ${osFailureReason(cause)}`,
       cause: cause instanceof Error ? cause : undefined,
     });
   }
