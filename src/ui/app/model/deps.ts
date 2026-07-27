@@ -15,7 +15,7 @@ import {
 } from "@reatom/core";
 import * as errore from "errore";
 
-import type { UUIDv7 } from "core/protocol";
+import type { Sha256Hex, UUIDv7 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
@@ -70,6 +70,12 @@ export interface UiLocalState {
   readonly chatSelection: Atom<number>;
   /** Draft text for the new-pin popup (phase 7 local state; pin issuance lands in Task 3). */
   readonly pinDraft: Atom<string>;
+  /**
+   * The page picked from the tab strip, or `null` while the Kernel's own active slug is the whole
+   * truth. Written by `selectPage` (`ui/workspace/model/page-selection.ts`), cleared whenever the
+   * Kernel publishes a new active slug of its own.
+   */
+  readonly pageOverride: Atom<string | null>;
   /**
    * The `operationId` of the last export result the user dismissed (M14), or `null`. There is
    * no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member — export
@@ -147,6 +153,13 @@ export interface UiDeps {
   readonly runtime: Atom<undefined>;
   readonly interaction: PreviewInteractionState;
   readonly local: UiLocalState;
+  /**
+   * The page the Workspace is showing: {@link UiLocalState.pageOverride} when the user picked a
+   * tab, else the Kernel's own `activePageSlug`. The single slug every consumer reads — see
+   * `ui/workspace/model/page-selection.ts` for why the choice lives here rather than in a
+   * Kernel field the UI could not learn back.
+   */
+  readonly activePageSlug: Computed<string | null>;
   /**
    * Re-runs the agent-health probe and updates {@link UiLocalState.homeHealth} (M15's
    * `home-recheck` intent calls this). Named and `withAsync`-extended per RTM-A02/A03; a fresh
@@ -266,6 +279,30 @@ export function createUiDeps(
   const previewFrame = atom<UiPreviewFrame | null>(null, "ui.app.previewFrame");
   const runtimeError = atom<Error | null>(null, "ui.app.runtimeError");
   const interaction = createPreviewInteractionState();
+  // The tab-strip override and the one effective slug derived from it — see
+  // `ui/workspace/model/page-selection.ts` for why the user's page choice is UI-local state.
+  // Declared here, above `runtime`, because that atom's connect hook drives the preview session
+  // off `activePageSlug` below.
+  const pageOverride = atom<string | null>(null, "ui.local.pageOverride");
+  const activePageSlug = computed<string | null>(
+    () => pageOverride() ?? mirror.project().activePageSlug,
+    "ui.app.activePageSlug",
+  );
+  // What the preview session is asked for: the effective page AND the bytes it should be
+  // rendering. The `sourceHash` half is why this is not just `activePageSlug` — a turn that
+  // rewrites the page already on screen changes no slug at all, and a slug-keyed request would
+  // leave the host rendering the pre-turn source (the 2026-07-26 defect `requestPreviewForActive
+  // Page`'s own memo was rebuilt to fix). A page with no descriptor yet reports a `null` hash
+  // rather than inventing one.
+  const activePageRequest = computed<Readonly<{
+    slug: string;
+    sourceHash: Sha256Hex | null;
+  }> | null>(() => {
+    const slug = activePageSlug();
+    if (slug === null) return null;
+    const descriptor = mirror.pageDescriptors().find((entry) => entry.pageSlug === slug);
+    return { slug, sourceHash: descriptor?.sourceHash ?? null };
+  }, "ui.app.activePageRequest");
 
   const runtime = atom<undefined>(undefined, "ui.app.runtime").extend(
     withConnectHook(() => {
@@ -384,6 +421,11 @@ export function createUiDeps(
           return;
         }
         lastRequestedPageKey = pageKey;
+        // DIAGNOSTIC (HANDOFF Finding 2): the ONE place a page choice becomes a Kernel command.
+        // Without this the log could not distinguish "the memo swallowed the click", "the
+        // dispatch was made and refused", and "the dispatch was accepted and the handler never
+        // ran" — three different bugs that all look identical as silence.
+        trace("ui.preview.request", { pageSlug, sourceHash, pageKey });
         void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
           if (result instanceof Error) {
             // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
@@ -398,7 +440,12 @@ export function createUiDeps(
             // descriptor change retry once the guard's precondition actually holds.
             console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
             lastRequestedPageKey = null;
+            return;
           }
+          // The accepted path used to be silent, which is what made Finding 2 unreadable: an
+          // accepted dispatch and a never-attempted one left the same (empty) evidence. Same
+          // channel and shape `page-selection.ts` already uses for `selection.clear`.
+          trace("ui.dispatch.result", { kind: "preview.selectPage", pageSlug, result });
         });
       });
       // THE ESCAPE FROM A BLOCKED OPEN (defect fix, 2026-07-26).
@@ -442,16 +489,22 @@ export function createUiDeps(
           }
         });
       });
-      const unsubscribeActivePage = mirror.project.subscribe((project) => {
-        if (project.activePageSlug !== null) {
-          // Read from the descriptor list, not from a second event: `page.descriptorsChanged` is
-          // the ONE producer of both `activePageSlug` and the descriptors, and `ui/mirror`'s own
-          // case writes the descriptors first — so by the time this subscriber runs, the list is
-          // already the one that arrived with this slug.
-          const active = mirror
-            .pageDescriptors()
-            .find((descriptor) => descriptor.pageSlug === project.activePageSlug);
-          requestPreviewForActivePage(project.activePageSlug, active?.sourceHash ?? null);
+      // KERNEL TRUTH RETIRES THE USER'S TAB PICK (page switching, 2026-07-27). `pageOverride`
+      // only ever covers the window between a tab click and the Kernel publishing an active slug
+      // of its own. When that slug arrives it either MATCHES the pick (`preview.selectPage`
+      // persisted it into `workspace.local.toml`, so `resolveActivePageSlug` hands it back) —
+      // clearing changes nothing on screen — or it DIFFERS, which per §6.2 means `pages.json`
+      // requested the move on apply, and the Kernel's choice must win. Both cases are the same
+      // rule: a changed Kernel slug retires the override. Starts `null` rather than reading
+      // `mirror.project()` here, which would make this connect hook depend on the project slice:
+      // no override can exist before the first tab click anyway, so the first notification's
+      // clear is a no-op.
+      let lastKernelPageSlug: string | null = null;
+      const retirePageOverride = bind(() => pageOverride.set(null));
+      const unsubscribeProject = mirror.project.subscribe((project) => {
+        if (project.activePageSlug !== lastKernelPageSlug) {
+          lastKernelPageSlug = project.activePageSlug;
+          retirePageOverride();
         }
         // `projectId === null` is what says the open never finished: `finishOpen` clears
         // `openFailure` anyway, so this pair only ever holds for a genuinely blocked open — never
@@ -459,6 +512,14 @@ export function createUiDeps(
         if (project.openFailure !== null && project.projectId === null) {
           recoverFromBlockedOpen(project.openFailure);
         }
+      });
+      // Driven by the EFFECTIVE slug, not by `mirror.project` directly, so a tab click reaches
+      // the host through the same memoized path a Kernel-published page change does — one
+      // producer of `preview.selectPage`, so a click can never race the echo into establishing
+      // the same session twice.
+      const unsubscribeActivePage = activePageRequest.subscribe((request) => {
+        if (request === null) return;
+        requestPreviewForActivePage(request.slug, request.sourceHash);
       });
       void (async () => {
         // Frames flow through the PreviewSession facade, not the event stream (§7.6). Iterate
@@ -512,6 +573,7 @@ export function createUiDeps(
         active = false;
         stopFrameIterator();
         unsubscribeActivePage();
+        unsubscribeProject();
         if (typeof unsubscribe === "function") unsubscribe();
       };
     }),
@@ -563,6 +625,7 @@ export function createUiDeps(
     slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
+    pageOverride,
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
@@ -605,6 +668,7 @@ export function createUiDeps(
     runtime,
     interaction,
     local,
+    activePageSlug,
     refreshHomeHealth,
     requestExit,
   };
