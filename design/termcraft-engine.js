@@ -1124,6 +1124,59 @@ export class Engine {
       hint:'preview error — composer enabled',hintFg:P.red,hintBg:P.redDim,mode:{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true},keys:[['F2','full'],['F3','tweaks']]});
     return this.render(b); }
 
+  // ---- 12 render crash · restart circuit latched open ----
+  // Deliberately NOT wsBrokenSource: nothing failed Gate here. The design was accepted, a live
+  // host child mounted it, and it threw. Four incarnations, three automatic restarts, all dying
+  // the same way — the supervisor stopped. Distinctions that survive the frame alone: the report
+  // is a red bordered block (the Gate state is bare centred text), it is titled `preview host ·
+  // halted`, its first line says *threw while rendering*, and the status mode chip reads
+  // ` HALTED ` instead of ` STATIC `. The host's own message is verbatim, gutter-marked, and
+  // wrapped at the block's content width — the runtime bounds it to 200 chars, which is why the
+  // block is sized so the worst case still wraps whole (no truncation, so no hidden text and no
+  // extra affordance to reveal it). The two routes out live inside the block, below a tee rule,
+  // each naming a real key: F5 retry (re-establish the session and mount again) and F6 repair
+  // (fills the composer with file · error · attempt count and moves focus there — sends nothing).
+  // o.retry===false is the variant where no session can be restarted: F5 is drawn disabled with
+  // its reason and marked 'dis' in the status key row, and repair is the only route out.
+  wsHostCrash(w,h,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const retry=o.retry!==false;
+    const s=this.paneShell(b,w,h,{right:'main · Current design · uncommitted',rightFg:P.amberHi,rightBold:true});
+    const err='PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function while mounting <ProcessTable> — host exited 1';
+    const bw=Math.min(s.dw-6,66), cwid=bw-6;
+    const eLines=this.wrapLines(err,cwid-2);
+    const bh=eLines.length+17;
+    const bx=s.dx+Math.floor((s.dw-bw)/2), by=s.dy+Math.max(0,Math.floor((s.dh-bh)/2));
+    this.fillRect(b,bx,by,bw,bh,{ch:' ',bg:P.bg});
+    this.box(b,bx,by,bw,bh,{title:'preview host · halted',fg:P.red,titleFg:P.red,bg:P.bg});
+    const lx=bx+3; let y=by+2;
+    this.text(b,lx,y,'✗ design threw while rendering — no preview',{fg:P.red,bold:true,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'main',{fg:P.amberHi,bold:true,bg:P.bg});
+    this.text(b,lx+5,y,'· .termcraft/pages/main/page.tsx',{fg:P.fg,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'host message',{fg:P.dim,bg:P.bg}); y++;
+    eLines.forEach(l=>{ this.put(b,lx,y,'│',{fg:P.red,bg:P.bg}); this.text(b,lx+2,y,l,{fg:P.fg,bg:P.bg}); y++; });
+    y++;
+    this.text(b,lx,y,'mounted 4× · 3 automatic restarts, all identical',{fg:P.dim,bg:P.bg}); y++;
+    this.text(b,lx,y,'restarts stopped — no preview until you act',{fg:P.dim,bg:P.bg}); y++;
+    this.hline(b,bx+1,y,bw-2,{fg:P.line}); this.put(b,bx,y,'├',{fg:P.red}); this.put(b,bx+bw-1,y,'┤',{fg:P.red}); y++;
+    const keyRow=(k,label,d1,d2,dis)=>{ this.text(b,lx,y,k,{fg:dis?P.faint:P.amber,bold:!dis,bg:P.bg});
+      this.text(b,lx+4,y,label,{fg:dis?P.faint:P.amberHi,bold:!dis,bg:P.bg});
+      this.text(b,lx+20,y,d1,{fg:dis?P.faint:P.dim,bg:P.bg}); y++;
+      if(d2){ this.text(b,lx+20,y,d2,{fg:P.faint,bg:P.bg}); y++; } };
+    keyRow('F5','retry preview', retry?'re-establish the host and mount again':'unavailable in this session',
+                                 retry?'a broken design will die again':'repair is the only route out', !retry);
+    keyRow('F6','repair…','write the failure into the composer','nothing is sent — you press ⏎');
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
+      {role:'❯ you'},{body:'add a spy hook to the process table'},{gap:1},
+      {role:'● codex'},{status:'✓ wrote main/page.tsx',c:P.dim},{status:'✓ Gate accepted',c:P.dim},{gap:1},
+      {system:'✗ preview crashed while rendering — halted after 3 restarts',c:P.red},
+      {system:'the design passed Gate; the host died running it',c:P.faint} ],
+      attach: retry?'F6 writes the fix · or type your own':'F6 writes the fix — retry unavailable',
+      attachFg:P.amberHi, placeholder:'describe a fix…', composerMeta:{model:'codex · gpt5.5 · high',ctx:46}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · Current design · uncommitted',verFg:P.amberHi,verBold:true,
+      hint:'render crashed',hintFg:P.red,hintBg:P.redDim,mode:{t:' HALTED ',fg:P.bg,bg:P.red,bold:true},
+      keys: retry?[['F5','retry'],['F6','repair'],['F2','full'],['F3','tweaks']]
+                 :[['F5','retry','dis'],['F6','repair'],['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
   // ---- 25 commit commands (v1) ----
   // Composer shows /commit typed; the slash menu filters to the three commit commands.
   wsCommitCommands(w,h){ return this.wsSlash(w,h,'/commit',{ctx:44}); }

@@ -37,9 +37,9 @@
   <div style="margin:0 0 22px;">
     <div style="display:flex;align-items:baseline;gap:14px;">
       <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">12 · Errors &amp; edge states</span>
-      <span style="color:#5b544a;font-size:12px;">err-agent-80 · ws-err-retry-120 · ws-cancelled-120 · ws-broken-source-120 · term-small-80 · lock-80</span>
+      <span style="color:#5b544a;font-size:12px;">err-agent-80 · ws-err-retry-120 · ws-cancelled-120 · ws-broken-source-120 · ws-host-crash-120 · ws-host-crash-noretry-120 · term-small-80 · lock-80</span>
     </div>
-    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">The honest failure surface, all using the <span style="color:#8a6d33;">⟲</span> system-entry style. Missing agent (with healthy/error health indicator), the schema-retry loop (the current design stays undimmed and unchanged), a cancelled turn, a canonical-source that fails Gate but keeps the composer open for a repair turn, plus the two full-screen refusals: terminal-too-small and second-instance lock. termcraft never rolls back or falls back to another source.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:72ch;line-height:1.5;">The honest failure surface, all using the <span style="color:#8a6d33;">⟲</span> system-entry style. Missing agent (with healthy/error health indicator), the schema-retry loop (the current design stays undimmed and unchanged), a cancelled turn, a canonical-source that fails Gate but keeps the composer open for a repair turn, the opposite failure — a design that passed Gate, was mounted by a live host child and <span style="color:#dd7b60;">threw while rendering</span>, halting the restart circuit after three identical deaths (with and without retry available) — plus the two full-screen refusals: terminal-too-small and second-instance lock. termcraft never rolls back or falls back to another source.</p>
   </div>
 
   <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
@@ -66,6 +66,22 @@
         <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-broken-source-120</span>
       </div>
       {{ wsBrokenSource120 }}
+    </div>
+    <div id="ws-host-crash-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · render crash · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-host-crash-120</span>
+      </div>
+      {{ wsHostCrash120 }}
+    </div>
+    <div id="ws-host-crash-noretry-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · render crash · no retry · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-host-crash-noretry-120</span>
+      </div>
+      {{ wsHostCrashNoRetry120 }}
     </div>
     <div id="err-agent-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
       <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
@@ -110,6 +126,8 @@ class Component extends DCLogic {
       wsErrRetry120: e.wsErrRetry(120,36),
       wsCancelled120: e.wsCancelled(120,36),
       wsBrokenSource120: e.wsBrokenSource(120,36),
+      wsHostCrash120: e.wsHostCrash(120,36,{retry:true}),
+      wsHostCrashNoRetry120: e.wsHostCrash(120,36,{retry:false}),
       errAgent80: e.homeErr(80,24),
       termSmall80: e.termSmall(80,24),
       lock80: e.lockScreen(80,24)
