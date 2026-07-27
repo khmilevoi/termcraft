@@ -20,6 +20,8 @@ export {
 } from "./model/interaction";
 export type { Point, Rect, SelectionCorners } from "./model/overlay";
 export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
+export type { RepairPromptInput } from "./model/repair-prompt";
+export { buildRepairPrompt, relativePageSourcePath } from "./model/repair-prompt";
 
 export type { FrameViewProps } from "./ui/FrameView";
 export { FrameView } from "./ui/FrameView";
