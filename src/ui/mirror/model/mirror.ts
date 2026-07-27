@@ -263,9 +263,20 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         return;
       }
       case "kernel.capabilitiesChanged": {
+        // `removed` MUST apply before `changed`. This map is keyed by capability `id` alone,
+        // but the Kernel diffs `(id, target)` pairs (`core/capabilities`'s `diffCapabilities`) —
+        // a growable identity retargeting (e.g. `chat.switch` moving to a newly created chat,
+        // `kernel.ts`'s `currentCapabilityRequests`) publishes BOTH a `removed` entry for the
+        // stale target and a `changed` entry for the current one under the SAME `id` in one
+        // event. Applying `changed` first let the later `removed` pass delete the fresh state
+        // it had just set, leaving the id absent (read as "unavailable" by `ui/actions`'
+        // `capabilityRowState`) — this is the defect reported as "/chats becomes unavailable
+        // right after creating a new chat". Removing first means a same-id `changed` entry
+        // always wins, and a removal with no matching `changed` (a target that is genuinely
+        // gone, e.g. a closed preview session) still deletes as before.
         const next = new Map(capabilities());
-        for (const entry of envelope.payload.changed) next.set(entry.id, entry.state);
         for (const removed of envelope.payload.removed) next.delete(removed.id);
+        for (const entry of envelope.payload.changed) next.set(entry.id, entry.state);
         capabilities.set(next);
         return;
       }

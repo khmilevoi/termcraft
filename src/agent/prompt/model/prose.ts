@@ -22,11 +22,22 @@ Conventions (warnings, fed back to you on your next attempt): keep element ids s
 
 Page slugs: a slug must match ^[a-z0-9][a-z0-9-]{0,31}$ and must not be a Windows-reserved device name (con, nul, aux, prn, com1-com9, lpt1-lpt9) — a slug becomes a directory name on disk. A slug violating this mask is a Gate error, not a warning.`;
 
+// THE PATHS LINE IS LORE, NOT DECORATION (defect fix, 2026-07-27). This block used to list
+// bare names and say only "inside this workspace", never stating what they are relative to.
+// Every observed turn opened by reading "/RUNTIME.md", "/runtime.d.ts", "/pages/<slug>.tsx"
+// and "/pages.json" — four tool calls, four denials (on Windows a leading slash resolves to
+// the drive root, which `agent/confinement`'s policy correctly refuses as outside the
+// workspace), then a "**/*" probe, then the same four reads relative. Six wasted calls and
+// ~7s per turn, entirely because the prompt never named the anchor the SDK already sets
+// (`agent/claude/query/model/query-options.ts` passes `cwd: task.workspacePath`).
 export const PAGE_FILE_LAYOUT = `Page-file layout inside this workspace:
+
+Your working directory IS the workspace root. Every path below is relative to it — read and edit them as "pages/dashboard.tsx", never "/pages/dashboard.tsx". A leading slash escapes the workspace and is refused.
 
 - pages/<slug>.tsx — one file per page, flat by slug. Create a new file to add a page; delete a file to remove one.
 - pages.json — the manifest slice: the ordered list of page slugs, and an optional requested active slug. Reorder pages or request which one becomes active by editing this file, not any other way.
 - RUNTIME.md and runtime.d.ts, alongside the files above — the runtime API reference for "@termcraft/runtime". Read them before writing or editing a page.
+- REATOM.md, alongside them — how state works in this runtime. It is Reatom v1001, which is NOT the Reatom most code you have seen uses: there is no "ctx" parameter and no ".spy". Read it before writing any atom, computed, action, or reatomComponent, and do not fall back on remembered Reatom idioms instead.
 
 A page's display title lives in its own source, as meta.title — retitle a page by editing that field, never pages.json.`;
 

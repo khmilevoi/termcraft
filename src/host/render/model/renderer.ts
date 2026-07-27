@@ -3,6 +3,8 @@ import { createRoot } from "@opentui/react";
 
 import type { Size } from "../../types";
 import type { CapturedFrame, RenderHandle } from "../types";
+import { createRenderErrorSink, withRenderErrorCapture } from "./error-capture";
+import type { RenderErrorSink } from "./error-capture";
 import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry";
 import { styledRowsFromSpanLines } from "./span-rows";
 import { makeHeadlessStreams } from "./streams";
@@ -28,10 +30,18 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
     exitOnCtrlC: false,
   });
   const root = createRoot(renderer);
+  // Re-created per `mount()`: a fresh tree gets a clean verdict, so re-mounting a healthy
+  // page never keeps reporting the previous mount's failure. See `./error-capture.ts` for
+  // why a boundary is the only way to observe a render throw through `@opentui/react`.
+  let errorSink: RenderErrorSink = createRenderErrorSink();
 
   return {
     mount(node) {
-      root.render(node as never);
+      errorSink = createRenderErrorSink();
+      root.render(withRenderErrorCapture(node as never, errorSink) as never);
+    },
+    renderError() {
+      return errorSink.taken;
     },
     async render() {
       renderer.intermediateRender();

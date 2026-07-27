@@ -439,7 +439,8 @@ describe("turnProgressPayloadV1Schema", () => {
     const contents = [
       { kind: "reasoning", text: "t" },
       { kind: "tool", id: "t1", op: "read", target: "main.tsx" },
-      { kind: "tool-failed", id: "t1" },
+      { kind: "tool-failed", id: "t1", reason: "target is outside the turn workspace" },
+      { kind: "tool-failed", id: "t2", reason: null },
       { kind: "final", text: "done" },
       { kind: "usage", tokens: { inputTokens: 1, outputTokens: 2, contextPercent: null } },
       { kind: "error", message: "boom" },

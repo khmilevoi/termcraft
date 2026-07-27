@@ -127,8 +127,8 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     deps.requestExit({ code: 1, reason: String(error.reason) });
   }
 
-  /** Post-handshake fatal: emit a best-effort typed `error`, then exit (§12). */
-  function fail(error: ProtocolError): void {
+  /** Emit a best-effort typed `error` envelope, then exit (§12). Shared by every fatal below. */
+  function sendFatal(code: string, reason: string): void {
     if (identity !== null) {
       deps.send({
         type: "control",
@@ -138,12 +138,36 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
           sessionId: identity.sessionId,
           nonce: identity.nonce,
           messageId: nextMessageId(),
-          body: { code: error.code, reason: error.reason },
+          body: { code, reason },
         },
       });
     }
     phase = "closed";
-    deps.requestExit({ code: 1, reason: String(error.reason) });
+    deps.requestExit({ code: 1, reason });
+  }
+
+  /** Post-handshake fatal: emit a best-effort typed `error`, then exit (§12). */
+  function fail(error: ProtocolError): void {
+    // `String(...)` on both: `createTaggedError`'s `$code`/`$reason` template variables are
+    // typed as the widest thing an interpolation accepts, not `string` — the wire body wants
+    // the rendered text, and this is the same coercion the old inline `body` already did.
+    sendFatal(String(error.code), String(error.reason));
+  }
+
+  /**
+   * THE CANDIDATE'S OWN FAULT, NOT A PROTOCOL VIOLATION (defect fix, 2026-07-27).
+   *
+   * Deliberately NOT a `ProtocolError`: every `ProtocolViolationCode`
+   * (`protocol/model/errors.ts:9-16`) is on the supervisor's own `PROTOCOL_ERROR_CODES`
+   * list (`supervisor/model/session.ts:449`, `one-shot.ts:257`), where it opens the restart
+   * circuit — the right answer for a host that is speaking nonsense, the wrong one for a
+   * page whose component threw. An unlisted code maps to a restartable
+   * `DESIGN_RENDER_FAILED` instead, which is exactly what a broken candidate is: the gate's
+   * smoke stage turns it into one `kind:"smoke"` GateError and the agent gets it back as
+   * feedback on its next attempt.
+   */
+  function failRender(reason: string): void {
+    sendFatal("PAGE_RENDER_FAILED", reason.length > 200 ? `${reason.slice(0, 197)}...` : reason);
   }
 
   async function handleMount(envelope: ControlEnvelope): Promise<void> {
@@ -167,6 +191,13 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
 
     handle.mount(createElement(loaded.component as never));
     await handle.render();
+    // A SEALED FRAME IS NOT PROOF THE PAGE RENDERED (defect fix, 2026-07-27). `@opentui/react`
+    // catches a component's throw in its own boundary and paints the stack trace, so `render()`
+    // and `capture()` below both succeed for a page that never rendered at all — see
+    // `render/model/error-capture.ts`. Asking the handle is the only honest check, and it must
+    // happen BEFORE `ready`: a `ready` here would tell the supervisor the mount succeeded.
+    const renderFailure = handle.renderError();
+    if (renderFailure !== null) return failRender(renderFailure.message);
     const captured = handle.capture();
 
     const frameIdentity = sealFrameIdentity();

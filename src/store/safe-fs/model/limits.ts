@@ -84,9 +84,16 @@ function isSlugFile(name: string, ext: string): boolean {
 }
 
 /**
+ * The read-only markdown docs staged at the workspace root (§5.4's "runtime docs"). Kept as
+ * one named set because `agent/prompt/model/runtime-docs.ts` stages exactly these names —
+ * the two lists must agree, and a bare literal in a condition hides that they are a pair.
+ */
+const AGENT_DOC_FILES: ReadonlySet<string> = new Set(["RUNTIME.md", "REATOM.md"]);
+
+/**
  * The agent workspace / candidate inventory (§5.4). The mutable namespace is exactly
- * `pages/<slug>.tsx` and `pages.json`; `RUNTIME.md` and runtime type declarations are
- * read-only inputs. Everything else — added files, nested page directories — is rejected.
+ * `pages/<slug>.tsx` and `pages.json`; {@link AGENT_DOC_FILES} and runtime type declarations
+ * are read-only inputs. Everything else — added files, nested page directories — is rejected.
  *
  * SPEC GAP (§5.4 names "runtime type declarations" without pinning their location): this
  * accepts any `*.d.ts` anywhere in the tree EXCEPT under `pages/`, which stays reserved
@@ -98,7 +105,7 @@ function classifyWorkspace(components: readonly string[]): ManagedNamespace | nu
 
   if (components.length === 1) {
     if (first === "pages.json") return "agent-manifest";
-    if (first === "RUNTIME.md") return "agent-runtime-doc";
+    if (AGENT_DOC_FILES.has(first)) return "agent-runtime-doc";
     if (first.endsWith(".d.ts")) return "agent-runtime-doc";
     return null;
   }

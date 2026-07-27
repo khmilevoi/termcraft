@@ -235,7 +235,7 @@ describe("startTurnAttempt — workspace-ready -> running -> stopping", () => {
       if (lease === null) throw new Error("expected a live lease");
 
       h.agentBackend.emitEvent(lease, { kind: "tool", id: "t1", op: "edit", target: "page.tsx" });
-      h.agentBackend.emitEvent(lease, { kind: "tool-failed", id: "t1" });
+      h.agentBackend.emitEvent(lease, { kind: "tool-failed", id: "t1", reason: null });
       await Bun.sleep(0);
 
       expect(h.published).toEqual([
@@ -254,7 +254,7 @@ describe("startTurnAttempt — workspace-ready -> running -> stopping", () => {
           payload: {
             turnId: TURN_ID,
             attempt: 1,
-            content: { kind: "tool-failed", id: "t1" },
+            content: { kind: "tool-failed", id: "t1", reason: null },
           },
           correlation: { turnId: TURN_ID },
         },

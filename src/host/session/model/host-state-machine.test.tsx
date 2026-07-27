@@ -250,6 +250,50 @@ describe("host session — mount", () => {
     expect(h.exits[0]!.code).toBe(1);
   });
 
+  /**
+   * REGRESSION (defect fix, 2026-07-27): a page component that throws used to reach `ready`
+   * + a frame and exit 0, because `@opentui/react` catches the throw in its own boundary and
+   * paints the stack trace — so `render()`/`capture()` both succeed. The gate's smoke stage
+   * reads exactly that "did a frame come back" signal, so a completely broken page passed the
+   * gate, the turn committed, and the chat reported success. `PAGE_RENDER_FAILED` is
+   * deliberately NOT a `ProtocolViolationCode`: the supervisor maps unlisted codes to the
+   * restartable `DESIGN_RENDER_FAILED`, which is what a bad candidate is.
+   */
+  test("a page that throws while rendering emits PAGE_RENDER_FAILED instead of ready+frame", async () => {
+    const { h, session } = await handshaken({
+      loadPage: async () => ({
+        meta: {
+          kitApiVersion: 1,
+          title: "Dashboard",
+          minSize: { w: 16, h: 3 },
+          theme: "dark-default",
+        },
+        component: function Broken(): never {
+          throw new TypeError("ctx.spy is not a function");
+        },
+        sourceHash: "a".repeat(64),
+      }),
+    });
+    await session.receiveControlPayload(mountEnvelope());
+
+    const error = h.out.find(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+    ) as { payload: ControlEnvelope } | undefined;
+    expect(error).toBeDefined();
+    expect((error!.payload.body as { code: string }).code).toBe("PAGE_RENDER_FAILED");
+    expect((error!.payload.body as { reason: string }).reason).toContain(
+      "ctx.spy is not a function",
+    );
+    expect(
+      h.out.some(
+        (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "ready",
+      ),
+    ).toBe(false);
+    expect(h.out.some((m) => m.type === "frame")).toBe(false);
+    expect(h.exits).toHaveLength(1);
+    expect(h.exits[0]!.code).toBe(1);
+  });
+
   test("an inbound envelope with the wrong nonce is fatal", async () => {
     const { h, session } = await handshaken();
     await session.receiveControlPayload(mountEnvelope({}, SESSION_ID, "f".repeat(32)));

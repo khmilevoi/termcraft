@@ -19,8 +19,8 @@ describe("createProductionAgentPromptSource (phase-8 WP-3 contract test)", () =>
     expect(prompt).toContain("markdown-lite");
   });
 
-  test("runtimeDocs() names RUNTIME.md and runtime.d.ts, both resolving to real files", () => {
+  test("runtimeDocs() names REATOM.md, RUNTIME.md and runtime.d.ts, all resolving to real files", () => {
     const docs = createProductionAgentPromptSource().runtimeDocs();
-    expect(docs.map((d) => d.relPath).sort()).toEqual(["RUNTIME.md", "runtime.d.ts"]);
+    expect(docs.map((d) => d.relPath).sort()).toEqual(["REATOM.md", "RUNTIME.md", "runtime.d.ts"]);
   });
 });

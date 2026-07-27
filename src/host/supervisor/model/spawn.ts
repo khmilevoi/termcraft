@@ -10,9 +10,27 @@ import { SupervisorError } from "./errors";
  * keys/tokens/agent values. On Windows, Bun still injects a system-var baseline
  * (PATH/SYSTEMROOT/…, Spike 04 D3) that this cannot suppress; that baseline
  * carries no secrets.
+ *
+ * `TERMCRAFT_DEBUG_LOG` is forwarded when the parent has tracing on, and is the one
+ * deliberate widening of the list. It carries a file path this process minted, never a
+ * credential, so it does not weaken what §13 is actually protecting — and without it the
+ * design host is undiagnosable. The child is a re-invocation of this same binary, so it
+ * resolves the variable through the same sink: unset, it defaulted to a run file under its
+ * own cwd, which `createBunSpawn` sets to a throwaway scratch directory. Every smoke render,
+ * export render and preview session therefore wrote its diagnostics to a temp path nobody
+ * would ever read, and the process that mounts and renders a page — the one that answers
+ * "why did this page fail" — was the single least observable part of the system.
  */
-export function buildChildEnv(): Record<string, string> {
-  return { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" };
+export function buildChildEnv(
+  env: Readonly<Partial<Record<string, string>>> = process.env,
+): Record<string, string> {
+  const debugLog = env["TERMCRAFT_DEBUG_LOG"];
+  return {
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    TZ: "UTC",
+    ...(debugLog === undefined || debugLog.length === 0 ? {} : { TERMCRAFT_DEBUG_LOG: debugLog }),
+  };
 }
 
 function defaultScratchDir(): string {

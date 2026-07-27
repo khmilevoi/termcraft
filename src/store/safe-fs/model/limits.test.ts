@@ -36,7 +36,15 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
     expectNamespace("workspace", "pages/home.tsx", "agent-page-source");
     expectNamespace("workspace", "pages.json", "agent-manifest");
     expectNamespace("workspace", "RUNTIME.md", "agent-runtime-doc");
+    // The other half of the pair `agent/prompt/model/runtime-docs.ts` stages: a doc written
+    // under a name this grammar rejects would be unreadable through `SafeProjectFs`.
+    expectNamespace("workspace", "REATOM.md", "agent-runtime-doc");
     expectNamespace("workspace", "types/runtime.d.ts", "agent-runtime-doc");
+  });
+
+  test("a markdown file outside the staged doc set is still rejected", () => {
+    expectUnknown("workspace", "NOTES.md");
+    expectUnknown("workspace", "readme.md");
   });
 
   test("a candidate shares the workspace grammar", () => {

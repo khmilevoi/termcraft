@@ -6,6 +6,7 @@ import { scanImportAllowlist } from "./import-scan";
 import {
   lintDeterminism,
   lintDroppedIds,
+  lintSilencingAny,
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
@@ -83,6 +84,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
     });
   }
   warnings.push(...lintDeterminism(input.source));
+  warnings.push(...lintSilencingAny(input.source));
   warnings.push(...lintDroppedIds(input.source, input.referencedIds));
   warnings.push(...lintUnpointedElements(input.source));
   warnings.push(...lintUnlistedNavigation(input.source, input.listedSlugs));

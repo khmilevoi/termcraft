@@ -209,6 +209,31 @@ describe("runOneShotSession (2D-4, §4/§11.3/§11.4)", () => {
     if (result instanceof ProtocolError) expect(result.code).toBe("SOURCE_HASH_MISMATCH");
   });
 
+  /**
+   * The other half of the render-failure path (defect fix, 2026-07-27): `host-state-machine.ts`
+   * emits `PAGE_RENDER_FAILED` when the mounted page throws, and it must land here as a
+   * `DESIGN_RENDER_FAILED` SupervisorError — a candidate fault the gate turns into one
+   * `kind:"smoke"` GateError — NOT a ProtocolError, which would open the restart circuit as
+   * though the host itself were speaking nonsense.
+   */
+  test("a PAGE_RENDER_FAILED mount error maps to DESIGN_RENDER_FAILED, not a protocol violation", async () => {
+    const spec = specFor({ mode: "smoke" });
+    const child = oneShotChild(spec, { mountErrorCode: "PAGE_RENDER_FAILED" });
+    const clock = createManualClock();
+    const result = await runOneShotSession(spec, {
+      spawn: () => child,
+      command: { cmd: ["_host"] },
+      clock,
+      runtimeDeclaration,
+    });
+    expect(result).toBeInstanceOf(SupervisorError);
+    expect(result).not.toBeInstanceOf(ProtocolError);
+    if (result instanceof SupervisorError) {
+      expect(result.code).toBe("DESIGN_RENDER_FAILED");
+      expect(String(result.reason)).toContain("PAGE_RENDER_FAILED");
+    }
+  });
+
   test("no host.hello within 3 s is a HANDSHAKE_TIMEOUT", async () => {
     const spec = specFor({ mode: "smoke" });
     const child = oneShotChild(spec, { skipHostHello: true });

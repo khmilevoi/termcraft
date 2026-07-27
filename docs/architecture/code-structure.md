@@ -508,7 +508,17 @@ vendor tier's own pre-split run-loop file.
   passes the same test. It exists because a TUI owns the terminal, which means a
   `console.log` is not a diagnostic channel here — without a file to write to, a
   producer/consumer seam like "the Kernel published the event but the mirror ignored
-  it" has nowhere to be observed
+  it" has nowhere to be observed. Each run writes its own file into a run directory,
+  named for the run's start instant and pid, and the directory is trimmed to a
+  retention cap — so a run can be compared against the one before it, which a single
+  overwritten file made impossible. A test run is excluded from that directory rather
+  than writing into it: it used to, and an investigation's log came back interleaving
+  real diagnostics with test fixtures that read exactly like production failures. The
+  resolved path is passed to child processes, which is what puts the design host's own
+  trace in the same file as the turn that spawned it — a child resolving the variable
+  for itself defaulted to its own working directory, and the host child's is a
+  throwaway scratch directory, so those diagnostics were written where nobody would
+  ever read them
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
 

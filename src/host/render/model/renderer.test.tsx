@@ -63,3 +63,63 @@ describe("headless renderer", () => {
     expect((frame.rows[0] ?? []).map((r) => r.text).join("")).toContain("resize-me");
   });
 });
+
+/**
+ * THE DEFECT THIS PINS (2026-07-27): a page that THROWS while rendering used to be
+ * indistinguishable from one that rendered fine. `@opentui/react`'s `createRoot` wraps
+ * every mounted tree in its OWN `ErrorBoundary` (`chunk-hjtp6jv9.js:585`) and hands the
+ * reconciler `console.error` for all three error channels, so nothing propagates out of
+ * `root.render(...)`: `render()`/`capture()` both succeed and seal a frame carrying the
+ * red stack trace. The gate's smoke stage (`gate/model/gate.ts:103`) reads only "did the
+ * one-shot seal a frame", so it passed such a page, the turn committed, and the user was
+ * told the page had been updated while the preview showed a stack trace.
+ *
+ * `renderError()` is the honest answer to "did the mounted tree actually render". It is
+ * captured by a boundary mounted INSIDE OpenTUI's own (React routes a throw to the
+ * NEAREST enclosing boundary), so ours wins and OpenTUI's never trips.
+ */
+describe("headless renderer — render-error capture", () => {
+  function Boom(): never {
+    throw new TypeError("ctx.spy is not a function");
+  }
+
+  test("a component that throws is reported through renderError() instead of passing silently", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 4 });
+    open = handle;
+    handle.mount(<Boom />);
+    await handle.render();
+
+    const failure = handle.renderError();
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure?.message).toContain("ctx.spy is not a function");
+  });
+
+  test("a tree that renders cleanly reports no render error", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 4 });
+    open = handle;
+    handle.mount(
+      <box>
+        <text>fine</text>
+      </box>,
+    );
+    await handle.render();
+
+    expect(handle.renderError()).toBeNull();
+  });
+
+  test("re-mounting a healthy tree clears a previous mount's render error", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 4 });
+    open = handle;
+    handle.mount(<Boom />);
+    await handle.render();
+    expect(handle.renderError()).toBeInstanceOf(Error);
+
+    handle.mount(
+      <box>
+        <text>recovered</text>
+      </box>,
+    );
+    await handle.render();
+    expect(handle.renderError()).toBeNull();
+  });
+});

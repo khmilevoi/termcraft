@@ -32,7 +32,10 @@ export type GateWarningKindV1 =
   | "unpointed-element"
   | "unguarded-timer"
   | "unguarded-randomness"
-  | "unlisted-navigation";
+  | "unlisted-navigation"
+  // `any` written to make a type error go away — the escape hatch that turns a diagnostic the
+  // gate DID catch into a crash it cannot. See `gate/model/lints.ts`'s `lintSilencingAny`.
+  | "silencing-any";
 
 export interface GateWarningV1 {
   readonly kind: GateWarningKindV1;

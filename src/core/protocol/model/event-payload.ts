@@ -744,7 +744,13 @@ const turnProgressContentV1Schema = z.discriminatedUnion("kind", [
   // position — see `entities/turn`'s `AgentEvent` doc for why only the failure,
   // never a paired success, is emitted). Design's third step glyph, verbatim
   // (`design/03-workspace-generating.dc.html:44`: "✓ done, ▸ running, ✗ failed").
-  z.strictObject({ kind: z.literal("tool-failed"), id: z.string() }),
+  // `reason` is the tool's own bounded error text, `null` when the vendor sent none — see
+  // `entities/turn`'s `AgentEvent` doc for the diagnostics gap it closes.
+  z.strictObject({
+    kind: z.literal("tool-failed"),
+    id: z.string(),
+    reason: z.string().nullable(),
+  }),
   z.strictObject({ kind: z.literal("final"), text: z.string() }),
   z.strictObject({
     kind: z.literal("usage"),
@@ -789,6 +795,9 @@ const GATE_WARNING_KINDS_V1 = [
   "unguarded-timer",
   "unguarded-randomness",
   "unlisted-navigation",
+  // `any` written to make a type error go away — see `gate/model/lints.ts`'s
+  // `lintSilencingAny` for the turn that made this its own warning kind.
+  "silencing-any",
 ] as const;
 
 const turnGateErrorV1Schema = z.strictObject({

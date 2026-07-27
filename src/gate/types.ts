@@ -33,7 +33,8 @@ export type GateWarningKind =
   | "unpointed-element"
   | "unguarded-timer"
   | "unguarded-randomness"
-  | "unlisted-navigation";
+  | "unlisted-navigation"
+  | "silencing-any";
 
 /** One non-fatal gate warning. */
 export interface GateWarning {

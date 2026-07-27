@@ -22,6 +22,32 @@ describe("buildChildEnv", () => {
     expect("TERMCRAFT_TEST_MARKER" in env).toBe(false);
     delete process.env.TERMCRAFT_TEST_MARKER;
   });
+
+  /**
+   * THE GAP THIS CLOSES (2026-07-27). The child is a re-invocation of the same binary and
+   * resolves `TERMCRAFT_DEBUG_LOG` through the same sink. Unset, it defaulted to a run file
+   * under its OWN cwd — which `createBunSpawn` sets to a throwaway scratch directory — so
+   * every smoke render, export render and preview session wrote its diagnostics to a temp
+   * path nobody would read. Forwarding the parent's resolved path puts the design host's
+   * trace in the same run file as the turn that spawned it.
+   */
+  test("forwards the parent's resolved trace file so the child traces into the same run", () => {
+    const env = buildChildEnv({ TERMCRAFT_DEBUG_LOG: "C:/w/termcraft-debug/run-x.jsonl" });
+    expect(env.TERMCRAFT_DEBUG_LOG).toBe("C:/w/termcraft-debug/run-x.jsonl");
+  });
+
+  test("omits the variable entirely when the parent has tracing off", () => {
+    expect("TERMCRAFT_DEBUG_LOG" in buildChildEnv({})).toBe(false);
+    expect("TERMCRAFT_DEBUG_LOG" in buildChildEnv({ TERMCRAFT_DEBUG_LOG: "" })).toBe(false);
+  });
+
+  /**
+   * A child that inherits `0`/`off` must stay silent rather than mint a file of its own —
+   * the value is forwarded verbatim, and the sink reads it as "tracing off" at the far end.
+   */
+  test("forwards an explicit off switch verbatim", () => {
+    expect(buildChildEnv({ TERMCRAFT_DEBUG_LOG: "0" }).TERMCRAFT_DEBUG_LOG).toBe("0");
+  });
 });
 
 describe("createBunSpawn", () => {

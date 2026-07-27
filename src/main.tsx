@@ -12,7 +12,7 @@ import * as errore from "errore";
 
 import { EMBEDDED_RUNTIME_DECLARATION, PROTOCOL_HARD_LIMITS } from "host/protocol";
 import { parseHostArgs, runHostStdio } from "host/session";
-import { installConsoleTee, resetTrace, trace } from "infrastructure/debug-log";
+import { beginTraceRun, installConsoleTee, trace } from "infrastructure/debug-log";
 
 /** The `_host` stdio boundary failed — real stdin, `registerRuntimeResolver`, and a real
  *  child process are all uncontrolled code, so errore's boundary rule applies here exactly
@@ -64,10 +64,13 @@ if (import.meta.main) {
   // (mirrors `parseHostArgs`'s own "_host" scan), so there is no cost to resolving it before
   // knowing whether the `_host` branch will fire first. Both scans also decide which
   // `TerminalControl` the boundary below gets, so they have to run before it is constructed.
-  // DIAGNOSTIC (infrastructure/debug-log): opt-in, no-op unless TERMCRAFT_DEBUG_LOG is set.
-  // Installed before anything else so the tee captures the 75 files' worth of existing
-  // console.* reporting that the alternate screen would otherwise swallow.
-  resetTrace();
+  // DIAGNOSTIC (infrastructure/debug-log): opens THIS run's own file under `termcraft-debug/`
+  // and prunes the directory back to its retention cap. Installed before anything else so the
+  // tee captures the 75 files' worth of existing console.* reporting that the alternate screen
+  // would otherwise swallow. Runs on all three branches below on purpose: a `_host` child
+  // inherits the parent's resolved path and appends to the SAME run file, so a page-render
+  // failure and the turn that caused it read as one story rather than two.
+  beginTraceRun();
   installConsoleTee();
   trace("main.start", { argv: process.argv.slice(2), cwd: process.cwd() });
 

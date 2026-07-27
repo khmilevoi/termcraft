@@ -467,6 +467,33 @@ describe("mirror.apply — capabilities changed", () => {
     );
     expect(m.capabilities().has("chat.create")).toBe(false);
   });
+
+  test("a same-id retarget (changed for the new target, removed for the old one) in one event keeps the fresh state — never drops it", () => {
+    // Reproduces the reported defect: creating/switching a chat retargets `chat.switch`'s
+    // per-target capability request (`kernel.ts`'s `currentCapabilityRequests`) from the old
+    // active chatId to the new one. `diffCapabilities` keys by `id::target`, so ONE
+    // `kernel.capabilitiesChanged` event carries both a `changed` entry for the new chatId
+    // AND a `removed` entry for the old chatId, sharing the SAME `id: "chat.switch"` — the
+    // mirror's own map is keyed by `id` alone (target-blind), so whichever loop runs last
+    // wins for that id, regardless of which one is actually current.
+    const m = createMirror();
+    const oldChatId = uuidv7();
+    const newChatId = uuidv7();
+    m.apply(
+      snapshot({
+        capabilities: [
+          { id: "chat.switch", target: { chatId: oldChatId }, state: { available: true } },
+        ],
+      }),
+    );
+    m.apply(
+      event("kernel.capabilitiesChanged", {
+        changed: [{ id: "chat.switch", target: { chatId: newChatId }, state: { available: true } }],
+        removed: [{ id: "chat.switch", target: { chatId: oldChatId } }],
+      }),
+    );
+    expect(m.capabilities().get("chat.switch")).toEqual({ available: true });
+  });
 });
 
 describe("mirror.apply — pages", () => {
@@ -758,7 +785,7 @@ describe("mirror.apply — tool-failed folds onto its matching step by id (desig
     mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "a.tsx" }));
     mirror.apply(progress(TURN_ID, { kind: "reasoning", text: "trying b now" }));
     mirror.apply(progress(TURN_ID, { kind: "tool", id: "t2", op: "edit", target: "b.tsx" }));
-    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t2" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t2", reason: null }));
 
     const turn = mirror.turn();
     if (turn.phase !== "running") return;
@@ -777,7 +804,7 @@ describe("mirror.apply — tool-failed folds onto its matching step by id (desig
     mirror.apply(progress(TURN_ID, { kind: "tool", id: "t3", op: "run", target: "build" }));
     // t1 fails AFTER t2 and t3 already started — a positional "last step" rule would wrongly
     // land this on t3.
-    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t1" }));
+    mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "t1", reason: null }));
 
     const turn = mirror.turn();
     if (turn.phase !== "running") return;
@@ -794,7 +821,7 @@ describe("mirror.apply — tool-failed folds onto its matching step by id (desig
       const mirror = createMirror(() => 0);
       mirror.apply(turnStarted(TURN_ID));
       mirror.apply(progress(TURN_ID, { kind: "tool", id: "t1", op: "read", target: "a.tsx" }));
-      mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "does-not-exist" }));
+      mirror.apply(progress(TURN_ID, { kind: "tool-failed", id: "does-not-exist", reason: null }));
 
       const turn = mirror.turn();
       if (turn.phase !== "running") return;

@@ -514,6 +514,7 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // `createProductionAgentPromptSource()`, not a fake.
       expect(fs.existsSync(path.join(workspacePath, "RUNTIME.md"))).toBe(true);
       expect(fs.existsSync(path.join(workspacePath, "runtime.d.ts"))).toBe(true);
+      expect(fs.existsSync(path.join(workspacePath, "REATOM.md"))).toBe(true);
 
       // "the fake agent edits staging": a REAL page file plus a REAL manifest-slice update
       // are written into the REAL turn workspace the staging adapter minted on disk —

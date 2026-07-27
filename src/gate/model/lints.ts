@@ -63,6 +63,44 @@ export function lintDeterminism(source: string): GateWarning[] {
 }
 
 /**
+ * The `silencing-any` warning (defect fix, 2026-07-27). Non-fatal, in the same voice as the
+ * determinism lints above: the gate reminds, it does not reject.
+ *
+ * Written because `any` is the one escape hatch that converts a caught error into an
+ * uncaught one. A live turn was told `TS7006 Parameter 'ctx' implicitly has an 'any' type`
+ * — the compiler's report that the page was calling an API this runtime does not have — and
+ * "fixed" it by writing `ctx: any`. The type error went away, the gate passed, the page
+ * committed, and it threw `TypeError: ctx.spy is not a function` on the first render.
+ *
+ * Deliberately narrowed to `: any` and `as any`, the two shapes that suppress a diagnostic.
+ * TypeScript's scanner emits `AnyKeyword` for the bare word wherever it appears — including
+ * a property named `any` (`{ any: 1 }`, `o.any`) that the PARSER, not the scanner, resolves
+ * as an identifier — so matching the keyword alone would warn on code that has no annotation
+ * in it at all. Checking the preceding token is what keeps this precise.
+ */
+export function lintSilencingAny(source: string): GateWarning[] {
+  const toks = tokenize(source);
+  const warnings: GateWarning[] = [];
+
+  for (let i = 0; i < toks.length; i += 1) {
+    const t = toks[i]!;
+    if (t.kind !== SK.AnyKeyword) continue;
+    const prev = toks[i - 1];
+    if (prev === undefined) continue;
+    if (prev.kind !== SK.ColonToken && prev.kind !== SK.AsKeyword) continue;
+    warnings.push({
+      kind: "silencing-any",
+      message:
+        "`any` here suppresses a type error instead of fixing it — if a parameter's type is not " +
+        "obvious, the call shape is wrong; see REATOM.md",
+      ...lineColOf(source, t.pos),
+    });
+  }
+
+  return warnings;
+}
+
+/**
  * The `unpointed-element` warning (§6.3 step 3; §5.2's escape hatch: "the Gate
  * reminds, not rejects"). A JSX tag's capitalization is the load-bearing signal:
  * a capitalized tag is a component reference, and because the import allowlist

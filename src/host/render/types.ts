@@ -50,6 +50,17 @@ export interface RenderHandle {
   mount(node: unknown): void;
   /** Paint one frame and wait for it to settle. */
   render(): Promise<void>;
+  /**
+   * The error the currently mounted tree threw while rendering, or `null` when it rendered
+   * cleanly. Call it AFTER `render()` — a React error boundary only records the throw once
+   * the failed render has been committed.
+   *
+   * This exists because a frame coming back is NOT evidence that the page rendered:
+   * `@opentui/react` catches every render throw in its own boundary and paints the stack
+   * trace instead, so `render()`/`capture()` both succeed for a page that is completely
+   * broken. `render/model/error-capture.ts` documents the mechanism in full.
+   */
+  renderError(): Error | null;
   /** Capture the current frame as styled rows. */
   capture(): CapturedFrame;
   /** Resize the live renderer, preserving the mounted tree and its atom state. */

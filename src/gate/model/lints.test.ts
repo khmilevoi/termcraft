@@ -5,9 +5,53 @@ import type { PageSlug } from "entities/page";
 import {
   lintDeterminism,
   lintDroppedIds,
+  lintSilencingAny,
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
+
+/**
+ * THE TURN THIS LINT COMES FROM (2026-07-27). The gate rejected a candidate with two
+ * `TS7006 Parameter 'ctx' implicitly has an 'any' type` errors — the only signal that the
+ * page was calling a Reatom API this runtime does not have. The agent's next attempt
+ * annotated both parameters `ctx: any`, which silenced the compiler exactly as asked, passed
+ * the gate, committed, and threw `TypeError: ctx.spy is not a function` on the first render.
+ * `any` written to make a type error go away is the failure mode; the lint says so out loud
+ * on the attempt that introduces it, while the agent can still act on it.
+ */
+describe("lintSilencingAny (an `any` written to make a type error go away)", () => {
+  test("a page with no `any` produces no warnings", () => {
+    expect(lintSilencingAny(`const n: number = 1\nconst s = String(n)\n`)).toEqual([]);
+  });
+
+  test("an annotated parameter warns", () => {
+    const w = lintSilencingAny(`const setPalette = action((ctx: any, id: string) => {})\n`);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("silencing-any");
+    expect(w[0]?.line).toBe(1);
+  });
+
+  test("an `as any` assertion warns", () => {
+    const w = lintSilencingAny(`const page = mod.default as any\n`);
+    expect(w).toHaveLength(1);
+    expect(w[0]?.kind).toBe("silencing-any");
+  });
+
+  test("an object property or member named `any` is not an annotation and does not warn", () => {
+    expect(lintSilencingAny(`const o = { any: 1 }\nconst v = o.any\n`)).toEqual([]);
+  });
+
+  test("the word `any` inside a string or an identifier does not warn", () => {
+    expect(lintSilencingAny(`const label = "any color"\nconst anything = 2\n`)).toEqual([]);
+  });
+
+  test("every occurrence is reported, each at its own position", () => {
+    const w = lintSilencingAny(`function f(a: any) {}\n\nfunction g(b: any) {}\n`);
+    expect(w).toHaveLength(2);
+    expect(w[0]?.line).toBe(1);
+    expect(w[1]?.line).toBe(3);
+  });
+});
 
 describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("a deterministic page produces no warnings", () => {

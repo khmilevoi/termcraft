@@ -18,6 +18,9 @@ node_modules/
 
 HANDOFF.md
 
-# The opt-in diagnostic trace (infrastructure/debug-log, TERMCRAFT_DEBUG_LOG). One file per
-# session, overwritten on every launch — a debugging artifact, never repository content.
+# The diagnostic trace (infrastructure/debug-log, TERMCRAFT_DEBUG_LOG). One JSONL file per
+# run, kept to a retention cap — a debugging artifact, never repository content. The bare
+# filename is the pre-2026-07-27 single-file form; it stays listed so a checkout that still
+# has one does not suddenly start tracking it.
+termcraft-debug/
 termcraft-debug.jsonl

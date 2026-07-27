@@ -22,11 +22,36 @@ describe("agent/prompt static prose", () => {
     expect(DESIGN_CODE_RULES).toContain("animation guarded by the export flag");
   });
 
-  test("PAGE_FILE_LAYOUT names pages/<slug>.tsx, pages.json, and the two runtime docs", () => {
+  test("PAGE_FILE_LAYOUT names pages/<slug>.tsx, pages.json, and all three runtime docs", () => {
     expect(PAGE_FILE_LAYOUT).toContain("pages/<slug>.tsx");
     expect(PAGE_FILE_LAYOUT).toContain("pages.json");
     expect(PAGE_FILE_LAYOUT).toContain("RUNTIME.md");
     expect(PAGE_FILE_LAYOUT).toContain("runtime.d.ts");
+    expect(PAGE_FILE_LAYOUT).toContain("REATOM.md");
+  });
+
+  /**
+   * REGRESSION (defect fix, 2026-07-27): this block used to say only "inside this workspace"
+   * and list bare names. Every observed turn opened by reading "/RUNTIME.md" and three more
+   * leading-slash paths, all four denied by `agent/confinement` (on Windows a leading slash
+   * is the drive root, which is outside the fence), then probed with a glob, then re-read
+   * them relative. Six wasted tool calls per turn for a fact the prompt simply never stated.
+   */
+  test("PAGE_FILE_LAYOUT states that paths are relative to the workspace root", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("working directory IS the workspace root");
+    expect(PAGE_FILE_LAYOUT).toContain("relative");
+    expect(PAGE_FILE_LAYOUT).toContain("leading slash");
+  });
+
+  /**
+   * The v3-vs-v1001 split is the most expensive thing an authoring agent gets wrong here —
+   * it typechecks and then throws at render — so the prompt itself must warn, not only the
+   * doc the agent may or may not open. See `runtime-docs.ts` for the turn this comes from.
+   */
+  test("PAGE_FILE_LAYOUT warns that Reatom here is v1001, with no ctx and no .spy", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("v1001");
+    expect(PAGE_FILE_LAYOUT).toContain("ctx");
+    expect(PAGE_FILE_LAYOUT).toContain(".spy");
   });
 
   test("ANSWER_STYLE names the markdown-lite subset and what flattens", () => {

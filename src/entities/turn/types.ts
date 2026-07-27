@@ -26,6 +26,13 @@ export interface TokenUsage {
  * so mirroring every result would double the wire traffic for no new information.
  * Only the one state the positional signal structurally cannot express — a step
  * that failed, regardless of where it sits in the list — gets its own event.
+ *
+ * `tool-failed.reason` is the tool's own bounded error text, or `null` when the vendor sent
+ * a failure with no readable message. It exists because the event used to carry the id
+ * ALONE (defect fix, 2026-07-27): a live turn opened with four denied reads in a row and
+ * the diagnostics recorded four bare `tool-failed` lines, so the log could not answer the
+ * one question being asked of it — WHY the tool failed. The denial message the agent itself
+ * received ("Read target is outside the turn workspace") was discarded on the way through.
  */
 export type AgentEvent =
   | { readonly kind: "reasoning"; readonly text: string }
@@ -35,7 +42,7 @@ export type AgentEvent =
       readonly op: AgentToolOp;
       readonly target: string;
     }
-  | { readonly kind: "tool-failed"; readonly id: string }
+  | { readonly kind: "tool-failed"; readonly id: string; readonly reason: string | null }
   | { readonly kind: "final"; readonly text: string }
   | { readonly kind: "usage"; readonly tokens: TokenUsage }
   | { readonly kind: "error"; readonly message: string };

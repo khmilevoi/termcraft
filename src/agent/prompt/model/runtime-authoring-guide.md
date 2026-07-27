@@ -33,13 +33,29 @@ Hold state in named Reatom atoms, computeds, and actions — not React hooks.
 `reatomComponent` re-renders when the atoms it reads change. Keep helper models and
 components in the same file as the page that uses them; pages never import each other.
 
+**Read `REATOM.md`, next to this file, before you write any of it.** This runtime is Reatom
+**v1001**, not the v3 that most Reatom code you have seen uses: there is no `ctx` parameter
+and no `.spy`. Reading an atom is `count()`, writing it is `count.set(1)`, and
+`reatomComponent`'s callback receives React props — never a context. Getting this wrong
+typechecks and then throws on the first render.
+
 ## Layout and style
 
 Layout is ordinary flexbox: `direction`, `grow`/`shrink`/`basis`, gaps, padding, and
 alignment as style props on containers and primitives. `Row`/`Column` are flex-direction
-presets; `Spacer` is `flexGrow: 1`. Colors come from the closed palette-token set
-(`background`, `surface`, `text`, `text-muted`, `text-faint`, `border`, `primary`, `accent`,
-`selection`, `ok`, `error`) — reach them through runtime context rather than raw hex values.
+presets; `Spacer` is `flexGrow: 1`.
+
+Colors are semantic token names from one closed set — never raw hex. The complete set, and
+the only names that resolve:
+
+`background`, `surface`, `foreground`, `foregroundMuted`, `foregroundFaint`, `border`,
+`line`, `accent`, `accentHi`, `accentDim`, `selection`, `selectionFg`, `success`, `warning`,
+`danger`, `dangerDim`, `statusBg`.
+
+`accent` is the primary highlight (amber); `success`/`warning`/`danger` are the semantic
+status hues; `foregroundMuted`/`foregroundFaint` are the de-emphasis steps. The MVP ships a
+single theme (`dark-default`), so a page cannot offer a real theme switch — it can only
+choose which of these tokens it uses.
 
 ## What not to do
 

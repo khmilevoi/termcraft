@@ -95,7 +95,58 @@ function user(content: unknown[] | string): SDKMessage {
 
 test("a user message's tool_result block with is_error true yields tool-failed, carrying tool_use_id as id", () => {
   const msg = user([{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }]);
-  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t1" }]);
+  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t1", reason: "boom" }]);
+});
+
+/**
+ * WHY `reason` EXISTS (defect fix, 2026-07-27). A live turn opened by reading "/RUNTIME.md"
+ * and three more leading-slash paths; `agent/confinement` denied all four with a message
+ * saying exactly why ("Read target is outside the turn workspace"), and this mapper threw
+ * every one of those messages away. The diagnostics recorded four bare `tool-failed` lines
+ * and could not answer the only question being asked of them.
+ */
+test("a tool_result whose content is the SDK's block-array form carries the denial text through", () => {
+  const msg = user([
+    {
+      type: "tool_result",
+      tool_use_id: "t1",
+      content: [{ type: "text", text: "Read target is outside the turn workspace" }],
+      is_error: true,
+    },
+  ]);
+  expect(normalizeMessage(msg)).toEqual([
+    { kind: "tool-failed", id: "t1", reason: "Read target is outside the turn workspace" },
+  ]);
+});
+
+test("an unreadable or empty tool_result content yields reason null, never a fabricated message", () => {
+  const noContent = user([{ type: "tool_result", tool_use_id: "t1", is_error: true }]);
+  expect(normalizeMessage(noContent)).toEqual([{ kind: "tool-failed", id: "t1", reason: null }]);
+
+  const blank = user([
+    { type: "tool_result", tool_use_id: "t2", content: "   \n ", is_error: true },
+  ]);
+  expect(normalizeMessage(blank)).toEqual([{ kind: "tool-failed", id: "t2", reason: null }]);
+
+  const imageOnly = user([
+    {
+      type: "tool_result",
+      tool_use_id: "t3",
+      content: [{ type: "image", source: { type: "base64", data: "x", media_type: "image/png" } }],
+      is_error: true,
+    },
+  ]);
+  expect(normalizeMessage(imageOnly)).toEqual([{ kind: "tool-failed", id: "t3", reason: null }]);
+});
+
+test("a long tool_result reason is bounded — it crosses the wire and lands in a UI row", () => {
+  const msg = user([
+    { type: "tool_result", tool_use_id: "t1", content: "x".repeat(500), is_error: true },
+  ]);
+  const events = normalizeMessage(msg);
+  const reason = (events[0] as { reason: string }).reason;
+  expect(reason.length).toBe(200);
+  expect(reason.endsWith("...")).toBe(true);
 });
 
 test("a user message's tool_result block with is_error false (an ordinary success) yields nothing — only failures are mirrored", () => {
@@ -114,7 +165,7 @@ test("a user message with multiple tool_result blocks keeps only the failed one,
     { type: "tool_result", tool_use_id: "t2", content: "boom", is_error: true },
     { type: "tool_result", content: "no id", is_error: true }, // malformed: no tool_use_id
   ]);
-  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t2" }]);
+  expect(normalizeMessage(msg)).toEqual([{ kind: "tool-failed", id: "t2", reason: "boom" }]);
 });
 
 test("a user message whose content is a plain string (no blocks) yields no events", () => {

@@ -91,9 +91,46 @@ function normalizeUserBlock(block: UserContentBlock): AgentEvent | null {
     typeof block.tool_use_id === "string" &&
     block.is_error === true
   ) {
-    return { kind: "tool-failed", id: block.tool_use_id };
+    return { kind: "tool-failed", id: block.tool_use_id, reason: toolResultReason(block.content) };
   }
   return null;
+}
+
+/** A tool result's error text must never be unbounded — it crosses the wire and lands in a UI row. */
+const TOOL_FAILURE_REASON_MAX = 200;
+
+/**
+ * Extract the tool's own error text from a `tool_result` block's `content`, or `null` when
+ * the vendor sent nothing readable. NEVER invents a message: an unreadable shape stays
+ * `null` so the UI and the diagnostics both say "no reason given" instead of a fabricated one.
+ *
+ * `content` is `string | Array<TextBlockParam | ImageBlockParam>` — the array form is what
+ * the SDK actually delivers for a denied tool call, with the denial message in one `text`
+ * block. Both shapes are handled because this data crosses a process boundary untyped at
+ * runtime, exactly as {@link normalizeBlock}'s own `typeof` guards do.
+ */
+function toolResultReason(content: unknown): string | null {
+  const raw = ((): string | null => {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return null;
+    const texts = content
+      .filter(
+        (part): part is { type: "text"; text: string } =>
+          typeof part === "object" &&
+          part !== null &&
+          (part as { type?: unknown }).type === "text" &&
+          typeof (part as { text?: unknown }).text === "string",
+      )
+      .map((part) => part.text);
+    return texts.length === 0 ? null : texts.join("\n");
+  })();
+
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length > TOOL_FAILURE_REASON_MAX
+    ? `${trimmed.slice(0, TOOL_FAILURE_REASON_MAX - 3)}...`
+    : trimmed;
 }
 
 /** A success result yields the final text plus, when derivable, a usage event. */

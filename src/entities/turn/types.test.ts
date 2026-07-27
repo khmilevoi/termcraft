@@ -25,7 +25,7 @@ describe("AgentEvent", () => {
     const events: AgentEvent[] = [
       { kind: "reasoning", text: "planning" },
       { kind: "tool", id: "toolu_1", op: "edit", target: "pages/main.tsx" },
-      { kind: "tool-failed", id: "toolu_1" },
+      { kind: "tool-failed", id: "toolu_1", reason: "denied" },
       { kind: "final", text: "done" },
       {
         kind: "usage",
