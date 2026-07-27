@@ -45,8 +45,8 @@ import { createFloodMonitor } from "./flood-monitor";
 import { createFrameBroker } from "./frame-broker";
 import { createHeartbeatWatchdog } from "./heartbeat-watchdog";
 import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table";
+import { HANDSHAKE_TIMEOUT_MS, HANDSHAKE_TIMEOUT_REASON } from "./timeouts";
 
-const HANDSHAKE_TIMEOUT_MS = 3_000;
 const MOUNT_TIMEOUT_MS = 10_000;
 const SHUTDOWN_ACK_TIMEOUT_MS = 1_000;
 const REAP_TIMEOUT_MS = 1_000;
@@ -189,7 +189,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     });
     inbound = readInbound(spawned);
 
-    // --- negotiate: send client.hello, await host.hello within 3s ---
+    // --- negotiate: send client.hello, await host.hello within the handshake budget ---
     phase = "negotiating";
     const clientHello = buildClientHello({
       spec,
@@ -205,7 +205,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const handshakeDeadlineAt = deps.clock.now() + HANDSHAKE_TIMEOUT_MS;
     const helloMessage = await nextInbound(
       handshakeDeadlineAt,
-      new SupervisorError({ code: "HANDSHAKE_TIMEOUT", reason: "no host.hello within 3s" }),
+      new SupervisorError({ code: "HANDSHAKE_TIMEOUT", reason: HANDSHAKE_TIMEOUT_REASON }),
     );
     if (helloMessage instanceof Error) return failWith(helloMessage);
     if (helloMessage.messageClass !== "control")

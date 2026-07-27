@@ -14,6 +14,7 @@ import { SupervisorError } from "./errors";
 import { runOneShotSession } from "./one-shot";
 import { createScriptedChild, frameControl, frameFrame, frameHostHello } from "./scripted-child";
 import type { ScriptedChild } from "./scripted-child";
+import { HANDSHAKE_TIMEOUT_MS } from "./timeouts";
 import { readInbound } from "./transport";
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
@@ -234,7 +235,7 @@ describe("runOneShotSession (2D-4, §4/§11.3/§11.4)", () => {
     }
   });
 
-  test("no host.hello within 3 s is a HANDSHAKE_TIMEOUT", async () => {
+  test("no host.hello within the handshake budget is a HANDSHAKE_TIMEOUT", async () => {
     const spec = specFor({ mode: "smoke" });
     const child = oneShotChild(spec, { skipHostHello: true });
     const clock = createManualClock();
@@ -245,7 +246,7 @@ describe("runOneShotSession (2D-4, §4/§11.3/§11.4)", () => {
       runtimeDeclaration,
     });
     await waitUntil(() => clock.pending() >= 1, "handshake timer armed");
-    clock.advance(3_000);
+    clock.advance(HANDSHAKE_TIMEOUT_MS);
     const result = await promise;
     expect(result).toBeInstanceOf(SupervisorError);
     if (result instanceof SupervisorError) expect(result.code).toBe("HANDSHAKE_TIMEOUT");

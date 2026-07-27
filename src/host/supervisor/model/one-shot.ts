@@ -14,10 +14,10 @@ import type { OneShotDeps, OneShotResult } from "../types";
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
+import { HANDSHAKE_TIMEOUT_MS, HANDSHAKE_TIMEOUT_REASON } from "./timeouts";
 import { createStderrDrain, readInbound, writeFramed } from "./transport";
 import type { InboundMessage } from "./transport";
 
-const HANDSHAKE_TIMEOUT_MS = 3_000;
 /** §9: one-shot smoke/export capture deadline. */
 const CAPTURE_TIMEOUT_MS = 10_000;
 const REAP_TIMEOUT_MS = 1_000;
@@ -101,7 +101,7 @@ export async function runOneShotSession(
     return winner;
   }
 
-  // --- negotiate: client.hello → host.hello within 3 s ---
+  // --- negotiate: client.hello → host.hello within the handshake budget ---
   const helloBytes = encodeClientHello(
     buildClientHello({
       spec,
@@ -116,7 +116,7 @@ export async function runOneShotSession(
   const helloDeadline = deps.clock.now() + HANDSHAKE_TIMEOUT_MS;
   const helloMessage = await nextInbound(
     helloDeadline,
-    new SupervisorError({ code: "HANDSHAKE_TIMEOUT", reason: "no host.hello within 3s" }),
+    new SupervisorError({ code: "HANDSHAKE_TIMEOUT", reason: HANDSHAKE_TIMEOUT_REASON }),
   );
   if (helloMessage instanceof Error) return fail(helloMessage);
   if (helloMessage.messageClass !== "control")

@@ -16,6 +16,7 @@ import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table";
 import { createScriptedChild, frameControl, frameFrame, frameHostHello } from "./scripted-child";
 import type { ScriptedChild } from "./scripted-child";
 import { createHostSession } from "./session";
+import { HANDSHAKE_TIMEOUT_MS } from "./timeouts";
 import { readInbound } from "./transport";
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
@@ -201,12 +202,12 @@ describe("createHostSession lifecycle", () => {
     const { deps: sessionDeps } = deps(child, clock);
     const session = createHostSession(spec, sessionDeps);
     const startPromise = session.start();
-    // Block until start() is parked in "negotiating" with the 3s handshake timer armed.
+    // Block until start() is parked in "negotiating" with the handshake timer armed.
     await waitUntil(
       () => session.phase === "negotiating" && clock.pending() >= 1,
       "handshake timer armed",
     );
-    clock.advance(3_000);
+    clock.advance(HANDSHAKE_TIMEOUT_MS);
     const outcome = await startPromise;
     expect(outcome).toBeInstanceOf(SupervisorError);
     if (outcome instanceof SupervisorError) expect(outcome.code).toBe("HANDSHAKE_TIMEOUT");
