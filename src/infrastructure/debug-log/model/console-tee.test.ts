@@ -64,11 +64,18 @@ describe("installConsoleTee", () => {
 
   test("covers every method OpenTUI overrides, including info and debug", () => {
     const lines: string[] = [];
+    const infoSaid: unknown[] = [];
+    const debugSaid: unknown[] = [];
+    console.info = (...args: unknown[]) => infoSaid.push(...args);
+    console.debug = (...args: unknown[]) => debugSaid.push(...args);
+
     installConsoleTee(recordingSink(lines));
     console.info("i");
     console.debug("d");
 
     expect(lines).toEqual(['console.info:["i"]', 'console.debug:["d"]']);
+    expect(infoSaid).toEqual(["i"]);
+    expect(debugSaid).toEqual(["d"]);
   });
 
   test("does nothing at all when tracing is off", () => {
@@ -80,9 +87,14 @@ describe("installConsoleTee", () => {
 
   test("flattens an Error argument with its cause chain", () => {
     const lines: string[] = [];
+    const said: unknown[] = [];
+    console.error = (...args: unknown[]) => said.push(...args);
+
     installConsoleTee(recordingSink(lines));
-    console.error("failed:", new Error("outer", { cause: new Error("inner") }));
+    const outer = new Error("outer", { cause: new Error("inner") });
+    console.error("failed:", outer);
 
     expect(lines[0]).toContain('"message":"inner"');
+    expect(said).toEqual(["failed:", outer]);
   });
 });
