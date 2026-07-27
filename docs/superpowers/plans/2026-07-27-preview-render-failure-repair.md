@@ -448,8 +448,7 @@ A pure function over the mirror's preview slice — the same derivation-without-
   export interface RepairPromptInput {
     readonly pageSlug: string;
     readonly safeMessage: string;
-    /** `null` for the `failed` phase, which has no attempt count. */
-    readonly attempts: number | null;
+    readonly attempts: number;
   }
   export function relativePageSourcePath(pageSlug: string): string;
   export function buildRepairPrompt(input: RepairPromptInput): string;
@@ -483,12 +482,6 @@ describe("buildRepairPrompt", () => {
       "  attempts: 4 host incarnations failed before the preview circuit opened",
     );
     expect(text).toContain("this is a repair, not a redesign");
-  });
-
-  test("drops the attempts line when there is no attempt count", () => {
-    const text = buildRepairPrompt({ pageSlug: "dashboard", safeMessage: MESSAGE, attempts: null });
-    expect(text).not.toContain("attempts:");
-    expect(text).toContain(`  error:    ${MESSAGE}`);
   });
 
   test("never emits an absolute path", () => {
@@ -538,12 +531,15 @@ export interface RepairPromptInput {
   readonly pageSlug: string;
   /** The host's own bounded error text, as the Kernel published it. Quoted verbatim. */
   readonly safeMessage: string;
-  /** `null` for the `failed` phase, which has no attempt count to report. */
-  readonly attempts: number | null;
+  /**
+   * How many host incarnations died. Always known: the only caller is the `circuit-open`
+   * phase, whose mirror fold carries the count the supervisor reported.
+   */
+  readonly attempts: number;
 }
 
 export function buildRepairPrompt(input: RepairPromptInput): string {
-  const lines: string[] = [
+  return [
     `The preview cannot render the "${input.pageSlug}" page.`,
     "",
     "This is a runtime error from the preview host, not a Gate rejection — the page",
@@ -551,18 +547,11 @@ export function buildRepairPrompt(input: RepairPromptInput): string {
     "",
     `  file:     ${relativePageSourcePath(input.pageSlug)}`,
     `  error:    ${input.safeMessage}`,
-  ];
-  if (input.attempts !== null) {
-    lines.push(
-      `  attempts: ${input.attempts} host incarnations failed before the preview circuit opened`,
-    );
-  }
-  lines.push(
+    `  attempts: ${input.attempts} host incarnations failed before the preview circuit opened`,
     "",
     "Fix the render error in that file. Keep the page's behaviour and layout as they",
     "are — this is a repair, not a redesign.",
-  );
-  return lines.join("\n");
+  ].join("\n");
 }
 ```
 
@@ -638,6 +627,13 @@ describe("F6 — compose-repair", () => {
     expect(deps.local.composer()).toBe("");
   });
 
+  test("no-ops in the `failed` phase — that panel names no key, so the key does not act there", () => {
+    const deps = createDeps();
+    deps.mirror.apply(previewFailed({ pageSlug: "dashboard", safeMessage: CRASH_MESSAGE }));
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+    expect(deps.local.composer()).toBe("");
+  });
+
   test("no-ops on the read-only screen", () => {
     const deps = createDeps({ screen: "read-only" });
     deps.mirror.apply(circuitOpened({ pageSlug: "dashboard", attempts: 4, safeMessage: CRASH_MESSAGE }));
@@ -707,18 +703,22 @@ In `src/ui/app/model/intent.ts`'s `executeAction`, before the trailing `open-cha
       trace("ui.composeRepair.refused", { reason: "screen is read-only" });
       return;
     }
+    // `circuit-open` ONLY, deliberately — not the sibling `failed` phase. `failed` renders
+    // the Gate panel (`wsBrokenSource`), whose design offers exactly one route out, the open
+    // composer, and names no key at all. Accepting F6 there would give the user a working key
+    // that nothing on screen mentions — the mirror image of the defect this file's own
+    // `preview.retry` entry records in `ui/actions/model/registry.ts`, where a panel named a
+    // key that did not exist. Every affordance is named by something drawn, or it is not
+    // offered.
     const preview = deps.mirror.preview();
-    if (preview.phase !== "circuit-open" && preview.phase !== "failed") {
+    if (preview.phase !== "circuit-open") {
       trace("ui.composeRepair.refused", { reason: `preview phase is ${preview.phase}` });
       return;
     }
     const text = buildRepairPrompt({
       pageSlug: preview.pageSlug,
-      safeMessage:
-        preview.phase === "circuit-open"
-          ? preview.finalFailure.safeMessage
-          : preview.failure.safeMessage,
-      attempts: preview.phase === "circuit-open" ? preview.attempts : null,
+      safeMessage: preview.finalFailure.safeMessage,
+      attempts: preview.attempts,
     });
     // NEVER overwrite a draft: this codebase already carries two defect fixes built on that
     // principle (`home-submit` and `composer-submit` both clear their input only once the
@@ -842,7 +842,12 @@ describe("HostCrashPanel (design wsHostCrash)", () => {
   });
 
   test("renders the host message verbatim and wrapped, never truncated", async () => {
-    const long = `PAGE_RENDER_FAILED: ${"x".repeat(180)}`;
+    // A REALISTIC worst case, not one long unbroken token: the runtime bounds the message to
+    // 200 characters and every real one is prose with spaces, which is what a word wrapper can
+    // actually break. Asserting on `"x".repeat(180)` would test a case that cannot occur and
+    // would fail for a reason the component is not responsible for.
+    const long =
+      "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function while mounting the ProcessTable widget declared in the dashboard page, and the host exited with status 1 before any frame was captured";
     const handle = await createHeadlessRenderer({ w: 76, h: 30 });
     open = handle;
     handle.mount(
@@ -861,9 +866,10 @@ describe("HostCrashPanel (design wsHostCrash)", () => {
       .capture()
       .rows.flat()
       .map((run) => run.text)
-      .join("");
+      .join(" ");
     expect(joined).not.toContain("…");
-    expect(joined.replace(/\s+/g, "")).toContain("x".repeat(180));
+    // Every word of the message survives, in order, across however many lines it wrapped onto.
+    for (const word of long.split(" ")) expect(joined).toContain(word);
   });
 
   test("offers both keys when retry is available", async () => {

@@ -156,14 +156,18 @@ hotkey: { id: "preview.repair", key: "f6", label: "repair", capability: null }
 UI-local.
 
 **Handler.** `applyIntent`'s `executeAction` gains the `compose-repair` effect. It reads
-`deps.mirror.preview()`, returns silently unless the phase is `circuit-open` or `failed`,
-builds the message, writes it to `local.composer`, and sets `local.focus` to `"composer"`.
+`deps.mirror.preview()`, returns silently unless the phase is `circuit-open`, builds the
+message, writes it to `local.composer`, and sets `local.focus` to `"composer"`.
 
-Both phases are covered because both are reachable. §3.1 declines to map `backoff` into
-`failed`, but `failed` already has a production producer of its own: the establishment path
-publishes `preview.failed` when `HostSupervisorPort.preview` itself returns a failure
-(`preview-export.ts:672-673`). A page whose contract cannot be read reaches the panel that
-way, and deserves the same repair affordance.
+**`circuit-open` only — not the sibling `failed` phase.** An earlier revision of this spec
+covered both, reasoning that `failed` is separately reachable (the establishment path
+publishes `preview.failed` when `HostSupervisorPort.preview` itself returns a failure,
+`preview-export.ts:672-673`) and deserves the same affordance. That was wrong on the design's
+own terms: `failed` renders the Gate panel, whose design offers exactly one route out — the
+open composer — and names no key. A working `F6` there would be a key nothing on screen
+mentions, the mirror image of the defect `src/ui/actions/model/registry.ts:58-61` records,
+where a panel named a key that did not exist. Every affordance is named by something drawn,
+or it is not offered. If the design later covers `failed`, the handler widens then.
 
 An existing draft is never destroyed. This codebase already carries two separate defect
 fixes built on that principle (`home-submit` and `composer-submit` both clear their input
@@ -247,8 +251,9 @@ are — this is a repair, not a redesign.
 ```
 
 `{relativeSourcePath}` is derived in the UI from the slug using the fixed canonical layout
-`.termcraft/pages/<slug>/page.tsx` (`preview-export.ts:157`). The `attempts` line is
-conditional — the `failed` phase has no attempt count and drops it.
+`.termcraft/pages/<slug>/page.tsx` (`preview-export.ts:157`). Every field is always present:
+the only caller is the `circuit-open` phase, whose mirror fold carries the page slug, the
+host's message and the attempt count together.
 
 Rendered against the failure in the recorded run:
 
