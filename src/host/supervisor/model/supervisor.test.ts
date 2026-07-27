@@ -319,6 +319,49 @@ describe("createHostSupervisor — restart budget + backoff + circuit (§10, §1
     );
     await supervisor.stopAll();
   });
+
+  test("circuitOpened carries the failing incarnation's code and message, not only the policy reason", async () => {
+    // DESIGN_RENDER_FAILED is not in restart-policy.ts's deterministic set, so an
+    // incarnation that always fails to start with it drives the SAME 250/500/1000ms
+    // budget-exhaustion path as the first test above — proving circuitOpened carries the
+    // FAILING incarnation's own code/message (from `error`), distinct from `reason` (the
+    // policy's own verdict text).
+    const renderFailure = new SupervisorError({
+      code: "DESIGN_RENDER_FAILED",
+      reason: "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
+    });
+    const factory = fakeFactory({ startFor: () => renderFailure });
+    const { supervisor, clock, events } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor());
+    if (handle instanceof Error) throw handle;
+
+    await waitUntil(() => handle.state() === "backoff", "backoff after 1st failed start");
+    clock.advance(250);
+    await waitUntil(
+      () => factory.incarnations.length === 2 && handle.state() === "backoff",
+      "backoff after 2nd failed start",
+    );
+    clock.advance(500);
+    await waitUntil(
+      () => factory.incarnations.length === 3 && handle.state() === "backoff",
+      "backoff after 3rd failed start",
+    );
+    clock.advance(1000);
+    await waitUntil(
+      () => factory.incarnations.length === 4 && handle.state() === "circuit-open",
+      "circuit opens after 4th failed start",
+    );
+
+    const opened = events.find((e) => e.type === "circuitOpened");
+    expect(opened).toBeDefined();
+    expect(opened?.failureCode).toBe("DESIGN_RENDER_FAILED");
+    expect(opened?.failureMessage).toBe(
+      "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
+    );
+    // The policy reason is still reported — the two are different facts.
+    expect(opened?.reason).toContain("restart budget exhausted");
+    await supervisor.stopAll();
+  });
 });
 
 describe("createHostSupervisor — keys, source change, frames relay (§10, §10.1)", () => {

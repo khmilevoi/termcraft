@@ -163,6 +163,8 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         sourceHashPrefix: hashPrefix(ks.spec),
         attempts: decision.attempts,
         reason: decision.reason,
+        failureCode: String(error.code),
+        failureMessage: String(error.reason),
       });
       tryDrainQueue();
       return;

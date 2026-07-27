@@ -53,6 +53,9 @@ export interface SupervisorEventV1 {
   readonly delayMs?: number;
   readonly attempts?: number;
   readonly reason?: string;
+  /** The failing incarnation's own error, on `circuitOpened` only — distinct from `reason` (the restart policy's verdict). */
+  readonly failureCode?: string;
+  readonly failureMessage?: string;
 }
 
 export interface HostSupervisorPort {

@@ -341,6 +341,17 @@ export interface SupervisorEvent {
   readonly attempts?: number;
   /** bounded reason (backoff/circuitOpened/stopped) */
   readonly reason?: string;
+  /**
+   * The FAILING INCARNATION's own error, on `circuitOpened` only — distinct from `reason`,
+   * which reports the restart policy's verdict ("restart budget exhausted (3 in 60000ms)").
+   * Without these the Kernel can say a preview stopped but never why, and the repair message
+   * the UI offers has nothing to quote.
+   *
+   * §13-safe as-is: `session.ts` already bounds the reason to 200 characters and it carries
+   * no path, environment value or source content.
+   */
+  readonly failureCode?: string;
+  readonly failureMessage?: string;
 }
 
 /**
