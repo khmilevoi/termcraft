@@ -2,7 +2,7 @@ import {
   definePage,
   reatomComponent,
   atom,
-  action,
+  wrap,
   Panel,
   Column,
   Row,
@@ -74,10 +74,6 @@ const PALETTE_OPTIONS = [
 ]
 
 const paletteIdAtom = atom("green", "paletteIdAtom")
-
-const setPalette = action((ctx: any, id: string) => {
-  paletteIdAtom(ctx, id)
-}, "setPalette")
 
 // ── analog clock face, rendered as a grid of monospace characters ──
 // Pure function of `now`: no timers, no randomness — same deterministic
@@ -153,11 +149,11 @@ function buildAnalogClockFace(d: Date): string {
 // so a static/export render is sealed at whatever instant it was invoked — fully
 // deterministic, no setInterval/setTimeout/randomness involved.
 
-export default reatomComponent(function Page(ctx: any) {
+export default reatomComponent(function Page() {
   const now = new Date()
   const analogFace = buildAnalogClockFace(now)
 
-  const paletteId = ctx.spy(paletteIdAtom)
+  const paletteId = paletteIdAtom()
   const selectedPalette = PALETTE_OPTIONS.find((o) => o.id === paletteId) ?? PALETTE_OPTIONS[0]
   const accentToken = selectedPalette.token
 
@@ -172,7 +168,7 @@ export default reatomComponent(function Page(ctx: any) {
             id="palette-menu"
             tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
             activeId={paletteId}
-            onSelect={(id) => setPalette(ctx, id)}
+            onSelect={wrap((id: string) => paletteIdAtom.set(id))}
           />
         </Row>
 
