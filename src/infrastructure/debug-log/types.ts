@@ -8,3 +8,16 @@ export interface TraceLine {
   readonly channel: string;
   readonly data: Record<string, unknown>;
 }
+
+/**
+ * The trace seam {@link installConsoleTee} writes through.
+ *
+ * Injectable because the real sink resolves its target ONCE at module load, and under
+ * `bun test` (`NODE_ENV=test`) that target is `null` — so a tee test can neither enable
+ * tracing after the fact nor assert against a file. A fake sink makes the tee testable
+ * without an environment variable and without touching disk.
+ */
+export interface TeeSink {
+  readonly enabled: () => boolean;
+  readonly trace: (channel: string, data: Record<string, unknown>) => void;
+}

@@ -2,6 +2,7 @@ import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import * as errore from "errore";
 
+import { installConsoleTee } from "infrastructure/debug-log";
 import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
 import type { KernelPort } from "ui/kernel";
 
@@ -66,8 +67,21 @@ export class UiRootError extends errore.createTaggedError({
   message: "UI root failed during $operation",
 }) {}
 
+/**
+ * The interactive renderer's config. Exported so it is assertable — the `consoleMode` line is a
+ * diagnostics-critical decision, not a style preference.
+ *
+ * `consoleMode: "disabled"` (HANDOFF Finding 1, 2026-07-27): OpenTUI's default
+ * `"console-overlay"` calls `overrideConsoleMethods` at construction, replacing every
+ * `console.*` method with an overlay writer that does NOT call through — which discards the
+ * debug-log tee installed back in `main.tsx` and blinds the entire interactive run. The app
+ * never shows OpenTUI's overlay, so nothing is lost by turning it off, and
+ * `host/render/model/renderer.ts` already makes exactly this choice for the same reason.
+ */
+export const UI_RENDERER_CONFIG = { exitOnCtrlC: false, consoleMode: "disabled" } as const;
+
 const defaultAdapters: UiRootAdapters = {
-  createRenderer: () => createCliRenderer({ exitOnCtrlC: false }),
+  createRenderer: () => createCliRenderer(UI_RENDERER_CONFIG),
   createRoot: (renderer) => createRoot(renderer as CliRenderer),
 };
 
@@ -78,6 +92,10 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     .createRenderer()
     .catch((cause) => new UiRootError({ operation: "create renderer", cause }));
   if (renderer instanceof Error) return renderer;
+  // Belt to `UI_RENDERER_CONFIG`'s braces: any renderer construction — including an injected
+  // adapter, or a future OpenTUI version that re-overrides console outside `consoleMode` — gets
+  // the tee put back over whatever it left behind. A no-op when nothing replaced it.
+  installConsoleTee();
 
   const root = errore.try(() => adapters.createRoot(renderer));
   if (root instanceof Error) {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createFakeKernel } from "ui/testing";
 
-import { UiRootError, createUiRoot } from "./root";
+import { UI_RENDERER_CONFIG, UiRootError, createUiRoot } from "./root";
 
 describe("createUiRoot", () => {
   test("disposes by unmounting before destroying exactly once", async () => {
@@ -90,5 +90,19 @@ describe("createUiRoot", () => {
 
     expect(result).toBeInstanceOf(UiRootError);
     expect(destroyed).toBe(1);
+  });
+});
+
+describe("UI_RENDERER_CONFIG", () => {
+  // HANDOFF Finding 1: OpenTUI's default `consoleMode: "console-overlay"` replaces
+  // console.log/info/warn/error/debug with an overlay writer that never calls through, which
+  // silently destroys the debug-log tee for the whole interactive run. The host renderer
+  // (`host/render/model/renderer.ts`) already disables it; the UI must too.
+  test("disables OpenTUI's console overlay so the debug-log tee survives", () => {
+    expect(UI_RENDERER_CONFIG.consoleMode).toBe("disabled");
+  });
+
+  test("keeps ctrl+c under the app's own control", () => {
+    expect(UI_RENDERER_CONFIG.exitOnCtrlC).toBe(false);
   });
 });
