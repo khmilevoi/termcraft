@@ -20,6 +20,7 @@ export {
 } from "./model/interaction";
 export type { Point, Rect, SelectionCorners } from "./model/overlay";
 export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
+export { isDesignRenderFailure } from "./model/failure-class";
 export type { RepairPromptInput } from "./model/repair-prompt";
 export { buildRepairPrompt, relativePageSourcePath } from "./model/repair-prompt";
 

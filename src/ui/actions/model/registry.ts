@@ -60,16 +60,28 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // the `preview.retry` command — but NOTHING in `src/ui` ever dispatched it, so the sentence
     // named an action that could not be taken.
     //
-    // DIVERGENCE, closest faithful mapping (CLAUDE.md: flag the gap, never guess): the design
-    // specifies the affordance in prose but names no key for it — it has no circuit-open screen
-    // at all (`design/12-errors-edge-states.dc.html` enumerates its failure surface and this is
-    // not among them). `f5` is chosen because it continues the design's OWN key vocabulary for
-    // this pane (`f2` fullscreen, `f3` tweaks, `f4` interact — `termcraft-engine.js`'s `wsStatus`
-    // key rows) at the next free slot, and because a bare letter is unusable here for the same
-    // reason `q` became `/exit`: the composer is live and would swallow it as text.
+    // DIVERGENCE — CLOSED (design iteration 8, 2026-07-27). This note used to record a live
+    // gap: the design specified the affordance in prose but named no key, having no circuit-open
+    // screen at all, so `f5` was chosen in code because it continued the pane's own key
+    // vocabulary (`f2` fullscreen, `f3` tweaks, `f4` interact) at the next free slot. The design
+    // now HAS that screen — `termcraft-engine.js`'s `wsHostCrash` draws `F5 retry preview` and
+    // `F6 repair…` — and it names `f5` for exactly this. The reasoning was right and the key is
+    // now design-named; this is history, not an open divergence.
     id: "preview.retry",
     execution: { kind: "command", command: "preview.retry" },
     hotkey: { id: "preview.retry", key: "f5", label: "retry", capability: "preview.retry" },
+  },
+  {
+    // The design's second route out of a halted preview (`termcraft-engine.js`'s `wsHostCrash`:
+    // `F6 repair… · write the failure into the composer · nothing is sent — you press ⏎`).
+    //
+    // `kind: "local"` and `capability: null` because nothing is dispatched: the effect writes
+    // the composer and moves focus, and the user sends it themselves. Whether it acts at all is
+    // decided in `intent.ts` against the failure's own class — a spawn failure gets no repair
+    // offer, because no edit to the page could fix it (spec §3.2.1).
+    id: "preview.repair",
+    execution: { kind: "local", effect: "compose-repair" },
+    hotkey: { id: "preview.repair", key: "f6", label: "repair", capability: null },
   },
   {
     id: "preview.tweaks",

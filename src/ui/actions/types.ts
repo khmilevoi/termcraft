@@ -2,7 +2,10 @@ import type { CommandKindV1, UnavailableReason } from "core/protocol";
 import type { CapabilityState, ScreenKind } from "ui/mirror";
 
 export type UiActionExecution =
-  | { readonly kind: "local"; readonly effect: "fullscreen" | "open-chats" | "exit" }
+  | {
+      readonly kind: "local";
+      readonly effect: "fullscreen" | "open-chats" | "exit" | "compose-repair";
+    }
   | {
       readonly kind: "command";
       // `preview.retry` is the one member whose payload is not `{}` — it names the session it

@@ -5,6 +5,7 @@ import { trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
+import { buildRepairPrompt, isDesignRenderFailure } from "ui/preview";
 import { nextFocus, resolveEsc } from "ui/workspace";
 
 import type { UiDeps, UiLocalState } from "./deps";
@@ -411,6 +412,47 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
   if (execution.effect === "exit") {
     // `/exit`, dispatched via the slash menu's `slash-submit` -> `action-execute` path.
     deps.requestExit();
+    return;
+  }
+  if (execution.effect === "compose-repair") {
+    // The composer is the destination, so the same refusal `composer-submit` applies here:
+    // filling an input that cannot send would promise an action the screen does not offer.
+    if (deps.screen() === "read-only") {
+      trace("ui.composeRepair.refused", { reason: "screen is read-only" });
+      return;
+    }
+    // `circuit-open` ONLY, deliberately — not the sibling `failed` phase. `failed` renders the
+    // Gate panel (`wsBrokenSource`), whose design offers exactly one route out, the open
+    // composer, and names no key at all. Accepting F6 there would give the user a working key
+    // that nothing on screen mentions — the mirror image of the defect `preview.retry`'s own
+    // registry entry records, where a panel named a key that did not exist. Every affordance is
+    // named by something drawn, or it is not offered.
+    const preview = deps.mirror.preview();
+    if (preview.phase !== "circuit-open") {
+      trace("ui.composeRepair.refused", { reason: `preview phase is ${preview.phase}` });
+      return;
+    }
+    // And only when the PAGE is what failed (spec §3.2.1). A host that died before it ever ran
+    // the page is not the page's fault, and a message asking the agent to fix `page.tsx` would
+    // promise a repair that cannot land.
+    if (!isDesignRenderFailure(preview.finalFailure)) {
+      trace("ui.composeRepair.refused", {
+        reason: "the host failed before it ran the page",
+        hostFailureCode: String(preview.finalFailure.details.hostFailureCode ?? "none"),
+      });
+      return;
+    }
+    const text = buildRepairPrompt({
+      pageSlug: preview.pageSlug,
+      safeMessage: preview.finalFailure.safeMessage,
+      attempts: preview.attempts,
+    });
+    // NEVER overwrite a draft: this codebase already carries two defect fixes built on that
+    // principle (`home-submit` and `composer-submit` both clear their input only once the Kernel
+    // accepted). An empty composer is filled; a non-empty one keeps every character.
+    const draft = deps.local.composer();
+    deps.local.composer.set(draft.length === 0 ? text : `${draft}\n\n${text}`);
+    deps.local.focus.set("composer");
     return;
   }
   const chats = deps.mirror.chats();

@@ -56,6 +56,7 @@ describe("SLASH_COMMANDS registry", () => {
       ["chat.open-list", { kind: "local", effect: "open-chats" }],
       ["preview.fullscreen", { kind: "local", effect: "fullscreen" }],
       ["preview.retry", { kind: "command", command: "preview.retry" }],
+      ["preview.repair", { kind: "local", effect: "compose-repair" }],
       ["preview.tweaks", { kind: "inert" }],
       ["preview.interact", { kind: "inert" }],
       ["export.start", { kind: "command", command: "export.start" }],

@@ -268,6 +268,87 @@ describe("applyIntent — preview retry", () => {
   });
 });
 
+describe("applyIntent — F6 compose-repair", () => {
+  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+
+  const circuitOpened = (opts?: { hostFailureCode?: string; attempts?: number }) =>
+    event("preview.circuitOpened", {
+      previewSessionId: uuidv7(),
+      pageSlug: "main",
+      sourceHash: TEST_SHA,
+      attempts: opts?.attempts ?? 4,
+      finalFailure: {
+        code: "HOST_CIRCUIT_OPEN",
+        retryable: true,
+        safeMessage: CRASH,
+        details: {
+          pageSlug: "main",
+          attempts: opts?.attempts ?? 4,
+          ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
+        },
+      },
+      retryCapability: { available: true },
+    });
+
+  test("fills an empty composer with the repair message and moves focus there", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    deps.local.focus.set("preview");
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    expect(deps.local.composer()).toContain('The preview cannot render the "main" page.');
+    expect(deps.local.composer()).toContain(CRASH);
+    expect(deps.local.composer()).toContain(".termcraft/pages/main/page.tsx");
+    expect(deps.local.focus()).toBe("composer");
+    // Nothing is sent — the design says so on the frame ("nothing is sent — you press ⏎").
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("appends below a blank line rather than overwriting an existing draft", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    deps.local.composer.set("my own words");
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    expect(deps.local.composer().startsWith("my own words\n\n")).toBe(true);
+    expect(deps.local.composer()).toContain(CRASH);
+  });
+
+  test("no-ops when the preview is not in an error phase", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    expect(deps.local.composer()).toBe("");
+  });
+
+  test("no-ops when the host never got as far as the page — a spawn failure is not the page's fault", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "SPAWN_FAILED", attempts: 1 }));
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    // Asking the agent to fix page.tsx could not make an unwritable temp directory writable.
+    expect(deps.local.composer()).toBe("");
+  });
+
+  test("no-ops when the circuit-open carried no host code — absent is not evidence the page failed", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(circuitOpened());
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    expect(deps.local.composer()).toBe("");
+  });
+});
+
 describe("applyIntent — slash menu", () => {
   test("opening and typing filters rows and selects the first enabled row", () => {
     const kernel = createFakeKernel();
