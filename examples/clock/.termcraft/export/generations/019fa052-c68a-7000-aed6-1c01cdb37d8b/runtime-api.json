@@ -1,0 +1,10 @@
+{
+  "module": "@termcraft/runtime",
+  "currentKitApiVersion": 1,
+  "supportedKitApiVersions": [
+    1
+  ],
+  "publicCapabilityIds": [
+    "theme:dark-default"
+  ]
+}

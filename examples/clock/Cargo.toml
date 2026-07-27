@@ -1,0 +1,21 @@
+[package]
+name = "clock"
+version = "0.1.0"
+edition = "2024"
+description = "Native Rust/ratatui port of the .termcraft/pages/dashboard clock design."
+
+[[bin]]
+name = "clock"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+color-eyre = "0.6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
