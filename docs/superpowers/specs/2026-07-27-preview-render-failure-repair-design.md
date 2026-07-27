@@ -170,12 +170,59 @@ fixes built on that principle (`home-submit` and `composer-submit` both clear th
 only once the Kernel accepted). An empty composer is filled; a non-empty one gets the repair
 text appended below a blank line.
 
-**Panel.** `ErrorPanel` gains an optional fourth line below `nextStep`.
+**Panel.** A new component, `src/ui/preview/ui/HostCrashPanel.tsx`. `ErrorPanel` is neither
+extended nor reused: the design draws a bordered, titled block with a red gutter, a tee rule
+and two-line key rows, where `ErrorPanel` draws three centred lines and an optional inset.
+`ErrorPanel` keeps serving the Gate state (`wsBrokenSource`), which the design left
+untouched.
+
+Content, from `wsHostCrash` (`design/termcraft-engine.js:1127-1178`):
+
+- title `preview host · halted`, red border, red title;
+- `✗ design threw while rendering — no preview`, red bold;
+- the page slug in `amberHi` bold, then `· .termcraft/pages/<slug>/page.tsx` in `fg`;
+- a `host message` label in `dim`, then the verbatim error — every wrapped line prefixed by a
+  red `│` gutter. Wrapped, never truncated: the runtime already bounds the text to 200
+  characters, so the block is sized for the worst case to wrap whole. No hidden text means no
+  reveal affordance is needed;
+- `mounted 4× · 3 automatic restarts, all identical` and
+  `restarts stopped — no preview until you act`, both `dim`;
+- a tee rule (`├`/`┤`), then one row per action — `F5 retry preview` and `F6 repair…` — each
+  with two `dim` description lines. When retry is unavailable, `F5` renders `faint` and
+  unbold with `unavailable in this session` / `repair is the only route out`.
+
+**Status bar.** Mode chip ` HALTED ` (fg `bg` on bg `red` — inverted, unlike ` STATIC `),
+hint `render crashed` (`red` on `redDim`), key row `F5 retry · F6 repair · F2 full ·
+F3 tweaks`, with `F5` marked `dis` in the retry-unavailable variant. No type changes are
+needed: `StatusBarModeChip` is free-form `{text, fg, bg}` and `StatusBarHintKey` already
+carries an optional `"dis"` state.
 
 **Composer attach line.** `deriveComposerAttach` (`src/ui/workspace/model/attach.ts`) gains a
-branch producing `describe a fix — composer is enabled` in `amberHi`. It is placed last,
-immediately before `return null`: the turn-running branches must win, because
-`⏎ send disabled — draft kept` directly contradicts the claim that the composer is enabled.
+branch producing `F6 writes the fix · or type your own`, or
+`F6 writes the fix — retry unavailable` when retry is gone — both `amberHi`, both taken from
+`wsHostCrash`'s own `attach`. Placed last, immediately before `return null`: the
+turn-running branches must win, because `⏎ send disabled — draft kept` contradicts an attach
+line offering to write something the user can send.
+
+**Chat lines.** The design puts two lines in the chat panel:
+`✗ preview crashed while rendering — halted after 3 restarts` (`red`) and
+`the design passed Gate; the host died running it` (`faint`). They are rendered as
+**ephemeral, UI-local notices** — a new mirror slice fed from `preview.circuitOpened`, drawn
+by `ChatScrollback` below the persisted tail — not as persisted chat records.
+
+Why not persisted: `system:error` requires exactly one of `turnId`/`actionId`
+(`entities/chat/model/decode.ts:114-121`; storage-identity §11.2 — "a system record relates
+to exactly one of a turn or a standalone action"). A host crash is neither. It happens
+outside any turn — the design's own frame shows `✓ Gate accepted` above these lines, so the
+turn already succeeded — and no user performed an action. Persisting one would mean minting
+an `actionId` for something nobody did and writing that into the chat log, the one artifact
+that has to stay honest. An ephemeral notice is what this actually is: a UI statement about
+a live condition. It disappears on restart, which is correct — the preview re-establishes
+and either works or crashes again, re-issuing the line.
+
+This decision sets the precedent for `wsBrokenSource`'s own designed-but-unbuilt system line
+(`✗ current design failed Gate — preview unavailable`), which has the same shape and no
+producer today.
 
 **Prompt builder.** `src/ui/preview/model/repair-prompt.ts` — a pure function over the
 mirror's preview slice, no renderer involved, the same split `attach.ts` and `tabs.ts`
@@ -226,34 +273,34 @@ the agent's system prompt (`src/agent/prompt/model/runtime-docs.ts:26`) and cove
 
 ## 5. Design fidelity
 
-The authoritative screen is `ws-broken-source-120` in
-`design/12-errors-edge-states.dc.html`, drawn by `wsBrokenSource`
-(`design/termcraft-engine.js:1109-1125`).
+The authoritative screens are `ws-host-crash-120` and `ws-host-crash-noretry-120` in
+`design/12-errors-edge-states.dc.html`, both drawn by `wsHostCrash(w,h,{retry})`
+(`design/termcraft-engine.js:1127-1178`). They were authored for this work as design
+iteration 8; the brief that commissioned them is
+`design-prompts/claude-design-prompt-8.md`.
 
-Taken verbatim from the design:
+**The three divergences an earlier revision of this spec carried are closed.** They were a
+fourth message line in the existing panel, the choice of `F6`, and the status-bar key row.
+The design answered all three, and rejected the first outright: instead of adding a line to
+the Gate panel's centred block it introduced a distinct bordered one. `F5` and `F6` were
+confirmed as drawn, which also closes the older flagged divergence at
+`src/ui/actions/model/registry.ts:63-69`, where `F5` had been picked in code with no design
+to cite.
 
-- the three-line message block and its tones (`red` bold headline, `fg` cause, `faint`
-  next step) — already implemented in `ErrorPanel`;
-- the composer attach line `describe a fix — composer is enabled` in `amberHi`
-  (`termcraft-engine.js:1122`) — designed but not yet implemented, added here;
-- the status-bar hint `preview error — composer enabled`, `red` on `redDim`
-  (`termcraft-engine.js:1124`).
+Everything in §3.4 is taken from that method. Its own comment states the distinctions it
+makes deliberately, and they are load-bearing: a bordered report rather than bare centred
+text, the title `preview host · halted`, an opening line naming *threw while rendering*, and
+` HALTED ` in place of ` STATIC ` — so the frame cannot be mistaken for the Gate one when
+read alone.
 
-Divergences, flagged rather than invented (CLAUDE.md):
+`ws-broken-source-120` is untouched by this work, and `ErrorPanel` goes on rendering it.
 
-1. **A fourth line in the panel.** The design draws three centred lines plus the restore
-   inset; there is no action line. Closest faithful mapping: the `amberHi` tone the design
-   gives the only actionable line on this screen, the restore inset's
-   `⏎ Restore… a working commit` (`termcraft-engine.js:1117`).
-2. **`F6`.** The design names no key for repair — it draws no circuit-open screen at all.
-   `f6` continues the design's own key vocabulary for this pane (`F2` full, `F3` tweaks,
-   `F4` interact, `F5` retry) at the next free slot. This is the same reasoning already
-   recorded for `F5` in `registry.ts:63-69`, and a bare letter is unusable because the
-   composer is live and would swallow it as text.
-3. **Status-bar key row.** `wsBrokenSource` shows `[['F2','full'],['F3','tweaks']]`. Adding
-   `F6 repair` in error phases extends that row.
+Remaining divergence, flagged rather than invented (CLAUDE.md): the design draws the two chat
+lines as part of the frame without saying whether they persist. §3.4 renders them
+ephemerally, for the record-model reason given there. Making them survive a restart is a wire
+change and its own piece of work.
 
-All added copy is English, matching every other string in the shell.
+All copy is English, matching every other string in the shell.
 
 ## 6. Edge cases
 
@@ -266,6 +313,8 @@ All added copy is English, matching every other string in the shell.
 | Machine cannot legally take `sessionFailed` | Checked with `canApply` before calling `openCircuitEvents`. This also absorbs a repeated `circuitOpened` for the same key: from `circuit-open` the transition is illegal, so nothing is published twice. |
 | `failureMessage` absent (deterministic branch) | `safeMessage` falls back to the policy `reason`. Nothing is fabricated. |
 | `F5` retry pressed after `F6` | Retry re-establishes the session; on success the phase leaves `circuit-open` and the panel disappears. The composer draft stays — the user decides whether to send or clear it. |
+| Retry is unavailable (`retryCapability.available === false`) | The panel renders the no-retry variant: `F5` faint and unbold with `unavailable in this session` / `repair is the only route out`, and `dis` in the status key row. `F6` is unaffected, and the composer attach line reads `F6 writes the fix — retry unavailable`. |
+| The preview recovers while the chat notice is on screen | The notice is ephemeral and tied to the failure, not to the chat's history. Clear it when the phase leaves the error states, so the chat never claims a crash that has been resolved. |
 
 ## 7. Testing
 
@@ -278,7 +327,13 @@ All added copy is English, matching every other string in the shell.
   into the path.
 - `ui/app/model/intent.test.ts` — `F6` fills an empty composer and moves focus; appends to
   rather than overwrites a non-empty draft; no-ops on `read-only` and on non-error phases.
-- `ui/workspace` — the action line renders only when the repair action is available.
+- `ui/preview` — `HostCrashPanel` renders both variants: `F5` live, and `F5` faint with its
+  own reason when retry is unavailable. The error text wraps rather than truncating at the
+  200-character bound the runtime enforces.
+- `ui/workspace` — the composer attach line picks the retry-aware wording; the status bar
+  carries the ` HALTED ` chip and marks `F5` `dis` in the no-retry variant.
+- `ui/chat` — the ephemeral crash notice renders below the persisted tail and clears when the
+  preview leaves the error phases.
 - End-to-end — a page that throws at render drives the UI to the error panel rather than an
   indefinite `preparing preview…`. This is the regression test for the reported defect.
 
@@ -299,6 +354,12 @@ All added copy is English, matching every other string in the shell.
 - `src/ui/mirror/model/mirror.ts`
 - `src/ui/actions/model/registry.ts`
 - `src/ui/app/model/intent.ts`
-- `src/ui/preview/ui/ErrorPanel.tsx`, `src/ui/preview/model/repair-prompt.ts` (new)
+- `src/ui/preview/ui/ErrorPanel.tsx` (unchanged — the Gate state),
+  `src/ui/preview/ui/HostCrashPanel.tsx` (new),
+  `src/ui/preview/model/repair-prompt.ts` (new)
 - `src/ui/workspace/model/attach.ts`, `src/ui/workspace/ui/Workspace.tsx`
-- `design/12-errors-edge-states.dc.html`, `design/termcraft-engine.js` (`wsBrokenSource`)
+- `src/ui/chat/ui/ChatScrollback.tsx`, `src/entities/chat/model/decode.ts`
+- `design/12-errors-edge-states.dc.html`, `design/termcraft-engine.js` (`wsHostCrash`,
+  and `wsBrokenSource` for the Gate state it stays distinct from)
+- `design-prompts/claude-design-prompt-8.md` — the brief that commissioned the screens
+  (that directory is gitignored, so this one is local working material, not a repo artifact)
