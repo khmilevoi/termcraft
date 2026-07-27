@@ -347,8 +347,15 @@ export interface SupervisorEvent {
    * Without these the Kernel can say a preview stopped but never why, and the repair message
    * the UI offers has nothing to quote.
    *
-   * §13-safe as-is: `session.ts` already bounds the reason to 200 characters and it carries
-   * no path, environment value or source content.
+   * §13-safe, but NOT for one single reason — the text arrives by three different routes and
+   * each is bounded on its own terms:
+   *   - a failure the host itself reported: `session.ts`'s `mapHostError` slices the envelope's
+   *     reason to 200 characters (`DESIGN_RENDER_FAILED` and every `ProtocolError`);
+   *   - a failure the OS reported: `spawn.ts` and `transport.ts` build the reason from
+   *     `osFailureReason`, which relays the structured code and syscall and never the throw's
+   *     own message — libuv concatenates the offending absolute path into that message;
+   *   - everything else: literal strings written in this repository (timeouts, `CHILD_EXITED`).
+   * No route relays free-form OS or host text verbatim, which is what §13 actually forbids.
    */
   readonly failureCode?: string;
   readonly failureMessage?: string;

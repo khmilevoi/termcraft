@@ -355,11 +355,21 @@ describe("createHostSupervisor — restart budget + backoff + circuit (§10, §1
     const opened = events.find((e) => e.type === "circuitOpened");
     expect(opened).toBeDefined();
     expect(opened?.failureCode).toBe("DESIGN_RENDER_FAILED");
-    expect(opened?.failureMessage).toBe(
-      "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
-    );
+    expect(opened?.failureMessage).toBe("PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function");
     // The policy reason is still reported — the two are different facts.
     expect(opened?.reason).toContain("restart budget exhausted");
+
+    // "populated on circuitOpened ONLY" (types.ts's contract) is what lets a consumer treat
+    // the presence of failureCode as the signal that a preview stopped for good. The three
+    // backoff events on the way here carry the same `error`, so nothing but the emit site's
+    // own branching keeps them clean — assert it rather than trust it.
+    const backoffs = events.filter((e) => e.type === "backoff");
+    expect(backoffs).toHaveLength(3);
+    for (const event of backoffs) {
+      expect(event.failureCode).toBeUndefined();
+      expect(event.failureMessage).toBeUndefined();
+    }
+
     await supervisor.stopAll();
   });
 });

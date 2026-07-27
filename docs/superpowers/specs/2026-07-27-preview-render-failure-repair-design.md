@@ -111,10 +111,68 @@ that class of failure surfaces immediately.
 (`PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function…`) stays inside the
 `SupervisorError` that `onIncarnationFatal` (`supervisor.ts:149`) already holds.
 
-The text is bounded to 200 characters at `session.ts:462` and carries no paths, no
-environment values and no source contents, so it satisfies host-supervision §13's diagnostic
-bound as it stands. `SupervisorEventV1` (`src/core/ports/host-supervisor.ts:46-56`) mirrors
-the same two fields, and `src/host/adapters/host-supervisor.ts` forwards them.
+**Correction (2026-07-27, Task 1 review).** An earlier revision of this section claimed the
+text "is bounded to 200 characters at `session.ts:462` and carries no paths". The first half
+holds only for one of three routes, and the second half was simply false.
+
+`session.ts:462` is inside `mapHostError`, which maps the *host's own* control-envelope
+failure — `DESIGN_RENDER_FAILED` and every `ProtocolError`. Two other codes reach the same
+event by other routes and were never touched by it: `SPAWN_FAILED` (`spawn.ts:54-58`,
+`:75-79`) and `TRANSPORT_ERROR` (`transport.ts:38`, `:71-74`) both built their reason from the
+raw OS message. Neither is in the deterministic set (`restart-policy.ts:19-23`), so four of
+either opens the circuit exactly like a render failure. libuv concatenates the offending
+absolute path into that message, so an unwritable temp directory produced
+
+```
+SPAWN_FAILED: scratch dir creation failed: EACCES: permission denied, mkdtemp 'C:\Users\<user>\AppData\Local\Temp\termcraft-host-XXXXXX'
+```
+
+— an absolute path inside a diagnostic that promises none, unbounded in length, on its way to
+a user-visible `safeMessage`.
+
+**The fix is at the source, not on the UI path.** `osFailureReason`
+(`src/host/supervisor/model/errors.ts`) relays libuv's *structured* fields — `EACCES
+(mkdtemp)` — and never the throw's own message; when a throw carries no structured code it
+relays nothing at all rather than guessing where free-form text stops being safe. The original
+throw survives untouched on the `SupervisorError`'s `cause`, which the debug log records and
+the §13 sink never reads. Both call sites now go through it. This was a live §13 violation in
+the supervisor's existing diagnostic sink, independent of this feature; scrubbing it further
+downstream would have left the sink itself still leaking.
+
+With that, all three routes are bounded on their own terms and the §13 claim is true —
+`types.ts`'s comment on the fields states which route is bounded by what, rather than
+asserting one blanket reason.
+
+`SupervisorEventV1` (`src/core/ports/host-supervisor.ts:46-58`) mirrors the same two fields,
+and `src/host/adapters/host-supervisor.ts` forwards them.
+
+### 3.2.1 Two failure classes, two screens
+
+The same review exposed a second, larger problem the path leak was only a symptom of: **a
+failed spawn is not the page's fault.** `wsHostCrash` says `✗ design threw while rendering`
+and offers `F6` to ask the agent to fix `.termcraft/pages/<slug>/page.tsx`. For a
+`SPAWN_FAILED`, a `HANDSHAKE_TIMEOUT`, a `RUNTIME_INTEGRITY_MISMATCH` or a broken pipe that
+headline is a false accusation and the repair offer promises a fix that cannot land — no edit
+to that file makes a temp directory writable.
+
+The tally lies too. Budgeted failures give four incarnations and three restarts, which is what
+`mounted 4× · 3 automatic restarts, all identical` states. But every `ProtocolError` is
+classified deterministic (`restart-policy.ts:31-36`) and opens the circuit on the **first**
+failure: one incarnation, zero restarts.
+
+So the circuit-open state branches on the failing incarnation's code:
+
+- **`DESIGN_RENDER_FAILED`** — the page threw. `wsHostCrash`, `F5` retry and `F6` repair,
+  exactly as designed in iteration 8.
+- **every other code** — the host never got as far as the page. A separate screen, no repair
+  offer.
+
+The second screen's visual answer is commissioned as design iteration 9
+(`design-prompts/claude-design-prompt-9.md`); its brief is deliberately written in the same
+genre as iteration 8's — it states the facts the runtime can supply and leaves the frame to
+the design. **Until that iteration lands, the second branch has no drawn frame**, and the
+tasks that render it are blocked on it. The branch's *mechanism* — carrying the class from the
+supervisor to the UI — is not blocked and is specified in §3.3.
 
 ### 3.3 `core/kernel` — subscribe and correlate
 
@@ -138,6 +196,24 @@ transition is needed.
 `details` carries `attempts` and `pageSlug`. It does **not** carry the source path:
 `canonicalPageSourcePath` is absolute (`preview-export.ts:157`), and an absolute path belongs
 neither in a §13 diagnostic nor in a message the user will read in chat.
+
+**Carrying §3.2.1's failure class.** `details` also carries `hostFailureCode` — the supervisor
+event's `failureCode` verbatim, e.g. `DESIGN_RENDER_FAILED` or `SPAWN_FAILED`. This needs no
+protocol change: `HOST_CIRCUIT_OPEN` is one of the 28 codes §11.2 leaves on the general
+bounded-details record (`failure.ts:143-158`), and `failureDetailsV1Schema` accepts any string
+value under its key and length caps. The alternative — a new field on
+`PreviewCircuitOpenedPayloadV1` — would edit a payload whose shape the protocol design fixes
+verbatim at §9/KCC:824, for a fact `details` already exists to carry.
+
+The class is *not* re-derived in the UI. The UI reads one string and branches; the mapping
+from supervisor code to screen lives here and at the one Kernel call site, so the two screens
+cannot drift apart from each other.
+
+`failureCode` is optional on `SupervisorEventV1`, and the Kernel must behave when it is
+missing. The production emitter (`supervisor.ts:159-168`, the only one) always populates it,
+so absence means a fake, a future emitter, or a port implementation that does not — never a
+known-but-unnamed code. Absence therefore takes the **non-blaming** branch: accusing the page
+requires positive evidence that the page is what failed, and `undefined` is not evidence.
 
 Downstream nothing changes: `ui/mirror` already folds `preview.circuitOpened`
 (`mirror.ts:517-528`) and `ErrorPanel` already renders that phase.
