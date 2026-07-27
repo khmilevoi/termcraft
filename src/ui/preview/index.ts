@@ -32,5 +32,7 @@ export type { EmptyStateProps } from "./ui/EmptyState";
 export { EmptyState } from "./ui/EmptyState";
 export type { ErrorPanelProps } from "./ui/ErrorPanel";
 export { ErrorPanel } from "./ui/ErrorPanel";
+export type { HostCrashPanelProps } from "./ui/HostCrashPanel";
+export { HostCrashPanel } from "./ui/HostCrashPanel";
 export type { EnlargePlaceholderProps, EnlargePlaceholderSize } from "./ui/EnlargePlaceholder";
 export { EnlargePlaceholder } from "./ui/EnlargePlaceholder";
