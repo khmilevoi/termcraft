@@ -199,7 +199,20 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
     // and "the command was rejected downstream" — invisible otherwise, since the shell owns the
     // terminal and no key path reports anything on screen.
     trace("ui.onKey", {
-      key: { name: key.name, sequence: key.sequence, ctrl: key.ctrl },
+      // EVERY modifier the terminal reported, not just `ctrl` (HANDOFF Finding 3). Recording one
+      // modifier made "the terminal swallowed the chord" and "no chord was pressed" the same
+      // line in the log, and a whole finding was drawn from that ambiguity. `raw` is the bytes
+      // as received, which is the only way to tell a CSI-encoded chord from a bare arrow.
+      key: {
+        name: key.name,
+        sequence: key.sequence,
+        raw: key.raw,
+        ctrl: key.ctrl,
+        shift: key.shift,
+        meta: key.meta,
+        option: key.option,
+        eventType: key.eventType,
+      },
       context,
       intent,
       // The two mirror fields `deriveScreen` actually branches on. Logged here rather than
