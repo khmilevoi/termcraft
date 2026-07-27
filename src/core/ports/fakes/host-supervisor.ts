@@ -24,6 +24,13 @@ export type HostSupervisorCall =
 export interface FakeHostSupervisorPort extends HostSupervisorPort {
   readonly calls: readonly HostSupervisorCall[];
   failNext(method: HostSupervisorFailableMethod, failure: FailureDtoV1): void;
+  /**
+   * Deliver a lifecycle diagnostic to every `onEvent` subscriber, as the real supervisor's
+   * own sink does. `preview()`/`close()` already emit `spawning`/`ready`/`stopped` themselves;
+   * this is the seam for the ones no fake call produces — above all `circuitOpened`, which a
+   * real host reaches only by crash-looping a live child.
+   */
+  emit(event: SupervisorEventV1): void;
 }
 
 export function createFakeHostSupervisorPort(): FakeHostSupervisorPort {
@@ -111,7 +118,7 @@ export function createFakeHostSupervisorPort(): FakeHostSupervisorPort {
     return () => listeners.delete(listener);
   }
 
-  return { preview, liveCount, stopAll, onEvent, calls, failNext };
+  return { preview, liveCount, stopAll, onEvent, emit, calls, failNext };
 }
 
 type _Conforms = AssertConforms<HostSupervisorPort, FakeHostSupervisorPort>;

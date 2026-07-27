@@ -57,11 +57,13 @@ import {
   eventPayloadV1SchemaByKind,
   isUuidv7,
 } from "core/protocol";
+import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 
 import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
 import { createHandlerRegistry, totalHandlers } from "./handlers";
+import { hostCircuitOpenedEvents } from "./handlers/preview-export";
 import type { HandlerContext, SelectionSnapshotV1, TurnCancelHandle } from "./handlers/types";
 import { publishOperationEvents } from "./operation-publish";
 
@@ -820,6 +822,64 @@ export function createKernel(deps: KernelDeps): Kernel {
       return id;
     }
 
+    /**
+     * THE MISSING CONSUMER (defect fix, 2026-07-27). `HostSupervisorPort.onEvent` had no
+     * production subscriber at all — only tests — so a live session whose host crash-looped
+     * latched its circuit open in silence: the mirror stayed `ready`, no frame ever arrived,
+     * and the Workspace fell through to `preparing preview…` forever. This is the wiring the
+     * port's own header always named: "phase 6 wires this onto the Kernel event channel."
+     *
+     * ONLY `circuitOpened` is mapped. `backoff` is deliberately left a pure diagnostic: a
+     * restart that succeeds must not have flashed an error on the way, and the supervisor's
+     * 250/500/1000 ms backoff means the whole cycle is over in about two seconds, during which
+     * `preparing preview…` is an accurate statement.
+     *
+     * Correlation is by `(pageSlug, sourceHashPrefix)` against the spec the live session was
+     * established with. A non-matching key belongs to another session — or to one this page has
+     * already replaced — and is dropped rather than attributed to whatever happens to be live.
+     *
+     * `bind` because the supervisor invokes this listener from OUTSIDE this Kernel's Reatom
+     * frame (a child process died; no dispatch is in flight), and the work it launches applies
+     * real preview-machine transitions. Same reason `events` above is `bind(eventBus.subscribe)`.
+     */
+    const unsubscribeSupervisor = deps.hostSupervisor.onEvent(
+      bind((event) => {
+        if (event.type !== "circuitOpened") return;
+        const spec = previewSessionCommands.currentSpec();
+        const previewSessionId = currentPreviewSessionId();
+        if (spec === null || previewSessionId === null) {
+          trace("kernel.preview.hostCircuitOpened", { step: "dropped", reason: "no live session" });
+          return;
+        }
+        if (
+          event.pageSlug !== spec.pageSlug ||
+          !spec.sourceHash.startsWith(event.sourceHashPrefix)
+        ) {
+          trace("kernel.preview.hostCircuitOpened", { step: "dropped", reason: "foreign key" });
+          return;
+        }
+        const pageSlug = parsePageSlug(spec.pageSlug);
+        if (pageSlug instanceof Error) {
+          // Defensive only: the spec was built from a parsed slug on the way in. Reported
+          // rather than swallowed — a slug that stopped parsing is a real inconsistency.
+          trace("kernel.preview.hostCircuitOpened", { step: "dropped", reason: "unparsable slug" });
+          return;
+        }
+        // `?? reason` covers a `SupervisorEventV1` whose optional `failureMessage` is absent.
+        // The production emitter always populates it, so this only runs for another port
+        // implementation — never for an invented string beyond the final literal.
+        const safeMessage =
+          event.failureMessage ?? event.reason ?? "the preview host stopped unexpectedly";
+        launchOperation("kernel.preview.hostCircuitOpened", async () =>
+          hostCircuitOpenedEvents(handlerContext, previewSessionId, pageSlug, spec.sourceHash, {
+            attempts: event.attempts ?? 1,
+            safeMessage,
+            hostFailureCode: event.failureCode,
+          }),
+        );
+      }),
+    );
+
     // kernel-assembly Task 16 — the Kernel's own frame-token authority surface. Both are
     // plain, synchronous delegations to `previewSessionCommands` (itself touching only
     // plain closures, never a Reatom atom — see that module's own header), so neither
@@ -838,6 +898,10 @@ export function createKernel(deps: KernelDeps): Kernel {
     async function close(): Promise<void> {
       if (closed) return;
       closed = true;
+      // Before anything else: a disposed Kernel must stop receiving supervisor events. The
+      // teardown below tears down the preview session, which makes the supervisor emit — and
+      // a listener still attached would try to drive machines this frame is releasing.
+      unsubscribeSupervisor();
       const preview = activePreview;
       // Routed through `setActivePreviewSession(null)` (not a bare `activePreview = null`
       // assignment) so this teardown path ALSO invalidates `previewSessionCommands`'s own

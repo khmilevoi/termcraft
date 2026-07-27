@@ -17,6 +17,7 @@ import type {
 } from "core/ports";
 import { PAGE_META_EXTRACTOR_VERSION } from "core/ports";
 import {
+  type FakeHostSupervisorPort,
   createFakeAgentBackend,
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
@@ -625,5 +626,156 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     expect(finalPayload.models.turn.activeTurnId).toBeNull();
     expect(finalPayload.models.export.phase).toBe("idle");
     unsubscribeFinal();
+  });
+});
+
+/**
+ * The reported defect's regression gate at the Kernel boundary. `HostSupervisorPort.onEvent`
+ * had NO production subscriber at all, so a live session whose host crash-looped latched its
+ * circuit open in silence: the mirror stayed `ready`, no frame ever arrived, and the Workspace
+ * sat on `preparing preview…` forever. This drives the whole seam through the real Kernel —
+ * subscribe, correlate by `(pageSlug, sourceHashPrefix)`, publish — rather than calling the
+ * handler directly as `preview-export.test.ts` does.
+ */
+describe("the Kernel's supervisor subscription (preview render-failure repair, 2026-07-27)", () => {
+  const RENDER_CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+
+  /** Drives `project.open -> project.setTrust -> preview.selectPage` and returns a LIVE preview. */
+  async function livePreviewKernel() {
+    const chatStore = createChatMutationsStub();
+    const deps = buildDeps(
+      chatStore,
+      createFakeGateRunner(),
+      createFakeAgentRegistry([createFakeAgentBackend()]),
+      createFakeExportPublish(),
+    );
+    const kernel = createKernel(deps);
+
+    const openResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: "0",
+      kind: "project.open",
+      payload: { root: "/test-root" },
+    });
+    if (openResult instanceof Error) throw openResult;
+
+    const readyEnvelope = await waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.finishOpen",
+    );
+    const trustResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: readyEnvelope.stateRevision,
+      kind: "project.setTrust",
+      payload: { trust: "trusted", workspaceIdentity: "ws-1" },
+    });
+    if (trustResult instanceof Error) throw trustResult;
+    if (trustResult.status !== "accepted") throw new Error("project.setTrust was not accepted");
+
+    const sessionReady = waitForEvent(
+      kernel,
+      (envelope) => envelope.kind === "preview.sessionReady",
+    );
+    const selectResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: trustResult.resultingRevision,
+      kind: "preview.selectPage",
+      payload: { pageSlug: HOME },
+    });
+    if (selectResult instanceof Error) throw selectResult;
+    await sessionReady;
+
+    return { kernel, supervisor: deps.hostSupervisor as FakeHostSupervisorPort };
+  }
+
+  test("a circuitOpened for the live session publishes preview.circuitOpened carrying the host's own message, code and attempt count", async () => {
+    const { kernel, supervisor } = await livePreviewKernel();
+
+    const opened = waitForEvent(kernel, (envelope) => envelope.kind === "preview.circuitOpened");
+    supervisor.emit({
+      type: "circuitOpened",
+      key: `${HOME}@${HOME_SOURCE_HASH.slice(0, 8)}`,
+      sessionId: "fake-session-1",
+      pageSlug: HOME,
+      sourceHashPrefix: HOME_SOURCE_HASH.slice(0, 8),
+      attempts: 4,
+      reason: "restart budget exhausted (3 in 60000ms)",
+      failureCode: "DESIGN_RENDER_FAILED",
+      failureMessage: RENDER_CRASH,
+    });
+
+    const envelope = await opened;
+    const payload = eventPayloadV1SchemaByKind["preview.circuitOpened"].parse(envelope.payload);
+    expect(payload.pageSlug).toBe(HOME);
+    expect(payload.attempts).toBe(4);
+    expect(payload.finalFailure.code).toBe("HOST_CIRCUIT_OPEN");
+    expect(payload.finalFailure.safeMessage).toBe(RENDER_CRASH);
+    expect(payload.finalFailure.details.hostFailureCode).toBe("DESIGN_RENDER_FAILED");
+  });
+
+  test("a foreign key publishes nothing — a crash belonging to another session is never attributed to whatever is live", async () => {
+    const { kernel, supervisor } = await livePreviewKernel();
+
+    const envelopes: EventEnvelopeV1[] = [];
+    const unsubscribe = kernel.events((envelope) => envelopes.push(envelope));
+    if (unsubscribe instanceof Error) throw unsubscribe;
+
+    supervisor.emit({
+      type: "circuitOpened",
+      key: "other-page@deadbeef",
+      sessionId: "fake-session-99",
+      pageSlug: "other-page",
+      sourceHashPrefix: "deadbeef",
+      attempts: 4,
+      reason: "restart budget exhausted (3 in 60000ms)",
+      failureCode: "DESIGN_RENDER_FAILED",
+      failureMessage: "boom",
+    });
+    // Same page, a DIFFERENT source — the session that crashed has already been replaced.
+    supervisor.emit({
+      type: "circuitOpened",
+      key: `${HOME}@ffffffff`,
+      sessionId: "fake-session-98",
+      pageSlug: HOME,
+      sourceHashPrefix: "ffffffff",
+      attempts: 4,
+      reason: "restart budget exhausted (3 in 60000ms)",
+      failureCode: "DESIGN_RENDER_FAILED",
+      failureMessage: "boom",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(envelopes.filter((e) => e.kind === "preview.circuitOpened")).toHaveLength(0);
+    unsubscribe();
+  });
+
+  test("backoff is not mapped — a restart that succeeds must not have flashed an error on the way", async () => {
+    const { kernel, supervisor } = await livePreviewKernel();
+
+    const envelopes: EventEnvelopeV1[] = [];
+    const unsubscribe = kernel.events((envelope) => envelopes.push(envelope));
+    if (unsubscribe instanceof Error) throw unsubscribe;
+
+    supervisor.emit({
+      type: "backoff",
+      key: `${HOME}@${HOME_SOURCE_HASH.slice(0, 8)}`,
+      sessionId: "fake-session-1",
+      pageSlug: HOME,
+      sourceHashPrefix: HOME_SOURCE_HASH.slice(0, 8),
+      attempt: 2,
+      delayMs: 500,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(envelopes.filter((e) => e.kind === "preview.circuitOpened")).toHaveLength(0);
+    unsubscribe();
   });
 });

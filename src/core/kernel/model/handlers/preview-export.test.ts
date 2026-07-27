@@ -61,7 +61,7 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
-import { exportHandlers, previewHandlers } from "./preview-export";
+import { exportHandlers, hostCircuitOpenedEvents, previewHandlers } from "./preview-export";
 import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
 
 function slug(value: string) {
@@ -1256,5 +1256,123 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
     // Capture never began — no export.started, no export.progress, nothing else.
     const published = harness.getPublishedEvents();
     expect(published).toHaveLength(0);
+  });
+});
+
+/**
+ * The reported defect's actual fix. Every describe above reaches `circuit-open` through an
+ * ESTABLISHMENT failure — the `hostSupervisor.preview()` CALL itself returned
+ * `HOST_CIRCUIT_OPEN`, so a command was in flight to attribute it to. This one covers the
+ * opposite arrival: a session that established fine and crash-looped later, whose failure
+ * reaches the Kernel unsolicited over `HostSupervisorPort.onEvent`.
+ */
+describe("hostCircuitOpenedEvents — a LIVE session's host crash-loop", () => {
+  const RENDER_CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+
+  async function liveHarness() {
+    const deps = buildDeps();
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    return harness;
+  }
+
+  test("applies sessionFailed then openCircuit and publishes preview.circuitOpened carrying the host's own message and the real attempt count", async () => {
+    const harness = await liveHarness();
+
+    const events = hostCircuitOpenedEvents(
+      harness.handlerContext,
+      uuidv7(),
+      HOME,
+      HOME_SOURCE_HASH,
+      {
+        attempts: 4,
+        safeMessage: RENDER_CRASH,
+        hostFailureCode: "DESIGN_RENDER_FAILED",
+      },
+    );
+
+    expect(harness.handlerContext.machines.preview.phase()).toBe("circuit-open");
+
+    const actions = events
+      .filter((e) => e.kind === "kernel.stateChanged")
+      .map((e) => eventPayloadV1SchemaByKind["kernel.stateChanged"].parse(e.payload).action);
+    expect(actions).toEqual(["kernel.preview.sessionFailed", "kernel.preview.openCircuit"]);
+
+    const opened = events.find((e) => e.kind === "preview.circuitOpened");
+    expect(opened).toBeDefined();
+    const payload = eventPayloadV1SchemaByKind["preview.circuitOpened"].parse(opened!.payload);
+    // The supervisor's REAL tally, not `KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND`'s stand-in 1.
+    expect(payload.attempts).toBe(4);
+    expect(payload.finalFailure.code).toBe("HOST_CIRCUIT_OPEN");
+    expect(payload.finalFailure.safeMessage).toBe(RENDER_CRASH);
+    expect(payload.retryCapability).toEqual({ available: true });
+  });
+
+  test("carries the failing incarnation's code in details, so the UI branches on evidence rather than re-deriving it", async () => {
+    const harness = await liveHarness();
+
+    const events = hostCircuitOpenedEvents(
+      harness.handlerContext,
+      uuidv7(),
+      HOME,
+      HOME_SOURCE_HASH,
+      {
+        attempts: 1,
+        safeMessage: "scratch dir creation failed: EACCES (mkdtemp)",
+        hostFailureCode: "SPAWN_FAILED",
+      },
+    );
+
+    const opened = events.find((e) => e.kind === "preview.circuitOpened");
+    const payload = eventPayloadV1SchemaByKind["preview.circuitOpened"].parse(opened!.payload);
+    expect(payload.finalFailure.details.hostFailureCode).toBe("SPAWN_FAILED");
+    // A deterministic ProtocolError opens the circuit on the FIRST failure — one incarnation,
+    // zero restarts. The count is reported as measured, never rounded up to the budget.
+    expect(payload.attempts).toBe(1);
+  });
+
+  test("omits hostFailureCode entirely when the event carried none — absent is not DESIGN_RENDER_FAILED", async () => {
+    const harness = await liveHarness();
+
+    const events = hostCircuitOpenedEvents(
+      harness.handlerContext,
+      uuidv7(),
+      HOME,
+      HOME_SOURCE_HASH,
+      {
+        attempts: 4,
+        safeMessage: "the preview host stopped",
+        hostFailureCode: undefined,
+      },
+    );
+
+    const opened = events.find((e) => e.kind === "preview.circuitOpened");
+    const payload = eventPayloadV1SchemaByKind["preview.circuitOpened"].parse(opened!.payload);
+    expect("hostFailureCode" in payload.finalFailure.details).toBe(false);
+  });
+
+  test("returns no events when the machine cannot legally take sessionFailed", () => {
+    const harness = buildTestContext(buildDeps());
+    // `disabled` — sessionFailed has no edge from here, so a late or duplicate circuitOpened
+    // is dropped rather than published a second time.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("disabled");
+
+    const events = hostCircuitOpenedEvents(
+      harness.handlerContext,
+      uuidv7(),
+      HOME,
+      HOME_SOURCE_HASH,
+      {
+        attempts: 4,
+        safeMessage: "boom",
+        hostFailureCode: "DESIGN_RENDER_FAILED",
+      },
+    );
+
+    expect(events).toEqual([]);
+    expect(harness.handlerContext.machines.preview.phase()).toBe("disabled");
   });
 });

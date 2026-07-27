@@ -551,15 +551,13 @@ function mintPlaceholderNonce(): string {
  * The value is a real, measured Kernel-side count; only its SCOPE is narrow, and this comment is
  * where that scope is stated so no consumer mistakes it for the host's restart budget.
  *
- * THE HOST'S OWN COUNT REMAINS OUT OF REACH, and deliberately so rather than approximated:
- * `toHostFailureDto` (`host/adapters/host-supervisor.ts`) puts only `supervisorErrorCode` into
- * `FailureDtoV1.details`, and `core` may not import `host` to read `MAX_AUTOMATIC_RESTARTS`
- * (this project's layering — `host` implements `core/ports`, never the reverse).
- * `SupervisorEventV1`'s `type: "circuitOpened"` variant (`core/ports/host-supervisor.ts`) does
- * carry a real host-side `attempts`, but only over the separate `onEvent` diagnostic channel;
- * correlating that stream back to this specific command is a materially larger change. Until it
- * exists, publishing this Kernel-scoped count is honest and publishing the host's would be a
- * guess.
+ * SCOPED TO THE ESTABLISH PATH ONLY (2026-07-27). This comment used to close by saying the
+ * host's own count "remains out of reach" because correlating the `onEvent` diagnostic stream
+ * back to a specific command was a materially larger change. That change has since landed:
+ * {@link hostCircuitOpenedEvents} is fed by the Kernel's supervisor subscription and passes the
+ * supervisor's REAL `attempts` explicitly. So this constant is now the default for exactly one
+ * caller — `failSession`'s branch, where the `HostSupervisorPort.preview()` call itself came
+ * back `HOST_CIRCUIT_OPEN` and one Kernel-side attempt is genuinely all there was.
  */
 const KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND = 1;
 
@@ -587,6 +585,7 @@ function openCircuitEvents(
   sourceHash: Sha256Hex,
   correlation: EventCorrelationV1,
   finalFailure: FailureDtoV1,
+  attempts: number = KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND,
 ): readonly PublishableEventV1[] {
   const openOutcome = context.machines.preview.apply("kernel.preview.openCircuit");
   if (openOutcome.kind !== "changed") {
@@ -624,7 +623,7 @@ function openCircuitEvents(
       previewSessionId,
       pageSlug,
       sourceHash,
-      attempts: KERNEL_ESTABLISH_ATTEMPTS_PER_COMMAND,
+      attempts,
       finalFailure,
       retryCapability,
     },
@@ -632,6 +631,79 @@ function openCircuitEvents(
   };
   events.push(circuitOpenedEvent);
   return events;
+}
+
+/** What a live session's crash-loop reports, as the Kernel's supervisor subscription read it. */
+export interface HostCircuitOpenedInput {
+  /** The supervisor's own tally of failed incarnations: 4 for a budgeted loop, 1 for a deterministic failure. */
+  readonly attempts: number;
+  /** The failing incarnation's bounded, §13-safe error text. */
+  readonly safeMessage: string;
+  /**
+   * The failing incarnation's `SupervisorErrorCode` / `ProtocolViolationCode`, which decides
+   * WHICH screen the UI draws (spec §3.2.1). `undefined` when the event carried none — that is
+   * not the same as `DESIGN_RENDER_FAILED`, and the detail is then omitted rather than guessed.
+   */
+  readonly hostFailureCode: string | undefined;
+}
+
+/**
+ * A LIVE preview session whose host crash-looped until the supervisor latched its circuit open
+ * (`host/supervisor/model/supervisor.ts`'s `circuitOpened`).
+ *
+ * DISTINCT FROM THE ESTABLISH-TIME PATH above. There the `HostSupervisorPort.preview` CALL
+ * itself returned `HOST_CIRCUIT_OPEN`, so a command was in flight to attribute the failure to.
+ * Here the command succeeded long ago and the failure arrives unsolicited over the supervisor's
+ * event channel — which is why this is its own entry point rather than another branch of
+ * `selectCurrentSource`. Until it existed nothing in production consumed
+ * `HostSupervisorPort.onEvent` at all, so a live session's crash-loop was invisible to
+ * everything above the supervisor and the Workspace sat on `preparing preview…` forever.
+ *
+ * `sessionFailed` is applied first — legal from `live` (`preview-machine.ts`'s table) — and its
+ * legality IS the guard: from `circuit-open` it is illegal, which is exactly what makes a
+ * repeated `circuitOpened` for the same key a no-op instead of a second publication.
+ *
+ * `finalFailure.code` is `HOST_CIRCUIT_OPEN` because the operational-failure registry is closed
+ * at 30 members (`core/protocol/model/failure.ts`); the host's own message is what `safeMessage`
+ * carries and its own code is what `details.hostFailureCode` carries.
+ */
+export function hostCircuitOpenedEvents(
+  context: HandlerContext,
+  previewSessionId: UUIDv7,
+  pageSlug: PageSlug,
+  sourceHash: Sha256Hex,
+  input: HostCircuitOpenedInput,
+): readonly PublishableEventV1[] {
+  const failedOutcome = context.machines.preview.apply("kernel.preview.sessionFailed");
+  if (failedOutcome.kind !== "changed") return [];
+
+  const correlation: EventCorrelationV1 = { previewSessionId };
+  const finalFailure: FailureDtoV1 = {
+    code: "HOST_CIRCUIT_OPEN",
+    // The circuit latches until a user `retry` clears the key (`restart-policy.ts`'s own
+    // `retry`), and `F5` is bound to exactly that — so this failure IS retryable, unlike the
+    // establish-time one where the supervisor refused the call outright.
+    retryable: true,
+    safeMessage: input.safeMessage,
+    details: {
+      pageSlug,
+      attempts: input.attempts,
+      ...(input.hostFailureCode === undefined ? {} : { hostFailureCode: input.hostFailureCode }),
+    },
+  };
+
+  return [
+    previewStateChangedEvent("kernel.preview.sessionFailed", failedOutcome, correlation),
+    ...openCircuitEvents(
+      context,
+      previewSessionId,
+      pageSlug,
+      sourceHash,
+      correlation,
+      finalFailure,
+      input.attempts,
+    ),
+  ];
 }
 
 /**
