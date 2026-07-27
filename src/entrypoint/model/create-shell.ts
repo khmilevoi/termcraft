@@ -21,6 +21,7 @@ import {
   createBunSpawn,
   createSystemClock as createHostClock,
   createHostSpawnCommand,
+  sweepStaleScratchDirs,
 } from "host/supervisor";
 import type { SpawnFn } from "host/supervisor";
 import { systemClock } from "infrastructure/clock";
@@ -143,6 +144,10 @@ async function interactiveShell(
   const srcRoot = deps.srcRoot ?? Bun.main;
   const spawnCommand = createHostSpawnCommand({ execPath, srcRoot });
   const spawn = deps.spawn ?? createBunSpawn();
+  // Once per process, and ONLY on the production spawn path: a test that injects its own `spawn`
+  // has no host children and must never reach into the real %TEMP%. Removes directories left by
+  // runs that died without reaping (HANDOFF Finding 5).
+  if (deps.spawn === undefined) sweepStaleScratchDirs();
   const hostClock = createHostClock();
 
   const hostSupervisorAdapter = createHostSupervisorAdapter({

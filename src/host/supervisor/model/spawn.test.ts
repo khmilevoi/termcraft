@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { SpawnedChild } from "../types";
 import { SupervisorError } from "./errors";
-import { buildChildEnv, createBunSpawn } from "./spawn";
+import { buildChildEnv, createBunSpawn, selectStaleScratchDirs } from "./spawn";
 
 const children: SpawnedChild[] = [];
 afterEach(async () => {
@@ -77,5 +77,32 @@ describe("createBunSpawn", () => {
     expect(code).toBe(0);
     expect(result.exitCode).toBe(0);
     expect(result.signalCode).toBeNull();
+  });
+});
+
+describe("selectStaleScratchDirs", () => {
+  const DAY = 24 * 60 * 60 * 1_000;
+  const now = 1_000 * DAY;
+
+  test("selects only this module's own directories, and only old ones", () => {
+    const stale = selectStaleScratchDirs(
+      [
+        { name: "termcraft-host-4zvjjo", mtimeMs: now - 2 * DAY },
+        { name: "termcraft-host-08Z6eW", mtimeMs: now - 60_000 },
+        { name: "termcraft-debug", mtimeMs: now - 90 * DAY },
+        { name: "some-other-tool-cache", mtimeMs: now - 90 * DAY },
+        { name: "termcraft-host-", mtimeMs: now - 90 * DAY },
+      ],
+      now,
+      DAY,
+    );
+
+    expect(stale).toEqual(["termcraft-host-4zvjjo"]);
+  });
+
+  test("a directory exactly at the age limit is not yet stale", () => {
+    expect(
+      selectStaleScratchDirs([{ name: "termcraft-host-abcdef", mtimeMs: now - DAY }], now, DAY),
+    ).toEqual([]);
   });
 });

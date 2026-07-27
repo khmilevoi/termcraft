@@ -2,7 +2,7 @@ export { SupervisorError } from "./model/errors";
 export type { SupervisorErrorCode } from "./model/errors";
 export { createSystemClock, createManualClock } from "./model/clock";
 export type { Clock, TimerHandle, ManualClock } from "./model/clock";
-export { buildChildEnv, createBunSpawn } from "./model/spawn";
+export { buildChildEnv, createBunSpawn, sweepStaleScratchDirs } from "./model/spawn";
 export { createHostSpawnCommand } from "./model/spawn-command";
 export { mintIdentity, mintNonce } from "./model/identity";
 export { createHostSession } from "./model/session";
