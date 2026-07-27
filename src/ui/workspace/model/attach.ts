@@ -38,11 +38,22 @@ export interface ComposerAttachInput {
    * duplicate source.
    */
   readonly slashOpen: boolean;
+  /**
+   * Set when the preview host has halted and its circuit latched open (design `wsHostCrash`'s
+   * own `attach`). `null`/omitted otherwise. Carries `retryAvailable` because the design words
+   * the line differently once `F5` is gone.
+   *
+   * OPTIONAL, unlike every field above: it is the one input that describes the PREVIEW rather
+   * than the composer's own surroundings, and it is the lowest-priority branch of all. Making it
+   * required would force fifteen unrelated fixtures to spell out a `null` that says nothing
+   * about what each of them is testing.
+   */
+  readonly previewCrashed?: null | { readonly retryAvailable: boolean };
 }
 
 /**
  * Derives the Composer's single meta line (design §3.1/§3.2), priority read-only → selection →
- * open pins → turn-time line → none:
+ * open pins → turn-time line → halted preview → none:
  * - **read-only** — the existing `read-only — Send disabled` line, `SHELL_PALETTE.red`.
  * - **selection present** — the design `wsSelect` chip (`chipTag`, glyph `▣`), e.g. `▣ gauge-cpu`.
  * - **no selection, open pins present** — `N open pins attached · sent next`, `amberHi` bold
@@ -62,6 +73,11 @@ export interface ComposerAttachInput {
  *   plainer `workspace(w,h,'gen')`/`drawChat` path (`:198-256`) shows no attach line at all for
  *   this state, only the faint placeholder — matching the same `03-workspace-generating.dc.html`
  *   prose: "Empty, it shows the faint ❯ generating… esc to cancel placeholder with no caret."
+ * - **no turn running and the preview host has halted** — `F6 writes the fix · or type your own`,
+ *   or `F6 writes the fix — retry unavailable` once `F5` is gone (`wsHostCrash`'s own `attach`,
+ *   `design/termcraft-engine.js`). Ranked LAST deliberately: every turn-time line above it must
+ *   win, because `⏎ send disabled — draft kept` contradicts a line offering to write something
+ *   the user can send.
  * - **none of the above** — `null` (Composer hides the line).
  *
  * GAP (finding §2.5, phase-8 Task 16, flagged not invented): design never draws open pins
@@ -111,9 +127,21 @@ export function deriveComposerAttach(
   const open = input.openPins.filter((pin) => pin.status === "open");
   if (open.length > 0)
     return { text: `${open.length} open pins attached · sent next`, fg: "amberHi" };
-  if (!input.turnRunning) return null;
-  if (input.slashOpen) return { text: "send refused — / still runs commands", fg: "amberHi" };
-  if (input.composerValue.length > 0)
-    return { text: "⏎ send disabled — draft kept", fg: "amberHi" };
+  if (input.turnRunning) {
+    if (input.slashOpen) return { text: "send refused — / still runs commands", fg: "amberHi" };
+    if (input.composerValue.length > 0)
+      return { text: "⏎ send disabled — draft kept", fg: "amberHi" };
+    return null;
+  }
+  // LAST on purpose: every branch above must win. `⏎ send disabled — draft kept` in particular
+  // directly contradicts a line offering to write something the user can send.
+  if (input.previewCrashed != null) {
+    return {
+      text: input.previewCrashed.retryAvailable
+        ? "F6 writes the fix · or type your own"
+        : "F6 writes the fix — retry unavailable",
+      fg: "amberHi",
+    };
+  }
   return null;
 }

@@ -774,3 +774,91 @@ describe("Workspace live-turn connection line (design termcraft-engine.js:568 he
     expect(text).toContain("❯ chat · working");
   });
 });
+
+describe("Workspace halted preview (design wsHostCrash)", () => {
+  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+
+  const circuitOpened = (opts?: { hostFailureCode?: string; retryAvailable?: boolean }) =>
+    event("preview.circuitOpened", {
+      previewSessionId: uuidv7(),
+      pageSlug: "main",
+      sourceHash: TEST_SHA,
+      attempts: 4,
+      finalFailure: {
+        code: "HOST_CIRCUIT_OPEN",
+        retryable: true,
+        safeMessage: CRASH,
+        details: {
+          pageSlug: "main",
+          attempts: 4,
+          ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
+        },
+      },
+      retryCapability:
+        opts?.retryAvailable === false
+          ? { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] }
+          : { available: true },
+    });
+
+  async function renderWith(applyCircuit: ReturnType<typeof circuitOpened>) {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(applyCircuit);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    return handle.capture().rows;
+  }
+
+  test("a page that threw renders the host-crash panel, not the Gate error panel", async () => {
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    expect(findRun(rows, "preview host · halted")).toBeDefined();
+    expect(findRun(rows, "✗ design threw while rendering")).toBeDefined();
+    expect(findRun(rows, "preview stopped after repeated failures")).toBeUndefined();
+    expect(allText(rows)).not.toContain("preparing preview…");
+  });
+
+  test("a host that never ran the page keeps the neutral panel — it must not be accused", async () => {
+    // AWAITING DESIGN ITERATION 9. Until its frame exists this stays on the panel that has
+    // always served the state; what this pins is that `wsHostCrash` is NOT reused here.
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "SPAWN_FAILED" }));
+    expect(findRun(rows, "✗ design threw while rendering")).toBeUndefined();
+    expect(findRun(rows, "preview stopped after repeated failures")).toBeDefined();
+  });
+
+  test("the status bar wears the HALTED chip, the render-crashed hint and both keys", async () => {
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    const text = allText(rows);
+    expect(text).toContain("HALTED");
+    expect(text).not.toContain("STATIC");
+    expect(findRun(rows, "render crashed")).toBeDefined();
+    expect(text).toContain("F5");
+    expect(text).toContain("F6");
+  });
+
+  test("the composer offers the repair key, worded for whether retry survives", async () => {
+    expect(
+      findRun(
+        await renderWith(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" })),
+        "F6 writes the fix · or type your own",
+      ),
+    ).toBeDefined();
+
+    expect(
+      findRun(
+        await renderWith(
+          circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED", retryAvailable: false }),
+        ),
+        "F6 writes the fix — retry unavailable",
+      ),
+    ).toBeDefined();
+  });
+});

@@ -244,4 +244,44 @@ describe("deriveComposerAttach — turn-time lines (finding §2.5, wsGenTyping/w
     });
     expect(result).toEqual({ text: "1 open pins attached · sent next", fg: "amberHi" });
   });
+
+  describe("the halted-preview line (design wsHostCrash's own attach)", () => {
+    const idle = {
+      readOnly: false,
+      selection: null,
+      activePageSlug: "main",
+      openPins: [],
+      turnRunning: false,
+      composerValue: "",
+      slashOpen: false,
+    } as const;
+
+    test("a crashed preview offers the repair key, retry-aware", () => {
+      expect(deriveComposerAttach({ ...idle, previewCrashed: { retryAvailable: true } })).toEqual({
+        text: "F6 writes the fix · or type your own",
+        fg: "amberHi",
+      });
+
+      expect(deriveComposerAttach({ ...idle, previewCrashed: { retryAvailable: false } })).toEqual({
+        text: "F6 writes the fix — retry unavailable",
+        fg: "amberHi",
+      });
+    });
+
+    test("a running turn outranks the crash line — it contradicts an offer to send", () => {
+      expect(
+        deriveComposerAttach({
+          ...idle,
+          turnRunning: true,
+          composerValue: "draft",
+          previewCrashed: { retryAvailable: true },
+        }),
+      ).toEqual({ text: "⏎ send disabled — draft kept", fg: "amberHi" });
+    });
+
+    test("omitting previewCrashed is the same as no crash", () => {
+      expect(deriveComposerAttach(idle)).toBeNull();
+      expect(deriveComposerAttach({ ...idle, previewCrashed: null })).toBeNull();
+    });
+  });
 });

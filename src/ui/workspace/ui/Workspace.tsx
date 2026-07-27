@@ -20,9 +20,11 @@ import {
   EmptyState,
   ErrorPanel,
   FrameView,
+  HostCrashPanel,
   PreviewOverlays,
   acknowledgeFrame,
   frameLocalPoint,
+  isDesignRenderFailure,
   requestGeometry,
 } from "ui/preview";
 import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
@@ -46,10 +48,18 @@ import type { WorkspaceDeps } from "../types";
 const BOLD = shellAttrs({ bold: true });
 
 /** The status-bar mode chip for the current turn/fullscreen state (design mode-chip literals). */
-function modeChip(turn: TurnMirror, fullscreen: boolean, readOnly: boolean): StatusBarModeChip {
+function modeChip(
+  turn: TurnMirror,
+  fullscreen: boolean,
+  readOnly: boolean,
+  previewHalted: boolean,
+): StatusBarModeChip {
   if (readOnly) return { text: "READ-ONLY", fg: "amberHi", bg: "line" };
   if (turn.phase === "running") return { text: "GENERATING", fg: "bg", bg: "amber" };
   if (fullscreen) return { text: "FULLSCREEN", fg: "bg", bg: "amber" };
+  // `wsHostCrash`'s own chip: ` HALTED ` on red, not ` STATIC `. The design names it as one of
+  // the distinctions that must let this screen be told apart from the Gate one on sight.
+  if (previewHalted) return { text: "HALTED", fg: "bg", bg: "red" };
   return { text: "STATIC", fg: "amberHi", bg: "line" };
 }
 
@@ -86,6 +96,7 @@ function hintKeys(
   turn: TurnMirror,
   fullscreen: boolean,
   circuitOpen: boolean,
+  retryAvailable: boolean,
 ): readonly StatusBarHintKey[] {
   if (fullscreen) return fullscreenHint("windowed");
   // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
@@ -94,13 +105,18 @@ function hintKeys(
       ["⏎", "send", "dis"],
       ["esc", "cancel"],
     ];
-  // `preview.retry`'s key is advertised ONLY while the circuit is actually open — the one phase
-  // its capability guard admits it from. Showing it unconditionally would put a live-looking
-  // `F5 retry` in the status bar for the entire session, for a command the Kernel refuses in
-  // every other phase — the same "advertised but inert" trap this file's own `dis` state and the
-  // `q`/`/exit` divergence elsewhere exist to avoid.
-  return HOTKEYS.filter((action) => action.id !== "preview.retry" || circuitOpen).map((action) =>
-    hotkeyHint(action),
+  // `preview.retry` and `preview.repair` are advertised ONLY while the circuit is actually open
+  // — the one phase either acts in. Showing them unconditionally would put a live-looking
+  // `F5 retry`/`F6 repair` in the status bar for the entire session, for actions that do nothing
+  // in every other phase — the same "advertised but inert" trap this file's own `dis` state and
+  // the `q`/`/exit` divergence elsewhere exist to avoid.
+  return HOTKEYS.filter(
+    (action) => (action.id !== "preview.retry" && action.id !== "preview.repair") || circuitOpen,
+  ).map((action) =>
+    action.id === "preview.retry" && !retryAvailable
+      ? // `wsHostCrash`'s no-retry variant marks F5 `dis` in the key row while F6 stays live.
+        [hotkeyGlyph(action.key), action.label, "dis"]
+      : hotkeyHint(action),
   );
 }
 
@@ -233,6 +249,28 @@ function renderPreviewRegion(
     );
   }
   if (preview.phase === "circuit-open") {
+    // The PAGE threw — design `wsHostCrash`, which offers both F5 retry and F6 repair.
+    if (isDesignRenderFailure(preview.finalFailure)) {
+      return (
+        <HostCrashPanel
+          id="ws-preview-crash"
+          width={width}
+          height={height}
+          pageSlug={preview.pageSlug}
+          hostMessage={preview.finalFailure.safeMessage}
+          attempts={preview.attempts}
+          retryAvailable={preview.retryAvailable}
+        />
+      );
+    }
+    // The host never got as far as the page (spec §3.2.1) — a spawn failure, a handshake or
+    // mount timeout, a broken pipe, a runtime-integrity mismatch. `wsHostCrash` must NOT be
+    // reused: its headline accuses the design and its F6 offers a repair that could not land.
+    //
+    // AWAITING DESIGN ITERATION 9 (`design-prompts/claude-design-prompt-9.md`), which is
+    // commissioned for exactly this state. Until it returns, this keeps the panel that has
+    // always served it, unchanged — it names no key that does not act and blames nothing. It is
+    // a weaker screen than the one being drawn, not a wrong one.
     return (
       <ErrorPanel
         id="ws-preview-circuit"
@@ -361,6 +399,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const pinRows = derivePinListRows(pins);
   const records = mirror.records();
   const selection = mirror.selection();
+  // The one preview state the status bar, the composer attach line and the preview panel all
+  // three read — derived once here so the three can never disagree about whether the host halted.
+  const previewCrashed =
+    preview.phase === "circuit-open" ? { retryAvailable: preview.retryAvailable } : null;
   const composerAttach = deriveComposerAttach({
     readOnly: props.readOnly,
     selection,
@@ -369,6 +411,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     turnRunning: turn.phase === "running",
     composerValue,
     slashOpen,
+    previewCrashed,
   });
   // Review round 1, Finding 1: the row budget `foldTurnTimeline` gets as `maxRows` must both cap
   // at the design's own 11-row ceiling AND measure real remaining space inside `ws-chat-stream`
@@ -624,7 +667,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       <StatusBar
         id="ws-status"
         width={w}
-        mode={modeChip(turn, fullscreen, props.readOnly)}
+        mode={modeChip(turn, fullscreen, props.readOnly, previewCrashed !== null)}
         page={project.activePageSlug !== null ? { text: project.activePageSlug, fg: "dim" } : null}
         size={{ w, h, min: minSize }}
         ctx={ctx}
@@ -638,9 +681,17 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               // bg:P.line` exactly.
               turn.phase === "running"
               ? { text: "⚠ turn running — send disabled", fg: "amberHi", bg: "line" }
-              : null
+              : // `wsHostCrash`'s own hint: `render crashed`, red on redDim.
+                previewCrashed !== null
+                ? { text: "render crashed", fg: "red", bg: "redDim" }
+                : null
         }
-        hintKeys={hintKeys(turn, fullscreen, preview.phase === "circuit-open")}
+        hintKeys={hintKeys(
+          turn,
+          fullscreen,
+          previewCrashed !== null,
+          previewCrashed?.retryAvailable ?? false,
+        )}
       />
     </box>
   );
