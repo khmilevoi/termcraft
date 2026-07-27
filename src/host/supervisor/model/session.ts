@@ -14,6 +14,8 @@ import type {
   ProtocolViolationCode,
 } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, Size } from "../../types";
+import { trace } from "infrastructure/debug-log";
+
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
@@ -202,11 +204,21 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const sent = await writeFramed(spawned, helloBytes);
     if (sent instanceof SupervisorError) return failWith(sent);
 
-    const handshakeDeadlineAt = deps.clock.now() + HANDSHAKE_TIMEOUT_MS;
+    const handshakeStartedAt = deps.clock.now();
+    const handshakeDeadlineAt = handshakeStartedAt + HANDSHAKE_TIMEOUT_MS;
     const helloMessage = await nextInbound(
       handshakeDeadlineAt,
       new SupervisorError({ code: "HANDSHAKE_TIMEOUT", reason: HANDSHAKE_TIMEOUT_REASON }),
     );
+    // DIAGNOSTIC: the measured wait against the budget, on BOTH outcomes. A timeout that is
+    // budgeted (`restart-policy.ts`) is invisible as a single event — it shows up only as four
+    // spawns and a frozen app — so the number that decides it belongs in the log.
+    trace("host.handshake", {
+      sessionId: identity.sessionId,
+      waitedMs: deps.clock.now() - handshakeStartedAt,
+      budgetMs: HANDSHAKE_TIMEOUT_MS,
+      outcome: helloMessage instanceof Error ? helloMessage.code : "hello",
+    });
     if (helloMessage instanceof Error) return failWith(helloMessage);
     if (helloMessage.messageClass !== "control")
       return failWith(

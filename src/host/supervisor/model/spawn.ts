@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { trace } from "infrastructure/debug-log";
+
 import type { SpawnCommand, SpawnFn, SpawnedChild } from "../types";
 import { SupervisorError, osFailureReason } from "./errors";
 
@@ -75,6 +77,11 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
           cwd: scratch,
           env: buildChildEnv(),
         });
+        // DIAGNOSTIC: the parent-side instant of the spawn. The child writes `main.start` into
+        // this SAME run file (`buildChildEnv` forwards TERMCRAFT_DEBUG_LOG), so the gap between
+        // these two lines is the child's startup cost — the number HANDOFF Finding 4 had to
+        // reconstruct from scratch-directory mtimes because neither end was logged.
+        trace("host.spawn", { scratch, cmd: command.cmd });
         return proc as unknown as SpawnedChild;
       } catch (cause) {
         return new SupervisorError({
