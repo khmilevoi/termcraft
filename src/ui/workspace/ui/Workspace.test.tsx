@@ -862,3 +862,45 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
     ).toBeDefined();
   });
 });
+
+describe("Workspace halted-preview chat notice", () => {
+  test("raises the design's two system lines in the chat panel, and drops them on recovery", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(
+      event("preview.circuitOpened", {
+        previewSessionId: uuidv7(),
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        attempts: 4,
+        finalFailure: {
+          code: "HOST_CIRCUIT_OPEN",
+          retryable: true,
+          safeMessage: "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
+          details: { pageSlug: "main", attempts: 4, hostFailureCode: "DESIGN_RENDER_FAILED" },
+        },
+        retryCapability: { available: true },
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+
+    const headline = findRun(rows, "preview crashed while rendering");
+    expect(headline).toBeDefined();
+    expect(headline && extractRgb(headline.fg)).toBe(SHELL_PALETTE.red);
+    // Both lines wrap inside the chat panel, so match a fragment, not the whole sentence.
+    const detail = findRun(rows, "the design passed Gate");
+    expect(detail).toBeDefined();
+    expect(detail && extractRgb(detail.fg)).toBe(SHELL_PALETTE.faint);
+  });
+});

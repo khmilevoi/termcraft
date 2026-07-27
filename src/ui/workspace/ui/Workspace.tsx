@@ -10,6 +10,7 @@ import {
   ChatScrollback,
   Composer,
   PinList,
+  SystemNotice,
   foldTurnTimeline,
   markdownLineRows,
 } from "ui/chat";
@@ -399,6 +400,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const pinRows = derivePinListRows(pins);
   const records = mirror.records();
   const selection = mirror.selection();
+  const previewNotice = mirror.previewNotice();
   // The one preview state the status bar, the composer attach line and the preview panel all
   // three read — derived once here so the three can never disagree about whether the host halted.
   const previewCrashed =
@@ -556,6 +558,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 width={chatContentWidth}
                 maxRows={scrollbackRows}
               />
+              {/* Below the persisted tail, above the live turn block — chronologically the crash
+                  follows the turn that produced the design, which is exactly where the design
+                  draws it (`wsHostCrash`'s own `chatSeq`). */}
+              {previewNotice !== null && (
+                <SystemNotice
+                  id="ws-preview-notice"
+                  headline={previewNotice.headline}
+                  detail={previewNotice.detail}
+                />
+              )}
               {turn.phase === "running" && (
                 <AgentStatusBlock
                   id="ws-agent"

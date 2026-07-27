@@ -19,3 +19,5 @@ export type { ChatScrollbackProps } from "./ui/ChatScrollback";
 export { ChatScrollback, recordToChatRecordProps } from "./ui/ChatScrollback";
 export type { PinListProps, PinListRow } from "./ui/PinList";
 export { PinList } from "./ui/PinList";
+export type { SystemNoticeProps } from "./ui/SystemNotice";
+export { SystemNotice } from "./ui/SystemNotice";

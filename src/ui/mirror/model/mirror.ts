@@ -3,6 +3,7 @@ import { type Atom, atom } from "@reatom/core";
 import {
   type CommandKindV1,
   type DiagnosticDtoV1,
+  type FailureDtoV1,
   type PageDescriptorV1,
   type PinDtoV1,
   type UInt64String,
@@ -10,6 +11,7 @@ import {
   isUuidv7,
 } from "core/protocol";
 import type { AnyEventEnvelope } from "ui/kernel";
+import { isDesignRenderFailure } from "ui/preview";
 
 import type {
   AgentIdentity,
@@ -18,6 +20,7 @@ import type {
   ChatsMirror,
   ExportMirror,
   PreviewMirror,
+  PreviewNoticeMirror,
   ProjectMirror,
   ProjectOpenFailure,
   SelectionMirror,
@@ -41,6 +44,17 @@ export interface Mirror {
   readonly pageDescriptors: Atom<readonly PageDescriptorV1[]>;
   readonly turn: Atom<TurnMirror>;
   readonly preview: Atom<PreviewMirror>;
+  /**
+   * The chat panel's ephemeral crash notice (design `wsHostCrash`'s own `chatSeq` system lines).
+   * `null` whenever the preview is not halted.
+   *
+   * DELIBERATELY NOT A `ChatRecord`. A persisted `system:error` requires exactly one of
+   * `turnId`/`actionId` (`entities/chat/model/decode.ts`) and a host crash is neither — it
+   * happens outside any turn, and no user performed an action. It is also a description of a
+   * LIVE condition, not a historical fact: it must disappear the moment the preview recovers,
+   * which a persisted record could not do.
+   */
+  readonly previewNotice: Atom<PreviewNoticeMirror | null>;
   readonly chats: Atom<ChatsMirror>;
   /**
    * The ACTIVE chat's persisted tail (WP-10 Task 7), fed by `chat.records`. A single bulk-replace
@@ -145,6 +159,34 @@ function seedOrPreserveClock(
 }
 
 /**
+ * The chat-panel lines for a halted preview. Design `wsHostCrash`'s own `chatSeq` system entries
+ * are written for the case the design drew — the page threw, after a budgeted crash-loop:
+ * `✗ preview crashed while rendering — halted after 3 restarts` / `the design passed Gate; the
+ * host died running it`.
+ *
+ * Neither sentence is true when the host died before it ever ran the page (spec §3.2.1), and the
+ * restart count is not 3 when a deterministic failure opened the circuit on the first try. Both
+ * cases get honest wording instead. The non-render-crash lines are placeholders in the same
+ * sense the panel is: design iteration 9 supersedes them.
+ */
+function previewNoticeFor(attempts: number, finalFailure: FailureDtoV1): PreviewNoticeMirror {
+  if (!isDesignRenderFailure(finalFailure)) {
+    return {
+      headline: "✗ the preview host stopped — no preview",
+      detail: "the design was never run; this is not a fault in the page",
+    };
+  }
+  const restarts = Math.max(attempts - 1, 0);
+  return {
+    headline:
+      restarts === 0
+        ? "✗ preview crashed while rendering — halted immediately"
+        : `✗ preview crashed while rendering — halted after ${restarts} restarts`,
+    detail: "the design passed Gate; the host died running it",
+  };
+}
+
+/**
  * `now` is injected so a test can pin `TurnMirror.startedAt` — the one value in this read-model
  * that comes from the UI's own clock rather than from an event payload (see that field's doc).
  */
@@ -159,6 +201,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
   const pageDescriptors = atom<readonly PageDescriptorV1[]>([], "ui.mirror.pageDescriptors");
   const turn = atom<TurnMirror>(IDLE_TURN, "ui.mirror.turn");
   const preview = atom<PreviewMirror>(NO_PREVIEW, "ui.mirror.preview");
+  const previewNotice = atom<PreviewNoticeMirror | null>(null, "ui.mirror.previewNotice");
   const chats = atom<ChatsMirror>({ activeChatId: null, summaries: new Map() }, "ui.mirror.chats");
   const records = atom<readonly ChatRecord[]>([], "ui.mirror.records");
   const pinsByPage = atom<ReadonlyMap<string, readonly PinDtoV1[]>>(
@@ -255,6 +298,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         // it — there is no replay (§9), so a subscription started mid-turn simply starts idle.
         turn.set(IDLE_TURN);
         preview.set(NO_PREVIEW);
+        previewNotice.set(null);
         selection.set(null);
         exportAtom.set(IDLE_EXPORT);
         pinsByPage.set(new Map());
@@ -486,6 +530,9 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           interactionMode: p.interactionMode,
           theme: p.theme,
         });
+        // The notice describes a LIVE condition. Leaving it up once the preview recovers would
+        // make the chat claim a crash that no longer holds.
+        previewNotice.set(null);
         return;
       }
       case "preview.sourceChanged": {
@@ -524,6 +571,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           finalFailure: p.finalFailure,
           retryAvailable: p.retryCapability.available,
         });
+        previewNotice.set(previewNoticeFor(p.attempts, p.finalFailure));
         return;
       }
       case "chat.changed": {
@@ -641,6 +689,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     pageDescriptors,
     turn,
     preview,
+    previewNotice,
     chats,
     records,
     pinsByPage,

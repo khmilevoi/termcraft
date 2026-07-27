@@ -195,6 +195,18 @@ export type ChatRecord = EventPayloadByKindV1["chat.records"]["records"][number]
 export type SelectionMirror = EventPayloadByKindV1["selection.changed"];
 
 /**
+ * The two chat-panel lines a halted preview raises (design `wsHostCrash`'s `chatSeq` system
+ * entries: `✗ preview crashed while rendering — halted after 3 restarts` in red, then
+ * `the design passed Gate; the host died running it` in faint).
+ *
+ * A UI-local notice, never a persisted `ChatRecord` — see `Mirror.previewNotice` for why.
+ */
+export interface PreviewNoticeMirror {
+  readonly headline: string;
+  readonly detail: string;
+}
+
+/**
  * The export slice — the export-feedback popup and status refusal read this. The `failed`
  * variant retains the `pageSlug`/`sizeBytes` from the last `export.progress` before the
  * terminal transition (M14): `export.failed`'s own payload (`ExportTerminalPayloadV1`) carries

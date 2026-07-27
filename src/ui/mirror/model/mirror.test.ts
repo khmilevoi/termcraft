@@ -1495,3 +1495,82 @@ describe("mirror.apply — out-of-scope kinds are counter-only no-ops", () => {
     expect(m.turn().phase).toBe("idle");
   });
 });
+
+describe("mirror.previewNotice — the ephemeral halted-preview chat lines", () => {
+  const circuitOpened = (hostFailureCode: string | undefined, attempts: number) =>
+    event("preview.circuitOpened", {
+      previewSessionId: uuidv7(),
+      pageSlug: "main",
+      sourceHash: TEST_SHA,
+      attempts,
+      finalFailure: {
+        code: "HOST_CIRCUIT_OPEN",
+        retryable: true,
+        safeMessage: "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function",
+        details: {
+          pageSlug: "main",
+          attempts,
+          ...(hostFailureCode === undefined ? {} : { hostFailureCode }),
+        },
+      },
+      retryCapability: { available: true },
+    });
+
+  test("starts empty", () => {
+    expect(createMirror().previewNotice()).toBeNull();
+  });
+
+  test("a render crash raises the design's own two lines, with the real restart count", () => {
+    const m = createMirror();
+    m.apply(circuitOpened("DESIGN_RENDER_FAILED", 4));
+    expect(m.previewNotice()).toEqual({
+      headline: "✗ preview crashed while rendering — halted after 3 restarts",
+      detail: "the design passed Gate; the host died running it",
+    });
+  });
+
+  test("a deterministic render crash says so rather than claiming 0 restarts", () => {
+    const m = createMirror();
+    m.apply(circuitOpened("DESIGN_RENDER_FAILED", 1));
+    expect(m.previewNotice()?.headline).toBe(
+      "✗ preview crashed while rendering — halted immediately",
+    );
+  });
+
+  test("a host that never ran the page gets lines that do not blame the design", () => {
+    const m = createMirror();
+    m.apply(circuitOpened("SPAWN_FAILED", 4));
+    const notice = m.previewNotice();
+    expect(notice?.headline).toBe("✗ the preview host stopped — no preview");
+    expect(notice?.detail).toBe("the design was never run; this is not a fault in the page");
+    expect(notice?.detail).not.toContain("Gate");
+  });
+
+  test("sessionReady clears it — the notice describes a live condition, not a past one", () => {
+    const m = createMirror();
+    m.apply(circuitOpened("DESIGN_RENDER_FAILED", 4));
+    expect(m.previewNotice()).not.toBeNull();
+
+    m.apply(
+      event("preview.sessionReady", {
+        previewSessionId: uuidv7(),
+        nonce: TEST_NONCE,
+        pageSlug: "main",
+        sourceHash: TEST_SHA,
+        hostMode: "static",
+        interactionMode: "static",
+        size: { w: 80, h: 24 },
+        theme: "dark-default",
+        initialFrameSeq: "1",
+      }),
+    );
+    expect(m.previewNotice()).toBeNull();
+  });
+
+  test("a fresh kernel.snapshot clears it too", () => {
+    const m = createMirror();
+    m.apply(circuitOpened("DESIGN_RENDER_FAILED", 4));
+    m.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
+    expect(m.previewNotice()).toBeNull();
+  });
+});
