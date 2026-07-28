@@ -186,6 +186,9 @@ function buildTestContext(options?: {
   // paths against (`projectRoot`), without disturbing any existing call site — both default
   // to exactly what this builder already used before either field existed.
   readonly gateRunner?: ReturnType<typeof createFakeGateRunner>;
+  // Applies ONLY when `projectStore` is not also supplied — an explicit `projectStore`
+  // already carries its own root, and this builder never overrides it, so passing both
+  // silently ignores `projectRoot`.
   readonly projectRoot?: string;
 }): TestHarness {
   let trust: ProjectTrustV1 = null;
