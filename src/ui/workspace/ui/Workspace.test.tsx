@@ -553,7 +553,7 @@ describe("Workspace action-derived hotkey hints", () => {
     // The status bar is the frame's bottom row; its right-aligned cluster is the key row.
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
     // `^E export` never appears — `StatusBar`'s own `HIDDEN_HINT_GLYPHS` drops it (design
-    // `hintKeys`, `termcraft-engine.js:413-416`), which is why the row is these four and only
+    // `hintKeys`, `termcraft-engine.js:500`), which is why the row is these four and only
     // these four: F2 full · F3 tweaks · F4 act · Ctrl+P preview. `full`/`act` are the design's
     // own shortenings (`hintKeys`, `termcraft-engine.js:499`) of `fullscreen`/`interact`.
     expect(statusRow.trimEnd().endsWith(" F2  full  F3  tweaks  F4  act  Ctrl+P  preview")).toBe(
@@ -1061,7 +1061,18 @@ describe("Workspace preview clipping", () => {
   // The Background's other named scenario: "at 100×20 it also paints over both panels' bottom
   // borders." At 100×20, chatColumnWidth(100) = 37, so the pane is 63 wide and region = {w: 61,
   // h: 14} (previewRegionSize) — the 80×24 fake frame overflows BOTH axes here, unlike the
-  // 120×34 test above, so this is the one that actually exercises `height={Math.min(...)}`.
+  // 120×34 test above.
+  //
+  // CORRECTED (review finding, phase-8 fix wave): this comment used to claim the test "actually
+  // exercises `height={Math.min(...)}`". Verified false: reverting ONLY the height clamp
+  // (`height={uiFrame.frame.height}`) leaves every test in this file green, including this one —
+  // the parent `ws-preview` box's own `overflow="hidden"` already keeps the excess rows off the
+  // bottom border row at this terminal size, independently of the inner clamp. Reverting ONLY
+  // the width clamp fails a DIFFERENT test (the 120×34 one above), not this one; reverting BOTH
+  // still leaves this test green. So this assertion pins the outer shell's own clipping at a
+  // smaller terminal size, not either `Math.min`. The height clamp stays in place regardless —
+  // deliberate defence in depth for a host/layout combination where the outer clip alone might
+  // not be enough — it is simply not what makes this particular test pass.
   test("a frame taller than a smaller pane never paints over the pane's own bottom border", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 100, h: 20 });
     deps.mirror.apply(

@@ -2,7 +2,7 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import type { StatusBarHintKey, StatusBarProps, StatusBarSize } from "../types";
 
-/** Glyphs `hintKeys()` (design `wsStatus`/`hintKeys`, `design/termcraft-engine.js:413-416`) always drops. */
+/** Glyphs `hintKeys()` (design `wsStatus`/`hintKeys`, `design/termcraft-engine.js:500`) always drops. */
 const HIDDEN_HINT_GLYPHS: ReadonlySet<string> = new Set(["m", "^E", "/"]);
 
 /** Label shortenings `hintKeys()` applies (design `hintKeys`, `design/termcraft-engine.js:499`). */
