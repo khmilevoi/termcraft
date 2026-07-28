@@ -125,9 +125,14 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   function flushPendingResize(ks: KeyState): void {
     const pending = ks.pendingResize;
     if (pending === null) return;
-    ks.pendingResize = null;
     const current = ks.current;
-    if (current === null) return; // defensive: ready implies current, but never assume it
+    // Guard BEFORE clearing the buffer (errore rule 21): nulling `pendingResize` first and
+    // only then bailing here would silently drop the size on this defensive branch — nobody
+    // would ever be told the incarnation was not actually ready, and the resize would simply
+    // vanish. Checking first means a hit here (believed unreachable — ready implies current)
+    // leaves the buffered size in place for a later flush instead of discarding it.
+    if (current === null) return;
+    ks.pendingResize = null;
     void current.resize(pending).then((result) => {
       if (result instanceof Error)
         console.warn("host-supervisor: buffered resize flush failed:", result.message);
