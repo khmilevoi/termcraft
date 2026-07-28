@@ -1021,7 +1021,10 @@ describe("Workspace preview clipping", () => {
     ]),
   });
 
-  test("a frame wider and taller than the pane never paints over the pane's own border", async () => {
+  // NOTE: at 120×34 the fake frame (80×24) overflows the pane's WIDTH (region.w = 74) but not
+  // its height (region.h = 30 > 24) — so this test exercises only the width half of the clamp.
+  // The vertical half is covered separately below, at a terminal where the frame overflows both.
+  test("a frame wider than the pane never paints over the pane's own right border", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
     deps.mirror.apply(
       snapshot({
@@ -1052,5 +1055,40 @@ describe("Workspace preview clipping", () => {
     }
     // The pane's bottom border row is intact — a rounded corner, not frame content.
     expect(lines[32]).toContain("╯");
+  });
+
+  // The Background's other named scenario: "at 100×20 it also paints over both panels' bottom
+  // borders." At 100×20, chatColumnWidth(100) = 37, so the pane is 63 wide and region = {w: 61,
+  // h: 16} (previewRegionSize) — the 80×24 fake frame overflows BOTH axes here, unlike the
+  // 120×34 test above, so this is the one that actually exercises `height={Math.min(...)}`.
+  test("a frame taller than a smaller pane never paints over the pane's own bottom border", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 100, h: 20 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "dashboard",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [readyDescriptor("dashboard", "Дашборд")],
+      }),
+    );
+    const fake = createFakePreviewSession();
+    const frame = solidFrame(80, 24);
+    deps.previewFrame.set({ frame, frameToken: uuidv7() as never, handle: fake.handle });
+
+    const handle = await createHeadlessRenderer({ w: 100, h: 20 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const lines = rows.map((row) => row.map((run) => run.text).join(""));
+
+    // frameH = h - 1 = 19, so `ws-preview` occupies rows 0..18 and its own bottom border sits
+    // at row 18 — a rounded corner, never the frame's `#` content, even though the frame (24
+    // rows) is 8 rows taller than the region (16 rows) it is painted into.
+    const bottomBorderRow = 18;
+    expect(lines[bottomBorderRow].length).toBe(100);
+    expect(lines[bottomBorderRow]).toContain("╯");
+    expect(lines[bottomBorderRow]).not.toContain("#");
   });
 });
