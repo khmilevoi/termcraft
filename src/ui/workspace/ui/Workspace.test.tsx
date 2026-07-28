@@ -1092,3 +1092,28 @@ describe("Workspace preview clipping", () => {
     expect(lines[bottomBorderRow]).not.toContain("#");
   });
 });
+
+describe("Workspace preview placeholder sizing", () => {
+  test("the empty state leaves the preview pane's right border and bottom corner intact", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 20 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 20 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const lines = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+
+    expect(lines.join("\n")).toContain("No pages yet — describe what to build");
+    // Row 1..17 are inside the pane; each must still end in the pane's own border column.
+    for (const line of lines.slice(1, 18)) expect(line[119]).toBe("│");
+    // The pane's bottom-right rounded corner survives.
+    expect(lines[18]?.[119]).toBe("╯");
+  });
+});
