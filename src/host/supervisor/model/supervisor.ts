@@ -38,11 +38,16 @@ interface KeyState {
   incarnationFailed: boolean;
   /**
    * A resize requested while no incarnation was ready yet (Task 11 —
-   * resize-race-diagnosis.md): last-wins, flushed by `startIncarnation`'s ready hook.
-   * Cleared on EVERY teardown (`onIncarnationFatal`/`close`) so a dead incarnation's
-   * buffered value never survives into a later one — only a resize requested AFTER a
-   * teardown (while queued/backing off/circuit-open) re-populates it for the next
-   * incarnation's own ready hook to flush.
+   * resize-race-diagnosis.md): last-wins, flushed as a control request by
+   * `startIncarnation`'s ready hook when THIS incarnation reaches ready.
+   *
+   * Teardown never replays it as a control request into a later incarnation (a stale
+   * command could arrive out of order, and a not-yet-ready successor would just refuse
+   * it anyway) — `pendingResize` itself is always `null` again before the next
+   * `startIncarnation` runs. But `onIncarnationFatal` does not simply drop the
+   * requested SIZE: it folds it into `ks.spec` first (fix round 2), so the successor
+   * mounts at that size directly instead of the stale spec's. `close()` has no
+   * successor to fold into, so it discards the size outright (logged, never silent).
    */
   pendingResize: Size | null;
   backoffTimer: TimerHandle | null;
@@ -176,9 +181,21 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   function onIncarnationFatal(ks: KeyState, error: ProtocolError | SupervisorError): void {
     if (ks.incarnationFailed || ks.closed) return;
     ks.incarnationFailed = true;
-    // Task 11: a resize buffered for THIS dying incarnation must not leak into
-    // whatever incarnation starts next (automatic restart or a later manual retry).
-    ks.pendingResize = null;
+    // Task 11 (fix round 2 — reviewer-confirmed gap): a resize buffered for the
+    // incarnation that just died is NEVER replayed as a control request against
+    // whatever starts next — that stays true, and is exactly what supervisor.test.ts's
+    // "never replayed as a stale control request" test pins. But discarding the SIZE
+    // outright reproduces this task's own defect one road over: the successor would
+    // mount at the stale `ks.spec.size` (the "auto" 80x24 preset), and the shell's
+    // per-(session,size) latch means nobody ever asks again. So the requested size is
+    // folded into `ks.spec` — mount geometry, not a queued command — so the successor's
+    // OWN mount request carries it directly. No round-trip, no reordering risk: it
+    // travels as the spec the next incarnation is built from (`startIncarnation`'s
+    // `createSession(ks.spec, ...)`), never as a resize sent after the fact.
+    if (ks.pendingResize !== null) {
+      ks.spec = { ...ks.spec, size: ks.pendingResize };
+      ks.pendingResize = null;
+    }
     const failed = ks.current;
     ks.current = null;
     void failed?.stop();
@@ -354,7 +371,17 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   async function close(ks: KeyState): Promise<void> {
     if (ks.closed) return;
     ks.closed = true;
-    ks.pendingResize = null; // Task 11: a key that is closing will never reach ready again
+    // Task 11: unlike onIncarnationFatal, a closing key never mounts again, so a
+    // buffered size has nowhere to fold to — discard it. But the Kernel already told
+    // the caller this resize was accepted, so an abandoned value must leave a trace,
+    // never vanish silently (errore rule 21).
+    if (ks.pendingResize !== null) {
+      console.warn(
+        `host-supervisor: close(${ks.key}) dropped a buffered resize ` +
+          `(${ks.pendingResize.w}x${ks.pendingResize.h}) — the session is closing`,
+      );
+      ks.pendingResize = null;
+    }
     ks.backoffTimer?.cancel();
     ks.backoffTimer = null;
     const queueIndex = startQueue.indexOf(ks);

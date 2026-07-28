@@ -712,12 +712,16 @@ describe("createHostSupervisor — interactionMode updates only from an accepted
  * long as the test needs — the same technique `session.test.ts`'s HANDSHAKE_TIMEOUT/
  * MOUNT_TIMEOUT tests use, just driven manually instead of by a timeout. Every `resize`
  * control envelope that reaches the wire is recorded (and acked), so a test can assert
- * exactly how many resizes were dispatched, and with what size.
+ * exactly how many resizes were dispatched, and with what size. The `mount` request's
+ * OWN `body.size` is recorded too (`mountedSize()`) — fix round 2's fold test asserts
+ * against this, not against a resize envelope, because the fold changes the MOUNT
+ * geometry, not a post-mount control request.
  */
 function parkingChild(spec: HostSessionSpec): {
   child: ScriptedChild;
   identity: () => { sessionId: string; nonce: string } | null;
   hasMountRequest: () => boolean;
+  mountedSize: () => Size | null;
   replyHello: () => void;
   replyReady: () => void;
   resizeWrites: () => Size[];
@@ -725,6 +729,7 @@ function parkingChild(spec: HostSessionSpec): {
   const child = createScriptedChild();
   let id: { sessionId: string; nonce: string } | null = null;
   let mountRequestId: string | null = null;
+  let mountedSize: Size | null = null;
   const resizeWrites: Size[] = [];
   let messageId = 1n;
   const nextId = () => (messageId++).toString();
@@ -748,6 +753,7 @@ function parkingChild(spec: HostSessionSpec): {
         }
         if (raw.kind === "mount") {
           mountRequestId = raw.requestId ?? null;
+          mountedSize = raw.body.size as unknown as Size;
           return;
         }
         if (raw.kind === "resize" && id !== null) {
@@ -790,6 +796,7 @@ function parkingChild(spec: HostSessionSpec): {
     child,
     identity: () => id,
     hasMountRequest: () => mountRequestId !== null,
+    mountedSize: () => mountedSize,
     replyHello: () => {
       if (id === null) throw new Error("parkingChild: client.hello not received yet");
       const hostHello: HostHelloV1 = {
@@ -910,7 +917,16 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
     await supervisor.stopAll();
   });
 
-  test("a resize buffered before an incarnation dies is cleared on teardown and never leaks into the next incarnation", async () => {
+  // Fix round 2 (reviewer-confirmed gap) split what was one test into two DELIBERATELY
+  // different pins on the SAME scenario (a resize buffered while negotiating, then the
+  // incarnation dies before ready) — they can look contradictory at a glance, so state the
+  // split plainly: the FIRST pins that the buffered size is never replayed as a stale
+  // CONTROL REQUEST against the successor (no resize envelope ever reaches either child's
+  // wire); the SECOND pins that the size is NOT simply thrown away either — it is folded
+  // into the successor's own MOUNT request, so the child mounts at the right size directly.
+  // "Never replayed as a command" and "still reaches the successor as mount geometry" are
+  // both true at once; neither test's assertions overlap with the other's.
+  test("a resize buffered before an incarnation dies is never replayed as a stale control request into the next incarnation", async () => {
     const spec = specFor();
     const first = parkingChild(spec);
     const second = parkingChild(spec);
@@ -946,9 +962,59 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
     second.replyReady();
     await waitUntil(() => handle.state() === "ready", "2nd incarnation ready");
 
-    // The buffered resize belonged to the DEAD 1st incarnation and must not survive.
+    // No resize CONTROL REQUEST was ever sent to either incarnation's wire — the buffered
+    // value did not survive as a queued/replayed command (see the next test for where the
+    // requested size actually went: folded into the mount, not into a resize envelope).
     expect(second.resizeWrites()).toHaveLength(0);
     expect(first.resizeWrites()).toHaveLength(0);
+    await supervisor.stopAll();
+  });
+
+  test("a resize buffered before an incarnation dies is folded into the successor's MOUNT size, not silently discarded", async () => {
+    const spec = specFor();
+    const first = parkingChild(spec);
+    const second = parkingChild(spec);
+    let attempt = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: () => {
+        attempt += 1;
+        return attempt === 1 ? first.child : second.child;
+      },
+      mintSessionId: () => "sid-1",
+    });
+
+    const handle = supervisor.preview(spec);
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => first.identity() !== null, "1st client.hello reached the child");
+
+    // Buffered while the 1st incarnation is still negotiating — deliberately distinct from
+    // specFor()'s own size ({ w: 80, h: 24 }), so a successor that mounts at the OLD spec
+    // size (the original defect, reached via a restart instead of the startup race) is
+    // unmistakably different from one that mounts at this size.
+    handle.resize({ w: 140, h: 40 });
+
+    // Never reply hello — the handshake budget times out, killing the 1st incarnation via
+    // the REAL session.ts path (same technique as the sibling test above).
+    await waitUntil(() => clock.pending() >= 1, "handshake timer armed");
+    clock.advance(HANDSHAKE_TIMEOUT_MS);
+    await waitUntil(() => handle.state() === "backoff", "1st incarnation died, backing off");
+
+    clock.advance(250); // fires the backoff timer, spawning the 2nd incarnation
+    await waitUntil(() => second.identity() !== null, "2nd client.hello reached the child");
+    second.replyHello();
+    await waitUntil(() => second.hasMountRequest(), "2nd incarnation mounting");
+
+    // The fold: the successor's OWN mount request already carries the buffered size —
+    // this is mount geometry, not a resize command (the sibling test above proves no
+    // resize control request was ever sent).
+    expect(second.mountedSize()).toEqual({ w: 140, h: 40 });
+
+    second.replyReady();
+    await waitUntil(() => handle.state() === "ready", "2nd incarnation ready");
     await supervisor.stopAll();
   });
 });
