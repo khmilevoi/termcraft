@@ -55,7 +55,7 @@ flowchart TB
    reaches the same field by a different route: a successful preview source
    switch — what a tab click or the page-step keys ultimately issue — writes the
    page it switched to as the active one, best-effort, so the choice survives a
-   restart (`flows/interactive-prototype.md` step 4a).
+   restart (`flows/interactive-prototype.md` step 5a).
 3. **Pages.** Every page has one canonical
    `pages/<slug>/page.tsx`. The slug is its immutable page and Git-history
    identity; no page UUID or private version file exists. `page.tsx` imports only

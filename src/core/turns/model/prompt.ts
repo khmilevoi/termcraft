@@ -19,11 +19,12 @@ import type { EventPayloadByKindV1 } from "core/protocol";
  * into a LATER attempt's prompt) is refused rather than silently rendered — a stale fold
  * would tell the agent to fix a problem in the wrong attempt's context.
  *
- * DETERMINISM WARNINGS ONLY: of Gate's five warning kinds, exactly two are about
+ * DETERMINISM WARNINGS ONLY: of Gate's six warning kinds, exactly two are about
  * non-determinism (`unguarded-timer`, `unguarded-randomness` — code that would break
- * Export/replay by depending on wall-clock time or unseeded randomness). The other three
- * (`dropped-id`, `unpointed-element`, `unlisted-navigation`) are UI-contract warnings with no
- * bearing on a Gate REJECTION retry, so they are deliberately excluded from the fold.
+ * Export/replay by depending on wall-clock time or unseeded randomness). The other four
+ * (`dropped-id`, `unpointed-element`, `unlisted-navigation`, `silencing-any`) are UI-contract/
+ * type-suppression warnings with no bearing on a Gate REJECTION retry, so they are
+ * deliberately excluded from the fold.
  */
 
 export type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
