@@ -5,6 +5,18 @@ import type { StatusBarHintKey, StatusBarProps, StatusBarSize } from "../types";
 /** Glyphs `hintKeys()` (design `wsStatus`/`hintKeys`, `design/termcraft-engine.js:413-416`) always drops. */
 const HIDDEN_HINT_GLYPHS: ReadonlySet<string> = new Set(["m", "^E", "/"]);
 
+/** Label shortenings `hintKeys()` applies (design `hintKeys`, `design/termcraft-engine.js:499`). */
+const SHORT_HINT_LABELS: Readonly<Record<string, string>> = {
+  fullscreen: "full",
+  interact: "act",
+  versions: "vers",
+};
+
+/** Applies the design's own shortening; a label the design does not shorten passes through. */
+function shortHintLabel(label: string): string {
+  return SHORT_HINT_LABELS[label] ?? label;
+}
+
 /** One resolved left-cluster segment, ready to render as a single `<text>` run. */
 interface LeftSegment {
   readonly id: string;
@@ -19,22 +31,13 @@ function isBelowMinimum(size: StatusBarSize): boolean {
   return size.min != null && (size.w < size.min.w || size.h < size.min.h);
 }
 
-/**
- * Resolves the left-to-right cluster (mode chip -> page/version -> size -> hint badge ->
- * ctx%) into flat, render-ready segments — mirrors `wsStatus`'s `left` array assembly
- * (`design/termcraft-engine.js:403-412`), minus the dead `combo` chip (every workspace
- * screen after §07 passes `combo:false`, so this component never renders one).
- */
 function buildLeftSegments(props: StatusBarProps): readonly LeftSegment[] {
-  const segments: LeftSegment[] = [
-    {
-      id: "mode",
-      text: ` ${props.mode.text} `,
-      fg: SHELL_PALETTE[props.mode.fg],
-      bg: SHELL_PALETTE[props.mode.bg],
-      bold: true,
-    },
-  ];
+  // design `wsStatus` (`design/termcraft-engine.js:489-496`) assembles its `left` array in
+  // this exact order: version -> size -> hint -> MODE -> ctx. CORRECTED: this used to push
+  // the mode chip FIRST, citing `:403-412` — a stale range that now lands in
+  // `gitHistoryInset`. The dead `combo` chip stays dropped (every workspace screen after §07
+  // passes `combo:false`).
+  const segments: LeftSegment[] = [];
 
   if (props.page) {
     segments.push({
@@ -70,6 +73,14 @@ function buildLeftSegments(props: StatusBarProps): readonly LeftSegment[] {
       bold: true,
     });
   }
+
+  segments.push({
+    id: "mode",
+    text: ` ${props.mode.text} `,
+    fg: SHELL_PALETTE[props.mode.fg],
+    bg: SHELL_PALETTE[props.mode.bg],
+    bold: true,
+  });
 
   const showCtx = props.ctx != null && (props.width >= 100 || props.ctxCaution === true);
   if (showCtx) {
@@ -110,7 +121,7 @@ function fitHintKeys(
 
 /**
  * The bottom status bar (design `statusBar`/`wsStatus`, `design/02-workspace-idle.dc.html`).
- * Segment order, left to right: mode chip -> page/version -> size -> optional hint badge ->
+ * Segment order, left to right: page/version -> size -> optional hint badge -> mode chip ->
  * ctx%, then a flexible spacer, then the right-aligned key hints (`^E`/`m`/`/` are always
  * filtered per `hintKeys()`). Every hex, glyph, and literal below is taken verbatim from the
  * design engine; a flexGrow spacer stands in for the engine's manual `rx` right-alignment
@@ -119,7 +130,9 @@ function fitHintKeys(
 export function StatusBar(props: StatusBarProps) {
   const leftSegments = buildLeftSegments(props);
   const leftWidth = 1 + leftSegments.reduce((sum, seg) => sum + seg.text.length, 0);
-  const visibleKeys = (props.hintKeys ?? []).filter((key) => !HIDDEN_HINT_GLYPHS.has(key[0]));
+  const visibleKeys = (props.hintKeys ?? [])
+    .filter((key) => !HIDDEN_HINT_GLYPHS.has(key[0]))
+    .map((key): StatusBarHintKey => [key[0], shortHintLabel(key[1]), key[2]]);
   const fittedKeys = fitHintKeys(visibleKeys, props.width, leftWidth);
 
   return (

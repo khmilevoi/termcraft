@@ -554,10 +554,11 @@ describe("Workspace action-derived hotkey hints", () => {
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
     // `^E export` never appears — `StatusBar`'s own `HIDDEN_HINT_GLYPHS` drops it (design
     // `hintKeys`, `termcraft-engine.js:413-416`), which is why the row is these four and only
-    // these four: F2 fullscreen · F3 tweaks · F4 interact · Ctrl+P preview.
-    expect(
-      statusRow.trimEnd().endsWith(" F2  fullscreen  F3  tweaks  F4  interact  Ctrl+P  preview"),
-    ).toBe(true);
+    // these four: F2 full · F3 tweaks · F4 act · Ctrl+P preview. `full`/`act` are the design's
+    // own shortenings (`hintKeys`, `termcraft-engine.js:499`) of `fullscreen`/`interact`.
+    expect(statusRow.trimEnd().endsWith(" F2  full  F3  tweaks  F4  act  Ctrl+P  preview")).toBe(
+      true,
+    );
     for (const absent of ["Ctrl+B", "Ctrl+N", "prev page", "next page"]) {
       expect(allText(rows)).not.toContain(absent);
     }

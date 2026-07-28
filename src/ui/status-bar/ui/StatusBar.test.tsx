@@ -50,7 +50,8 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     // concatenated row text, not distinct run identities.
     const text = lineText(frame, 0);
     let cursor = -1;
-    for (const needle of ["STATIC", "main", "80×24", "git off", "ctx 55%", "F2"]) {
+    // design `wsStatus` (`design/termcraft-engine.js:489-496`): version -> size -> hint -> MODE -> ctx.
+    for (const needle of ["main", "80×24", "git off", "STATIC", "ctx 55%", "F2"]) {
       const idx = text.indexOf(needle, cursor + 1);
       expect(idx).toBeGreaterThan(cursor);
       cursor = idx;
@@ -183,7 +184,9 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     const glyph = findRun(frame, "F2");
     expect(glyph).toBeDefined();
     expect(glyph && extractRgb(glyph.fg)).toBe<string>(SHELL_PALETTE.amber);
-    expect(findRun(frame, "fullscreen")).toBeDefined();
+    // design `hintKeys` (`design/termcraft-engine.js:499`) shortens `fullscreen` to `full`.
+    expect(findRun(frame, "full")).toBeDefined();
+    expect(findRun(frame, "fullscreen")).toBeUndefined();
   });
 
   test("a `dis` hint key's glyph and label are visible but faint and not bold", async () => {
@@ -278,5 +281,47 @@ describe("StatusBar component (design statusBar/wsStatus)", () => {
     const frame = handle.capture();
     expect(findRun(frame, "F2")).toBeDefined();
     expect(findRun(frame, "F4")).toBeUndefined();
+  });
+
+  test("orders the left cluster the way the design does — the mode chip last", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 1 });
+    open = handle;
+    handle.mount(
+      <StatusBar
+        id="status"
+        width={80}
+        mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
+        page={{ text: "dashboard", fg: "dim" }}
+        size={{ w: 120, h: 34 }}
+      />,
+    );
+    await handle.render();
+    const text = lineText(handle.capture(), 0);
+    // design/termcraft-engine.js:491-495 — version, then size, then the mode chip.
+    expect(text.indexOf("dashboard")).toBeLessThan(text.indexOf("120×34"));
+    expect(text.indexOf("120×34")).toBeLessThan(text.indexOf("STATIC"));
+  });
+
+  test("shortens the design's own key labels", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 1 });
+    open = handle;
+    handle.mount(
+      <StatusBar
+        id="status"
+        width={80}
+        mode={{ text: "STATIC", fg: "amberHi", bg: "line" }}
+        hintKeys={[
+          ["F2", "fullscreen"],
+          ["F4", "interact"],
+        ]}
+      />,
+    );
+    await handle.render();
+    const text = lineText(handle.capture(), 0);
+    // design/termcraft-engine.js:499 — `short = {fullscreen:'full', interact:'act', versions:'vers'}`.
+    expect(text).toContain("full");
+    expect(text).not.toContain("fullscreen");
+    expect(text).toContain("act");
+    expect(text).not.toContain("interact");
   });
 });
