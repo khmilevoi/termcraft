@@ -525,6 +525,36 @@ describe("Workspace action-derived hotkey hints", () => {
       expect((inert?.attrs ?? 0) & 1).toBe(0);
     }
   });
+
+  /**
+   * DESIGN-FIDELITY GUARD (final-review Finding 3). `Workspace.tsx`'s hint row is a verbatim
+   * transcription of the design's own key rows, and §3.8 names NO page key at all — so the
+   * page-step entries, bound but marked `hint: false`, must never reach it.
+   *
+   * The `toContain` assertions above cannot see a key that was ADDED: deleting the three-line
+   * `action.hint === false` filter puts `Ctrl+B prev page` and `Ctrl+N next page` on every
+   * workspace screen with the whole suite still green. This asserts the EXACT row instead, so
+   * the extra pair is a failure rather than an unnoticed divergence from `design/*.dc.html`.
+   */
+  test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // The status bar is the frame's bottom row; its right-aligned cluster is the key row.
+    const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
+    // `^E export` never appears — `StatusBar`'s own `HIDDEN_HINT_GLYPHS` drops it (design
+    // `hintKeys`, `termcraft-engine.js:413-416`), which is why the row is these four and only
+    // these four: F2 fullscreen · F3 tweaks · F4 interact · Ctrl+P preview.
+    expect(
+      statusRow.trimEnd().endsWith(" F2  fullscreen  F3  tweaks  F4  interact  Ctrl+P  preview"),
+    ).toBe(true);
+    for (const absent of ["Ctrl+B", "Ctrl+N", "prev page", "next page"]) {
+      expect(allText(rows)).not.toContain(absent);
+    }
+  });
 });
 
 describe("Workspace chat scrollback (design §3.2 — persisted records above the ephemeral block, WP-10 Task 8)", () => {
