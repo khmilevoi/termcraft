@@ -1,10 +1,15 @@
 import {
   definePage,
   reatomComponent,
+  atom,
+  wrap,
   Panel,
   Column,
+  Row,
+  Box,
   Text,
   Separator,
+  Tabs,
 } from "@termcraft/runtime"
 
 export const meta = definePage({
@@ -56,6 +61,20 @@ function fullDate(d: Date): string {
 function weekday(d: Date): string {
   return WEEKDAYS_RU[d.getDay()]
 }
+
+// ── palette menu ──
+// The theme system ships a single closed token set (`dark-default`), so "choosing a
+// palette color" here means choosing which semantic accent token drives the page's
+// highlight color — the only real hues available are the theme's green/amber/red
+// accent-ish tokens. Selection lives in a named atom; a Tabs strip drives it.
+
+const PALETTE_OPTIONS = [
+  { id: "green", label: "Зелёный", token: "success" } as const,
+  { id: "amber", label: "Янтарный", token: "accent" } as const,
+  { id: "red", label: "Красный", token: "danger" } as const,
+]
+
+const paletteIdAtom = atom("green", "paletteIdAtom")
 
 // ── analog clock face, rendered as a grid of monospace characters ──
 // Pure function of `now`: no timers, no randomness — same deterministic
@@ -135,26 +154,44 @@ export default reatomComponent(function Page() {
   const now = new Date()
   const analogFace = buildAnalogClockFace(now)
 
+  const paletteId = paletteIdAtom()
+  const selectedPalette = PALETTE_OPTIONS.find((o) => o.id === paletteId) ?? PALETTE_OPTIONS[0]
+  const accentToken = selectedPalette.token
+
   return (
-    <Panel id="root" title="Часы" padding={1}>
-      <Column id="layout" gap={1} align="center">
-        <Text id="digital-time" bold color="accentHi">
-          {fullTime(now)}
-        </Text>
-        <Text id="date-line" dim color="foregroundMuted">
-          {`${weekday(now)}, ${fullDate(now)}`}
-        </Text>
-
-        <Separator id="sep-header" />
-
-        <Panel id="panel-analog" title="Аналоговые часы" padding={1}>
-          <Column id="analog-col" gap={0} align="center">
-            <Text id="analog-face" color="accent">
-              {analogFace}
+    <Box id="app-bg" direction="column" grow={1} background="background">
+      <Panel id="root" title="Часы" padding={1} borderColor={accentToken}>
+        <Column id="layout" gap={1} align="center">
+          <Row id="palette-row" gap={1} align="center">
+            <Text id="palette-label" dim color="foregroundMuted">
+              Палитра:
             </Text>
-          </Column>
-        </Panel>
-      </Column>
-    </Panel>
+            <Tabs
+              id="palette-menu"
+              tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+              activeId={paletteId}
+              onSelect={wrap((id: string) => paletteIdAtom.set(id))}
+            />
+          </Row>
+
+          <Text id="digital-time" bold color={accentToken}>
+            {fullTime(now)}
+          </Text>
+          <Text id="date-line" dim color="foregroundMuted">
+            {`${weekday(now)}, ${fullDate(now)}`}
+          </Text>
+
+          <Separator id="sep-header" color={accentToken} />
+
+          <Panel id="panel-analog" title="Аналоговые часы" padding={1} borderColor={accentToken} titleColor={accentToken}>
+            <Column id="analog-col" gap={0} align="center">
+              <Text id="analog-face" color={accentToken}>
+                {analogFace}
+              </Text>
+            </Column>
+          </Panel>
+        </Column>
+      </Panel>
+    </Box>
   )
 })

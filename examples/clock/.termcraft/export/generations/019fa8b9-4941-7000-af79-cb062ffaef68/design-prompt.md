@@ -17,6 +17,17 @@ output matching it — diff your output against it.
   - 120x40 -> snapshots/dashboard/120x40.txt
   - 160x40 -> snapshots/dashboard/160x40.txt
 
+### calendar
+
+- theme: dark-default
+- kitApiVersion: 1
+- source: pages/calendar/page.tsx
+- layout: layout/calendar.json (per-size resolved layout trees; ids/boxes populated, text awaits the runtime catalog — D-Q6)
+- rendered sizes:
+  - 60x26 -> snapshots/calendar/60x26.txt
+  - 120x40 -> snapshots/calendar/120x40.txt
+  - 160x40 -> snapshots/calendar/160x40.txt
+
 ## Runtime
 
 - module: @termcraft/runtime
