@@ -195,13 +195,45 @@ describe("createHostSupervisorAdapter", () => {
     expect(seen).toContain("spawning");
   });
 
-  test("resize/setMode/retry resolve undefined — host's underlying calls are fire-and-forget", async () => {
+  test("setMode/retry resolve undefined — host's underlying calls are fire-and-forget", async () => {
+    const adapter = createHostSupervisorAdapter(depsFor());
+    const session = await adapter.preview(specFor());
+    if ("code" in session) throw session;
+    await expect(session.setMode("interactive")).resolves.toBeUndefined();
+    await expect(session.retry()).resolves.toBeUndefined();
+  });
+
+  test("resize() resolves undefined on a genuine accepted dispatch (Task 11: no longer fabricated)", async () => {
     const adapter = createHostSupervisorAdapter(depsFor());
     const session = await adapter.preview(specFor());
     if ("code" in session) throw session;
     await expect(session.resize({ w: 100, h: 30 })).resolves.toBeUndefined();
-    await expect(session.setMode("interactive")).resolves.toBeUndefined();
-    await expect(session.retry()).resolves.toBeUndefined();
+  });
+
+  test("resize() surfaces a genuine host failure as a FailureDtoV1, not a fabricated success (Task 11)", async () => {
+    const factory = fakeFactory();
+    const adapter = createHostSupervisorAdapter(
+      depsFor({
+        createSession: (spec, sessionDeps) => {
+          const session = factory(spec, sessionDeps);
+          return {
+            ...session,
+            async resize() {
+              return new SupervisorError({
+                code: "TRANSPORT_ERROR",
+                reason: "wire rejected the resize",
+              });
+            },
+          };
+        },
+      }),
+    );
+    const session = await adapter.preview(specFor());
+    if ("code" in session) throw session;
+    const result = await session.resize({ w: 100, h: 30 });
+    expect(result).toBeDefined();
+    if (result === undefined) throw new Error("expected a FailureDtoV1");
+    expect(result.code).toBe("HOST_PROTOCOL_FAILED");
   });
 
   test("setTheme() and query() report the documented not-yet-wired gap as a FailureDtoV1, never a fabricated success", async () => {

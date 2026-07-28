@@ -24,12 +24,22 @@ import type { HostSessionSpec } from "../types";
  * header note.
  *
  * KNOWN DIVERGENCES (documented, not fabricated — flagged in the WP-2 lane report):
- * - `resize`/`setMode`/`retry` are FIRE-AND-FORGET on `SupervisedPreviewSession` (host logs
- *   a dropped failure internally and never surfaces it to the caller). This adapter cannot
- *   recover that disposition, so it invokes the host method and resolves `undefined`
- *   immediately — never fabricating a `FailureDtoV1` for a call that may still be failing
- *   silently inside host. A future host API that returns the awaited disposition would let
- *   this genuinely report failure instead.
+ * - `setMode`/`retry` are FIRE-AND-FORGET on `SupervisedPreviewSession` (host logs a dropped
+ *   failure internally and never surfaces it to the caller). This adapter cannot recover
+ *   that disposition, so it invokes the host method and resolves `undefined` immediately —
+ *   never fabricating a `FailureDtoV1` for a call that may still be failing silently inside
+ *   host. A future host API that returns the awaited disposition would let this genuinely
+ *   report failure instead.
+ * - `resize` USED TO be in the divergence list above too, until Task 11
+ *   (resize-race-diagnosis.md) found the cost of that divergence: `preview.sessionReady`
+ *   fires the instant a `SupervisedPreviewSession` object exists, hundreds of ms before the
+ *   host child accepts control requests, so the shell's first resize landed in that window,
+ *   was refused by `session.ts`'s phase gate, and this adapter reported success anyway —
+ *   `runSimpleLiveCommand` then published a `kernel.stateChanged` for a resize that never
+ *   reached the wire. `SupervisedPreviewSession.resize` now returns the real disposition
+ *   (buffering a pre-ready resize is itself an accepted outcome — see `supervisor.ts`'s
+ *   `sessionFor`/`flushPendingResize`); this adapter awaits it and maps a genuine
+ *   `SupervisorError` the same way `preview()` already does.
  * - `setTheme` has NO host implementation at all (`host/supervisor/model/preview-session.ts`'s
  *   own header: "Deferred facade methods (forwardInput, setTheme, setCapabilities, tweaks)
  *   remain intentionally absent"). This adapter returns a `HOST_PROTOCOL_FAILED` FailureDtoV1
@@ -130,7 +140,11 @@ function toPreviewSession(supervised: SupervisedPreviewSession): PreviewSession 
     },
     frames: toPreviewFrames(supervised.frames),
     async resize(size) {
-      supervised.resize(size); // fire-and-forget — see this file's header note
+      // Task 11: genuinely awaited — no longer fire-and-forget (see this file's header
+      // note). A buffered pre-ready resize resolves `undefined` (accepted, not a failure);
+      // a real `SupervisorError` is mapped the same way `preview()`'s failures are.
+      const failure = await supervised.resize(size);
+      if (failure instanceof SupervisorError) return toHostFailureDto(failure);
       return undefined;
     },
     async setMode(mode) {

@@ -36,6 +36,15 @@ interface KeyState {
   interactionMode: InteractionMode;
   /** One failure per incarnation: guards the start()-error and onFatal channels from double-counting. */
   incarnationFailed: boolean;
+  /**
+   * A resize requested while no incarnation was ready yet (Task 11 —
+   * resize-race-diagnosis.md): last-wins, flushed by `startIncarnation`'s ready hook.
+   * Cleared on EVERY teardown (`onIncarnationFatal`/`close`) so a dead incarnation's
+   * buffered value never survives into a later one — only a resize requested AFTER a
+   * teardown (while queued/backing off/circuit-open) re-populates it for the next
+   * incarnation's own ready hook to flush.
+   */
+  pendingResize: Size | null;
   backoffTimer: TimerHandle | null;
   pumpTask: Promise<void>;
   state: SupervisorState;
@@ -103,6 +112,23 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     }
   }
 
+  // Task 11 (resize-race-diagnosis.md §6): flushes a resize buffered while no
+  // incarnation was ready, through the SAME fire-and-forget dispatch the happy-path
+  // `resize()` below uses — a flush failure is logged, never swallowed (errore rule 21).
+  // Called ONLY from the ready hook, so it always runs against the incarnation that
+  // just became ready.
+  function flushPendingResize(ks: KeyState): void {
+    const pending = ks.pendingResize;
+    if (pending === null) return;
+    ks.pendingResize = null;
+    const current = ks.current;
+    if (current === null) return; // defensive: ready implies current, but never assume it
+    void current.resize(pending).then((result) => {
+      if (result instanceof Error)
+        console.warn("host-supervisor: buffered resize flush failed:", result.message);
+    });
+  }
+
   function startIncarnation(ks: KeyState): void {
     if (ks.closed) return;
     ks.incarnationFailed = false;
@@ -139,6 +165,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         pageSlug: ks.spec.pageSlug,
         sourceHashPrefix: hashPrefix(ks.spec),
       });
+      flushPendingResize(ks);
     });
   }
 
@@ -149,6 +176,9 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   function onIncarnationFatal(ks: KeyState, error: ProtocolError | SupervisorError): void {
     if (ks.incarnationFailed || ks.closed) return;
     ks.incarnationFailed = true;
+    // Task 11: a resize buffered for THIS dying incarnation must not leak into
+    // whatever incarnation starts next (automatic restart or a later manual retry).
+    ks.pendingResize = null;
     const failed = ks.current;
     ks.current = null;
     void failed?.stop();
@@ -230,18 +260,36 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         return ks.interactionMode;
       },
       frames: ks.relay.frames,
-      resize(size: Size) {
+      resize(size: Size): Promise<SupervisorError | undefined> {
+        // Task 11 (resize-race-diagnosis.md): a not-yet-ready incarnation refuses every
+        // control request (session.ts's `sendRequest` phase gate), so calling into it
+        // here would just be lost. Buffer instead — last-wins — and let the ready hook
+        // flush it (host-supervision §8's coalescible-resize contract, cited at
+        // deps.ts's shell-side comment). Buffering IS the accepted disposition, not a
+        // failure: the caller asked for a size, and it WILL be applied once possible.
+        if (ks.state !== "ready") {
+          ks.pendingResize = size;
+          return Promise.resolve(undefined);
+        }
         const current = ks.current;
         if (current === null) {
-          console.warn(
-            `host-supervisor: resize(${ks.key}) dropped — no live incarnation (state "${ks.state}")`,
-          );
-          return;
+          const reason = `resize(${ks.key}) dropped — no live incarnation (state "${ks.state}")`;
+          console.warn(`host-supervisor: ${reason}`);
+          return Promise.resolve(new SupervisorError({ code: "TRANSPORT_ERROR", reason }));
         }
-        // Fire-and-forget; a dropped error is LOGGED, never swallowed (errore rule 21).
-        void current.resize(size).then((result) => {
-          if (result instanceof Error)
-            console.warn("host-supervisor: resize failed:", result.message);
+        // A dropped error is LOGGED, never swallowed (errore rule 21), AND now returned
+        // to the caller — `host-adapters/host-supervisor.ts` no longer has to fabricate
+        // success for a resize that never reached the wire.
+        return current.resize(size).then((result) => {
+          if (!(result instanceof Error)) return undefined;
+          console.warn("host-supervisor: resize failed:", result.message);
+          return result instanceof SupervisorError
+            ? result
+            : new SupervisorError({
+                code: "TRANSPORT_ERROR",
+                reason: result.message,
+                cause: result,
+              });
         });
       },
       setMode(next: InteractionMode) {
@@ -306,6 +354,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   async function close(ks: KeyState): Promise<void> {
     if (ks.closed) return;
     ks.closed = true;
+    ks.pendingResize = null; // Task 11: a key that is closing will never reach ready again
     ks.backoffTimer?.cancel();
     ks.backoffTimer = null;
     const queueIndex = startQueue.indexOf(ks);
@@ -344,6 +393,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       current: null,
       interactionMode: spec.interactionMode,
       incarnationFailed: false,
+      pendingResize: null,
       backoffTimer: null,
       pumpTask: Promise.resolve(),
       state: "queued",

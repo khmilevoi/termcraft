@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import { PROTOCOL_HARD_LIMITS, ProtocolError } from "../../protocol";
-import type { ControlEnvelope, FrameIdentity, RuntimeDeclarationBundleV1 } from "../../protocol";
+import type {
+  ControlEnvelope,
+  FrameEnvelope,
+  FrameIdentity,
+  HostHelloV1,
+  RuntimeDeclarationBundleV1,
+} from "../../protocol";
 import type { HostSessionSpec, InteractionMode, PreviewFrame, Size } from "../../types";
 import type {
   GeometryQuery,
@@ -14,7 +20,11 @@ import type {
 import { createManualClock } from "./clock";
 import { SupervisorError } from "./errors";
 import { createPreviewRelay } from "./preview-relay";
+import { createScriptedChild, frameControl, frameFrame, frameHostHello } from "./scripted-child";
+import type { ScriptedChild } from "./scripted-child";
 import { createHostSupervisor } from "./supervisor";
+import { HANDSHAKE_TIMEOUT_MS } from "./timeouts";
+import { readInbound } from "./transport";
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
@@ -678,6 +688,267 @@ describe("createHostSupervisor — interactionMode updates only from an accepted
       () => handle.interactionMode === "interactive",
       "interactionMode updated from the accepted set-mode response",
     );
+    await supervisor.stopAll();
+  });
+});
+
+// --- Task 11 (resize-race-diagnosis.md): `preview.sessionReady` (and the mirror's
+// `phase: "ready"`, and the capability guard's `live`) fires the instant
+// `hostSupervisor.preview()` returns a session object — while `ks.state` is still
+// "starting" and the real incarnation is negotiating/mounting, 661ms before the child
+// can accept control requests in the captured run. A resize requested in that window
+// reached `sessionFor`'s old fire-and-forget `resize()`, which called straight into the
+// not-yet-ready `HostSession`; `session.ts`'s `sendRequest` phase gate ("resize requires
+// a ready session") refused it before it ever reached `controlQueue`, and the refusal was
+// swallowed (fire-and-forget). These tests use a REAL `createHostSession` (no fake
+// `createSession` override) driven by a scripted child the test answers manually, so the
+// phase gate exercised is the genuine one from `session.ts`, not a hand-rolled stand-in —
+// only that makes the RED failure below prove the diagnosed defect rather than a fake's
+// leniency.
+
+/**
+ * A child that answers `client.hello`/`mount` only when the test explicitly tells it to
+ * (`replyHello`/`replyReady`), so the incarnation parks in "negotiating"/"mounting" for as
+ * long as the test needs — the same technique `session.test.ts`'s HANDSHAKE_TIMEOUT/
+ * MOUNT_TIMEOUT tests use, just driven manually instead of by a timeout. Every `resize`
+ * control envelope that reaches the wire is recorded (and acked), so a test can assert
+ * exactly how many resizes were dispatched, and with what size.
+ */
+function parkingChild(spec: HostSessionSpec): {
+  child: ScriptedChild;
+  identity: () => { sessionId: string; nonce: string } | null;
+  hasMountRequest: () => boolean;
+  replyHello: () => void;
+  replyReady: () => void;
+  resizeWrites: () => Size[];
+} {
+  const child = createScriptedChild();
+  let id: { sessionId: string; nonce: string } | null = null;
+  let mountRequestId: string | null = null;
+  const resizeWrites: Size[] = [];
+  let messageId = 1n;
+  const nextId = () => (messageId++).toString();
+
+  child.onWrite = (bytes) => {
+    void (async () => {
+      // reuse readInbound over a throwaway child carrying just these bytes, exactly as
+      // session.test.ts's own respondingChild and preview-test-host.ts's livePreviewChild do.
+      const carrier = createScriptedChild();
+      carrier.emit(bytes);
+      carrier.endStdout();
+      for await (const message of readInbound(carrier)) {
+        if (message instanceof Error) return;
+        if (message.messageClass !== "control") return;
+        const raw = JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope & {
+          kind: string;
+        };
+        if (raw.kind === "client.hello" && id === null) {
+          id = { sessionId: raw.sessionId, nonce: raw.nonce };
+          return;
+        }
+        if (raw.kind === "mount") {
+          mountRequestId = raw.requestId ?? null;
+          return;
+        }
+        if (raw.kind === "resize" && id !== null) {
+          resizeWrites.push(raw.body.size as unknown as Size);
+          const ack: ControlEnvelope = {
+            protocolVersion: 1,
+            kind: "resize",
+            sessionId: id.sessionId,
+            nonce: id.nonce,
+            messageId: nextId(),
+            responseTo: raw.requestId,
+            body: { size: raw.body.size! },
+          };
+          const framed = frameControl(ack);
+          if (!(framed instanceof ProtocolError)) child.emit(framed);
+          return;
+        }
+        if (raw.kind === "shutdown" && id !== null) {
+          // stopAll()/close() drive a graceful shutdown from "ready" (session.ts's
+          // stop()) — ack it and exit, exactly as livePreviewChild does, or a test's
+          // stopAll() would hang on the manual clock's un-advanced 1s ack deadline.
+          const ack: ControlEnvelope = {
+            protocolVersion: 1,
+            kind: "shutdown-ack",
+            sessionId: id.sessionId,
+            nonce: id.nonce,
+            messageId: nextId(),
+            responseTo: raw.requestId,
+            body: { ok: true },
+          };
+          const framed = frameControl(ack);
+          if (!(framed instanceof ProtocolError)) child.emit(framed);
+          child.simulateExit({ code: 0 });
+        }
+      }
+    })();
+  };
+
+  return {
+    child,
+    identity: () => id,
+    hasMountRequest: () => mountRequestId !== null,
+    replyHello: () => {
+      if (id === null) throw new Error("parkingChild: client.hello not received yet");
+      const hostHello: HostHelloV1 = {
+        framingVersion: 1,
+        kind: "host.hello",
+        sessionId: id.sessionId,
+        nonce: id.nonce,
+        selectedFramingVersion: 1,
+        selectedProtocolVersion: 1,
+        runtimeDeclaration,
+        limits: PROTOCOL_HARD_LIMITS,
+      };
+      const framed = frameHostHello(hostHello);
+      if (framed instanceof ProtocolError) throw framed;
+      child.emit(framed);
+    },
+    replyReady: () => {
+      if (id === null || mountRequestId === null) {
+        throw new Error("parkingChild: mount not received yet");
+      }
+      const ready: ControlEnvelope = {
+        protocolVersion: 1,
+        kind: "ready",
+        sessionId: id.sessionId,
+        nonce: id.nonce,
+        messageId: nextId(),
+        responseTo: mountRequestId,
+        body: { size: { w: spec.size.w, h: spec.size.h }, interactionMode: spec.interactionMode },
+      };
+      const readyFramed = frameControl(ready);
+      if (readyFramed instanceof ProtocolError) throw readyFramed;
+      child.emit(readyFramed);
+      // awaitReady (session.ts) waits for BOTH `ready` AND the first data-class frame
+      // under one deadline — the real 2C child always sends ready then the frame, so the
+      // test double must too, or the incarnation never reaches "ready" (hangs instead).
+      const frame: FrameEnvelope = {
+        protocolVersion: 1,
+        kind: "frame",
+        sessionId: id.sessionId,
+        nonce: id.nonce,
+        sourceHash: spec.sourceHash,
+        frameSeq: "1",
+        width: spec.size.w,
+        height: spec.size.h,
+        rows: Array.from({ length: spec.size.h }, () => []),
+      };
+      const frameFramed = frameFrame(frame);
+      if (frameFramed instanceof ProtocolError) throw frameFramed;
+      child.emit(frameFramed);
+    },
+    resizeWrites: () => resizeWrites,
+  };
+}
+
+describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Task 11)", () => {
+  test("a resize requested while starting (negotiating/mounting) is buffered and flushed exactly once when ready", async () => {
+    const spec = specFor();
+    const host = parkingChild(spec);
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: () => host.child,
+      mintSessionId: () => "sid-1",
+    });
+
+    const handle = supervisor.preview(spec);
+    if (handle instanceof Error) throw handle;
+    expect(handle.state()).toBe("starting");
+
+    await waitUntil(() => host.identity() !== null, "client.hello reached the child");
+
+    // The diagnosed race window: the incarnation is negotiating, ks.state is still
+    // "starting". Before the fix this reached the real (refusing) session and was lost.
+    const pending = handle.resize({ w: 86, h: 30 });
+    expect(handle.state()).toBe("starting");
+    expect(host.resizeWrites()).toHaveLength(0); // nothing hit the wire yet
+
+    host.replyHello();
+    await waitUntil(() => host.hasMountRequest(), "mount reached the child");
+    host.replyReady();
+    await waitUntil(() => handle.state() === "ready", "ready");
+
+    expect(await pending).toBeUndefined(); // buffering is an accepted disposition, not a failure
+    expect(host.resizeWrites()).toEqual([{ w: 86, h: 30 }]);
+    await supervisor.stopAll();
+  });
+
+  test("several resizes requested before ready coalesce to exactly one flushed envelope, carrying the LAST size", async () => {
+    const spec = specFor();
+    const host = parkingChild(spec);
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: () => host.child,
+      mintSessionId: () => "sid-1",
+    });
+
+    const handle = supervisor.preview(spec);
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => host.identity() !== null, "client.hello reached the child");
+
+    void handle.resize({ w: 60, h: 20 });
+    void handle.resize({ w: 74, h: 24 });
+    const last = handle.resize({ w: 86, h: 30 });
+    expect(host.resizeWrites()).toHaveLength(0);
+
+    host.replyHello();
+    await waitUntil(() => host.hasMountRequest(), "mount reached the child");
+    host.replyReady();
+    await waitUntil(() => handle.state() === "ready", "ready");
+
+    expect(await last).toBeUndefined();
+    expect(host.resizeWrites()).toEqual([{ w: 86, h: 30 }]); // last-wins, exactly one envelope
+    await supervisor.stopAll();
+  });
+
+  test("a resize buffered before an incarnation dies is cleared on teardown and never leaks into the next incarnation", async () => {
+    const spec = specFor();
+    const first = parkingChild(spec);
+    const second = parkingChild(spec);
+    let attempt = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: () => {
+        attempt += 1;
+        return attempt === 1 ? first.child : second.child;
+      },
+      mintSessionId: () => "sid-1",
+    });
+
+    const handle = supervisor.preview(spec);
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => first.identity() !== null, "1st client.hello reached the child");
+
+    handle.resize({ w: 999, h: 999 }); // buffered while the 1st incarnation is still negotiating
+
+    // Never reply hello — the handshake budget times out, killing the 1st incarnation via
+    // the REAL session.ts path (the same technique session.test.ts's own timeout tests use).
+    await waitUntil(() => clock.pending() >= 1, "handshake timer armed");
+    clock.advance(HANDSHAKE_TIMEOUT_MS);
+    await waitUntil(() => handle.state() === "backoff", "1st incarnation died, backing off");
+
+    clock.advance(250); // fires the backoff timer, spawning the 2nd incarnation
+    await waitUntil(() => second.identity() !== null, "2nd client.hello reached the child");
+    second.replyHello();
+    await waitUntil(() => second.hasMountRequest(), "2nd incarnation mounting");
+    second.replyReady();
+    await waitUntil(() => handle.state() === "ready", "2nd incarnation ready");
+
+    // The buffered resize belonged to the DEAD 1st incarnation and must not survive.
+    expect(second.resizeWrites()).toHaveLength(0);
+    expect(first.resizeWrites()).toHaveLength(0);
     await supervisor.stopAll();
   });
 });

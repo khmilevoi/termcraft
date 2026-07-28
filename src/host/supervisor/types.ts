@@ -376,6 +376,19 @@ export interface SupervisorEvent {
 export interface SupervisedPreviewSession extends PreviewSession {
   /** The current supervised lifecycle state (§10) — an observability extra past the base facade. */
   state(): SupervisorState;
+  /**
+   * Overrides the base facade's fire-and-forget `resize(): void` with the real disposition
+   * (Task 11 — resize-race-diagnosis.md). `preview.sessionReady` fires the instant this
+   * key's `KeyState` exists, not when the incarnation can accept control requests, so a
+   * resize issued in that window used to reach a not-yet-ready `HostSession` and be
+   * refused-then-swallowed. `undefined` now covers BOTH "dispatched to the live
+   * incarnation" and "buffered because no incarnation is ready yet" (last-wins, flushed
+   * from `supervisor.ts`'s ready hook — host-supervision §8's coalescible-resize
+   * contract). A `SupervisorError` means a LIVE incarnation genuinely refused or dropped
+   * the request, so `host-adapters/host-supervisor.ts` can report that instead of a
+   * fabricated success.
+   */
+  resize(size: Size): Promise<SupervisorError | undefined>;
 }
 
 /** Injected dependencies of the standalone `HostSupervisor` (§13). */
