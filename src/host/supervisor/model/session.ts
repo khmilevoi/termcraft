@@ -1,3 +1,5 @@
+import { trace } from "infrastructure/debug-log";
+
 import {
   PROTOCOL_HARD_LIMITS,
   ProtocolError,
@@ -14,8 +16,6 @@ import type {
   ProtocolViolationCode,
 } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, Size } from "../../types";
-import { trace } from "infrastructure/debug-log";
-
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";

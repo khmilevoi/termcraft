@@ -152,7 +152,8 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
         // `unhandledRejection` listener and take down the whole live session over housekeeping.
         void proc.exited.then(
           () => removeScratchDir(scratch),
-          (cause) => console.warn(`host: scratch cleanup skipped for ${scratch} — exited rejected`, cause),
+          (cause) =>
+            console.warn(`host: scratch cleanup skipped for ${scratch} — exited rejected`, cause),
         );
         return proc as unknown as SpawnedChild;
       } catch (cause) {
