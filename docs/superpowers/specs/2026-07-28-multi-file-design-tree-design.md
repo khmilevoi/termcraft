@@ -332,10 +332,16 @@ The bullet list is populated for this migration with the real plan: pages moved 
 `design/`, `pages.json` synthesized from the existing order, pin logs relocated,
 `project.toml` rewritten.
 
-`esc later` returns to Home without opening the project. The design shows the dialog at
-the setup tier and states no other deferral behavior, so this is an interpretation, not a
-transcription: the alternative — opening a workspace whose page store cannot read the
-old layout — has nothing to show.
+**A version-1 project never opens.** The workspace is not constructed for it, and there is
+no read-only, degraded, or partially-open state. The dialog is the only thing the project
+produces: `⏎ migrate` runs the migration and then opens the migrated project, `esc later`
+returns to Home having written nothing.
+
+This is what keeps the blast radius small. Because the old layout is never rendered,
+previewed, exported, or handed to a turn, **no compatibility reader for it exists anywhere
+in the system** — not in the page store, the Gate, the host, or the UI. Every one of those
+only ever sees format 2. The old layout is understood by exactly one thing: the migration
+step itself.
 
 Detection cannot rest on the version counter alone. `src/store/model/factory.ts` wires only
 the registry's `checkNotTooNew` gate; `findSteps` has no production caller, so a version-1
