@@ -404,18 +404,26 @@ export function createUiDeps(
       // back to the slug alone rather than inventing a hash — one redundant re-select is
       // cheaper than a preview stuck on stale content.
       let lastRequestedPageKey: string | null = null;
-      // Retires the tab strip's optimistic pick. Declared HERE, above its first use, for the
-      // same reason `active` is: `bind(...)` must be created in this hook body, before anything
-      // async, so the `pageOverride.set` it performs from a promise continuation lands in the
-      // runtime's own Reatom context instead of the default one (RTM-A04). Two callers — the
-      // terminal-refusal branch below, and the Kernel-truth subscriber further down.
+      // TWO WAYS TO RETIRE THE TAB STRIP'S OPTIMISTIC PICK, and they are not interchangeable.
+      // Both are declared HERE, above their first use, for the same reason `active` is:
+      // `bind(...)` must be created in this hook body, before anything async, so the
+      // `pageOverride.set` each performs from a promise continuation or a subscriber lands in the
+      // runtime's own Reatom context rather than the default one (RTM-A04).
+      //
+      // UNCONDITIONAL — one caller, the Kernel-truth subscriber further down. When the Kernel
+      // publishes an active slug of its own it is authoritative whatever the pick was, so there
+      // is nothing to compare against.
       const retirePageOverride = bind(() => pageOverride.set(null));
-      // SCOPED TO ITS OWN DISPATCH. The memo is keyed `slug@hash`, so two quick clicks leave two
-      // `preview.selectPage` dispatches in flight at once. An unconditional clear would let the
-      // FIRST one's refusal wipe the SECOND, still-pending pick — the effective slug would snap
-      // back to the Kernel's page and the strip would again mark a page the user did not choose,
-      // which is precisely the defect this branch exists to fix. A refusal may only retire the
-      // pick it was actually dispatched for.
+      // SCOPED TO ITS OWN DISPATCH — the two terminal-refusal branches below. The memo is keyed
+      // `slug@hash`, so two quick clicks leave two `preview.selectPage` dispatches in flight at
+      // once. An unconditional clear would let the FIRST one's refusal wipe the SECOND,
+      // still-pending pick — the effective slug would snap back to the Kernel's page and the strip
+      // would again mark a page the user did not choose, which is precisely the defect this branch
+      // exists to fix. A refusal may only retire the pick it was actually dispatched for.
+      //
+      // Slug equality is the comparison, so it still cannot tell two in-flight dispatches for the
+      // SAME slug apart (click B, click C, click B again). Narrower than the case above and not
+      // closed here; a per-dispatch token would be the real fix — recorded as follow-up.
       const retirePageOverrideIfCurrent = bind((rawPageSlug: string) => {
         if (pageOverride() !== rawPageSlug) return;
         pageOverride.set(null);
@@ -525,9 +533,10 @@ export function createUiDeps(
       // rule: a changed Kernel slug retires the override. Starts `null` rather than reading
       // `mirror.project()` here, which would make this connect hook depend on the project slice:
       // no override can exist before the first tab click anyway, so the first notification's
-      // clear is a no-op. This is the SECOND caller of `retirePageOverride` (declared above, with
-      // the dispatch it pairs with); a refused switch is the other, and both mean the same thing
-      // — the pick is no longer backed by anything the preview is actually showing.
+      // clear is a no-op. This is the ONLY caller of the unconditional `retirePageOverride`
+      // (declared above): Kernel truth outranks the pick whatever it was, so unlike the refusal
+      // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
+      // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
       let lastKernelPageSlug: string | null = null;
       const unsubscribeProject = mirror.project.subscribe((project) => {
         if (project.activePageSlug !== lastKernelPageSlug) {
