@@ -42,7 +42,7 @@ import {
   createPreviewInteractionState,
   handleGeometryResult,
 } from "ui/preview";
-import type { FocusTarget, OverlayKind } from "ui/workspace";
+import { type FocusTarget, type OverlayKind, previewRegionSize } from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
@@ -282,6 +282,9 @@ export function createUiDeps(
   const previewFrame = atom<UiPreviewFrame | null>(null, "ui.app.previewFrame");
   const runtimeError = atom<Error | null>(null, "ui.app.runtimeError");
   const interaction = createPreviewInteractionState();
+  // Declared here, above `runtime`, because that atom's connect hook reads it to size the
+  // preview region — same reason `pageOverride` is hoisted.
+  const fullscreen = atom(false, "ui.local.fullscreen");
   // The tab-strip override and the one effective slug derived from it — see
   // `ui/workspace/model/page-selection.ts` for why the user's page choice is UI-local state.
   // Declared here, above `runtime`, because that atom's connect hook drives the preview session
@@ -307,6 +310,32 @@ export function createUiDeps(
     return { slug, sourceHash: descriptor?.sourceHash ?? null };
   }, "ui.app.activePageRequest");
 
+  /**
+   * The size the live preview session SHOULD be rendering at, or `null` when there is
+   * nothing to ask for. Reads the region from the one geometry module the Workspace lays
+   * itself out with (`ui/workspace`'s `previewRegionSize`), so the rectangle the host fills
+   * and the box the shell paints into are the same rectangle by construction.
+   *
+   * `preview.size` is the size the session was ESTABLISHED at and never changes afterwards —
+   * `handleResize` publishes only `kernel.stateChanged`, no size event — so this comparison
+   * is an honest skip only for the first ask after establishment. The per-(session, size)
+   * memo inside the connect hook below is the real repeat guard.
+   */
+  const previewTargetSize = computed<Readonly<{
+    previewSessionId: UUIDv7;
+    w: number;
+    h: number;
+  }> | null>(() => {
+    const preview = mirror.preview();
+    // Only `ready` maps to the machine's `live` phase, the one phase the capability guard
+    // admits `preview.resize` from (`core/capabilities/model/guards.ts`).
+    if (preview.phase !== "ready") return null;
+    const region = previewRegionSize(terminal(), fullscreen());
+    if (region.w < 1 || region.h < 1) return null;
+    if (region.w === preview.size.w && region.h === preview.size.h) return null;
+    return { previewSessionId: preview.previewSessionId, w: region.w, h: region.h };
+  }, "ui.app.previewTargetSize");
+
   const runtime = atom<undefined>(undefined, "ui.app.runtime").extend(
     withConnectHook(() => {
       // These callbacks are bound while the runtime is connected. The frame consumer runs
@@ -318,6 +347,50 @@ export function createUiDeps(
       });
       const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
+      // THE MISSING PRODUCER for `preview.resize`. The command has been wired end to end —
+      // schema, guard, `handleResize`, `PreviewSessionCommands.resize`, the host adapter, the
+      // child — with nothing in `src/ui` ever issuing it, so every preview rendered at
+      // `sizeFromWorkspaceState`'s `"auto"` fallback (80×24) whatever the pane's real size
+      // was. Owned by THIS hook and torn down below (RTM-L01); `bind` is created here, in the
+      // hook body, because the `.then` continuation writes `lastResizeKey` and the dispatch
+      // resolves outside this frame (RTM-A04).
+      //
+      // Coalescing is the host's job by contract (host-supervision §8: "coalescible resize …
+      // may continue to replace an already pending value"), and `PreviewSessionCommands
+      // .resize` deliberately reserves no queue slot — so a drag that emits many sizes is
+      // handled downstream rather than debounced here.
+      let lastResizeKey: string | null = null;
+      const requestPreviewResize = bind(
+        (target: Readonly<{ previewSessionId: UUIDv7; w: number; h: number }>) => {
+          const key = `${target.previewSessionId}@${target.w}x${target.h}`;
+          if (key === lastResizeKey) return;
+          lastResizeKey = key;
+          trace("ui.preview.resize", target);
+          void dispatcher
+            .dispatch("preview.resize", {
+              previewSessionId: target.previewSessionId,
+              width: target.w,
+              height: target.h,
+            })
+            .then((result) => {
+              if (result instanceof Error) {
+                // Logged, never swallowed (errore rule 21). A preview stuck at the previous
+                // size is a degraded view, not an unusable UI, so `runtimeError` stays clear.
+                console.warn("UI preview.resize dispatch failed:", result);
+                lastResizeKey = null;
+                return;
+              }
+              if (result.status === "rejected") {
+                console.warn(`UI preview.resize was rejected (${result.code})`);
+                lastResizeKey = null;
+              }
+            });
+        },
+      );
+      const unsubscribePreviewSize = previewTargetSize.subscribe((target) => {
+        if (target === null) return;
+        requestPreviewResize(target);
+      });
       // The frame loop's attachment point. Declared HERE, above `applyEnvelope` — which reads
       // it through `resyncPreviewSession` — because `port.subscribe` below may deliver an
       // envelope synchronously, and a `let` declared further down would still be in its
@@ -614,6 +687,7 @@ export function createUiDeps(
         stopFrameIterator();
         unsubscribeActivePage();
         unsubscribeProject();
+        unsubscribePreviewSize();
         if (typeof unsubscribe === "function") unsubscribe();
       };
     }),
@@ -660,7 +734,7 @@ export function createUiDeps(
     prompt,
     composer,
     focus: atom<FocusTarget>("composer", "ui.local.focus"),
-    fullscreen: atom(false, "ui.local.fullscreen"),
+    fullscreen,
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
     slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),

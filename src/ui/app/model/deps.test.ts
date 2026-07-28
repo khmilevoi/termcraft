@@ -4,6 +4,7 @@ import { context } from "@reatom/core";
 
 import type { PreviewFrameV1 } from "core/ports";
 import type { CommandResultV1 } from "core/protocol";
+import { uuidv7 } from "infrastructure/uuid";
 import type { HomeAgentHealth } from "ui/home";
 import { homeSubmitAllowed } from "ui/home";
 import {
@@ -716,5 +717,95 @@ describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, requestExit);
     deps.requestExit();
     expect(calls).toBe(1);
+  });
+});
+
+describe("preview resize", () => {
+  const sessionReady = (previewSessionId: string, size: { w: number; h: number }) =>
+    event("preview.sessionReady", {
+      previewSessionId: previewSessionId as never,
+      nonce: TEST_NONCE,
+      pageSlug: "dashboard",
+      sourceHash: TEST_SHA,
+      hostMode: "preview",
+      interactionMode: "static",
+      size,
+      theme: "dark-default",
+      initialFrameSeq: "1",
+    });
+
+  const resizeEnvelopes = (kernel: { readonly dispatched: readonly unknown[] }) =>
+    kernel.dispatched.filter(
+      (raw) => (raw as { kind?: unknown }).kind === "preview.resize",
+    ) as readonly {
+      readonly payload: { previewSessionId: string; width: number; height: number };
+    }[];
+
+  test("asks the host for the region size once a session is established at a different size", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    // The runtime's connect hook attaches through Reatom's own hook queue, which flushes on a
+    // microtask (`_enqueue`, `@reatom/core`'s `withConnectHook`) — never synchronously with
+    // `.subscribe()` itself. Every sibling test in this file waits one tick before the FIRST
+    // Kernel emission for the same reason; this is that same wait, just against a plain
+    // microtask rather than `tick()`'s `setTimeout`, since nothing here needs a macrotask.
+    await Promise.resolve();
+    const previewSessionId = uuidv7();
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+
+    expect(resizeEnvelopes(kernel)).toHaveLength(1);
+    expect(resizeEnvelopes(kernel)[0]?.payload).toEqual({
+      previewSessionId,
+      width: 74,
+      height: 30,
+    });
+    stop();
+  });
+
+  test("does not ask again for a size it already asked for", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    await Promise.resolve();
+    const previewSessionId = uuidv7();
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+    // A second readiness event for the SAME session and size must not re-ask.
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+
+    expect(resizeEnvelopes(kernel)).toHaveLength(1);
+    stop();
+  });
+
+  test("asks again when the terminal is resized", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    await Promise.resolve();
+    const previewSessionId = uuidv7();
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+    deps.terminal.set({ w: 140, h: 36 });
+    await Promise.resolve();
+
+    const envelopes = resizeEnvelopes(kernel);
+    expect(envelopes).toHaveLength(2);
+    expect(envelopes[1]?.payload).toEqual({ previewSessionId, width: 86, height: 32 });
+    stop();
+  });
+
+  test("never asks while no session is live", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    await Promise.resolve();
+    deps.terminal.set({ w: 140, h: 36 });
+    await Promise.resolve();
+
+    expect(resizeEnvelopes(kernel)).toHaveLength(0);
+    stop();
   });
 });
