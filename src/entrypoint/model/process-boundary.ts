@@ -1,3 +1,5 @@
+import * as errore from "errore";
+
 import { resumeConsolePassthrough } from "infrastructure/debug-log";
 
 import type { ProcessBoundary, ShutdownSignal } from "../types";
@@ -117,9 +119,23 @@ export function createProcessBoundary(
   function restoreTerminal(): void {
     if (restored) return;
     restored = true;
-    terminal.disableRawMode();
-    terminal.disableMouseCapture();
-    terminal.exitAlternateScreen();
+    // GUARDED, SO NOTHING BELOW CAN BE SKIPPED (2026-07-28). These three are real syscalls on
+    // stdio this path cannot assume is healthy — `REAL_TERMINAL_CONTROL` above is
+    // `process.stdin.setRawMode` plus two `process.stdout.write`s, and a broken pipe makes those
+    // throw SYNCHRONOUSLY, which is precisely the state a panic tends to arrive in. Left
+    // unguarded, one throw here escaped `restoreTerminal` entirely and took the whole rest of the
+    // fatal path with it: `resumeConsolePassthrough()` below, `reportFatal`'s own `console.error`,
+    // and `onPanic`'s `exit(1)` — a throw inside the `uncaughtException` handler itself, with the
+    // operator left looking at a half-restored, blank terminal.
+    //
+    // `errore.try` rather than a bare `try/finally`: a `finally` would run the resume but still
+    // propagate, so the report and the exit would stay lost. The three are guarded as one step
+    // because the realistic failure — a destroyed stdout — fails both writes together anyway.
+    const teardown = errore.try(() => {
+      terminal.disableRawMode();
+      terminal.disableMouseCapture();
+      terminal.exitAlternateScreen();
+    });
     // The fourth thing a live renderer took, and the one `TerminalControl` cannot express: while
     // it owned the terminal, `ui/app/model/root.tsx` had the debug-log tee stop calling through
     // to the real writer, so nothing would paint raw text over a frame
@@ -132,6 +148,12 @@ export function createProcessBoundary(
     // never suspend anything) would otherwise be free to omit it. Idempotent, and a no-op in
     // every process that never suspended.
     resumeConsolePassthrough();
+    // Logged, never silently dropped (errore rule 21) — and AFTER the resume, so it reaches the
+    // screen rather than only the trace file. Ahead of the caller's own fatal message on purpose:
+    // it explains a terminal that may still be half-restored when that message lands.
+    if (teardown instanceof Error) {
+      console.error("termcraft: terminal restore did not complete:", teardown);
+    }
   }
 
   function reportFatal(message: string, cause: unknown): void {

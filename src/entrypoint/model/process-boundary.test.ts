@@ -235,4 +235,38 @@ describe("createProcessBoundary with a suspended console tee", () => {
 
     expect(printed).toContain("termcraft: startup failed");
   });
+
+  /**
+   * A THROWING TEARDOWN MUST NOT COST THE REPORT (final-review round 2). `restoreTerminal`'s three
+   * calls are real syscalls on stdio a panic cannot assume is healthy — `REAL_TERMINAL_CONTROL` is
+   * `process.stdin.setRawMode` plus two `process.stdout.write`s, and a broken pipe makes those
+   * throw synchronously. Unguarded, that throw skipped `resumeConsolePassthrough()`, the fatal
+   * message, AND the exit: the panic handler itself threw, and the operator was left with a
+   * half-restored, blank terminal — the exact outcome the suspension exists to avoid.
+   */
+  test("a teardown that throws still hands the terminal back, prints, and exits", () => {
+    const { target, handlers } = fakeTarget();
+    const printed: string[] = [];
+    const exits: string[] = [];
+
+    withSuspendedTee(printed, () => {
+      createProcessBoundary(
+        target,
+        {
+          disableRawMode: () => undefined,
+          disableMouseCapture: () => undefined,
+          exitAlternateScreen: () => {
+            throw new Error("EPIPE: broken pipe");
+          },
+        },
+        fakeExit(exits),
+      );
+      handlers.get("uncaughtException")?.(new Error("boom"));
+    });
+
+    expect(printed.some((line) => line.includes("boom"))).toBe(true);
+    expect(exits).toEqual(["exit:1"]);
+    // The teardown failure is reported too, never silently dropped (errore rule 21).
+    expect(printed.some((line) => line.includes("terminal restore did not complete"))).toBe(true);
+  });
 });

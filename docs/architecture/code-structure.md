@@ -534,11 +534,18 @@ vendor tier's own pre-split run-loop file.
   `src/entrypoint/model/process-boundary.ts`'s `restoreTerminal`, which is the only
   one a panic reaches — a fatal message that reached the trace file and nothing else
   would leave the operator with a blank terminal, which is worse than the torn frame
-  the suspension prevents. The three paths that first have to tear a renderer down —
-  the two mount-failure branches and `dispose()` — put the resume in a `finally`, so
-  a throwing `destroy()`/`unmount()` cannot strand the gate; the other two have no
-  teardown to throw ahead of them and resume with a plain statement. The gate covers `console.*` only; a direct
-  `process.stderr.write` or the runtime's own uncaught-exception printer bypasses it
+  the suspension prevents. No path can have its resume skipped by a throwing
+  teardown, by one of two mechanisms. The three that tear a renderer down — the
+  two mount-failure branches and `dispose()` — put the resume in a `finally`, so
+  a throwing `destroy()`/`unmount()` cannot strand the gate. `restoreTerminal`
+  instead runs its three terminal calls through `errore.try`: they are
+  `process.stdin.setRawMode` plus two `process.stdout.write`s, which throw
+  synchronously on the broken pipe a panic tends to arrive with, and a `finally`
+  there would run the resume but still propagate — losing the fatal message and
+  the exit that follow it. The renderer-that-never-came-up branch needs neither
+  mechanism, having nothing to tear down, and resumes with a plain statement. The
+  gate covers `console.*` only; a direct `process.stderr.write` or the runtime's
+  own uncaught-exception printer bypasses it
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
 
