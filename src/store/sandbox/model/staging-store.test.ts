@@ -264,21 +264,21 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     expect(result.turnJsonPath).toBe(turnJsonPath(USER_STATE_ROOT, projectKey, TURN_ID));
     expect(result.files.map((f) => f.relPath).sort()).toEqual([
       "RUNTIME.md",
-      "pages.json",
-      "pages/about.tsx",
-      "pages/home.tsx",
+      "design/pages.json",
+      "design/pages/about.tsx",
+      "design/pages/home.tsx",
       "types/foo.d.ts",
     ]);
 
-    const home = result.files.find((f) => f.relPath === "pages/home.tsx");
+    const home = result.files.find((f) => f.relPath === "design/pages/home.tsx");
     if (home === undefined) throw new Error("home page missing");
-    expect(home.namespace).toBe("agent-page-source");
+    expect(home.namespace).toBe("design-source");
     expect(home.sha256).toBe(crypto.createHash("sha256").update(HOME_TSX).digest("hex"));
     expect(home.size).toBe(HOME_TSX.byteLength);
 
-    const manifest = result.files.find((f) => f.relPath === "pages.json");
+    const manifest = result.files.find((f) => f.relPath === "design/pages.json");
     if (manifest === undefined) throw new Error("manifest missing");
-    expect(manifest.namespace).toBe("agent-manifest");
+    expect(manifest.namespace).toBe("design-source");
     expect(manifest.sha256).toBe(crypto.createHash("sha256").update(MANIFEST).digest("hex"));
 
     const dts = result.files.find((f) => f.relPath === "types/foo.d.ts");
@@ -490,7 +490,7 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     if (result instanceof Error) throw result;
     expect(result.files.map((f) => f.relPath).sort()).toEqual([
       "RUNTIME.md",
-      "pages.json",
+      "design/pages.json",
       "types/foo.d.ts",
     ]);
   });
@@ -578,7 +578,9 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
     );
     if (result instanceof Error) throw result;
 
-    expect(fs.readFileSync(path.join(result.root, "pages", "home.tsx"), "utf8")).toContain("Home");
+    expect(
+      fs.readFileSync(path.join(result.root, "design", "pages", "home.tsx"), "utf8"),
+    ).toContain("Home");
     expect(fs.readFileSync(path.join(result.root, "RUNTIME.md"), "utf8")).toContain("runtime");
     expect(fs.existsSync(result.turnJsonPath)).toBe(true);
     const record = JSON.parse(fs.readFileSync(result.turnJsonPath, "utf8")) as Record<
@@ -596,7 +598,7 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
       }),
     );
     expect(collided).toBeInstanceOf(WorkspaceCollisionError);
-    expect(fs.existsSync(path.join(result.root, "pages", "home.tsx"))).toBe(true);
+    expect(fs.existsSync(path.join(result.root, "design", "pages", "home.tsx"))).toBe(true);
   });
 
   test("retireWorkspace deletes the workspace AND turn.json — the whole turn tree, on a real volume", async () => {

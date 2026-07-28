@@ -50,6 +50,12 @@ beforeAll(() => {
   fs.mkdirSync(path.join(root, "pages"));
   fs.mkdirSync(path.join(root, "pages", "home"));
   fs.writeFileSync(path.join(root, "pages", "home", "page.tsx"), "export const meta = {}\n");
+  // The retired `pages/<slug>/page.tsx` fixture above stays — `resolveManagedPath` and
+  // `assertWithinRoot` below are namespace-agnostic and still exercise it. Anything that goes
+  // through `SafeProjectFs` (`readFile`/`stat`/`readRange`/`list`) enforces the §5.3 grammar,
+  // so it needs a leaf that actually classifies — the design tree's `design/pages/home.tsx`.
+  fs.mkdirSync(path.join(root, "design", "pages"), { recursive: true });
+  fs.writeFileSync(path.join(root, "design", "pages", "home.tsx"), "export const meta = {}\n");
   fs.writeFileSync(path.join(outside, "secret.txt"), "TOP SECRET\n");
 });
 
@@ -190,13 +196,13 @@ describe("assertWithinRoot", () => {
 describe("SafeProjectFs", () => {
   test("reads a managed leaf and lists a managed directory", () => {
     const safeFs = createSafeProjectFs(openRoot(), deps);
-    const bytes = safeFs.readFile("pages/home/page.tsx");
+    const bytes = safeFs.readFile("design/pages/home.tsx");
     if (bytes instanceof Error) throw new Error(bytes.message);
     expect(Buffer.from(bytes).toString("utf8")).toContain("export const meta");
 
-    const listed = safeFs.list("pages/home");
+    const listed = safeFs.list("design/pages");
     if (listed instanceof Error) throw new Error(listed.message);
-    expect(listed).toContain("page.tsx");
+    expect(listed).toContain("home.tsx");
   });
 
   test("refuses a leaf outside the project namespace grammar", () => {
@@ -228,17 +234,17 @@ describe("SafeProjectFs", () => {
   describe("stat + readRange (projections §16.1)", () => {
     test("stat reports a managed leaf's current size without reading its content", () => {
       const safeFs = createSafeProjectFs(openRoot(), deps);
-      const result = safeFs.stat("pages/home/page.tsx");
+      const result = safeFs.stat("design/pages/home.tsx");
       if (result instanceof Error) throw new Error(result.message);
-      expect(result.size).toBe(fs.statSync(path.join(root, "pages", "home", "page.tsx")).size);
+      expect(result.size).toBe(fs.statSync(path.join(root, "design", "pages", "home.tsx")).size);
     });
 
     test("readRange returns exactly the requested byte range", () => {
       const safeFs = createSafeProjectFs(openRoot(), deps);
-      const whole = safeFs.readFile("pages/home/page.tsx");
+      const whole = safeFs.readFile("design/pages/home.tsx");
       if (whole instanceof Error) throw new Error(whole.message);
 
-      const ranged = safeFs.readRange("pages/home/page.tsx", 7, 12);
+      const ranged = safeFs.readRange("design/pages/home.tsx", 7, 12);
       if (ranged instanceof Error) throw new Error(ranged.message);
       expect(Buffer.from(ranged)).toEqual(Buffer.from(whole.subarray(7, 12)));
     });
@@ -263,9 +269,9 @@ describe("SafeProjectFs", () => {
 
     test("readRange refuses a range past the file's current end rather than silently truncating", () => {
       const safeFs = createSafeProjectFs(openRoot(), deps);
-      const stat = safeFs.stat("pages/home/page.tsx");
+      const stat = safeFs.stat("design/pages/home.tsx");
       if (stat instanceof Error) throw new Error(stat.message);
-      expect(safeFs.readRange("pages/home/page.tsx", 0, stat.size + 1_000)).toBeInstanceOf(Error);
+      expect(safeFs.readRange("design/pages/home.tsx", 0, stat.size + 1_000)).toBeInstanceOf(Error);
     });
   });
 });

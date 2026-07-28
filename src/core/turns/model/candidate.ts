@@ -68,8 +68,12 @@ export type FreezeTurnCandidateResultV1 =
   | { readonly kind: "failed"; readonly failure: FailureDtoV1 }
   | { readonly kind: "captured"; readonly candidate: TurnCandidateV1 };
 
-/** The real staging store's own page-file convention (`store/sandbox/model/staging-store.ts`'s `stageAllFiles`: `pages/${slug}.tsx`). */
-const PAGE_FILE_PATTERN = /^pages\/([^/]+)\.tsx$/;
+/**
+ * The real staging store's own page-file convention (`store/sandbox/model/staging-store.ts`'s
+ * `stageAllFiles`: `design/pages/${slug}.tsx` — a stopgap destination prefix, not yet the real
+ * design-tree closure; see that file's own header comment).
+ */
+const PAGE_FILE_PATTERN = /^design\/pages\/([^/]+)\.tsx$/;
 
 function pageSlugFromRelPath(relPath: string): PageSlug | null {
   const match = PAGE_FILE_PATTERN.exec(relPath);

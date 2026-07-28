@@ -40,17 +40,26 @@ export interface NamespaceLimit {
   readonly maxFiles: number | null;
   /** `null` where §5.3 states no aggregate limit for the namespace. */
   readonly aggregateBytes: number | null;
+  /**
+   * A namespace-level depth ceiling, tighter than its root's. Present for exactly one
+   * namespace: the design tree reuses the WORKSPACE root's depth-8 budget (multi-file design
+   * tree design §3.1) even inside the `.termcraft` project root, whose own row has no
+   * whole-tree budget and falls back to the §5.1 component ceiling. Without this field the
+   * canonical tree would accept a depth the workspace copy of that same tree would reject.
+   */
+  readonly maxDepth?: number;
 }
 
 /** The turn-durability §5.3 limit table, transcribed row for row. */
 export const NAMESPACE_LIMITS: Record<ManagedNamespace, NamespaceLimit> = {
-  "agent-page-source": { perFileBytes: 2 * MiB, maxFiles: 256, aggregateBytes: null },
-  "agent-manifest": { perFileBytes: 256 * KiB, maxFiles: 1, aggregateBytes: null },
+  // The authored design tree at BOTH roots (multi-file design tree design §3.1): the
+  // workspace root budget — 512 files, 64 MiB total, depth 8 — with the 2 MiB per-file
+  // limit the retired `canonical-page` row carried.
+  "design-source": { perFileBytes: 2 * MiB, maxFiles: 512, aggregateBytes: 64 * MiB, maxDepth: 8 },
   "agent-runtime-doc": { perFileBytes: 4 * MiB, maxFiles: 32, aggregateBytes: 16 * MiB },
   "project-config": { perFileBytes: 1 * MiB, maxFiles: null, aggregateBytes: 16 * MiB },
   "chat-jsonl": { perFileBytes: 64 * MiB, maxFiles: null, aggregateBytes: null },
   "comments-jsonl": { perFileBytes: 32 * MiB, maxFiles: null, aggregateBytes: null },
-  "canonical-page": { perFileBytes: 2 * MiB, maxFiles: 256, aggregateBytes: null },
   "export-artifact": { perFileBytes: 16 * MiB, maxFiles: 20_000, aggregateBytes: 1024 * MiB },
   "transaction-payload": { perFileBytes: 64 * MiB, maxFiles: null, aggregateBytes: 2048 * MiB },
   "migration-backup": { perFileBytes: 64 * MiB, maxFiles: null, aggregateBytes: 2048 * MiB },
@@ -77,7 +86,8 @@ export const ROOT_LIMITS: Record<ManagedRootKind, RootAggregateLimit> = {
   backup: { maxFiles: null, totalBytes: 2048 * MiB, maxDepth: MAX_PATH_COMPONENTS },
 };
 
-/** True iff `name` is `<slug>.<ext>` for a valid page slug (`entities/page` mask). */
+/** True iff `name` is `<slug>.<ext>` for a valid page slug (`entities/page` mask). Used by
+ * {@link classifyProject}'s `pins/<slug>.jsonl` grammar — e.g. `pins/home.jsonl`. */
 function isSlugFile(name: string, ext: string): boolean {
   if (!name.endsWith(ext)) return false;
   return !(parsePageSlug(name.slice(0, -ext.length)) instanceof Error);
@@ -91,27 +101,29 @@ function isSlugFile(name: string, ext: string): boolean {
 const AGENT_DOC_FILES: ReadonlySet<string> = new Set(["RUNTIME.md", "REATOM.md"]);
 
 /**
- * The agent workspace / candidate inventory (§5.4). The mutable namespace is exactly
- * `pages/<slug>.tsx` and `pages.json`; {@link AGENT_DOC_FILES} and runtime type declarations
- * are read-only inputs. Everything else — added files, nested page directories — is rejected.
- *
- * SPEC GAP (§5.4 names "runtime type declarations" without pinning their location): this
- * accepts any `*.d.ts` anywhere in the tree EXCEPT under `pages/`, which stays reserved
- * for `<slug>.tsx` so the "no nested page directories" rule cannot be side-stepped.
+ * The design tree's directory name. Paired with `entities/design-tree`'s `DESIGN_DIRNAME` —
+ * this layer is domain-free and does not import it, so the two must be changed together.
+ */
+const DESIGN_DIRNAME = "design";
+
+/**
+ * The agent workspace / candidate inventory (turn-durability §5.4, as amended by the
+ * multi-file design tree design §10). The mutable namespace is the whole `design/**` tree, a
+ * 1:1 copy of the canonical one — the flat `pages/<slug>.tsx` + root `pages.json` shape is
+ * retired, and `pages.json` now lives INSIDE the tree. {@link AGENT_DOC_FILES} and runtime
+ * type declarations remain read-only inputs staged BESIDE the tree at the workspace root,
+ * never inside it (design §10).
  */
 function classifyWorkspace(components: readonly string[]): ManagedNamespace | null {
-  const [first, second] = components;
+  const [first] = components;
   if (first === undefined) return null;
 
+  if (first === DESIGN_DIRNAME) return components.length >= 2 ? "design-source" : null;
+
   if (components.length === 1) {
-    if (first === "pages.json") return "agent-manifest";
     if (AGENT_DOC_FILES.has(first)) return "agent-runtime-doc";
     if (first.endsWith(".d.ts")) return "agent-runtime-doc";
     return null;
-  }
-  if (first === "pages") {
-    if (components.length !== 2 || second === undefined) return null;
-    return isSlugFile(second, ".tsx") ? "agent-page-source" : null;
   }
   const last = components[components.length - 1];
   if (last !== undefined && last.endsWith(".d.ts")) return "agent-runtime-doc";
@@ -125,7 +137,7 @@ function classifyWorkspace(components: readonly string[]): ManagedNamespace | nu
  * TOML/JSON state" row alongside the portable config files.
  */
 function classifyProject(components: readonly string[]): ManagedNamespace | null {
-  const [first, second, third] = components;
+  const [first, second] = components;
   if (first === undefined) return null;
 
   if (components.length === 1) {
@@ -137,14 +149,12 @@ function classifyProject(components: readonly string[]): ManagedNamespace | null
     if (components.length !== 2 || second === undefined) return null;
     return second.endsWith(".jsonl") ? "chat-jsonl" : null;
   }
-  if (first === "pages") {
-    // Canonical page storage is `pages/<slug>/page.tsx` + `pages/<slug>/comments.jsonl` —
-    // deliberately NOT the agent's flat `pages/<slug>.tsx` shape.
-    if (components.length !== 3 || second === undefined || third === undefined) return null;
-    if (parsePageSlug(second) instanceof Error) return null;
-    if (third === "page.tsx") return "canonical-page";
-    if (third === "comments.jsonl") return "comments-jsonl";
-    return null;
+  if (first === DESIGN_DIRNAME) return components.length >= 2 ? "design-source" : null;
+  if (first === "pins") {
+    // `pins/<slug>.jsonl` (design §3) — the append-only pin log, moved out from under the
+    // retired `pages/<slug>/` directory so page identity lives in ONE place, the manifest.
+    if (components.length !== 2 || second === undefined) return null;
+    return isSlugFile(second, ".jsonl") ? "comments-jsonl" : null;
   }
   if (first === "transactions.local") return "transaction-payload";
   if (first === "export") {
@@ -262,6 +272,10 @@ export function createLimitBudget(rootKind: ManagedRootKind): LimitBudget {
       }
 
       const nsLimit = NAMESPACE_LIMITS[input.namespace];
+      if (nsLimit.maxDepth !== undefined && input.depth > nsLimit.maxDepth) {
+        return exceeded(`${input.namespace} depth`, input.relPath, input.depth, nsLimit.maxDepth);
+      }
+
       const nsCount = (namespaceCounts.get(input.namespace) ?? 0) + 1;
       if (nsLimit.maxFiles !== null && nsCount > nsLimit.maxFiles) {
         return exceeded(`${input.namespace} count`, input.relPath, nsCount, nsLimit.maxFiles);

@@ -21,15 +21,20 @@ export type ManagedRootKind = "project" | "workspace" | "candidate" | "export-ca
  * A managed namespace — one row of the turn-durability §5.3 limit table. Every managed
  * leaf classifies into exactly one; a leaf that classifies into none is "outside each
  * managed namespace's grammar" (§5.1) and is rejected.
+ *
+ * `design-source` covers the whole authored design tree at BOTH the `.termcraft` project
+ * root and a turn workspace/candidate root (multi-file design tree design §3.1/§10): the
+ * workspace tree is a 1:1 copy of the canonical one, so one namespace — and one grammar —
+ * serves both roots. It replaces the retired `canonical-page`, `agent-page-source`, and
+ * `agent-manifest` namespaces, which named the single-file-per-page layout this plan
+ * retires.
  */
 export type ManagedNamespace =
-  | "agent-page-source"
-  | "agent-manifest"
+  | "design-source"
   | "agent-runtime-doc"
   | "project-config"
   | "chat-jsonl"
   | "comments-jsonl"
-  | "canonical-page"
   | "export-artifact"
   | "transaction-payload"
   | "migration-backup";

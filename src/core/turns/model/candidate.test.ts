@@ -129,9 +129,9 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
     await context.start(async () => {
       const h = harness();
       queueCandidate(h.staging, [
-        { relPath: "pages.json", sha256: SHA_A, size: 2 },
-        { relPath: "pages/about.tsx", sha256: SHA_B, size: 40 },
-        { relPath: "pages/home.tsx", sha256: SHA_A, size: 100 },
+        { relPath: "design/pages.json", sha256: SHA_A, size: 2 },
+        { relPath: "design/pages/about.tsx", sha256: SHA_B, size: 40 },
+        { relPath: "design/pages/home.tsx", sha256: SHA_A, size: 100 },
         { relPath: "RUNTIME.md", sha256: SHA_A, size: 5 },
       ]);
 
@@ -150,7 +150,7 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
           canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: SHA_A, size: 100 } }],
         }),
       );
-      queueCandidate(h.staging, [{ relPath: "pages/home.tsx", sha256: SHA_A, size: 100 }]);
+      queueCandidate(h.staging, [{ relPath: "design/pages/home.tsx", sha256: SHA_A, size: 100 }]);
 
       const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
       if (result.kind !== "captured")
@@ -167,7 +167,7 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
           canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: SHA_A, size: 100 } }],
         }),
       );
-      queueCandidate(h.staging, [{ relPath: "pages/home.tsx", sha256: SHA_B, size: 120 }]);
+      queueCandidate(h.staging, [{ relPath: "design/pages/home.tsx", sha256: SHA_B, size: 120 }]);
 
       const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
       if (result.kind !== "captured")
@@ -190,8 +190,8 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
         }),
       );
       queueCandidate(h.staging, [
-        { relPath: "pages/home.tsx", sha256: SHA_A, size: 100 },
-        { relPath: "pages/about.tsx", sha256: SHA_B, size: 30 },
+        { relPath: "design/pages/home.tsx", sha256: SHA_A, size: 100 },
+        { relPath: "design/pages/about.tsx", sha256: SHA_B, size: 30 },
       ]);
 
       const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
@@ -214,7 +214,7 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
           ],
         }),
       );
-      queueCandidate(h.staging, [{ relPath: "pages/home.tsx", sha256: SHA_A, size: 100 }]);
+      queueCandidate(h.staging, [{ relPath: "design/pages/home.tsx", sha256: SHA_A, size: 100 }]);
 
       const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
       if (result.kind !== "captured")
@@ -238,7 +238,7 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
           canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: SHA_A, size: 100 } }],
         }),
       );
-      queueCandidate(h.staging, [{ relPath: "pages/home.tsx", sha256: SHA_B, size: 100 }]);
+      queueCandidate(h.staging, [{ relPath: "design/pages/home.tsx", sha256: SHA_B, size: 100 }]);
 
       const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
       if (result.kind !== "captured")

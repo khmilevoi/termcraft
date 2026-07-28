@@ -94,7 +94,7 @@ describe("createFakeStagingService", () => {
       const candidate = await service.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error("unexpected failure");
 
-      const manifestFile = candidate.files.find((f) => f.relPath === "pages.json");
+      const manifestFile = candidate.files.find((f) => f.relPath === "design/pages.json");
       if (manifestFile === undefined) throw new Error("expected a pages.json entry");
 
       const bytes = await service.readCandidateFile(candidate.root, manifestFile.relPath);
@@ -109,7 +109,7 @@ describe("createFakeStagingService", () => {
       const candidate = await service.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error("unexpected failure");
 
-      const pageFile = candidate.files.find((f) => f.relPath !== "pages.json");
+      const pageFile = candidate.files.find((f) => f.relPath !== "design/pages.json");
       if (pageFile === undefined) throw new Error("expected a staged page file");
 
       const first = await service.readCandidateFile(candidate.root, pageFile.relPath);
@@ -126,14 +126,17 @@ describe("createFakeStagingService", () => {
       const candidate = await service.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error("unexpected failure");
 
-      const result = await service.readCandidateFile(candidate.root, "pages/never-staged.tsx");
+      const result = await service.readCandidateFile(
+        candidate.root,
+        "design/pages/never-staged.tsx",
+      );
       if (!("code" in result)) throw new Error("expected a failure");
       expect(result.code).toBe("PERSISTENCE_FAILED");
     });
 
     test("returns a FailureDtoV1 for a root that was never frozen into a candidate", async () => {
       const service = createFakeStagingService();
-      const result = await service.readCandidateFile("/never-a-candidate", "pages.json");
+      const result = await service.readCandidateFile("/never-a-candidate", "design/pages.json");
       if (!("code" in result)) throw new Error("expected a failure");
       expect(result.code).toBe("PERSISTENCE_FAILED");
     });
@@ -144,7 +147,7 @@ describe("createFakeStagingService", () => {
       if ("code" in workspace) throw new Error("unexpected failure");
       const candidate = await service.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error("unexpected failure");
-      const manifestFile = candidate.files.find((f) => f.relPath === "pages.json");
+      const manifestFile = candidate.files.find((f) => f.relPath === "design/pages.json");
       if (manifestFile === undefined) throw new Error("expected a pages.json entry");
 
       service.failNext("readCandidateFile", FAILURE);
@@ -160,7 +163,7 @@ describe("createFakeStagingService", () => {
       if ("code" in workspace) throw new Error("unexpected failure");
       const candidate = await service.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error("unexpected failure");
-      await service.readCandidateFile(candidate.root, "pages.json");
+      await service.readCandidateFile(candidate.root, "design/pages.json");
       expect(service.calls.map((c) => c.method)).toEqual([
         "createTurnWorkspace",
         "snapshotToCandidate",

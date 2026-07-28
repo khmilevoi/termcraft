@@ -1830,8 +1830,8 @@ describe('turnHandlers["turn.start"]', () => {
     const [call] = capturedRunPageInputs;
     if (call === undefined) throw new Error("expected a captured runPage() call");
     expect(call.slug).toBe(HOME);
-    expect(call.fileName).toBe("pages/home.tsx");
-    expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/pages/home.tsx`);
+    expect(call.fileName).toBe("design/pages/home.tsx");
+    expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/design/pages/home.tsx`);
   });
 
   test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged path travels separately in `runPage`'s own `sourcePath` (Finding #6)", async () => {
@@ -1960,14 +1960,14 @@ describe('turnHandlers["turn.start"]', () => {
     const [firstError] = diagnostics.errors;
     if (firstError === undefined) throw new Error("expected exactly one Gate error");
     // The short display name only — no drive letter, no candidate root, no absolute path.
-    expect(firstError.file).toBe("pages/home.tsx");
+    expect(firstError.file).toBe("design/pages/home.tsx");
     expect(firstError.file).not.toContain("/test-root");
     expect(firstError.file).not.toContain("fake-candidate");
     expect(firstError.file).not.toMatch(/^[A-Za-z]:/);
 
     // The absolute staged path travels separately, in its own `sourcePath` field.
     expect(capturedSourcePaths[0]).toMatch(/^\/fake-candidate\//);
-    expect(capturedSourcePaths[0]).toContain("pages/home.tsx");
+    expect(capturedSourcePaths[0]).toContain("design/pages/home.tsx");
 
     await waitForPublishedCount("turn.attemptStarted", 2);
     const secondStart = agentBackend.calls.filter((c) => c.method === "startTurn")[1];

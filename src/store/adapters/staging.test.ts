@@ -72,7 +72,7 @@ function buildInput(homeSourcePath: string): CreateTurnWorkspaceInputV1 {
 }
 
 describe("createStagingAdapter — contract test (fake vs. real)", () => {
-  test("createTurnWorkspace() stages a real page file at pages/<slug>.tsx (the fixed fake-fidelity path)", async () => {
+  test("createTurnWorkspace() stages a real page file at design/pages/<slug>.tsx (the fixed fake-fidelity path)", async () => {
     const sourceDir = freshSourceDir();
     const homeSourcePath = path.join(sourceDir, "home.tsx");
     fs.writeFileSync(homeSourcePath, "export const meta = { title: 'Home' };\n");
@@ -80,18 +80,18 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const fake = createFakeStagingService();
     const fakeWorkspace = await fake.createTurnWorkspace(buildInput(homeSourcePath));
     if ("code" in fakeWorkspace) throw new Error("fixture bug: fake createTurnWorkspace failed");
-    expect(fakeWorkspace.files.some((f) => f.relPath === "pages/home.tsx")).toBe(true);
+    expect(fakeWorkspace.files.some((f) => f.relPath === "design/pages/home.tsx")).toBe(true);
 
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
       const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
-      expect(workspace.files.some((f) => f.relPath === "pages/home.tsx")).toBe(true);
-      expect(workspace.files.some((f) => f.relPath === "pages.json")).toBe(true);
-      expect(fs.readFileSync(path.join(workspace.root, "pages", "home.tsx"), "utf8")).toBe(
-        "export const meta = { title: 'Home' };\n",
-      );
+      expect(workspace.files.some((f) => f.relPath === "design/pages/home.tsx")).toBe(true);
+      expect(workspace.files.some((f) => f.relPath === "design/pages.json")).toBe(true);
+      expect(
+        fs.readFileSync(path.join(workspace.root, "design", "pages", "home.tsx"), "utf8"),
+      ).toBe("export const meta = { title: 'Home' };\n");
     } finally {
       await open.close();
     }
@@ -128,7 +128,7 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
       });
 
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
-      expect(workspace.files.some((f) => f.relPath === "pages/main.tsx")).toBe(true);
+      expect(workspace.files.some((f) => f.relPath === "design/pages/main.tsx")).toBe(true);
     } finally {
       await open.close();
     }
@@ -151,11 +151,11 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
       expect(candidate.root).not.toBe(workspace.root);
       expect(fs.existsSync(candidate.root)).toBe(true);
 
-      const bytes = await adapter.readCandidateFile(candidate.root, "pages/home.tsx");
+      const bytes = await adapter.readCandidateFile(candidate.root, "design/pages/home.tsx");
       if ("code" in bytes) throw new Error(`fixture bug: ${bytes.safeMessage}`);
       expect(new TextDecoder().decode(bytes)).toBe(homeSource);
 
-      const manifestBytes = await adapter.readCandidateFile(candidate.root, "pages.json");
+      const manifestBytes = await adapter.readCandidateFile(candidate.root, "design/pages.json");
       if ("code" in manifestBytes) throw new Error(`fixture bug: ${manifestBytes.safeMessage}`);
       expect(new TextDecoder().decode(manifestBytes)).toBe(JSON.stringify({ pages: ["home"] }));
 
@@ -163,7 +163,10 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
       const retired = await adapter.retireWorkspace(workspace);
       expect(retired).toBeUndefined();
       expect(fs.existsSync(candidate.root)).toBe(true);
-      const stillReadable = await adapter.readCandidateFile(candidate.root, "pages/home.tsx");
+      const stillReadable = await adapter.readCandidateFile(
+        candidate.root,
+        "design/pages/home.tsx",
+      );
       if ("code" in stillReadable) throw new Error(`fixture bug: ${stillReadable.safeMessage}`);
       expect(new TextDecoder().decode(stillReadable)).toBe(homeSource);
     } finally {
@@ -196,13 +199,13 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
       // Written into the WORKSPACE, not the original source dir: that sandbox copy is what the
       // agent edits and what `snapshotToCandidate` actually freezes.
       const secondAttempt = "export const meta = { title: 'Second' };\n";
-      fs.writeFileSync(path.join(workspace.root, "pages", "home.tsx"), secondAttempt);
+      fs.writeFileSync(path.join(workspace.root, "design", "pages", "home.tsx"), secondAttempt);
 
       const second = await adapter.snapshotToCandidate(workspace);
       if ("code" in second) throw new Error(`retry re-freeze must not fail: ${second.safeMessage}`);
 
       expect(second.root).toBe(first.root);
-      const bytes = await adapter.readCandidateFile(second.root, "pages/home.tsx");
+      const bytes = await adapter.readCandidateFile(second.root, "design/pages/home.tsx");
       if ("code" in bytes) throw new Error(`fixture bug: ${bytes.safeMessage}`);
       expect(new TextDecoder().decode(bytes)).toBe(secondAttempt);
     } finally {

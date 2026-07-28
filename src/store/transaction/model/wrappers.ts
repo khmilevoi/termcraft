@@ -70,8 +70,13 @@ export function chatJsonlPath(chatId: string): string {
 export function canonicalPagePath(slug: PageSlug): string {
   return `pages/${slug}/page.tsx`;
 }
+/** The pin log's managed path (multi-file design tree design §3.1/§10): moved out from
+ * under the retired `pages/<slug>/` directory to `pins/<slug>.jsonl`, so page identity
+ * lives in ONE place, the manifest (`store/safe-fs`'s `comments-jsonl` namespace grammar,
+ * `classifyProject`'s `pins` branch). The function name is unchanged — only the namespace's
+ * managed-path grammar moved, not its identity in the §5.3 limit table. */
 export function pageCommentsPath(slug: PageSlug): string {
-  return `pages/${slug}/comments.jsonl`;
+  return `pins/${slug}.jsonl`;
 }
 
 // ---- shared errors --------------------------------------------------------------------

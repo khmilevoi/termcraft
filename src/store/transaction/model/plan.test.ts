@@ -56,7 +56,7 @@ function appendPlan(): TransactionPlan {
     operations: [
       {
         index: 0,
-        target: "pages/home/comments.jsonl",
+        target: "pins/home.jsonl",
         mode: "append-jsonl",
         oldImage: { state: "file", sha256: sha256Hex(bytesOf("header\n")), size: 7 },
         newImage: {
@@ -271,7 +271,7 @@ describe("validatePlanPayloads", () => {
     const plan = appendPlan();
     const op = plan.operations[0];
     if (op === undefined || op.append === undefined) throw new Error("fixture bug");
-    // "pages/home/comments.jsonl" classifies as `comments-jsonl` (32 MiB per-file limit).
+    // "pins/home.jsonl" classifies as `comments-jsonl` (32 MiB per-file limit).
     const oversized = {
       ...op,
       newImage: {

@@ -252,10 +252,26 @@ function writeInlineFile(input: {
 }
 
 /**
+ * The design tree's directory name inside the workspace (multi-file design tree design
+ * §10). STOPGAP (documented, not silent): this still stages one `CreateTurnWorkspaceInput
+ * .pages` entry per page plus a separately-synthesized `manifestSlice`, the pre-design-tree
+ * shape — it does not yet copy the whole authored `design/**` tree 1:1, which is a later
+ * task's job (`docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`, "Task 8:
+ * `store/sandbox` — stage the tree"). What changes HERE is only the destination: every
+ * staged file now lands under `design/` so its `namespace` (derived from the real
+ * `classifyNamespace`, never hardcoded) is honest under the new workspace grammar
+ * (`store/safe-fs`'s `classifyWorkspace`, which no longer recognizes a bare `pages/`).
+ */
+const DESIGN_DIRNAME = "design";
+
+/**
  * Stage every listed canonical page, the manifest slice, and every runtime doc into the
  * (already create-new) workspace directory (turn-durability §7.2's staging read set). A
  * runtime-doc relative path outside the workspace's `agent-runtime-doc` grammar is rejected
- * before it is opened.
+ * before it is opened; so is a page or manifest destination outside `design-source` — which
+ * cannot actually happen for the fixed `design/pages/<slug>.tsx` / `design/pages.json`
+ * shapes below, but going through `classifyNamespace` rather than a hardcoded namespace
+ * keeps the staged `namespace` tag truthful by construction.
  */
 function stageAllFiles(input: {
   workspacePath: AbsPath;
@@ -264,24 +280,36 @@ function stageAllFiles(input: {
 }): StagingError | StagedFile[] {
   const files: StagedFile[] = [];
 
+  // The manifest lands inside `design/` even with zero pages, so this directory is made
+  // unconditionally — unlike the `pages/` subdirectory below, which only pages need.
+  const madeDesignDir = input.fs.mkdirAll(path.join(input.workspacePath, DESIGN_DIRNAME));
+  if (madeDesignDir instanceof Error) return madeDesignDir;
+
   if (input.source.pages.length > 0) {
-    const madePagesDir = input.fs.mkdirAll(path.join(input.workspacePath, "pages"));
+    const madePagesDir = input.fs.mkdirAll(path.join(input.workspacePath, DESIGN_DIRNAME, "pages"));
     if (madePagesDir instanceof Error) return madePagesDir;
   }
   for (const page of input.source.pages) {
-    const relPath = `pages/${page.pageSlug}.tsx`;
-    const destPath = path.join(input.workspacePath, "pages", `${page.pageSlug}.tsx`);
+    const relPath = `${DESIGN_DIRNAME}/pages/${page.pageSlug}.tsx`;
+    const namespace = classifyNamespace("workspace", relPath);
+    if (namespace instanceof Error) return namespace;
+
+    const destPath = path.join(
+      input.workspacePath,
+      DESIGN_DIRNAME,
+      "pages",
+      `${page.pageSlug}.tsx`,
+    );
     const copied = copySourceFile({ absSourcePath: page.absSourcePath, destPath, fs: input.fs });
     if (copied instanceof Error) return copied;
-    files.push({
-      relPath,
-      namespace: "agent-page-source",
-      sha256: copied.sha256,
-      size: copied.size,
-    });
+    files.push({ relPath, namespace, sha256: copied.sha256, size: copied.size });
   }
 
-  const manifestDest = path.join(input.workspacePath, "pages.json");
+  const manifestRelPath = `${DESIGN_DIRNAME}/pages.json`;
+  const manifestNamespace = classifyNamespace("workspace", manifestRelPath);
+  if (manifestNamespace instanceof Error) return manifestNamespace;
+
+  const manifestDest = path.join(input.workspacePath, DESIGN_DIRNAME, "pages.json");
   const manifestWritten = writeInlineFile({
     destPath: manifestDest,
     bytes: input.source.manifestSlice,
@@ -289,8 +317,8 @@ function stageAllFiles(input: {
   });
   if (manifestWritten instanceof Error) return manifestWritten;
   files.push({
-    relPath: "pages.json",
-    namespace: "agent-manifest",
+    relPath: manifestRelPath,
+    namespace: manifestNamespace,
     sha256: manifestWritten.sha256,
     size: manifestWritten.size,
   });

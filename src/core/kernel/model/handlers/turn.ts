@@ -442,14 +442,20 @@ function turnStateChangedEvent(
 // --- turn.start — real, composing `runTurn` ------------------------------------------------
 
 /**
- * The agent WORKSPACE's own flat page-file convention (`store/sandbox/model/staging-store.ts`'s
- * `stageAllFiles`, transcribed by `core/turns/model/candidate.ts`'s `PAGE_FILE_PATTERN`):
- * `pages/<slug>.tsx`, relative to a STAGED workspace or candidate root — never to the project
- * root. Named for its namespace after Gap G, where the un-namespaced old name (`pageFileRelPath`)
- * let the same helper be joined onto `projectStore.root` and produce a path that does not exist.
+ * The agent WORKSPACE's own staged page-file convention (`store/sandbox/model/
+ * staging-store.ts`'s `stageAllFiles`, transcribed by `core/turns/model/candidate.ts`'s
+ * `PAGE_FILE_PATTERN`): `design/pages/<slug>.tsx`, relative to a STAGED workspace or
+ * candidate root — never to the project root. Named for its namespace after Gap G, where the
+ * un-namespaced old name (`pageFileRelPath`) let the same helper be joined onto
+ * `projectStore.root` and produce a path that does not exist.
+ *
+ * STOPGAP (documented, not silent): `design/` here is `store/sandbox`'s own stopgap
+ * destination prefix, not yet the real design-tree closure (multi-file design tree design
+ * §10, `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`, "Task 8:
+ * `store/sandbox` — stage the tree") — see that file's own header comment.
  */
 function workspacePageRelPath(pageSlug: PageSlug): string {
-  return `pages/${pageSlug}.tsx`;
+  return `design/pages/${pageSlug}.tsx`;
 }
 
 /** The directory canonical project state lives in, under the project root (storage-identity §4). */
@@ -467,7 +473,7 @@ function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): strin
   return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
 }
 
-const MANIFEST_SLICE_REL_PATH = "pages.json";
+const MANIFEST_SLICE_REL_PATH = "design/pages.json";
 
 /**
  * Wraps a real `StagingService` so the frozen candidate's own byte content is available

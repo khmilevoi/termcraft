@@ -13,6 +13,7 @@ import {
   classifyNamespace,
   createLimitBudget,
 } from "./limits";
+import { PathRuleError, validateRelativePath } from "./path-rules";
 
 const CHAT_ID = "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10";
 
@@ -32,14 +33,49 @@ function expectUnknown(rootKind: ManagedRootKind, relPath: string): void {
 }
 
 describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", () => {
-  test("classifies the agent workspace's exact allowed inventory", () => {
-    expectNamespace("workspace", "pages/home.tsx", "agent-page-source");
-    expectNamespace("workspace", "pages.json", "agent-manifest");
+  test("classifies the project root's design tree and pin logs", () => {
+    expectNamespace("project", "design/pages.json", "design-source");
+    expectNamespace("project", "design/pages/dashboard.tsx", "design-source");
+    expectNamespace("project", "design/lib/nested/deep/theme.ts", "design-source");
+    expectNamespace("project", "pins/home.jsonl", "comments-jsonl");
+    expectNamespace("project", "project.toml", "project-config");
+  });
+
+  test("the retired page layout is no longer a managed namespace", () => {
+    expectUnknown("project", "pages/home/page.tsx");
+    expectUnknown("project", "pages/home/comments.jsonl");
+    expectUnknown("project", "pins/Home.jsonl"); // invalid slug
+    expectUnknown("project", "pins/home.txt");
+    expectUnknown("project", "pins/nested/home.jsonl");
+  });
+
+  test("classifies the workspace root's design tree the same way", () => {
+    expectNamespace("workspace", "design/pages.json", "design-source");
+    expectNamespace("workspace", "design/widgets/gauge.tsx", "design-source");
     expectNamespace("workspace", "RUNTIME.md", "agent-runtime-doc");
-    // The other half of the pair `agent/prompt/model/runtime-docs.ts` stages: a doc written
-    // under a name this grammar rejects would be unreadable through `SafeProjectFs`.
-    expectNamespace("workspace", "REATOM.md", "agent-runtime-doc");
-    expectNamespace("workspace", "types/runtime.d.ts", "agent-runtime-doc");
+    expectNamespace("workspace", "runtime.generated.d.ts", "agent-runtime-doc");
+    expectUnknown("workspace", "pages/home.tsx");
+    expectUnknown("workspace", "pages.json");
+  });
+
+  // A retired namespace name is not merely unreachable — `ManagedNamespace` no longer
+  // spells `canonical-page`/`agent-page-source`/`agent-manifest` at all (compile-time
+  // enforced: nothing in this module can produce those strings any more). This pins the
+  // runtime half — every path those namespaces used to own now falls through to
+  // `UnknownNamespaceError` — is exercised above (`pages/home/page.tsx` was `canonical-page`,
+  // `pages/home.tsx` and `pages.json` under a workspace were `agent-page-source`/
+  // `agent-manifest`) rather than repeated here.
+
+  // `classifyNamespace` documents its own precondition as "a validated managed relative
+  // path" — it only `.split("/")`s, so it never itself rejects a `..` component. The escape
+  // guard lives one layer down, in `validateRelativePath` (`path-rules.ts`), which every real
+  // caller (`resolveManagedPath`, `enumerateDirectory`) runs BEFORE `classifyNamespace` is
+  // ever reached. This pins that a `design/`-rooted escape attempt is refused there, so it
+  // never gets the chance to be (mis)classified as `design-source` by a naive prefix check.
+  test("a path that tries to escape the design tree never reaches classification — path-rules rejects it first", () => {
+    const validated = validateRelativePath("design/../secrets");
+    expect(validated).toBeInstanceOf(PathRuleError);
+    expect((validated as PathRuleError).code).toBe("DOT_COMPONENT");
   });
 
   test("a markdown file outside the staged doc set is still rejected", () => {
@@ -48,33 +84,21 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
   });
 
   test("a candidate shares the workspace grammar", () => {
-    expectNamespace("candidate", "pages/home.tsx", "agent-page-source");
-    expectNamespace("candidate", "pages.json", "agent-manifest");
+    expectNamespace("candidate", "design/pages/home.tsx", "design-source");
+    expectNamespace("candidate", "design/pages.json", "design-source");
   });
 
-  test("rejects added files, nested page directories, and non-slug page names (§5.4)", () => {
-    expectUnknown("workspace", "evil.sh");
-    expectUnknown("workspace", "pages/home/extra.tsx");
-    expectUnknown("workspace", "pages/Home.tsx"); // slug mask is lower-case only
-    expectUnknown("workspace", "pages/home.txt");
-    expectUnknown("workspace", "pages/con.tsx"); // reserved device name is not a slug
-    expectUnknown("workspace", "pages/nested.d.ts"); // .d.ts may not hide under pages/
-  });
-
-  test("classifies the `.termcraft` project namespaces", () => {
-    expectNamespace("project", "project.toml", "project-config");
+  test("classifies the `.termcraft` project's remaining namespaces unchanged", () => {
     expectNamespace("project", "workspace.local.toml", "project-config");
     expectNamespace("project", ".gitignore", "project-config");
     expectNamespace("project", `chats/${CHAT_ID}.jsonl`, "chat-jsonl");
-    expectNamespace("project", "pages/home/page.tsx", "canonical-page");
-    expectNamespace("project", "pages/home/comments.jsonl", "comments-jsonl");
     expectNamespace("project", "cache/page-meta/home/1/abc.json", "project-config");
     expectNamespace("project", `transactions.local/${CHAT_ID}/plan.json`, "transaction-payload");
     expectNamespace("project", `export/generations/${CHAT_ID}/pages/home.json`, "export-artifact");
   });
 
   test("the workspace grammar does not leak into the project root and vice versa", () => {
-    expectUnknown("project", "pages/home.tsx"); // agent shape, not the canonical shape
+    expectUnknown("project", "pages/home.tsx"); // the retired agent shape, not the design tree
     expectUnknown("workspace", "project.toml");
     expectUnknown("workspace", `chats/${CHAT_ID}.jsonl`);
   });
@@ -87,29 +111,34 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
 
 describe("§5.3 limit table constants", () => {
   test("carries the spec's per-file limits verbatim", () => {
-    expect(NAMESPACE_LIMITS["agent-page-source"].perFileBytes).toBe(2 * MiB);
-    expect(NAMESPACE_LIMITS["agent-manifest"].perFileBytes).toBe(256 * KiB);
+    expect(NAMESPACE_LIMITS["design-source"].perFileBytes).toBe(2 * MiB);
     expect(NAMESPACE_LIMITS["agent-runtime-doc"].perFileBytes).toBe(4 * MiB);
     expect(NAMESPACE_LIMITS["project-config"].perFileBytes).toBe(1 * MiB);
     expect(NAMESPACE_LIMITS["chat-jsonl"].perFileBytes).toBe(64 * MiB);
     expect(NAMESPACE_LIMITS["comments-jsonl"].perFileBytes).toBe(32 * MiB);
-    expect(NAMESPACE_LIMITS["canonical-page"].perFileBytes).toBe(2 * MiB);
     expect(NAMESPACE_LIMITS["export-artifact"].perFileBytes).toBe(16 * MiB);
     expect(NAMESPACE_LIMITS["transaction-payload"].perFileBytes).toBe(64 * MiB);
     expect(NAMESPACE_LIMITS["migration-backup"].perFileBytes).toBe(64 * MiB);
   });
 
   test("carries the spec's count and aggregate limits verbatim", () => {
-    expect(NAMESPACE_LIMITS["agent-page-source"].maxFiles).toBe(256);
-    expect(NAMESPACE_LIMITS["agent-manifest"].maxFiles).toBe(1);
+    expect(NAMESPACE_LIMITS["design-source"].maxFiles).toBe(512);
+    expect(NAMESPACE_LIMITS["design-source"].aggregateBytes).toBe(64 * MiB);
+    expect(NAMESPACE_LIMITS["design-source"].maxDepth).toBe(8);
     expect(NAMESPACE_LIMITS["agent-runtime-doc"].maxFiles).toBe(32);
     expect(NAMESPACE_LIMITS["agent-runtime-doc"].aggregateBytes).toBe(16 * MiB);
     expect(NAMESPACE_LIMITS["project-config"].aggregateBytes).toBe(16 * MiB);
-    expect(NAMESPACE_LIMITS["canonical-page"].maxFiles).toBe(256);
     expect(NAMESPACE_LIMITS["export-artifact"].maxFiles).toBe(20_000);
     expect(NAMESPACE_LIMITS["export-artifact"].aggregateBytes).toBe(1024 * MiB);
     expect(NAMESPACE_LIMITS["transaction-payload"].aggregateBytes).toBe(2048 * MiB);
     expect(NAMESPACE_LIMITS["migration-backup"].aggregateBytes).toBe(2048 * MiB);
+  });
+
+  test("no other namespace carries a `maxDepth` — `design-source` is the one exception", () => {
+    for (const [namespace, limit] of Object.entries(NAMESPACE_LIMITS)) {
+      if (namespace === "design-source") continue;
+      expect(limit.maxDepth).toBeUndefined();
+    }
   });
 
   test("the whole turn workspace/candidate is 512 files, 64 MiB, depth 8", () => {
@@ -124,67 +153,47 @@ describe("§5.3 limit table constants", () => {
 });
 
 describe("createLimitBudget — checked before allocation (§5.3)", () => {
-  test("admits a page file at exactly the per-file limit and rejects one byte over", () => {
+  test("admits a design-source file at exactly the per-file limit and rejects one byte over", () => {
     const at = createLimitBudget("workspace");
     expect(
       at.admitFile({
-        relPath: "pages/home.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/home.tsx",
+        namespace: "design-source",
         declaredSize: 2 * MiB,
-        depth: 2,
+        depth: 3,
       }),
     ).toBeNull();
 
     const over = createLimitBudget("workspace");
     const rejected = over.admitFile({
-      relPath: "pages/home.tsx",
-      namespace: "agent-page-source",
+      relPath: "design/pages/home.tsx",
+      namespace: "design-source",
       declaredSize: 2 * MiB + 1,
-      depth: 2,
+      depth: 3,
     });
     expect(rejected).toBeInstanceOf(StorageLimitExceededError);
     expect((rejected as StorageLimitExceededError).measured).toBe(2 * MiB + 1);
     expect((rejected as StorageLimitExceededError).allowed).toBe(2 * MiB);
   });
 
-  test("admits exactly one `pages.json` and rejects a second", () => {
+  test("admits 512 design-source files and rejects the 513th", () => {
     const budget = createLimitBudget("workspace");
-    expect(
-      budget.admitFile({
-        relPath: "pages.json",
-        namespace: "agent-manifest",
-        declaredSize: 10,
-        depth: 1,
-      }),
-    ).toBeNull();
-    expect(
-      budget.admitFile({
-        relPath: "b.json",
-        namespace: "agent-manifest",
-        declaredSize: 10,
-        depth: 1,
-      }),
-    ).toBeInstanceOf(StorageLimitExceededError);
-  });
-
-  test("admits 256 page files and rejects the 257th", () => {
-    const budget = createLimitBudget("workspace");
-    for (let i = 0; i < 256; i += 1) {
+    for (let i = 0; i < 512; i += 1) {
       expect(
         budget.admitFile({
-          relPath: `pages/p${i}.tsx`,
-          namespace: "agent-page-source",
+          relPath: `design/pages/p${i}.tsx`,
+          namespace: "design-source",
           declaredSize: 1,
-          depth: 2,
+          depth: 3,
         }),
       ).toBeNull();
     }
     expect(
       budget.admitFile({
-        relPath: "pages/p256.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/p512.tsx",
+        namespace: "design-source",
         declaredSize: 1,
-        depth: 2,
+        depth: 3,
       }),
     ).toBeInstanceOf(StorageLimitExceededError);
   });
@@ -194,10 +203,10 @@ describe("createLimitBudget — checked before allocation (§5.3)", () => {
     for (let i = 0; i < 32; i += 1) {
       expect(
         at.admitFile({
-          relPath: `pages/p${i}.tsx`,
-          namespace: "agent-page-source",
+          relPath: `design/pages/p${i}.tsx`,
+          namespace: "design-source",
           declaredSize: 2 * MiB,
-          depth: 2,
+          depth: 3,
         }),
       ).toBeNull();
     }
@@ -205,27 +214,28 @@ describe("createLimitBudget — checked before allocation (§5.3)", () => {
     const over = createLimitBudget("workspace");
     for (let i = 0; i < 32; i += 1) {
       over.admitFile({
-        relPath: `pages/p${i}.tsx`,
-        namespace: "agent-page-source",
+        relPath: `design/pages/p${i}.tsx`,
+        namespace: "design-source",
         declaredSize: 2 * MiB,
-        depth: 2,
+        depth: 3,
       });
     }
     expect(
       over.admitFile({
-        relPath: "pages.json",
-        namespace: "agent-manifest",
+        relPath: "design/pages.json",
+        namespace: "design-source",
         declaredSize: 1,
-        depth: 1,
+        depth: 2,
       }),
     ).toBeInstanceOf(StorageLimitExceededError);
   });
 
   test("admits 512 workspace files and rejects the 513th", () => {
-    // A unit-level probe of the ROOT count rule alone: every workspace namespace also
-    // carries a tighter count cap (256 + 32 + 1 = 289), so the root's 512 is defence in
-    // depth that only a count-uncapped namespace can reach. `classifyNamespace` — not the
-    // budget — is what keeps a `chat-jsonl` leaf out of a workspace in production.
+    // A unit-level probe of the ROOT count rule alone: `design-source`'s own count cap
+    // (512) now equals the workspace root's, so this deliberately uses a namespace with NO
+    // count cap (`chat-jsonl`) to isolate the root-level check from any namespace-level one.
+    // `classifyNamespace` — not the budget — is what keeps a `chat-jsonl` leaf out of a
+    // workspace in production.
     const budget = createLimitBudget("workspace");
     for (let i = 0; i < 512; i += 1) {
       expect(
@@ -237,13 +247,51 @@ describe("createLimitBudget — checked before allocation (§5.3)", () => {
     ).toBeInstanceOf(StorageLimitExceededError);
   });
 
-  test("admits depth 8 and rejects depth 9 in a turn workspace", () => {
+  test("admits depth 8 and rejects depth 9 in a turn workspace (ROOT depth ceiling)", () => {
     const budget = createLimitBudget("workspace");
     expect(
       budget.admitFile({ relPath: "a", namespace: "agent-runtime-doc", declaredSize: 1, depth: 8 }),
     ).toBeNull();
     expect(
       budget.admitFile({ relPath: "b", namespace: "agent-runtime-doc", declaredSize: 1, depth: 9 }),
+    ).toBeInstanceOf(StorageLimitExceededError);
+  });
+
+  test("design/ carries the workspace tree budget: depth 8, 512 files, 64 MiB", () => {
+    const budget = createLimitBudget("project");
+    expect(
+      budget.admitFile({
+        relPath: "design/a/b/c/d/e/f/g/h/i.tsx",
+        namespace: "design-source",
+        declaredSize: 1,
+        depth: 10,
+      }),
+    ).toBeInstanceOf(StorageLimitExceededError);
+  });
+
+  test("design/ admits exactly depth 8 under the `.termcraft` project root (the NAMESPACE ceiling, not the root's own 16-component one)", () => {
+    // The project root's own `maxDepth` falls back to the §5.1 component ceiling (16, see
+    // `ROOT_LIMITS.project`), which would happily admit depth 8 or 9 on its own — this test
+    // only proves anything because it is `design-source`'s namespace-level `maxDepth: 8` that
+    // is doing the rejecting one component later.
+    const admits8 = createLimitBudget("project");
+    expect(
+      admits8.admitFile({
+        relPath: "design/a/b/c/d/e/f/g.tsx",
+        namespace: "design-source",
+        declaredSize: 1,
+        depth: 8,
+      }),
+    ).toBeNull();
+
+    const rejects9 = createLimitBudget("project");
+    expect(
+      rejects9.admitFile({
+        relPath: "design/a/b/c/d/e/f/g/h.tsx",
+        namespace: "design-source",
+        declaredSize: 1,
+        depth: 9,
+      }),
     ).toBeInstanceOf(StorageLimitExceededError);
   });
 });
@@ -254,22 +302,22 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     // The directory entry claimed 1 KiB; the stream keeps delivering bytes.
     expect(
       budget.admitFile({
-        relPath: "pages/home.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/home.tsx",
+        namespace: "design-source",
         declaredSize: KiB,
-        depth: 2,
+        depth: 3,
       }),
     ).toBeNull();
     expect(
       budget.observeBytes({
-        relPath: "pages/home.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/home.tsx",
+        namespace: "design-source",
         bytesSoFar: 2 * MiB,
       }),
     ).toBeNull();
     const rejected = budget.observeBytes({
-      relPath: "pages/home.tsx",
-      namespace: "agent-page-source",
+      relPath: "design/pages/home.tsx",
+      namespace: "design-source",
       bytesSoFar: 2 * MiB + 1,
     });
     expect(rejected).toBeInstanceOf(StorageLimitExceededError);
@@ -279,32 +327,32 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     const budget = createLimitBudget("workspace");
     for (let i = 0; i < 31; i += 1) {
       budget.admitFile({
-        relPath: `pages/p${i}.tsx`,
-        namespace: "agent-page-source",
+        relPath: `design/pages/p${i}.tsx`,
+        namespace: "design-source",
         declaredSize: 2 * MiB,
-        depth: 2,
+        depth: 3,
       });
     }
     // 62 MiB committed; this entry claims 1 byte but streams 2 MiB + 1.
     expect(
       budget.admitFile({
-        relPath: "pages/last.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/last.tsx",
+        namespace: "design-source",
         declaredSize: 1,
-        depth: 2,
+        depth: 3,
       }),
     ).toBeNull();
     expect(
       budget.observeBytes({
-        relPath: "pages/last.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/last.tsx",
+        namespace: "design-source",
         bytesSoFar: 2 * MiB,
       }),
     ).toBeNull();
     expect(
       budget.observeBytes({
-        relPath: "pages/last.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/last.tsx",
+        namespace: "design-source",
         bytesSoFar: 2 * MiB + 1,
       }),
     ).toBeInstanceOf(StorageLimitExceededError);
@@ -321,10 +369,10 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     for (let i = 0; i < 32; i += 1) {
       expect(
         budget.admitFile({
-          relPath: `pages/p${i}.tsx`,
-          namespace: "agent-page-source",
+          relPath: `design/pages/p${i}.tsx`,
+          namespace: "design-source",
           declaredSize: 2 * MiB,
-          depth: 2,
+          depth: 3,
         }),
       ).toBeNull();
     }
@@ -333,8 +381,8 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     // its honest declared size is not growth and must be admitted.
     expect(
       budget.observeBytes({
-        relPath: "pages/p0.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/p0.tsx",
+        namespace: "design-source",
         bytesSoFar: 2 * MiB,
       }),
     ).toBeNull();
@@ -342,8 +390,8 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     // Growth on that same earlier file is still caught.
     expect(
       budget.observeBytes({
-        relPath: "pages/p0.tsx",
-        namespace: "agent-page-source",
+        relPath: "design/pages/p0.tsx",
+        namespace: "design-source",
         bytesSoFar: 2 * MiB + 1,
       }),
     ).toBeInstanceOf(StorageLimitExceededError);

@@ -99,8 +99,13 @@ export function createFakeStagingService(): FakeStagingService {
     const queued = queues.createTurnWorkspace.shift();
     if (queued !== undefined) return queued;
 
+    // Staged under `design/` — the fixed fake-fidelity path (this file's own header):
+    // `store/adapters/staging.ts`'s real `createStagingAdapter` now stages every page and
+    // the manifest slice under `design/` (multi-file design tree design §10, `store/sandbox`'s
+    // `stageAllFiles`), and this fake's `relPath`s must keep matching or the fidelity test
+    // this comment refers to (`store/adapters/staging.test.ts`) silently stops proving anything.
     const pageFiles: StagedFileV1[] = input.pages.map((page) => ({
-      relPath: `pages/${page.pageSlug}.tsx`,
+      relPath: `design/pages/${page.pageSlug}.tsx`,
       sha256: fakeSha256Hex(page.sourcePath),
       size: 0,
     }));
@@ -110,7 +115,7 @@ export function createFakeStagingService(): FakeStagingService {
       size: 0,
     }));
     const manifestFile: StagedFileV1 = {
-      relPath: "pages.json",
+      relPath: "design/pages.json",
       sha256: fakeSha256Hex(`manifest:${input.turnId}`),
       size: input.manifestSlice.byteLength,
     };
@@ -123,7 +128,7 @@ export function createFakeStagingService(): FakeStagingService {
     content.set(manifestFile.relPath, input.manifestSlice);
     for (const page of input.pages) {
       content.set(
-        `pages/${page.pageSlug}.tsx`,
+        `design/pages/${page.pageSlug}.tsx`,
         new TextEncoder().encode(`fake-page-source:${page.sourcePath}`),
       );
     }

@@ -29,7 +29,7 @@ function accept(raw: string): readonly string[] {
 
 describe("validateRelativePath — turn-durability §5.1 rejection classes", () => {
   test("accepts a canonical managed relative path", () => {
-    expect(accept("pages/home/page.tsx")).toEqual(["pages", "home", "page.tsx"]);
+    expect(accept("design/pages/dashboard.tsx")).toEqual(["design", "pages", "dashboard.tsx"]);
   });
 
   test("rejects an empty path", () => {
