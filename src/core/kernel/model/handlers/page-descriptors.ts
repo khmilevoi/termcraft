@@ -21,6 +21,27 @@ import type { HandlerContext } from "./types";
  */
 
 /**
+ * `.termcraft` — the project-state directory name. Transcribed here, not imported: `core` may
+ * not import `store`, the same reason `handlers/turn.ts` and `handlers/preview-export.ts` each
+ * carry their own copy of this constant.
+ */
+const PROJECT_STATE_DIRNAME = ".termcraft";
+
+/**
+ * The CANONICAL page's absolute path — `.termcraft/pages/<slug>/page.tsx`, deliberately NOT
+ * the agent workspace's flat `pages/<slug>.tsx`. The Gate's smoke stage hands this straight to
+ * a host child that resolves it with `Bun.file` from its OWN fresh scratch cwd
+ * (`host/session/model/source-mount.ts`'s `loadPage`), so a bare `${slug}.tsx` — the fallback
+ * `gate/adapters/gate-runner.ts` applies when no path is supplied — can never resolve there.
+ * Omitting it made EVERY descriptor `invalid` with `cannot read source at <slug>.tsx`: the tab
+ * strip fell back to the slug, `minSize`/`theme` were lost, and one host child was spawned and
+ * thrown away per page on every open and every turn.
+ */
+function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
+  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
+}
+
+/**
  * Reads one page's source and runs it through the Gate, mapping the result to a
  * `PageDescriptorV1`. A source-read failure is returned to the caller (on the open path it
  * blocks the whole open, matching `core/project/model/open-sequence.ts`'s own
@@ -40,6 +61,7 @@ export async function buildPageDescriptors(
       context.deps.gateRunner.runPage({
         source: new TextDecoder().decode(source.bytes),
         slug: pageSlug,
+        sourcePath: canonicalPageSourcePath(context.deps.projectStore.root, pageSlug),
       }),
     );
 

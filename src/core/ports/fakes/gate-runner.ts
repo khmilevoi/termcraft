@@ -18,7 +18,7 @@ import type { AssertConforms } from "../index";
 
 export type GateRunnerCall =
   | { readonly method: "runManifestSlice"; readonly presentSlugCount: number }
-  | { readonly method: "runPage"; readonly slug: PageSlug }
+  | { readonly method: "runPage"; readonly slug: PageSlug; readonly sourcePath?: string }
   | { readonly method: "extractPageMeta"; readonly slug: PageSlug };
 
 export interface FakeGateRunner extends GateRunner {
@@ -63,10 +63,14 @@ export function createFakeGateRunner(): FakeGateRunner {
     source: string;
     slug: PageSlug;
     fileName?: string;
-    /** Widened alongside the port's own additive field (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so it is accepted and simply unused. */
+    /** Widened alongside the port's own additive field (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so `sourcePath` only reaches the call log below for test observability; it never affects the result returned. */
     sourcePath?: string;
   }): Promise<GateRunResultV1> {
-    calls.push({ method: "runPage", slug: input.slug });
+    calls.push({
+      method: "runPage",
+      slug: input.slug,
+      ...(input.sourcePath === undefined ? {} : { sourcePath: input.sourcePath }),
+    });
     const queued = pageResults.shift();
     if (queued !== undefined) return queued;
     return {

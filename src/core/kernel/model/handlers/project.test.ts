@@ -56,6 +56,7 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
+import { buildPageDescriptors } from "./page-descriptors";
 import { projectHandlers } from "./project";
 import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
 
@@ -180,6 +181,12 @@ function buildTestContext(options?: {
   readonly trustGate?: ReturnType<typeof createFakeTrustGate>;
   readonly chatReader?: ChatReader;
   readonly exportPublish?: ReturnType<typeof createFakeExportPublish>;
+  // Both additive, Task 5 (Gate smoke-stage path fix): lets a test read the Gate calls
+  // `buildPageDescriptors` makes (`gateRunner`) and control the root those calls resolve
+  // paths against (`projectRoot`), without disturbing any existing call site — both default
+  // to exactly what this builder already used before either field existed.
+  readonly gateRunner?: ReturnType<typeof createFakeGateRunner>;
+  readonly projectRoot?: string;
 }): TestHarness {
   let trust: ProjectTrustV1 = null;
   let activeTurnId: UUIDv7 | null = null;
@@ -207,7 +214,9 @@ function buildTestContext(options?: {
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
 
   const deps: KernelDeps = {
-    projectStore: options?.projectStore ?? createFakeProjectStore({ root: "/test-root" }),
+    projectStore:
+      options?.projectStore ??
+      createFakeProjectStore({ root: options?.projectRoot ?? "/test-root" }),
     chatReader: options?.chatReader ?? chatStore,
     chatMutations: chatStore,
     pageReader: pageStore,
@@ -223,7 +232,7 @@ function buildTestContext(options?: {
     renderCache: createFakeRenderCache(),
     sessionCheckpoint: createFakeSessionCheckpointService(),
     recovery: options?.recovery ?? createFakeRecoveryService(),
-    gateRunner: createFakeGateRunner(),
+    gateRunner: options?.gateRunner ?? createFakeGateRunner(),
     hostSupervisor: createFakeHostSupervisorPort(),
     exportRender: createFakeExportRenderPort(),
     exportPublish: options?.exportPublish ?? createFakeExportPublish(),
@@ -1080,6 +1089,51 @@ describe("project.open", () => {
       ]);
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  // --- Task 5 (preview-render-repair): the smoke stage needs a path it can read ----------------
+
+  test("validates each canonical page through the Gate at its real on-disk path", async () => {
+    await context.start(async () => {
+      const dashboard = slug("dashboard");
+      const calendar = slug("calendar");
+      const pageReader = createFakePageStore({
+        order: [dashboard, calendar],
+        sources: new Map([
+          [
+            dashboard,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+          [
+            calendar,
+            {
+              bytes: new TextEncoder().encode("export const meta = {}"),
+              sourceHash: FAKE_SOURCE_HASH,
+            },
+          ],
+        ]),
+      });
+      const gateRunner = createFakeGateRunner();
+      const harness = buildTestContext({ gateRunner, projectRoot: "/tmp/proj", pageReader });
+
+      await buildPageDescriptors(harness.handlerContext, [dashboard, calendar]);
+
+      const runPageCalls = gateRunner.calls.filter((call) => call.method === "runPage");
+      expect(runPageCalls).toHaveLength(2);
+      expect(runPageCalls[0]).toEqual({
+        method: "runPage",
+        slug: dashboard,
+        sourcePath: "/tmp/proj/.termcraft/pages/dashboard/page.tsx",
+      });
+      expect(runPageCalls[1]).toEqual({
+        method: "runPage",
+        slug: calendar,
+        sourcePath: "/tmp/proj/.termcraft/pages/calendar/page.tsx",
+      });
     });
   });
 });
