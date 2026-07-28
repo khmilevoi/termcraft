@@ -130,9 +130,18 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
   // Home no matter what was on disk.
   //
-  // A failed startup open must SURFACE rather than silently leave Home (spec, "Error handling"):
-  // `project.retryOpen` already exists for the recovery-conflict path, and a rejection here is
-  // logged with its code so the next occurrence is diagnosable.
+  // WHAT A FAILED STARTUP OPEN ACTUALLY DOES TODAY — the spec ("Error handling") requires it to
+  // SURFACE rather than silently leave the user on Home, and this code does NOT meet that
+  // requirement. The two `console.error` calls below run while the renderer owns the terminal,
+  // so `infrastructure/debug-log`'s pass-through gate is engaged: with tracing on the line
+  // reaches the trace file and nothing else; with tracing off it waits in the hold buffer and
+  // prints only once the user has already quit. Either way the user sees Home with no
+  // explanation. That is not a regression introduced by the gate — before it, the line tore a
+  // hole in the live frame, which was not a surface either. The missing piece is a designed
+  // in-app surface for a failed startup open, and there is none in `design/*.dc.html`; inventing
+  // one here is forbidden (CLAUDE.md, "Design is a source of truth"), so this is recorded as an
+  // open design gap rather than papered over. `project.retryOpen` already exists for the
+  // recovery-conflict path and would be the natural action such a surface offers.
   //
   // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
   // handlers this function awaits nothing before. Dispatching first, as this used to, meant a

@@ -218,7 +218,11 @@ describe("suspendConsolePassthrough", () => {
     // the difference between a bounded buffer and the silent-swallow defect this branch exists
     // to undo.
     expect(screen).toHaveLength(MAX_HELD_LINES + 1);
-    expect(String(screen[0])).toContain("3");
+    // The whole message, not a substring: `toContain("3")` also passes on "13", "30" or "203",
+    // which is every wrong drop count this assertion exists to catch.
+    expect(screen[0]).toBe(
+      `termcraft: 3 earlier console line(s) were dropped while the terminal was held (the buffer keeps the most recent ${MAX_HELD_LINES})`,
+    );
     expect(screen[1]).toBe("line-3");
     expect(screen.at(-1)).toBe(`line-${MAX_HELD_LINES + 2}`);
   });

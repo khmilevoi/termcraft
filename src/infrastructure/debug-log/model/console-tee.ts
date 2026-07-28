@@ -60,6 +60,12 @@ let passthrough = true;
  * reads. On overflow the OLDEST entry falls out and {@link resumeConsolePassthrough}'s flush
  * announces the count — dropping silently would be the same class of defect this module exists
  * to undo.
+ *
+ * The cost of holding raw args is that they are read at FLUSH time, not at call time: an object
+ * mutated between the `console.*` call and the flush prints the value it holds then, not the one
+ * the call site meant to report. Accepted as the lesser evil against eager formatting, and
+ * invisible whenever a trace sink is capturing — that path serialises immediately and never
+ * holds anything.
  */
 export const MAX_HELD_LINES = 200;
 
@@ -133,11 +139,29 @@ function flushHeld(): void {
   // Ahead of the survivors, because the dropped ones were the oldest — this reads in the order
   // the lines happened.
   if (dropped > 0) {
-    installedOriginals.get("error")?.(
+    writerFor("error")(
       `termcraft: ${dropped} earlier console line(s) were dropped while the terminal was held (the buffer keeps the most recent ${MAX_HELD_LINES})`,
     );
   }
-  for (const line of lines) installedOriginals.get(line.method)?.(...line.args);
+  for (const line of lines) writerFor(line.method)(...line.args);
+}
+
+/**
+ * The writer a held line is released through — total, never optional.
+ *
+ * {@link installConsoleTee} fills all five originals in one loop, so the fallback is unreachable
+ * today. It is still written out rather than left as a `?.` because both call sites above exist
+ * precisely to guarantee that nothing is discarded in silence, and an optional call makes the
+ * one thing that must not be skippable exactly that. A missing original would silently swallow a
+ * held line — and, worse, the announcement that lines had been swallowed.
+ */
+function writerFor(method: ConsoleMethod): ConsoleWriter {
+  const original = installedOriginals.get(method);
+  if (original !== undefined) return original;
+  // Reached only if the invariant above ever breaks. `passthrough` is already true by the time a
+  // flush runs, so going back through `console` calls through to the real writer rather than
+  // re-entering the hold path.
+  return console[method].bind(console);
 }
 
 function hold(method: ConsoleMethod, args: readonly unknown[]): void {
