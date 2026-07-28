@@ -4,9 +4,9 @@ import { trace, traceEnabled } from "./sink";
 /**
  * DIAGNOSTIC INSTRUMENTATION — see `sink.ts`'s header.
  *
- * The codebase already reports through `console.warn`/`console.error`/`console.log` from 75
- * files, and in a live interactive run every one of those lines is lost behind the alternate
- * screen. Rather than edit hundreds of call sites, this mirrors them into the trace file.
+ * The codebase already reports through `console.warn`/`console.error`/`console.log` from 82
+ * non-test files, and in a live interactive run every one of those lines is lost behind the
+ * alternate screen. Rather than edit hundreds of call sites, this mirrors them into the trace file.
  *
  * THE ORIGINAL METHOD IS NOT ALWAYS CALLED (2026-07-28). This used to say that it always was,
  * and that the tee could therefore be removed without altering what the app does. Neither is

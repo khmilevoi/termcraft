@@ -104,9 +104,11 @@ describe("createUiRoot", () => {
  * `bun test` (`infrastructure/debug-log/model/sink.ts`'s test-runner exclusion). That does NOT
  * make the call a no-op — since the hold-buffer change, a disabled sink still installs, because
  * the wrapper is the gate. What keeps these tests' own tee in place is wrapper IDENTITY: each
- * case below pre-installs with an enabled fake sink, so `console.warn` already is this module's
- * wrapper and `createUiRoot`'s install skips it. The other four methods, which these cases do
- * not assert on, genuinely do get fresh default-sink wrappers.
+ * case below pre-installs with an enabled fake sink through `teeInto`, and `installConsoleTee`
+ * wraps ALL FIVE methods it covers and records all five in `installedWrappers`, so
+ * `createUiRoot`'s own install (`console-tee.ts:186`) skips every one of them. No method ends up
+ * on a default-sink wrapper here — which is exactly why the fake sink still sees the traced line
+ * this suite asserts on, and why `afterEach` has to restore all five and not only `warn`.
  */
 describe("createUiRoot terminal ownership", () => {
   // All five, not just `warn`: `installConsoleTee` wraps every method it covers, so restoring

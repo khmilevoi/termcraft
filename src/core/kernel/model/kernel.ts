@@ -698,15 +698,20 @@ export function createKernel(deps: KernelDeps): Kernel {
      * context through its chain," so the code after this specific await IS back in the
      * Kernel's own frame).
      *
-     * REVISION SEMANTICS (this file's own report appendix documents the choice in full):
-     * `stateRevision` advances if AND ONLY IF `run()` resolves with at least one event —
-     * never a bare, unexplained bump. This differs from `dispatch.ts`'s own SYNCHRONOUS
-     * rule (`applyTransition` advances on disposition alone, even for a `startedOutcome([])`
-     * admission with zero events) because that rule's own invariant does not extend to a
-     * LATER, async completion that ships with genuinely nothing to publish (the `selection`/
-     * `model` family's own documented "no failure event exists" boundary case) — advancing
-     * anyway would break "a revision bump is always explained by at least one published
-     * event," an invariant every client recovering from `STALE_REVISION` relies on.
+     * REVISION SEMANTICS: `stateRevision` advances if AND ONLY IF `run()` resolves with at
+     * least one event — never a bare, unexplained bump. It covers the case an async completion
+     * makes easy to hit (the `selection`/`model` family's own documented "no failure event
+     * exists" boundary case, which resolves with genuinely nothing to publish), and advancing
+     * anyway would break "a revision bump is always explained by at least one published event,"
+     * an invariant every client recovering from `STALE_REVISION` relies on.
+     *
+     * `dispatch.ts`'s SYNCHRONOUS half states the same rule (2026-07-28). It used to advance on
+     * the handler's disposition alone — a `startedOutcome([])` admission moved the Kernel and
+     * published nothing, and the UI mirror, which learns revisions only from published
+     * envelopes, could never catch up; every later command was refused `STALE_REVISION` for the
+     * rest of the process. That was a deviation from KCC §6/§7.6/§12.1/§13.3, not a deliberately
+     * different rule, and it is gone: both halves of the Kernel now share one invariant, and
+     * `operation-publish.ts` is where the shared implementation of it lives.
      */
     async function runLaunchedOperation(
       label: string,

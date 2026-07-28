@@ -277,8 +277,8 @@ screens: the slash menu never opened from the Home prompt, so `/exit` was
 literal text there and Enter would create a project whose first message was
 the string `"/exit"`. **Ctrl+C is not an escape route either** — a previous
 task's claim to the contrary was already investigated and retracted
-(`ui/app/model/root.tsx:81` sets `UI_RENDERER_CONFIG`'s `exitOnCtrlC: false`,
-passed to `createCliRenderer` at `:84`, no `ctrl+c` hotkey is registered, and raw mode disables
+(`ui/app/model/root.tsx:103` sets `UI_RENDERER_CONFIG`'s `exitOnCtrlC: false`,
+passed to `createCliRenderer` at `:106`, no `ctrl+c` hotkey is registered, and raw mode disables
 `ISIG`, so a Ctrl+C keypress never reaches `run-app.ts`'s SIGINT handler at
 all — it resolves to an ordinary, ignored keystroke). Before this task there
 was no way out of idle Home at all.

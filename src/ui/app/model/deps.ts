@@ -72,8 +72,11 @@ export interface UiLocalState {
   readonly pinDraft: Atom<string>;
   /**
    * The page picked from the tab strip, or `null` while the Kernel's own active slug is the whole
-   * truth. Written by `selectPage` (`ui/workspace/model/page-selection.ts`), cleared whenever the
-   * Kernel publishes a new active slug of its own.
+   * truth. Written by `selectPage` (`ui/workspace/model/page-selection.ts`) and retired by EITHER
+   * of the two routes the "TWO WAYS TO RETIRE THE TAB STRIP'S OPTIMISTIC PICK" block below spells
+   * out: unconditionally when the Kernel publishes a new active slug of its own, and — scoped to
+   * the slug it was dispatched for — when that pick's own `preview.selectPage` is terminally
+   * refused.
    */
   readonly pageOverride: Atom<string | null>;
   /**

@@ -5,11 +5,14 @@ import type { WorkspaceDeps } from "../types";
 /**
  * Switching pages from the tab strip (design §3.3, "Tabs switch pages").
  *
- * WHY AN OVERRIDE AND NOT A COMMAND FIELD. The Kernel's own `activePageSlug` reaches the UI on
- * exactly one event — `page.descriptorsChanged` (`ui/mirror/model/mirror.ts`) — whose `reason`
- * is a closed eight-member union (`core/protocol/model/event-payload.ts`, KCC §9) with no member
- * for "the user picked a tab". So a tab click cannot announce itself through Kernel state
- * without widening a contract-tested closed union. It does not need to: which page the user is
+ * WHY AN OVERRIDE AND NOT A COMMAND FIELD. Two events carry the Kernel's own `activePageSlug`
+ * into the mirror (`ui/mirror/model/mirror.ts`): `kernel.snapshot`, which SEEDS the project slice
+ * on subscribe (`model/seed.ts`), and `page.descriptorsChanged`, the only one that can announce a
+ * CHANGE mid-session. A snapshot is not something a click can provoke, and
+ * `page.descriptorsChanged` carries a closed eight-member `reason` union
+ * (`core/protocol/model/event-payload.ts`, KCC §9) with no member for "the user picked a tab" —
+ * so a tab click cannot announce itself through Kernel state without widening a contract-tested
+ * closed union. It does not need to: which page the user is
  * LOOKING at is machine-local view state, the same class as focus and fullscreen. The Kernel
  * still learns the choice — `preview.selectPage` (dispatched by `ui/app/model/deps.ts` when the
  * effective slug changes) persists it into `workspace.local.toml`, which is what

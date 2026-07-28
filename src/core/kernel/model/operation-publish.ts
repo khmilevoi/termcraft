@@ -16,13 +16,17 @@ import type { KernelCounters } from "./counters";
  * `launchOperation`'s own one-shot terminal batch cannot carry) both call, rather than each
  * hand-rolling its own copy of "advance iff non-empty, then publish through the SAME bus."
  *
- * REVISION SEMANTICS (unchanged from `launchOperation`'s own documented rule, `kernel.ts`'s
- * report appendix): the revision advances IF AND ONLY IF `events` is non-empty — never a
- * bare, unexplained bump. This is deliberately narrower than `dispatch.ts`'s own SYNCHRONOUS
- * rule (`applyTransition` advances on disposition alone, even for a zero-event admission),
- * because an async completion (or a mid-operation tick) that genuinely has nothing to publish
- * must not silently bump `stateRevision` with no event to explain it — see `kernel.ts`'s own
- * report appendix for the full argument this reuses verbatim.
+ * REVISION SEMANTICS: the revision advances IF AND ONLY IF `events` is non-empty — never a
+ * bare, unexplained bump, because "a revision bump is always explained by at least one published
+ * event" is what every client recovering from `STALE_REVISION` relies on.
+ *
+ * THE SYNCHRONOUS HALF NOW STATES THE SAME RULE (2026-07-28, `dispatch.ts`'s own bump site).
+ * This comment used to describe the async rule as deliberately NARROWER than `dispatch.ts`'s,
+ * which advanced on the handler's disposition alone; that deviation was a live defect, not a
+ * design — a zero-event `startedOutcome([])` moved the Kernel forward and published nothing, and
+ * since the UI mirror learns revisions only from published envelopes it could never catch up.
+ * Under KCC §6's Global Constraint "the transition changed authoritative state" and "there is an
+ * event to publish" are the same predicate, so both halves of the Kernel state ONE invariant.
  *
  * CALLABLE ANY NUMBER OF TIMES. Unlike `launchOperation`'s own terminal call (exactly once,
  * when `run()` settles), the live-publish primitive may call this any number of times over

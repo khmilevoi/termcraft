@@ -529,13 +529,15 @@ vendor tier's own pre-split run-loop file.
   released to the writer on resume (overflow drops the oldest and the flush says how
   many). That is why the tee installs even when tracing is off — leaving it
   uninstalled meant there was no gate at all, and the frame tore exactly as before.
-  Every path that gives the terminal back resumes it, each in a `finally` so a
-  throwing teardown cannot skip it: the renderer that never came up, the two
-  mount-failure branches, `dispose()`, and
+  Every path that gives the terminal back resumes it: the renderer that never came
+  up, the two mount-failure branches, `dispose()`, and
   `src/entrypoint/model/process-boundary.ts`'s `restoreTerminal`, which is the only
   one a panic reaches — a fatal message that reached the trace file and nothing else
   would leave the operator with a blank terminal, which is worse than the torn frame
-  the suspension prevents. The gate covers `console.*` only; a direct
+  the suspension prevents. The three paths that first have to tear a renderer down —
+  the two mount-failure branches and `dispose()` — put the resume in a `finally`, so
+  a throwing `destroy()`/`unmount()` cannot strand the gate; the other two have no
+  teardown to throw ahead of them and resume with a plain statement. The gate covers `console.*` only; a direct
   `process.stderr.write` or the runtime's own uncaught-exception printer bypasses it
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
