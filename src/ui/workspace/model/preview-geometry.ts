@@ -35,6 +35,13 @@ const TAB_RULE_ROWS = 2;
 /** The pane's own left+right border columns. */
 const PANE_BORDER_COLUMNS = 2;
 
+/**
+ * The tab strip's own indent beyond the pane's border — one more column on each side, inside
+ * it. Design `paneShell` (`design/termcraft-engine.js:484`): `drawTabs(b, px0+2, 1, pw-4, …)`
+ * — `pw-4` is the pane's border ({@link PANE_BORDER_COLUMNS}, 2) plus this indent (2 more).
+ */
+const TAB_STRIP_INSET_COLUMNS = 2;
+
 export function chatColumnWidth(terminalWidth: number): number {
   return Math.round(terminalWidth * CHAT_WIDTH_RATIO);
 }
@@ -58,6 +65,32 @@ export function chatColumnWidth(terminalWidth: number): number {
  */
 export function previewPaneWidth(terminal: CellSize, fullscreen: boolean): number {
   return fullscreen ? terminal.w : terminal.w - chatColumnWidth(terminal.w);
+}
+
+/**
+ * The preview pane's own OUTER height — the `ws-preview` box's own `height` prop (and, per
+ * the design, `ws-chat`'s too: `paneShell` sets both boxes' height from this SAME number,
+ * `design/termcraft-engine.js:477`: `frameH = h - 1`, one row reserved for the shell's own
+ * status bar below the pane — see {@link STATUS_BAR_ROWS}).
+ */
+export function previewPaneHeight(terminal: CellSize): number {
+  return terminal.h - STATUS_BAR_ROWS;
+}
+
+/**
+ * The tab strip's own width — what `Workspace.tsx`'s `renderTabs` sizes the `ws-tabs` box to
+ * and bounds `tabsOverflow`'s estimate with. Design `paneShell` (`design/termcraft-engine.js
+ * :484`): `drawTabs(b, px0+2, 1, pw-4, …)` — `pw` is the pane's own OUTER width
+ * ({@link previewPaneWidth}), and `pw-4` is that width minus its border
+ * ({@link PANE_BORDER_COLUMNS}) minus the strip's own indent ({@link TAB_STRIP_INSET_COLUMNS}).
+ * Clamped at zero for the same reason {@link previewRegionSize} is: a terminal too small to
+ * hold the chrome reports an empty strip rather than a negative width.
+ */
+export function previewTabStripWidth(terminal: CellSize, fullscreen: boolean): number {
+  return Math.max(
+    0,
+    previewPaneWidth(terminal, fullscreen) - PANE_BORDER_COLUMNS - TAB_STRIP_INSET_COLUMNS,
+  );
 }
 
 /**

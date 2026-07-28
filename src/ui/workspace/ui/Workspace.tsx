@@ -48,8 +48,9 @@ import { derivePinListRows } from "../model/pins";
 import {
   chatColumnWidth,
   previewFrameOrigin,
-  previewPaneWidth,
+  previewPaneHeight,
   previewRegionSize,
+  previewTabStripWidth,
 } from "../model/preview-geometry";
 import type { CellSize } from "../model/preview-geometry";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
@@ -191,23 +192,22 @@ const AGENT_BLOCK_CHROME_ROWS = 1;
  * The engine source is the design's ground truth (CLAUDE.md "design is a source of truth"), so
  * this renders `SHELL_PALETTE.amber` bold, matching the drawn glyph exactly.
  *
- * `width` is the preview column's outer width (matching `tabsOverflow`'s own best-effort
- * estimate, `../model/tabs.ts`); the strip box is bounded to `width - 4` — the parent
- * `ws-preview` box's own left/right `border` (2) plus one more column of indent on each side,
- * matching the design's own `drawTabs(b, px0+2, 1, pw-4, …)` (`design/termcraft-engine.js:484`)
- * — so `overflow="hidden"` clips the tab content the way the engine's fixed-width character
- * buffer naturally would, and the trailing `›` (pinned with `position="absolute" right={0}`)
- * always lands at the strip's true right edge instead of after however much tab content the
- * row would otherwise emit (which, since the preview column is flush against the terminal's
- * own right edge, would render past the canvas and never appear at all).
+ * `stripWidth` is `../model/preview-geometry.ts`'s own `previewTabStripWidth` — the pane's
+ * outer width less its border and the design's own indent (`drawTabs(b, px0+2, 1, pw-4, …)`,
+ * `design/termcraft-engine.js:484`), matching `tabsOverflow`'s best-effort estimate
+ * (`../model/tabs.ts`). Bounding the strip box to exactly this width is what makes
+ * `overflow="hidden"` clip the tab content the way the engine's fixed-width character buffer
+ * naturally would, and the trailing `›` (pinned with `position="absolute" right={0}`) always
+ * lands at the strip's true right edge instead of after however much tab content the row would
+ * otherwise emit (which, since the preview column is flush against the terminal's own right
+ * edge, would render past the canvas and never appear at all).
  */
 function renderTabs(
   tabs: readonly TabEntry[],
-  width: number,
+  stripWidth: number,
   onTabMouseDown: (pageSlug: string, event: MouseEvent) => void,
 ) {
-  const overflow = tabsOverflow(tabs, width - 4);
-  const stripWidth = Math.max(0, width - 4);
+  const overflow = tabsOverflow(tabs, stripWidth);
   return (
     <box
       id="ws-tabs"
@@ -419,7 +419,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // Every preview measurement comes from ONE module (`../model/preview-geometry.ts`) so the
   // rectangle the host is asked to render into, the box it is painted into, and the origin
   // the mouse is mapped against can never drift apart.
-  const previewWidth = previewPaneWidth(size, fullscreen);
+  const tabStripWidth = previewTabStripWidth(size, fullscreen);
   const previewRegion = previewRegionSize(size, fullscreen);
   // The pane's border and its header rule share ONE hue (design `paneShell` `:479,485` — the
   // rule is drawn in `pbf`, the same value passed as the pane's own border colour; `wsFocus`
@@ -428,7 +428,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // Computed once here, not inlined twice, so the rule and the border can never drift apart.
   const previewBorderColor =
     composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
-  const frameH = h - 1;
+  const frameH = previewPaneHeight(size);
   const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
   const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
   const active = descriptors.find((descriptor) => descriptor.pageSlug === activePageSlug);
@@ -716,7 +716,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderStyle="rounded"
           borderColor={previewBorderColor}
         >
-          {renderTabs(tabs, previewWidth, onTabMouseDown)}
+          {renderTabs(tabs, tabStripWidth, onTabMouseDown)}
           <PreviewPaneRule
             id="ws-preview-rule"
             width={previewRegion.w}

@@ -13,8 +13,10 @@ export type { CellPoint, CellSize } from "./model/preview-geometry";
 export {
   chatColumnWidth,
   previewFrameOrigin,
+  previewPaneHeight,
   previewPaneWidth,
   previewRegionSize,
+  previewTabStripWidth,
 } from "./model/preview-geometry";
 export type { TabEntry } from "./model/tabs";
 export { deriveTabs, neighbourTabSlug, tabWidth, tabsOverflow } from "./model/tabs";
