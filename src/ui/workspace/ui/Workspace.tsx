@@ -45,6 +45,13 @@ import {
 import { deriveComposerAttach } from "../model/attach";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
+import {
+  chatColumnWidth,
+  previewFrameOrigin,
+  previewPaneWidth,
+  previewRegionSize,
+} from "../model/preview-geometry";
+import type { CellSize } from "../model/preview-geometry";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
@@ -252,8 +259,7 @@ function renderPreviewRegion(
   preview: PreviewMirror,
   uiFrame: UiPreviewFrame | null,
   hasPages: boolean,
-  width: number,
-  height: number,
+  region: CellSize,
   interaction: Readonly<{
     pins: readonly PinDtoV1[];
     pendingPin: PendingPin | null;
@@ -268,8 +274,8 @@ function renderPreviewRegion(
     return (
       <ErrorPanel
         id="ws-preview-error"
-        width={width}
-        height={height}
+        width={region.w}
+        height={region.h}
         headline="could not render current design"
         cause={preview.failure.safeMessage}
         nextStep="fix it in a repair turn — the composer stays open"
@@ -283,8 +289,8 @@ function renderPreviewRegion(
       return (
         <HostCrashPanel
           id="ws-preview-crash"
-          width={width}
-          height={height}
+          width={region.w}
+          height={region.h}
           pageSlug={preview.pageSlug}
           hostMessage={preview.finalFailure.safeMessage}
           attempts={preview.attempts}
@@ -298,8 +304,8 @@ function renderPreviewRegion(
     return (
       <HostUnavailablePanel
         id="ws-preview-unavailable"
-        width={width}
-        height={height}
+        width={region.w}
+        height={region.h}
         pageSlug={preview.pageSlug}
         failureCode={hostFailureCodeOf(preview.finalFailure)}
         hostMessage={preview.finalFailure.safeMessage}
@@ -308,7 +314,7 @@ function renderPreviewRegion(
       />
     );
   }
-  if (!hasPages) return <EmptyState id="ws-preview-empty" width={width} height={height} />;
+  if (!hasPages) return <EmptyState id="ws-preview-empty" width={region.w} height={region.h} />;
   if (uiFrame !== null) {
     const frameRect = { x: 0, y: 0, width: uiFrame.frame.width, height: uiFrame.frame.height };
     return (
@@ -400,15 +406,12 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
 
   const w = size.w;
   const h = size.h;
-  const chatW = Math.round(w * 0.37);
-  // Fullscreen (F2) drops the chat column entirely (`!fullscreen &&` below), so the preview pane
-  // — tab strip and preview region alike — must claim the FULL terminal width, matching the
-  // design engine's `paneShell(..., {noChat:true})` (`termcraft-engine.js:392-401`: `chatW=0`
-  // when `noChat`, so `pw = w - 0 = w`). Previously both were sized `w - chatW` unconditionally,
-  // clipping the tab strip ~chatW columns early and mis-sizing EmptyState/ErrorPanel/the ready
-  // placeholder in fullscreen — `requestAtMouse` above already branches the same way
-  // (`fullscreen ? 0 : chatW`) for the live frame's mouse-cell origin.
-  const previewWidth = fullscreen ? w : w - chatW;
+  const chatW = chatColumnWidth(w);
+  // Every preview measurement comes from ONE module (`../model/preview-geometry.ts`) so the
+  // rectangle the host is asked to render into, the box it is painted into, and the origin
+  // the mouse is mapped against can never drift apart.
+  const previewWidth = previewPaneWidth(size, fullscreen);
+  const previewRegion = previewRegionSize(size, fullscreen);
   const frameH = h - 1;
   const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
   const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
@@ -482,9 +485,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const requestAtMouse = (purpose: "hover" | "select" | "pin", event: MouseEvent) => {
     const current = previewFrame();
     if (current === null) return;
+    const origin = previewFrameOrigin(size, fullscreen);
     const frameRect = {
-      x: (fullscreen ? 0 : chatW) + 1,
-      y: 2,
+      x: origin.x,
+      y: origin.y,
       width: current.frame.width,
       height: current.frame.height,
     };
@@ -696,7 +700,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
           {renderTabs(tabs, previewWidth, onTabMouseDown)}
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewWidth, frameH - 3, {
+          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {
             pins,
             pendingPin,
             selectionRect,

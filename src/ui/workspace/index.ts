@@ -9,6 +9,13 @@ export type { EscOutcome, EscState, FocusTarget, OverlayKind } from "./model/foc
 export { nextFocus, resolveEsc, singleCharKeysActive } from "./model/focus";
 export { selectPage } from "./model/page-selection";
 export { derivePinListRows } from "./model/pins";
+export type { CellPoint, CellSize } from "./model/preview-geometry";
+export {
+  chatColumnWidth,
+  previewFrameOrigin,
+  previewPaneWidth,
+  previewRegionSize,
+} from "./model/preview-geometry";
 export type { TabEntry } from "./model/tabs";
 export { deriveTabs, neighbourTabSlug, tabWidth, tabsOverflow } from "./model/tabs";
 export type { WorkspaceDeps, WorkspaceLocalState } from "./types";
