@@ -20,6 +20,12 @@ export interface WorkspaceLocalState {
   readonly slashSelection: Atom<number>;
   readonly chatSelection: Atom<number>;
   readonly pinDraft: Atom<string>;
+  /**
+   * The page the user picked from the tab strip, or `null` while the Kernel's own active slug
+   * is the whole truth. UI-local view state, exactly like {@link WorkspaceLocalState.focus} —
+   * see `model/page-selection.ts` for why a tab click cannot travel through Kernel state.
+   */
+  readonly pageOverride: Atom<string | null>;
 }
 
 export interface WorkspaceDeps {
@@ -31,4 +37,11 @@ export interface WorkspaceDeps {
   readonly runtimeError: Atom<Error | null>;
   readonly interaction: PreviewInteractionState;
   readonly local: WorkspaceLocalState;
+  /**
+   * The page the Workspace is actually showing: the tab-strip override when the user has picked
+   * one, else the Kernel's own `activePageSlug`. Every consumer — tab strip, status bar, pin
+   * list, composer attach line, and the preview-session request in `ui/app/model/deps.ts` —
+   * reads THIS, never `mirror.project().activePageSlug` directly, so they cannot disagree.
+   */
+  readonly activePageSlug: Computed<string | null>;
 }

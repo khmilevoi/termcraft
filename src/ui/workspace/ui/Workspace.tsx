@@ -43,6 +43,7 @@ import {
   scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
+import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
@@ -124,6 +125,9 @@ function hintKeys(
   // `F6` additionally requires the PAGE to be at fault: `wsHostUnavailable`'s own key row is
   // `F5 · F2 · F3` with no repair key at all, because no page edit could start a host.
   return HOTKEYS.filter((action) => {
+    // A key bound without being drawn (the page-step extension, `HotkeyAction.hint`) never
+    // enters the row: this row is a transcription of the design's own key rows.
+    if (action.hint === false) return false;
     if (action.id === "preview.retry") return previewHalt !== null;
     if (action.id === "preview.repair") return previewHalt?.designAtFault === true;
     return true;
@@ -188,7 +192,11 @@ const AGENT_BLOCK_CHROME_ROWS = 1;
  * preview column is flush against the terminal's own right edge, would render past the
  * canvas and never appear at all).
  */
-function renderTabs(tabs: readonly TabEntry[], width: number) {
+function renderTabs(
+  tabs: readonly TabEntry[],
+  width: number,
+  onTabMouseDown: (pageSlug: string, event: MouseEvent) => void,
+) {
   const overflow = tabsOverflow(tabs, width);
   const stripWidth = Math.max(0, width - 2);
   return (
@@ -209,6 +217,12 @@ function renderTabs(tabs: readonly TabEntry[], width: number) {
         <text
           key={tab.pageSlug}
           id={`ws-tab-${tab.pageSlug}`}
+          // §3.3 "Tabs switch pages" — the design's only page-switch affordance. Each tab owns
+          // its own handler rather than one strip-level hit test over column arithmetic: OpenTUI
+          // delivers the hit `target` itself (`MouseEvent.target`), so the slug comes from the
+          // element that was actually clicked, never from a width estimate that could drift out
+          // of step with what `drawTabs` painted.
+          onMouseDown={(event: MouseEvent) => onTabMouseDown(tab.pageSlug, event)}
           fg={
             tab.active ? SHELL_PALETTE.amber : tab.ghost ? SHELL_PALETTE.faint : SHELL_PALETTE.dim
           }
@@ -348,7 +362,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const turn = mirror.turn();
   const preview = mirror.preview();
   const descriptors = mirror.pageDescriptors();
-  const project = mirror.project();
+  // The page the Workspace is showing — the tab-strip pick when there is one, else the Kernel's
+  // own active slug (`../model/page-selection.ts`). Read ONCE here so the tab strip, the pin
+  // list, the composer attach line and the status bar all name the same page.
+  const activePageSlug = props.deps.activePageSlug();
   const uiFrame = previewFrame();
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
@@ -393,14 +410,12 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // (`fullscreen ? 0 : chatW`) for the live frame's mouse-cell origin.
   const previewWidth = fullscreen ? w : w - chatW;
   const frameH = h - 1;
-  const ghostSlug =
-    turn.phase === "running" && descriptors.length === 0 ? project.activePageSlug : null;
-  const tabs = deriveTabs(descriptors, project.activePageSlug, ghostSlug);
-  const active = descriptors.find((descriptor) => descriptor.pageSlug === project.activePageSlug);
+  const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
+  const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
+  const active = descriptors.find((descriptor) => descriptor.pageSlug === activePageSlug);
   const minSize = active !== undefined && active.status === "ready" ? active.minSize : null;
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
-  const pins =
-    project.activePageSlug === null ? [] : (mirror.pinsByPage().get(project.activePageSlug) ?? []);
+  const pins = activePageSlug === null ? [] : (mirror.pinsByPage().get(activePageSlug) ?? []);
   const pinRows = derivePinListRows(pins);
   const records = mirror.records();
   const selection = mirror.selection();
@@ -417,7 +432,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerAttach = deriveComposerAttach({
     readOnly: props.readOnly,
     selection,
-    activePageSlug: project.activePageSlug,
+    activePageSlug,
     openPins: pins,
     turnRunning: turn.phase === "running",
     composerValue,
@@ -480,6 +495,13 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     (event: MouseEvent) => requestAtMouse("hover", event),
     "ui.Workspace.onPreviewMouseMove",
   );
+  // Left click only: the tab context menu (rename · move · remove — `design/18-tab-management
+  // .dc.html`) is v1.0 and out of scope here, so a right click on a tab must do nothing rather
+  // than fall through to some other meaning.
+  const onTabMouseDown = useWrap((pageSlug: string, event: MouseEvent) => {
+    if (event.button !== MouseButton.LEFT) return;
+    selectPage(props.deps, pageSlug);
+  }, "ui.Workspace.onTabMouseDown");
   const onPreviewMouseDown = useWrap((event: MouseEvent) => {
     if (props.readOnly) return;
     if (event.button === MouseButton.RIGHT) return requestAtMouse("pin", event);
@@ -617,7 +639,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                * resolution signal. `derivePinListRows` also numbers each open pin's badge
                * among open pins only, matching `PreviewOverlays`' own numbering.
                */}
-              <PinList id="ws-pins" pageSlug={project.activePageSlug ?? ""} pins={pinRows} />
+              <PinList id="ws-pins" pageSlug={activePageSlug ?? ""} pins={pinRows} />
             </box>
             <Composer
               id="ws-composer"
@@ -673,7 +695,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderStyle="rounded"
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
-          {renderTabs(tabs, previewWidth)}
+          {renderTabs(tabs, previewWidth, onTabMouseDown)}
           {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewWidth, frameH - 3, {
             pins,
             pendingPin,
@@ -689,7 +711,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
         id="ws-status"
         width={w}
         mode={modeChip(turn, fullscreen, props.readOnly, previewHalt)}
-        page={project.activePageSlug !== null ? { text: project.activePageSlug, fg: "dim" } : null}
+        page={activePageSlug !== null ? { text: activePageSlug, fg: "dim" } : null}
         size={{ w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}

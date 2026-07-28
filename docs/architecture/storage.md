@@ -51,7 +51,11 @@ flowchart TB
    scale design. A dangling local
    selection falls back without mutating portable state. An agent request to
    activate a page is a local post-apply effect recorded in the same recoverable
-   turn transaction, not a portable manifest change.
+   turn transaction, not a portable manifest change. The user's own page choice
+   reaches the same field by a different route: a successful preview source
+   switch — what a tab click or the page-step keys ultimately issue — writes the
+   page it switched to as the active one, best-effort, so the choice survives a
+   restart (`flows/interactive-prototype.md` step 4a).
 3. **Pages.** Every page has one canonical
    `pages/<slug>/page.tsx`. The slug is its immutable page and Git-history
    identity; no page UUID or private version file exists. `page.tsx` imports only
@@ -200,6 +204,13 @@ flowchart TB
   full local field set (active page/chat, backend/model/effort, preview,
   theme, render mode, session checkpoints, resource-limit override ranges) and
   its preserve-and-default corruption policy
+- `src/core/kernel/model/handlers/preview-export.ts` — item 2's other writer of the
+  active page: a successful `preview.selectPage`/`preview.selectCurrent` persists the
+  page it switched to through `ProjectStore.writeWorkspaceState`, after the session is
+  established and only on success; a write failure is logged, never fatal
+- `src/core/kernel/model/handlers/page-descriptors.ts` — `resolveActivePageSlug`: the
+  reader on the other side of that write — it keeps the persisted page active if it
+  still exists, else falls back to the first in the ordered list
 - `src/entities/page/model/slug.ts` — item 3: the page-slug grammar
   (directory-name mask, Windows reserved-name rejection) that is a page's only
   identity

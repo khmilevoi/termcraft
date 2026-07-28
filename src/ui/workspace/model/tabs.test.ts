@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { PageDescriptorV1 } from "core/protocol";
 import { TEST_SHA } from "ui/testing";
 
-import { deriveTabs, tabWidth, tabsOverflow } from "./tabs";
+import { deriveTabs, neighbourTabSlug, tabWidth, tabsOverflow } from "./tabs";
 
 const ready = (slug: string, title: string): PageDescriptorV1 => ({
   status: "ready",
@@ -40,6 +40,35 @@ describe("deriveTabs", () => {
   test("the ghost slug marks a still-generating first page", () => {
     const tabs = deriveTabs([ready("main", "Main")], null, "main");
     expect(tabs[0]?.ghost).toBe(true);
+  });
+});
+
+describe("neighbourTabSlug", () => {
+  const tabs = deriveTabs([ready("a", "Alpha"), ready("b", "Bravo"), ready("c", "Charlie")], "b");
+
+  test("moves one tab to the right of the active one", () => {
+    expect(neighbourTabSlug(tabs, 1)).toBe("c");
+  });
+
+  test("moves one tab to the left of the active one", () => {
+    expect(neighbourTabSlug(tabs, -1)).toBe("a");
+  });
+
+  test("stops at the ends instead of wrapping around", () => {
+    const first = deriveTabs([ready("a", "Alpha"), ready("b", "Bravo")], "a");
+    const last = deriveTabs([ready("a", "Alpha"), ready("b", "Bravo")], "b");
+    expect(neighbourTabSlug(first, -1)).toBeNull();
+    expect(neighbourTabSlug(last, 1)).toBeNull();
+  });
+
+  test("with no active tab, steps in from the edge the direction comes from", () => {
+    const none = deriveTabs([ready("a", "Alpha"), ready("b", "Bravo")], null);
+    expect(neighbourTabSlug(none, 1)).toBe("a");
+    expect(neighbourTabSlug(none, -1)).toBe("b");
+  });
+
+  test("an empty strip has no neighbour", () => {
+    expect(neighbourTabSlug([], 1)).toBeNull();
   });
 });
 

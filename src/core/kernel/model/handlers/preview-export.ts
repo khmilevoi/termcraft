@@ -423,6 +423,32 @@ function selectCurrentSource(
     context.setActivePreviewSession(session, spec);
     context.setPreviewSourceKind("current");
 
+    // PERSIST THE ACTIVE PAGE (page switching, 2026-07-27). `preview.selectPage` is the command
+    // a tab click ultimately issues (§3.3 "Tabs switch pages"; KCC:529 "Switch the canonical
+    // preview source"), and which page the user is on is machine-local state — the same class
+    // `model.select` stores (KCC:522) and the same field `handlers/page-descriptors.ts`'s
+    // `resolveActivePageSlug` reads back to decide the active page on the next open. Without
+    // this write a switched-to page was forgotten the moment the process exited, and any later
+    // `page.descriptorsChanged` announced the OLD page as active, snapping the strip back.
+    //
+    // AFTER the session is established, never before, and only on success: the same rule
+    // `handlers/chat.ts` applies to `activeChatId` — persistence records a state change that
+    // genuinely happened. A failed `selectPage` falls into `failSession` above and never
+    // reaches this line, so a page that could not be previewed is not remembered as the one
+    // being looked at.
+    //
+    // A write failure is logged, never fatal (errore rule 21, and the same best-effort
+    // treatment `chat.ts` documents): the live session IS established and rendering, which is
+    // what the events below report; durability across restarts is the only thing lost.
+    const persistFailure = await wrap(
+      context.deps.projectStore.writeWorkspaceState({ activePageSlug: payload.pageSlug }),
+    );
+    if (persistFailure !== undefined) {
+      console.warn(
+        `core/kernel: preview source switched to "${payload.pageSlug}" but persisting it as the active page failed: ${persistFailure.safeMessage}`,
+      );
+    }
+
     const readyEvent =
       readyOutcome.kind === "changed"
         ? [previewStateChangedEvent("kernel.preview.sessionReady", readyOutcome, correlation)]

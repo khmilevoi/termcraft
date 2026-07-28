@@ -94,6 +94,48 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     expect((right?.attrs ?? 0) & 1).toBe(1);
   });
 
+  test("marks the tab the user switched to, not the Kernel's own active page", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "a",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [ready("a", "Alpha"), ready("b", "Bravo")],
+      }),
+    );
+    deps.local.pageOverride.set("b");
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("▸ Bravo");
+    expect(text).not.toContain("▸ Alpha");
+  });
+
+  test("every tab is a hit-testable element the mouse can land on", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "a",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [ready("a", "Alpha"), ready("b", "Bravo")],
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rect = handle.rectOf("ws-tab-b");
+    expect(rect).not.toBeNull();
+    expect(rect && rect.width).toBeGreaterThan(0);
+    expect(rect && handle.hitTest(rect.x, rect.y)).toBe("ws-tab-b");
+  });
+
   test("omits the scroll indicators when the tab strip fits", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(

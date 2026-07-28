@@ -33,6 +33,26 @@ export function deriveTabs(
   }));
 }
 
+/**
+ * The slug one step from the active tab, or `null` when there is nowhere to step.
+ *
+ * DESIGN EXTENSION (flagged, not invented silently): §3.8's two hotkey tiers name no key for
+ * moving between pages at all — the design switches tabs by mouse only. The keyboard route the
+ * maintainer asked for (2026-07-27) needs SOME order semantics, and this is the narrowest one:
+ * strip order (which is descriptor order, the portable `pages.json` order) with NO wrap-around.
+ * Stopping at the ends keeps a held key from cycling the whole project past the page you meant,
+ * and — unlike wrapping — it never re-establishes a preview session the user did not ask for.
+ *
+ * With no active tab (a project whose pages exist but whose active slug has not resolved yet),
+ * a step enters the strip from the side the direction comes from rather than doing nothing.
+ */
+export function neighbourTabSlug(tabs: readonly TabEntry[], delta: -1 | 1): string | null {
+  if (tabs.length === 0) return null;
+  const activeIndex = tabs.findIndex((tab) => tab.active);
+  if (activeIndex === -1) return (delta === 1 ? tabs[0] : tabs[tabs.length - 1])?.pageSlug ?? null;
+  return tabs[activeIndex + delta]?.pageSlug ?? null;
+}
+
 /** Approximate rendered width of one tab (design `drawTabs`: `▸ name` +4 active, `name` +3 inactive). */
 export function tabWidth(entry: TabEntry): number {
   return entry.title.length + (entry.active ? 4 : 3);

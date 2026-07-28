@@ -6,7 +6,7 @@ import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
 import { buildRepairPrompt, isDesignRenderFailure } from "ui/preview";
-import { nextFocus, resolveEsc } from "ui/workspace";
+import { deriveTabs, neighbourTabSlug, nextFocus, resolveEsc, selectPage } from "ui/workspace";
 
 import type { UiDeps, UiLocalState } from "./deps";
 import type { KeyIntent } from "./keymap";
@@ -412,6 +412,20 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
   if (execution.effect === "exit") {
     // `/exit`, dispatched via the slash menu's `slash-submit` -> `action-execute` path.
     deps.requestExit();
+    return;
+  }
+  if (execution.effect === "page-prev" || execution.effect === "page-next") {
+    // The keyboard half of tab switching (design extension — see this action's own registry
+    // entry). It derives the target from the SAME tab strip the mouse clicks
+    // (`deriveTabs` + `neighbourTabSlug`) and lands in the SAME `selectPage`, so the two routes
+    // cannot drift apart in what they consider "the next page" or in what a switch does.
+    const tabs = deriveTabs(deps.mirror.pageDescriptors(), deps.activePageSlug());
+    const target = neighbourTabSlug(tabs, execution.effect === "page-next" ? 1 : -1);
+    if (target === null) {
+      trace("ui.page.step.refused", { effect: execution.effect });
+      return;
+    }
+    selectPage(deps, target);
     return;
   }
   if (execution.effect === "compose-repair") {

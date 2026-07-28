@@ -46,8 +46,9 @@ document here that addresses how the source tree itself is laid out.
 > `docs/architecture/flows/migration.md`); the composed agent system prompt cannot yet
 > carry source-extracted per-page metadata or the current selection (`agent/prompt/`,
 > phase-8 WP-3); and the interactive channels layered on top of a live preview session —
-> the `F4` mode toggle, input forwarding, tweaks, and page navigation — each remain blocked
-> by their own named gap (`docs/architecture/flows/interactive-prototype.md`). Each
+> the `F4` mode toggle, input forwarding, tweaks, and *runtime-driven* page navigation — each
+> remain blocked by their own named gap (`docs/architecture/flows/interactive-prototype.md`);
+> *user-driven* page switching, by tab click or `Ctrl+B`/`Ctrl+N`, is live as of 2026-07-27. Each
 > document states which half of a claim is built and which is a
 > design target, and anchors the unbuilt half to the governing specification instead
 > of a source file; anchors keep moving to real paths as implementation proceeds (see
@@ -113,8 +114,9 @@ One document per user-visible process:
   behavior is the continuation specification linked above.
 - [flows/interactive-prototype.md](flows/interactive-prototype.md) — real
   component state inside the design host; what crosses the boundary for
-  interactive mode and the Tweaks panel. The host and its supervision are built;
-  the input, tweak, and navigation channels are not.
+  interactive mode and the Tweaks panel. The host and its supervision are built,
+  and user-driven page switching with them; the input, tweak, and
+  runtime-navigation channels are not.
 - [flows/pins-and-selection.md](flows/pins-and-selection.md) — mouse selection
   and pin comments: anchoring, lifecycle, unresolved pins.
 - [flows/export.md](flows/export.md) — the export package: deterministic

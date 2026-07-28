@@ -324,6 +324,46 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(parsed.nextTag).toBe("switching");
   });
 
+  test("a successful selectPage persists the page as the machine-local active one", async () => {
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: { activePageSlug: null },
+    });
+    const deps = buildDeps({ projectStore });
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+
+    const read = await wrap(projectStore.readWorkspaceState());
+    expect("code" in read ? read : read.state.activePageSlug).toBe(HOME);
+  });
+
+  test("a FAILED selectPage persists nothing — the active page is only what the user is really looking at", async () => {
+    const projectStore = createFakeProjectStore({
+      root: "/test-root",
+      workspaceState: { activePageSlug: null },
+    });
+    const failure: FailureDtoV1 = {
+      code: "HOST_START_FAILED",
+      retryable: true,
+      safeMessage: "host refused to start",
+      details: {},
+    };
+    const hostSupervisor = createFakeHostSupervisorPort();
+    hostSupervisor.failNext("preview", failure);
+    const deps = buildDeps({ projectStore, hostSupervisor });
+    seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+
+    await selectPageAndSettle(harness, { pageSlug: HOME });
+
+    const read = await wrap(projectStore.readWorkspaceState());
+    expect("code" in read ? read : read.state.activePageSlug).toBeNull();
+  });
+
   test("async completion, cache HIT + successful host call: establishes a session and emits preview.sourceChanged", async () => {
     const deps = buildDeps();
     seedPageMeta(deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>);

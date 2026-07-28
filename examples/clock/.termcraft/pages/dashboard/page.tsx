@@ -6,6 +6,7 @@ import {
   Panel,
   Column,
   Row,
+  Box,
   Text,
   Separator,
   Tabs,
@@ -158,37 +159,39 @@ export default reatomComponent(function Page() {
   const accentToken = selectedPalette.token
 
   return (
-    <Panel id="root" title="Часы" padding={1} borderColor={accentToken}>
-      <Column id="layout" gap={1} align="center">
-        <Row id="palette-row" gap={1} align="center">
-          <Text id="palette-label" dim color="foregroundMuted">
-            Палитра:
-          </Text>
-          <Tabs
-            id="palette-menu"
-            tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
-            activeId={paletteId}
-            onSelect={wrap((id: string) => paletteIdAtom.set(id))}
-          />
-        </Row>
-
-        <Text id="digital-time" bold color={accentToken}>
-          {fullTime(now)}
-        </Text>
-        <Text id="date-line" dim color="foregroundMuted">
-          {`${weekday(now)}, ${fullDate(now)}`}
-        </Text>
-
-        <Separator id="sep-header" color={accentToken} />
-
-        <Panel id="panel-analog" title="Аналоговые часы" padding={1} borderColor={accentToken} titleColor={accentToken}>
-          <Column id="analog-col" gap={0} align="center">
-            <Text id="analog-face" color={accentToken}>
-              {analogFace}
+    <Box id="app-bg" direction="column" grow={1} background="background">
+      <Panel id="root" title="Часы" padding={1} borderColor={accentToken}>
+        <Column id="layout" gap={1} align="center">
+          <Row id="palette-row" gap={1} align="center">
+            <Text id="palette-label" dim color="foregroundMuted">
+              Палитра:
             </Text>
-          </Column>
-        </Panel>
-      </Column>
-    </Panel>
+            <Tabs
+              id="palette-menu"
+              tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+              activeId={paletteId}
+              onSelect={wrap((id: string) => paletteIdAtom.set(id))}
+            />
+          </Row>
+
+          <Text id="digital-time" bold color={accentToken}>
+            {fullTime(now)}
+          </Text>
+          <Text id="date-line" dim color="foregroundMuted">
+            {`${weekday(now)}, ${fullDate(now)}`}
+          </Text>
+
+          <Separator id="sep-header" color={accentToken} />
+
+          <Panel id="panel-analog" title="Аналоговые часы" padding={1} borderColor={accentToken} titleColor={accentToken}>
+            <Column id="analog-col" gap={0} align="center">
+              <Text id="analog-face" color={accentToken}>
+                {analogFace}
+              </Text>
+            </Column>
+          </Panel>
+        </Column>
+      </Panel>
+    </Box>
   )
 })

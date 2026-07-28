@@ -189,6 +189,60 @@ describe("applyIntent — local toggles", () => {
   });
 });
 
+describe("applyIntent — page tabs (design extension, 2026-07-27)", () => {
+  const pages = (activePageSlug: string) => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [
+          {
+            status: "ready",
+            pageSlug: "main",
+            sourceHash: TEST_SHA,
+            title: "Main",
+            minSize: { w: 80, h: 24 },
+            theme: "dark-default",
+            kitApiVersion: 1,
+          },
+          {
+            status: "ready",
+            pageSlug: "settings",
+            sourceHash: TEST_SHA,
+            title: "Settings",
+            minSize: { w: 80, h: 24 },
+            theme: "dark-default",
+            kitApiVersion: 1,
+          },
+        ],
+      }),
+    );
+    return { kernel, deps };
+  };
+
+  test("page.next moves to the tab on the right", () => {
+    const { deps } = pages("main");
+    applyIntent({ kind: "action-execute", actionId: "page.next" }, deps);
+    expect(deps.activePageSlug()).toBe("settings");
+  });
+
+  test("page.prev moves to the tab on the left", () => {
+    const { deps } = pages("settings");
+    applyIntent({ kind: "action-execute", actionId: "page.prev" }, deps);
+    expect(deps.activePageSlug()).toBe("main");
+  });
+
+  test("stepping past the last tab does nothing", () => {
+    const { deps } = pages("settings");
+    applyIntent({ kind: "action-execute", actionId: "page.next" }, deps);
+    expect(deps.activePageSlug()).toBe("settings");
+  });
+});
+
 describe("applyIntent — exit (phase-8 Task 11 / WP-10)", () => {
   test("the exit intent calls requestExit and dispatches nothing", () => {
     const kernel = createFakeKernel();
