@@ -211,7 +211,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
         }),
       );
 
-    // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
+    // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+rule+gap+border =
+    // y4 (task 8: design `paneShell`'s `dy = 4` — the rule row and the blank gap row between
+    // the tab strip and the design area).
     await renderer.act(() => renderer.mockMouse.moveTo(49, 7));
     await renderer.act(emitHit);
     await renderer.act(() => renderer.mockMouse.pressDown(50, 8, MouseButtons.LEFT));
@@ -222,9 +224,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       .map((raw) => raw as { kind: string; payload: { query?: unknown } })
       .filter((command) => command.kind === "preview.queryGeometry");
     expect(geometryQueries.map((command) => command.payload.query)).toEqual([
-      { kind: "hit", x: 4, y: 5 },
-      { kind: "hit", x: 5, y: 6 },
-      { kind: "pin-anchor", x: 6, y: 7 },
+      { kind: "hit", x: 4, y: 3 },
+      { kind: "hit", x: 5, y: 4 },
+      { kind: "pin-anchor", x: 6, y: 5 },
     ]);
   });
 
@@ -1010,7 +1012,8 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     await renderer.waitFor(() => preview.acknowledgements.length === 1);
     expect(preview.acknowledgements).toEqual([frameToken]);
 
-    // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+border = y2.
+    // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+rule+gap+border =
+    // y4 (task 8: design `paneShell`'s `dy = 4`).
     await renderer.act(() => renderer.mockMouse.pressDown(51, 9, MouseButtons.RIGHT));
     const geometryQuery = dispatchedOf("preview.queryGeometry");
     expect(geometryQuery).toEqual({
@@ -1018,7 +1021,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       commandId: geometryQuery.commandId,
       expectedRevision: chatChanged.stateRevision,
       kind: "preview.queryGeometry",
-      payload: { frameToken, query: { kind: "pin-anchor", x: 6, y: 7 } },
+      payload: { frameToken, query: { kind: "pin-anchor", x: 6, y: 5 } },
     });
 
     const geometryToken = uuidv7();

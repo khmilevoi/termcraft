@@ -1022,7 +1022,7 @@ describe("Workspace preview clipping", () => {
   });
 
   // NOTE: at 120×34 the fake frame (80×24) overflows the pane's WIDTH (region.w = 74) but not
-  // its height (region.h = 30 > 24) — so this test exercises only the width half of the clamp.
+  // its height (region.h = 28 > 24) — so this test exercises only the width half of the clamp.
   // The vertical half is covered separately below, at a terminal where the frame overflows both.
   test("a frame wider than the pane never paints over the pane's own right border", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
@@ -1059,7 +1059,7 @@ describe("Workspace preview clipping", () => {
 
   // The Background's other named scenario: "at 100×20 it also paints over both panels' bottom
   // borders." At 100×20, chatColumnWidth(100) = 37, so the pane is 63 wide and region = {w: 61,
-  // h: 16} (previewRegionSize) — the 80×24 fake frame overflows BOTH axes here, unlike the
+  // h: 14} (previewRegionSize) — the 80×24 fake frame overflows BOTH axes here, unlike the
   // 120×34 test above, so this is the one that actually exercises `height={Math.min(...)}`.
   test("a frame taller than a smaller pane never paints over the pane's own bottom border", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 100, h: 20 });
@@ -1115,5 +1115,28 @@ describe("Workspace preview placeholder sizing", () => {
     for (const line of lines.slice(1, 18)) expect(line[119]).toBe("│");
     // The pane's bottom-right rounded corner survives.
     expect(lines[18]?.[119]).toBe("╯");
+  });
+});
+
+describe("Workspace preview pane header", () => {
+  test("draws the design's rule between the tab strip and the design area", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const lines = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+
+    // Row 0 pane border, row 1 tabs, row 2 the rule — a solid run of ─ across the pane.
+    const rule = lines[2]?.slice(45, 119) ?? "";
+    expect(rule).toBe("─".repeat(74));
   });
 });

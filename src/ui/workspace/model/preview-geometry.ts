@@ -25,6 +25,13 @@ const PANE_BORDER_ROWS = 2;
 /** The tab strip row inside the pane (design `paneShell` draws it at y=1). */
 const TAB_STRIP_ROWS = 1;
 
+/**
+ * The rule under the tab strip plus the blank row below it — design `paneShell`
+ * (`design/termcraft-engine.js:485-486`) draws `hline` at y=2 and starts the design at
+ * `dy = 4`, i.e. two rows of header chrome between the tabs and the design.
+ */
+const TAB_RULE_ROWS = 2;
+
 /** The pane's own left+right border columns. */
 const PANE_BORDER_COLUMNS = 2;
 
@@ -63,7 +70,10 @@ export function previewPaneWidth(terminal: CellSize, fullscreen: boolean): numbe
 export function previewRegionSize(terminal: CellSize, fullscreen: boolean): CellSize {
   return {
     w: Math.max(0, previewPaneWidth(terminal, fullscreen) - PANE_BORDER_COLUMNS),
-    h: Math.max(0, terminal.h - STATUS_BAR_ROWS - PANE_BORDER_ROWS - TAB_STRIP_ROWS),
+    h: Math.max(
+      0,
+      terminal.h - STATUS_BAR_ROWS - PANE_BORDER_ROWS - TAB_STRIP_ROWS - TAB_RULE_ROWS,
+    ),
   };
 }
 
@@ -76,6 +86,6 @@ export function previewRegionSize(terminal: CellSize, fullscreen: boolean): Cell
 export function previewFrameOrigin(terminal: CellSize, fullscreen: boolean): CellPoint {
   return {
     x: (fullscreen ? 0 : chatColumnWidth(terminal.w)) + 1,
-    y: PANE_BORDER_ROWS - 1 + TAB_STRIP_ROWS,
+    y: PANE_BORDER_ROWS - 1 + TAB_STRIP_ROWS + TAB_RULE_ROWS,
   };
 }

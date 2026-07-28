@@ -55,6 +55,7 @@ import type { CellSize } from "../model/preview-geometry";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
+import { PreviewPaneRule } from "./PreviewPaneRule";
 
 const BOLD = shellAttrs({ bold: true });
 
@@ -191,26 +192,28 @@ const AGENT_BLOCK_CHROME_ROWS = 1;
  * this renders `SHELL_PALETTE.amber` bold, matching the drawn glyph exactly.
  *
  * `width` is the preview column's outer width (matching `tabsOverflow`'s own best-effort
- * estimate, `../model/tabs.ts`); the strip box is bounded to `width - 2` — the parent
- * `ws-preview` box's own left/right `border` — so `overflow="hidden"` clips the tab content
- * the way the engine's fixed-width character buffer naturally would, and the trailing `›`
- * (pinned with `position="absolute" right={0}`) always lands at the strip's true right edge
- * instead of after however much tab content the row would otherwise emit (which, since the
- * preview column is flush against the terminal's own right edge, would render past the
- * canvas and never appear at all).
+ * estimate, `../model/tabs.ts`); the strip box is bounded to `width - 4` — the parent
+ * `ws-preview` box's own left/right `border` (2) plus one more column of indent on each side,
+ * matching the design's own `drawTabs(b, px0+2, 1, pw-4, …)` (`design/termcraft-engine.js:484`)
+ * — so `overflow="hidden"` clips the tab content the way the engine's fixed-width character
+ * buffer naturally would, and the trailing `›` (pinned with `position="absolute" right={0}`)
+ * always lands at the strip's true right edge instead of after however much tab content the
+ * row would otherwise emit (which, since the preview column is flush against the terminal's
+ * own right edge, would render past the canvas and never appear at all).
  */
 function renderTabs(
   tabs: readonly TabEntry[],
   width: number,
   onTabMouseDown: (pageSlug: string, event: MouseEvent) => void,
 ) {
-  const overflow = tabsOverflow(tabs, width);
-  const stripWidth = Math.max(0, width - 2);
+  const overflow = tabsOverflow(tabs, width - 4);
+  const stripWidth = Math.max(0, width - 4);
   return (
     <box
       id="ws-tabs"
       flexDirection="row"
       position="relative"
+      marginLeft={1}
       width={stripWidth}
       height={1}
       overflow="hidden"
@@ -707,6 +710,9 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
         >
           {renderTabs(tabs, previewWidth, onTabMouseDown)}
+          <PreviewPaneRule id="ws-preview-rule" width={previewRegion.w} />
+          {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
+          <box id="ws-preview-gap" height={1} />
           {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {
             pins,
             pendingPin,

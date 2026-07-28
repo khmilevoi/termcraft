@@ -759,7 +759,7 @@ describe("preview resize", () => {
     expect(resizeEnvelopes(kernel)[0]?.payload).toEqual({
       previewSessionId,
       width: 74,
-      height: 30,
+      height: 28,
     });
     stop();
   });
@@ -793,7 +793,7 @@ describe("preview resize", () => {
 
     const envelopes = resizeEnvelopes(kernel);
     expect(envelopes).toHaveLength(2);
-    expect(envelopes[1]?.payload).toEqual({ previewSessionId, width: 86, height: 32 });
+    expect(envelopes[1]?.payload).toEqual({ previewSessionId, width: 86, height: 30 });
     stop();
   });
 
