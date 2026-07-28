@@ -18,3 +18,11 @@ export {
   SpecifierRejectedError,
   resolveDesignSpecifier,
 } from "./model/specifier";
+export type { ClosureV1 } from "./model/closure";
+export { computeClosureHash, computeTreeRevision, resolveClosure } from "./model/closure";
+export {
+  DuplicateInventoryPathError,
+  createDesignTreeInventory,
+  inventoryHas,
+  inventorySha256,
+} from "./model/inventory";
