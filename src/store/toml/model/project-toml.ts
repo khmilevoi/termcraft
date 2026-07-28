@@ -1,7 +1,6 @@
 import * as errore from "errore";
 import { z } from "zod";
 
-import { pageSlugSchema } from "entities/page";
 import { rfc3339UtcSchema } from "infrastructure/clock";
 import { canonicalUuidv7Schema } from "infrastructure/uuid";
 
@@ -11,8 +10,8 @@ import type { ProjectManifest } from "../types";
 /** The portable manifest's name inside `.termcraft/` (storage-identity §4, §5.1). */
 export const PROJECT_MANIFEST_FILENAME = "project.toml";
 
-/** The only shipped portable schema version (storage-identity §5.1, §12). */
-export const PROJECT_MANIFEST_FORMAT_VERSION = 1;
+/** The only shipped portable schema version (storage-identity §5.1; multi-file design tree design §3). */
+export const PROJECT_MANIFEST_FORMAT_VERSION = 2;
 
 /**
  * `project.toml` is unreadable: not TOML, missing/non-integer `format_version`, a failed
@@ -32,6 +31,19 @@ export class ManifestCorruptError extends errore.createTaggedError({
 export class ManifestTooNewError extends errore.createTaggedError({
   name: "ManifestTooNewError",
   message: "$file has format_version $found, newer than the supported version $supported",
+}) {}
+
+/**
+ * `project.toml` declares a `format_version` OLDER than this binary's. Version 1 is the
+ * one-page-one-file layout; the multi-file design tree design §12.1 states that such a
+ * project never opens — the workspace is not constructed for it and there is no read-only or
+ * degraded state. This error is what the open sequence turns into the migration offer once
+ * plan 1b ships it; until then it is the honest refusal the user sees.
+ */
+export class ManifestMigrationRequiredError extends errore.createTaggedError({
+  name: "ManifestMigrationRequiredError",
+  message:
+    "$file declares format_version $found and must be migrated to version $supported before it can be opened",
 }) {}
 
 /** The named TOML basic-string escapes (TOML v1.0.0, "String"). */
@@ -115,11 +127,14 @@ export function readFormatVersion(value: unknown): number | null {
 }
 
 /**
- * Exactly the five semantic fields of storage-identity §5.1 plus `format_version`.
+ * Exactly the four semantic fields of storage-identity §5.1 plus `format_version`.
  * `strictObject` is the mechanism that "rejects any non-portable field": active page,
  * active chat, backend, model, effort, preview/UI settings, session ids, Git status, page
  * title, `minSize`, theme, source hash, and extracted page metadata all belong to
- * `workspace.local.toml` or a rebuildable projection, so their presence here is corruption.
+ * `workspace.local.toml` or a rebuildable projection, so their presence here is corruption —
+ * and so, as of format_version 2 (multi-file design tree design §3, §12.1), does a lingering
+ * `pages` array: page order and enumeration now live solely in `design/pages.json`, so a
+ * `pages` key here would be a second, driftable source of truth for the same fact.
  */
 const projectManifestSchema = z.strictObject({
   format_version: z.literal(PROJECT_MANIFEST_FORMAT_VERSION),
@@ -129,16 +144,14 @@ const projectManifestSchema = z.strictObject({
   name: z.string(),
   created_at: rfc3339UtcSchema,
   target_stack: z.enum(TARGET_STACKS),
-  pages: z.array(pageSlugSchema).refine((pages) => new Set(pages).size === pages.length, {
-    error: "`pages` must be duplicate-free",
-  }),
 });
 
 /**
  * Serialize a `ProjectManifest` as the portable `.termcraft/project.toml`
  * (storage-identity §5.1). Field order is fixed so the file is byte-deterministic and
- * produces a minimal Git diff; page order is preserved verbatim because it IS the listing
- * and tab order.
+ * produces a minimal Git diff. Page order and enumeration are NOT written here as of
+ * format_version 2 — `design/pages.json` is the sole ordering authority (multi-file design
+ * tree design §3).
  */
 export function encodeProjectManifest(manifest: ProjectManifest): string {
   return [
@@ -147,21 +160,22 @@ export function encodeProjectManifest(manifest: ProjectManifest): string {
     tomlLine("name", manifest.name),
     tomlLine("created_at", manifest.createdAt),
     tomlLine("target_stack", manifest.targetStack),
-    tomlLine("pages", manifest.pages),
     "",
   ].join("\n");
 }
 
 /**
  * Parse and validate `.termcraft/project.toml` (storage-identity §5.1). The order is
- * deliberate: TOML parse, then the `format_version` gate (a newer file is
- * {@link ManifestTooNewError}, never a shape complaint), then the strict field schema.
- * `file` names the artifact in every error, as §12 requires.
+ * deliberate: TOML parse, then the `format_version` gate — older-than
+ * ({@link ManifestMigrationRequiredError}) and newer-than ({@link ManifestTooNewError}) are
+ * both checked before the shape schema runs, so neither is ever misreported as a generic
+ * shape complaint — then the strict field schema. `file` names the artifact in every error,
+ * as §12 requires.
  */
 export function decodeProjectManifest(
   text: string,
   file: string = PROJECT_MANIFEST_FILENAME,
-): ProjectManifest | ManifestCorruptError | ManifestTooNewError {
+): ProjectManifest | ManifestCorruptError | ManifestTooNewError | ManifestMigrationRequiredError {
   const parsed = parseToml(text);
   if (parsed instanceof Error) {
     return new ManifestCorruptError({
@@ -178,6 +192,13 @@ export function decodeProjectManifest(
       file,
       code: "format_version",
       reason: "missing or non-integer `format_version`",
+    });
+  }
+  if (version < PROJECT_MANIFEST_FORMAT_VERSION) {
+    return new ManifestMigrationRequiredError({
+      file,
+      found: version,
+      supported: PROJECT_MANIFEST_FORMAT_VERSION,
     });
   }
   if (version > PROJECT_MANIFEST_FORMAT_VERSION) {
@@ -197,6 +218,5 @@ export function decodeProjectManifest(
     name: result.data.name,
     createdAt: result.data.created_at,
     targetStack: result.data.target_stack,
-    pages: result.data.pages,
   };
 }

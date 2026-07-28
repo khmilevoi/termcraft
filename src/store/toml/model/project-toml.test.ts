@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { parsePageSlug } from "entities/page";
-import type { PageSlug } from "entities/page";
-
 import type { ProjectManifest } from "../types";
 import {
   ManifestCorruptError,
+  ManifestMigrationRequiredError,
   ManifestTooNewError,
   PROJECT_MANIFEST_FILENAME,
   PROJECT_MANIFEST_FORMAT_VERSION,
@@ -14,19 +12,12 @@ import {
   encodeTomlString,
 } from "./project-toml";
 
-function slug(value: string): PageSlug {
-  const parsed = parsePageSlug(value);
-  if (parsed instanceof Error) throw parsed;
-  return parsed;
-}
-
 const manifest: ProjectManifest = {
-  formatVersion: 1,
+  formatVersion: 2,
   projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
   name: "Checkout Flow",
   createdAt: "2026-07-19T10:11:12Z",
   targetStack: "rust-ratatui",
-  pages: [slug("home"), slug("checkout"), slug("settings")],
 };
 
 describe("encodeTomlString", () => {
@@ -39,15 +30,14 @@ describe("encodeTomlString", () => {
 });
 
 describe("encodeProjectManifest", () => {
-  test("emits format_version = 1 and exactly the five semantic fields, in order", () => {
+  test("emits format_version = 2 and exactly the four semantic fields, in order", () => {
     const text = encodeProjectManifest(manifest);
     expect(text.trimEnd().split("\n")).toEqual([
-      "format_version = 1",
+      "format_version = 2",
       `project_id = "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10"`,
       `name = "Checkout Flow"`,
       `created_at = "2026-07-19T10:11:12Z"`,
       `target_stack = "rust-ratatui"`,
-      `pages = ["home", "checkout", "settings"]`,
     ]);
   });
 
@@ -55,11 +45,13 @@ describe("encodeProjectManifest", () => {
     expect(encodeProjectManifest(manifest)).toBe(encodeProjectManifest({ ...manifest }));
   });
 
-  test("PORTABLE SNAPSHOT (§16.1): target stack and page order travel, local state does not", () => {
+  test("PORTABLE SNAPSHOT (§16.1): target stack travels; local state and page order do not", () => {
     const text = encodeProjectManifest(manifest);
-    // Target stack and the exact page order are portable.
+    // Target stack is portable.
     expect(text).toContain(`target_stack = "rust-ratatui"`);
-    expect(text).toContain(`pages = ["home", "checkout", "settings"]`);
+    // Page order/enumeration moved to design/pages.json as of format_version 2 (§3, §12.1) —
+    // project.toml never carries a `pages` key again.
+    expect(text).not.toContain("pages");
     // Active page/chat, backend/model/effort, preview/UI state, and sessions never appear.
     for (const forbidden of [
       "active_page",
@@ -99,14 +91,29 @@ describe("decodeProjectManifest", () => {
     }
   });
 
+  test("a version-1 manifest is a migration-required refusal, not a shape error, even with otherwise-valid fields", () => {
+    const decoded = decodeProjectManifest(
+      encodeProjectManifest(manifest).replace("format_version = 2", "format_version = 1"),
+    );
+    expect(decoded).toBeInstanceOf(ManifestMigrationRequiredError);
+    expect(decoded).not.toBeInstanceOf(ManifestCorruptError);
+    const error = decoded as ManifestMigrationRequiredError;
+    expect(error._tag).toBe("ManifestMigrationRequiredError");
+    expect(error.file).toBe(PROJECT_MANIFEST_FILENAME);
+    expect(error.found).toBe(1);
+    expect(error.supported).toBe(PROJECT_MANIFEST_FORMAT_VERSION);
+    expect(error.message).toContain("migrated");
+  });
+
   test("a newer format_version is a hard ManifestTooNewError NAMING the file", () => {
     const decoded = decodeProjectManifest(
-      encodeProjectManifest(manifest).replace("format_version = 1", "format_version = 2"),
+      encodeProjectManifest(manifest).replace("format_version = 2", "format_version = 3"),
     );
     expect(decoded).toBeInstanceOf(ManifestTooNewError);
     const error = decoded as ManifestTooNewError;
+    expect(error._tag).toBe("ManifestTooNewError");
     expect(error.file).toBe(PROJECT_MANIFEST_FILENAME);
-    expect(error.found).toBe(2);
+    expect(error.found).toBe(3);
     expect(error.supported).toBe(PROJECT_MANIFEST_FORMAT_VERSION);
     expect(error.message).toContain(PROJECT_MANIFEST_FILENAME);
   });
@@ -118,6 +125,15 @@ describe("decodeProjectManifest", () => {
     );
     expect(decoded).toBeInstanceOf(ManifestTooNewError);
     expect((decoded as ManifestTooNewError).file).toBe("pages/project.toml");
+  });
+
+  test("the older-than check runs before schema validation too, so a stale shape still reports migration-required", () => {
+    const decoded = decodeProjectManifest(
+      `format_version = 1\nsomething_old = true\n`,
+      "pages/project.toml",
+    );
+    expect(decoded).toBeInstanceOf(ManifestMigrationRequiredError);
+    expect((decoded as ManifestMigrationRequiredError).file).toBe("pages/project.toml");
   });
 
   test("rejects any non-portable field", () => {
@@ -134,6 +150,12 @@ describe("decodeProjectManifest", () => {
       const decoded = decodeProjectManifest(`${encodeProjectManifest(manifest)}${extra}\n`);
       expect(decoded).toBeInstanceOf(ManifestCorruptError);
     }
+  });
+
+  test("a version-2 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
+    const decoded = decodeProjectManifest(`${encodeProjectManifest(manifest)}pages = ["a"]\n`);
+    expect(decoded).toBeInstanceOf(ManifestCorruptError);
+    expect((decoded as ManifestCorruptError)._tag).toBe("ManifestCorruptError");
   });
 
   test("rejects a missing or non-integer format_version", () => {
@@ -163,17 +185,53 @@ describe("decodeProjectManifest", () => {
     ).toBeInstanceOf(ManifestCorruptError);
   });
 
-  test("rejects a duplicate page slug and an invalid slug", () => {
-    const duplicated = encodeProjectManifest({ ...manifest, pages: [slug("home"), slug("home")] });
-    expect(decodeProjectManifest(duplicated)).toBeInstanceOf(ManifestCorruptError);
-    expect(
-      decodeProjectManifest(encodeProjectManifest(manifest).replace(`"home"`, `"Home"`)),
-    ).toBeInstanceOf(ManifestCorruptError);
+  test("encode round-trips and omits pages", () => {
+    const text = encodeProjectManifest(manifest);
+    expect(text).not.toContain("pages");
+    expect(decodeProjectManifest(text)).toEqual(manifest);
   });
+});
 
-  test("preserves page ORDER rather than sorting it", () => {
-    const reversed = { ...manifest, pages: [slug("settings"), slug("checkout"), slug("home")] };
-    const decoded = decodeProjectManifest(encodeProjectManifest(reversed));
-    expect((decoded as ProjectManifest).pages).toEqual(reversed.pages);
-  });
+// Task 5 brief's own sample, kept verbatim (values, structure) alongside the suite above,
+// which folds the same coverage into the file's established `manifest` fixture style.
+const V2 = [
+  "format_version = 2",
+  'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"',
+  'name = "clock"',
+  'created_at = "2026-07-26T19:58:57.883Z"',
+  'target_stack = "js-opentui"',
+  "",
+].join("\n");
+
+test("decodes a version-2 manifest with no pages field", () => {
+  const decoded = decodeProjectManifest(V2);
+  if (decoded instanceof Error) throw decoded;
+  expect(decoded.formatVersion).toBe(2);
+  expect(decoded.name).toBe("clock");
+  expect("pages" in decoded).toBe(false);
+});
+
+test("a version-1 manifest is a migration-required refusal, not a shape error", () => {
+  const result = decodeProjectManifest(V2.replace("format_version = 2", "format_version = 1"));
+  expect(result).toBeInstanceOf(ManifestMigrationRequiredError);
+  expect(String(result)).toContain("migrated");
+});
+
+test("a version-2 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
+  const result = decodeProjectManifest(`${V2}pages = ["a"]\n`);
+  expect(result).toBeInstanceOf(ManifestCorruptError);
+});
+
+test("a version-3 manifest is still too-new, not migration-required", () => {
+  const result = decodeProjectManifest(V2.replace("format_version = 2", "format_version = 3"));
+  expect(result).toBeInstanceOf(ManifestTooNewError);
+  expect(result).not.toBeInstanceOf(ManifestMigrationRequiredError);
+});
+
+test("encode round-trips and omits pages", () => {
+  const decoded = decodeProjectManifest(V2);
+  if (decoded instanceof Error) throw decoded;
+  const text = encodeProjectManifest(decoded);
+  expect(text).not.toContain("pages");
+  expect(decodeProjectManifest(text)).toEqual(decoded);
 });

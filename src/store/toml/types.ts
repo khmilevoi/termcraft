@@ -11,21 +11,25 @@ export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "gen
 
 /**
  * `.termcraft/project.toml` — the PORTABLE project state (storage-identity §5.1), with
- * `format_version = 1` and exactly these five semantic fields. It deliberately carries no
+ * `format_version = 2` and exactly these four semantic fields. It deliberately carries no
  * active page, active chat, backend, model, effort, preview/UI setting, agent session id,
  * Git status, page title, `minSize`, theme, source hash, or extracted page metadata, so
  * changing machines never produces a workspace-navigation or backend-preference diff
  * (§5.1, §16.1). Everything omitted here lives in {@link WorkspaceLocalState}.
+ *
+ * As of format_version 2 (multi-file design tree design §3, §12.1), this manifest carries
+ * no `pages` field: page order and enumeration live solely in `design/pages.json`, inside
+ * the authored source tree the agent edits. Keeping both here and there would be two
+ * sources of truth for the same fact. A version-1 file (which still has `pages`) is refused
+ * outright by `decodeProjectManifest` — see `ManifestMigrationRequiredError`.
  */
 export interface ProjectManifest {
-  readonly formatVersion: 1;
+  readonly formatVersion: 2;
   readonly projectId: string;
   readonly name: string;
   /** UTC RFC 3339. */
   readonly createdAt: string;
   readonly targetStack: TargetStack;
-  /** Ordered and duplicate-free: listing and tab order, NOT page identity allocation (§5.1). */
-  readonly pages: readonly PageSlug[];
 }
 
 /** Preview size mode (storage-identity §6.1; master design §8.1 item 10). */

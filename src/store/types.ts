@@ -29,6 +29,7 @@ import type {
 import type { StagingStore } from "store/sandbox";
 import type {
   ManifestCorruptError,
+  ManifestMigrationRequiredError,
   ManifestTooNewError,
   ProjectManifest,
   WorkspaceLocalState,
@@ -133,10 +134,19 @@ export type { LeaseAdvisory, LeaseError, LeaseStore, ProjectLease } from "store/
 
 /**
  * Reads go through the already-landed `store/toml` decoder; writes go through the
- * transaction engine (project-mutation / turn finalization), matching the plan.
+ * transaction engine (project-mutation / turn finalization), matching the plan. The return
+ * union mirrors `decodeProjectManifest`'s own (project-toml format_version 2, task 5):
+ * `ManifestMigrationRequiredError` is a version-1 project's honest refusal, not a shape
+ * complaint — this plan does not implement the migration path.
  */
 export interface ManifestStore {
-  read(): Promise<SafeFsError | ManifestCorruptError | ManifestTooNewError | ProjectManifest>;
+  read(): Promise<
+    | SafeFsError
+    | ManifestCorruptError
+    | ManifestTooNewError
+    | ManifestMigrationRequiredError
+    | ProjectManifest
+  >;
 }
 
 /**
@@ -203,7 +213,13 @@ export interface PageStore {
   readSource(
     pageSlug: PageSlug,
   ): Promise<SafeFsError | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
-  /** = `ProjectManifest.pages` (the manifest is the sole ordering authority). */
+  /**
+   * The ordered page slugs a page's listing/tab order and identity allocation are drawn
+   * from. As of project.toml format_version 2 (task 5), `ProjectManifest` carries no
+   * `pages` field — `design/pages.json`, inside the authored design tree, is now the sole
+   * ordering authority (multi-file design tree design §3). This method's implementation is
+   * NOT yet updated to read it (task 9's `store/model/factory.ts`).
+   */
   listSlugs(): Promise<
     SafeFsError | ManifestCorruptError | ManifestTooNewError | readonly PageSlug[]
   >;

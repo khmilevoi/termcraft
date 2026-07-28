@@ -198,7 +198,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
     const manifestPath = absOf(termcraftDir, PROJECT_MANIFEST_FILENAME);
     const bumped = fs
       .readFileSync(manifestPath, "utf8")
-      .replace("format_version = 1", "format_version = 2");
+      .replace("format_version = 2", "format_version = 3");
     fs.writeFileSync(manifestPath, bumped);
 
     const reopened = await store.openProject(projectRoot);
@@ -934,23 +934,21 @@ interface PlanFixture {
 function oneFileReplacePlan(termcraftDir: string, transactionId: string): PlanFixture {
   const oldBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: uuidv7(),
       name: "Old",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     }),
   );
   writeManaged(termcraftDir, PROJECT_MANIFEST_FILENAME, oldBytes);
   const newBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: uuidv7(),
       name: "New",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     }),
   );
   const payloadId = uuidv7();
@@ -1216,12 +1214,11 @@ function exportPublishPlan(transactionId: string): PlanFixture {
 function migrationPlan(transactionId: string): PlanFixture {
   const bytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: uuidv7(),
       name: "Migrated",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     }),
   );
   const payloadId = uuidv7();

@@ -304,12 +304,11 @@ describe("loadWorkspaceLocalState (§6.1 missing / corrupt behavior)", () => {
 describe("the portable/local split is airtight (§16.1)", () => {
   test("no local field name appears in a portable manifest, and no portable field leaks into local state", () => {
     const manifestText = encodeProjectManifest({
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
       name: "Checkout Flow",
       createdAt: "2026-07-19T10:11:12Z",
       targetStack: "rust-ratatui",
-      pages: [slug("home"), slug("checkout")],
     });
     const localText = encodeWorkspaceLocalState(populated);
 
@@ -333,8 +332,10 @@ describe("the portable/local split is airtight (§16.1)", () => {
       expect(manifestText).not.toContain(localKey);
     }
 
-    // Portable identity/stack/order keys live ONLY in project.toml.
-    for (const portableKey of ["project_id", "created_at", "target_stack", "pages ="]) {
+    // Portable identity/stack keys live ONLY in project.toml. Page order/enumeration moved
+    // to design/pages.json as of format_version 2 (§3, §12.1); project.toml never carries a
+    // `pages` key.
+    for (const portableKey of ["project_id", "created_at", "target_stack"]) {
       expect(manifestText).toContain(portableKey);
       expect(localText).not.toContain(portableKey);
     }

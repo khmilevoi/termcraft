@@ -29,6 +29,7 @@ export { COLOR_CAPABILITIES, PREVIEW_SIZE_PRESETS, TARGET_STACKS } from "./types
 
 export {
   ManifestCorruptError,
+  ManifestMigrationRequiredError,
   ManifestTooNewError,
   PROJECT_MANIFEST_FILENAME,
   PROJECT_MANIFEST_FORMAT_VERSION,

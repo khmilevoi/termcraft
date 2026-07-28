@@ -474,12 +474,11 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
     const home = slug("home");
     seedChatHeader(chatId);
     const manifestBefore: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: PROJECT_ID,
       name: "original",
       createdAt: TS,
       targetStack: "generic",
-      pages: [home],
     };
     seedManifest(manifestBefore);
 

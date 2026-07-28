@@ -330,12 +330,11 @@ describe("synthetic end-to-end migration", () => {
 
   function seedOldManifest(): Uint8Array {
     const manifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: PROJECT_ID,
       name: "old-name",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const bytes = bytesOf(encodeProjectManifest(manifest));
     fs.writeFileSync(path.join(termcraftDir, PROJECT_MANIFEST_FILENAME), bytes);
@@ -379,12 +378,11 @@ describe("synthetic end-to-end migration", () => {
     // Synthetic "transform": a real migration would decode format N and re-encode format
     // N+1; here it is simply a re-encoded manifest with a different name.
     const newManifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: PROJECT_ID,
       name: "migrated-name",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const newBytes = bytesOf(encodeProjectManifest(newManifest));
     const payloadId = uuidv7();
@@ -442,23 +440,21 @@ describe("synthetic end-to-end migration", () => {
     // A concurrent external edit lands AFTER the verified backup but BEFORE the migration's
     // pre-intent re-check.
     const driftedManifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: PROJECT_ID,
       name: "drifted-by-someone-else",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const driftedBytes = bytesOf(encodeProjectManifest(driftedManifest));
     fs.writeFileSync(path.join(termcraftDir, PROJECT_MANIFEST_FILENAME), driftedBytes);
 
     const newManifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: 2,
       projectId: PROJECT_ID,
       name: "migrated-name",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const newBytes = bytesOf(encodeProjectManifest(newManifest));
     const payloadId = uuidv7();
