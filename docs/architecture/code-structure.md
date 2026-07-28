@@ -518,7 +518,16 @@ vendor tier's own pre-split run-loop file.
   trace in the same file as the turn that spawned it — a child resolving the variable
   for itself defaulted to its own working directory, and the host child's is a
   throwaway scratch directory, so those diagnostics were written where nobody would
-  ever read them
+  ever read them. The tee also gates whether it still calls the writer it replaced:
+  `src/ui/app/model/root.tsx` suspends that pass-through for exactly as long as the
+  interactive renderer owns the terminal, because the same `consoleMode: "disabled"`
+  that keeps the tee alive also leaves nothing between a `console.warn` and the
+  screen — a live run painted a Kernel warning raw across a rendered panel. Every
+  path that gives the terminal back resumes it: the renderer's own teardown and its
+  two mount-failure branches, and `src/entrypoint/model/process-boundary.ts`'s
+  `restoreTerminal`, which is the only one a panic reaches — a fatal message that
+  reached the trace file and nothing else would leave the operator with a blank
+  terminal, which is worse than the torn frame the suspension prevents
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
 

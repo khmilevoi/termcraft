@@ -1,3 +1,5 @@
+import { resumeConsolePassthrough } from "infrastructure/debug-log";
+
 import type { ProcessBoundary, ShutdownSignal } from "../types";
 
 /** The two process-level panic events (M9, design §9) — an escaping failure that never went
@@ -118,6 +120,18 @@ export function createProcessBoundary(
     terminal.disableRawMode();
     terminal.disableMouseCapture();
     terminal.exitAlternateScreen();
+    // The fourth thing a live renderer took, and the one `TerminalControl` cannot express: while
+    // it owned the terminal, `ui/app/model/root.tsx` had the debug-log tee stop calling through
+    // to the real writer, so nothing would paint raw text over a frame
+    // (`infrastructure/debug-log`'s `suspendConsolePassthrough`). A panic never reaches that
+    // renderer's own `dispose()` — this function is the ONLY thing that runs — so without this
+    // line `reportFatal`'s `console.error` below would land in the trace file and nowhere else,
+    // leaving the operator with a correctly restored but completely blank terminal. Called
+    // directly rather than through the injected `terminal` seam precisely because it must never
+    // be optional: `main.tsx`'s `NOOP_TERMINAL_CONTROL` (the `_host`/`export` branches, which
+    // never suspend anything) would otherwise be free to omit it. Idempotent, and a no-op in
+    // every process that never suspended.
+    resumeConsolePassthrough();
   }
 
   function reportFatal(message: string, cause: unknown): void {

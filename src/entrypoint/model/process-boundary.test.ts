@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
+import {
+  installConsoleTee,
+  resumeConsolePassthrough,
+  suspendConsolePassthrough,
+} from "infrastructure/debug-log";
+import type { TeeSink } from "infrastructure/debug-log";
+
 import type { ShutdownSignal } from "../types";
 import { createProcessBoundary } from "./process-boundary";
 import type { PanicEvent, ProcessExit, SignalTarget, TerminalControl } from "./process-boundary";
@@ -166,5 +173,66 @@ describe("createProcessBoundary", () => {
     expect(calls.some((entry) => entry.startsWith("printed:"))).toBe(true);
     expect(calls.at(-1)).toBe("exit:1");
     expect(calls.filter((entry) => entry.startsWith("exit:"))).toHaveLength(1);
+  });
+});
+
+/**
+ * The renderer suspends the debug-log tee's console pass-through for as long as it owns the
+ * terminal (`infrastructure/debug-log`'s `suspendConsolePassthrough`, engaged by
+ * `ui/app/model/root.tsx`). A panic never reaches that renderer's `dispose()` — `restoreTerminal`
+ * is the ONLY thing that runs — so if it did not also hand the writer back, `reportFatal`'s own
+ * `console.error` would land in the trace file and the operator would be left with a restored
+ * but completely blank terminal, which is a worse failure than the torn frame the suspension
+ * exists to prevent.
+ *
+ * Asserted through the REAL tee, not a spy: the writer double is installed BEFORE the tee, so it
+ * is what the tee captured as its `original`, and reaching it is the same thing as reaching the
+ * terminal in production.
+ */
+describe("createProcessBoundary with a suspended console tee", () => {
+  function withSuspendedTee(printed: string[], run: () => void): void {
+    // All five, not just `error`: `installConsoleTee` wraps every method it covers, so restoring
+    // only the one this suite asserts on would leave four live wrappers behind it.
+    const originals = {
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      error: console.error,
+      debug: console.debug,
+    } as const;
+    console.error = (...args: unknown[]) => printed.push(String(args[0]));
+    const sink: TeeSink = { enabled: () => true, trace: () => undefined };
+    installConsoleTee(sink);
+    suspendConsolePassthrough();
+    try {
+      run();
+    } finally {
+      resumeConsolePassthrough();
+      Object.assign(console, originals);
+    }
+  }
+
+  test("a panic still prints the failure to the terminal", () => {
+    const { target, handlers } = fakeTarget();
+    const printed: string[] = [];
+
+    withSuspendedTee(printed, () => {
+      createProcessBoundary(target, fakeTerminal([]), fakeExit([]));
+      handlers.get("uncaughtException")?.(new Error("boom"));
+    });
+
+    expect(printed.some((line) => line.includes("boom"))).toBe(true);
+  });
+
+  test("an explicit reportFatal still prints the failure to the terminal", () => {
+    const { target } = fakeTarget();
+    const printed: string[] = [];
+
+    withSuspendedTee(printed, () => {
+      const boundary = createProcessBoundary(target, fakeTerminal([]), fakeExit([]));
+      boundary.reportFatal("startup failed", null);
+    });
+
+    expect(printed).toContain("termcraft: startup failed");
   });
 });
