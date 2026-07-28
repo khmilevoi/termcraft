@@ -71,6 +71,13 @@ function reject(
  * names a real file in the inventory. This function performs no I/O and knows nothing about
  * symlinks — the reparse/junction check (design §6) belongs to whoever turns a tree-relative
  * path into an absolute one, i.e. `store/safe-fs`'s `no-follow.ts` (Task 8 and Task 15).
+ *
+ * PRECONDITION on `from`: it must already be a tree-relative, forward-slash path — the same
+ * shape `findUnresolvedEntries` and a prior successful resolution both produce. This function
+ * does not validate it (that would widen the contract beyond §6, which only ever speaks about
+ * the SPECIFIER); a malformed `from` is a caller bug, not a specifier the design forbids.
+ * `entities/design-tree`'s own `entryPathSchema` already rejects a backslash or a leading `/`
+ * before a `from` could ever originate from a manifest entry.
  */
 export function resolveDesignSpecifier(input: {
   readonly from: string;
@@ -84,7 +91,15 @@ export function resolveDesignSpecifier(input: {
   if (specifier.includes("\\"))
     return reject({ from, specifier }, "BACKSLASH", "a specifier must use forward slashes");
 
-  const isRelative = specifier.startsWith("./") || specifier.startsWith("../");
+  // `.` and `..` are themselves valid relative specifiers in ESM — classifying them as a BARE
+  // specifier below would be a false claim. Both are handled honestly further down: `.` is
+  // caught by the directory-form check (it names the importer's own directory), and `..` is
+  // caught by normalization landing exactly at the tree root.
+  const isRelative =
+    specifier === "." ||
+    specifier === ".." ||
+    specifier.startsWith("./") ||
+    specifier.startsWith("../");
   if (!isRelative) {
     return reject(
       { from, specifier },
@@ -101,12 +116,35 @@ export function resolveDesignSpecifier(input: {
     );
   }
 
+  // A specifier whose LAST segment is empty (a trailing slash, e.g. `./calendar.tsx/`) or a
+  // bare `.` (e.g. `./`, `./.`) names a directory, never a file. Reject it before normalization
+  // would otherwise silently drop that trailing segment and probe the importer's own directory
+  // as if it were a file basename — the permissive default §6 forbids on this perimeter. A
+  // trailing `..` is deliberately NOT included here: it is not a directory-form typo, it is a
+  // real traversal step, and normalization below already gives it an honest outcome (it either
+  // lands inside the tree on a real segment, lands exactly on the tree root, or escapes).
+  const specifierSegments = specifier.split("/");
+  const lastSpecifierSegment = specifierSegments[specifierSegments.length - 1] ?? "";
+  if (lastSpecifierSegment === "" || lastSpecifierSegment === ".") {
+    return reject(
+      { from, specifier },
+      "UNRESOLVED",
+      `"${specifier}" names a directory, not a file; there is no directory-index resolution`,
+    );
+  }
+
   // The importer's directory, then the specifier's own segments, normalized as one path.
   const fromSegments = from.split("/");
   fromSegments.pop();
   const normalized = normalizeRelative([...fromSegments, ...specifier.split("/")]);
-  if (normalized === null || normalized.length === 0)
+  if (normalized === null)
     return reject({ from, specifier }, "ESCAPES_TREE", "resolves outside design/");
+  if (normalized.length === 0)
+    return reject(
+      { from, specifier },
+      "ESCAPES_TREE",
+      "resolves to the design/ root itself, not a file inside it",
+    );
 
   const base = normalized.join("/");
   if (input.has(base)) return { kind: "file", relPath: base };
