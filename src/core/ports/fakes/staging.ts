@@ -104,6 +104,9 @@ export function createFakeStagingService(): FakeStagingService {
     // the manifest slice under `design/` (multi-file design tree design §10, `store/sandbox`'s
     // `stageAllFiles`), and this fake's `relPath`s must keep matching or the fidelity test
     // this comment refers to (`store/adapters/staging.test.ts`) silently stops proving anything.
+    // STOPGAP, same as the real adapter it mirrors: `docs/superpowers/plans/2026-07-28-
+    // design-tree-canonical-source.md`'s "Task 8: `store/sandbox` — stage the tree" replaces
+    // this per-page shape with the whole `design/**` tree; update this fake alongside it.
     const pageFiles: StagedFileV1[] = input.pages.map((page) => ({
       relPath: `design/pages/${page.pageSlug}.tsx`,
       sha256: fakeSha256Hex(page.sourcePath),

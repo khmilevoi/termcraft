@@ -70,8 +70,10 @@ export type FreezeTurnCandidateResultV1 =
 
 /**
  * The real staging store's own page-file convention (`store/sandbox/model/staging-store.ts`'s
- * `stageAllFiles`: `design/pages/${slug}.tsx` — a stopgap destination prefix, not yet the real
- * design-tree closure; see that file's own header comment).
+ * `stageAllFiles`: `design/pages/${slug}.tsx` — a STOPGAP destination prefix, not yet the real
+ * design-tree closure). `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`'s
+ * "Task 8: `store/sandbox` — stage the tree" replaces this per-page shape with the whole
+ * `design/**` tree; update this pattern alongside it.
  */
 const PAGE_FILE_PATTERN = /^design\/pages\/([^/]+)\.tsx$/;
 

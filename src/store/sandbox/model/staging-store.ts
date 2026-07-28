@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as errore from "errore";
 
+import { DESIGN_DIRNAME } from "entities/design-tree";
 import { isCanonicalUuidv7 } from "infrastructure/uuid";
 import type {
   CandidateSink,
@@ -251,18 +252,17 @@ function writeInlineFile(input: {
   return { sha256: hash.digestHex(), size: input.bytes.byteLength };
 }
 
-/**
- * The design tree's directory name inside the workspace (multi-file design tree design
- * §10). STOPGAP (documented, not silent): this still stages one `CreateTurnWorkspaceInput
- * .pages` entry per page plus a separately-synthesized `manifestSlice`, the pre-design-tree
- * shape — it does not yet copy the whole authored `design/**` tree 1:1, which is a later
- * task's job (`docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`, "Task 8:
- * `store/sandbox` — stage the tree"). What changes HERE is only the destination: every
- * staged file now lands under `design/` so its `namespace` (derived from the real
- * `classifyNamespace`, never hardcoded) is honest under the new workspace grammar
- * (`store/safe-fs`'s `classifyWorkspace`, which no longer recognizes a bare `pages/`).
- */
-const DESIGN_DIRNAME = "design";
+// STOPGAP (documented, not silent — Task 8: `store/sandbox` — stage the tree,
+// `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`): `stageAllFiles` below
+// still stages one `CreateTurnWorkspaceInput.pages` entry per page plus a separately-
+// synthesized `manifestSlice`, the pre-design-tree shape — it does not yet copy the whole
+// authored `design/**` tree 1:1, which is Task 8's job. What changes HERE, ahead of Task 8, is
+// only the destination: every staged file now lands under {@link DESIGN_DIRNAME} (imported from
+// `entities/design-tree`, the domain's own constant — `store/sandbox` is not the domain-free
+// layer `store/safe-fs` is, so it imports the real thing rather than a paired literal) so its
+// `namespace` (derived from the real `classifyNamespace`, never hardcoded) is honest under the
+// new workspace grammar (`store/safe-fs`'s `classifyWorkspace`, which no longer recognizes a
+// bare `pages/`).
 
 /**
  * Stage every listed canonical page, the manifest slice, and every runtime doc into the

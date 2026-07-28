@@ -473,6 +473,9 @@ function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): strin
   return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
 }
 
+// `design/pages.json` is design-mandated (multi-file design tree design §10: the manifest
+// lives INSIDE the tree), not a stopgap — unlike `workspacePageRelPath`'s `design/pages/`
+// prefix above, this exact value survives Task 8's tree-copy rewrite unchanged.
 const MANIFEST_SLICE_REL_PATH = "design/pages.json";
 
 /**

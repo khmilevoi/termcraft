@@ -53,7 +53,13 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
     expectNamespace("workspace", "design/pages.json", "design-source");
     expectNamespace("workspace", "design/widgets/gauge.tsx", "design-source");
     expectNamespace("workspace", "RUNTIME.md", "agent-runtime-doc");
+    // The other half of the pair `agent/prompt/model/runtime-docs.ts` stages: a doc written
+    // under a name this grammar rejects would be unreadable through `SafeProjectFs`.
+    expectNamespace("workspace", "REATOM.md", "agent-runtime-doc");
     expectNamespace("workspace", "runtime.generated.d.ts", "agent-runtime-doc");
+    // A NESTED `.d.ts` (`classifyWorkspace`'s "last component" branch), distinct from the
+    // single-segment case above.
+    expectNamespace("workspace", "types/runtime.d.ts", "agent-runtime-doc");
     expectUnknown("workspace", "pages/home.tsx");
     expectUnknown("workspace", "pages.json");
   });
@@ -67,12 +73,22 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
   // `agent-manifest`) rather than repeated here.
 
   // `classifyNamespace` documents its own precondition as "a validated managed relative
-  // path" — it only `.split("/")`s, so it never itself rejects a `..` component. The escape
-  // guard lives one layer down, in `validateRelativePath` (`path-rules.ts`), which every real
-  // caller (`resolveManagedPath`, `enumerateDirectory`) runs BEFORE `classifyNamespace` is
-  // ever reached. This pins that a `design/`-rooted escape attempt is refused there, so it
-  // never gets the chance to be (mis)classified as `design-source` by a naive prefix check.
-  test("a path that tries to escape the design tree never reaches classification — path-rules rejects it first", () => {
+  // path" — it only `.split("/")`s a raw string, so it does not itself reject a `..`
+  // component, and callers do not agree on when they validate relative to when they
+  // classify: `store/safe-fs/model/candidate.ts`'s `enumerateDirectory` calls
+  // `validateRelativePath` before `classifyNamespace`, but `SafeProjectFs.readFile`
+  // classifies FIRST and resolves (which is where validation actually lives) only after
+  // (`no-follow.ts:305` then `:308`). So `design/../secrets` really is classified as
+  // `design-source` by the now-broad `design/**` branch, which accepts any components after
+  // its prefix and has no `..` awareness of its own. What holds unconditionally for every
+  // caller is narrower and lives one layer down: no filesystem access happens until
+  // `resolveManagedPath` has approved the path, and `validateRelativePath` is its very FIRST
+  // statement (`no-follow.ts:233`), before any `lstat`. This pins both halves honestly —
+  // the widened classification is real, and it is inert — rather than asserting the
+  // comfortable fiction that classification itself refuses the escape.
+  test("a `design/`-rooted escape attempt classifies as design-source (the widened branch has no `..` awareness), but is refused before any filesystem access", () => {
+    expectNamespace("project", "design/../secrets", "design-source");
+
     const validated = validateRelativePath("design/../secrets");
     expect(validated).toBeInstanceOf(PathRuleError);
     expect((validated as PathRuleError).code).toBe("DOT_COMPONENT");
