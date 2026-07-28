@@ -421,6 +421,13 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // the mouse is mapped against can never drift apart.
   const previewWidth = previewPaneWidth(size, fullscreen);
   const previewRegion = previewRegionSize(size, fullscreen);
+  // The pane's border and its header rule share ONE hue (design `paneShell` `:479,485` — the
+  // rule is drawn in `pbf`, the same value passed as the pane's own border colour; `wsFocus`
+  // `:801` is the one screen that varies it, `prevBorderFg: cf ? P.line : P.amber`, the exact
+  // composer-focus switch this codebase already applies to the pane's `borderColor` below).
+  // Computed once here, not inlined twice, so the rule and the border can never drift apart.
+  const previewBorderColor =
+    composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
   const frameH = h - 1;
   const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
   const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
@@ -707,10 +714,14 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           overflow="hidden"
           border
           borderStyle="rounded"
-          borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
+          borderColor={previewBorderColor}
         >
           {renderTabs(tabs, previewWidth, onTabMouseDown)}
-          <PreviewPaneRule id="ws-preview-rule" width={previewRegion.w} />
+          <PreviewPaneRule
+            id="ws-preview-rule"
+            width={previewRegion.w}
+            color={previewBorderColor}
+          />
           {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
           <box id="ws-preview-gap" height={1} />
           {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {

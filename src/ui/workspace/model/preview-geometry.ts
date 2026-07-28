@@ -62,10 +62,12 @@ export function previewPaneWidth(terminal: CellSize, fullscreen: boolean): numbe
 
 /**
  * The cell size actually available to preview CONTENT: the pane minus its own border, minus
- * the tab strip row. This is the size the host is asked to render at (`preview.resize`) and
- * the size every placeholder panel is laid out in — one number, so a frame can never be
- * sized against a different rectangle than the one it is painted into. Clamped at zero so a
- * terminal too small to hold the chrome reports an empty region rather than a negative one.
+ * the tab strip row, minus the rule row and the blank gap row below it (design `paneShell`'s
+ * `dy = 4` — see {@link TAB_RULE_ROWS}). This is the size the host is asked to render at
+ * (`preview.resize`) and the size every placeholder panel is laid out in — one number, so a
+ * frame can never be sized against a different rectangle than the one it is painted into.
+ * Clamped at zero so a terminal too small to hold the chrome reports an empty region rather
+ * than a negative one.
  */
 export function previewRegionSize(terminal: CellSize, fullscreen: boolean): CellSize {
   return {

@@ -1139,4 +1139,53 @@ describe("Workspace preview pane header", () => {
     const rule = lines[2]?.slice(45, 119) ?? "";
     expect(rule).toBe("─".repeat(74));
   });
+
+  // Controller ruling (task-8 review, round 2): the design draws the rule in `pbf` — the SAME
+  // hue passed as the pane's own border (`design/termcraft-engine.js:479,485`), and the one
+  // screen that varies it, `wsFocus` (`:801`), uses the exact composer-focus switch this
+  // codebase already applies to `ws-preview`'s own `borderColor`. These two tests pin the rule
+  // to that border colour in BOTH states, so a future edit that re-splits the two values apart
+  // fails here rather than silently drifting.
+  test("paints the rule in the pane's border hue while the composer is focused (design wsFocus :801, cf=true -> P.line)", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    // `ui.local.focus`'s own default is "composer" (`src/ui/app/model/deps.ts:736`) — no
+    // override needed to exercise the composer-focused branch.
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
+    expect(ruleRun).toBeDefined();
+    expect(ruleRun && extractRgb(ruleRun.fg)).toBe(SHELL_PALETTE.line);
+  });
+
+  test("paints the rule back in amber once focus leaves the composer (design wsFocus :801, cf=false -> P.amber)", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.local.focus.set("preview");
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
+    expect(ruleRun).toBeDefined();
+    expect(ruleRun && extractRgb(ruleRun.fg)).toBe(SHELL_PALETTE.amber);
+  });
 });

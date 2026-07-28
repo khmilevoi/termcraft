@@ -1,9 +1,17 @@
-import { SHELL_PALETTE } from "ui/theme";
-
 export interface PreviewPaneRuleProps {
   readonly id: string;
   /** The pane's inner content width in cells — `previewRegionSize(...).w`. */
   readonly width: number;
+  /**
+   * The rule's hue — design `paneShell` draws it in `pbf`, whatever hue the caller passed as
+   * the pane's own border (`design/termcraft-engine.js:479`: `const pbf = o.prevBorderFg ||
+   * P.border`; `:485`: `hline(b, px0+1, 2, pw-2, {fg:pbf})`). The one screen that varies it,
+   * `wsFocus` (`:801`: `prevBorderFg: cf ? P.line : P.amber`), uses the same composer-focus
+   * switch `Workspace.tsx` already applies to the pane's own `borderColor` — so the caller
+   * passes that SAME value here rather than this component picking its own colour, which is
+   * what keeps the rule from drifting out of step with the border it sits inside.
+   */
+  readonly color: `#${string}`;
 }
 
 /**
@@ -19,7 +27,7 @@ export interface PreviewPaneRuleProps {
  */
 export function PreviewPaneRule(props: PreviewPaneRuleProps) {
   return (
-    <text id={props.id} fg={SHELL_PALETTE.amber}>
+    <text id={props.id} fg={props.color}>
       {"─".repeat(Math.max(0, props.width))}
     </text>
   );
