@@ -483,6 +483,100 @@ non-null `activeTurnId` — which emits no warnings (both readers exit early on 
 new `turn.start` through, whose id the OLD handler then clears. Item 2 above should close both
 ends together.
 
+### 1.7 Gap H — `PreviewSession.query` is an unimplemented stub; hover, selection and pin creation are all dead
+
+**[verified]** Every `preview.queryGeometry` operation in a live run resolves with `eventCount: 0`
+and one content-free `console.warn` line reading `preview.queryGeometry was failed`, decided in
+under 1 ms in every case — no host round trip happens at all
+(`termcraft-debug/run-2026-07-28T10-12-05-238Z-41460.jsonl:32-34, 63-65, 95-97, 127-129, 145-147,
+162-164` — six occurrences, six failures, zero successes). Every `preview.selectPage` in the same
+run is `accepted`; page switching itself works and is unaffected. This is an orthogonal,
+pre-existing defect, not a consequence of the current page-switching work.
+
+**Root cause: a hard-coded stub, not a protocol mismatch or a race.**
+`src/host/adapters/host-supervisor.ts:150-152`:
+
+```ts
+async query(_frameToken, _query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
+  return QUERY_NOT_WIRED;
+},
+```
+
+`QUERY_NOT_WIRED` (`:89-95`) is a module constant carrying a fixed `HOST_PROTOCOL_FAILED`
+`FailureDtoV1`, returned unconditionally regardless of the arguments. It becomes
+`{kind: "failed", failure: result}` in the router (`src/core/preview/model/session-commands.ts:368`)
+and is discarded — logged with the outcome kind only, never its content — at
+`src/core/kernel/model/handlers/preview-export.ts:1153-1157`. Landed in `a453a49` (2026-07-24,
+"feat(host): add the host-supervisor adapter") and the file has never been touched since
+(`rtk git log -S "QUERY_NOT_WIRED" -- src/host/adapters/host-supervisor.ts` and
+`rtk git log -- src/host/adapters/host-supervisor.ts` each return exactly that one commit).
+
+**What the user loses.** `preview.queryGeometry` is the sole backing for all three mouse
+interactions over the preview frame (`src/ui/workspace/ui/Workspace.tsx:483-498, 700-708`):
+
+- **Hover highlight** — `requestGeometry(…, "hover", …)` (`src/ui/preview/model/interaction.ts:91`)
+  — never renders.
+- **Click-to-select** — never dispatches `selection.set` (`interaction.ts:168-173`), so the
+  composer's selection chip can never appear from a preview click.
+- **Pin creation is entirely unreachable.** `GeometryTokenV1` is minted only by a resolving
+  `hit`/`pin-anchor` query (`session-commands.ts:370-379`), and `pin.create` consumes exactly that
+  token (`src/core/pins/model/create.ts`, `geometry-token-ledger.ts:8-13`) — so pins cannot be
+  created at all, not in any state.
+
+It also **latches**: on failure the Kernel publishes nothing, so `pendingGeometry` is never cleared
+(`interaction.ts:113-118`), and only a newly acknowledged frame clears it (`:83-87`). On a static
+page (no animation redrawing frames) this makes the preview go permanently inert after the first
+mouse move.
+
+**Severity.** This is a real functional loss on a shipped, documented, architecture-diagrammed flow
+(`docs/architecture/flows/pins-and-selection.md`) — hover, click-to-select, and one of the app's
+headline interactions ("right-click to pin a comment on an element") are all dead, not merely
+degraded. It has no distinguishing symptom beyond "hovering and clicking do nothing," which reads
+as a missing feature rather than a broken one — the dispatch itself is reported `accepted` and the
+Kernel's own trace names no reason.
+
+**The stub's own stated blocker no longer exists.** Its file header
+(`src/host/adapters/host-supervisor.ts:37-43`) says `query` "needs a Kernel-side `FrameTokenV1` →
+`FrameIdentity` ledger" the adapter has no access to. That ledger exists now:
+`FrameTokenLedger.verifyCurrent` already returns the resolved identity
+(`src/core/preview/model/frame-token-ledger.ts:90-98`), and the Kernel handler already holds it in
+hand (`preview-export.ts:1142`) — then discards it and passes the opaque token instead
+(`:1151`, `session-commands.ts:365`). Everything below the adapter is finished and tested:
+`SupervisedPreviewSession.query` (`src/host/supervisor/model/preview-session.ts:77-79`),
+`HostSession.query`'s wire request/correlation/fencing (`src/host/supervisor/model/session.ts:670-686`,
+covered by `session.test.ts:311, 340, 379, 510+`), the child's query handling
+(`src/host/session/model/host-state-machine.ts:434-439, 529-564`), and the geometry primitives
+(`src/host/render/model/geometry.ts:51`). One adapter method is the only thing not connected.
+
+**Shape of the fix, as diagnosed (not applied here).** Change `query`'s first parameter from
+`FrameTokenV1` to the already-resolved `FrameIdentityV1` at the port
+(`src/core/ports/preview-session.ts:112-115`), pass `verification.identity` instead of `frameToken`
+at `session-commands.ts:365`, and implement `query` for real in
+`src/host/adapters/host-supervisor.ts` — the host ring owns it, since the frame-scoped half of the
+identity (`sourceHash`, `frameSeq`) is Kernel-real but the incarnation-scoped half (`sessionId`,
+`nonce`) is host-owned. That needs one additive, read-only accessor for the live incarnation's
+nonce on `SupervisedPreviewSession` (currently unavailable — `PreviewIdentity =
+Omit<HostSessionIdentity, "nonce">`, `src/host/types.ts:67`), because the Kernel-minted
+`previewSessionId`/placeholder nonce would otherwise always draw a `STALE_FRAME` refusal from the
+child's own identity fence (`host-state-machine.ts:544-560`).
+
+**Blocking prerequisite — record this prominently, because the work cannot simply be picked up.**
+`PreviewGeometryQueryResultV1.resolvedAnchor` needs `fx`/`fy`
+(`src/core/ports/preview-session.ts:85-90`), and `GeometryTokenV1` binds them
+(`geometry-token-ledger.ts:45-46`), but **no source anywhere in this repository states what they
+are fractions *of*** — the element's own rect, or the frame. Until someone defines it, pins stay
+uncreatable even after the wiring above lands, because a geometry token is minted only for a
+non-null `resolvedAnchor`. Do not invent this value; the design owns it and has not stated it
+(`design/07-selection-hover.dc.html`, `design/08-pin-comments.dc.html`). A second, already-documented
+shape mismatch will also need resolving before hover/selection are actually usable: the host's
+`checkHit` result carries only `{hit: {id}}` while `parseHitGeometry` also wants `pageSlug`,
+`elementId`, `label` and a `rect` (`interaction.ts:181-202`, `interaction.test.ts:75-79, 177-189`).
+
+**Untracked until now.** This document's prior passes discussed `preview.queryGeometry` only as a
+capability-guard problem (§1.1, Gap A, closed by Task 10); it contained no reference to the adapter
+stub, `QUERY_NOT_WIRED`, or "not wired." The stub is documented in the adapter's own file header
+but was otherwise invisible outside the code.
+
 ---
 
 ## 2. Defects that make a working build look broken
@@ -723,6 +817,26 @@ Added during the investigation, needs a decision before commit — see §6.
   recorded here (§1.1's own "Two honest unknowns" also names it) so it is not discovered a third
   time. Closes when a later slice threads a real host-incarnation nonce through the port
   boundary.
+- **A deliberate session teardown is reported as a crash code, `CHILD_EXITED`.** **[verified]**
+  When `setActivePreviewSession` retires the preview session a page switch displaces
+  (`src/core/kernel/model/kernel.ts:636-640`, from `1f39f14 fix(preview): retire the displaced
+  session and follow its successor`) while that session's child is still mid-handshake, the closed
+  child's stdout closes and the handshake resolves `SupervisorError({code: "CHILD_EXITED", reason:
+  "stdout closed before the expected message"})` (`src/host/supervisor/model/session.ts:160-167`)
+  — the same code a genuine crash produces. `CHILD_EXITED` is a "budgeted", not deterministic,
+  failure (`src/host/supervisor/model/restart-policy.ts:19-23, 89-92`), so it counts toward the
+  three-restarts-per-60s budget and, on exhaustion, opens the circuit carrying
+  `failureCode: "CHILD_EXITED"` verbatim (`src/host/supervisor/model/supervisor.ts:166`) through to
+  `kernel.ts:901` and the UI's closed code→phrase table, which reads it as *"the host exited
+  before it could render"* (`src/ui/preview/model/host-failure-phrase.ts:14`). Observed once in a
+  live run (`termcraft-debug/run-2026-07-28T10-12-05-238Z-41460.jsonl:60`,
+  `waitedMs: 1007, budgetMs: 10000` — a page-switch-back 160 ms after the displaced session's child
+  reached `main.start`) and it recovered on the next session (`outcome: "hello"`). The teardown
+  itself is intended and correct; only its label is wrong — a deliberate close should not be able
+  to consume restart budget or draw the same user-facing failure panel as an actual crash. Needs a
+  distinct disposition (e.g. "retired during handshake") or suppression of the failure path when
+  the close is Kernel-initiated. Independent of Gap H (§1.7) above; page switching itself works
+  correctly. Not gating MVP; recorded so it is not lost.
 - **Selection never reaches the Kernel.** **[read]** `selection.set`/`selection.clear` only emit
   `selection.changed`; they never write `context.setSelection`, so `context.selection()` stays
   `null` and every sent chat record carries an unpopulated `selection`. The admission read path
