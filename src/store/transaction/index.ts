@@ -127,7 +127,7 @@ export {
 // builders (built and unit-tested; MVP wires no caller for any of the three — see
 // `./model/wrappers.ts`'s header comment).
 export type {
-  ChangedPageOp,
+  ChangedDesignFileOp,
   ExportPublishInput,
   MigrationTransactionInput,
   PinEventInput,
@@ -152,17 +152,16 @@ export {
   TurnRecordNotFoundError,
   admitTurn,
   buildExportPublishTransaction,
-  buildManifestOperation,
   buildMigrationTransaction,
   buildPinEventOperations,
   buildRestoreTransaction,
   buildStandalonePinEventOperation,
   buildWorkspaceLocalPatchOperation,
-  canonicalPagePath,
   chatJsonlPath,
+  designFilePath,
   finalizeTurn,
   observeFileImage,
-  pageCommentsPath,
+  pinsJsonlPath,
   runProjectMutation,
   terminalizeTurn,
 } from "./model/wrappers";

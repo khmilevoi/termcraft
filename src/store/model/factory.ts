@@ -76,18 +76,23 @@ import {
 import type { ProjectManifest } from "store/toml";
 import {
   admitTurn,
-  buildManifestOperation,
+  // `canonicalPagePath` and `buildManifestOperation` are DELETED (design-tree canonical
+  // source plan, Task 6): a page's file is now whatever `design/pages.json`'s `entry` says,
+  // never computed from its slug. Rewiring `readSource`/`renamePageTitle`/`reorderPages`/
+  // `removePage` onto `pages.json`-based resolution (`DesignTreeStore`) is Task 9's job, not
+  // Task 6's — every affected method below returns `DesignTreeStoreNotWiredError` instead of
+  // referencing either deleted export (see that class's own doc comment). `pageCommentsPath`
+  // was RENAMED, not deleted (pin logs are still slug-keyed, design §3) — its call sites
+  // below now use `pinsJsonlPath`, a mechanical rename with no behavior change.
   buildPinEventOperations,
   buildWorkspaceLocalPatchOperation,
-  canonicalPagePath,
   chatJsonlPath,
   createWriteMutex,
   ensureJournalFormat,
   finalizeTurn,
   nodeRecoveryFsDeps,
   nodeTransactionFsDeps,
-  observeFileImage,
-  pageCommentsPath,
+  pinsJsonlPath,
   readJournalFormat,
   recoverTransactions,
   runProjectMutation,
@@ -161,6 +166,25 @@ export class ProjectLayoutError extends errore.createTaggedError({
 export class ProjectAlreadyExistsError extends errore.createTaggedError({
   name: "ProjectAlreadyExistsError",
   message: "a project already exists at $root",
+}) {}
+
+/**
+ * KNOWN GAP, not this task's to close (design-tree canonical source plan, Task 6 boundary):
+ * `renamePageTitle`/`reorderPages`/`removePage`/`PageStore.readSource` used to resolve a
+ * page's on-disk location from its slug via `store/transaction`'s `canonicalPagePath`, and
+ * `reorderPages`/`removePage` used to derive a `project.toml` page-order rewrite via
+ * `buildManifestOperation`. Both are deleted (Task 6): a page's file is now whatever
+ * `design/pages.json`'s `entry` says, and the agent may move it anywhere in the tree — the
+ * plan's single most important rule is that nothing computes a page's file from its slug.
+ * Wiring the real replacement (`DesignTreeStore`, reading `pages.json`) is Task 9's job, not
+ * this task's — until it lands, every affected method below returns this typed error
+ * immediately, rather than referencing a deleted export. This is a deliberate, honest
+ * "not yet implemented" value (CLAUDE.md "Honest values only"), not a guessed bridge.
+ */
+export class DesignTreeStoreNotWiredError extends errore.createTaggedError({
+  name: "DesignTreeStoreNotWiredError",
+  message:
+    "$method cannot resolve a page's design-tree location yet — DesignTreeStore is not wired into this factory (plan Task 9)",
 }) {}
 
 // ---- production dependency wiring --------------------------------------------------
@@ -294,10 +318,11 @@ function makeTransactionEngine(
 
     // ---- named domain methods (phase-6 blocker B3) -----------------------------------
     // `core` never learns `TransactionOperation`'s shape: each method below builds its own
-    // operation(s) from the already-landed builders (`observeFileImage`,
-    // `buildManifestOperation`, `buildWorkspaceLocalPatchOperation`,
+    // operation(s) from the already-landed builders (`buildWorkspaceLocalPatchOperation`,
     // `buildStandalonePinEventOperation`) and runs them through the same `runProjectMutation`
-    // base engine every other project mutation already uses.
+    // base engine every other project mutation already uses. EXCEPT `renamePageTitle`/
+    // `reorderPages`/`removePage`, which are blocked pending Task 9 — see
+    // `DesignTreeStoreNotWiredError`'s doc comment.
 
     async createChat(input: CreateChatInput) {
       return withPermit(mutex, async (permit) => {
@@ -373,111 +398,20 @@ function makeTransactionEngine(
       });
     },
 
-    async renamePageTitle(input: RenamePageTitleInput) {
-      return withPermit(mutex, async (permit) => {
-        const target = canonicalPagePath(input.pageSlug);
-        const oldImage = observeFileImage(fs, target);
-        if (oldImage instanceof Error) return oldImage;
-
-        const payloadId = deps.uuidv7();
-        const operation: TransactionOperation = {
-          index: 0,
-          target,
-          mode: "replace",
-          oldImage,
-          newImage: {
-            state: "file",
-            sha256: sha256Hex(input.newBytes),
-            size: input.newBytes.byteLength,
-          },
-          payloadId,
-        };
-        return runProjectMutation(wrapperDeps, {
-          mutex,
-          permit,
-          transactionId: input.transactionId,
-          actionId: input.actionId,
-          mutationKind: "title-edit",
-          operations: [operation],
-          payloads: new Map([[payloadId, input.newBytes]]),
-          createdAt: input.createdAt,
-        });
-      });
+    // `renamePageTitle`/`reorderPages`/`removePage` are BLOCKED pending Task 9's
+    // `DesignTreeStore` (see `DesignTreeStoreNotWiredError`'s doc comment above) — each
+    // returns that typed error immediately rather than referencing the deleted
+    // `canonicalPagePath`/`buildManifestOperation`.
+    async renamePageTitle(_input: RenamePageTitleInput) {
+      return new DesignTreeStoreNotWiredError({ method: "renamePageTitle" });
     },
 
-    async reorderPages(input: ReorderPagesInput) {
-      return withPermit(mutex, async (permit) => {
-        const built = buildManifestOperation(wrapperDeps, input.manifestBefore, input.orderedSlugs);
-        if (built instanceof Error) return built;
-        return runProjectMutation(wrapperDeps, {
-          mutex,
-          permit,
-          transactionId: input.transactionId,
-          actionId: input.actionId,
-          mutationKind: "page-reorder",
-          // `built === null` when the requested order already matches the durable manifest —
-          // a legal, deterministic no-op transaction rather than a special-cased early return.
-          operations: built === null ? [] : [{ ...built.operation, index: 0 }],
-          payloads: built === null ? new Map() : payloadMapOf(built.payload),
-          createdAt: input.createdAt,
-        });
-      });
+    async reorderPages(_input: ReorderPagesInput) {
+      return new DesignTreeStoreNotWiredError({ method: "reorderPages" });
     },
 
-    async removePage(input: RemovePageInput) {
-      return withPermit(mutex, async (permit) => {
-        const remainingSlugs = input.manifestBefore.pages.filter((slug) => slug !== input.pageSlug);
-        const manifestOp = buildManifestOperation(
-          wrapperDeps,
-          input.manifestBefore,
-          remainingSlugs,
-        );
-        if (manifestOp instanceof Error) return manifestOp;
-
-        const canonicalTarget = canonicalPagePath(input.pageSlug);
-        const canonicalOldImage = observeFileImage(fs, canonicalTarget);
-        if (canonicalOldImage instanceof Error) return canonicalOldImage;
-
-        const commentsTarget = pageCommentsPath(input.pageSlug);
-        const commentsOldImage = observeFileImage(fs, commentsTarget);
-        if (commentsOldImage instanceof Error) return commentsOldImage;
-
-        const operations: TransactionOperation[] = [];
-        const payloads = new Map<string, Uint8Array>();
-        if (manifestOp !== null) {
-          operations.push({ ...manifestOp.operation, index: operations.length });
-          if (manifestOp.payload !== undefined)
-            payloads.set(manifestOp.payload[0], manifestOp.payload[1]);
-        }
-        // Deleting an already-absent target is a documented no-op at apply time (`engine.ts`'s
-        // `applyFixedOperation`: current already matches newImage=absent) — so both deletes are
-        // always included, whether or not this page's canonical source/comments log exist.
-        operations.push({
-          index: operations.length,
-          target: canonicalTarget,
-          mode: "delete",
-          oldImage: canonicalOldImage,
-          newImage: { state: "absent" },
-        });
-        operations.push({
-          index: operations.length,
-          target: commentsTarget,
-          mode: "delete",
-          oldImage: commentsOldImage,
-          newImage: { state: "absent" },
-        });
-
-        return runProjectMutation(wrapperDeps, {
-          mutex,
-          permit,
-          transactionId: input.transactionId,
-          actionId: input.actionId,
-          mutationKind: "page-remove",
-          operations,
-          payloads,
-          createdAt: input.createdAt,
-        });
-      });
+    async removePage(_input: RemovePageInput) {
+      return new DesignTreeStoreNotWiredError({ method: "removePage" });
     },
 
     async appendPinEvent(input: AppendPinEventInput) {
@@ -596,10 +530,10 @@ function makeWorkspaceStateStore(safeFs: SafeProjectFs): WorkspaceStateStore {
 
 function makePageStore(safeFs: SafeProjectFs, manifest: ManifestStore): PageStore {
   return {
-    async readSource(pageSlug) {
-      const bytes = safeFs.readFile(canonicalPagePath(pageSlug));
-      if (bytes instanceof Error) return bytes;
-      return { bytes, sourceHash: sha256Hex(bytes) };
+    // Blocked pending Task 9's `DesignTreeStore` — see `DesignTreeStoreNotWiredError`'s doc
+    // comment; `safeFs` is intentionally unused here until that lands.
+    async readSource(_pageSlug) {
+      return new DesignTreeStoreNotWiredError({ method: "readSource" });
     },
     async listSlugs() {
       const read = await manifest.read();
@@ -618,7 +552,7 @@ function makePageStore(safeFs: SafeProjectFs, manifest: ManifestStore): PageStor
 function makePinStore(safeFs: SafeProjectFs, projectId: string): PinStore {
   return {
     async fold(pageSlug) {
-      const relPath = pageCommentsPath(pageSlug);
+      const relPath = pinsJsonlPath(pageSlug);
       const bytes = safeFs.readFile(relPath);
       if (bytes instanceof Error) {
         if (bytes instanceof FsAccessError && isNotFound(bytes)) return [];

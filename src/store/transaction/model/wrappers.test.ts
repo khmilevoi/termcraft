@@ -27,6 +27,7 @@ import { createSafeProjectFs, nodeSafeFsDeps, openManagedRoot } from "store/safe
 import type { SafeProjectFs } from "store/safe-fs";
 import {
   PROJECT_MANIFEST_FILENAME,
+  PROJECT_MANIFEST_FORMAT_VERSION,
   decodeProjectManifest,
   decodeWorkspaceLocalState,
   encodeProjectManifest,
@@ -45,10 +46,10 @@ import {
   buildMigrationTransaction,
   buildRestoreTransaction,
   buildStandalonePinEventOperation,
-  canonicalPagePath,
   chatJsonlPath,
+  designFilePath,
   finalizeTurn,
-  pageCommentsPath,
+  pinsJsonlPath,
   runProjectMutation,
   terminalizeTurn,
 } from "./wrappers";
@@ -167,11 +168,22 @@ function seedPinsFile(pageSlug: PageSlug, events: readonly PinEvent[]): void {
     if (line instanceof Error) throw new Error(`fixture bug: ${line.message}`);
     return line;
   });
-  writeManaged(pageCommentsPath(pageSlug), concatBytes([headerLine, ...eventLines]));
+  writeManaged(pinsJsonlPath(pageSlug), concatBytes([headerLine, ...eventLines]));
 }
 
 function seedManifest(manifest: ProjectManifest): void {
   writeManaged(PROJECT_MANIFEST_FILENAME, bytesOf(encodeProjectManifest(manifest)));
+}
+
+/** A minimal valid `project.toml` — format_version 2 (Task 5): no `pages` field, page order lives in `design/pages.json` instead. */
+function defaultManifest(name = "demo"): ProjectManifest {
+  return {
+    formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
+    projectId: PROJECT_ID,
+    name,
+    createdAt: TS,
+    targetStack: "generic",
+  };
 }
 
 function readManaged(relPath: string): Uint8Array {
@@ -195,7 +207,7 @@ function appendBaseOf(relPath: string): AppendBase {
 function emptyReadSet(chatId: string): TurnReadSet {
   return {
     manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
-    canonicalPages: new Map(),
+    designFiles: new Map(),
     chat: appendBaseOf(chatJsonlPath(chatId)),
     pins: new Map(),
   };
@@ -261,20 +273,12 @@ describe("admitTurn", () => {
 });
 
 describe("finalizeTurn — empty diff", () => {
-  test("changedPages: [], exactly one agent record, and no pin resolved even if candidates were passed", async () => {
+  test("changedFiles: [], exactly one agent record, and no pin resolved even if candidates were passed", async () => {
     const chatId = uuidv7();
     const turnId = uuidv7();
     const home = slug("home");
     seedChatHeader(chatId);
-    const manifest: ProjectManifest = {
-      formatVersion: 1,
-      projectId: PROJECT_ID,
-      name: "demo",
-      createdAt: TS,
-      targetStack: "generic",
-      pages: [home],
-    };
-    seedManifest(manifest);
+    seedManifest(defaultManifest());
 
     const deps = wrapperDeps();
     const mutex = createWriteMutex();
@@ -286,9 +290,7 @@ describe("finalizeTurn — empty diff", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [],
-      validatedPageSlugs: [home], // identical to manifest.pages — no manifest operation expected
-      manifestBefore: manifest,
+      changedFiles: [],
       agentRecord: agentRecord(turnId, []),
       resolvedPins: [
         {
@@ -303,6 +305,8 @@ describe("finalizeTurn — empty diff", () => {
           },
         },
       ],
+      // home's CLOSURE did change — proves the gate below is the empty FILE diff, not this set.
+      changedPageSlugs: [home],
       readSet: emptyReadSet(chatId),
       createdAt: TS,
     });
@@ -310,20 +314,22 @@ describe("finalizeTurn — empty diff", () => {
 
     expect(result.operations).toHaveLength(1); // only the agent record
     expect(lineCount(chatJsonlPath(chatId))).toBe(2); // header + the one agent record
-    expect(managedExists(pageCommentsPath(home))).toBe(false); // the pin candidate's page was never touched
+    expect(managedExists(pinsJsonlPath(home))).toBe(false); // the pin candidate's page was never touched
   });
 });
 
 describe("finalizeTurn — full successful finalization", () => {
-  test("canonical pages (sorted), derived manifest, workspace-local switch, agent record, then pin resolution — in that order", async () => {
+  test("design files (sorted by tree-relative path), workspace-local switch, agent record, then pin resolution — in that order", async () => {
     const chatId = uuidv7();
     const turnId = uuidv7();
     const home = slug("home");
     const about = slug("about");
     const pinId = uuidv7();
+    const homeRelPath = "pages/home.tsx";
+    const aboutRelPath = "pages/about.tsx";
 
     seedChatHeader(chatId);
-    writeManaged(canonicalPagePath(home), bytesOf("export default function Home() {}\n"));
+    writeManaged(designFilePath(homeRelPath), bytesOf("export default function Home() {}\n"));
     seedPinsFile(home, [
       {
         kind: "pin:created",
@@ -336,24 +342,17 @@ describe("finalizeTurn — full successful finalization", () => {
         ts: TS,
       },
     ]);
-    const manifestBefore: ProjectManifest = {
-      formatVersion: 1,
-      projectId: PROJECT_ID,
-      name: "demo",
-      createdAt: TS,
-      targetStack: "generic",
-      pages: [home],
-    };
-    seedManifest(manifestBefore);
+    seedManifest(defaultManifest());
+    const manifestBytesBefore = readManaged(PROJECT_MANIFEST_FILENAME);
 
     const readSet: TurnReadSet = {
       manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
-      canonicalPages: new Map([
-        [home, fileImageOf(canonicalPagePath(home))],
-        [about, fileImageOf(canonicalPagePath(about))], // expected-absent: about does not exist yet
+      designFiles: new Map([
+        [homeRelPath, fileImageOf(designFilePath(homeRelPath))],
+        [aboutRelPath, fileImageOf(designFilePath(aboutRelPath))], // expected-absent: about does not exist yet
       ]),
       chat: appendBaseOf(chatJsonlPath(chatId)),
-      pins: new Map([[home, appendBaseOf(pageCommentsPath(home))]]),
+      pins: new Map([[home, appendBaseOf(pinsJsonlPath(home))]]),
     };
 
     const deps = wrapperDeps();
@@ -371,12 +370,10 @@ describe("finalizeTurn — full successful finalization", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [
-        { pageSlug: home, change: "replace", newBytes: newHomeBytes },
-        { pageSlug: about, change: "replace", newBytes: newAboutBytes },
+      changedFiles: [
+        { relPath: homeRelPath, change: "replace", newBytes: newHomeBytes },
+        { relPath: aboutRelPath, change: "replace", newBytes: newAboutBytes },
       ],
-      validatedPageSlugs: [about, home], // reordered — triggers a project.toml operation
-      manifestBefore,
       requestedActivePage: about,
       agentRecord: agentRecord(turnId, [about, home]),
       resolvedPins: [
@@ -392,56 +389,55 @@ describe("finalizeTurn — full successful finalization", () => {
           },
         },
       ],
+      changedPageSlugs: [about, home],
       readSet,
       createdAt: TS,
     });
     if (result instanceof Error) throw new Error(`unexpected error: ${result.message}`);
 
-    // about(0) < home(1) by sorted slug, then manifest(2), workspace-local(3), agent(4), pins(5).
-    expect(result.operations.map((op) => op.index)).toEqual([0, 1, 2, 3, 4, 5]);
-    expect(readManaged(canonicalPagePath(about))).toEqual(newAboutBytes);
-    expect(readManaged(canonicalPagePath(home))).toEqual(newHomeBytes);
+    // "pages/about.tsx"(0) < "pages/home.tsx"(1) by sorted relPath — no manifest op any more
+    // (project.toml carries no page order, Task 5) — then workspace-local(2), agent(3), pins(4).
+    expect(result.operations.map((op) => op.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(readManaged(designFilePath(aboutRelPath))).toEqual(newAboutBytes);
+    expect(readManaged(designFilePath(homeRelPath))).toEqual(newHomeBytes);
 
-    const manifestNow = decodeProjectManifest(textOf(readManaged(PROJECT_MANIFEST_FILENAME)));
-    if (manifestNow instanceof Error) throw new Error(`unexpected error: ${manifestNow.message}`);
-    expect(manifestNow.pages).toEqual([about, home]);
+    // project.toml is NOT rewritten by a turn any more — page order lives in the tree.
+    expect(readManaged(PROJECT_MANIFEST_FILENAME)).toEqual(manifestBytesBefore);
 
     const workspaceNow = decodeWorkspaceLocalState(textOf(readManaged("workspace.local.toml")));
     if (workspaceNow instanceof Error) throw new Error(`unexpected error: ${workspaceNow.message}`);
     expect(workspaceNow.activePageSlug).toBe(about);
 
     expect(lineCount(chatJsonlPath(chatId))).toBe(2); // header + the one agent record
-    expect(lineCount(pageCommentsPath(home))).toBe(3); // header + pin:created + pin:status resolved
-    expect(textOf(readManaged(pageCommentsPath(home)))).toContain('"status":"resolved"');
+    expect(lineCount(pinsJsonlPath(home))).toBe(3); // header + pin:created + pin:status resolved
+    expect(textOf(readManaged(pinsJsonlPath(home)))).toContain('"status":"resolved"');
   });
-});
 
-describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
-  test("canonical page drift yields a typed source_changed error and no overwrite", async () => {
+  test("writes tree files under design/ and resolves pins under pins/, including a brand-new file and a no-op delete of an already-absent one", async () => {
     const chatId = uuidv7();
     const turnId = uuidv7();
     const home = slug("home");
     seedChatHeader(chatId);
-    writeManaged(canonicalPagePath(home), bytesOf("original\n"));
-    const manifestBefore: ProjectManifest = {
-      formatVersion: 1,
-      projectId: PROJECT_ID,
-      name: "demo",
-      createdAt: TS,
-      targetStack: "generic",
-      pages: [home],
-    };
-    seedManifest(manifestBefore);
+    seedManifest(defaultManifest());
+    writeManaged("design/pages.json", bytesOf('{"schemaVersion":1,"pages":[]}\n'));
+    writeManaged(designFilePath("pages/home.tsx"), bytesOf("export default function Home() {}\n"));
+    const manifestBytesBefore = readManaged(PROJECT_MANIFEST_FILENAME);
+
+    const homeV2 = bytesOf(
+      'export default function Home() { return <Gauge color="red" /> }\n',
+    );
+    const themeBytes = bytesOf("export const theme = { accent: 'red' };\n");
 
     const readSet: TurnReadSet = {
       manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
-      canonicalPages: new Map([[home, fileImageOf(canonicalPagePath(home))]]),
+      designFiles: new Map([
+        ["pages.json", fileImageOf("design/pages.json")],
+        ["pages/home.tsx", fileImageOf(designFilePath("pages/home.tsx"))],
+        ["lib/theme.ts", fileImageOf(designFilePath("lib/theme.ts"))], // expected-absent
+      ]),
       chat: appendBaseOf(chatJsonlPath(chatId)),
       pins: new Map(),
     };
-
-    // A hook (or any external writer) drifts the canonical source after the read set was captured.
-    writeManaged(canonicalPagePath(home), bytesOf("hook-mutated\n"));
 
     const deps = wrapperDeps();
     const mutex = createWriteMutex();
@@ -453,33 +449,161 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [],
-      validatedPageSlugs: [home],
-      manifestBefore,
+      changedFiles: [
+        { relPath: "pages/home.tsx", change: "replace", newBytes: homeV2 },
+        { relPath: "lib/theme.ts", change: "replace", newBytes: themeBytes },
+        { relPath: "pages/gone.tsx", change: "delete" }, // never existed — a legal no-op delete
+      ],
+      agentRecord: agentRecord(turnId, [home]),
+      resolvedPins: [],
+      changedPageSlugs: [home],
+      readSet,
+      createdAt: TS,
+    });
+    if (result instanceof Error) throw new Error(`unexpected error: ${result.message}`);
+
+    expect(readManaged(designFilePath("pages/home.tsx"))).toEqual(homeV2);
+    expect(readManaged(designFilePath("lib/theme.ts"))).toEqual(themeBytes);
+    expect(managedExists(designFilePath("pages/gone.tsx"))).toBe(false);
+    expect(managedExists(PROJECT_MANIFEST_FILENAME)).toBe(true);
+    // project.toml is NOT rewritten by a turn any more — page order lives in the tree.
+    expect(readManaged(PROJECT_MANIFEST_FILENAME)).toEqual(manifestBytesBefore);
+  });
+});
+
+describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
+  test("design file drift yields a typed source_changed error and no overwrite", async () => {
+    const chatId = uuidv7();
+    const turnId = uuidv7();
+    const homeRelPath = "pages/home.tsx";
+    seedChatHeader(chatId);
+    writeManaged(designFilePath(homeRelPath), bytesOf("original\n"));
+    seedManifest(defaultManifest());
+
+    const readSet: TurnReadSet = {
+      manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
+      designFiles: new Map([[homeRelPath, fileImageOf(designFilePath(homeRelPath))]]),
+      chat: appendBaseOf(chatJsonlPath(chatId)),
+      pins: new Map(),
+    };
+
+    // A hook (or any external writer) drifts the design source after the read set was captured.
+    writeManaged(designFilePath(homeRelPath), bytesOf("hook-mutated\n"));
+
+    const deps = wrapperDeps();
+    const mutex = createWriteMutex();
+    const permit = await mutex.acquire();
+
+    const result = await finalizeTurn(deps, {
+      mutex,
+      permit,
+      transactionId: uuidv7(),
+      turnId,
+      targetChatId: chatId,
+      changedFiles: [],
       agentRecord: agentRecord(turnId, []),
       resolvedPins: [],
+      changedPageSlugs: [],
       readSet,
       createdAt: TS,
     });
 
     expect(result).toBeInstanceOf(SourceChangedError);
-    expect(result instanceof SourceChangedError && result.part).toBe(`canonical:${home}`);
-    expect(textOf(readManaged(canonicalPagePath(home)))).toBe("hook-mutated\n"); // never overwritten
+    expect(result instanceof SourceChangedError && result.part).toBe(`design:${homeRelPath}`);
+    expect(textOf(readManaged(designFilePath(homeRelPath)))).toBe("hook-mutated\n"); // never overwritten
     expect(lineCount(chatJsonlPath(chatId))).toBe(1); // no agent record was appended
+  });
+
+  test("the finalize CAS reports source_changed when any read-set tree file drifted, even a shared module no `changedFiles` entry touches", async () => {
+    const chatId = uuidv7();
+    const turnId = uuidv7();
+    seedChatHeader(chatId);
+    seedManifest(defaultManifest());
+    writeManaged(designFilePath("lib/theme.ts"), bytesOf("export const theme = { accent: 'blue' };\n"));
+
+    const readSet: TurnReadSet = {
+      manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
+      designFiles: new Map([["lib/theme.ts", fileImageOf(designFilePath("lib/theme.ts"))]]),
+      chat: appendBaseOf(chatJsonlPath(chatId)),
+      pins: new Map(),
+    };
+
+    // Drifts after the read set was captured — nothing in `changedFiles` below touches it.
+    writeManaged(designFilePath("lib/theme.ts"), bytesOf("export const theme = { accent: 'green' };\n"));
+
+    const deps = wrapperDeps();
+    const mutex = createWriteMutex();
+    const permit = await mutex.acquire();
+
+    const result = await finalizeTurn(deps, {
+      mutex,
+      permit,
+      transactionId: uuidv7(),
+      turnId,
+      targetChatId: chatId,
+      changedFiles: [{ relPath: "pages/home.tsx", change: "replace", newBytes: bytesOf("x\n") }],
+      agentRecord: agentRecord(turnId, []),
+      resolvedPins: [],
+      changedPageSlugs: [],
+      readSet,
+      createdAt: TS,
+    });
+
+    expect(result).toBeInstanceOf(SourceChangedError);
+    expect(result instanceof SourceChangedError && result.part).toBe("design:lib/theme.ts");
+    expect(textOf(readManaged(designFilePath("lib/theme.ts")))).toContain("green"); // never overwritten
+    expect(managedExists(designFilePath("pages/home.tsx"))).toBe(false); // no partial commit either
+  });
+
+  test("a read-set entry for a file no page's closure reaches is still CAS'd — treeRevision covers the whole design/ inventory, not just reachable files", async () => {
+    const chatId = uuidv7();
+    const turnId = uuidv7();
+    seedChatHeader(chatId);
+    seedManifest(defaultManifest());
+    // An orphaned asset: no page's closure imports it, but it is still part of the tree
+    // inventory (and therefore of `treeRevision`) — the CAS must still notice it drifting.
+    writeManaged(designFilePath("assets/unused-icon.svg"), bytesOf("<svg/>\n"));
+
+    const readSet: TurnReadSet = {
+      manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
+      designFiles: new Map([
+        ["assets/unused-icon.svg", fileImageOf(designFilePath("assets/unused-icon.svg"))],
+      ]),
+      chat: appendBaseOf(chatJsonlPath(chatId)),
+      pins: new Map(),
+    };
+
+    writeManaged(designFilePath("assets/unused-icon.svg"), bytesOf("<svg class='new'/>\n"));
+
+    const deps = wrapperDeps();
+    const mutex = createWriteMutex();
+    const permit = await mutex.acquire();
+
+    const result = await finalizeTurn(deps, {
+      mutex,
+      permit,
+      transactionId: uuidv7(),
+      turnId,
+      targetChatId: chatId,
+      changedFiles: [],
+      agentRecord: agentRecord(turnId, []),
+      resolvedPins: [],
+      changedPageSlugs: [],
+      readSet,
+      createdAt: TS,
+    });
+
+    expect(result).toBeInstanceOf(SourceChangedError);
+    expect(result instanceof SourceChangedError && result.part).toBe(
+      "design:assets/unused-icon.svg",
+    );
   });
 
   test("manifest drift yields a typed source_changed error and no overwrite", async () => {
     const chatId = uuidv7();
     const turnId = uuidv7();
-    const home = slug("home");
     seedChatHeader(chatId);
-    const manifestBefore: ProjectManifest = {
-      formatVersion: 2,
-      projectId: PROJECT_ID,
-      name: "original",
-      createdAt: TS,
-      targetStack: "generic",
-    };
+    const manifestBefore = defaultManifest("original");
     seedManifest(manifestBefore);
 
     const readSet = emptyReadSet(chatId);
@@ -497,11 +621,10 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [],
-      validatedPageSlugs: [home],
-      manifestBefore,
+      changedFiles: [],
       agentRecord: agentRecord(turnId, []),
       resolvedPins: [],
+      changedPageSlugs: [],
       readSet,
       createdAt: TS,
     });
@@ -534,18 +657,10 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [],
-      validatedPageSlugs: [],
-      manifestBefore: {
-        formatVersion: 1,
-        projectId: PROJECT_ID,
-        name: "demo",
-        createdAt: TS,
-        targetStack: "generic",
-        pages: [],
-      },
+      changedFiles: [],
       agentRecord: agentRecord(turnId, []),
       resolvedPins: [],
+      changedPageSlugs: [],
       readSet,
       createdAt: TS,
     });
@@ -576,14 +691,14 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
 
     const readSet: TurnReadSet = {
       manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
-      canonicalPages: new Map(),
+      designFiles: new Map(),
       chat: appendBaseOf(chatJsonlPath(chatId)),
-      pins: new Map([[home, appendBaseOf(pageCommentsPath(home))]]),
+      pins: new Map([[home, appendBaseOf(pinsJsonlPath(home))]]),
     };
 
     // A concurrent UI action (e.g. a fresh pin) grows the comments log after the read set was captured.
     appendManaged(
-      pageCommentsPath(home),
+      pinsJsonlPath(home),
       bytesOf(
         `${JSON.stringify({ kind: "pin:created", recordId: uuidv7(), pinId: uuidv7(), element: "y", fx: 0.1, fy: 0.1, text: "z", ts: TS })}\n`,
       ),
@@ -599,18 +714,10 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
       transactionId: uuidv7(),
       turnId,
       targetChatId: chatId,
-      changedPages: [],
-      validatedPageSlugs: [],
-      manifestBefore: {
-        formatVersion: 1,
-        projectId: PROJECT_ID,
-        name: "demo",
-        createdAt: TS,
-        targetStack: "generic",
-        pages: [],
-      },
+      changedFiles: [],
       agentRecord: agentRecord(turnId, []),
       resolvedPins: [],
+      changedPageSlugs: [],
       readSet,
       createdAt: TS,
     });
@@ -618,6 +725,30 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
     expect(result).toBeInstanceOf(StaleError);
     expect(result instanceof StaleError && result.part).toBe(`pins:${home}`);
     expect(lineCount(chatJsonlPath(chatId))).toBe(1);
+  });
+});
+
+describe("designFilePath / pinsJsonlPath — path helpers", () => {
+  test("designFilePath lifts a deeply nested tree-relative path to its project-relative form", () => {
+    expect(designFilePath("components/ui/buttons/PrimaryButton.tsx")).toBe(
+      "design/components/ui/buttons/PrimaryButton.tsx",
+    );
+  });
+
+  test("designFilePath's double-prefix case is impossible by construction, not by runtime validation", () => {
+    // `designFilePath`'s signature is a plain `string -> string` (no `Error` union), so it has
+    // no room to reject a caller-supplied value that already carries the `design/` prefix —
+    // demonstrated here by the raw (undesirable) output such a call WOULD produce.
+    expect(designFilePath("design/pages/home.tsx")).toBe("design/design/pages/home.tsx");
+    // The guarantee instead lives at the data's only real source: `entities/design-tree`'s
+    // `entry` field (`model/manifest.ts`'s `entryPathSchema`) and its closure walk
+    // (`model/closure.ts`'s `resolveClosure`) both work purely in TREE-relative space and
+    // never themselves emit a `design/`-prefixed string, so no legitimate caller of
+    // `designFilePath` can produce this input in the first place.
+  });
+
+  test("pinsJsonlPath is unaffected by the design-tree migration — still slug-keyed, same value the retired pageCommentsPath produced", () => {
+    expect(pinsJsonlPath(slug("home"))).toBe("pins/home.jsonl");
   });
 });
 
@@ -653,7 +784,7 @@ describe("terminalizeTurn", () => {
 
       expect(result.operations).toHaveLength(1);
       expect(lineCount(chatJsonlPath(chatId))).toBe(3); // header + user + terminal
-      expect(managedExists(pageCommentsPath(slug("home")))).toBe(false);
+      expect(managedExists(pinsJsonlPath(slug("home")))).toBe(false);
       mutex.release(permit);
     }
   });
@@ -795,8 +926,8 @@ describe("runProjectMutation", () => {
     });
     if (result instanceof Error) throw new Error(`unexpected error: ${result.message}`);
 
-    expect(lineCount(pageCommentsPath(home))).toBe(2); // header + the created event
-    expect(textOf(readManaged(pageCommentsPath(home)))).toContain('"kind":"pin:created"');
+    expect(lineCount(pinsJsonlPath(home))).toBe(2); // header + the created event
+    expect(textOf(readManaged(pinsJsonlPath(home)))).toContain('"kind":"pin:created"');
   });
 });
 
@@ -809,13 +940,14 @@ describe("buildRestoreTransaction (infrastructure only — no MVP caller)", () =
     const chatId = uuidv7();
     const home = slug("home");
     const restoreActionId = uuidv7();
+    const homeRelPath = "pages/home.tsx";
     seedChatHeader(chatId);
 
     const bytes = bytesOf("restored content\n");
     const payloadId = uuidv7();
     const sourceOperation: TransactionOperation = {
       index: 0,
-      target: canonicalPagePath(home),
+      target: designFilePath(homeRelPath),
       mode: "replace",
       oldImage: { state: "absent" },
       newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength },
@@ -850,7 +982,7 @@ describe("buildRestoreTransaction (infrastructure only — no MVP caller)", () =
     if (result instanceof Error) throw new Error(`unexpected error: ${result.message}`);
 
     expect(result.operations).toHaveLength(2);
-    expect(readManaged(canonicalPagePath(home))).toEqual(bytes);
+    expect(readManaged(designFilePath(homeRelPath))).toEqual(bytes);
     expect(lineCount(chatJsonlPath(chatId))).toBe(2); // header + the one restore record
   });
 });

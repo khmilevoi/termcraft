@@ -22,7 +22,7 @@ import {
   encodeProjectManifest,
 } from "store/toml";
 import type { ProjectManifest } from "store/toml";
-import { canonicalPagePath } from "store/transaction";
+import { designFilePath } from "store/transaction";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import {
@@ -118,7 +118,10 @@ async function projectWithPagesAndNoChats(): Promise<string> {
   if (manifest instanceof Error) throw manifest;
   fs.writeFileSync(manifestPath, encodeProjectManifest({ ...manifest, pages: [home] }));
 
-  const pagePath = path.join(termcraftDir, canonicalPagePath(home));
+  // `canonicalPagePath` is retired (design-tree canonical source plan, Task 6) — this fixture
+  // only needs SOME page-shaped file on disk for the content probe under test, not a real
+  // `pages.json`-resolved location, so `designFilePath` stands in with a synthetic tree path.
+  const pagePath = path.join(termcraftDir, designFilePath(`pages/${home}.tsx`));
   fs.mkdirSync(path.dirname(pagePath), { recursive: true });
   fs.writeFileSync(pagePath, "export default function Home() { return null }\n");
 

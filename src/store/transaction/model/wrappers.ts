@@ -8,6 +8,7 @@ import type {
   ChatSystemRestoreRecord,
   ChatUserRecord,
 } from "entities/chat";
+import { DESIGN_DIRNAME } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import type { PinEvent, PinStatusEvent } from "entities/pin";
 import type { AppendBase, AppendBuilderDeps } from "store/jsonl";
@@ -23,11 +24,10 @@ import {
 } from "store/jsonl";
 import { FsAccessError, isNotFound } from "store/safe-fs";
 import type { SafeFsError } from "store/safe-fs";
-import type { ProjectManifest, WorkspaceLocalState } from "store/toml";
+import type { WorkspaceLocalState } from "store/toml";
 import {
   PROJECT_MANIFEST_FILENAME,
   WORKSPACE_STATE_FILENAME,
-  encodeProjectManifest,
   encodeWorkspaceLocalState,
   loadWorkspaceLocalState,
 } from "store/toml";
@@ -67,15 +67,29 @@ import type { WriteMutex } from "./write-mutex";
 export function chatJsonlPath(chatId: string): string {
   return `chats/${chatId}.jsonl`;
 }
-export function canonicalPagePath(slug: PageSlug): string {
-  return `pages/${slug}/page.tsx`;
+
+/**
+ * A TREE-relative path lifted to its PROJECT-relative form (multi-file design tree design
+ * §3). `treeRelPath` is exactly what `pages.json` and every closure speaks; this is the only
+ * place the `design/` prefix is added, so no caller ever has to remember it. Never the other
+ * way around: nothing here strips a `design/` prefix back off, so a caller that already holds
+ * a project-relative path (one that already starts with `design/`) must not pass it back in —
+ * `entities/design-tree`'s closure walk and `pages.json`'s `entry` field are the only sources
+ * of the tree-relative strings this function is meant to receive, and neither ever emits the
+ * `design/` prefix itself, so the double-prefix case this would otherwise create cannot arise
+ * by construction.
+ */
+export function designFilePath(treeRelPath: string): string {
+  return `${DESIGN_DIRNAME}/${treeRelPath}`;
 }
-/** The pin log's managed path (multi-file design tree design §3.1/§10): moved out from
- * under the retired `pages/<slug>/` directory to `pins/<slug>.jsonl`, so page identity
- * lives in ONE place, the manifest (`store/safe-fs`'s `comments-jsonl` namespace grammar,
- * `classifyProject`'s `pins` branch). The function name is unchanged — only the namespace's
- * managed-path grammar moved, not its identity in the §5.3 limit table. */
-export function pageCommentsPath(slug: PageSlug): string {
+
+/**
+ * The page's append-only pin log (design §3) — moved out of the retired `pages/<slug>/`
+ * directory to `pins/<slug>.jsonl`. Pin logs genuinely key by slug (unlike a page's design
+ * source, which the agent may move anywhere in the tree): this is correct, deliberate, and
+ * the one place in this module a slug still maps directly to a path.
+ */
+export function pinsJsonlPath(slug: PageSlug): string {
   return `pins/${slug}.jsonl`;
 }
 
@@ -122,7 +136,7 @@ export class TurnAlreadyTerminalError extends errore.createTaggedError({
   message: "turn $turnId already has a terminal record in chat $targetChatId",
 }) {}
 
-/** turn-durability §7.5 / §13: a canonical page, the page inventory, or the portable manifest drifted since the turn's send-time read set. */
+/** turn-durability §7.5 / §13: a design-tree file or the portable manifest drifted since the turn's send-time read set. */
 export class SourceChangedError extends errore.createTaggedError({
   name: "SourceChangedError",
   message: "source_changed: $part drifted from the turn's send-time read set",
@@ -215,7 +229,7 @@ function fileImageForBefore(base: AppendBase): FileImage {
 
 /**
  * Observe a fixed (non-JSONL) managed target's current `FileImage`, e.g. `project.toml` or
- * one canonical page. Exported (phase-6 blocker B3) so `store/model/factory.ts`'s named
+ * one design-tree file. Exported (phase-6 blocker B3) so `store/model/factory.ts`'s named
  * `TransactionEngine` methods can build their own `replace`/`delete` operations from the
  * same current-state observation this file's own wrappers already use — reusing the
  * primitive rather than re-implementing the identical `readFile`/`isNotFound` dance.
@@ -320,10 +334,11 @@ export async function admitTurn(deps: TransactionWrapperDeps, input: TurnAdmissi
 
 // ---- finalization (§7.4, §7.5) ------------------------------------------------------------
 
-export interface ChangedPageOp {
-  readonly pageSlug: PageSlug;
+export interface ChangedDesignFileOp {
+  /** Tree-relative — never the `design/` prefix; see {@link designFilePath}. */
+  readonly relPath: string;
   readonly change: "replace" | "delete";
-  /** Required when `change === "replace"` — the page's complete new bytes. */
+  /** Required when `change === "replace"` — the file's complete new bytes. */
   readonly newBytes?: Uint8Array;
 }
 
@@ -341,24 +356,28 @@ export interface ResolvedPinAppend {
  */
 export interface TurnReadSet {
   readonly manifest: FileImage;
-  /** Every canonical page exposed to the agent, INCLUDING expected-absent entries for potential new targets (§7.5). */
-  readonly canonicalPages: ReadonlyMap<PageSlug, FileImage>;
+  /**
+   * Every tree file the turn's agent workspace exposed, keyed by TREE-relative path
+   * (`entities/design-tree`'s closure vocabulary — never the `design/` prefix), INCLUDING
+   * expected-absent entries for potential new targets (§7.5). This is not scoped to any one
+   * page's closure: `treeRevision` covers the whole `design/` inventory, so a file no page
+   * currently reaches is still a legitimate, carried entry — its drift is just as much a
+   * `source_changed` condition as a reachable file's.
+   */
+  readonly designFiles: ReadonlyMap<string, FileImage>;
   readonly chat: AppendBase;
   /** Every comments log whose selection or sent pins contributed context (§7.2 step 4). */
   readonly pins: ReadonlyMap<PageSlug, AppendBase>;
 }
 
 /**
- * CRITICAL (plan "Deferred / cross-phase" — `pages.json` vs `project.toml.pages`):
- * `pages.json` is the TRANSIENT agent-workspace manifest slice inside the turn
- * workspace/candidate (`store/sandbox`, T16 — not landed) — it is Gate-validated there and
- * NEVER written as a portable file. `project.toml.pages` is the PORTABLE durable ordered
- * slug array. `validatedPageSlugs` below is that already-Gate-validated `pages.json` ordered
- * slug array, handed to this wrapper by the caller (finalization does not re-open or
- * re-validate `pages.json` itself); this wrapper's only job is deriving the new
- * `project.toml` from it (turn-durability §7.4 item 2: "portable `project.toml` changes
- * derived from validated `pages.json`, containing only ordered page slugs ... never cached
- * metadata"). No code path in this file ever writes a `pages.json` file.
+ * `project.toml` no longer carries page order (plan Task 5) — `pages.json`'s `entry` map is
+ * the sole ordering/location authority (design §3, §7). Finalization therefore never derives
+ * a `project.toml` write from a validated slug array; it only re-CASes the already-durable
+ * manifest image (`readSet.manifest`) and commits whatever tree files the turn actually
+ * touched. `pages.json` itself stays the TRANSIENT agent-workspace manifest slice inside the
+ * turn workspace/candidate (`store/sandbox`, T16 — not landed): Gate-validated there, never
+ * written as a portable file, and no code path in this module ever writes one.
  */
 export interface TurnFinalizeInput {
   readonly mutex: WriteMutex;
@@ -366,38 +385,37 @@ export interface TurnFinalizeInput {
   readonly transactionId: string;
   readonly turnId: string;
   readonly targetChatId: string;
-  /** Gate-validated diff; empty means no canonical page changed. */
-  readonly changedPages: readonly ChangedPageOp[];
-  /** The validated `pages.json` ordered slug array — see the CRITICAL note above. */
-  readonly validatedPageSlugs: readonly PageSlug[];
-  /** The portable manifest as observed at the START of finalization (before the fresh re-observe below). */
-  readonly manifestBefore: ProjectManifest;
+  /** Gate-validated diff over tree-relative paths; empty means no design file changed. */
+  readonly changedFiles: readonly ChangedDesignFileOp[];
   /** Present only when the candidate explicitly requests a different active page (§7.4 item 3). */
   readonly requestedActivePage?: PageSlug | null;
   /** Fully built by the caller: `changedPages`/`warnings`/`text` are Gate/agent outcomes this module never computes. */
   readonly agentRecord: ChatAgentRecord;
-  /** Every sent pin resolved by this turn — filtered down to `changedPages` internally (§7.4 item 5). */
+  /** Every sent pin resolved by this turn — filtered internally to pages whose closure changed (§7.4 item 5), via `changedPageSlugs` below. */
   readonly resolvedPins: readonly ResolvedPinAppend[];
+  /** The slugs whose CLOSURE changed this turn (design §7) — the pin-resolution filter. Derived by the caller from the closure diff, never from a file path: a page can change without its own entry file's bytes moving when a shared module it depends on changed instead. */
+  readonly changedPageSlugs: readonly PageSlug[];
   readonly readSet: TurnReadSet;
   readonly createdAt: string;
 }
 
-function buildChangedPageOperation(
+/** Builds one design-tree file's replace/delete operation, targeting the file's PROJECT-relative path via {@link designFilePath} — this is the only place `finalizeTurn` turns a tree-relative `relPath` into a managed target. */
+function buildChangedFileOperation(
   deps: TransactionWrapperDeps,
-  page: ChangedPageOp,
+  file: ChangedDesignFileOp,
 ): SafeFsError | TurnFinalizeInputError | BuiltOperation {
-  const target = canonicalPagePath(page.pageSlug);
+  const target = designFilePath(file.relPath);
   const oldImage = observeFileImage(deps.fs, target);
   if (oldImage instanceof Error) return oldImage;
 
-  if (page.change === "delete") {
+  if (file.change === "delete") {
     return {
       operation: { index: 0, target, mode: "delete", oldImage, newImage: { state: "absent" } },
     };
   }
-  if (page.newBytes === undefined)
+  if (file.newBytes === undefined)
     return new TurnFinalizeInputError({
-      reason: `page ${page.pageSlug} is a replace with no newBytes`,
+      reason: `design file ${file.relPath} is a replace with no newBytes`,
     });
 
   const payloadId = deps.append.newPayloadId();
@@ -407,46 +425,10 @@ function buildChangedPageOperation(
       target,
       mode: "replace",
       oldImage,
-      newImage: { state: "file", sha256: sha256Hex(page.newBytes), size: page.newBytes.byteLength },
+      newImage: { state: "file", sha256: sha256Hex(file.newBytes), size: file.newBytes.byteLength },
       payloadId,
     },
-    payload: [payloadId, page.newBytes],
-  };
-}
-
-/**
- * turn-durability §7.4 item 2 — `null` when `validatedPageSlugs` already matches the durable
- * manifest (no unrelated file is touched). Exported (phase-6 blocker B3): `page.reorder` and
- * `page.removeConfirm` are both, at bottom, "rewrite `project.toml`'s page order" — the exact
- * operation this helper already builds for turn finalization — so `store/model/factory.ts`'s
- * named methods reuse it rather than re-deriving the same replace operation a second way.
- */
-export function buildManifestOperation(
-  deps: TransactionWrapperDeps,
-  before: ProjectManifest,
-  validatedPageSlugs: readonly PageSlug[],
-): SafeFsError | BuiltOperation | null {
-  const unchanged =
-    before.pages.length === validatedPageSlugs.length &&
-    before.pages.every((slug, at) => slug === validatedPageSlugs[at]);
-  if (unchanged) return null;
-
-  const oldImage = observeFileImage(deps.fs, PROJECT_MANIFEST_FILENAME);
-  if (oldImage instanceof Error) return oldImage;
-
-  const nextManifest: ProjectManifest = { ...before, pages: validatedPageSlugs };
-  const bytes = new TextEncoder().encode(encodeProjectManifest(nextManifest));
-  const payloadId = deps.append.newPayloadId();
-  return {
-    operation: {
-      index: 0,
-      target: PROJECT_MANIFEST_FILENAME,
-      mode: "replace",
-      oldImage,
-      newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength },
-      payloadId,
-    },
-    payload: [payloadId, bytes],
+    payload: [payloadId, file.newBytes],
   };
 }
 
@@ -541,7 +523,7 @@ function buildPinResolutionOperation(
   pageSlug: PageSlug,
   events: readonly PinStatusEvent[],
 ): SafeFsError | ChatMutationLockedError | Error | BuiltOperation {
-  const target = pageCommentsPath(pageSlug);
+  const target = pinsJsonlPath(pageSlug);
   const before = readPinsBefore(deps.fs, target);
   if (before instanceof Error) return before;
   const appended = buildPinAppend({ before: before.base, events, deps: deps.append });
@@ -596,10 +578,11 @@ function buildFinalizeCasPrecondition(
     if (!imagesEqual(manifestNow, readSet.manifest))
       return new SourceChangedError({ part: "manifest" });
 
-    for (const [slug, expected] of readSet.canonicalPages) {
-      const now = observeFileImage(fs, canonicalPagePath(slug));
+    for (const [treeRelPath, expected] of readSet.designFiles) {
+      const now = observeFileImage(fs, designFilePath(treeRelPath));
       if (now instanceof Error) return now;
-      if (!imagesEqual(now, expected)) return new SourceChangedError({ part: `canonical:${slug}` });
+      if (!imagesEqual(now, expected))
+        return new SourceChangedError({ part: `design:${treeRelPath}` });
     }
 
     const chatNow = readChatBefore(fs, chatPath);
@@ -612,7 +595,7 @@ function buildFinalizeCasPrecondition(
     }
 
     for (const [slug, expected] of readSet.pins) {
-      const now = readPinsBefore(fs, pageCommentsPath(slug));
+      const now = readPinsBefore(fs, pinsJsonlPath(slug));
       if (now instanceof Error) return now;
       if (now.base.length !== expected.length || now.base.prefixSha256 !== expected.prefixSha256) {
         return new StaleError({ part: `pins:${slug}` });
@@ -624,31 +607,28 @@ function buildFinalizeCasPrecondition(
 }
 
 /**
- * Finalization (turn-durability §7.4, §7.5): the canonical operation order is changed
- * canonical pages (sorted by slug) → the derived `project.toml` (only when page order
- * changed) → an optional `workspace.local.toml` active-page replacement → exactly one agent
- * record → one append-only `pin:status resolved` per resolved sent pin (only for pages the
+ * Finalization (turn-durability §7.4, §7.5; multi-file design tree design §3, §7): the
+ * canonical operation order is changed design files (sorted by tree-relative path) → an
+ * optional `workspace.local.toml` active-page replacement → exactly one agent record → one
+ * append-only `pin:status resolved` per resolved sent pin (only for pages whose CLOSURE the
  * turn actually changed — an empty diff resolves none, regardless of what the caller passed
- * in `resolvedPins`). The full send-time CAS runs as the engine's `precondition` step,
- * immediately before intent (§7.5) — a match commits every effect in one transaction, and a
- * mismatch commits none of them.
+ * in `resolvedPins`). `project.toml` is no longer part of this sequence: it carries no page
+ * order any more (Task 5), so finalization never derives a manifest write. The full send-time
+ * CAS runs as the engine's `precondition` step, immediately before intent (§7.5) — a match
+ * commits every effect in one transaction, and a mismatch commits none of them.
  */
 export async function finalizeTurn(deps: TransactionWrapperDeps, input: TurnFinalizeInput) {
   const chatPath = chatJsonlPath(input.targetChatId);
   const built: BuiltOperation[] = [];
 
-  const sortedPages = [...input.changedPages].sort((a, b) =>
-    a.pageSlug < b.pageSlug ? -1 : a.pageSlug > b.pageSlug ? 1 : 0,
+  const sortedFiles = [...input.changedFiles].sort((a, b) =>
+    a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
   );
-  for (const page of sortedPages) {
-    const result = buildChangedPageOperation(deps, page);
+  for (const file of sortedFiles) {
+    const result = buildChangedFileOperation(deps, file);
     if (result instanceof Error) return result;
     built.push(result);
   }
-
-  const manifestOp = buildManifestOperation(deps, input.manifestBefore, input.validatedPageSlugs);
-  if (manifestOp instanceof Error) return manifestOp;
-  if (manifestOp !== null) built.push(manifestOp);
 
   if (input.requestedActivePage !== undefined && input.requestedActivePage !== null) {
     const workspaceOp = buildWorkspaceLocalOperation(deps, input.requestedActivePage);
@@ -660,11 +640,15 @@ export async function finalizeTurn(deps: TransactionWrapperDeps, input: TurnFina
   if (agentOp instanceof Error) return agentOp;
   built.push(agentOp);
 
-  // §7.4 item 5: "An empty design diff resolves no pin." Filtering here — rather than
-  // trusting the caller to have already filtered — makes that invariant hold even if a
-  // caller passes stale/candidate resolutions alongside an empty `changedPages`.
-  const changedSlugs = new Set(input.changedPages.map((page) => page.pageSlug));
-  const eligiblePins = input.resolvedPins.filter((pin) => changedSlugs.has(pin.pageSlug));
+  // §7.4 item 5: "An empty design diff resolves no pin." With shared modules a page can change
+  // without its own entry file's bytes moving, so eligibility is the caller's CLOSURE diff
+  // (`changedPageSlugs`), gated on the diff being non-empty at all. Filtering here rather than
+  // trusting the caller keeps the invariant true even for a caller that passes stale pins.
+  const changedSlugs = new Set(input.changedPageSlugs);
+  const eligiblePins =
+    input.changedFiles.length === 0
+      ? []
+      : input.resolvedPins.filter((pin) => changedSlugs.has(pin.pageSlug));
   const grouped = groupResolvedPins(eligiblePins);
   for (const slug of [...grouped.keys()].sort()) {
     const events = grouped.get(slug);
@@ -873,7 +857,7 @@ export function buildStandalonePinEventOperation(
       readonly operation: TransactionOperation;
       readonly payloads: ReadonlyMap<string, Uint8Array>;
     } {
-  const target = pageCommentsPath(input.pageSlug);
+  const target = pinsJsonlPath(input.pageSlug);
   const before = readPinsBefore(deps.fs, target);
   if (before instanceof Error) return before;
   const appended = buildPinAppend({
@@ -933,7 +917,7 @@ export function buildPinEventOperations(
       readonly operations: readonly TransactionOperation[];
       readonly payloads: ReadonlyMap<string, Uint8Array>;
     } {
-  const target = pageCommentsPath(input.pageSlug);
+  const target = pinsJsonlPath(input.pageSlug);
   const existing = deps.fs.safeFs.readFile(target);
   const missing =
     existing instanceof Error && existing instanceof FsAccessError && isNotFound(existing);

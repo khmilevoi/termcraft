@@ -30,13 +30,13 @@ import type { ProjectManifest } from "store/toml";
 import {
   CRASH_EXIT_CODE,
   JournalTooNewError,
-  canonicalPagePath,
   chatJsonlPath,
   computePlanHash,
+  designFilePath,
   encodeCanonicalJson,
   intentPath,
-  pageCommentsPath,
   payloadPath,
+  pinsJsonlPath,
   planPath,
   runCrashCase,
 } from "store/transaction";
@@ -637,7 +637,7 @@ describe("identity checks (storage-identity §5.2)", () => {
     });
     if (wrongProjectHeader instanceof Error)
       throw new Error(`fixture bug: ${wrongProjectHeader.message}`);
-    writeManaged(termcraftDir, pageCommentsPath(pageSlug), wrongProjectHeader);
+    writeManaged(termcraftDir, pinsJsonlPath(pageSlug), wrongProjectHeader);
 
     const reopenedForProjectCase = await store.openProject(projectRoot);
     if (reopenedForProjectCase instanceof Error)
@@ -656,7 +656,7 @@ describe("identity checks (storage-identity §5.2)", () => {
     });
     if (wrongSlugHeader instanceof Error)
       throw new Error(`fixture bug: ${wrongSlugHeader.message}`);
-    writeManaged(termcraftDir, pageCommentsPath(pageSlug), wrongSlugHeader);
+    writeManaged(termcraftDir, pinsJsonlPath(pageSlug), wrongSlugHeader);
 
     const reopenedForSlugCase = await store.openProject(projectRoot);
     if (reopenedForSlugCase instanceof Error)
@@ -988,7 +988,7 @@ function multiPageFinalizationPlan(transactionId: string): PlanFixture {
   const operations: TransactionOperation[] = [
     {
       index: 0,
-      target: canonicalPagePath(slugA),
+      target: designFilePath(`pages/${slugA}.tsx`),
       mode: "replace",
       oldImage: { state: "absent" },
       newImage: { state: "file", sha256: sha256Hex(bytesA), size: bytesA.byteLength },
@@ -996,7 +996,7 @@ function multiPageFinalizationPlan(transactionId: string): PlanFixture {
     },
     {
       index: 1,
-      target: canonicalPagePath(slugB),
+      target: designFilePath(`pages/${slugB}.tsx`),
       mode: "replace",
       oldImage: { state: "absent" },
       newImage: { state: "file", sha256: sha256Hex(bytesB), size: bytesB.byteLength },
@@ -1089,7 +1089,7 @@ function pinAppendPlan(termcraftDir: string, transactionId: string): PlanFixture
     pageSlug,
   });
   if (headerLine instanceof Error) throw new Error(`fixture bug: ${headerLine.message}`);
-  writeManaged(termcraftDir, pageCommentsPath(pageSlug), headerLine);
+  writeManaged(termcraftDir, pinsJsonlPath(pageSlug), headerLine);
 
   const before: AppendBase = { length: headerLine.byteLength, prefixSha256: sha256Hex(headerLine) };
   const event: PinCreatedEvent = {
@@ -1114,7 +1114,7 @@ function pinAppendPlan(termcraftDir: string, transactionId: string): PlanFixture
   const operations: TransactionOperation[] = [
     {
       index: 0,
-      target: pageCommentsPath(pageSlug),
+      target: pinsJsonlPath(pageSlug),
       mode: "append-jsonl",
       oldImage: { state: "file", sha256: before.prefixSha256, size: before.length },
       newImage: { state: "file", sha256: after.sha256, size: after.size },

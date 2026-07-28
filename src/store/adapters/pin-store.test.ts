@@ -8,7 +8,7 @@ import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent, PinEvent } from "entities/pin";
 import { uuidv7 } from "infrastructure/uuid";
 import { encodeCommentsHeaderLine, encodePinEventLine } from "store/jsonl";
-import { pageCommentsPath } from "store/transaction";
+import { pinsJsonlPath } from "store/transaction";
 
 import { createPinStoreAdapter } from "./pin-store";
 import { cleanupScratchRoots, createRealProjectFixture } from "./test-support";
@@ -54,7 +54,7 @@ function writeRawComments(
   pageSlug: PageSlug,
   bytes: Uint8Array,
 ): void {
-  const absPath = path.join(open.safeFs.root.realPath, ...pageCommentsPath(pageSlug).split("/"));
+  const absPath = path.join(open.safeFs.root.realPath, ...pinsJsonlPath(pageSlug).split("/"));
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, bytes);
 }

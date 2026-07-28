@@ -4,7 +4,7 @@ import type { PageSlug } from "entities/page";
 import type { Pin, PinEvent } from "entities/pin";
 import { readPinsJsonl, sha256Hex } from "store/jsonl";
 import { FsAccessError, isNotFound } from "store/safe-fs";
-import { pageCommentsPath } from "store/transaction";
+import { pinsJsonlPath } from "store/transaction";
 
 import { toFailureDto } from "./failure";
 import type { StoreAdapterDeps } from "./types";
@@ -26,7 +26,7 @@ async function readRawEvents(
   open: StoreAdapterDeps["open"],
   pageSlug: PageSlug,
 ): Promise<FailureDtoV1 | readonly PinEvent[]> {
-  const relPath = pageCommentsPath(pageSlug);
+  const relPath = pinsJsonlPath(pageSlug);
   const bytes = open.safeFs.readFile(relPath);
   if (bytes instanceof Error) {
     if (bytes instanceof FsAccessError && isNotFound(bytes)) return [];
@@ -60,7 +60,7 @@ export function createPinStoreAdapter(deps: StoreAdapterDeps): PinReader & PinMu
    * not merely be "some" honest empty.
    */
   async function readAppendBase(pageSlug: PageSlug): Promise<FailureDtoV1 | ReadSetAppendBaseV1> {
-    const relPath = pageCommentsPath(pageSlug);
+    const relPath = pinsJsonlPath(pageSlug);
     const bytes = open.safeFs.readFile(relPath);
     if (bytes instanceof Error) {
       if (bytes instanceof FsAccessError && isNotFound(bytes)) {
