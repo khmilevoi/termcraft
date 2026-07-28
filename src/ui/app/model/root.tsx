@@ -91,7 +91,9 @@ export class UiRootError extends errore.createTaggedError({
  * straight over the live frame; a screenshot of a real run showed a `preview-export` warning
  * cutting through a panel. That is why this setting is inseparable from the
  * `suspendConsolePassthrough()` call below: `"disabled"` keeps the trace alive, the suspension
- * keeps the screen clean, and neither half is correct without the other.
+ * keeps this app's `console.*` traffic off the frame, and neither half is correct without the
+ * other. (Only `console.*` — a direct `process.stderr.write` or the runtime's own uncaught
+ * printer still reaches the screen; see `suspendConsolePassthrough`'s own doc comment.)
  *
  * The rejected alternative is OpenTUI's own sanctioned stdout sink, `externalOutputMode:
  * "capture-stdout"` — it is validated to require `screenMode: "split-footer"`, i.e. the app
@@ -108,25 +110,41 @@ const defaultAdapters: UiRootAdapters = {
 /** Creates the disposable OpenTUI runtime for a prepared UI Kernel boundary. */
 export async function createUiRoot(options: UiRootOptions): Promise<UiRootError | UiRootHandle> {
   const adapters = options.adapters ?? defaultAdapters;
+  // Ensures the gate `suspendConsolePassthrough` below relies on actually exists. `main.tsx`
+  // installs the tee at startup, but `demo.tsx` does not, and this function must not depend on
+  // which root reached it. Idempotent by wrapper identity, so this costs nothing when the tee is
+  // already in place.
+  installConsoleTee();
+  // Terminal ownership begins INSIDE `createCliRenderer`, not after it: `setupTerminal()` enters
+  // raw mode, mouse tracking and the alternate screen before the promise resolves, and OpenTUI
+  // can `console.error` from its own partially-set-up-renderer teardown in there. So the
+  // suspension has to straddle the await rather than follow it — every path out of it below
+  // resumes. See `UI_RENDERER_CONFIG`'s doc comment for why `consoleMode: "disabled"` makes this
+  // necessary at all, and `infrastructure/debug-log`'s `suspendConsolePassthrough` for where a
+  // line goes while it is engaged.
+  suspendConsolePassthrough();
   const renderer = await adapters
     .createRenderer()
     .catch((cause) => new UiRootError({ operation: "create renderer", cause }));
-  if (renderer instanceof Error) return renderer;
+  if (renderer instanceof Error) {
+    resumeConsolePassthrough();
+    return renderer;
+  }
   // Belt to `UI_RENDERER_CONFIG`'s braces: any renderer construction — including an injected
   // adapter, or a future OpenTUI version that re-overrides console outside `consoleMode` — gets
   // the tee put back over whatever it left behind. A no-op when nothing replaced it.
   installConsoleTee();
-  // The renderer owns the terminal from HERE (the first point at which a paint can happen) until
-  // each `renderer.destroy()` below — so console output is mirrored into the trace and kept off
-  // the screen for exactly that window. See `UI_RENDERER_CONFIG`'s doc comment for why
-  // `consoleMode: "disabled"` makes this necessary, and `infrastructure/debug-log`'s
-  // `suspendConsolePassthrough` for what it does when tracing is off.
-  suspendConsolePassthrough();
 
   const root = errore.try(() => adapters.createRoot(renderer));
   if (root instanceof Error) {
-    renderer.destroy();
-    resumeConsolePassthrough();
+    // `finally`, not a following statement: a throwing `destroy()` must not be able to strand
+    // the terminal with the gate down and leave only the panic hook to save it. Same shape on
+    // every release path below.
+    try {
+      renderer.destroy();
+    } finally {
+      resumeConsolePassthrough();
+    }
     return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
 
@@ -145,8 +163,11 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     ),
   );
   if (mounted instanceof Error) {
-    renderer.destroy();
-    resumeConsolePassthrough();
+    try {
+      renderer.destroy();
+    } finally {
+      resumeConsolePassthrough();
+    }
     return new UiRootError({ operation: "mount app", cause: mounted.cause ?? mounted });
   }
 
@@ -155,12 +176,15 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      root.unmount();
-      renderer.destroy();
-      // The terminal is the operator's again: anything printed from here on — `runApp`'s own
-      // shutdown reporting, `main.tsx`'s fatal branch — belongs on the screen, not only in the
-      // trace file.
-      resumeConsolePassthrough();
+      try {
+        root.unmount();
+        renderer.destroy();
+      } finally {
+        // The terminal is the operator's again: anything printed from here on — `runApp`'s own
+        // shutdown reporting, `main.tsx`'s fatal branch — belongs on the screen, not only in the
+        // trace file. In `finally` so a throwing `unmount`/`destroy` cannot skip it.
+        resumeConsolePassthrough();
+      }
     },
   };
 }

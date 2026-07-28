@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { TeeSink } from "../types";
 import {
+  MAX_HELD_LINES,
   installConsoleTee,
   resumeConsolePassthrough,
   suspendConsolePassthrough,
@@ -85,11 +86,19 @@ describe("installConsoleTee", () => {
     expect(debugSaid).toEqual(["d"]);
   });
 
-  test("does nothing at all when tracing is off", () => {
-    const untouched = console.warn;
-    installConsoleTee({ enabled: () => false, trace: () => undefined });
+  test("stays transparent when tracing is off — it installs, but never traces and never withholds", () => {
+    const screen: unknown[] = [];
+    console.warn = (...args: unknown[]) => screen.push(...args);
 
-    expect(console.warn).toBe(untouched);
+    installConsoleTee({
+      enabled: () => false,
+      trace: () => {
+        throw new Error("the tee must not trace when tracing is off");
+      },
+    });
+    console.warn("plain");
+
+    expect(screen).toEqual(["plain"]);
   });
 
   test("flattens an Error argument with its cause chain", () => {
@@ -161,7 +170,7 @@ describe("suspendConsolePassthrough", () => {
     expect(screen).toEqual([]);
   });
 
-  test("is inert when tracing is off, so output is never dropped uncaptured", () => {
+  test("with no trace sink, a held line reaches neither the writer nor the screen, then lands on resume", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
@@ -169,10 +178,49 @@ describe("suspendConsolePassthrough", () => {
     suspendConsolePassthrough();
     console.warn("nowhere else to go");
 
-    // Deliberate: with no sink installed there is no file holding this line, and silently
-    // discarding a diagnostic is strictly worse than a torn frame. A torn frame is at least
-    // visible; a swallowed one is the failure mode this whole branch exists to undo.
+    // Nothing may reach the frame — and nothing may be lost either. With no file capturing it,
+    // the line waits in memory until the renderer gives the terminal back.
+    expect(screen).toEqual([]);
+
+    resumeConsolePassthrough();
     expect(screen).toEqual(["nowhere else to go"]);
+  });
+
+  test("holds nothing when a sink is capturing — the trace file already has the line", () => {
+    const lines: string[] = [];
+    const screen: unknown[] = [];
+    console.warn = (...args: unknown[]) => screen.push(...args);
+
+    installConsoleTee(recordingSink(lines));
+    suspendConsolePassthrough();
+    console.warn("traced");
+    resumeConsolePassthrough();
+
+    // Replaying a whole session's warnings onto the terminal after a normal quit would be noise,
+    // not diagnostics: the file already holds them.
+    expect(screen).toEqual([]);
+    expect(lines).toEqual(['console.warn:["traced"]']);
+  });
+
+  test("bounds what it holds and reports how many it dropped", () => {
+    const screen: unknown[] = [];
+    console.warn = (...args: unknown[]) => screen.push(...args);
+    console.error = (...args: unknown[]) => screen.push(...args);
+
+    installConsoleTee({ enabled: () => false, trace: () => undefined });
+    suspendConsolePassthrough();
+    for (let index = 0; index < MAX_HELD_LINES + 3; index++) console.warn(`line-${index}`);
+    expect(screen).toEqual([]);
+
+    resumeConsolePassthrough();
+
+    // The oldest three fell out of the ring; the flush says so rather than hiding it, which is
+    // the difference between a bounded buffer and the silent-swallow defect this branch exists
+    // to undo.
+    expect(screen).toHaveLength(MAX_HELD_LINES + 1);
+    expect(String(screen[0])).toContain("3");
+    expect(screen[1]).toBe("line-3");
+    expect(screen.at(-1)).toBe(`line-${MAX_HELD_LINES + 2}`);
   });
 });
 

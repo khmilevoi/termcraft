@@ -331,10 +331,18 @@ describe("runApp", () => {
       });
       if (app instanceof Error) throw app;
 
+      // ASSERTED AFTER close(), NOT BEFORE (2026-07-28). The guarantee this test names — the
+      // rejection is reported, never swallowed — is unchanged; WHEN it reaches `console.error`'s
+      // underlying writer is not. This dispatch happens while the renderer owns the terminal, so
+      // `infrastructure/debug-log`'s pass-through gate is engaged: with a trace sink the line
+      // goes straight to the file, and without one (which is every `bun test` process) it waits
+      // in the bounded hold buffer until `dispose()` hands the terminal back. Asserting before
+      // `close()` would now be asserting that a startup diagnostic is painted raw over a live
+      // frame, which is the defect that gate exists to prevent.
+      await app.close();
+
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
-
-      await app.close();
     });
   });
 

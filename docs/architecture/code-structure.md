@@ -520,14 +520,23 @@ vendor tier's own pre-split run-loop file.
   throwaway scratch directory, so those diagnostics were written where nobody would
   ever read them. The tee also gates whether it still calls the writer it replaced:
   `src/ui/app/model/root.tsx` suspends that pass-through for exactly as long as the
-  interactive renderer owns the terminal, because the same `consoleMode: "disabled"`
-  that keeps the tee alive also leaves nothing between a `console.warn` and the
-  screen — a live run painted a Kernel warning raw across a rendered panel. Every
-  path that gives the terminal back resumes it: the renderer's own teardown and its
-  two mount-failure branches, and `src/entrypoint/model/process-boundary.ts`'s
-  `restoreTerminal`, which is the only one a panic reaches — a fatal message that
-  reached the trace file and nothing else would leave the operator with a blank
-  terminal, which is worse than the torn frame the suspension prevents
+  interactive renderer owns the terminal — from before `createCliRenderer` is
+  awaited, since OpenTUI enters the alternate screen inside it — because the same
+  `consoleMode: "disabled"` that keeps the tee alive also leaves nothing between a
+  `console.warn` and the screen, and a live run painted a Kernel warning raw across
+  a rendered panel. Nothing is discarded while it is engaged: a line goes to the
+  trace file, or, when no file is capturing it, into a bounded hold buffer that is
+  released to the writer on resume (overflow drops the oldest and the flush says how
+  many). That is why the tee installs even when tracing is off — leaving it
+  uninstalled meant there was no gate at all, and the frame tore exactly as before.
+  Every path that gives the terminal back resumes it, each in a `finally` so a
+  throwing teardown cannot skip it: the renderer that never came up, the two
+  mount-failure branches, `dispose()`, and
+  `src/entrypoint/model/process-boundary.ts`'s `restoreTerminal`, which is the only
+  one a panic reaches — a fatal message that reached the trace file and nothing else
+  would leave the operator with a blank terminal, which is worse than the torn frame
+  the suspension prevents. The gate covers `console.*` only; a direct
+  `process.stderr.write` or the runtime's own uncaught-exception printer bypasses it
 - `src/host/supervisor/model/spawn.ts` — the design host's own process spawning,
   still inside `host` and not routed through `infrastructure/process/`
 

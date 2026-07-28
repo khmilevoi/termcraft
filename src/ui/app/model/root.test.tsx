@@ -155,6 +155,55 @@ describe("createUiRoot terminal ownership", () => {
     expect(traced).toEqual(['console.warn:["mid-frame"]', 'console.warn:["after teardown"]']);
   });
 
+  test("restores pass-through when the renderer never comes up at all", async () => {
+    const traced: string[] = [];
+    const screen: unknown[] = [];
+    teeInto(traced, screen);
+
+    const result = await createUiRoot({
+      port: createFakeKernel(),
+      adapters: {
+        createRenderer: () => Promise.reject(new Error("terminal unavailable")),
+        createRoot: () => ({ render: () => undefined, unmount: () => undefined }),
+      },
+    });
+
+    expect(result).toBeInstanceOf(UiRootError);
+    // The suspension straddles `createRenderer` (OpenTUI enters raw mode and the alternate
+    // screen INSIDE it), so the failure path has to hand the terminal back before `main.tsx`
+    // prints why startup failed.
+    console.warn("startup diagnostic");
+    expect(screen).toEqual(["startup diagnostic"]);
+  });
+
+  test("resumes pass-through even when teardown itself throws", async () => {
+    const traced: string[] = [];
+    const screen: unknown[] = [];
+    teeInto(traced, screen);
+
+    const result = await createUiRoot({
+      port: createFakeKernel(),
+      adapters: {
+        createRenderer: () =>
+          Promise.resolve({
+            width: 120,
+            height: 36,
+            destroy: () => {
+              throw new Error("destroy failed");
+            },
+          }),
+        createRoot: () => ({ render: () => undefined, unmount: () => undefined }),
+      },
+    });
+    if (result instanceof Error) throw result;
+
+    expect(() => result.dispose()).toThrow("destroy failed");
+    // Correct by construction, not by luck: a throwing `unmount`/`destroy` must not be able to
+    // strand the terminal with the gate down, leaving only the panic hook to save it.
+    console.warn("after a failed teardown");
+    expect(screen).toEqual(["after a failed teardown"]);
+  });
+
   test("restores pass-through when mounting fails and the renderer is destroyed", async () => {
     const traced: string[] = [];
     const screen: unknown[] = [];
