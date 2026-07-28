@@ -2,10 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
-import { createHeadlessRenderer } from "host/render/model/renderer";
+import { createHeadlessRenderer, renderNodeOnce } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
 import { themeTokens } from "../model/tokens";
+import { Column } from "./column";
 import { Separator } from "./separator";
 
 let open: RenderHandle | null = null;
@@ -39,5 +40,17 @@ describe("Separator rule (design-system §3.2)", () => {
     const band = lineRuns(handle.capture(), 0).find((run) => run.bg !== "default");
     expect(band && extractRgb(band.bg)).toBe<string>(themeTokens("dark-default").line);
     expect(band?.text.length).toBe(1);
+  });
+
+  test("a horizontal separator spans its container even when the parent centres its children", async () => {
+    const frame = await renderNodeOnce(
+      <Column id="col" align="center">
+        <Separator id="rule" color="success" />
+      </Column>,
+      { w: 20, h: 3 },
+    );
+    const filled = frame.rows[0]?.filter((run) => run.bg !== "default") ?? [];
+    const width = filled.reduce((sum, run) => sum + run.text.length, 0);
+    expect(width).toBe(20);
   });
 });

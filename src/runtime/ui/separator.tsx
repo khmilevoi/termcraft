@@ -25,8 +25,13 @@ export function Separator(props: SeparatorProps) {
   const tokens = activeTokens();
   const direction = props.direction ?? "horizontal";
   const fill = tokens[props.color ?? "line"];
+  // `alignSelf: "stretch"` is what makes the rule a RULE. Without it a parent that centres
+  // its children (`Column align="center"` — what a generated page reaches for constantly)
+  // shrinks the band to its content width, i.e. a single coloured cell. Stretch overrides the
+  // parent's `alignItems` for this child only, which is exactly the design's intent: a rule
+  // spans its container whatever the container does with everything else.
   if (direction === "vertical") {
-    return <box id={props.id} width={1} backgroundColor={fill} />;
+    return <box id={props.id} width={1} alignSelf="stretch" backgroundColor={fill} />;
   }
-  return <box id={props.id} height={1} backgroundColor={fill} />;
+  return <box id={props.id} height={1} alignSelf="stretch" backgroundColor={fill} />;
 }
