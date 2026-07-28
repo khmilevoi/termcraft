@@ -450,6 +450,16 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
    * particular cause, but `CAPABILITY_UNAVAILABLE` on an untrusted project (spec §2.2) is a
    * routine, by-design refusal that reaches the same branch.
    */
+  const acceptedResult = (): CommandResultV1 =>
+    ({
+      protocolVersion: 1,
+      commandId: "019fa7d3-0eb6-7000-a27a-d8181a27781e",
+      status: "accepted",
+      acceptedRevision: "0",
+      resultingRevision: "0",
+      disposition: "started",
+    }) as unknown as CommandResultV1;
+
   const refusal = (code: string): CommandResultV1 =>
     ({
       protocolVersion: 1,
@@ -486,6 +496,65 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
       { pageSlug: "settings" },
       { pageSlug: "main" },
     ]);
+    unsubscribe();
+  });
+
+  test("a stale refusal does not retire a NEWER tab pick that is still in flight", async () => {
+    // Two clicks in quick succession leave two `preview.selectPage` dispatches in flight (the
+    // memo is keyed `slug@hash`, so the second is not swallowed). If the FIRST one's refusal
+    // retired the override unconditionally, it would wipe the SECOND, still-pending pick — the
+    // effective slug would snap back to the Kernel's page and the strip would once again show a
+    // page the user did not choose. That is the very defect this branch exists to fix,
+    // reappearing under interleaving, so the retirement must be scoped to its own dispatch.
+    const kernel = createFakeKernel();
+    const pending: { slug: string; resolve: (result: CommandResultV1) => void }[] = [];
+    const port = {
+      ...kernel,
+      dispatch(raw: unknown): Promise<Error | CommandResultV1> {
+        // `pending` below is this test's own record of what was dispatched — the fake's
+        // `dispatched` array is readonly and this port replaces its `dispatch` wholesale.
+        const envelope = raw as { kind: string; payload: { pageSlug: string } };
+        if (envelope.kind !== "preview.selectPage") return Promise.resolve(refusal("IGNORED"));
+        return new Promise((resolve) => {
+          pending.push({ slug: envelope.payload.pageSlug, resolve });
+        });
+      },
+    };
+    const deps = createUiDeps(port, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    const settle = (slug: string, result: CommandResultV1) => {
+      const entry = pending.find((candidate) => candidate.slug === slug);
+      if (entry === undefined) throw new Error(`fixture bug: no dispatch in flight for "${slug}"`);
+      entry.resolve(result);
+    };
+    settle("main", acceptedResult());
+    await tick();
+
+    // Click B, then click C before B's result comes back.
+    deps.local.pageOverride.set("beta");
+    await tick();
+    deps.local.pageOverride.set("gamma");
+    await tick();
+    expect(pending.map((entry) => entry.slug)).toEqual(["main", "beta", "gamma"]);
+
+    // B is refused — but the user has already moved on to C.
+    settle("beta", refusal("CAPABILITY_UNAVAILABLE"));
+    await tick();
+    await tick();
+
+    expect(deps.local.pageOverride()).toBe("gamma");
+    expect(deps.activePageSlug()).toBe("gamma");
+
+    // ...and C's own refusal still retires it, because C IS the pick on screen.
+    settle("gamma", refusal("CAPABILITY_UNAVAILABLE"));
+    await tick();
+    await tick();
+    expect(deps.local.pageOverride()).toBeNull();
+    expect(deps.activePageSlug()).toBe("main");
     unsubscribe();
   });
 

@@ -18,6 +18,7 @@ import type {
 import { PAGE_META_EXTRACTOR_VERSION } from "core/ports";
 import {
   type FakeHostSupervisorPort,
+  type FakePreviewSession,
   createFakeAgentBackend,
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
@@ -780,6 +781,152 @@ describe("the Kernel's supervisor subscription (preview render-failure repair, 2
     await Promise.resolve();
 
     expect(envelopes.filter((e) => e.kind === "preview.circuitOpened")).toHaveLength(0);
+    unsubscribe();
+  });
+
+  /**
+   * THE LIVE DEFECT, END TO END (stale-revision repair, 2026-07-28) — root-cause report §6.2.
+   *
+   * `dispatch.test.ts` proves the mailbox RULE ("advance iff at least one event is published").
+   * This proves the BINDING — that `preview.queryGeometry` actually falls under it, over the
+   * real `createKernel` wiring, the real handler, and a real live preview session. The rule was
+   * never in doubt in production; which handlers it governed was.
+   *
+   * Reproduces `run-2026-07-28T08-24-11-710Z-2132.jsonl` exactly: a live session, a valid
+   * acknowledged frame token, and a host `query` that answers with a `FailureDtoV1` — so
+   * `handleQueryGeometry` clears its frame-token check, calls the session, and both halves then
+   * publish nothing (`preview-export.ts`'s `:1157` return and its `startedOutcome([], …)`).
+   * Before the fix the Kernel advanced anyway and the next `preview.selectPage` was refused
+   * `STALE_REVISION` forever.
+   */
+  test("a preview.queryGeometry whose host query fails leaves the client's revision still usable", async () => {
+    const captured: FakePreviewSession[] = [];
+    const base = buildDeps(
+      createChatMutationsStub(),
+      createFakeGateRunner(),
+      createFakeAgentRegistry([createFakeAgentBackend()]),
+      createFakeExportPublish(),
+    );
+    const innerSupervisor = base.hostSupervisor;
+    const deps: KernelDeps = {
+      ...base,
+      hostSupervisor: {
+        ...innerSupervisor,
+        async preview(spec) {
+          const session = await innerSupervisor.preview(spec);
+          // The fake supervisor spreads its inner `FakePreviewSession`, so `failNext` survives.
+          if (!("code" in session)) captured.push(session as FakePreviewSession);
+          return session;
+        },
+      },
+    };
+    const kernel = createKernel(deps);
+
+    const openResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: "0",
+      kind: "project.open",
+      payload: { root: "/test-root" },
+    });
+    if (openResult instanceof Error) throw openResult;
+    const readyEnvelope = await waitForEvent(
+      kernel,
+      (envelope) =>
+        envelope.kind === "kernel.stateChanged" &&
+        (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+          "kernel.project.finishOpen",
+    );
+    const trustResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: readyEnvelope.stateRevision,
+      kind: "project.setTrust",
+      payload: { trust: "trusted", workspaceIdentity: "ws-1" },
+    });
+    if (trustResult instanceof Error) throw trustResult;
+    if (trustResult.status !== "accepted") throw new Error("project.setTrust was not accepted");
+
+    const sessionReady = waitForEvent(
+      kernel,
+      (envelope) => envelope.kind === "preview.sessionReady",
+    );
+    const selectResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: trustResult.resultingRevision,
+      kind: "preview.selectPage",
+      payload: { pageSlug: HOME },
+    });
+    if (selectResult instanceof Error) throw selectResult;
+    await sessionReady;
+
+    // Track what a real subscriber actually SEES — the only thing a client's revision can ever
+    // come from (`ui/mirror/model/mirror.ts` has exactly one `stateRevision.set`, fed by
+    // envelopes). This is the whole point: a bump with no envelope is invisible to it.
+    let lastSeenRevision = "0";
+    const unsubscribe = kernel.events((envelope) => {
+      lastSeenRevision = envelope.stateRevision;
+    });
+    if (unsubscribe instanceof Error) throw unsubscribe;
+    await Promise.resolve();
+
+    const sessionId = kernel.currentPreviewSessionId();
+    if (sessionId === null) throw new Error("no live preview session was established");
+    const frameToken = kernel.publishFrame({
+      sessionId,
+      sourceHash: HOME_SOURCE_HASH,
+      frameSeq: "1",
+      width: 80,
+      height: 24,
+      rows: [],
+    });
+    if (frameToken instanceof Error) throw frameToken;
+    const acknowledged = kernel.acknowledgeDisplay(frameToken);
+    if (acknowledged instanceof Error) throw acknowledged;
+
+    const session = captured[captured.length - 1];
+    if (session === undefined) throw new Error("no fake preview session was captured");
+    // The exact 18.172 condition: the host refuses the geometry query.
+    session.failNext("query", {
+      code: "HOST_PROTOCOL_FAILED",
+      retryable: false,
+      safeMessage: "geometry query refused by the host",
+      details: {},
+    });
+
+    const revisionBeforeQuery = lastSeenRevision;
+    const queryResult = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: revisionBeforeQuery,
+      kind: "preview.queryGeometry",
+      payload: { frameToken, query: { kind: "layout" } },
+    });
+    if (queryResult instanceof Error) throw queryResult;
+    if (queryResult.status !== "accepted") {
+      throw new Error(`preview.queryGeometry was not accepted: ${JSON.stringify(queryResult)}`);
+    }
+    // Let the launched operation settle — it resolves with zero events, publishing nothing.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Nothing was published, so a real subscriber's revision cannot have moved...
+    expect(lastSeenRevision).toBe(revisionBeforeQuery);
+    // ...and the admission must not have moved the Kernel's either.
+    expect(queryResult.resultingRevision).toBe(queryResult.acceptedRevision);
+
+    // THE DECISIVE ASSERTION — the tab click that was refused forever in the live run.
+    const followUp = await kernel.dispatch({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      expectedRevision: revisionBeforeQuery,
+      kind: "preview.selectPage",
+      payload: { pageSlug: HOME },
+    });
+    if (followUp instanceof Error) throw followUp;
+    expect(followUp.status).toBe("accepted");
     unsubscribe();
   });
 

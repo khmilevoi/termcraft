@@ -196,9 +196,24 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
     // stayed at 4 — and every later command, including every page-tab click, was refused
     // `STALE_REVISION` for the rest of the process, with nothing able to resync it.
     //
-    // Returning `currentRevision` for both fields is schema-valid (`AcceptedCommandV1` places
-    // no cross-field constraint on them) and more accurate: nothing has changed yet, and the
-    // async half will bump when it actually publishes.
+    // Returning `currentRevision` for both fields is schema-valid: `AcceptedCommandV1` places
+    // no cross-field constraint on them.
+    //
+    // WHAT THIS DOES AND DOES NOT PROMISE, per disposition — the two cases are NOT the same:
+    //   - `"started"`: nothing has changed YET, and the operation's async half bumps if and
+    //     when it actually publishes (`operation-publish.ts`). Reporting the unchanged revision
+    //     is simply accurate.
+    //   - `"completed"`: there is no async half to bump later. A `completedOutcome([])` claims a
+    //     transition ran and offers no event to explain it, which §6's Global Constraint already
+    //     forbids — so either nothing authoritative changed (and not advancing is correct), or
+    //     the HANDLER is in breach and must be fixed to publish. What the mailbox must not do is
+    //     paper over that breach with a bump no subscriber can ever observe: `publishTransition
+    //     ([])` emits no envelope and `publishAndTrackCapabilities` short-circuits on an empty
+    //     batch, so such a bump never conveyed the change to anyone — it only advanced a token
+    //     clients could no longer match. `handlers/page-pin.ts`'s `page.removeDiscardPlan` is
+    //     the one live instance; see this change's report for why it is a pre-existing handler
+    //     gap (the protocol already reserves `kernel.project.discardPageRemovePlan` as a
+    //     `kernel.stateChanged` action name for exactly that event) rather than a loss here.
     if (outcome.events.length === 0) {
       return accepted(
         envelope.commandId,

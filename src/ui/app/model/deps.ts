@@ -410,6 +410,16 @@ export function createUiDeps(
       // runtime's own Reatom context instead of the default one (RTM-A04). Two callers — the
       // terminal-refusal branch below, and the Kernel-truth subscriber further down.
       const retirePageOverride = bind(() => pageOverride.set(null));
+      // SCOPED TO ITS OWN DISPATCH. The memo is keyed `slug@hash`, so two quick clicks leave two
+      // `preview.selectPage` dispatches in flight at once. An unconditional clear would let the
+      // FIRST one's refusal wipe the SECOND, still-pending pick — the effective slug would snap
+      // back to the Kernel's page and the strip would again mark a page the user did not choose,
+      // which is precisely the defect this branch exists to fix. A refusal may only retire the
+      // pick it was actually dispatched for.
+      const retirePageOverrideIfCurrent = bind((rawPageSlug: string) => {
+        if (pageOverride() !== rawPageSlug) return;
+        pageOverride.set(null);
+      });
       const requestPreviewForActivePage = bind((rawPageSlug: string, sourceHash: string | null) => {
         const pageKey = `${rawPageSlug}@${sourceHash ?? ""}`;
         if (pageKey === lastRequestedPageKey) return;
@@ -447,7 +457,7 @@ export function createUiDeps(
             // failures that make the UI unusable, and a preview that did not start is not one.
             console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
             lastRequestedPageKey = null;
-            retirePageOverride();
+            retirePageOverrideIfCurrent(rawPageSlug);
             return;
           }
           if (result.status === "rejected") {
@@ -456,7 +466,7 @@ export function createUiDeps(
             // descriptor change retry once the guard's precondition actually holds.
             console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
             lastRequestedPageKey = null;
-            retirePageOverride();
+            retirePageOverrideIfCurrent(rawPageSlug);
             return;
           }
           // The accepted path used to be silent, which is what made Finding 2 unreadable: an
