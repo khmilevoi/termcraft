@@ -316,23 +316,34 @@ export function createUiDeps(
    * itself out with (`ui/workspace`'s `previewRegionSize`), so the rectangle the host fills
    * and the box the shell paints into are the same rectangle by construction.
    *
+   * `terminal()`/`fullscreen()` are read BEFORE the `phase !== "ready"` early return below —
+   * both must stay tracked dependencies even while no session is live, so a resize that
+   * happens during a non-ready phase still recomputes this atom (to `null`, via the guard)
+   * rather than leaving the computed asleep with no subscription on either atom at all.
+   *
    * `preview.size` is the size the session was ESTABLISHED at and never changes afterwards —
-   * `handleResize` publishes only `kernel.stateChanged`, no size event — so this comparison
-   * is an honest skip only for the first ask after establishment. The per-(session, size)
-   * memo inside the connect hook below is the real repeat guard.
+   * `handleResize` publishes only `kernel.stateChanged`, no size event. It CANNOT be compared
+   * against the freshly computed region to skip a redundant ask: an ordinary terminal resize
+   * can land the region back on exactly that number long after establishment (a genuinely
+   * new ask this atom must still report), and a comparison that treated that as "nothing
+   * changed" is the defect this whole branch exists to kill (reachable by a plain window
+   * resize, not a contrived direct call — see `deps.test.ts`'s regression test in the
+   * "preview resize" describe block). The per-(session, size) memo inside the connect hook
+   * below is the real, and only, repeat guard.
    */
   const previewTargetSize = computed<Readonly<{
     previewSessionId: UUIDv7;
     w: number;
     h: number;
   }> | null>(() => {
+    const currentTerminal = terminal();
+    const currentFullscreen = fullscreen();
     const preview = mirror.preview();
     // Only `ready` maps to the machine's `live` phase, the one phase the capability guard
     // admits `preview.resize` from (`core/capabilities/model/guards.ts`).
     if (preview.phase !== "ready") return null;
-    const region = previewRegionSize(terminal(), fullscreen());
+    const region = previewRegionSize(currentTerminal, currentFullscreen);
     if (region.w < 1 || region.h < 1) return null;
-    if (region.w === preview.size.w && region.h === preview.size.h) return null;
     return { previewSessionId: preview.previewSessionId, w: region.w, h: region.h };
   }, "ui.app.previewTargetSize");
 

@@ -797,6 +797,40 @@ describe("preview resize", () => {
     stop();
   });
 
+  test("asks again when a resize makes the region land back on the size the session was established at", async () => {
+    // REGRESSION (review finding, phase-8 fix wave): `preview.size` is the size the session
+    // was ESTABLISHED at and never changes afterwards, so `previewTargetSize` must never
+    // treat "region equals `preview.size`" as "nothing to do" past the very first ask — an
+    // ordinary window resize can land the region back on that exact number for reasons that
+    // have nothing to do with the established session still being current. Before this fix,
+    // that comparison short-circuited the computed before the real repeat guard (the
+    // per-(session, size) memo) was ever consulted, so the host was silently never told —
+    // the headline defect this whole branch exists to kill (Background table row 1),
+    // reproduced here by an ordinary terminal resize, not a contrived direct call.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    await Promise.resolve();
+    const previewSessionId = uuidv7();
+    // Established at 80x24 — the number `preview.size` reports forever.
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+    // The 120x34 terminal's region is {w:74,h:28} — different from the established size, so
+    // this first ask happens under either version of the code.
+    expect(resizeEnvelopes(kernel)).toHaveLength(1);
+
+    // 130x30 makes `previewRegionSize` compute EXACTLY {w:80,h:24} — the same numbers the
+    // session was established at (chatColumnWidth(130)=48, pane=82, region.w=80;
+    // region.h=30-6=24).
+    deps.terminal.set({ w: 130, h: 30 });
+    await Promise.resolve();
+
+    const envelopes = resizeEnvelopes(kernel);
+    expect(envelopes).toHaveLength(2);
+    expect(envelopes[1]?.payload).toEqual({ previewSessionId, width: 80, height: 24 });
+    stop();
+  });
+
   test("never asks while no session is live", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 34 });
@@ -806,6 +840,48 @@ describe("preview resize", () => {
     await Promise.resolve();
 
     expect(resizeEnvelopes(kernel)).toHaveLength(0);
+    stop();
+  });
+
+  test("never asks after the session leaves ready, even though a terminal resize still recomputes the guard", async () => {
+    // Strengthened (review finding, phase-8 fix wave): with `terminal()`/`fullscreen()` read
+    // BEFORE the `preview.phase !== "ready"` early return in `previewTargetSize`, a terminal
+    // resize while a session is NOT ready still recomputes the atom — it must recompute to
+    // `null` because the phase guard fires, not merely stay unread. Before that hoist this
+    // test would have passed for the wrong reason: the computed never re-ran at all once the
+    // early return made `terminal` a non-dependency in the non-ready state, so "no dispatch"
+    // proved nothing about the guard itself.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 34 });
+    const stop = deps.runtime.subscribe(() => {});
+    await Promise.resolve();
+    const previewSessionId = uuidv7();
+    kernel.emit(sessionReady(previewSessionId, { w: 80, h: 24 }));
+    await Promise.resolve();
+    // Establishing the session already asked once — what this test pins is that a resize
+    // AFTER the session leaves `ready` asks for nothing further.
+    expect(resizeEnvelopes(kernel)).toHaveLength(1);
+
+    kernel.emit(
+      event("preview.circuitOpened", {
+        previewSessionId,
+        pageSlug: "dashboard",
+        sourceHash: TEST_SHA,
+        attempts: 3,
+        finalFailure: {
+          code: "HOST_CIRCUIT_OPEN",
+          retryable: true,
+          safeMessage: "boom",
+          details: {},
+        },
+        retryCapability: { available: true },
+      }),
+    );
+    await Promise.resolve();
+    deps.terminal.set({ w: 140, h: 36 });
+    await Promise.resolve();
+
+    expect(resizeEnvelopes(kernel)).toHaveLength(1);
     stop();
   });
 });
