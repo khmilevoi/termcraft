@@ -233,4 +233,158 @@ describe("resolveClosure — cycle proof and diamond shape", () => {
     // Exactly one occurrence — proves the walk deduped rather than double-visiting.
     expect(closure.files.filter((relPath) => relPath === "lib/shared.ts")).toHaveLength(1);
   });
+
+  test("an indirect three-hop cycle (a -> b -> c -> a) terminates", () => {
+    // ESM permits a cycle of any length, and the design treats one as a Gate WARNING, never a
+    // fatal (§8 step 2) — a longer indirect cycle is a distinct property from the two-file
+    // mutual cycle above (that one revisits the SAME pair every hop; this one only closes the
+    // loop on the third hop) and BFS's `visited` set must survive both shapes.
+    const threeHopFiles = createDesignTreeInventory([
+      { relPath: "pages/loop.tsx", sha256: "5".repeat(64) },
+      { relPath: "lib/a.ts", sha256: "6".repeat(64) },
+      { relPath: "lib/b.ts", sha256: "7".repeat(64) },
+      { relPath: "lib/c.ts", sha256: "8".repeat(64) },
+    ]);
+    if (threeHopFiles instanceof Error) throw threeHopFiles;
+    const threeHopHas = inventoryHas(threeHopFiles);
+
+    const threeHopEdges: Record<string, readonly string[]> = {
+      "pages/loop.tsx": ["../lib/a"],
+      "lib/a.ts": ["./b"],
+      "lib/b.ts": ["./c"],
+      "lib/c.ts": ["./a"], // closes the loop back to a.ts
+    };
+    const threeHopEdgesOf = (relPath: string) => threeHopEdges[relPath] ?? [];
+
+    const closure = resolveClosure({
+      entry: "pages/loop.tsx",
+      has: threeHopHas,
+      edgesOf: threeHopEdgesOf,
+    });
+    if (closure instanceof Error) throw closure;
+    expect(closure.files).toEqual(["lib/a.ts", "lib/b.ts", "lib/c.ts", "pages/loop.tsx"]);
+  });
+});
+
+describe("hash framing — injectivity, domain separation, dedup (review round 1 fixes)", () => {
+  // The framing this section defends: `foldMerkle` builds `prefix || 0x00 || fields`, where
+  // EVERY field (both `relPath` and `sha256`, not just the path) is
+  // `u32be(byte length) || bytes` — mirroring `store/trust/model/subject.ts`'s `encodeField`.
+  // See `closure.ts`'s comments on `encodeField`/`foldMerkle` for the full rationale.
+
+  test("the former collision no longer collides: length-prefixing sha256 closes it", () => {
+    // Exact reproduction from the review: under the old `<relPath.length>:<relPath><sha256>`
+    // text framing, both calls folded to the identical string "1:x1:yh" because `sha256` was
+    // joined bare with no width precondition.
+    const collisionA = computeClosureHash({ files: ["x"], sha256Of: () => "1:yh" });
+    const collisionB = computeClosureHash({
+      files: ["x", "y"],
+      sha256Of: (path) => (path === "x" ? "" : "h"),
+    });
+    expect(collisionA).not.toBeNull();
+    expect(collisionB).not.toBeNull();
+    expect(collisionA).not.toBe(collisionB);
+  });
+
+  test('computeClosureHash deduplicates its file list: ["a","a"] hashes the same as ["a"]', () => {
+    const dupSha256Of = () => "a".repeat(64);
+    expect(computeClosureHash({ files: ["a", "a"], sha256Of: dupSha256Of })).toBe(
+      computeClosureHash({ files: ["a"], sha256Of: dupSha256Of }),
+    );
+    // ...and still differs from a genuinely larger set.
+    expect(computeClosureHash({ files: ["a", "a"], sha256Of: dupSha256Of })).not.toBe(
+      computeClosureHash({ files: ["a", "b"], sha256Of: dupSha256Of }),
+    );
+  });
+
+  test("closureHash and treeRevision are domain-separated even at the degenerate empty case", () => {
+    const empty = createDesignTreeInventory([]);
+    if (empty instanceof Error) throw empty;
+    // Same underlying pair list (none), different prefix — must never collide.
+    expect(computeClosureHash({ files: [], sha256Of })).not.toBe(computeTreeRevision(empty));
+  });
+
+  test("closureHash and treeRevision are domain-separated when a page's closure equals the whole inventory", () => {
+    // pages.json is not reached by any page's closure in this fixture, so build a fixture where
+    // the entry's closure IS the whole tree — the exact case the review called out.
+    const wholeTreeFiles = createDesignTreeInventory([
+      { relPath: "pages/solo.tsx", sha256: "a".repeat(64) },
+      { relPath: "lib/only.ts", sha256: "b".repeat(64) },
+    ]);
+    if (wholeTreeFiles instanceof Error) throw wholeTreeFiles;
+    const wholeTreeHas = inventoryHas(wholeTreeFiles);
+    const wholeTreeSha256Of = inventorySha256(wholeTreeFiles);
+    const wholeTreeEdgesOf = (relPath: string) =>
+      relPath === "pages/solo.tsx" ? ["../lib/only"] : [];
+
+    const closure = resolveClosure({
+      entry: "pages/solo.tsx",
+      has: wholeTreeHas,
+      edgesOf: wholeTreeEdgesOf,
+    });
+    if (closure instanceof Error) throw closure;
+    expect(closure.files).toEqual(["lib/only.ts", "pages/solo.tsx"]);
+    expect(wholeTreeFiles.files.map((file) => file.relPath)).toEqual([...closure.files]);
+
+    expect(computeClosureHash({ files: closure.files, sha256Of: wholeTreeSha256Of })).not.toBe(
+      computeTreeRevision(wholeTreeFiles),
+    );
+  });
+
+  test("odd relPath bytes (a colon, a digit-like prefix, a space, a newline) hash deterministically and distinctly", () => {
+    // These are exactly the byte shapes a text "<len>:<relPath>" framing could misparse. Each
+    // must be deterministic (same input, same output) and distinguishable from the others —
+    // proving no two of these fold to an accidental collision under the binary framing.
+    const oddFiles = createDesignTreeInventory([
+      { relPath: "a:b.ts", sha256: "1".repeat(64) },
+      { relPath: "5:foo.ts", sha256: "2".repeat(64) },
+      { relPath: "my file.ts", sha256: "3".repeat(64) },
+      { relPath: "line1\nline2.ts", sha256: "4".repeat(64) },
+    ]);
+    if (oddFiles instanceof Error) throw oddFiles;
+    const oddSha256Of = inventorySha256(oddFiles);
+
+    const hashes = ["a:b.ts", "5:foo.ts", "my file.ts", "line1\nline2.ts"].map((relPath) =>
+      computeClosureHash({ files: [relPath], sha256Of: oddSha256Of }),
+    );
+
+    for (const hash of hashes) {
+      expect(hash).not.toBeNull();
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    }
+    // Deterministic: recomputing the first one again gives the same digest.
+    expect(computeClosureHash({ files: ["a:b.ts"], sha256Of: oddSha256Of })).toBe(hashes[0]!);
+    // Pairwise distinct.
+    expect(new Set(hashes).size).toBe(hashes.length);
+  });
+
+  // Normative vectors, computed once by calling `computeClosureHash`/`computeTreeRevision`
+  // directly and frozen here as a regression anchor: a silent future change to the byte
+  // framing (field order, length width, prefix, separator) will move these digests and fail
+  // this test, instead of quietly rotating every cache under an unchanged function name. Mirrors
+  // the normative-vector shape in `store/trust/model/subject.test.ts`.
+  describe("normative vectors", () => {
+    const GOLDEN_THEME_SHA = "0123456789abcdef".repeat(4);
+    const GOLDEN_DASHBOARD_SHA = "fedcba9876543210".repeat(4);
+    const goldenInventory = createDesignTreeInventory([
+      { relPath: "lib/theme.ts", sha256: GOLDEN_THEME_SHA },
+      { relPath: "pages/dashboard.tsx", sha256: GOLDEN_DASHBOARD_SHA },
+    ]);
+    if (goldenInventory instanceof Error) throw goldenInventory;
+    const goldenSha256Of = inventorySha256(goldenInventory);
+    const GOLDEN_FILES = ["lib/theme.ts", "pages/dashboard.tsx"];
+
+    const CLOSURE_HASH_KEY = "8d6d4c4f521da8fa21c1a2797da641ba5f06d400a0ce20ccde24fec062c0539a";
+    const TREE_REVISION_KEY = "9295a0bfcac020bfbc4b90cda89d27326e04fe20d5d9349b393a76e277296573";
+
+    test("computeClosureHash", () => {
+      expect(computeClosureHash({ files: GOLDEN_FILES, sha256Of: goldenSha256Of })).toBe(
+        CLOSURE_HASH_KEY,
+      );
+    });
+
+    test("computeTreeRevision", () => {
+      expect(computeTreeRevision(goldenInventory)).toBe(TREE_REVISION_KEY);
+    });
+  });
 });
