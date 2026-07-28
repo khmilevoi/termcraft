@@ -7,7 +7,14 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
 import { createUiDeps } from "ui/app";
-import { TEST_SHA, TEST_TS, createFakeKernel, event, snapshot } from "ui/testing";
+import {
+  TEST_SHA,
+  TEST_TS,
+  createFakeKernel,
+  createFakePreviewSession,
+  event,
+  snapshot,
+} from "ui/testing";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { Workspace } from "./Workspace";
@@ -988,5 +995,62 @@ describe("Workspace halted-preview chat notice", () => {
     const detail = findRun(rows, "the design passed Gate");
     expect(detail).toBeDefined();
     expect(detail && extractRgb(detail.fg)).toBe(SHELL_PALETTE.faint);
+  });
+});
+
+describe("Workspace preview clipping", () => {
+  const readyDescriptor = (slug: string, title: string): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: slug,
+    sourceHash: TEST_SHA,
+    title,
+    minSize: { w: 60, h: 26 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  /** One frame of solid `#` cells at the requested size — deliberately larger than the pane. */
+  const solidFrame = (width: number, height: number) => ({
+    sessionId: uuidv7(),
+    sourceHash: TEST_SHA,
+    frameSeq: "1",
+    width,
+    height,
+    rows: Array.from({ length: height }, () => [
+      { text: "#".repeat(width), fg: "default" as const, bg: "default" as const, attrs: 0 },
+    ]),
+  });
+
+  test("a frame wider and taller than the pane never paints over the pane's own border", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "dashboard",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [readyDescriptor("dashboard", "Дашборд")],
+      }),
+    );
+    const fake = createFakePreviewSession();
+    const frame = solidFrame(80, 24);
+    deps.previewFrame.set({ frame, frameToken: uuidv7() as never, handle: fake.handle });
+
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const lines = rows.map((row) => row.map((run) => run.text).join(""));
+
+    // The pane's right border column survives on every row of the preview region, and the
+    // frame's own cells stop before it.
+    const regionRows = lines.slice(2, 32);
+    for (const line of regionRows) {
+      expect(line.length).toBe(120);
+      expect(line[119]).not.toBe("#");
+    }
+    // The pane's bottom border row is intact — a rounded corner, not frame content.
+    expect(lines[32]).toContain("╯");
   });
 });

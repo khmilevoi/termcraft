@@ -321,8 +321,14 @@ function renderPreviewRegion(
       <box
         id="ws-preview-canvas"
         position="relative"
-        width={uiFrame.frame.width}
-        height={uiFrame.frame.height}
+        // Clamped to the region, not sized by the frame: a frame the host has not yet
+        // re-rendered at the current pane size (see `previewTargetSize` in
+        // `ui/app/model/deps.ts`) is a transient the pane clips, never an overdraw that
+        // eats the pane's own border and the rows below it. `overflow="hidden"` is what
+        // makes the clamp actually cut the content rather than merely mis-measure the box.
+        width={Math.min(uiFrame.frame.width, region.w)}
+        height={Math.min(uiFrame.frame.height, region.h)}
+        overflow="hidden"
         onMouseMove={interaction.onMouseMove}
         onMouseDown={interaction.onMouseDown}
       >
@@ -695,6 +701,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           flexGrow={1}
           height={frameH}
           flexDirection="column"
+          overflow="hidden"
           border
           borderStyle="rounded"
           borderColor={composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber}
