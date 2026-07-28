@@ -31,8 +31,16 @@ export function Panel(props: PanelProps) {
     <box
       id={props.id}
       border
+      // design/termcraft-engine.js:47 — `box()`'s own default is ROUNDED (`const r =
+      // o.rounded !== false`); square corners are the opt-out, and no design screen takes it.
+      borderStyle="rounded"
       borderColor={tokens[props.borderColor ?? "border"]}
-      title={props.title}
+      // design/termcraft-engine.js:52 — the caption is drawn at `x+2` as `' '+title+' '`.
+      // OpenTUI already starts a left-aligned title at index 2, so the padding is the only
+      // part this has to supply. DIVERGENCE: the design also draws it bold by default
+      // (`titleBold !== false`); OpenTUI's box exposes `titleColor`/`titleAlignment` and no
+      // attribute mask for the caption, so weight cannot be reproduced here.
+      title={props.title === undefined ? undefined : ` ${props.title} `}
       titleColor={tokens[props.titleColor ?? "foreground"]}
       flexDirection="column"
       padding={props.padding}

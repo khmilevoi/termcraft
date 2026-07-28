@@ -556,10 +556,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             // `P.amber`, not `P.amberHi`, since `wsSlashTurn` never overrides `chatTitleFg`).
             title={
               turn.phase === "running"
-                ? "❯ chat · working"
+                ? " ❯ chat · working "
                 : composerFocused
-                  ? `❯ chat${chatTitleSuffix}`
-                  : `chat${chatTitleSuffix}`
+                  ? ` ❯ chat${chatTitleSuffix} `
+                  : ` chat${chatTitleSuffix} `
             }
             titleColor={
               turn.phase === "running"

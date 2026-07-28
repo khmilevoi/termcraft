@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
-import { createHeadlessRenderer } from "host/render/model/renderer";
+import { createHeadlessRenderer, renderNodeOnce } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
 import { themeTokens } from "../model/tokens";
@@ -46,5 +46,18 @@ describe("Panel bordered container (design-system §3.2)", () => {
     );
     expect(border).toBeDefined();
     expect(runs.some((run) => run.text.includes("body"))).toBe(true);
+  });
+
+  test("renders the design's rounded frame with a space-padded title", async () => {
+    const frame = await renderNodeOnce(
+      <Panel id="p" title="Часы">
+        <Text id="body">x</Text>
+      </Panel>,
+      { w: 20, h: 4 },
+    );
+    const top = frame.rows[0]?.map((run) => run.text).join("") ?? "";
+    // design/termcraft-engine.js:47,52 — rounded corners; title at x+2 as ' '+title+' '.
+    expect(top.startsWith("╭─ Часы ")).toBe(true);
+    expect(top.endsWith("╮")).toBe(true);
   });
 });
