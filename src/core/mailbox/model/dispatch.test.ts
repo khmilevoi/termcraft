@@ -111,7 +111,19 @@ function setup(overrides: Partial<DispatchDeps> = {}): {
       readKernelState: (): KernelStateSnapshot => null,
       extractTarget: noAvailableTarget,
       evaluateGuard: alwaysAvailableGuard,
-      handle: () => ({ disposition: "completed", events: [] }),
+      // ONE REAL EVENT, deliberately. This is the "an ordinary command happened" fixture every
+      // test that does not care about handler specifics leans on, and since `applyTransition`
+      // advances the revision IF AND ONLY IF there is something to publish (§12.1 step 5's "if
+      // state changed"), a zero-event default would silently turn "an ordinary command advances
+      // the revision by one" into "nothing ever moves" for all of them. `selection.changed` with
+      // a `null` payload is the cheapest schema-valid event (its payload schema is `.nullable()`)
+      // and the same shape the explicit publication test below uses. Tests that are ABOUT a
+      // command publishing nothing — the `"no-op"` case and the zero-event admission cases —
+      // override this with their own handler on purpose.
+      handle: () => ({
+        disposition: "completed",
+        events: [{ kind: "selection.changed", payload: null }],
+      }),
       ...overrides,
     };
     return { deps, dispatch: createDispatch(deps).dispatch };
@@ -318,6 +330,56 @@ describe("createDispatch — §12.1 steps 4-6: transition, revision, and publica
     expect(received[1]?.stateRevision).toBe("1");
   });
 
+  /**
+   * THE LIVE DEFECT, 2026-07-28 — `termcraft-debug/run-2026-07-28T08-24-11-710Z-2132.jsonl`.
+   *
+   * `preview.queryGeometry`'s handler returned `startedOutcome([], operationId)` when the host
+   * refused the query. `applyTransition` advanced the Kernel 4 -> 5 on the DISPOSITION alone and
+   * then published nothing, and the operation's async half also resolved with zero events. The UI
+   * mirror learns revisions from published envelopes and from nothing else
+   * (`ui/mirror/model/mirror.ts`'s single `stateRevision.set`), so it stayed at 4 — and every
+   * later command, including every tab click, came back `STALE_REVISION` for the rest of the
+   * process, with no recovery path.
+   *
+   * Spec §12.1 step 5 is "IF STATE CHANGED, the mailbox advances `stateRevision` once ... and
+   * publishes contiguous state/domain events" (§6 and §13.3 state the same rule), so a bump with
+   * nothing published was always a deviation, never the contract.
+   */
+  test("a zero-event admission publishes nothing and reports an unchanged revision", async () => {
+    const operationId = uuidv7();
+    const { deps, dispatch } = setup({
+      handle: (): HandlerOutcome => ({ disposition: "started", events: [], operationId }),
+    });
+    const received: EventEnvelopeV1[] = [];
+    const unsub = deps.eventBus.subscribe((e) => received.push(e));
+    if (unsub instanceof Error) throw unsub;
+
+    const result = await dispatch(makeRawCommand({ expectedRevision: "0" }));
+
+    expectAccepted(result);
+    // Still a genuine "started" admission with its operation id — only the revision is honest now.
+    expect(result.disposition).toBe("started");
+    expect(result.operationId).toBe(operationId);
+    expect(result.resultingRevision).toBe(result.acceptedRevision);
+    expect(received).toHaveLength(1); // the subscribe-time snapshot only — no envelope at all
+  });
+
+  test("a zero-event admission leaves a later command at the same expectedRevision acceptable", async () => {
+    // THE DECISIVE CHECK, and the reason the assertion above is not enough on its own: a
+    // regression that bumped the counter but reported the OLD value would satisfy
+    // `resultingRevision === acceptedRevision` and still desync every client. This asserts the
+    // defect itself — the client that saw no envelope still holds "0", and its next command
+    // must still be admitted rather than refused `STALE_REVISION`.
+    const { dispatch } = setup({
+      handle: (): HandlerOutcome => ({ disposition: "started", events: [], operationId: uuidv7() }),
+    });
+
+    const first = await dispatch(makeRawCommand({ expectedRevision: "0" }));
+    expectAccepted(first);
+
+    await expectRevisionIs(dispatch, "0");
+  });
+
   test("an accepted no-op from the handler does not advance the revision or publish anything", async () => {
     const { deps, dispatch } = setup({ handle: () => ({ disposition: "no-op", events: [] }) });
     const received: EventEnvelopeV1[] = [];
@@ -409,7 +471,15 @@ describe("createDispatch — §8.5 dedupe: exactly-once end to end", () => {
   });
 
   test("reusing a commandId with a different envelope rejects COMMAND_ID_REUSE_MISMATCH without re-running the handler", async () => {
-    const handle = mock((): HandlerOutcome => ({ disposition: "completed", events: [] }));
+    // Publishes one event so the first dispatch genuinely moves the revision — this test's own
+    // decisive assertion below is that `toDedupeRejection` reports a LIVE revision, which a
+    // handler that advanced nothing could not distinguish from a hardcoded zero.
+    const handle = mock(
+      (): HandlerOutcome => ({
+        disposition: "completed",
+        events: [{ kind: "selection.changed", payload: null }],
+      }),
+    );
     const { dispatch } = setup({ handle });
     const commandId = uuidv7();
 

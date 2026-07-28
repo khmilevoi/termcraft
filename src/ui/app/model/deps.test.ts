@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context } from "@reatom/core";
 
 import type { PreviewFrameV1 } from "core/ports";
+import type { CommandResultV1 } from "core/protocol";
 import type { HomeAgentHealth } from "ui/home";
 import { homeSubmitAllowed } from "ui/home";
 import {
@@ -378,6 +379,135 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
     await tick();
 
     expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }]);
+  });
+
+  test("dispatches preview.selectPage for a page the user picked from the tab strip", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    deps.local.pageOverride.set("settings");
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "settings" }]);
+    unsubscribe();
+  });
+
+  test("does not re-establish the session when the Kernel echoes the page the user already picked", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    deps.local.pageOverride.set("settings");
+    await tick();
+    // What `preview.selectPage` persisting the slug produces on the next descriptor publish: the
+    // Kernel's own active page catches up with the pick the UI already made.
+    kernel.emit(activePage("settings"));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "settings" }]);
+    expect(deps.local.pageOverride()).toBeNull();
+    expect(deps.activePageSlug()).toBe("settings");
+    unsubscribe();
+  });
+
+  test("a Kernel-requested page move (pages.json on apply) wins over the user's pick", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+    deps.local.pageOverride.set("settings");
+    await tick();
+    kernel.emit(activePage("report"));
+    await tick();
+
+    expect(deps.activePageSlug()).toBe("report");
+    expect(selectedPages(kernel)).toEqual([
+      { pageSlug: "main" },
+      { pageSlug: "settings" },
+      { pageSlug: "report" },
+    ]);
+    unsubscribe();
+  });
+
+  /**
+   * A terminal refusal of `preview.selectPage` must retire the optimistic tab pick.
+   *
+   * `ui/workspace/model/page-selection.ts` sets `pageOverride` BEFORE dispatching, and the only
+   * thing that used to retire it was the KERNEL's own active slug changing — which a refusal, by
+   * definition, does not do. So the tab strip went on highlighting a page the preview was never
+   * showing, with no way back. Seen live on 2026-07-28 behind `STALE_REVISION`
+   * (`termcraft-debug/run-2026-07-28T08-24-11-710Z-2132.jsonl`); the root fix removes that
+   * particular cause, but `CAPABILITY_UNAVAILABLE` on an untrusted project (spec §2.2) is a
+   * routine, by-design refusal that reaches the same branch.
+   */
+  const refusal = (code: string): CommandResultV1 =>
+    ({
+      protocolVersion: 1,
+      commandId: "019fa7d3-0eb6-7000-a27a-d8181a27781e",
+      status: "rejected",
+      currentRevision: "0",
+      code,
+      reasons: [{ code }],
+    }) as unknown as CommandResultV1;
+
+  test("retires the optimistic tab pick when the Kernel refuses the page switch", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+
+    kernel.setDispatchResult(refusal("CAPABILITY_UNAVAILABLE"));
+    deps.local.pageOverride.set("settings");
+    await tick();
+    await tick();
+
+    // The defect: the strip kept marking "settings" while the preview stayed on "main".
+    expect(deps.local.pageOverride()).toBeNull();
+    expect(deps.activePageSlug()).toBe("main");
+    // Retiring the override puts the effective slug back on the Kernel's own page, which the
+    // (now cleared) memo re-requests once. Pinning the exact list is also what proves the clear
+    // cannot feed itself: the re-request is refused too, and clearing an already-null override
+    // notifies nothing, so the sequence terminates here instead of spinning.
+    expect(selectedPages(kernel)).toEqual([
+      { pageSlug: "main" },
+      { pageSlug: "settings" },
+      { pageSlug: "main" },
+    ]);
+    unsubscribe();
+  });
+
+  test("retires the optimistic tab pick when the page-switch dispatch itself fails", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePage("main"));
+    await tick();
+
+    // The transport half of the same defect: a dispatch that never produced a result at all
+    // leaves the pick just as unbacked as an explicit rejection does.
+    kernel.setDispatchResult(new Error("kernel port closed"));
+    deps.local.pageOverride.set("settings");
+    await tick();
+    await tick();
+
+    expect(deps.local.pageOverride()).toBeNull();
+    expect(deps.activePageSlug()).toBe("main");
+    unsubscribe();
   });
 });
 

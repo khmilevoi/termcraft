@@ -404,6 +404,12 @@ export function createUiDeps(
       // back to the slug alone rather than inventing a hash — one redundant re-select is
       // cheaper than a preview stuck on stale content.
       let lastRequestedPageKey: string | null = null;
+      // Retires the tab strip's optimistic pick. Declared HERE, above its first use, for the
+      // same reason `active` is: `bind(...)` must be created in this hook body, before anything
+      // async, so the `pageOverride.set` it performs from a promise continuation lands in the
+      // runtime's own Reatom context instead of the default one (RTM-A04). Two callers — the
+      // terminal-refusal branch below, and the Kernel-truth subscriber further down.
+      const retirePageOverride = bind(() => pageOverride.set(null));
       const requestPreviewForActivePage = bind((rawPageSlug: string, sourceHash: string | null) => {
         const pageKey = `${rawPageSlug}@${sourceHash ?? ""}`;
         if (pageKey === lastRequestedPageKey) return;
@@ -427,11 +433,21 @@ export function createUiDeps(
         // ran" — three different bugs that all look identical as silence.
         trace("ui.preview.request", { pageSlug, sourceHash, pageKey });
         void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
+          // A PAGE SWITCH THAT DID NOT HAPPEN MUST NOT STAY ON THE TAB STRIP (defect fix,
+          // 2026-07-28). `ui/workspace/model/page-selection.ts` sets `pageOverride` optimistically
+          // BEFORE dispatching, and the only thing that used to retire it was the KERNEL's own
+          // active slug CHANGING — which a refusal, by definition, does not do. So every terminal
+          // refusal left the strip marking a page the preview was not showing, permanently:
+          // `activePageSlug` is `override ?? Kernel`, so the whole Workspace agreed on a page that
+          // was never established. Retiring it here drops the effective slug back to the Kernel's
+          // own page, which is what is actually on screen. Both branches below are terminal, so
+          // both must clear it — a rejected dispatch and a failed one are equally unbacked.
           if (result instanceof Error) {
             // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
             // failures that make the UI unusable, and a preview that did not start is not one.
             console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
             lastRequestedPageKey = null;
+            retirePageOverride();
             return;
           }
           if (result.status === "rejected") {
@@ -440,6 +456,7 @@ export function createUiDeps(
             // descriptor change retry once the guard's precondition actually holds.
             console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
             lastRequestedPageKey = null;
+            retirePageOverride();
             return;
           }
           // The accepted path used to be silent, which is what made Finding 2 unreadable: an
@@ -498,9 +515,10 @@ export function createUiDeps(
       // rule: a changed Kernel slug retires the override. Starts `null` rather than reading
       // `mirror.project()` here, which would make this connect hook depend on the project slice:
       // no override can exist before the first tab click anyway, so the first notification's
-      // clear is a no-op.
+      // clear is a no-op. This is the SECOND caller of `retirePageOverride` (declared above, with
+      // the dispatch it pairs with); a refused switch is the other, and both mean the same thing
+      // — the pick is no longer backed by anything the preview is actually showing.
       let lastKernelPageSlug: string | null = null;
-      const retirePageOverride = bind(() => pageOverride.set(null));
       const unsubscribeProject = mirror.project.subscribe((project) => {
         if (project.activePageSlug !== lastKernelPageSlug) {
           lastKernelPageSlug = project.activePageSlug;

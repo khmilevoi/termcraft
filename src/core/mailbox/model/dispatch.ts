@@ -130,6 +130,12 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
    * and publish. The revision CHECK and the GUARD (both pure reads, §8.4/§10.2) already ran
    * before this is called; see `runFirstSeen` below.
    *
+   * "Reports no change" is TWO things, not one: a `"no-op"` disposition, and an outcome that
+   * carries no events. Step 5's advance is conditional ("IF STATE CHANGED"), and under §6's
+   * Global Constraint a transition that changed authoritative state without publishing is
+   * already illegal — so "nothing to publish" IS "nothing changed". See the bump site below
+   * for the live desync that proved advancing on the disposition alone is a deviation.
+   *
    * A PLAIN FUNCTION, deliberately, not a Reatom `action`. §6's "within one Reatom
    * transaction frame" is already satisfied here without one: this body is entirely
    * synchronous, and Reatom v1001 coalesces every write in a single synchronous tick into
@@ -169,6 +175,42 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
       );
     }
 
+    // §12.1 step 5 is conditional — "IF STATE CHANGED, the mailbox advances `stateRevision`
+    // once, derives capabilities, records `Accepted`, and publishes contiguous state/domain
+    // events" — and §6 ("increments `kernel.stateRevision` exactly once if the transition
+    // changed authoritative state"), §7.6 ("[guarded service pass-throughs] do not bump
+    // `stateRevision` unless authoritative Kernel state changes") and §13.3 ("`stateRevision`
+    // changes only for authoritative transitions") all say the same thing. Since §6's Global
+    // Constraint already forbids a handler from changing authoritative state without
+    // publishing, "state changed" and "there is at least one event to publish" are the same
+    // predicate — so this is `operation-publish.ts:50-52`'s rule verbatim, and both halves of
+    // the Kernel now state one invariant instead of two contradictory ones.
+    //
+    // WHY THIS IS LOAD-BEARING, not tidiness (live defect, 2026-07-28 —
+    // `termcraft-debug/run-2026-07-28T08-24-11-710Z-2132.jsonl`). Advancing on the DISPOSITION
+    // alone published a revision nobody could observe: `preview.queryGeometry`'s handler
+    // returned `startedOutcome([], operationId)` after the host refused the query, this line
+    // moved the Kernel 4 -> 5, `publishTransition([])` emitted nothing, and the operation's
+    // async half also resolved with zero events. The UI mirror learns revisions ONLY from
+    // published envelopes (`ui/mirror/model/mirror.ts`'s single `stateRevision.set`), so it
+    // stayed at 4 — and every later command, including every page-tab click, was refused
+    // `STALE_REVISION` for the rest of the process, with nothing able to resync it.
+    //
+    // Returning `currentRevision` for both fields is schema-valid (`AcceptedCommandV1` places
+    // no cross-field constraint on them) and more accurate: nothing has changed yet, and the
+    // async half will bump when it actually publishes.
+    if (outcome.events.length === 0) {
+      return accepted(
+        envelope.commandId,
+        currentRevision,
+        currentRevision,
+        outcome.disposition,
+        outcome.operationId,
+      );
+    }
+
+    // The bump must stay BEFORE `publishTransition`: `event-bus.ts` reads
+    // `counters.stateRevision()` fresh per batch to stamp each envelope.
     const resultingRevision = deps.counters.advanceRevision();
     const published = deps.eventBus.publishTransition(outcome.events);
     if (published instanceof Error) {
