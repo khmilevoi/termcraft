@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { SpawnedChild } from "../types";
 import { SupervisorError } from "./errors";
-import { buildChildEnv, createBunSpawn, selectStaleScratchDirs } from "./spawn";
+import {
+  SCRATCH_SWEEP_MAX_DELETIONS,
+  buildChildEnv,
+  createBunSpawn,
+  selectStaleScratchDirs,
+} from "./spawn";
 
 const children: SpawnedChild[] = [];
 afterEach(async () => {
@@ -95,14 +100,47 @@ describe("selectStaleScratchDirs", () => {
       ],
       now,
       DAY,
+      SCRATCH_SWEEP_MAX_DELETIONS,
     );
 
-    expect(stale).toEqual(["termcraft-host-4zvjjo"]);
+    expect(stale).toEqual({ selected: ["termcraft-host-4zvjjo"], skipped: 0 });
   });
 
   test("a directory exactly at the age limit is not yet stale", () => {
     expect(
-      selectStaleScratchDirs([{ name: "termcraft-host-abcdef", mtimeMs: now - DAY }], now, DAY),
-    ).toEqual([]);
+      selectStaleScratchDirs(
+        [{ name: "termcraft-host-abcdef", mtimeMs: now - DAY }],
+        now,
+        DAY,
+        SCRATCH_SWEEP_MAX_DELETIONS,
+      ),
+    ).toEqual({ selected: [], skipped: 0 });
+  });
+
+  // THE CAP (final-review Finding 2). `sweepStaleScratchDirs` runs on the boot path, before the
+  // renderer comes up, so an inherited backlog is dead time the operator sees as a frozen launch.
+  // Bounding it per run is what keeps that cost flat no matter how large the backlog got.
+  test("deletes at most the per-run cap, oldest first, and reports what it left", () => {
+    // Ages deliberately NOT in listing order (a deterministic scatter), so a pass that trusted
+    // `readdir` order rather than mtime would pick the wrong subset.
+    const entries = Array.from({ length: SCRATCH_SWEEP_MAX_DELETIONS + 5 }, (_, index) => ({
+      name: `termcraft-host-${String(index).padStart(6, "z")}`,
+      mtimeMs: now - 2 * DAY - ((index * 37 + 11) % 97) * 1_000,
+    }));
+    const oldestFirst = [...entries]
+      .sort((a, b) => a.mtimeMs - b.mtimeMs)
+      .slice(0, SCRATCH_SWEEP_MAX_DELETIONS)
+      .map((entry) => entry.name);
+
+    const stale = selectStaleScratchDirs(entries, now, DAY, SCRATCH_SWEEP_MAX_DELETIONS);
+
+    expect(stale.selected).toEqual(oldestFirst);
+    expect(stale.skipped).toBe(5);
+  });
+
+  test("a cap of zero selects nothing and reports the whole backlog as skipped", () => {
+    expect(
+      selectStaleScratchDirs([{ name: "termcraft-host-abcdef", mtimeMs: 0 }], now, DAY, 0),
+    ).toEqual({ selected: [], skipped: 1 });
   });
 });

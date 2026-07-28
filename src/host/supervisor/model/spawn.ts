@@ -46,21 +46,60 @@ const SCRATCH_DIR_PATTERN = /^termcraft-host-[A-Za-z0-9]{6}$/;
 const SCRATCH_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 /**
- * Which temp entries are abandoned scratch directories of ours.
+ * How many directories one sweep may delete. {@link sweepStaleScratchDirs} runs on the BOOT path
+ * (`entrypoint/model/create-shell.ts`) and is synchronous, so its whole cost is dead time before
+ * the first frame — housekeeping "must not stop the app from starting" (Task 7's own principle),
+ * and an unbounded loop over an inherited backlog is exactly that.
+ *
+ * MEASURED, not assumed (maintainer's Windows 11 machine, 2026-07-28, `fs.rmSync` recursive —
+ * the same call {@link removeScratchDir} makes): 330 deletions across two populations — 30 real
+ * abandoned scratch directories cold on disk, and one 300-directory synthetic batch — gave a
+ * median of 0.26 ms, a p95 of 1.4 ms and a single worst sample of 10.8 ms per directory;
+ * enumerating 179 entries (one `readdirSync` plus a `statSync` each) cost 11 ms. The review that
+ * asked for this cap projected ~190 ms per directory (~53 s for a 277-directory backlog); that
+ * figure did not reproduce here and is not recorded as fact — it came from a one-time hand sweep
+ * that was never timed.
+ *
+ * 64 is chosen against the WORST single sample rather than the median: 64 x 10.8 ms = 0.7 s, so
+ * the sweep stays clearly sub-second even if every directory in a run is as slow as the slowest
+ * one ever observed, while the ordinary case is ~17 ms. It also drains a 277-directory backlog
+ * in five launches, so a cap is a delay and never a leak.
+ */
+export const SCRATCH_SWEEP_MAX_DELETIONS = 64;
+
+/** What one capped sweep will delete, and how much of the backlog it is leaving for the next run. */
+export interface StaleScratchSelection {
+  /** Oldest first, at most `maxDeletions` long. */
+  readonly selected: readonly string[];
+  /** Stale directories the cap left in place. `0` means the backlog was fully drained. */
+  readonly skipped: number;
+}
+
+/**
+ * Which temp entries are abandoned scratch directories of ours, capped at `maxDeletions`.
  *
  * Pure and name-based, in the same spirit as `debug-log`'s own `selectRunsToPrune`: an entry this
  * module does not recognise as its own is never a candidate, so an operator's directory in
  * `%TEMP%` is not ours to delete. The age bound is what makes this safe against a CONCURRENT
  * termcraft: a sibling's live scratch dir is minutes old, never a day.
+ *
+ * OLDEST FIRST, and `skipped` is returned rather than inferred. `readdirSync` promises no order,
+ * so without the sort "the first 64" would be an arbitrary 64 and a backlog could drain in an
+ * order nobody can predict; and a truncated sweep that reported nothing would read to the next
+ * reader exactly like a complete one — the silent-truncation defect this branch exists to remove.
  */
 export function selectStaleScratchDirs(
   entries: readonly { readonly name: string; readonly mtimeMs: number }[],
   nowMs: number,
   maxAgeMs: number,
-): string[] {
-  return entries
+  maxDeletions: number,
+): StaleScratchSelection {
+  const stale = entries
     .filter((entry) => SCRATCH_DIR_PATTERN.test(entry.name) && nowMs - entry.mtimeMs > maxAgeMs)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs)
     .map((entry) => entry.name);
+  const selected = stale.slice(0, Math.max(0, maxDeletions));
+  return { selected, skipped: stale.length - selected.length };
 }
 
 /** Remove one scratch directory; a failure is never worth propagating (see {@link sweepStaleScratchDirs}). */
@@ -82,6 +121,11 @@ function removeScratchDir(directory: string): void {
  *
  * A run that dies without reaping — a crash, a kill, a power loss — cannot delete its own
  * directory on exit, so the per-child cleanup below can never be complete on its own.
+ *
+ * Bounded per run by {@link SCRATCH_SWEEP_MAX_DELETIONS}, because this runs before anything is
+ * drawn; a truncated sweep SAYS so, through this module's own `console.warn` housekeeping channel
+ * (errore rule 21 — the outcome is not propagated, so it must leave a trace), rather than reading
+ * like a complete one.
  */
 export function sweepStaleScratchDirs(nowMs: number = Date.now()): void {
   const tmp = os.tmpdir();
@@ -93,8 +137,26 @@ export function sweepStaleScratchDirs(nowMs: number = Date.now()): void {
         name: entry.name,
         mtimeMs: fs.statSync(path.join(tmp, entry.name)).mtimeMs,
       }));
-    for (const name of selectStaleScratchDirs(entries, nowMs, SCRATCH_MAX_AGE_MS)) {
+    const stale = selectStaleScratchDirs(
+      entries,
+      nowMs,
+      SCRATCH_MAX_AGE_MS,
+      SCRATCH_SWEEP_MAX_DELETIONS,
+    );
+    for (const name of stale.selected) {
       removeScratchDir(path.join(tmp, name));
+    }
+    trace("host.scratchSweep", {
+      scanned: entries.length,
+      deleted: stale.selected.length,
+      skipped: stale.skipped,
+      cap: SCRATCH_SWEEP_MAX_DELETIONS,
+    });
+    if (stale.skipped > 0) {
+      console.warn(
+        `host: scratch-directory sweep stopped at its per-run cap of ${SCRATCH_SWEEP_MAX_DELETIONS} — ` +
+          `${stale.skipped} abandoned directories remain in ${tmp} and the next launch continues the sweep`,
+      );
     }
   } catch (cause) {
     // Best-effort housekeeping: an unreadable %TEMP% must not stop the app from starting.
