@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import type { SpawnedChild } from "../types";
 import { SupervisorError } from "./errors";
@@ -7,6 +10,7 @@ import {
   buildChildEnv,
   createBunSpawn,
   selectStaleScratchDirs,
+  sweepStaleScratchDirs,
 } from "./spawn";
 
 const children: SpawnedChild[] = [];
@@ -142,5 +146,55 @@ describe("selectStaleScratchDirs", () => {
     expect(
       selectStaleScratchDirs([{ name: "termcraft-host-abcdef", mtimeMs: 0 }], now, DAY, 0),
     ).toEqual({ selected: [], skipped: 1 });
+  });
+});
+
+/**
+ * The selector's own `skipped` count is covered above, but nothing exercised the SWEEP — so the
+ * announcement that a run was truncated had no test at all, and deleting it would have shipped
+ * silent truncation with the suite green (the same hole as the status-bar hint filter, in the
+ * commit that was closing that one).
+ */
+describe("sweepStaleScratchDirs", () => {
+  const fixtures: string[] = [];
+
+  afterEach(() => {
+    for (const dir of fixtures.splice(0)) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (cause) {
+        // Already swept by the case itself, or refused by Windows — neither is a test failure,
+        // but a cleanup that fails for any other reason should not vanish (errore rule 21).
+        console.warn(`spawn.test: fixture cleanup skipped for ${dir}`, cause);
+      }
+    }
+  });
+
+  test("announces the backlog it left when the cap truncates the run", () => {
+    // One more than the cap, so truncation is guaranteed. Backdated to the epoch, which makes
+    // these the OLDEST entries in the temp directory by decades: the sweep deletes oldest-first,
+    // so it takes these fixtures and cannot reach anything else — a live sibling's own scratch
+    // directory is minutes old, and the age bound already excludes it.
+    for (let index = 0; index <= SCRATCH_SWEEP_MAX_DELETIONS; index++) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "termcraft-host-"));
+      fs.utimesSync(dir, new Date(0), new Date(0));
+      fixtures.push(dir);
+    }
+
+    const warned: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => warned.push(String(args[0]));
+    try {
+      sweepStaleScratchDirs();
+    } finally {
+      console.warn = original;
+    }
+
+    const truncation = warned.find((line) => line.includes("per-run cap"));
+    expect(truncation).toBeDefined();
+    expect(truncation).toContain(String(SCRATCH_SWEEP_MAX_DELETIONS));
+    // The cap actually bit: it deleted some and left some, rather than warning about nothing.
+    expect(fixtures.filter((dir) => fs.existsSync(dir)).length).toBeGreaterThan(0);
+    expect(fixtures.filter((dir) => !fs.existsSync(dir))).toHaveLength(SCRATCH_SWEEP_MAX_DELETIONS);
   });
 });
