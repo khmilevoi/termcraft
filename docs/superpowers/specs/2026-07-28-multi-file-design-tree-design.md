@@ -23,7 +23,9 @@ Two properties must survive the change, and one new property must be gained:
   exactly today's `finalize` semantics.
 - No custom module system in the host. The host keeps using `import()`; the in-process
   module registry that would allow in-place invalidation is deliberately deferred (§9.5).
-- No migration of existing projects (§12).
+- No automatic refactoring into shared modules. The mechanical migration (§12.2) moves
+  files and rewrites the manifest; turning single-file pages into a shared tree is an
+  ordinary agent turn the user can decline, redo, or ignore.
 
 ## 3. Storage layout
 
@@ -313,23 +315,90 @@ and the warm spare already pre-pays that cost.
   improvement over the single-file package: component decomposition in the design now maps
   onto component decomposition in the implementation.
 
-## 12. Compatibility
+## 12. Migration
 
-There is **no migration**. `MIGRATION_CHAIN` stays empty and `registry.test.ts` continues
-to assert that.
+An older project is migrated, not refused. `project.toml`'s `format_version` becomes 2,
+and opening a version-1 project offers the migration dialog the design already specifies.
 
-`src/store/model/factory.ts` wires only the registry's `checkNotTooNew` gate; `findSteps`
-has no production caller. So bumping `format_version` alone would not refuse an
-old-layout project — its version is 1, which is not "too new", so it would pass the gate
-and then fail in the schema decoder as a generic shape error. That is a silent misread and
-must not be shipped.
+### 12.1 Detection and the offer
 
-Instead:
+`design/16-wizard-migration.dc.html`'s `migrate-80` screen is the visual source of truth,
+drawn by `migrate()` in `design/termcraft-engine.js`. It is a compact centered dialog at
+the setup tier — before the workspace exists, not layered over it — carrying a warning
+line, a bullet list of what will change, the "git history is left untouched — only current
+sources migrate" note, the backup location, and two keys: `⏎ migrate` and `esc later`.
 
-- `project.toml`'s `format_version` becomes 2;
-- its decoder rejects a version-1 document with a typed error naming the file and stating
-  that the source layout changed;
-- `examples/clock/.termcraft/` is moved by hand as part of this change.
+The bullet list is populated for this migration with the real plan: pages moved into
+`design/`, `pages.json` synthesized from the existing order, pin logs relocated,
+`project.toml` rewritten.
+
+`esc later` returns to Home without opening the project. The design shows the dialog at
+the setup tier and states no other deferral behavior, so this is an interpretation, not a
+transcription: the alternative — opening a workspace whose page store cannot read the
+old layout — has nothing to show.
+
+Detection cannot rest on the version counter alone. `src/store/model/factory.ts` wires only
+the registry's `checkNotTooNew` gate; `findSteps` has no production caller, so a version-1
+document is not "too new" and would pass the gate and then fail in the schema decoder as a
+generic shape error. Wiring `findSteps` into the open sequence is what turns that silent
+misread into the offer above, and it is this migration's own work item.
+
+### 12.2 Two tracks, strictly ordered
+
+```mermaid
+flowchart TD
+    open["project open · format_version = 1"] --> dialog["migrate-80 dialog"]
+    dialog -- "esc later" --> home["back to Home, project not opened"]
+    dialog -- "⏎ migrate" --> backup["verified backup<br/>{userStateRoot}/backups/&lt;projectId&gt;/&lt;migrationActionId&gt;/"]
+    backup --> mech["mechanical migration — one transaction"]
+    mech --> valid["project open on format 2 and fully working:<br/>every page still one self-contained file"]
+    valid --> trust{"project trusted?"}
+    trust -- "no" --> done["done — refactor unavailable, read-only"]
+    trust -- "yes" --> turn["agent turn with a seeded message —<br/>ordinary turn, ordinary Gate, ordinary apply"]
+    turn --> done2["done"]
+```
+
+The two tracks are **sequential, never concurrent**. The agent's turn workspace is staged
+from the canonical tree, which the mechanical track is rewriting; running them together
+would stage a tree mid-move. The user still presses one key — "at the same time" is a
+property of the flow, not of the execution.
+
+**Track 1 — mechanical.** Deterministic, transactional, and required:
+
+- move each `pages/<slug>/page.tsx` to `design/pages/<slug>.tsx`;
+- synthesize `design/pages.json` from `project.toml`'s existing ordered `pages` array,
+  with `entry` pointing at each moved file;
+- move each `pages/<slug>/comments.jsonl` to `pins/<slug>.jsonl`;
+- rewrite `project.toml`: drop `pages`, set `format_version` to 2.
+
+No page source byte is edited. Every page remains a self-contained single file that
+imports only `@termcraft/runtime`, which is still valid under §5 and §6 — the new format
+permits shared modules, it does not require them. This is what makes the mechanical track
+sufficient on its own.
+
+**Track 2 — agent.** Optional and best-effort: an ordinary turn seeded with a synthesized
+message asking the agent to factor duplicated markup and logic into shared modules. It
+needs **no new machinery** — it runs through the same admission, staging, Gate, retry, and
+apply path as any other turn. If it fails, terminalizes, or produces something the user
+dislikes, the project is exactly as track 1 left it. It is gated on trust, because a turn
+spawns the agent CLI and an untrusted project is read-only.
+
+### 12.3 Consequences
+
+- `MIGRATION_CHAIN` gains its first real entry, and `registry.test.ts`'s assertion that
+  the shipped chain stays empty is replaced by one asserting its actual content.
+- The verified-backup protocol (`src/store/migration/model/backup-store.ts`) gets its first
+  production caller. **Divergence from the design, recorded deliberately:** the dialog
+  mockup shows the backup as `.termcraft/backup-2026-07-13/`, inside the project.
+  `docs/architecture/storage.md` item 17 and the implemented backup store place it at
+  `{userStateRoot}/backups/<projectId>/<migrationActionId>/`, outside `.termcraft`, so a
+  Git operation cannot clobber it. The storage design wins; the dialog shows the real path,
+  and the divergence is documented at the render site.
+- Track 1 changes every page's path, so every `closureHash` changes: every cache entry
+  invalidates and every page re-smokes on the first turn after migration. Correct and
+  expected.
+- `examples/clock/.termcraft/` is migrated by running the real migration, not by hand —
+  it is the first end-to-end test subject.
 
 ## 13. Accepted trade-offs
 
@@ -351,10 +420,14 @@ Instead:
 This design is too large for one implementation plan. It decomposes into three, each
 landing on a working system:
 
-1. **Tree as canonical source.** §3, §4, §5, §6, §10, §12 — storage layout, `pages.json`,
-   the resolver rules, staging, and the version rejection. The host and Gate still work
-   per page; the closure is computed but only used for `changedPages`. At the end of this
-   plan the agent can write shared code and it commits correctly.
+1. **Tree as canonical source.** §3, §4, §5, §6, §10 — storage layout, `pages.json`, the
+   resolver rules, and staging. The host and Gate still work per page; the closure is
+   computed but only used for `changedPages`. At the end of this plan the agent can write
+   shared code and it commits correctly.
+1b. **Migration.** §12 — the `migrate-80` dialog, `findSteps` wired into the open sequence,
+   the first `MIGRATION_CHAIN` entry over the existing verified-backup protocol, and the
+   seeded refactor turn. Separable from plan 1 and worth its own plan: it is the only part
+   that touches existing user data, and its two tracks have very different risk profiles.
 2. **Closure graph everywhere.** §7, §8 — re-key every cache, switch the type check to one
    whole-tree program, and scope smoke to changed closures. Purely internal; no user-visible
    behavior changes except that turns get faster.
@@ -362,7 +435,8 @@ landing on a working system:
    watchdog, and the export package shape. This is the plan that delivers instant page
    switching and is the one with the accepted isolation trade-off.
 
-Plan 1 is a prerequisite for both others; plans 2 and 3 are independent of each other.
+Plan 1 is a prerequisite for all the others; plans 1b, 2 and 3 are independent of each
+other.
 
 ## 15. Source anchors
 
@@ -400,8 +474,16 @@ Plan 1 is a prerequisite for both others; plans 2 and 3 are independent of each 
 - `src/core/kernel/model/handlers/preview-export.ts`,
   `src/core/kernel/model/handlers/page-descriptors.ts` — the session-establishing and
   descriptor-publishing paths that carry the new key
-- `src/store/migration/model/registry.ts` — §12's untouched empty chain and the
-  `checkNotTooNew`-only wiring that makes the decoder rejection necessary
+- `src/store/migration/model/registry.ts` — §12.1's first `MIGRATION_CHAIN` entry, and the
+  `checkNotTooNew`-only wiring that is why `findSteps` must gain a production caller
+- `src/store/migration/model/backup-store.ts` — §12.2's verified backup, gaining its first
+  production caller; the site of §12.3's recorded divergence on backup location
+- `src/core/project/model/open-sequence.ts` — where §12.1's version detection and the
+  migration offer enter the canonical open path
+- `design/16-wizard-migration.dc.html`, `design/termcraft-engine.js`'s `migrate()` — §12.1's
+  visual source of truth for the `migrate-80` dialog, its copy, and its two keys
+- `design/03-workspace-generating.dc.html` — the presentation §12.2's track 2 reuses, since
+  the refactor is an ordinary turn and needs no migration-specific UI
 - `docs/architecture/storage.md`, `docs/architecture/flows/generation-turn.md`,
   `flows/export.md`, `flows/interactive-prototype.md` — the architecture documents this
   design invalidates and which must be updated when it lands
