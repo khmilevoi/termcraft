@@ -36,6 +36,18 @@ export function chatColumnWidth(terminalWidth: number): number {
  * The preview pane's OUTER width — border columns included. Fullscreen (F2) drops the chat
  * column entirely, matching the design engine's `paneShell(..., {noChat:true})`
  * (`design/termcraft-engine.js:478,481`: `chatW = 0`, so `pw = w`).
+ *
+ * DIVERGENCE (non-fullscreen branch): the design's `paneShell` (`:478,481,483`) has the chat
+ * box and the preview box SHARE one divider column — `div = chatW - 1`, `pw = w - div =
+ * w - chatW + 1` — which is exactly the column the design paints its `┬`/`┴` tee glyphs into
+ * (`:483`), fusing the two boxes into one frame. OpenTUI lays out `ws-chat` and `ws-preview`
+ * as two ordinary flex siblings (same limitation already noted on `Workspace`'s own doc
+ * comment: "OpenTUI flex siblings cannot auto-tee their borders"), so each keeps its own,
+ * non-overlapping border column instead of sharing one. This returns `w - chatW` — one column
+ * narrower than the design's `w - chatW + 1` — the closest faithful mapping without a shared
+ * divider column to borrow. Do not "correct" this to the design's `+ 1`: with two independent
+ * sibling borders there is no shared column, so the extra column would make the preview pane
+ * overlap the chat column by one cell instead of sitting flush beside it.
  */
 export function previewPaneWidth(terminal: CellSize, fullscreen: boolean): number {
   return fullscreen ? terminal.w : terminal.w - chatColumnWidth(terminal.w);
