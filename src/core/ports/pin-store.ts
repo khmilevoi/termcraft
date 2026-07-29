@@ -78,7 +78,7 @@ export interface PinReader {
    * empty base `{length: 0, prefixSha256: <sha256 of zero bytes>}` — the exact value
    * `store/transaction/model/wrappers.ts`'s own `emptyBefore()` produces for a missing file,
    * and the exact fact `buildFinalizeCasPrecondition` compares its own
-   * `readPinsBefore(fs, pageCommentsPath(slug))` result against. This deliberately diverges
+   * `readPinsBefore(fs, pinsJsonlPath(slug))` result against. This deliberately diverges
    * from `ChatReader.readAppendBase`, which treats a missing file as a genuine failure — that
    * method is only ever called immediately after `turnTransactions.admit(...)` durably
    * appends to that exact chat file, so a miss there is unexpected; a page's comments log,

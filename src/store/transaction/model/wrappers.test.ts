@@ -413,7 +413,7 @@ describe("finalizeTurn — full successful finalization", () => {
     expect(textOf(readManaged(pinsJsonlPath(home)))).toContain('"status":"resolved"');
   });
 
-  test("writes tree files under design/ and resolves pins under pins/, including a brand-new file and a no-op delete of an already-absent one", async () => {
+  test("writes tree files under design/ and resolves pins under pins/, including a brand-new file, a GENUINE delete of an existing file, and a no-op delete of an already-absent one", async () => {
     const chatId = uuidv7();
     const turnId = uuidv7();
     const home = slug("home");
@@ -421,11 +421,16 @@ describe("finalizeTurn — full successful finalization", () => {
     seedManifest(defaultManifest());
     writeManaged("design/pages.json", bytesOf('{"schemaVersion":1,"pages":[]}\n'));
     writeManaged(designFilePath("pages/home.tsx"), bytesOf("export default function Home() {}\n"));
+    // `pages/retired.tsx` genuinely exists before the turn — this is the file the delete branch
+    // must actually remove, as opposed to `pages/gone.tsx` below (never existed), which only
+    // proves the no-op path, not that `buildChangedFileOperation`'s delete branch itself ran.
+    writeManaged(
+      designFilePath("pages/retired.tsx"),
+      bytesOf("export default function Retired() {}\n"),
+    );
     const manifestBytesBefore = readManaged(PROJECT_MANIFEST_FILENAME);
 
-    const homeV2 = bytesOf(
-      'export default function Home() { return <Gauge color="red" /> }\n',
-    );
+    const homeV2 = bytesOf('export default function Home() { return <Gauge color="red" /> }\n');
     const themeBytes = bytesOf("export const theme = { accent: 'red' };\n");
 
     const readSet: TurnReadSet = {
@@ -433,6 +438,7 @@ describe("finalizeTurn — full successful finalization", () => {
       designFiles: new Map([
         ["pages.json", fileImageOf("design/pages.json")],
         ["pages/home.tsx", fileImageOf(designFilePath("pages/home.tsx"))],
+        ["pages/retired.tsx", fileImageOf(designFilePath("pages/retired.tsx"))],
         ["lib/theme.ts", fileImageOf(designFilePath("lib/theme.ts"))], // expected-absent
       ]),
       chat: appendBaseOf(chatJsonlPath(chatId)),
@@ -452,6 +458,7 @@ describe("finalizeTurn — full successful finalization", () => {
       changedFiles: [
         { relPath: "pages/home.tsx", change: "replace", newBytes: homeV2 },
         { relPath: "lib/theme.ts", change: "replace", newBytes: themeBytes },
+        { relPath: "pages/retired.tsx", change: "delete" }, // genuinely existed — the real delete branch
         { relPath: "pages/gone.tsx", change: "delete" }, // never existed — a legal no-op delete
       ],
       agentRecord: agentRecord(turnId, [home]),
@@ -464,6 +471,7 @@ describe("finalizeTurn — full successful finalization", () => {
 
     expect(readManaged(designFilePath("pages/home.tsx"))).toEqual(homeV2);
     expect(readManaged(designFilePath("lib/theme.ts"))).toEqual(themeBytes);
+    expect(managedExists(designFilePath("pages/retired.tsx"))).toBe(false); // genuinely deleted
     expect(managedExists(designFilePath("pages/gone.tsx"))).toBe(false);
     expect(managedExists(PROJECT_MANIFEST_FILENAME)).toBe(true);
     // project.toml is NOT rewritten by a turn any more — page order lives in the tree.
@@ -519,7 +527,10 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
     const turnId = uuidv7();
     seedChatHeader(chatId);
     seedManifest(defaultManifest());
-    writeManaged(designFilePath("lib/theme.ts"), bytesOf("export const theme = { accent: 'blue' };\n"));
+    writeManaged(
+      designFilePath("lib/theme.ts"),
+      bytesOf("export const theme = { accent: 'blue' };\n"),
+    );
 
     const readSet: TurnReadSet = {
       manifest: fileImageOf(PROJECT_MANIFEST_FILENAME),
@@ -529,7 +540,10 @@ describe("finalizeTurn — mandatory pre-intent CAS (§7.5)", () => {
     };
 
     // Drifts after the read set was captured — nothing in `changedFiles` below touches it.
-    writeManaged(designFilePath("lib/theme.ts"), bytesOf("export const theme = { accent: 'green' };\n"));
+    writeManaged(
+      designFilePath("lib/theme.ts"),
+      bytesOf("export const theme = { accent: 'green' };\n"),
+    );
 
     const deps = wrapperDeps();
     const mutex = createWriteMutex();
@@ -855,12 +869,11 @@ describe("terminalizeTurn", () => {
 describe("runProjectMutation", () => {
   test("runs a caller-built replace operation under kind project-mutation", async () => {
     const manifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
       projectId: PROJECT_ID,
       name: "new project",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const bytes = bytesOf(encodeProjectManifest(manifest));
     const payloadId = uuidv7();
@@ -1024,12 +1037,11 @@ describe("buildExportPublishTransaction (infrastructure only — no MVP caller)"
 describe("buildMigrationTransaction (infrastructure only — no shipped migration exists)", () => {
   test("runs caller-built operations under kind migration", async () => {
     const manifest: ProjectManifest = {
-      formatVersion: 1,
+      formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
       projectId: PROJECT_ID,
       name: "migrated",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     };
     const bytes = bytesOf(encodeProjectManifest(manifest));
     const payloadId = uuidv7();

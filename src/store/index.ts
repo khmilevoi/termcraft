@@ -18,7 +18,7 @@ export type {
   AdvanceSessionCheckpointInput,
   AppendPinEventInput,
   BackupStore,
-  ChangedPageOp,
+  ChangedDesignFileOp,
   ChatHandle,
   ChatListEntry,
   ChatStore,

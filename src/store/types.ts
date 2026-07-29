@@ -210,9 +210,15 @@ export interface PinStore {
 // ---- pages (storage-identity §3.2, staging §9) -------------------------------------
 
 export interface PageStore {
+  /**
+   * `Error` rather than the narrower `SafeFsError` (matching `TransactionEngine`'s own
+   * `renamePageTitle`/`reorderPages`/`removePage` — the identical "blocked pending Task 9"
+   * shape just below): the current implementation returns `DesignTreeStoreNotWiredError`
+   * (`store/model/factory.ts`) until `DesignTreeStore` is wired in, not a `SafeFsError`.
+   */
   readSource(
     pageSlug: PageSlug,
-  ): Promise<SafeFsError | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
+  ): Promise<Error | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
   /**
    * The ordered page slugs a page's listing/tab order and identity allocation are drawn
    * from. As of project.toml format_version 2 (task 5), `ProjectManifest` carries no
@@ -229,7 +235,7 @@ export interface PageStore {
 
 export type { ProjectWritePermit, WriteMutex, RecoveryOutcome } from "store/transaction";
 export type {
-  ChangedPageOp,
+  ChangedDesignFileOp,
   ProjectMutationInput,
   ResolvedPinAppend,
   TurnAdmissionInput,
@@ -263,10 +269,15 @@ export type TransactionError =
 // active-page/active-chat writes and checkpoint persistence — need a legal path that never
 // requires a caller to learn `TransactionOperation`'s shape. Each method below builds its
 // own operation(s) internally from `store/transaction`'s already-landed builders
-// (`buildManifestOperation`, `buildWorkspaceLocalPatchOperation`,
-// `buildStandalonePinEventOperation`, `observeFileImage`) and runs them through the same
-// `runProjectMutation` base engine every other project mutation uses — `core` sees only
-// these named methods and their plain-data inputs.
+// (`buildWorkspaceLocalPatchOperation`, `buildStandalonePinEventOperation`,
+// `observeFileImage`) and runs them through the same `runProjectMutation` base engine
+// every other project mutation uses — `core` sees only these named methods and their
+// plain-data inputs. EXCEPT `renamePageTitle`/`reorderPages`/`removePage`: the
+// design-tree canonical source plan (Task 6) deleted the builder these three relied on
+// (`buildManifestOperation` — `project.toml` no longer carries page order) along with the
+// slug→path helper (`canonicalPagePath`) their target resolution used, so all three are
+// currently blocked pending Task 9's `DesignTreeStore` — see their own doc comments below
+// and `store/model/factory.ts`'s `DesignTreeStoreNotWiredError`.
 
 export interface CreateChatInput {
   readonly transactionId: string;
@@ -304,7 +315,13 @@ export interface RenamePageTitleInput {
 export interface ReorderPagesInput {
   readonly transactionId: string;
   readonly actionId: string;
-  /** The portable manifest as currently on disk — read by the caller first, matching `TurnFinalizeInput.manifestBefore`'s convention. */
+  /**
+   * The portable manifest as currently on disk — read by the caller first. `project.toml`
+   * no longer carries page order (Task 5) and `TurnFinalizeInput` correspondingly dropped
+   * its own `manifestBefore` field (Task 6); this one is unused by the current
+   * (`DesignTreeStoreNotWiredError`-blocked) implementation and is expected to go the same
+   * way once Task 9 rewires `reorderPages` onto `pages.json`.
+   */
   readonly manifestBefore: ProjectManifest;
   readonly orderedSlugs: readonly PageSlug[];
   readonly createdAt: string;
@@ -372,11 +389,23 @@ export interface TransactionEngine {
   setActiveChat(input: SetActiveChatInput): Promise<Error | CommittedMarker>;
   /** Active-page write (storage-identity §6.1). */
   setActivePage(input: SetActivePageInput): Promise<Error | CommittedMarker>;
-  /** `page.renameTitle`: replaces one canonical page's source bytes in place. */
+  /**
+   * `page.renameTitle`: replaces one page's design source bytes in place. BLOCKED pending
+   * Task 9's `DesignTreeStore` (design-tree canonical source plan, Task 6): resolving the
+   * page's file from its slug used `store/transaction`'s now-deleted `canonicalPagePath`,
+   * which this codebase never replaces with a slug→path guess — the current implementation
+   * returns `DesignTreeStoreNotWiredError` (`store/model/factory.ts`) until `pages.json`
+   * resolution lands.
+   */
   renamePageTitle(input: RenamePageTitleInput): Promise<Error | CommittedMarker>;
-  /** `page.reorder`: rewrites `project.toml`'s page order — a no-op plan when the order is already current. */
+  /**
+   * `page.reorder`. BLOCKED pending Task 9, same as `renamePageTitle` above — and its own
+   * premise ("rewrites `project.toml`'s page order") is retired regardless: `project.toml`
+   * carries no page order as of format_version 2 (Task 5), so the real replacement will not
+   * write a manifest either.
+   */
   reorderPages(input: ReorderPagesInput): Promise<Error | CommittedMarker>;
-  /** `page.removeConfirm`: drops a page from the manifest and deletes its canonical source and comments log. */
+  /** `page.removeConfirm`. BLOCKED pending Task 9, same as `renamePageTitle` above. */
   removePage(input: RemovePageInput): Promise<Error | CommittedMarker>;
   /** `pin.setStatus` (and standalone `pin:created`): one append-only comments-log event. */
   appendPinEvent(input: AppendPinEventInput): Promise<Error | CommittedMarker>;

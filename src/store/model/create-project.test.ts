@@ -8,6 +8,7 @@ import { encodeChatHeaderLine, sha256Hex } from "store/jsonl";
 import {
   PROJECT_GITIGNORE_FILENAME,
   PROJECT_MANIFEST_FILENAME,
+  PROJECT_MANIFEST_FORMAT_VERSION,
   WORKSPACE_STATE_FILENAME,
   decodeWorkspaceLocalState,
   defaultWorkspaceLocalState,
@@ -70,10 +71,13 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       const manifest = await opened.manifest.read();
       if (manifest instanceof Error)
         throw new Error(`fixture bug: manifest unreadable: ${manifest.message}`);
-      expect(manifest.formatVersion).toBe(1);
+      // `pages` is gone from `ProjectManifest` as of format_version 2 (Task 5) — it is not
+      // re-asserted here (there is nothing left on this type to assert): page order lives in
+      // `design/pages.json` instead, which `opened.pages.listSlugs()` below still needs
+      // `DesignTreeStore` to read (Task 9) — the still-failing part of this test.
+      expect(manifest.formatVersion).toBe(PROJECT_MANIFEST_FORMAT_VERSION);
       expect(manifest.name).toBe("My Project");
       expect(manifest.targetStack).toBe("generic");
-      expect(manifest.pages).toEqual([]);
       expect(() => new Date(manifest.createdAt).toISOString()).not.toThrow(); // sanity: createdAt is a real RFC 3339 string
 
       const manifestOnDisk = fs.readFileSync(
@@ -186,12 +190,11 @@ function projectCreationPlan(transactionId: string): {
 
   const manifestBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 1,
+      formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
       projectId,
       name: "Crash Sweep Project",
       createdAt: TS,
       targetStack: "generic",
-      pages: [],
     }),
   );
   const gitignoreBytes = bytesOf(renderProjectGitignore());

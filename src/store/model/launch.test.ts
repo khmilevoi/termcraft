@@ -985,6 +985,11 @@ function multiPageFinalizationPlan(transactionId: string): PlanFixture {
   const payloadA = uuidv7();
   const payloadB = uuidv7();
 
+  // `designFilePath(\`pages/${slug}.tsx\`)` here is a SYNTHETIC crash-plan target, not page
+  // resolution: this harness only needs two arbitrary, legally-namespaced files to prove the
+  // engine rolls forward a multi-file transaction correctly — it never claims this is where a
+  // real page named `slugA`/`slugB` actually lives (that answer only ever comes from
+  // `pages.json`'s `entry`, per the plan's single most important rule).
   const operations: TransactionOperation[] = [
     {
       index: 0,

@@ -229,10 +229,14 @@ function fileImageForBefore(base: AppendBase): FileImage {
 
 /**
  * Observe a fixed (non-JSONL) managed target's current `FileImage`, e.g. `project.toml` or
- * one design-tree file. Exported (phase-6 blocker B3) so `store/model/factory.ts`'s named
- * `TransactionEngine` methods can build their own `replace`/`delete` operations from the
- * same current-state observation this file's own wrappers already use — reusing the
- * primitive rather than re-implementing the identical `readFile`/`isNotFound` dance.
+ * one design-tree file. Exported (phase-6 blocker B3) so a `TransactionEngine`-adjacent
+ * caller can build its own `replace`/`delete` operations from the same current-state
+ * observation this file's own wrappers already use, reusing the primitive rather than
+ * re-implementing the identical `readFile`/`isNotFound` dance — currently
+ * `store/adapters/export-publish.ts`'s pre-publish re-observe (§10 step 3). (Not, as of the
+ * design-tree canonical source plan, `store/model/factory.ts`'s named page methods: Task 6
+ * deleted their slug→path resolution along with `canonicalPagePath`, so they no longer call
+ * this — see `factory.ts`'s `DesignTreeStoreNotWiredError`.)
  */
 export function observeFileImage(fs: TransactionFsDeps, relPath: string): SafeFsError | FileImage {
   const bytes = fs.safeFs.readFile(relPath);

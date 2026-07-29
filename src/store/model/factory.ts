@@ -1316,7 +1316,6 @@ async function createProject(
     name: input.name,
     createdAt,
     targetStack: input.targetStack,
-    pages: [],
   };
   const manifestBytes = new TextEncoder().encode(encodeProjectManifest(manifest));
   const gitignoreBytes = new TextEncoder().encode(renderProjectGitignore());
