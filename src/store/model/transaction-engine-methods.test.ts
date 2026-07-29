@@ -3,16 +3,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { encodePagesManifest } from "entities/design-tree";
+import { PagesManifestInvalidError, encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 import { uuidv7 } from "infrastructure/uuid";
-import { computeSessionPrefixHash } from "store/jsonl";
+import { computeSessionPrefixHash, sha256Hex } from "store/jsonl";
 
 import type { OpenProject, StoreDeps } from "../types";
-import { createStore, nodeStoreDeps } from "./factory";
+import {
+  ManifestDriftedError,
+  PageEntryNotFoundError,
+  ReorderPagesInvalidOrderError,
+  createStore,
+  nodeStoreDeps,
+} from "./factory";
 
 // Blocker B3 (phase-6 plan §2): six MVP commands (`chat.create`, `page.renameTitle`,
 // `page.reorder`, `page.removeConfirm`, `pin.setStatus`, `model.select`) plus active-page/
@@ -299,6 +305,38 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     }
   }, 20_000);
 
+  // Important review finding, round 2: `readSource` is a REAL production path
+  // (`core/kernel/model/handlers/{page-descriptors,page-pin,preview-export}.ts` call it via
+  // the adapter's own kept-for-compatibility `readSource`/`listSlugs`), but had no coverage
+  // in this file at all — every other test here reads pages back through `readTreeFile`.
+  test("readSource resolves the entry through the manifest, never a slug-computed path — and reports PageEntryNotFoundError for an unlisted slug", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      // Deliberately unrelated to the slug (design §3, §7's central rule).
+      const homeEntry = "screens/home-view.tsx";
+      const sourceBytes = new TextEncoder().encode("export default home;\n");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: homeEntry }],
+        requestedActivePage: null,
+      });
+      seedDesignFile(opened, homeEntry, sourceBytes);
+
+      const source = await opened.pages.readSource(home);
+      if (source instanceof Error) throw new Error(`fixture bug: ${source.message}`);
+      expect(new TextDecoder().decode(source.bytes)).toBe("export default home;\n");
+      expect(source.sourceHash).toBe(sha256Hex(sourceBytes));
+
+      // `about` is genuinely unlisted — never a slug-computed path guess.
+      const missing = await opened.pages.readSource(about);
+      expect(missing).toBeInstanceOf(PageEntryNotFoundError);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
   test("reorderPages rewrites design/pages.json, not project.toml — page.reorder, including the already-current no-op", async () => {
     const opened = await freshOpenProject();
     try {
@@ -366,7 +404,7 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     }
   }, 20_000);
 
-  test("reorderPages refuses an order that is not an exact permutation of the manifest's own slugs, without writing", async () => {
+  test("reorderPages refuses an order naming an unknown pageSlug, without writing", async () => {
     const opened = await freshOpenProject();
     try {
       const home = slug("home");
@@ -380,6 +418,10 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       if (manifestBefore instanceof Error)
         throw new Error(`fixture bug: ${manifestBefore.message}`);
 
+      // Asserted against the CLASS this task introduced, not `instanceof Error` — the
+      // permutation guard is the only thing this test claims to exercise, and a bare
+      // `instanceof Error` cannot distinguish it from an unrelated CAS conflict or an
+      // `FsAccessError` (review round 2).
       const rejected = await opened.transactions.reorderPages({
         transactionId: uuidv7(),
         actionId: uuidv7(),
@@ -387,11 +429,136 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
         orderedSlugs: [home, about], // `about` is not a listed slug
         createdAt: TS,
       });
-      expect(rejected instanceof Error).toBe(true);
+      expect(rejected).toBeInstanceOf(ReorderPagesInvalidOrderError);
 
       const manifestAfter = await opened.pages.readManifest();
       if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
       expect(manifestAfter.pages).toEqual(manifestBefore.pages); // untouched
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("reorderPages refuses a duplicated pageSlug — same length as the manifest, but never a silent drop of the other tracked slug, without writing", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: "screens/home-view.tsx" },
+          { slug: about, entry: "panels/about-panel.tsx" },
+        ],
+        requestedActivePage: null,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+
+      // `[home, home]` is the SAME length as the 2-page manifest — a length-only check would
+      // let this through and silently drop `about`; this is the exact class of bug the
+      // real engine's own guard exists to close (`core/ports/fakes/design-store.ts` review
+      // finding, mirrored here at the real engine, which previously had no coverage at all).
+      const rejected = await opened.transactions.reorderPages({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore,
+        orderedSlugs: [home, home],
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(ReorderPagesInvalidOrderError);
+
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual(manifestBefore.pages); // untouched — `about` not dropped
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("reorderPages refuses a genuine subset — never silently drops a tracked slug, without writing", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: "screens/home-view.tsx" },
+          { slug: about, entry: "panels/about-panel.tsx" },
+        ],
+        requestedActivePage: null,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+
+      const rejected = await opened.transactions.reorderPages({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore,
+        orderedSlugs: [home], // `about` silently dropped if unchecked
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(ReorderPagesInvalidOrderError);
+
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual(manifestBefore.pages); // untouched
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  // Important review finding, round 2: `reorderPages`/`removePage` rebuild `design/pages.json`
+  // WHOLESALE from `manifestBefore` — a snapshot the caller (`store/adapters/design-store.ts`)
+  // reads BEFORE acquiring the write permit. `design/pages.json` has a second writer (turn
+  // finalize), so that snapshot can go stale between the read and the permit. Without a
+  // drift check, this would silently overwrite whatever the concurrent writer just landed
+  // with content derived from the caller's outdated snapshot — see `ManifestDriftedError`'s
+  // own doc comment (`store/model/factory.ts`) for the full mechanism.
+  test("reorderPages refuses when design/pages.json drifted since manifestBefore was read — never overwrites a concurrent writer's page with stale content", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      const pricing = slug("pricing");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: "screens/home-view.tsx" },
+          { slug: about, entry: "panels/about-panel.tsx" },
+        ],
+        requestedActivePage: null,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+
+      // Simulate a concurrent writer (e.g. a turn finalize) landing a THIRD page directly on
+      // disk, after `manifestBefore` was captured but before `reorderPages` acquires the
+      // write permit.
+      const drifted: PagesManifestV1 = {
+        schemaVersion: 1,
+        pages: [...manifestBefore.pages, { slug: pricing, entry: "screens/pricing-view.tsx" }],
+        requestedActivePage: null,
+      };
+      seedManifest(opened, drifted);
+
+      const rejected = await opened.transactions.reorderPages({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore, // stale — the on-disk manifest now has 3 pages, not 2
+        orderedSlugs: [about, home],
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(ManifestDriftedError);
+
+      // The concurrent writer's page survives — never silently overwritten with 2 stale entries.
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual(drifted.pages);
     } finally {
       await opened.close();
     }
@@ -573,6 +740,101 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     }
   }, 20_000);
 
+  // Same mechanism as `reorderPages`'s own drift test above — `removePage` ALSO rebuilds
+  // `design/pages.json` wholesale from `manifestBefore` (`ManifestDriftedError`'s doc
+  // comment, `store/model/factory.ts`).
+  test("removePage refuses when design/pages.json drifted since manifestBefore was read — never overwrites a concurrent writer's page with stale content", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      const pricing = slug("pricing");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: "screens/home-view.tsx" },
+          { slug: about, entry: "panels/about-panel.tsx" },
+        ],
+        requestedActivePage: null,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+
+      // Simulate a concurrent writer landing a THIRD page directly on disk, after
+      // `manifestBefore` was captured but before `removePage` acquires the write permit.
+      const drifted: PagesManifestV1 = {
+        schemaVersion: 1,
+        pages: [...manifestBefore.pages, { slug: pricing, entry: "screens/pricing-view.tsx" }],
+        requestedActivePage: null,
+      };
+      seedManifest(opened, drifted);
+      seedDesignFile(opened, "screens/pricing-view.tsx", new TextEncoder().encode("pricing"));
+
+      const rejected = await opened.transactions.removePage({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore, // stale — the on-disk manifest now has 3 pages, not 2
+        pageSlug: home,
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(ManifestDriftedError);
+
+      // The concurrent writer's page survives untouched — never silently overwritten with a
+      // 1-page manifest derived from the stale 2-page snapshot.
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual(drifted.pages);
+      const pricingAfter = await opened.pages.readTreeFile("screens/pricing-view.tsx");
+      expect(pricingAfter instanceof Error).toBe(false);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  // Important review finding, round 2: deleting `removePage`'s `requestedActivePage`-clearing
+  // branch (`store/model/factory.ts`) would write a manifest whose `requestedActivePage`
+  // still names the just-removed slug — which `decodePagesManifest`'s own `ACTIVE_NOT_LISTED`
+  // check rejects on the very next read. Pinned with REAL bytes on disk, read back through
+  // the REAL decoder (`readManifest()`), not a constructed value — a successful decode here
+  // is only possible if the clearing genuinely happened, not merely that some in-memory
+  // computation looked right.
+  test("removePage clears requestedActivePage when it named the removed page — otherwise the manifest would fail its own decoder on the next read", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: "screens/home-view.tsx" },
+          { slug: about, entry: "panels/about-panel.tsx" },
+        ],
+        requestedActivePage: home,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+      expect(manifestBefore.requestedActivePage).toBe(home);
+
+      const removed = await opened.transactions.removePage({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore,
+        pageSlug: home,
+        createdAt: TS,
+      });
+      if (removed instanceof Error) throw removed;
+
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.requestedActivePage).toBeNull();
+      expect(manifestAfter.pages).toEqual([{ slug: about, entry: "panels/about-panel.tsx" }]);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
   test("listTree enumerates every design-tree file with its hash, sorted by relPath — [] when design/ does not exist yet", async () => {
     const opened = await freshOpenProject();
     try {
@@ -601,6 +863,46 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       await opened.close();
     }
   }, 20_000);
+
+  // Important review finding, round 2: `listSlugs()`'s ENOENT-only exception (an ABSENT
+  // `design/pages.json` resolves `[]`, `store/model/factory.ts`) is the entire contract this
+  // task's ambiguity resolution rests on. Without a test proving a PRESENT-but-invalid file
+  // still refuses, a future refactor to a blanket `catch -> []` would pass the whole suite
+  // and silently paper over real corruption. Both pinned with REAL bytes on disk, not a
+  // constructed error in a fake.
+  describe("listSlugs() — the ENOENT-only exception, pinned both ways", () => {
+    test("refuses a genuinely EMPTY design/pages.json — present-but-empty is not the same as absent", async () => {
+      const opened = await freshOpenProject();
+      try {
+        seedDesignFile(opened, "pages.json", new Uint8Array(0));
+        const slugs = await opened.pages.listSlugs();
+        expect(slugs).toBeInstanceOf(PagesManifestInvalidError);
+      } finally {
+        await opened.close();
+      }
+    }, 20_000);
+
+    test("refuses a genuinely CORRUPT (malformed JSON) design/pages.json", async () => {
+      const opened = await freshOpenProject();
+      try {
+        seedDesignFile(opened, "pages.json", new TextEncoder().encode("{not valid json"));
+        const slugs = await opened.pages.listSlugs();
+        expect(slugs).toBeInstanceOf(PagesManifestInvalidError);
+      } finally {
+        await opened.close();
+      }
+    }, 20_000);
+
+    test("still resolves [] when design/pages.json is genuinely ABSENT — the one case this exception covers", async () => {
+      const opened = await freshOpenProject();
+      try {
+        const slugs = await opened.pages.listSlugs();
+        expect(slugs).toEqual([]);
+      } finally {
+        await opened.close();
+      }
+    }, 20_000);
+  });
 
   test("appendPinEvent appends one comments-log event — pin.setStatus and standalone pin:created", async () => {
     const opened = await freshOpenProject();

@@ -61,7 +61,7 @@ import type { DesignTreeTooDeepError, JsonlOpenError } from "./model/factory";
 // `store/safe-fs`) exports its own real port type, re-exported here under the plan's name
 // rather than re-declared — a second, parallel declaration would drift from the type the
 // implementation actually satisfies. `ManifestStore`, `WorkspaceStateStore`, `ChatStore`,
-// `ChatHandle`, `PinStore`, `PageStore`, `ProjectionStore`, and `TransactionEngine` have no
+// `ChatHandle`, `PinStore`, `DesignTreeStore`, `ProjectionStore`, and `TransactionEngine` have no
 // landed submodule of their own (T19 is the first task that needs one flat interface spanning
 // several submodules), so they are declared fresh here and implemented in `./model/factory.ts`.
 //
@@ -591,6 +591,7 @@ export type {
   ProjectLayoutError,
   ProjectAlreadyExistsError,
   DesignTreeTooDeepError,
+  ManifestDriftedError,
   PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
 } from "./model/factory";

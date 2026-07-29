@@ -6,6 +6,7 @@ import { MigrationBackupFailedError, MigrationStaleError } from "store/migration
 import {
   DesignTreeTooDeepError,
   JsonlOpenError,
+  ManifestDriftedError,
   PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
 } from "store/model/factory";
@@ -287,6 +288,24 @@ export function toFailureDto(error: Error): FailureDtoV1 {
    * above is: the closed v1 union has no dedicated "invalid input" code.
    */
   if (error instanceof ReorderPagesInvalidOrderError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TransactionEngine.reorderPages()`/`removePage()` (Task 9 review round 2):
+   * `design/pages.json` drifted between the caller's `manifestBefore` read and the write
+   * permit — a genuine CAS-style conflict (`ManifestDriftedError`'s own doc comment,
+   * `store/model/factory.ts`), same family as `TransactionRecoveryConflictError` above but
+   * caught by this store's own domain-level precondition rather than the engine's generic
+   * roll-forward verification. No dedicated conflict code in the closed v1 union for this
+   * shape either, so it folds to the same generic bucket.
+   */
+  if (error instanceof ManifestDriftedError) {
     return {
       code: "PERSISTENCE_FAILED",
       retryable: false,

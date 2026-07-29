@@ -125,7 +125,7 @@ export type { StoreAdapterDeps } from "./adapters/types";
 export { toFailureDto } from "./adapters/failure";
 export { createProjectStoreAdapter } from "./adapters/project-store";
 export { createChatStoreAdapter } from "./adapters/chat-store";
-export { createPageStoreAdapter } from "./adapters/design-store";
+export { createDesignStoreAdapter } from "./adapters/design-store";
 export { createPinStoreAdapter } from "./adapters/pin-store";
 export { createStagingAdapter } from "./adapters/staging";
 export { createTurnTransactionsAdapter } from "./adapters/turn-transactions";

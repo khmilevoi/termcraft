@@ -143,6 +143,7 @@ import type {
   SetActiveChatInput,
   SetActivePageInput,
   SetWorkspaceLocalInput,
+  Sha256Hex,
   Store,
   StoreDeps,
   TransactionEngine,
@@ -196,6 +197,28 @@ export class PageEntryNotFoundError extends errore.createTaggedError({
 export class ReorderPagesInvalidOrderError extends errore.createTaggedError({
   name: "ReorderPagesInvalidOrderError",
   message: "reorderPages: $reason",
+}) {}
+
+/**
+ * `reorderPages`/`removePage` rebuild `design/pages.json` WHOLESALE from `manifestBefore` —
+ * a snapshot the caller read BEFORE acquiring the write permit (`store/adapters/
+ * design-store.ts`'s `reorder`/`remove` call `readManifest()` first, then separately invoke
+ * the engine). `design/pages.json` has a second writer, turn finalize
+ * (`store/adapters/turn-transactions.ts`), so that snapshot can go stale between the read
+ * and the permit. The engine's own CAS (`buildPagesManifestOperation`'s `observeFileImage`)
+ * cannot catch this on its own: it re-observes the CURRENT on-disk image, inside the SAME
+ * permit, mere statements before using it as `oldImage` — which can never disagree with
+ * itself. Without this check, a stale `manifestBefore` would silently overwrite whatever a
+ * concurrent writer had just landed (e.g. a newly-finalized page, or a moved `entry`) with
+ * content derived from the caller's outdated snapshot. Refused instead, by comparing
+ * `manifestBefore` re-encoded byte-for-byte (`encodePagesManifest` is deterministic) against
+ * the manifest's freshly re-observed on-disk image — INSIDE the permit, immediately before
+ * either method does anything else.
+ */
+export class ManifestDriftedError extends errore.createTaggedError({
+  name: "ManifestDriftedError",
+  message:
+    "design/pages.json changed since it was read; $method refuses rather than overwrite the drift",
 }) {}
 
 // ---- production dependency wiring --------------------------------------------------
@@ -313,6 +336,34 @@ function collectPagePayloads(
   built: readonly BuiltPageOperation[],
 ): ReadonlyMap<string, Uint8Array> {
   return new Map(built.flatMap((entry) => (entry.payload === undefined ? [] : [entry.payload])));
+}
+
+/**
+ * The CAS precondition `reorderPages`/`removePage` need before they rebuild
+ * `design/pages.json` wholesale from a caller-supplied `manifestBefore` snapshot — see
+ * {@link ManifestDriftedError}'s own doc comment for why the engine's ordinary
+ * `oldImage`/`newImage` CAS cannot catch this on its own. Compared by byte image, not
+ * structural/deep equality: `encodePagesManifest` is deterministic (fixed field order), so a
+ * snapshot that is still current re-encodes to exactly the bytes on disk — the same
+ * "compare hashes, not objects" discipline every other CAS check in this codebase follows
+ * (`observeFileImage`, `imagesEqual`). MUST be called first, inside the permit, before either
+ * method does anything else with `manifestBefore`.
+ */
+function assertManifestNotDrifted(
+  deps: TransactionWrapperDeps,
+  manifestBefore: PagesManifestV1,
+  method: string,
+): SafeFsError | ManifestDriftedError | null {
+  const target = designFilePath(PAGES_MANIFEST_RELPATH);
+  const current = observeFileImage(deps.fs, target);
+  if (current instanceof Error) return current;
+  const expectedBytes = new TextEncoder().encode(encodePagesManifest(manifestBefore));
+  const drifted =
+    current.state !== "file" ||
+    current.sha256 !== sha256Hex(expectedBytes) ||
+    current.size !== expectedBytes.byteLength;
+  if (drifted) return new ManifestDriftedError({ method });
+  return null;
 }
 
 /** The `design/pages.json` replace operation for a new manifest — the single writer of page order (`reorderPages`/`removePage`). */
@@ -506,10 +557,15 @@ function makeTransactionEngine(
      * that is not an exact permutation of the manifest's own slugs — never a subset, a
      * superset, or a duplicate. Each entry keeps its own `entry` value; reordering never
      * moves a page's source file. Already-current order is a legal, zero-operation
-     * transaction, not a special-cased rejection.
+     * transaction, not a special-cased rejection. Refuses with `ManifestDriftedError`
+     * (checked FIRST, inside the permit) when `manifestBefore` no longer matches what is
+     * actually on disk — see that class's own doc comment.
      */
     async reorderPages(input: ReorderPagesInput) {
       return withPermit(mutex, async (permit) => {
+        const drifted = assertManifestNotDrifted(wrapperDeps, input.manifestBefore, "reorderPages");
+        if (drifted instanceof Error) return drifted;
+
         const bySlug = new Map(input.manifestBefore.pages.map((entry) => [entry.slug, entry]));
         const seen = new Set<PageSlug>();
         const reordered: PageEntryV1[] = [];
@@ -558,10 +614,15 @@ function makeTransactionEngine(
      * any), and deletes its pin log — nothing else. A shared module the removed page's
      * entry imported is NEVER deleted (design §8 step 3: the design refuses to auto-delete a
      * dead module). A slug already absent from the manifest is a legal no-op on that half
-     * (idempotent retry); a page with no entry file yet only deletes its pin log.
+     * (idempotent retry); a page with no entry file yet only deletes its pin log. Refuses
+     * with `ManifestDriftedError` (checked FIRST, inside the permit) when `manifestBefore`
+     * no longer matches what is actually on disk — see that class's own doc comment.
      */
     async removePage(input: RemovePageInput) {
       return withPermit(mutex, async (permit) => {
+        const drifted = assertManifestNotDrifted(wrapperDeps, input.manifestBefore, "removePage");
+        if (drifted instanceof Error) return drifted;
+
         const entry = input.manifestBefore.pages.find((page) => page.slug === input.pageSlug);
         const nextPages = input.manifestBefore.pages.filter((page) => page.slug !== input.pageSlug);
         const nextRequestedActivePage =
@@ -799,7 +860,7 @@ function makeDesignTreeStore(safeFs: SafeProjectFs): DesignTreeStore {
      */
     async listTree() {
       const maxDepth = NAMESPACE_LIMITS["design-source"].maxDepth ?? MAX_PATH_COMPONENTS;
-      const files: { relPath: string; sha256: string; size: number }[] = [];
+      const files: { relPath: string; sha256: Sha256Hex; size: number }[] = [];
       const queue: { relPath: string; depth: number }[] = [{ relPath: "", depth: 1 }];
 
       while (queue.length > 0) {
@@ -837,7 +898,13 @@ function makeDesignTreeStore(safeFs: SafeProjectFs): DesignTreeStore {
 
           // Neither a readable leaf nor a directory — surface the leaf read's own rejection
           // (e.g. a reparse point, an oversized file): more specific than the directory
-          // listing's own generic failure for the same path.
+          // listing's own generic failure for the same path, which is LOGGED here rather
+          // than silently discarded (errore rule 21: an error that is not propagated must
+          // still be logged) even though it is not the value this method returns.
+          console.warn(
+            `store: listTree could not list ${childProjectRel} as a directory either:`,
+            subNames.message,
+          );
           return bytes;
         }
       }

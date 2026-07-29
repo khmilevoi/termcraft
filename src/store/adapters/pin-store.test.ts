@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createFakePinStore } from "core/ports/fakes";
+import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
@@ -131,29 +132,25 @@ describe("createPinStoreAdapter — contract test (fake vs. real)", () => {
 
       // `findPageForPin` scans `open.pages.listSlugs()` — `design/pages.json`'s own ordering
       // authority (design §3) — so the page must be LISTED before its comments log is in
-      // scope, matching `listSlugs()`'s own "= the manifest's pages array" doc. A freshly
-      // created project has no `design/pages.json` on disk yet, so `manifestBefore` here is
-      // deliberately in the OPPOSITE order from `orderedSlugs` below — `reorderPages` treats
-      // a caller-supplied order that already matches `manifestBefore.pages` as a legal
-      // zero-operation transaction, which would never actually create the manifest file this
-      // test needs on disk. Entries are deliberately unrelated to their slugs (design §3,
-      // §7's central rule: nothing computes a page's file from its slug).
-      const manifestBefore: PagesManifestV1 = {
+      // scope, matching `listSlugs()`'s own "= the manifest's pages array" doc. Seeded
+      // DIRECTLY on disk rather than through `reorderPages`: the engine now CAS-checks its
+      // own `manifestBefore` input against the real on-disk file
+      // (`ManifestDriftedError`, `store/model/factory.ts`, review round 2) to catch a stale
+      // snapshot, so a construct-and-reorder round trip is no longer the simplest way to
+      // seed a manifest this test never actually needs to reorder. Entries are deliberately
+      // unrelated to their slugs (design §3, §7's central rule: nothing computes a page's
+      // file from its slug).
+      const manifest: PagesManifestV1 = {
         schemaVersion: 1,
         pages: [
-          { slug: ABOUT_SLUG, entry: "screens/about-view.tsx" },
           { slug: HOME_SLUG, entry: "screens/home-view.tsx" },
+          { slug: ABOUT_SLUG, entry: "screens/about-view.tsx" },
         ],
         requestedActivePage: null,
       };
-      const listed = await open.transactions.reorderPages({
-        transactionId: uuidv7(),
-        actionId: uuidv7(),
-        manifestBefore,
-        orderedSlugs: [HOME_SLUG, ABOUT_SLUG],
-        createdAt: "2026-07-24T00:00:00.000Z",
-      });
-      if (listed instanceof Error) throw new Error(`fixture bug: ${listed.message}`);
+      const designDir = path.join(open.root, ".termcraft", "design");
+      fs.mkdirSync(designDir, { recursive: true });
+      fs.writeFileSync(path.join(designDir, "pages.json"), encodePagesManifest(manifest));
 
       const pinId = uuidv7();
       const appended = await adapter.appendStandaloneEvent(ABOUT_SLUG, createdEvent(pinId));

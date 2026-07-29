@@ -8,7 +8,7 @@ import { toFailureDto } from "./failure";
 import type { StoreAdapterDeps } from "./types";
 import { nowIso } from "./types";
 
-// `createPageStoreAdapter` — the `DesignTreeReader & PageMutations` port over
+// `createDesignStoreAdapter` — the `DesignTreeReader & PageMutations` port over
 // `OpenProject.pages`/`OpenProject.transactions` (plan Task 1).
 //
 // `readTreeFile`/`listTree`/`readManifest` now delegate to the real `DesignTreeStore`
@@ -141,7 +141,7 @@ interface LegacyPageSourceV1 {
 // Annotating the declared type here would trigger an excess-property error on the object
 // literal below; the bottom-of-file `AssertConforms` check still proves the REQUIRED port
 // shape is present, which is the actual guarantee that matters.
-export function createPageStoreAdapter(deps: StoreAdapterDeps) {
+export function createDesignStoreAdapter(deps: StoreAdapterDeps) {
   const { open } = deps;
 
   async function readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | LegacyPageSourceV1> {
@@ -249,5 +249,5 @@ export function createPageStoreAdapter(deps: StoreAdapterDeps) {
 
 type _Conforms = AssertConforms<
   DesignTreeReader & PageMutations,
-  ReturnType<typeof createPageStoreAdapter>
+  ReturnType<typeof createDesignStoreAdapter>
 >;

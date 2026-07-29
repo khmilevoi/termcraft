@@ -146,31 +146,18 @@ async function createAndCloseRealProject(prefix: string): Promise<string> {
 }
 
 /**
- * Writes an EXPLICIT, empty `design/pages.json` (`pages: []`) — never simply leaving the
- * file absent. `readManifest()`'s behavior on a MISSING `design/pages.json` (a project
- * created before its first turn) is deliberately unspecified by this plan and left for a
- * later task to decide (red-debt.md's own "tree-less project" ambiguity); an explicit empty
- * manifest sidesteps that undecided case entirely, letting `probeProjectContent` legitimately
- * observe "the design tree definitely has zero pages" rather than "the read failed".
- */
-function seedEmptyPagesManifest(root: string): void {
-  const designDir = path.join(root, ".termcraft", "design");
-  fs.mkdirSync(designDir, { recursive: true });
-  const manifest: PagesManifestV1 = { schemaVersion: 1, pages: [], requestedActivePage: null };
-  fs.writeFileSync(path.join(designDir, "pages.json"), encodePagesManifest(manifest));
-}
-
-/**
  * A real on-disk project with zero pages and its auto-minted FIRST CHAT still present (fix round
  * 1: `probeProjectContent`'s chats-list branch, `create-shell.ts:376-382`, had no test at all) —
  * "typed a message, nothing has generated yet" on a relaunch. `createProject` always mints a
  * first chat header, so this is the ordinary state of a project between its first Enter and its
  * first landed page — reachable on real disk with no cleanup beyond closing the first session.
+ * `design/` is left genuinely ABSENT (review round 2): `createProject` never creates one, and
+ * `probeProjectContent` now reads `listSlugs()`, which treats that absence as an honest empty
+ * list rather than a read failure — hand-seeding an empty `design/pages.json` here would no
+ * longer test anything real, since no project this product creates ever looks like that.
  */
 async function existingProjectWithChatOnly(): Promise<string> {
-  const root = await createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
-  seedEmptyPagesManifest(root);
-  return root;
+  return createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
 }
 
 /**
@@ -180,34 +167,22 @@ async function existingProjectWithChatOnly(): Promise<string> {
  * (`existing: false`): this project already has a `.termcraft/`, `store.openProject` succeeds on
  * it, and the ONLY reason `hasContent` comes back `false` is that both real reads confirm there
  * is nothing yet — `chats/` is removed after creation to delete the one thing `createProject`
- * always seeds.
+ * always seeds; `design/` is never created by `createProject` in the first place, so it is
+ * already absent with no cleanup needed (review round 2 — this is also the reachable "clone
+ * with no pages authored yet" case: `chats/` is git-ignored and a fresh checkout with no
+ * generated page has no `design/` tree either).
  */
 async function existingProjectWithNothing(): Promise<string> {
   const root = await createAndCloseRealProject("termcraft-shell-gap-d-empty-existing-");
-  seedEmptyPagesManifest(root);
   fs.rmSync(path.join(root, ".termcraft", "chats"), { recursive: true, force: true });
   return root;
-}
-
-/**
- * A structurally valid `PagesManifestV1` naming exactly the pages `probeProjectContent`
- * (fix round 1; re-pointed at `design/pages.json` by the design-tree canonical source plan's
- * Task 9) actually reads — every entry's `entry` path is deliberately unrelated to its own
- * slug (design §3, §7's central rule), even though this probe only ever reads `.length`.
- */
-function fakePagesManifest(pages: readonly PageSlug[]): PagesManifestV1 {
-  return {
-    schemaVersion: 1,
-    pages: pages.map((pageSlug) => ({ slug: pageSlug, entry: `screens/${pageSlug}-view.tsx` })),
-    requestedActivePage: null,
-  };
 }
 
 function fakeChatListEntry(chatId: string): ChatListEntry {
   return { chatId, createdAt: "2024-01-01T00:00:00.000Z", firstUserText: null };
 }
 
-/** A stand-in failure for a `DesignTreeStore` method this fixture never actually exercises — `probeProjectContent` only ever calls `pages.readManifest()`, but the type still requires a body for every member. */
+/** A stand-in failure for a `DesignTreeStore` method this fixture never actually exercises — `probeProjectContent` only ever calls `pages.listSlugs()` (review round 2: re-pointed off `readManifest()`), but the type still requires a body for every member. */
 function unusedDesignTreeFailure(method: string): PagesManifestInvalidError {
   return new PagesManifestInvalidError({
     code: "UNUSED",
@@ -224,23 +199,24 @@ function unusedDesignTreeFailure(method: string): PagesManifestInvalidError {
  * NOT — `openProject` never reads the design tree at all — but this fixture still drives the
  * failure branch directly rather than relying on real disk corruption, matching this file's own
  * established pattern for the chats-list failure branch below. `.chats.open`/`pages.readSource`/
- * `.listSlugs`/`.readTreeFile`/`.listTree` are never called by `probeProjectContent` but still
+ * `.readManifest`/`.readTreeFile`/`.listTree` are never called by `probeProjectContent` but still
  * need type-correct bodies — `ChatStore`/`DesignTreeStore` require them — so each returns a real,
- * if unused, error rather than a cast.
+ * if unused, error rather than a cast. `slugs` (not `manifest` — review round 2) is exactly
+ * `listSlugs()`'s own return shape, the method this probe actually calls.
  */
 function fakeContentSource(options: {
-  readonly manifest: Awaited<ReturnType<DesignTreeStore["readManifest"]>>;
+  readonly slugs: Awaited<ReturnType<DesignTreeStore["listSlugs"]>>;
   readonly chats?: Awaited<ReturnType<ChatStore["list"]>>;
 }): Pick<OpenProject, "chats" | "pages"> {
   return {
     pages: {
       readSource: () => Promise.resolve(unusedDesignTreeFailure("readSource")),
-      listSlugs: () => Promise.resolve(unusedDesignTreeFailure("listSlugs")),
+      listSlugs: () => Promise.resolve(options.slugs),
       readTreeFile: () =>
         Promise.resolve(new FsAccessError({ op: "readTreeFile", path: "unused", code: "UNUSED" })),
       listTree: () =>
         Promise.resolve(new FsAccessError({ op: "listTree", path: "unused", code: "UNUSED" })),
-      readManifest: () => Promise.resolve(options.manifest),
+      readManifest: () => Promise.resolve(unusedDesignTreeFailure("readManifest")),
     },
     chats: {
       open: () =>
@@ -498,28 +474,34 @@ describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", ()
     return parsed;
   })();
 
-  test("has-content when the manifest lists at least one page", async () => {
-    const open = fakeContentSource({ manifest: fakePagesManifest([HOME]) });
+  test("has-content when listSlugs() lists at least one page", async () => {
+    const open = fakeContentSource({ slugs: [HOME] });
     expect(await probeProjectContent(open)).toBe("has-content");
   });
 
   test("has-content when pages are empty but at least one chat exists", async () => {
     const open = fakeContentSource({
-      manifest: fakePagesManifest([]),
+      slugs: [],
       chats: [fakeChatListEntry(uuidv7())],
     });
     expect(await probeProjectContent(open)).toBe("has-content");
   });
 
+  // The real, common case (review round 2): every project `createProject` mints has no
+  // `design/` at all, so `slugs: []` here stands in for BOTH "an authored, empty manifest"
+  // and "no manifest file yet" — `listSlugs()` (`store/model/factory.ts`) already collapses
+  // that ENOENT case to `[]` for exactly this reason, so this fixture-level test cannot (and
+  // need not) distinguish them; `existingProjectWithNothing()` below exercises the real,
+  // on-disk absent-file path end to end.
   test("no-content only when BOTH reads succeed and both come back empty", async () => {
-    const open = fakeContentSource({ manifest: fakePagesManifest([]), chats: [] });
+    const open = fakeContentSource({ slugs: [], chats: [] });
     expect(await probeProjectContent(open)).toBe("no-content");
   });
 
-  test("unknown, logged, when the design-tree manifest read fails — never folded into no-content", async () => {
+  test("unknown, logged, when listSlugs() fails on a genuinely CORRUPT design tree — never folded into no-content", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     const open = fakeContentSource({
-      manifest: new PagesManifestInvalidError({
+      slugs: new PagesManifestInvalidError({
         code: "PARSE_FAILED",
         reason: "simulated transient read failure",
       }),
@@ -532,7 +514,7 @@ describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", ()
   test("unknown, logged, when the chat listing fails — never folded into no-content", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     const open = fakeContentSource({
-      manifest: fakePagesManifest([]),
+      slugs: [],
       chats: new FsAccessError({ op: "list", path: "chats", code: "EBUSY" }),
     });
     expect(await probeProjectContent(open)).toBe("unknown");

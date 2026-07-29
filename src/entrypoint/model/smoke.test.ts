@@ -25,8 +25,8 @@ import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 import {
   createChatStoreAdapter,
+  createDesignStoreAdapter,
   createExportPublishAdapter,
-  createPageStoreAdapter,
   createPinStoreAdapter,
   createProjectStoreAdapter,
   createProjectWriteAdapter,
@@ -383,7 +383,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
 
   const projections = createProjectionsAdapter(storeAdapterDeps);
   const chatStore = createChatStoreAdapter(storeAdapterDeps);
-  const pageStore = createPageStoreAdapter(storeAdapterDeps);
+  const pageStore = createDesignStoreAdapter(storeAdapterDeps);
   const pinStore = createPinStoreAdapter(storeAdapterDeps);
 
   const innerAgentBackend = createFakeAgentBackend({ capabilities: BACKEND_CAPABILITIES });

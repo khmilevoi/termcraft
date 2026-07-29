@@ -29,8 +29,8 @@ import { uuidv7 } from "infrastructure/uuid";
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 import {
   createChatStoreAdapter,
+  createDesignStoreAdapter,
   createExportPublishAdapter,
-  createPageStoreAdapter,
   createPinStoreAdapter,
   createProjectStoreAdapter,
   createProjectWriteAdapter,
@@ -137,7 +137,7 @@ async function interactiveShell(
   const storeAdapterDeps: StoreAdapterDeps = { open, uuidv7, clock: systemClock };
   const projections = createProjectionsAdapter(storeAdapterDeps);
   const chatStore = createChatStoreAdapter(storeAdapterDeps);
-  const pageStore = createPageStoreAdapter(storeAdapterDeps);
+  const pageStore = createDesignStoreAdapter(storeAdapterDeps);
   const pinStore = createPinStoreAdapter(storeAdapterDeps);
 
   const execPath = deps.execPath ?? process.execPath;
@@ -370,24 +370,32 @@ export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
 
 /**
  * "At least one page, or at least one chat" (fix-bundle spec §2.4). Both signals are already
- * available at open with no extra I/O beyond one design-tree manifest read and one chat
- * listing: `design/pages.json` is the sole page-order/identity authority as of the
- * design-tree canonical source plan (`ProjectManifestV1`/`ProjectManifest` carries no
- * `pages` field as of format_version 2), and chat presence comes free with Gap E's listing
- * (`ChatStore.list()`, `store/model/chat-listing.ts`).
+ * available at open with no extra I/O beyond one design-tree read and one chat listing:
+ * `design/pages.json` is the sole page-order/identity authority as of the design-tree
+ * canonical source plan (`ProjectManifestV1`/`ProjectManifest` carries no `pages` field as of
+ * format_version 2), and chat presence comes free with Gap E's listing (`ChatStore.list()`,
+ * `store/model/chat-listing.ts`).
  *
- * A read failure — including a project with no `design/pages.json` file yet, since this
- * probe does not decide that ambiguity (Task 16's own "tree-less project" territory,
- * red-debt.md) — resolves `"unknown"`, never `"no-content"` (fix round 1, Finding 1; ruling
- * reaffirmed for the design-tree read by the design-tree canonical source plan's own
- * controller: "a design-tree read failure routes as 'no readable content' — the same as a
- * corrupt manifest — and the failure is logged, never silently swallowed") — logged either
- * way (errore rule 21). `"unknown"` is folded into a dispatch-anyway decision by
- * {@link resolveShellLaunch}, not into a silent Home: the Kernel's own open sequence
- * (`core/kernel/model/handlers/project.ts`'s `runProjectReadySequence`) re-reads the same two
- * facts and is the one place a genuine failure can reach the event stream a real client
- * observes — this composition-root probe's own `console.warn` fires during shell composition,
- * before `createUiRoot` has even taken the terminal, so it is not user-visible on its own.
+ * READS `pages.listSlugs()`, NOT `pages.readManifest()` — deliberately (design-tree
+ * canonical source plan, review round 2, refining the controller's earlier ruling). Every
+ * project `createProject` mints has NO `design/` at all (confirmed by
+ * `transaction-engine-methods.test.ts`'s own `listTree()` assertion on a fresh project), so
+ * an absent `design/pages.json` is an honest ABSENCE, not a read FAILURE — the earlier
+ * `readManifest()`-based version routed every real project's every launch through the
+ * `"unknown"` failure branch below, which the controller's "route a read failure as unknown"
+ * ruling was never meant to cover. `listSlugs()` (`store/model/factory.ts`) already makes
+ * exactly this distinction: `[]` for a missing `design/pages.json` (matching its own
+ * pre-existing "[] for none" contract), propagated for a genuinely corrupt one. This probe
+ * inherits that distinction for free rather than re-deciding it.
+ *
+ * A GENUINE read failure (a corrupt `design/pages.json`, or an I/O fault) still resolves
+ * `"unknown"`, never `"no-content"` (fix round 1, Finding 1) — logged either way (errore rule
+ * 21). `"unknown"` is folded into a dispatch-anyway decision by {@link resolveShellLaunch},
+ * not into a silent Home: the Kernel's own open sequence (`core/kernel/model/handlers/
+ * project.ts`'s `runProjectReadySequence`) re-reads the same two facts and is the one place a
+ * genuine failure can reach the event stream a real client observes — this composition-root
+ * probe's own `console.warn` fires during shell composition, before `createUiRoot` has even
+ * taken the terminal, so it is not user-visible on its own.
  *
  * Exported — narrowed to `Pick<OpenProject, "chats" | "pages">` — so `create-shell.test.ts`
  * can drive both failure branches directly against a narrow fake: a TRANSIENT failure on either
@@ -398,14 +406,14 @@ export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
 export async function probeProjectContent(
   open: Pick<OpenProject, "chats" | "pages">,
 ): Promise<ProjectContentProbeV1> {
-  const manifest = await open.pages.readManifest();
-  if (manifest instanceof Error) {
+  const slugs = await open.pages.listSlugs();
+  if (slugs instanceof Error) {
     console.warn(
-      `termcraft: could not read the design tree manifest to route the launch (${manifest.message}) — routing as unknown, not "no content"`,
+      `termcraft: could not read the design tree to route the launch (${slugs.message}) — routing as unknown, not "no content"`,
     );
     return "unknown";
   }
-  if (manifest.pages.length > 0) return "has-content";
+  if (slugs.length > 0) return "has-content";
 
   const chats = await open.chats.list();
   if (chats instanceof Error) {

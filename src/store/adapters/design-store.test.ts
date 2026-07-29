@@ -9,7 +9,7 @@ import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { createPageStoreAdapter } from "./design-store";
+import { createDesignStoreAdapter } from "./design-store";
 import { cleanupScratchRoots, createRealProjectFixture } from "./test-support";
 import type { RealProjectFixture } from "./test-support";
 
@@ -62,7 +62,7 @@ function writeDesignFile(open: RealProjectFixture["open"], relPath: string, cont
 
 /**
  * Seeds `design/pages.json` and each entry's file directly on disk, bypassing the
- * transaction engine — this file's own subject is `createPageStoreAdapter`, not the engine
+ * transaction engine — this file's own subject is `createDesignStoreAdapter`, not the engine
  * (`store/model/transaction-engine-methods.test.ts` exercises that side). The real adapter's
  * `renameTitle`/`reorder`/`remove` all resolve a page's file through this exact manifest,
  * never by computing a path from its slug.
@@ -93,12 +93,12 @@ async function seedHomeAndAboutPages(open: RealProjectFixture["open"]) {
   writeDesignFile(open, ABOUT_ENTRY, ABOUT_SOURCE);
 }
 
-describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
+describe("createDesignStoreAdapter — contract test (fake vs. real)", () => {
   test("readTreeFile()/listTree()/readManifest() read the real design tree, entries resolved through the manifest — never a slug-computed path", async () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomePage(open);
-      const adapter = createPageStoreAdapter(deps);
+      const adapter = createDesignStoreAdapter(deps);
 
       const manifest = await adapter.readManifest();
       if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
@@ -130,7 +130,7 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
 
     const { open, deps } = await createRealProjectFixture();
     try {
-      const adapter = createPageStoreAdapter(deps);
+      const adapter = createDesignStoreAdapter(deps);
       const realResult = await adapter.readTreeFile("pages/missing.tsx");
       expect("code" in realResult).toBe(true);
     } finally {
@@ -142,7 +142,7 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomePage(open);
-      const adapter = createPageStoreAdapter(deps);
+      const adapter = createDesignStoreAdapter(deps);
 
       const renamed = await adapter.renameTitle(HOME_SLUG, "New Title");
       expect(renamed).toBeUndefined();
@@ -165,12 +165,32 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
   test("renameTitle() reports a failure, without writing, when the manifest lists no entry for the slug", async () => {
     const { open, deps } = await createRealProjectFixture();
     try {
-      // No `seedManifest`/entry file at all — `renameTitle`'s own manifest lookup must find
-      // nothing rather than falling back to a slug-computed guess.
-      const adapter = createPageStoreAdapter(deps);
+      // A manifest that genuinely EXISTS and decodes — listing only "about", never "home" —
+      // so `renameTitle`'s own `entry === undefined` branch (design-store.ts) is what fires.
+      // Seeding NOTHING at all would make `readManifest()` fail on ENOENT first, which maps
+      // to the SAME `PERSISTENCE_FAILED` code and would prove nothing about the intended
+      // branch — this is the load-bearing distinction (review finding, round 2).
+      seedManifest(open, {
+        schemaVersion: 1,
+        pages: [{ slug: ABOUT_SLUG, entry: ABOUT_ENTRY }],
+        requestedActivePage: null,
+      });
+      writeDesignFile(open, ABOUT_ENTRY, ABOUT_SOURCE);
+
+      const adapter = createDesignStoreAdapter(deps);
       const renamed = await adapter.renameTitle(HOME_SLUG, "New Title");
       if (renamed === undefined) throw new Error("fixture bug: expected a failure");
       expect(renamed.code).toBe("PERSISTENCE_FAILED");
+      // The exact `PageEntryNotFoundError` wording, not a generic manifest-read failure's.
+      expect(renamed.safeMessage).toContain("no design-tree entry");
+
+      // Nothing was written: the manifest and the untracked sibling page are unchanged.
+      const manifest = await adapter.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      expect(manifest.pages).toEqual([{ slug: ABOUT_SLUG, entry: ABOUT_ENTRY }]);
+      const aboutFile = await adapter.readTreeFile(ABOUT_ENTRY);
+      if ("code" in aboutFile) throw new Error("fixture bug: readTreeFile failed");
+      expect(new TextDecoder().decode(aboutFile.bytes)).toBe(ABOUT_SOURCE);
     } finally {
       await open.close();
     }
@@ -180,7 +200,7 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomeAndAboutPages(open);
-      const adapter = createPageStoreAdapter(deps);
+      const adapter = createDesignStoreAdapter(deps);
 
       const reordered = await adapter.reorder([ABOUT_SLUG, HOME_SLUG]);
       expect(reordered).toBeUndefined();
@@ -206,7 +226,7 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomeAndAboutPages(open);
-      const adapter = createPageStoreAdapter(deps);
+      const adapter = createDesignStoreAdapter(deps);
 
       const removed = await adapter.remove({
         pageRemovePlanId: uuidv7(),
@@ -253,7 +273,7 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
           },
         },
       };
-      const adapter = createPageStoreAdapter({ ...deps, open: spiedOpen });
+      const adapter = createDesignStoreAdapter({ ...deps, open: spiedOpen });
 
       const removed = await adapter.remove({
         pageRemovePlanId: uuidv7(),
@@ -313,7 +333,7 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomeAndAboutPages(open);
-      const real = createPageStoreAdapter(deps);
+      const real = createDesignStoreAdapter(deps);
 
       const fakeManifestResult = await fake.readManifest();
       const realManifestResult = await real.readManifest();
@@ -349,7 +369,7 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
     });
     const { open, deps } = await createRealProjectFixture();
     try {
-      const real = createPageStoreAdapter(deps);
+      const real = createDesignStoreAdapter(deps);
       const fakeResult = await fake.readTreeFile("nowhere.tsx");
       const realResult = await real.readTreeFile("nowhere.tsx");
       expect("code" in fakeResult).toBe(true);
