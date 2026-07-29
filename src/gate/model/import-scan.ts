@@ -1,19 +1,27 @@
+import { resolveDesignSpecifier } from "entities/design-tree";
+
 import { computeJsxTextTokenIndices } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { SyntaxKind, Tok } from "./lexer";
-
-/** The one legal authored module specifier — the bare runtime root (runtime-api §3.1). */
-const RUNTIME_ROOT = "@termcraft/runtime";
 
 /**
  * A fatal import-allowlist violation the gate rejects the candidate for (§3.1),
  * plus the two dynamic-code forms banned by the same design-code-rules bullet
  * (design §5.8: "`eval` and `new Function` are also forbidden"). `specifier` is
  * empty for the dynamic-code codes — they name no module edge.
+ *
+ * `UNRESOLVED_IMPORT` (design §6, Task 11) is a static import whose specifier has a LEGAL
+ * shape — the bare runtime root, or a relative specifier — but that {@link resolveDesignSpecifier}
+ * could not resolve inside the tree (a typo, a missing file, a path that escapes `design/`, a
+ * query string, a backslash, or a symlink the resolver's own `has` refuses). It is reported
+ * under a code distinct from `FORBIDDEN_IMPORT` deliberately: telling an author "you may only
+ * import @termcraft/runtime" when they wrote a legal relative import with a typo would be a
+ * false diagnosis (see this file's `scanImportAllowlist` doc comment for the full rationale).
  */
 export interface ImportScanError {
   readonly code:
     | "FORBIDDEN_IMPORT"
+    | "UNRESOLVED_IMPORT"
     | "DYNAMIC_IMPORT"
     | "REEXPORT"
     | "REQUIRE_CALL"
@@ -57,19 +65,72 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
 }
 
 /**
- * The AUTHORITATIVE static-import allowlist scan (runtime-api §3.1). Tokenizes the
+ * The specifier of the STATIC import statement beginning at `toks[importIndex]`, or `null`
+ * when that statement carries none. Takes the token array rather than the source so both
+ * callers tokenize exactly once and keep their own single pass: {@link scanImportAllowlist}
+ * judges each specifier in source order alongside its other checks, {@link scanModuleEdges}
+ * turns the same specifiers into closure edges. One implementation, so the two can never
+ * disagree about what a file imports — a closure built from a different reading than the
+ * allowlist's is exactly the shape that lets an unscanned module load.
+ *
+ * The caller has already established that `toks[importIndex]` is an `ImportKeyword` and that
+ * it is neither `import.meta` nor a dynamic `import(`. An `import x = require(...)` returns
+ * `null` here and is left to the require handler.
+ */
+export function readStaticImportSpecifier(toks: Tok[], importIndex: number): string | null {
+  for (let j = importIndex + 1; j < toks.length; j += 1) {
+    const tj = toks[j]!;
+    if (tj.kind === SK.RequireKeyword) return null;
+    if (tj.kind === SK.StringLiteral) return tj.value;
+    if (isEdgeBoundary(tj.kind)) return null;
+  }
+  return null;
+}
+
+/**
+ * No tree `context` supplied: nothing beyond the bare runtime root can ever resolve, so this
+ * is `scanImportAllowlist`'s pre-Task-11 default rather than a fabricated pass. `from: ""` is
+ * an honest empty (per this project's "honest values only" convention) — there is no
+ * meaningful tree-relative path to attribute a context-less scan to.
+ */
+const NO_TREE_CONTEXT = { from: "", has: () => false };
+
+/**
+ * The AUTHORITATIVE static-import allowlist scan (design §6; runtime-api §3.1). Tokenizes the
  * page source with the TypeScript lexer and classifies EVERY module edge the author
  * wrote — value + type-only imports, side-effect imports, `export … from`
  * re-exports, `import(...)` dynamic imports, and CJS `require(...)` — plus, per the
  * same design §5.8 rule, dynamic-code forms centered on the `eval`/`Function`
- * globals, fatal violations rather than module edges. Only a static
- * `import … from "@termcraft/runtime"` (bare root, no subpath) is legal; a
- * dynamic import, a re-export, or a require is rejected even when it names the
- * runtime, because one page is one independently-renderable file with no
- * runtime-selected loading. Because this scans the SOURCE tokens (not the
- * transform output), the compiler-injected JSX-helper edges never appear — no
- * exemption is needed, and an author-written `require("react")` (a real source
- * token) is caught, unlike the host's `Bun.Transpiler.scanImports` (2C residual gap).
+ * globals, fatal violations rather than module edges. Exactly two edges are legal
+ * anywhere in the tree (design §6): a static `import … from "@termcraft/runtime"`
+ * (bare root, no subpath), and a RELATIVE specifier (`./…`, `../…`) that resolves to a
+ * real file inside `design/`, per the optional `context` parameter below. A dynamic
+ * import, a re-export, or a require is rejected even when it names the runtime,
+ * because one page is one independently-renderable file with no runtime-selected
+ * loading. Because this scans the SOURCE tokens (not the transform output), the
+ * compiler-injected JSX-helper edges never appear — no exemption is needed, and an
+ * author-written `require("react")` (a real source token) is caught, unlike the
+ * host's `Bun.Transpiler.scanImports` (2C residual gap).
+ *
+ * `context` is what makes relative resolution possible: `from` is the importer's tree-relative
+ * path, `has` answers whether a tree-relative path names a real file. Resolution itself is
+ * entirely {@link resolveDesignSpecifier}'s job (`entities/design-tree`, Task 2) — this scan
+ * re-implements NONE of its rules (path normalization, the `.tsx`/`.ts` extension probe, the
+ * `ESCAPES_TREE`/`QUERY_OR_FRAGMENT`/`BACKSLASH`/`BARE_SPECIFIER` shape checks), it only maps
+ * the resolver's own outcome onto an `ImportScanError`. A specifier the resolver could not
+ * resolve (`resolved.code === "UNRESOLVED"`) is reported as `UNRESOLVED_IMPORT`, distinct from
+ * every other rejection's `FORBIDDEN_IMPORT`: the first is usually a typo or a missing file,
+ * the second is a rule violation, and telling an author "you may only import
+ * `@termcraft/runtime`" when they wrote a legal relative import with a typo would be a false
+ * diagnosis.
+ *
+ * `context` is OPTIONAL. A caller that omits it — every call site in this file's own test
+ * suite that predates Task 11, and `gate/model/gate.ts`'s `runGate` until Task 12 threads a
+ * real closure-backed `has()` through it — gets the pre-Task-11 default: the bare runtime root
+ * stays legal, and every relative specifier is reported `UNRESOLVED_IMPORT` (there is no tree
+ * to resolve it against). That default is an honest "cannot resolve without a tree", never a
+ * silently fabricated pass and never the old blanket `FORBIDDEN_IMPORT` for a syntactically
+ * legal relative shape.
  *
  * Dynamic-code detection (§5.8, Important 2/3 of the WP-6a fix pass) is
  * token-level, not a constant-folding evaluator, so it is deliberately not
@@ -166,11 +227,15 @@ function firstStringFrom(toks: Tok[], from: number): { value: string; pos: numbe
  * `scanJsx` is ever consulted, so no amount of JSX-awareness in `scanJsx`
  * could have closed them.
  */
-export function scanImportAllowlist(source: string): ImportScanError[] {
+export function scanImportAllowlist(
+  source: string,
+  context?: { readonly from: string; readonly has: (relPath: string) => boolean },
+): ImportScanError[] {
   const toks = tokenize(source);
   const jsxText = computeJsxTextTokenIndices(toks, source);
   const errors: ImportScanError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
+  const ctx = context ?? NO_TREE_CONTEXT;
 
   for (let i = 0; i < toks.length; i += 1) {
     const t = toks[i]!;
@@ -190,28 +255,29 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
         });
         continue;
       }
-      // static import (side-effect, default, named, namespace, or type-only). The
-      // specifier is the first StringLiteral in the statement; a RequireKeyword
-      // first means `import x = require(...)` — left for the require handler.
-      let specifier: string | null = null;
-      for (let j = i + 1; j < toks.length; j += 1) {
-        const tj = toks[j]!;
-        if (tj.kind === SK.RequireKeyword) break;
-        if (tj.kind === SK.StringLiteral) {
-          specifier = tj.value;
-          break;
-        }
-        if (isEdgeBoundary(tj.kind)) break;
-      }
-      if (specifier !== null && specifier !== RUNTIME_ROOT) {
-        const where = at(t.pos);
-        errors.push({
-          code: "FORBIDDEN_IMPORT",
+      // static import (side-effect, default, named, namespace, or type-only).
+      const specifier = readStaticImportSpecifier(toks, i);
+      if (specifier !== null) {
+        const resolved = resolveDesignSpecifier({
+          from: ctx.from,
           specifier,
-          message: `import of "${specifier}" is not allowed — a page may only import "${RUNTIME_ROOT}"`,
-          line: where.line,
-          column: where.column,
+          has: ctx.has,
         });
+        if (resolved instanceof Error) {
+          const where = at(t.pos);
+          errors.push({
+            // A specifier the resolver could not resolve inside the tree is reported
+            // separately from one that is not even a legal SHAPE: the first is usually a typo
+            // or a missing file, the second is a rule violation, and telling a user "you may
+            // only import @termcraft/runtime" when they wrote a perfectly legal relative
+            // import with a typo would be a false diagnosis.
+            code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
+            specifier,
+            message: resolved.message,
+            line: where.line,
+            column: where.column,
+          });
+        }
       }
       continue;
     }
@@ -367,4 +433,27 @@ export function scanImportAllowlist(source: string): ImportScanError[] {
   }
 
   return errors;
+}
+
+/**
+ * The raw static-import specifiers of one file, in source order, for `entities/design-tree`'s
+ * `resolveClosure`'s `edgesOf` (design §7, Task 3). Shares `readStaticImportSpecifier` with
+ * {@link scanImportAllowlist} so the closure walk and the allowlist scan can never disagree
+ * about what a file imports — legality aside, this is a raw edge list: a `require(...)`, a
+ * dynamic `import(...)`, and an `export … from` re-export are deliberately NOT edges here (a
+ * cycle through one of those is not a module edge to walk), matching `scanImportAllowlist`'s
+ * own DYNAMIC_IMPORT/REEXPORT/REQUIRE_CALL branches, which never touch a closure either — the
+ * allowlist scan still catches all three as fatal on its own pass over the same file.
+ */
+export function scanModuleEdges(source: string): readonly string[] {
+  const toks = tokenize(source);
+  const edges: string[] = [];
+  for (let i = 0; i < toks.length; i += 1) {
+    if (toks[i]?.kind !== SK.ImportKeyword) continue;
+    const next = toks[i + 1];
+    if (next?.kind === SK.DotToken || next?.kind === SK.OpenParenToken) continue;
+    const specifier = readStaticImportSpecifier(toks, i);
+    if (specifier !== null) edges.push(specifier);
+  }
+  return edges;
 }

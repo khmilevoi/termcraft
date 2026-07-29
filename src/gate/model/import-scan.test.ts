@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
+import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist } from "./import-scan";
 
 const clean = `import { definePage, Panel, Text, atom, reatomComponent } from "@termcraft/runtime"
 export const meta = definePage({ kitApiVersion: 1, title: "X", minSize: { w: 80, h: 24 }, theme: "dark-default" })
 export default reatomComponent(() => <Panel id="p"><Text id="t">{atom(1, "x")()}</Text></Panel>)
 `;
+
+const HAS = (relPath: string) => new Set(["lib/theme.ts", "widgets/gauge.tsx"]).has(relPath);
+const ctx = { from: "pages/dashboard.tsx", has: HAS };
 
 describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () => {
   test("a clean page importing only the bare runtime root passes", () => {
@@ -27,9 +31,13 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   });
 
   test("a type-only import from a foreign module is rejected (type edges are scanned)", () => {
+    // `./local` is a syntactically LEGAL relative specifier (design §6) — with no tree
+    // `context` supplied (this call passes only `source`), nothing can ever resolve, so the
+    // precise code is UNRESOLVED_IMPORT, not the old blanket FORBIDDEN_IMPORT. See the
+    // context-aware describe block below for the resolving case.
     const errors = scanImportAllowlist(`import type { X } from "./local"\n`);
     expect(errors).toHaveLength(1);
-    expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
   });
 
   test("a runtime subpath is rejected (only the bare root is legal)", () => {
@@ -39,7 +47,9 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   });
 
   test("a side-effect import is rejected even from the runtime root reasons aside — foreign is rejected", () => {
-    expect(scanImportAllowlist(`import "./side-effect"\n`)[0]?.code).toBe("FORBIDDEN_IMPORT");
+    // Same reason as the type-only case above: `./side-effect` is a legal relative shape that
+    // simply cannot resolve without a tree `context`, so it is UNRESOLVED_IMPORT now.
+    expect(scanImportAllowlist(`import "./side-effect"\n`)[0]?.code).toBe("UNRESOLVED_IMPORT");
   });
 
   test("a dynamic import is rejected even when it names the runtime", () => {
@@ -468,5 +478,99 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
+  });
+});
+
+describe("scanImportAllowlist — context-aware relative resolution (design §6, Task 11)", () => {
+  test("a relative import that resolves inside the tree is accepted", () => {
+    expect(scanImportAllowlist('import { theme } from "../lib/theme"\n', ctx)).toEqual([]);
+    expect(scanImportAllowlist('import G from "../widgets/gauge.tsx"\n', ctx)).toEqual([]);
+    expect(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n', ctx)).toEqual(
+      [],
+    );
+  });
+
+  test("a relative import that does not resolve is UNRESOLVED_IMPORT with the resolver's reason", () => {
+    const errors = scanImportAllowlist('import x from "../lib/missing"\n', ctx);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    expect(errors[0]?.message).toContain("directory-index");
+  });
+
+  test("every §6 rejection is still fatal", () => {
+    // Cast the expected-code column to the exported literal union rather than widening it to
+    // `string` — a bare `string` beats `toBe`'s overload against `ImportScanError["code"]`.
+    const cases: [string, ImportScanError["code"]][] = [
+      ['import fs from "node:fs"\n', "FORBIDDEN_IMPORT"],
+      ['import x from "react"\n', "FORBIDDEN_IMPORT"],
+      ['import x from "@termcraft/runtime/ui"\n', "FORBIDDEN_IMPORT"],
+      ['import x from "../../escape.ts"\n', "FORBIDDEN_IMPORT"],
+      ['import x from "../lib/theme.ts?raw"\n', "FORBIDDEN_IMPORT"],
+      ['const m = await import("../lib/theme")\n', "DYNAMIC_IMPORT"],
+      ['export { theme } from "../lib/theme"\n', "REEXPORT"],
+      ['const x = require("../lib/theme")\n', "REQUIRE_CALL"],
+    ];
+    for (const [source, code] of cases) {
+      const errors = scanImportAllowlist(source, ctx);
+      expect(errors[0]?.code).toBe(code);
+    }
+  });
+
+  test("a type-only relative import is scanned exactly like a value import", () => {
+    expect(scanImportAllowlist('import type { T } from "../lib/theme"\n', ctx)).toEqual([]);
+    expect(scanImportAllowlist('import type { T } from "../lib/nope"\n', ctx)).toHaveLength(1);
+  });
+
+  // --- adversarial coverage beyond the brief's own samples (Your Job, step 3) ---
+
+  test("a specifier that resolves via the extension probe picks .tsx before .ts when both exist", () => {
+    const bothExist = (relPath: string) =>
+      new Set(["widgets/panel.tsx", "widgets/panel.ts"]).has(relPath);
+    const errors = scanImportAllowlist('import P from "../widgets/panel"\n', {
+      from: "pages/dashboard.tsx",
+      has: bothExist,
+    });
+    expect(errors).toEqual([]);
+  });
+
+  test("a specifier resolves via the .ts fallback probe when no .tsx file exists", () => {
+    const onlyTs = (relPath: string) => relPath === "lib/theme.ts";
+    const errors = scanImportAllowlist('import t from "../lib/theme"\n', {
+      from: "pages/dashboard.tsx",
+      has: onlyTs,
+    });
+    expect(errors).toEqual([]);
+  });
+
+  test("a scoped bare package (@acme/widgets) is FORBIDDEN_IMPORT, not silently treated as relative", () => {
+    const errors = scanImportAllowlist('import x from "@acme/widgets"\n', ctx);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+  });
+
+  test("node:fs stays FORBIDDEN_IMPORT under a real tree context too, not only the context-less default", () => {
+    const errors = scanImportAllowlist('import fs from "node:fs"\n', ctx);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+  });
+
+  test("a specifier that resolves to a file existing on real disk but absent from `has` is UNRESOLVED_IMPORT — the resolver trusts only `has`, never the real filesystem", () => {
+    // "../package.json" from "pages/dashboard.tsx" normalizes to "package.json" — a file that
+    // genuinely exists at this repo's root. `ctx.has` knows nothing about it, so if resolution
+    // ever silently fell back to real disk I/O this would wrongly resolve; it must not.
+    const errors = scanImportAllowlist('import pkg from "../package.json"\n', ctx);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+  });
+
+  test("without a context argument at all, only the bare runtime root stays legal — the pre-Task-11 default for every existing caller that has not been updated yet", () => {
+    expect(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n')).toEqual([]);
+    expect(scanImportAllowlist('import x from "react"\n')[0]?.code).toBe("FORBIDDEN_IMPORT");
+    // A specifier that stays inside the (empty, honest) default `from: ""` root is
+    // UNRESOLVED_IMPORT — nothing can resolve without a real tree, but the SHAPE is legal.
+    expect(scanImportAllowlist('import x from "./lib/theme"\n')[0]?.code).toBe("UNRESOLVED_IMPORT");
+    // A specifier that climbs ABOVE the default empty root genuinely escapes it — honest
+    // ESCAPES_TREE, mapped to FORBIDDEN_IMPORT, not a fabricated UNRESOLVED_IMPORT.
+    expect(scanImportAllowlist('import x from "../lib/theme"\n')[0]?.code).toBe("FORBIDDEN_IMPORT");
   });
 });
