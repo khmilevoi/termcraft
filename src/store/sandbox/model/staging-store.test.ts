@@ -48,8 +48,9 @@ function mustSlug(raw: string): PageSlug {
   if (slug instanceof Error) throw slug;
   return slug;
 }
+// Still needed for `pins` — page comments logs stay pageSlug-keyed even though the tree
+// files themselves (this file's whole subject) are relPath-keyed, never slug-keyed.
 const homeSlug = mustSlug("home");
-const aboutSlug = mustSlug("about");
 
 // ---- in-memory fs -----------------------------------------------------------------
 
@@ -198,15 +199,15 @@ const MANIFEST = new TextEncoder().encode(JSON.stringify({ pages: ["home", "abou
 const RUNTIME_MD = new TextEncoder().encode("# runtime\n");
 const RUNTIME_DTS = new TextEncoder().encode("export type Foo = string\n");
 
-/** A plausible send-time read set (turn-durability §7.2 step 4): one present canonical page,
- * one expected-absent entry for a potential new target, the captured chat's append base, and
+/** A plausible send-time read set (turn-durability §7.2 step 4): one present tree file, one
+ * expected-absent entry for a potential new target, the captured chat's append base, and
  * one contributing comments log. */
 function sampleReadSet(): StagedTurnReadSet {
   return {
     manifest: { sha256: "a".repeat(64), size: 128 },
-    canonicalPages: [
-      { pageSlug: homeSlug, snapshot: { sha256: "b".repeat(64), size: 256 } },
-      { pageSlug: aboutSlug, snapshot: null },
+    designFiles: [
+      { relPath: "pages/home.tsx", snapshot: { sha256: "b".repeat(64), size: 256 } },
+      { relPath: "pages/about.tsx", snapshot: null },
     ],
     chat: { length: 512, prefixSha256: "c".repeat(64) },
     pins: [{ pageSlug: homeSlug, base: { length: 64, prefixSha256: "d".repeat(64) } }],
@@ -219,11 +220,11 @@ function validInput(overrides: Partial<CreateTurnWorkspaceInput> = {}): CreateTu
     projectId: PROJECT_ID,
     turnId: TURN_ID,
     targetChatId: CHAT_ID,
-    pages: [
-      { pageSlug: homeSlug, absSourcePath: "/project/pages/home/page.tsx" },
-      { pageSlug: aboutSlug, absSourcePath: "/project/pages/about/page.tsx" },
+    treeFiles: [
+      { relPath: "pages.json", absSourcePath: "/project/pages.json" },
+      { relPath: "pages/home.tsx", absSourcePath: "/project/pages/home/page.tsx" },
+      { relPath: "pages/about.tsx", absSourcePath: "/project/pages/about/page.tsx" },
     ],
-    manifestSlice: MANIFEST,
     runtimeDocs: [
       { relPath: "RUNTIME.md", absSourcePath: "/runtime/RUNTIME.md" },
       { relPath: "types/foo.d.ts", absSourcePath: "/runtime/foo.d.ts" },
@@ -241,6 +242,7 @@ interface SeededSource {
 
 function seededSources(): Record<string, SeededSource> {
   return {
+    "/project/pages.json": { bytes: MANIFEST },
     "/project/pages/home/page.tsx": { bytes: HOME_TSX },
     "/project/pages/about/page.tsx": { bytes: ABOUT_TSX },
     "/runtime/RUNTIME.md": { bytes: RUNTIME_MD },
@@ -251,7 +253,7 @@ function seededSources(): Record<string, SeededSource> {
 const projectKey = computeProjectKey({ canonicalProjectRoot: PROJECT_ROOT, projectId: PROJECT_ID });
 
 describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
-  test("stages every page, the manifest slice, and every runtime doc while hashing", async () => {
+  test("stages the whole tree at design/<relPath> (pages.json + every page) and every runtime doc while hashing", async () => {
     const memory = memoryStagingFs(seededSources());
     const durable = memoryDurableWriter();
     const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
@@ -286,6 +288,95 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     expect(dts.namespace).toBe("agent-runtime-doc");
   });
 
+  test("stages a deeply nested tree file at the identical relative path, with a relPath unrelated to any page slug — proving the destination is never derived from a slug", async () => {
+    const sources = seededSources();
+    sources["/project/lib/nested/theme.ts"] = {
+      bytes: new TextEncoder().encode("export const theme = { accent: 'teal' }\n"),
+    };
+    const memory = memoryStagingFs(sources);
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(
+      validInput({
+        treeFiles: [
+          ...validInput().treeFiles,
+          { relPath: "lib/nested/theme.ts", absSourcePath: "/project/lib/nested/theme.ts" },
+        ],
+      }),
+    );
+    if (result instanceof Error) throw result;
+
+    expect(result.files.map((f) => f.relPath)).toContain("design/lib/nested/theme.ts");
+    // The immediate parent directory is created via `mkdirAll` (recursive by contract — the
+    // in-memory fake only records the exact path it is asked to create, not synthetic
+    // ancestors, so this checks the one call `stageAllFiles` actually makes).
+    expect(memory.dirs.has(path.join(result.root, "design", "lib", "nested"))).toBe(true);
+    const staged = memory.files.get(path.join(result.root, "design", "lib", "nested", "theme.ts"));
+    if (staged === undefined) throw new Error("nested tree file was not written to disk");
+    expect(new TextDecoder().decode(staged)).toBe("export const theme = { accent: 'teal' }\n");
+  });
+
+  test("a tree file named REATOM.md stays inside design/ and never shadows the root-level runtime doc copy of the same name", async () => {
+    const sources = seededSources();
+    sources["/project/REATOM.md"] = {
+      bytes: new TextEncoder().encode("# design-tree REATOM notes\n"),
+    };
+    sources["/runtime/REATOM.md"] = { bytes: new TextEncoder().encode("# runtime REATOM doc\n") };
+    const memory = memoryStagingFs(sources);
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(
+      validInput({
+        treeFiles: [
+          { relPath: "pages.json", absSourcePath: "/project/pages.json" },
+          { relPath: "REATOM.md", absSourcePath: "/project/REATOM.md" },
+        ],
+        runtimeDocs: [{ relPath: "REATOM.md", absSourcePath: "/runtime/REATOM.md" }],
+      }),
+    );
+    if (result instanceof Error) throw result;
+
+    expect(result.files.some((f) => f.relPath === "design/REATOM.md")).toBe(true);
+    expect(result.files.some((f) => f.relPath === "REATOM.md")).toBe(true);
+
+    const treeCopy = memory.files.get(path.join(result.root, "design", "REATOM.md"));
+    const rootCopy = memory.files.get(path.join(result.root, "REATOM.md"));
+    if (treeCopy === undefined || rootCopy === undefined)
+      throw new Error("expected both copies on disk");
+    expect(new TextDecoder().decode(treeCopy)).toBe("# design-tree REATOM notes\n");
+    expect(new TextDecoder().decode(rootCopy)).toBe("# runtime REATOM doc\n");
+  });
+
+  test("runtime docs stay BESIDE the tree, never inside it", async () => {
+    const memory = memoryStagingFs(seededSources());
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(validInput());
+    if (result instanceof Error) throw result;
+
+    expect(memory.files.has(path.join(result.root, "RUNTIME.md"))).toBe(true);
+    expect(memory.files.has(path.join(result.root, "design", "RUNTIME.md"))).toBe(false);
+  });
+
+  test("rejects a tree file whose relPath escapes the tree with `..`, before opening its source", async () => {
+    const memory = memoryStagingFs(seededSources());
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(
+      validInput({
+        treeFiles: [{ relPath: "../escape.tsx", absSourcePath: "/escape.tsx" }],
+      }),
+    );
+    expect(result).toBeInstanceOf(UnknownNamespaceError);
+    if (!(result instanceof Error)) throw new Error("expected a rejection");
+    expect(result._tag).toBe("UnknownNamespaceError");
+    expect(memory.openCalls).not.toContain("/escape.tsx");
+  });
+
   test("writes exactly S bytes once, with no hardlinks (projections §16.3)", async () => {
     const sources = seededSources();
     const memory = memoryStagingFs(sources);
@@ -295,14 +386,13 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     const result = await store.createTurnWorkspace(validInput());
     if (result instanceof Error) throw result;
 
-    const s =
-      Object.values(sources).reduce((sum, src) => sum + src.bytes.byteLength, 0) +
-      MANIFEST.byteLength;
+    const s = Object.values(sources).reduce((sum, src) => sum + src.bytes.byteLength, 0);
     expect(result.totalBytes).toBe(s);
     // Every source opened exactly once — a copy, never a link, never a second read pass.
     expect(memory.openCalls.sort()).toEqual(Object.keys(sources).sort());
     expect(memory.bytesWritten()).toBe(s);
-    // One sink per staged file (4 sources + the inline manifest) — never reused, never linked.
+    // One sink per staged file (5 sources — `pages.json` is now an ordinary copied tree
+    // file, never written inline).
     expect(memory.sinksOpened()).toBe(5);
   });
 
@@ -481,18 +571,32 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     expect(memory.dirs.has(turnDir(USER_STATE_ROOT, projectKey, TURN_ID))).toBe(false);
   });
 
-  test("succeeds with zero listed pages (only the manifest slice and runtime docs are staged)", async () => {
+  test("succeeds with a tree that only has the manifest so far (no pages yet) — only the manifest and runtime docs are staged", async () => {
     const memory = memoryStagingFs(seededSources());
     const durable = memoryDurableWriter();
     const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
 
-    const result = await store.createTurnWorkspace(validInput({ pages: [] }));
+    const result = await store.createTurnWorkspace(
+      validInput({ treeFiles: [{ relPath: "pages.json", absSourcePath: "/project/pages.json" }] }),
+    );
     if (result instanceof Error) throw result;
     expect(result.files.map((f) => f.relPath).sort()).toEqual([
       "RUNTIME.md",
       "design/pages.json",
       "types/foo.d.ts",
     ]);
+  });
+
+  test("succeeds with a completely empty tree (zero treeFiles, a brand-new project) — only runtime docs are staged", async () => {
+    const memory = memoryStagingFs(seededSources());
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(validInput({ treeFiles: [] }));
+    if (result instanceof Error) throw result;
+    expect(result.files.map((f) => f.relPath).sort()).toEqual(["RUNTIME.md", "types/foo.d.ts"]);
+    // No `design/` directory is fabricated for an honestly-empty tree.
+    expect(memory.dirs.has(path.join(result.root, "design"))).toBe(false);
   });
 });
 
@@ -572,7 +676,7 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
     const result = await store.createTurnWorkspace(
       validInput({
         canonicalProjectRoot: projectRoot,
-        pages: [{ pageSlug: homeSlug, absSourcePath: pageSrc }],
+        treeFiles: [{ relPath: "pages/home.tsx", absSourcePath: pageSrc }],
         runtimeDocs: [{ relPath: "RUNTIME.md", absSourcePath: runtimeSrc }],
       }),
     );
@@ -593,7 +697,7 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
     const collided = await store.createTurnWorkspace(
       validInput({
         canonicalProjectRoot: projectRoot,
-        pages: [{ pageSlug: homeSlug, absSourcePath: pageSrc }],
+        treeFiles: [{ relPath: "pages/home.tsx", absSourcePath: pageSrc }],
         runtimeDocs: [{ relPath: "RUNTIME.md", absSourcePath: runtimeSrc }],
       }),
     );
@@ -620,7 +724,7 @@ describe("nodeStagingFsDeps + durableFileWrite — against a real volume", () =>
       validInput({
         turnId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d40",
         canonicalProjectRoot: projectRoot,
-        pages: [{ pageSlug: homeSlug, absSourcePath: pageSrc }],
+        treeFiles: [{ relPath: "pages/home.tsx", absSourcePath: pageSrc }],
         runtimeDocs: [],
       }),
     );

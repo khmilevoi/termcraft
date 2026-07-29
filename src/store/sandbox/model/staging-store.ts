@@ -8,11 +8,11 @@ import type {
   CandidateSink,
   FsAccessError,
   LeafRejectedError,
-  UnknownNamespaceError,
   UnsafeHardlinkError,
 } from "store/safe-fs";
 import {
   IdentityChangedError,
+  UnknownNamespaceError,
   checkIdentityUnchanged,
   checkManagedLeaf,
   classifyNamespace,
@@ -232,46 +232,22 @@ function copySourceFile(input: {
   return { sha256: hash.digestHex(), size: copied };
 }
 
-/** Write an in-memory buffer as a create-new workspace file while hashing it (the `pages.json` manifest slice). */
-function writeInlineFile(input: {
-  destPath: AbsPath;
-  bytes: Uint8Array;
-  fs: StagingFsDeps;
-}): StagingError | { sha256: Sha256Hex; size: number } {
-  const sink = input.fs.createNewSink(input.destPath);
-  if (sink instanceof Error) return sink;
-
-  const hash = input.fs.createHash();
-  hash.update(input.bytes);
-  const wrote = sink.write(input.bytes);
-  if (wrote instanceof Error) return closeSinkThen(sink, wrote);
-
-  const closed = sink.close();
-  if (closed instanceof Error) return closed;
-
-  return { sha256: hash.digestHex(), size: input.bytes.byteLength };
-}
-
-// STOPGAP (documented, not silent — Task 8: `store/sandbox` — stage the tree,
-// `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`): `stageAllFiles` below
-// still stages one `CreateTurnWorkspaceInput.pages` entry per page plus a separately-
-// synthesized `manifestSlice`, the pre-design-tree shape — it does not yet copy the whole
-// authored `design/**` tree 1:1, which is Task 8's job. What changes HERE, ahead of Task 8, is
-// only the destination: every staged file now lands under {@link DESIGN_DIRNAME} (imported from
-// `entities/design-tree`, the domain's own constant — `store/sandbox` is not the domain-free
-// layer `store/safe-fs` is, so it imports the real thing rather than a paired literal) so its
-// `namespace` (derived from the real `classifyNamespace`, never hardcoded) is honest under the
-// new workspace grammar (`store/safe-fs`'s `classifyWorkspace`, which no longer recognizes a
-// bare `pages/`).
-
 /**
- * Stage every listed canonical page, the manifest slice, and every runtime doc into the
- * (already create-new) workspace directory (turn-durability §7.2's staging read set). A
- * runtime-doc relative path outside the workspace's `agent-runtime-doc` grammar is rejected
- * before it is opened; so is a page or manifest destination outside `design-source` — which
- * cannot actually happen for the fixed `design/pages/<slug>.tsx` / `design/pages.json`
- * shapes below, but going through `classifyNamespace` rather than a hardcoded namespace
- * keeps the staged `namespace` tag truthful by construction.
+ * Stage the canonical design tree (a 1:1 copy at the SAME tree-relative paths, design §10)
+ * plus every runtime doc, into the already create-new workspace directory (turn-durability
+ * §7.2's staging read set). Every destination is classified through `classifyNamespace`
+ * BEFORE it is opened, so a destination outside the workspace grammar is rejected rather
+ * than written — and `namespace` is always derived from that real classifier, never
+ * hardcoded, so the staged tag is honest by construction.
+ *
+ * `classifyNamespace`'s `design/**` grammar (`store/safe-fs`'s `classifyWorkspace`) accepts
+ * any relative path with at least one component below `design/`, INCLUDING one carrying a
+ * `..` component — `design/../escape.tsx` still splits into the two-plus components that
+ * grammar checks for. It is a namespace classifier, not the full §5.1 path grammar; the
+ * component walk that rejects `..` (`store/safe-fs`'s `validateRelativePath`, reached via
+ * `resolveManagedPath`) never runs in this copy loop, which builds its destination with a
+ * raw `path.join` instead of resolving through an opened managed root. So the traversal
+ * check a reader might expect to cover this is guarded explicitly below instead.
  */
 function stageAllFiles(input: {
   workspacePath: AbsPath;
@@ -280,48 +256,29 @@ function stageAllFiles(input: {
 }): StagingError | StagedFile[] {
   const files: StagedFile[] = [];
 
-  // The manifest lands inside `design/` even with zero pages, so this directory is made
-  // unconditionally — unlike the `pages/` subdirectory below, which only pages need.
-  const madeDesignDir = input.fs.mkdirAll(path.join(input.workspacePath, DESIGN_DIRNAME));
-  if (madeDesignDir instanceof Error) return madeDesignDir;
+  for (const file of input.source.treeFiles) {
+    if (file.relPath.split("/").includes("..")) {
+      return new UnknownNamespaceError({
+        path: `${DESIGN_DIRNAME}/${file.relPath}`,
+        rootKind: "workspace",
+      });
+    }
 
-  if (input.source.pages.length > 0) {
-    const madePagesDir = input.fs.mkdirAll(path.join(input.workspacePath, DESIGN_DIRNAME, "pages"));
-    if (madePagesDir instanceof Error) return madePagesDir;
-  }
-  for (const page of input.source.pages) {
-    const relPath = `${DESIGN_DIRNAME}/pages/${page.pageSlug}.tsx`;
+    const relPath = `${DESIGN_DIRNAME}/${file.relPath}`;
     const namespace = classifyNamespace("workspace", relPath);
     if (namespace instanceof Error) return namespace;
 
-    const destPath = path.join(
-      input.workspacePath,
-      DESIGN_DIRNAME,
-      "pages",
-      `${page.pageSlug}.tsx`,
-    );
-    const copied = copySourceFile({ absSourcePath: page.absSourcePath, destPath, fs: input.fs });
+    const destPath = path.join(input.workspacePath, ...relPath.split("/"));
+    const parentDir = path.dirname(destPath);
+    if (parentDir !== input.workspacePath) {
+      const madeParent = input.fs.mkdirAll(parentDir);
+      if (madeParent instanceof Error) return madeParent;
+    }
+
+    const copied = copySourceFile({ absSourcePath: file.absSourcePath, destPath, fs: input.fs });
     if (copied instanceof Error) return copied;
     files.push({ relPath, namespace, sha256: copied.sha256, size: copied.size });
   }
-
-  const manifestRelPath = `${DESIGN_DIRNAME}/pages.json`;
-  const manifestNamespace = classifyNamespace("workspace", manifestRelPath);
-  if (manifestNamespace instanceof Error) return manifestNamespace;
-
-  const manifestDest = path.join(input.workspacePath, DESIGN_DIRNAME, "pages.json");
-  const manifestWritten = writeInlineFile({
-    destPath: manifestDest,
-    bytes: input.source.manifestSlice,
-    fs: input.fs,
-  });
-  if (manifestWritten instanceof Error) return manifestWritten;
-  files.push({
-    relPath: manifestRelPath,
-    namespace: manifestNamespace,
-    sha256: manifestWritten.sha256,
-    size: manifestWritten.size,
-  });
 
   for (const doc of input.source.runtimeDocs) {
     const namespace = classifyNamespace("workspace", doc.relPath);

@@ -5,23 +5,12 @@ import path from "node:path";
 
 import type { CreateTurnWorkspaceInputV1 } from "core/ports";
 import { createFakeStagingService } from "core/ports/fakes";
-import { parsePageSlug } from "entities/page";
-import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
 import { createStagingAdapter } from "./staging";
 import { cleanupScratchRoots, createRealProjectFixture } from "./test-support";
 
 afterEach(cleanupScratchRoots);
-
-function mustParseSlug(raw: string): PageSlug {
-  const slug = parsePageSlug(raw);
-  if (slug instanceof Error) throw new Error(`fixture bug: ${slug.message}`);
-  return slug;
-}
-
-const HOME_SLUG = mustParseSlug("home");
-const MAIN_SLUG = mustParseSlug("main");
 
 /**
  * Flips the case of the last cased (letter) character found in `raw`, scanning from the end
@@ -55,16 +44,23 @@ afterEach(() => {
   for (const dir of extraScratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function buildInput(homeSourcePath: string): CreateTurnWorkspaceInputV1 {
+/**
+ * Builds a `CreateTurnWorkspaceInputV1` staging exactly the given tree files (design §10:
+ * `relPath` is TREE-relative, never `design/`-prefixed) — an array rather than a single
+ * `{relPath, sourcePath}` pair so the round-trip test below can stage `pages.json` alongside
+ * a page in one call, the same way a real turn would.
+ */
+function buildInput(
+  files: readonly { relPath: string; sourcePath: string }[],
+): CreateTurnWorkspaceInputV1 {
   return {
     turnId: uuidv7(),
     targetChatId: uuidv7(),
-    pages: [{ pageSlug: HOME_SLUG, sourcePath: homeSourcePath }],
-    manifestSlice: new TextEncoder().encode(JSON.stringify({ pages: ["home"] })),
+    treeFiles: files.map((file) => ({ relPath: file.relPath, sourcePath: file.sourcePath })),
     runtimeDocs: [],
     readSet: {
       manifest: null,
-      canonicalPages: [{ pageSlug: HOME_SLUG, snapshot: null }],
+      designFiles: files.map((file) => ({ relPath: file.relPath, snapshot: null })),
       chat: { length: 0, prefixSha256: "0".repeat(64) },
       pins: [],
     },
@@ -72,23 +68,23 @@ function buildInput(homeSourcePath: string): CreateTurnWorkspaceInputV1 {
 }
 
 describe("createStagingAdapter — contract test (fake vs. real)", () => {
-  test("createTurnWorkspace() stages a real page file at design/pages/<slug>.tsx (the fixed fake-fidelity path)", async () => {
+  test("createTurnWorkspace() stages a real tree file at design/<relPath> (the fixed fake-fidelity path)", async () => {
     const sourceDir = freshSourceDir();
     const homeSourcePath = path.join(sourceDir, "home.tsx");
     fs.writeFileSync(homeSourcePath, "export const meta = { title: 'Home' };\n");
+    const input = buildInput([{ relPath: "pages/home.tsx", sourcePath: homeSourcePath }]);
 
     const fake = createFakeStagingService();
-    const fakeWorkspace = await fake.createTurnWorkspace(buildInput(homeSourcePath));
+    const fakeWorkspace = await fake.createTurnWorkspace(input);
     if ("code" in fakeWorkspace) throw new Error("fixture bug: fake createTurnWorkspace failed");
     expect(fakeWorkspace.files.some((f) => f.relPath === "design/pages/home.tsx")).toBe(true);
 
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(input);
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
       expect(workspace.files.some((f) => f.relPath === "design/pages/home.tsx")).toBe(true);
-      expect(workspace.files.some((f) => f.relPath === "design/pages.json")).toBe(true);
       expect(
         fs.readFileSync(path.join(workspace.root, "design", "pages", "home.tsx"), "utf8"),
       ).toBe("export const meta = { title: 'Home' };\n");
@@ -99,33 +95,24 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
 
   // Gap G regression: `core/kernel/handlers/turn.ts`'s `pages.push` used to build its
   // `sourcePath` from the agent WORKSPACE's own flat layout joined onto the PROJECT root — a
-  // path that never exists on disk, since canonical page storage is
-  // `<root>/.termcraft/pages/<slug>/page.tsx` (`store/safe-fs/model/limits.ts:134-135`,
-  // `store/transaction/model/wrappers.ts`'s `canonicalPagePath`). Every other test in this
-  // file either stages zero pages or hands `buildInput` a source path from an arbitrary
-  // scratch directory, so the one construction that matters — a real canonical layout on
-  // disk — was never exercised until now.
-  test("stages a page whose source sits at the canonical <root>/.termcraft/pages/<slug>/page.tsx", async () => {
+  // path that never existed on disk. Canonical design-tree storage now lives at
+  // `<root>/.termcraft/design/<treeRelPath>` (multi-file design tree design §3/§10 — the
+  // project root's OWN `design/**` namespace, `store/safe-fs/model/limits.ts`'s
+  // `classifyProject`), retiring the old `<root>/.termcraft/pages/<slug>/page.tsx` shape this
+  // test used to pin. Every other test in this file either stages zero tree files or hands
+  // `buildInput` a source path from an arbitrary scratch directory, so the one construction
+  // that matters — a real canonical layout on disk — was never exercised until now.
+  test("stages a tree file whose source sits at the canonical <root>/.termcraft/design/<relPath>", async () => {
     const { open, deps } = await createRealProjectFixture();
     try {
-      const sourcePath = path.join(open.root, ".termcraft", "pages", "main", "page.tsx");
+      const sourcePath = path.join(open.root, ".termcraft", "design", "pages", "main.tsx");
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, "export default 1;\n");
 
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace({
-        turnId: uuidv7(),
-        targetChatId: uuidv7(),
-        pages: [{ pageSlug: MAIN_SLUG, sourcePath }],
-        manifestSlice: new TextEncoder().encode(JSON.stringify({ pages: ["main"] })),
-        runtimeDocs: [],
-        readSet: {
-          manifest: null,
-          canonicalPages: [{ pageSlug: MAIN_SLUG, snapshot: null }],
-          chat: { length: 0, prefixSha256: "0".repeat(64) },
-          pins: [],
-        },
-      });
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([{ relPath: "pages/main.tsx", sourcePath }]),
+      );
 
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
       expect(workspace.files.some((f) => f.relPath === "design/pages/main.tsx")).toBe(true);
@@ -139,11 +126,19 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const homeSourcePath = path.join(sourceDir, "home.tsx");
     const homeSource = "export const meta = { title: 'Home' };\n";
     fs.writeFileSync(homeSourcePath, homeSource);
+    const manifestSourcePath = path.join(sourceDir, "pages.json");
+    const manifestSource = JSON.stringify({ pages: ["home"] });
+    fs.writeFileSync(manifestSourcePath, manifestSource);
 
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([
+          { relPath: "pages/home.tsx", sourcePath: homeSourcePath },
+          { relPath: "pages.json", sourcePath: manifestSourcePath },
+        ]),
+      );
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
 
       const candidate = await adapter.snapshotToCandidate(workspace);
@@ -157,7 +152,7 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
 
       const manifestBytes = await adapter.readCandidateFile(candidate.root, "design/pages.json");
       if ("code" in manifestBytes) throw new Error(`fixture bug: ${manifestBytes.safeMessage}`);
-      expect(new TextDecoder().decode(manifestBytes)).toBe(JSON.stringify({ pages: ["home"] }));
+      expect(new TextDecoder().decode(manifestBytes)).toBe(manifestSource);
 
       // The candidate survives workspace retirement (it lives outside `turns/<turnId>/`).
       const retired = await adapter.retireWorkspace(workspace);
@@ -189,7 +184,9 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([{ relPath: "pages/home.tsx", sourcePath: homeSourcePath }]),
+      );
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
 
       const first = await adapter.snapshotToCandidate(workspace);
@@ -221,7 +218,9 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([{ relPath: "pages/home.tsx", sourcePath: homeSourcePath }]),
+      );
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
       const candidate = await adapter.snapshotToCandidate(workspace);
       if ("code" in candidate) throw new Error(`fixture bug: ${candidate.safeMessage}`);
@@ -244,7 +243,7 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
         totalBytes: 0,
         readSet: {
           manifest: null,
-          canonicalPages: [],
+          designFiles: [],
           chat: { length: 0, prefixSha256: "0".repeat(64) },
           pins: [],
         },
@@ -263,7 +262,9 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([{ relPath: "pages/home.tsx", sourcePath: homeSourcePath }]),
+      );
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
 
       const candidate = await adapter.snapshotToCandidate(workspace);
@@ -369,7 +370,9 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       const adapter = createStagingAdapter(deps);
-      const workspace = await adapter.createTurnWorkspace(buildInput(homeSourcePath));
+      const workspace = await adapter.createTurnWorkspace(
+        buildInput([{ relPath: "pages/home.tsx", sourcePath: homeSourcePath }]),
+      );
       if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
 
       const candidate = await adapter.snapshotToCandidate(workspace);

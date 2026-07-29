@@ -33,9 +33,18 @@ export type StagingFsDeps = Pick<
   "mkdirAll" | "mkdirNew" | "openSource" | "createNewSink" | "createHash" | "removeTree"
 >;
 
-/** One canonical page to stage, already resolved to an absolute source path by the caller. */
-export interface StagingPageSource {
-  readonly pageSlug: PageSlug;
+/**
+ * One file of the canonical design tree to stage, already resolved to a readable absolute
+ * path by the caller. `relPath` is TREE-relative (`pages/home.tsx` — never carries the
+ * `design/` prefix, the plan's fixed vocabulary), and the workspace copy lands at the SAME
+ * tree-relative path under the design tree's directory name (`entities/design-tree`'s
+ * `DESIGN_DIRNAME`) — which is what makes design §10's hard requirement hold: because the
+ * two trees agree, no import specifier is ever rewritten on apply. Which tree file is a
+ * page (versus a lib module, a component, …) is `pages.json`'s business, not the stager's —
+ * this type carries no slug and no page-ness flag.
+ */
+export interface StagingTreeFile {
+  readonly relPath: string;
   readonly absSourcePath: AbsPath;
 }
 
@@ -49,7 +58,7 @@ export interface StagingRuntimeDoc {
   readonly absSourcePath: AbsPath;
 }
 
-/** A `project.toml` or canonical-page snapshot in the send-time read set — the same fact `store/transaction`'s `FileImage.file` variant carries, re-declared locally per this codebase's own convention (e.g. `store/transaction/model/plan.ts`'s `preparedAppendSchema`) rather than importing across `store/` submodules the plan does not wire as dependent. */
+/** A `project.toml` or design-tree file snapshot in the send-time read set — the same fact `store/transaction`'s `FileImage.file` variant carries, re-declared locally per this codebase's own convention (e.g. `store/transaction/model/plan.ts`'s `preparedAppendSchema`) rather than importing across `store/` submodules the plan does not wire as dependent. */
 export interface ReadSetFileSnapshot {
   readonly sha256: Sha256Hex;
   readonly size: number;
@@ -61,9 +70,9 @@ export interface ReadSetAppendBase {
   readonly prefixSha256: Sha256Hex;
 }
 
-/** One canonical page's snapshot in the send-time read set. `snapshot: null` marks an expected-absence entry — a potential new target that did not exist at admission time (turn-durability §7.2 step 4: the CAS still re-checks that absence at finalization). */
-export interface CanonicalPageReadSetEntry {
-  readonly pageSlug: PageSlug;
+/** One tree file's snapshot in the send-time read set, keyed by its TREE-relative path (never `design/`-prefixed — the plan's fixed vocabulary). `snapshot: null` marks an expected-absence entry — a potential new target that did not exist at admission time (turn-durability §7.2 step 4: the CAS still re-checks that absence at finalization). Mirrors `core/ports`' `StagedTurnReadSetV1.designFiles` entry shape exactly, so `store/adapters/staging.ts` can pass `readSet` straight through without a translation. */
+export interface DesignFileReadSetEntry {
+  readonly relPath: string;
   readonly snapshot: ReadSetFileSnapshot | null;
 }
 
@@ -76,7 +85,7 @@ export interface PinsReadSetEntry {
 /**
  * The full send-time read set turn-durability §7.2 step 4 requires `turn.json` to persist,
  * and §7.5's pre-intent CAS re-hashes: `project.toml`'s image (`null` only for the
- * theoretical not-yet-existing-manifest case), every canonical page exposed to the agent
+ * theoretical not-yet-existing-manifest case), every design-tree file exposed to the agent
  * (including expected-absence entries for a potential new target), the captured chat's
  * append base, and every contributing comments log's append base.
  *
@@ -96,16 +105,17 @@ export interface PinsReadSetEntry {
  */
 export interface StagedTurnReadSet {
   readonly manifest: ReadSetFileSnapshot | null;
-  readonly canonicalPages: readonly CanonicalPageReadSetEntry[];
+  readonly designFiles: readonly DesignFileReadSetEntry[];
   readonly chat: ReadSetAppendBase;
   readonly pins: readonly PinsReadSetEntry[];
 }
 
 /**
  * Everything `createTurnWorkspace` needs to populate one turn's workspace (turn-durability
- * §6.2/§7.2). `manifestSlice` is the already-assembled `pages.json` bytes: unlike the
- * canonical pages and runtime docs, the manifest slice is synthesized fresh per turn — not
- * copied from an existing file — so it is handed in as bytes rather than a source path.
+ * §6.2/§7.2, as amended by the multi-file design tree design §10). `treeFiles` is the whole
+ * canonical `design/**` tree, `pages.json` included — it is a real authored file the agent
+ * edits directly, not a manifest slice synthesized per turn, so staging copies it like every
+ * other tree file rather than taking it in as separately-assembled bytes.
  * `readSet` is the send-time read set captured at admission (see {@link StagedTurnReadSet}) —
  * durably persisted in `turn.json` rather than kept only in caller memory.
  */
@@ -114,8 +124,7 @@ export interface CreateTurnWorkspaceInput {
   readonly projectId: string;
   readonly turnId: string;
   readonly targetChatId: string;
-  readonly pages: readonly StagingPageSource[];
-  readonly manifestSlice: Uint8Array;
+  readonly treeFiles: readonly StagingTreeFile[];
   readonly runtimeDocs: readonly StagingRuntimeDoc[];
   readonly readSet: StagedTurnReadSet;
 }

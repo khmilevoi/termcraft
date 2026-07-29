@@ -57,10 +57,11 @@ import type { StoreAdapterDeps } from "./types";
 // `readCandidateFile` opens the frozen candidate as its OWN managed root (`kind: "candidate"`)
 // rather than reading through `open.safeFs` (which is scoped to `.termcraft`, not the
 // sandbox-area candidate root the plan's own text assumed) — `SafeProjectFs.readFile`'s own
-// namespace grammar (`pages/<slug>.tsx`, `pages.json`, `RUNTIME.md`, `*.d.ts` — the exact
-// staged-file inventory) plus its physical-presence check already deliver the port's
-// "out-of-contract paths return FailureDtoV1, never fabricated bytes" without this adapter
-// separately tracking each candidate's file list.
+// namespace grammar (`design/pages/<slug>.tsx`, `design/pages.json`, `RUNTIME.md`, `*.d.ts` —
+// the exact staged-file inventory, multi-file design tree design §10) plus its
+// physical-presence check already deliver the port's "out-of-contract paths return
+// FailureDtoV1, never fabricated bytes" without this adapter separately tracking each
+// candidate's file list.
 //
 // RESOLVED GAP (kernel-assembly Task 13): candidate directories this adapter creates under
 // `candidates/<turnId>/` (see `candidateDestRoot` below) used to be NEVER removed —
@@ -99,11 +100,10 @@ function toStoreInput(
     projectId,
     turnId: input.turnId,
     targetChatId: input.targetChatId,
-    pages: input.pages.map((page) => ({
-      pageSlug: page.pageSlug,
-      absSourcePath: page.sourcePath,
+    treeFiles: input.treeFiles.map((file) => ({
+      relPath: file.relPath,
+      absSourcePath: file.sourcePath,
     })),
-    manifestSlice: input.manifestSlice,
     runtimeDocs: input.runtimeDocs.map((doc) => ({
       relPath: doc.relPath,
       absSourcePath: doc.sourcePath,
