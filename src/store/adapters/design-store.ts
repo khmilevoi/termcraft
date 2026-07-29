@@ -195,6 +195,11 @@ export function createDesignStoreAdapter(deps: StoreAdapterDeps) {
       actionId: deps.uuidv7(),
       pageSlug,
       entryRelPath: entry.entry,
+      // The entry file's hash AT THE MOMENT `rewritten` was computed from it — the engine
+      // refuses (`EntrySourceDriftedError`) if this no longer matches by the time it
+      // acquires the write permit, rather than silently overwriting a concurrent write with
+      // a rewrite computed from these now-stale bytes.
+      expectedSourceHash: current.sha256,
       newBytes: new TextEncoder().encode(rewritten),
       createdAt: nowIso(deps.clock),
     });

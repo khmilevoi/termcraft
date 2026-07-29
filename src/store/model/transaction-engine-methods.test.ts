@@ -13,6 +13,7 @@ import { computeSessionPrefixHash, sha256Hex } from "store/jsonl";
 
 import type { OpenProject, StoreDeps } from "../types";
 import {
+  EntrySourceDriftedError,
   ManifestDriftedError,
   PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
@@ -261,9 +262,17 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     const opened = await freshOpenProject();
     try {
       // Deliberately unrelated to the slug (design §3, §7's central rule) — an entry equal
-      // to `pages/home.tsx` could never distinguish a manifest lookup from a slug guess.
+      // to `pages/home.tsx` could never distinguish a manifest lookup from a slug guess. The
+      // manifest must be seeded first: `renamePageTitle` now re-checks that it still binds
+      // `pageSlug` to `entryRelPath` (review round 3), so a page unlisted anywhere would be
+      // refused before ever reaching the write.
       const home = slug("home");
       const entryRelPath = "screens/home-view.tsx";
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: entryRelPath }],
+        requestedActivePage: null,
+      });
 
       const v1 = new TextEncoder().encode("export const meta = { title: 'Home' }\n");
       const created = await opened.transactions.renamePageTitle({
@@ -271,6 +280,7 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
         actionId: uuidv7(),
         pageSlug: home,
         entryRelPath,
+        expectedSourceHash: null, // the entry file does not exist yet — a create-new intent
         newBytes: v1,
         createdAt: TS,
       });
@@ -290,6 +300,7 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
         actionId: uuidv7(),
         pageSlug: home,
         entryRelPath,
+        expectedSourceHash: sha256Hex(v1), // the entry file now holds v1
         newBytes: v2,
         createdAt: TS,
       });
@@ -299,6 +310,111 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       if (readV2 instanceof Error) throw new Error(`fixture bug: ${readV2.message}`);
       expect(new TextDecoder().decode(readV2.bytes)).toBe(
         "export const meta = { title: 'Welcome Home' }\n",
+      );
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  // Important review finding, round 3: `renamePageTitle` carries the identical
+  // unprotected-snapshot shape Important 1 (round 2) closed for `reorderPages`/`removePage`
+  // — the CALLER (`store/adapters/design-store.ts`) resolves `entryRelPath` and reads the
+  // entry file's bytes OUTSIDE the write permit, and the engine's own `oldImage` CAS
+  // re-observes the SAME path fresh, inside the SAME permit, so it can never disagree with
+  // itself. See `EntrySourceDriftedError`'s own doc comment (`store/model/factory.ts`).
+  test("renamePageTitle refuses when the entry file's own bytes changed since they were read — never overwrites a concurrent writer's content with a stale rewrite", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const entryRelPath = "screens/home-view.tsx";
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: entryRelPath }],
+        requestedActivePage: null,
+      });
+      const v1 = new TextEncoder().encode("export const meta = { title: 'Home' }\n");
+      seedDesignFile(opened, entryRelPath, v1);
+
+      // Snapshot: what a caller would have read before computing a rewrite.
+      const expectedSourceHash = sha256Hex(v1);
+
+      // Simulate a concurrent writer (e.g. a turn finalize) replacing the entry file's
+      // content, after the snapshot was captured but before the permit is acquired.
+      const concurrentBytes = new TextEncoder().encode(
+        "export const meta = { title: 'Concurrent' }\n",
+      );
+      seedDesignFile(opened, entryRelPath, concurrentBytes);
+
+      const rejected = await opened.transactions.renamePageTitle({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        pageSlug: home,
+        entryRelPath,
+        expectedSourceHash, // stale — the file's real hash has moved on
+        newBytes: new TextEncoder().encode("export const meta = { title: 'Stale Rewrite' }\n"),
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(EntrySourceDriftedError);
+
+      // The concurrent writer's content survives untouched.
+      const after = await opened.pages.readTreeFile(entryRelPath);
+      if (after instanceof Error) throw new Error(`fixture bug: ${after.message}`);
+      expect(new TextDecoder().decode(after.bytes)).toBe(
+        "export const meta = { title: 'Concurrent' }\n",
+      );
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("renamePageTitle refuses when design/pages.json moved the page's entry since it was read — never resurrects the old, now-orphaned path", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const oldEntry = "screens/home-view.tsx";
+      const newEntry = "screens/home-view-v2.tsx";
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: oldEntry }],
+        requestedActivePage: null,
+      });
+      const originalBytes = new TextEncoder().encode("export const meta = { title: 'Home' }\n");
+      seedDesignFile(opened, oldEntry, originalBytes);
+      const expectedSourceHash = sha256Hex(originalBytes);
+
+      // Simulate a concurrent writer moving the page's entry to a NEW path. The OLD file's
+      // bytes are left exactly as they were — nothing physically changed at `oldEntry` — so
+      // a content-only check would miss this; only re-checking the manifest BINDING catches
+      // it.
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: newEntry }],
+        requestedActivePage: null,
+      });
+      seedDesignFile(opened, newEntry, originalBytes);
+
+      const rejected = await opened.transactions.renamePageTitle({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        pageSlug: home,
+        entryRelPath: oldEntry, // stale — the manifest no longer binds "home" to this path
+        expectedSourceHash,
+        newBytes: new TextEncoder().encode("export const meta = { title: 'Stale Rewrite' }\n"),
+        createdAt: TS,
+      });
+      expect(rejected).toBeInstanceOf(EntrySourceDriftedError);
+
+      // The old, now-orphaned path is untouched — never resurrected with the stale rewrite.
+      const oldAfter = await opened.pages.readTreeFile(oldEntry);
+      if (oldAfter instanceof Error) throw new Error(`fixture bug: ${oldAfter.message}`);
+      expect(new TextDecoder().decode(oldAfter.bytes)).toBe(
+        "export const meta = { title: 'Home' }\n",
+      );
+      // The real, current entry is also untouched by the refused call.
+      const newAfter = await opened.pages.readTreeFile(newEntry);
+      if (newAfter instanceof Error) throw new Error(`fixture bug: ${newAfter.message}`);
+      expect(new TextDecoder().decode(newAfter.bytes)).toBe(
+        "export const meta = { title: 'Home' }\n",
       );
     } finally {
       await opened.close();
@@ -559,6 +675,81 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       const manifestAfter = await opened.pages.readManifest();
       if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
       expect(manifestAfter.pages).toEqual(drifted.pages);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  // Important review finding, round 3 (fixing round 2's own regression): the drift check
+  // MUST compare `manifestBefore` STRUCTURALLY against the current on-disk manifest, never
+  // by re-encoding it and diffing bytes — `design/pages.json` is an agent-authored file
+  // `store/sandbox` stages verbatim and the system prompt tells the agent to edit directly,
+  // so its on-disk bytes are never guaranteed to match `encodePagesManifest`'s own canonical
+  // output (fixed indent, fixed key order, `requestedActivePage: null` OMITTED rather than
+  // written explicitly). Round 2's original byte-comparison implementation reported drift
+  // for this exact, semantically UNCHANGED manifest and permanently refused both
+  // `reorderPages` and `removePage` — reproduced here directly, seeding the on-disk file by
+  // hand rather than through `encodePagesManifest`, which is exactly why no earlier test
+  // (every one of which seeds via that same encoder) ever caught it.
+  test("reorderPages/removePage succeed against a valid but NON-CANONICAL pages.json — byte-identical is never required, only structurally equal", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      // Deliberately NOT what `encodePagesManifest` would produce: 4-space indent, reversed
+      // key order (both at the top level and within each entry), and an EXPLICIT
+      // `"requestedActivePage": null` the encoder would have omitted entirely.
+      const nonCanonicalBytes = new TextEncoder().encode(
+        [
+          "{",
+          '    "requestedActivePage": null,',
+          '    "pages": [',
+          '        { "entry": "screens/home-view.tsx", "slug": "home" },',
+          '        { "entry": "panels/about-panel.tsx", "slug": "about" }',
+          "    ],",
+          '    "schemaVersion": 1',
+          "}",
+        ].join("\n"),
+      );
+      seedDesignFile(opened, "pages.json", nonCanonicalBytes);
+
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+      expect(manifestBefore.pages.map((page) => page.slug)).toEqual([home, about]);
+      expect(manifestBefore.requestedActivePage).toBeNull();
+
+      const reordered = await opened.transactions.reorderPages({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore,
+        orderedSlugs: [about, home],
+        createdAt: TS,
+      });
+      if (reordered instanceof Error) throw reordered;
+      const manifestAfterReorder = await opened.pages.readManifest();
+      if (manifestAfterReorder instanceof Error)
+        throw new Error(`fixture bug: ${manifestAfterReorder.message}`);
+      expect(manifestAfterReorder.pages.map((page) => page.slug)).toEqual([about, home]);
+
+      // Same non-canonical shape, seeded again, proves `removePage` independently.
+      seedDesignFile(opened, "pages.json", nonCanonicalBytes);
+      const manifestBeforeRemove = await opened.pages.readManifest();
+      if (manifestBeforeRemove instanceof Error)
+        throw new Error(`fixture bug: ${manifestBeforeRemove.message}`);
+
+      const removed = await opened.transactions.removePage({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore: manifestBeforeRemove,
+        pageSlug: home,
+        createdAt: TS,
+      });
+      if (removed instanceof Error) throw removed;
+      const manifestAfterRemove = await opened.pages.readManifest();
+      if (manifestAfterRemove instanceof Error)
+        throw new Error(`fixture bug: ${manifestAfterRemove.message}`);
+      expect(manifestAfterRemove.pages.map((page) => page.slug)).toEqual([about]);
     } finally {
       await opened.close();
     }

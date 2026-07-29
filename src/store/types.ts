@@ -339,6 +339,17 @@ export interface RenamePageTitleInput {
    * guessed from `pageSlug` itself (design §3, §7). The engine targets exactly this path.
    */
   readonly entryRelPath: string;
+  /**
+   * The entry file's sha256 AT THE MOMENT the caller read it and computed `newBytes` from it
+   * — `null` when the caller believes the file does not exist there yet (a create-new
+   * intent, mirroring `FileImage`'s own `"absent" | "file"` vocabulary). The engine refuses
+   * (`EntrySourceDriftedError`) when the file's CURRENT state no longer matches this, rather
+   * than silently overwriting drifted content — or `design/pages.json`'s binding for
+   * `pageSlug` having moved to a different `entry` entirely — with a rewrite computed from a
+   * stale read (review round 3: the identical class of race `ManifestDriftedError` closes
+   * for `reorderPages`/`removePage`, applied to this method's own two-part source).
+   */
+  readonly expectedSourceHash: Sha256Hex | null;
   /** The page's complete new source bytes (the `meta.title` edit is baked into the source by the caller — a page title is not a manifest field, entities/page's `PageMeta`). */
   readonly newBytes: Uint8Array;
   readonly createdAt: string;
@@ -423,6 +434,10 @@ export interface TransactionEngine {
   /**
    * `page.renameTitle`: replaces one page's design source bytes in place, targeting
    * `input.entryRelPath` — never a path computed from `input.pageSlug` (design §3, §7).
+   * Refuses with `EntrySourceDriftedError` (checked FIRST, inside the permit) when either
+   * `design/pages.json`'s binding for `pageSlug` no longer names `entryRelPath`, or the
+   * entry file's current bytes no longer match `input.expectedSourceHash` — see that class's
+   * own doc comment.
    */
   renamePageTitle(input: RenamePageTitleInput): Promise<Error | CommittedMarker>;
   /**
@@ -591,6 +606,7 @@ export type {
   ProjectLayoutError,
   ProjectAlreadyExistsError,
   DesignTreeTooDeepError,
+  EntrySourceDriftedError,
   ManifestDriftedError,
   PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,

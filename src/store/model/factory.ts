@@ -112,6 +112,7 @@ import {
 } from "store/transaction";
 import type {
   CommittedMarker,
+  FileImage,
   ProjectWritePermit,
   RecoveryFsDeps,
   TransactionFsDeps,
@@ -211,14 +212,53 @@ export class ReorderPagesInvalidOrderError extends errore.createTaggedError({
  * itself. Without this check, a stale `manifestBefore` would silently overwrite whatever a
  * concurrent writer had just landed (e.g. a newly-finalized page, or a moved `entry`) with
  * content derived from the caller's outdated snapshot. Refused instead, by comparing
- * `manifestBefore` re-encoded byte-for-byte (`encodePagesManifest` is deterministic) against
- * the manifest's freshly re-observed on-disk image — INSIDE the permit, immediately before
- * either method does anything else.
+ * `manifestBefore` STRUCTURALLY (decoded field-by-field) against a freshly re-read and
+ * re-decoded on-disk manifest — INSIDE the permit, immediately before either method does
+ * anything else.
+ *
+ * NEVER compared by re-encoding `manifestBefore` and diffing bytes against the observed
+ * on-disk image (review round 3's own finding, fixing round 2's original implementation):
+ * `design/pages.json` is an AGENT-AUTHORED file `store/sandbox` stages verbatim into the
+ * turn workspace and the system prompt tells the agent to edit directly, and a user may
+ * hand-edit it too — its on-disk bytes are never guaranteed to match
+ * `encodePagesManifest`'s own canonical output (fixed 2-space indent, fixed key order, and
+ * `requestedActivePage: null` OMITTED rather than written explicitly,
+ * `entities/design-tree/model/manifest.ts`). A byte comparison reports drift for a
+ * SEMANTICALLY unchanged manifest and permanently refuses both mutating methods for any
+ * project whose `pages.json` was ever touched by anything other than this file's own
+ * writer — an unrecoverable-through-the-product regression the structural comparison does
+ * not have: the engine's own per-operation `oldImage`/`newImage` CAS (`buildPagesManifestOperation`)
+ * still independently covers true byte-level interleaving during the transaction itself.
  */
 export class ManifestDriftedError extends errore.createTaggedError({
   name: "ManifestDriftedError",
   message:
     "design/pages.json changed since it was read; $method refuses rather than overwrite the drift",
+}) {}
+
+/**
+ * `renamePageTitle` carries the identical unprotected-snapshot shape as
+ * {@link ManifestDriftedError}, applied to its own TWO-part source instead of the whole
+ * manifest: the caller (`store/adapters/design-store.ts`) resolves `entryRelPath` from a
+ * manifest read, then separately reads THAT file's current bytes and computes a rewrite from
+ * them — both BEFORE the write permit is acquired. Refused when either half has drifted
+ * since:
+ *
+ * - `design/pages.json`'s binding for `pageSlug` no longer names `entryRelPath` at all — a
+ *   concurrent writer moved the page's entry to a different path, or removed the page.
+ *   Writing anyway would silently RESURRECT a file the manifest no longer considers this
+ *   page's entry, at a path nothing else will ever read again.
+ * - the entry file's own bytes no longer match `expectedSourceHash` — a concurrent writer
+ *   (e.g. a turn finalize) replaced its content. The caller's `newBytes` was computed by
+ *   mechanically rewriting a NOW-STALE read, so writing it would silently discard whatever
+ *   the concurrent write added.
+ *
+ * Both checked FIRST, inside the permit, before any write — see
+ * `assertEntrySourceNotDrifted`.
+ */
+export class EntrySourceDriftedError extends errore.createTaggedError({
+  name: "EntrySourceDriftedError",
+  message: "design-tree entry $entryRelPath for page $pageSlug changed since it was read: $reason",
 }) {}
 
 // ---- production dependency wiring --------------------------------------------------
@@ -338,32 +378,77 @@ function collectPagePayloads(
   return new Map(built.flatMap((entry) => (entry.payload === undefined ? [] : [entry.payload])));
 }
 
+/** Field-by-field, order-sensitive equality (array order IS page order, design §4 — never a set comparison). Deliberately NOT a byte/hash comparison — see {@link ManifestDriftedError}'s own doc comment for why. */
+function manifestStructurallyEqual(a: PagesManifestV1, b: PagesManifestV1): boolean {
+  if (a.schemaVersion !== b.schemaVersion) return false;
+  if (a.requestedActivePage !== b.requestedActivePage) return false;
+  if (a.pages.length !== b.pages.length) return false;
+  return a.pages.every((entry, index) => {
+    const other = b.pages[index];
+    return other !== undefined && entry.slug === other.slug && entry.entry === other.entry;
+  });
+}
+
 /**
  * The CAS precondition `reorderPages`/`removePage` need before they rebuild
  * `design/pages.json` wholesale from a caller-supplied `manifestBefore` snapshot — see
  * {@link ManifestDriftedError}'s own doc comment for why the engine's ordinary
- * `oldImage`/`newImage` CAS cannot catch this on its own. Compared by byte image, not
- * structural/deep equality: `encodePagesManifest` is deterministic (fixed field order), so a
- * snapshot that is still current re-encodes to exactly the bytes on disk — the same
- * "compare hashes, not objects" discipline every other CAS check in this codebase follows
- * (`observeFileImage`, `imagesEqual`). MUST be called first, inside the permit, before either
- * method does anything else with `manifestBefore`.
+ * `oldImage`/`newImage` CAS cannot catch this on its own, and for why the comparison is
+ * STRUCTURAL rather than a byte/hash diff. MUST be called first, inside the permit, before
+ * either method does anything else with `manifestBefore`.
  */
 function assertManifestNotDrifted(
   deps: TransactionWrapperDeps,
   manifestBefore: PagesManifestV1,
   method: string,
-): SafeFsError | ManifestDriftedError | null {
-  const target = designFilePath(PAGES_MANIFEST_RELPATH);
-  const current = observeFileImage(deps.fs, target);
+): SafeFsError | PagesManifestInvalidError | ManifestDriftedError | null {
+  const current = readManifestFromDisk(deps.fs.safeFs);
   if (current instanceof Error) return current;
-  const expectedBytes = new TextEncoder().encode(encodePagesManifest(manifestBefore));
-  const drifted =
-    current.state !== "file" ||
-    current.sha256 !== sha256Hex(expectedBytes) ||
-    current.size !== expectedBytes.byteLength;
-  if (drifted) return new ManifestDriftedError({ method });
+  if (!manifestStructurallyEqual(current, manifestBefore)) {
+    return new ManifestDriftedError({ method });
+  }
   return null;
+}
+
+/**
+ * The two-part CAS precondition `renamePageTitle` needs before it replaces an entry file
+ * resolved by the CALLER, outside the permit — see {@link EntrySourceDriftedError}'s own doc
+ * comment for the two ways this can drift and why the engine's ordinary `oldImage` CAS
+ * cannot catch either on its own. Returns the entry file's freshly-observed `FileImage` on
+ * success (the caller reuses it directly as the write operation's own `oldImage`, so this
+ * check never reads the file's stat twice). MUST be called first, inside the permit, before
+ * any write.
+ */
+function assertEntrySourceNotDrifted(
+  fs: TransactionFsDeps,
+  input: RenamePageTitleInput,
+): SafeFsError | PagesManifestInvalidError | EntrySourceDriftedError | FileImage {
+  const manifest = readManifestFromDisk(fs.safeFs);
+  if (manifest instanceof Error) return manifest;
+  const currentEntry = manifest.pages.find((page) => page.slug === input.pageSlug);
+  if (currentEntry === undefined || currentEntry.entry !== input.entryRelPath) {
+    return new EntrySourceDriftedError({
+      pageSlug: input.pageSlug,
+      entryRelPath: input.entryRelPath,
+      reason: "design/pages.json no longer binds this page to this entry",
+    });
+  }
+
+  const target = designFilePath(input.entryRelPath);
+  const currentImage = observeFileImage(fs, target);
+  if (currentImage instanceof Error) return currentImage;
+  const matches =
+    input.expectedSourceHash === null
+      ? currentImage.state === "absent"
+      : currentImage.state === "file" && currentImage.sha256 === input.expectedSourceHash;
+  if (!matches) {
+    return new EntrySourceDriftedError({
+      pageSlug: input.pageSlug,
+      entryRelPath: input.entryRelPath,
+      reason: "the entry file's own bytes changed since they were read",
+    });
+  }
+  return currentImage;
 }
 
 /** The `design/pages.json` replace operation for a new manifest — the single writer of page order (`reorderPages`/`removePage`). */
@@ -518,14 +603,17 @@ function makeTransactionEngine(
 
     /**
      * `page.renameTitle`: `input.entryRelPath` names the exact tree-relative file to
-     * replace — resolved by the CALLER through `design/pages.json` (design §3, §7). This
-     * method never reads the manifest itself; it only observes and replaces one file.
+     * replace — resolved by the CALLER through `design/pages.json` (design §3, §7). Refuses
+     * with `EntrySourceDriftedError` (checked FIRST, inside the permit) when either the
+     * manifest's binding for `pageSlug` or the entry file's own bytes drifted since the
+     * caller observed them — see that class's own doc comment.
      */
     async renamePageTitle(input: RenamePageTitleInput) {
       return withPermit(mutex, async (permit) => {
-        const target = designFilePath(input.entryRelPath);
-        const oldImage = observeFileImage(fs, target);
+        const oldImage = assertEntrySourceNotDrifted(fs, input);
         if (oldImage instanceof Error) return oldImage;
+
+        const target = designFilePath(input.entryRelPath);
         const payloadId = deps.uuidv7();
         const operation: TransactionOperation = {
           index: 0,

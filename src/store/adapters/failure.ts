@@ -5,6 +5,7 @@ import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
 import {
   DesignTreeTooDeepError,
+  EntrySourceDriftedError,
   JsonlOpenError,
   ManifestDriftedError,
   PageEntryNotFoundError,
@@ -297,20 +298,40 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   }
 
   /**
-   * `TransactionEngine.reorderPages()`/`removePage()` (Task 9 review round 2):
-   * `design/pages.json` drifted between the caller's `manifestBefore` read and the write
-   * permit — a genuine CAS-style conflict (`ManifestDriftedError`'s own doc comment,
-   * `store/model/factory.ts`), same family as `TransactionRecoveryConflictError` above but
-   * caught by this store's own domain-level precondition rather than the engine's generic
-   * roll-forward verification. No dedicated conflict code in the closed v1 union for this
-   * shape either, so it folds to the same generic bucket.
+   * `TransactionEngine.reorderPages()`/`removePage()` (Task 9 review round 3, correcting
+   * round 2's own mis-mapping): `design/pages.json` drifted between the caller's
+   * `manifestBefore` read and the write permit — a genuine CAS-style conflict
+   * (`ManifestDriftedError`'s own doc comment, `store/model/factory.ts`), the SAME shape
+   * `SourceChangedError` above already has a dedicated code for: "the manifest moved under
+   * you, re-read and retry." Mapped to the identical `APPLY_SOURCE_CHANGED`/`part: "manifest"`
+   * rather than the generic `PERSISTENCE_FAILED` bucket round 2 used — that bucket tells the
+   * UI nothing about WHY the write failed, where `APPLY_SOURCE_CHANGED` is the exact,
+   * already-closed-v1 code for this exact condition.
    */
   if (error instanceof ManifestDriftedError) {
     return {
-      code: "PERSISTENCE_FAILED",
+      code: "APPLY_SOURCE_CHANGED",
       retryable: false,
       safeMessage: safeMessageOf(error),
-      details: {},
+      details: { part: "manifest" },
+    };
+  }
+
+  /**
+   * `TransactionEngine.renamePageTitle()` (Task 9 review round 3): the entry file's own
+   * bytes, or `design/pages.json`'s binding for the page, drifted between the caller's
+   * observation and the write permit (`EntrySourceDriftedError`'s own doc comment,
+   * `store/model/factory.ts`) — the identical CAS-conflict shape as `ManifestDriftedError`
+   * just above, scoped to one page's own entry rather than the whole manifest, so it maps to
+   * the same `APPLY_SOURCE_CHANGED` code with `part: "page"` (mirroring
+   * `normalizeSourceChangedPart`'s own `canonical:<slug>` → `{part: "page", slug}` case).
+   */
+  if (error instanceof EntrySourceDriftedError) {
+    return {
+      code: "APPLY_SOURCE_CHANGED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: { part: "page", slug: error.pageSlug },
     };
   }
 
