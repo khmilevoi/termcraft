@@ -8,15 +8,17 @@ import type {
   CandidateSink,
   FsAccessError,
   LeafRejectedError,
+  PathRuleError,
+  UnknownNamespaceError,
   UnsafeHardlinkError,
 } from "store/safe-fs";
 import {
   IdentityChangedError,
-  UnknownNamespaceError,
   checkIdentityUnchanged,
   checkManagedLeaf,
   classifyNamespace,
   nodeCandidateDeps,
+  validateRelativePath,
 } from "store/safe-fs";
 
 import type {
@@ -62,6 +64,7 @@ export type StagingError =
   | WorkspaceCollisionError
   | InvalidIdentityError
   | TurnJsonWriteError
+  | PathRuleError
   | UnknownNamespaceError
   | LeafRejectedError
   | UnsafeHardlinkError
@@ -233,21 +236,57 @@ function copySourceFile(input: {
 }
 
 /**
+ * Stage one file at `relPath` (already namespace-qualified — `design/pages/home.tsx` for a
+ * tree file, `RUNTIME.md` for a runtime doc) into the workspace.
+ *
+ * Review finding (Task 8 fix round): `classifyNamespace`'s `design/**` grammar (`store/
+ * safe-fs`'s `classifyWorkspace`) accepts any relative path with at least one component
+ * below `design/`, INCLUDING one carrying a `..` component or a Windows backslash separator
+ * — it is a namespace classifier, not the full §5.1 path grammar, and does not by itself
+ * stop `relPath = "..\\..\\evil.tsx"` (no `/`, so a naive `split("/")` scan never sees the
+ * `..`) from resolving, once `path.join` normalizes the backslashes on win32, to a
+ * destination OUTSIDE the workspace root. `validateRelativePath` (`store/safe-fs`) is the
+ * function that actually rejects all ten §5.1 classes — `DOT_COMPONENT`, `BACKSLASH`,
+ * `EMPTY_COMPONENT`, `CONTROL_CHAR`, `ABSOLUTE_POSIX`, `UNC`, `DEVICE_NAMESPACE`,
+ * `TRAILING_DOT_OR_SPACE`, `RESERVED_DEVICE_NAME`, and the length caps — and it runs here,
+ * BEFORE any filesystem call, on both the tree-file and the runtime-doc path (a single
+ * helper so the two call sites cannot drift apart the way the tree-file-only guard this
+ * replaces once did).
+ */
+function stageOne(input: {
+  relPath: string;
+  absSourcePath: AbsPath;
+  workspacePath: AbsPath;
+  fs: StagingFsDeps;
+}): StagingError | StagedFile {
+  const components = validateRelativePath(input.relPath);
+  if (components instanceof Error) return components;
+
+  const namespace = classifyNamespace("workspace", input.relPath);
+  if (namespace instanceof Error) return namespace;
+
+  const destPath = path.join(input.workspacePath, ...components);
+  const parentDir = path.dirname(destPath);
+  if (parentDir !== input.workspacePath) {
+    const madeParent = input.fs.mkdirAll(parentDir);
+    if (madeParent instanceof Error) return madeParent;
+  }
+
+  const copied = copySourceFile({
+    absSourcePath: input.absSourcePath,
+    destPath,
+    fs: input.fs,
+  });
+  if (copied instanceof Error) return copied;
+  return { relPath: input.relPath, namespace, sha256: copied.sha256, size: copied.size };
+}
+
+/**
  * Stage the canonical design tree (a 1:1 copy at the SAME tree-relative paths, design §10)
  * plus every runtime doc, into the already create-new workspace directory (turn-durability
- * §7.2's staging read set). Every destination is classified through `classifyNamespace`
- * BEFORE it is opened, so a destination outside the workspace grammar is rejected rather
- * than written — and `namespace` is always derived from that real classifier, never
- * hardcoded, so the staged tag is honest by construction.
- *
- * `classifyNamespace`'s `design/**` grammar (`store/safe-fs`'s `classifyWorkspace`) accepts
- * any relative path with at least one component below `design/`, INCLUDING one carrying a
- * `..` component — `design/../escape.tsx` still splits into the two-plus components that
- * grammar checks for. It is a namespace classifier, not the full §5.1 path grammar; the
- * component walk that rejects `..` (`store/safe-fs`'s `validateRelativePath`, reached via
- * `resolveManagedPath`) never runs in this copy loop, which builds its destination with a
- * raw `path.join` instead of resolving through an opened managed root. So the traversal
- * check a reader might expect to cover this is guarded explicitly below instead.
+ * §7.2's staging read set). Every destination is validated and classified — see
+ * {@link stageOne} — BEFORE it is opened, so a destination outside the §5.1 grammar or the
+ * workspace namespace grammar is rejected rather than written.
  */
 function stageAllFiles(input: {
   workspacePath: AbsPath;
@@ -257,43 +296,25 @@ function stageAllFiles(input: {
   const files: StagedFile[] = [];
 
   for (const file of input.source.treeFiles) {
-    if (file.relPath.split("/").includes("..")) {
-      return new UnknownNamespaceError({
-        path: `${DESIGN_DIRNAME}/${file.relPath}`,
-        rootKind: "workspace",
-      });
-    }
-
-    const relPath = `${DESIGN_DIRNAME}/${file.relPath}`;
-    const namespace = classifyNamespace("workspace", relPath);
-    if (namespace instanceof Error) return namespace;
-
-    const destPath = path.join(input.workspacePath, ...relPath.split("/"));
-    const parentDir = path.dirname(destPath);
-    if (parentDir !== input.workspacePath) {
-      const madeParent = input.fs.mkdirAll(parentDir);
-      if (madeParent instanceof Error) return madeParent;
-    }
-
-    const copied = copySourceFile({ absSourcePath: file.absSourcePath, destPath, fs: input.fs });
-    if (copied instanceof Error) return copied;
-    files.push({ relPath, namespace, sha256: copied.sha256, size: copied.size });
+    const staged = stageOne({
+      relPath: `${DESIGN_DIRNAME}/${file.relPath}`,
+      absSourcePath: file.absSourcePath,
+      workspacePath: input.workspacePath,
+      fs: input.fs,
+    });
+    if (staged instanceof Error) return staged;
+    files.push(staged);
   }
 
   for (const doc of input.source.runtimeDocs) {
-    const namespace = classifyNamespace("workspace", doc.relPath);
-    if (namespace instanceof Error) return namespace;
-
-    const destPath = path.join(input.workspacePath, ...doc.relPath.split("/"));
-    const parentDir = path.dirname(destPath);
-    if (parentDir !== input.workspacePath) {
-      const madeParent = input.fs.mkdirAll(parentDir);
-      if (madeParent instanceof Error) return madeParent;
-    }
-
-    const copied = copySourceFile({ absSourcePath: doc.absSourcePath, destPath, fs: input.fs });
-    if (copied instanceof Error) return copied;
-    files.push({ relPath: doc.relPath, namespace, sha256: copied.sha256, size: copied.size });
+    const staged = stageOne({
+      relPath: doc.relPath,
+      absSourcePath: doc.absSourcePath,
+      workspacePath: input.workspacePath,
+      fs: input.fs,
+    });
+    if (staged instanceof Error) return staged;
+    files.push(staged);
   }
 
   return files;

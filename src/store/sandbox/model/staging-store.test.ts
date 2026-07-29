@@ -12,6 +12,7 @@ import {
   FsAccessError,
   IdentityChangedError,
   LeafRejectedError,
+  PathRuleError,
   type SafeFsStat,
   UnknownNamespaceError,
   UnsafeHardlinkError,
@@ -371,10 +372,59 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
         treeFiles: [{ relPath: "../escape.tsx", absSourcePath: "/escape.tsx" }],
       }),
     );
-    expect(result).toBeInstanceOf(UnknownNamespaceError);
+    // `validateRelativePath` — not a hand-rolled `.split("/").includes("..")` scan, which
+    // only covers one of the ten §5.1 rejection classes (review finding #1) — is what
+    // actually rejects this: the raw component walk's `DOT_COMPONENT` class.
+    expect(result).toBeInstanceOf(PathRuleError);
     if (!(result instanceof Error)) throw new Error("expected a rejection");
-    expect(result._tag).toBe("UnknownNamespaceError");
+    expect(result._tag).toBe("PathRuleError");
+    expect((result as PathRuleError).code).toBe("DOT_COMPONENT");
     expect(memory.openCalls).not.toContain("/escape.tsx");
+  });
+
+  // Review finding #1 (Important, controller-overridden brief): on Windows, a hand-rolled
+  // `relPath.split("/").includes("..")` guard NEVER sees `..\\..\\evil.tsx` — there is no
+  // `/` in the string, so `split("/")` yields exactly one component. `classifyWorkspace`
+  // then still sees `design/..\..\evil.tsx` as two `/`-delimited components and returns
+  // `design-source`, and `path.join` normalizes the backslashes on win32 — landing the file
+  // OUTSIDE the workspace root. `validateRelativePath`'s `BACKSLASH` check (it runs before
+  // any component split, on the raw string) closes this.
+  test("rejects a tree file whose relPath carries a Windows backslash separator (the concrete escape a `..`-only guard misses), before opening its source", async () => {
+    const memory = memoryStagingFs(seededSources());
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(
+      validInput({
+        treeFiles: [{ relPath: "..\\..\\evil.tsx", absSourcePath: "/evil.tsx" }],
+      }),
+    );
+    expect(result).toBeInstanceOf(PathRuleError);
+    if (!(result instanceof Error)) throw new Error("expected a rejection");
+    expect(result._tag).toBe("PathRuleError");
+    expect((result as PathRuleError).code).toBe("BACKSLASH");
+    expect(memory.openCalls).not.toContain("/evil.tsx");
+  });
+
+  // Review finding #2: the runtime-docs loop had no traversal guard of its own — it is
+  // pre-existing code the brief told this task to leave alone, but `stageOne` (the helper
+  // findings 1/2 share, promoted finding #3) now covers both call sites identically, so this
+  // pins that the second loop is not silently exempt.
+  test("rejects a runtime-doc relPath that escapes with a leading `..`, before opening its source", async () => {
+    const memory = memoryStagingFs(seededSources());
+    const durable = memoryDurableWriter();
+    const store = createStagingStore(depsOver({ fs: memory.deps, durableWrite: durable.writer }));
+
+    const result = await store.createTurnWorkspace(
+      validInput({
+        runtimeDocs: [{ relPath: "../evil.d.ts", absSourcePath: "/evil.d.ts" }],
+      }),
+    );
+    expect(result).toBeInstanceOf(PathRuleError);
+    if (!(result instanceof Error)) throw new Error("expected a rejection");
+    expect(result._tag).toBe("PathRuleError");
+    expect((result as PathRuleError).code).toBe("DOT_COMPONENT");
+    expect(memory.openCalls).not.toContain("/evil.d.ts");
   });
 
   test("writes exactly S bytes once, with no hardlinks (projections §16.3)", async () => {

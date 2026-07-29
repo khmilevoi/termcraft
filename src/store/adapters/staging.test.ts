@@ -93,6 +93,36 @@ describe("createStagingAdapter — contract test (fake vs. real)", () => {
     }
   });
 
+  // Promoted review finding #4 (Task 8 fix round): every other fixture in this file uses a
+  // `pages/<slug>.tsx`-shaped relPath, so the fake's fidelity to the real stager was never
+  // exercised against a path a slug->path computation could not have produced — a fake that
+  // secretly special-cased "looks like a page" could still pass every test above. `lib/
+  // theme.ts` has no relation to any page slug.
+  test("createTurnWorkspace() stages a non-page tree file at design/<relPath> identically in the fake and the real adapter", async () => {
+    const sourceDir = freshSourceDir();
+    const themeSourcePath = path.join(sourceDir, "theme.ts");
+    fs.writeFileSync(themeSourcePath, "export const theme = { accent: 'teal' };\n");
+    const input = buildInput([{ relPath: "lib/theme.ts", sourcePath: themeSourcePath }]);
+
+    const fake = createFakeStagingService();
+    const fakeWorkspace = await fake.createTurnWorkspace(input);
+    if ("code" in fakeWorkspace) throw new Error("fixture bug: fake createTurnWorkspace failed");
+    expect(fakeWorkspace.files.some((f) => f.relPath === "design/lib/theme.ts")).toBe(true);
+
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createStagingAdapter(deps);
+      const workspace = await adapter.createTurnWorkspace(input);
+      if ("code" in workspace) throw new Error(`fixture bug: ${workspace.safeMessage}`);
+      expect(workspace.files.some((f) => f.relPath === "design/lib/theme.ts")).toBe(true);
+      expect(fs.readFileSync(path.join(workspace.root, "design", "lib", "theme.ts"), "utf8")).toBe(
+        "export const theme = { accent: 'teal' };\n",
+      );
+    } finally {
+      await open.close();
+    }
+  });
+
   // Gap G regression: `core/kernel/handlers/turn.ts`'s `pages.push` used to build its
   // `sourcePath` from the agent WORKSPACE's own flat layout joined onto the PROJECT root — a
   // path that never existed on disk. Canonical design-tree storage now lives at
