@@ -54,10 +54,22 @@ function invalid(code: string, reason: string): PagesManifestInvalidError {
   return new PagesManifestInvalidError({ code, reason });
 }
 
-/** Maps the first Zod issue onto the tagged error, mirroring `store/toml`'s decoder. */
+/**
+ * Maps the first Zod issue onto the tagged error, mirroring `store/toml`'s decoder. The code
+ * names the FIELD (`pages.entry`, `pages.slug`, `schemaVersion`, …), never the ARRAY INDEX a
+ * particular issue happened to occur at (task-12 review, red-debt item 4): joining
+ * `issue.path` verbatim once produced `pages.0.entry` for the first page's bad `entry` and
+ * `pages.1.entry` for the second's — the identical mistake under a different code purely
+ * because of where in the array it landed, so an agent could never branch on "this manifest's
+ * `entry` grammar is broken" without also tracking which index it currently means. Every
+ * numeric path segment (a JSON array index — `zod`'s own `path` entries are `string | number`,
+ * and only an array index is ever a `number`) is dropped before joining, leaving a stable,
+ * index-independent field name.
+ */
 function fromZod(error: z.ZodError): PagesManifestInvalidError {
   const issue = error.issues[0];
-  const code = issue !== undefined && issue.path.length > 0 ? issue.path.join(".") : "SHAPE";
+  const field = issue?.path.filter((segment) => typeof segment !== "number").join(".") ?? "";
+  const code = field.length > 0 ? field : "SHAPE";
   return invalid(code, issue?.message ?? "invalid input");
 }
 

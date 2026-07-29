@@ -59,6 +59,35 @@ describe("decodePagesManifest", () => {
     expect(result).toBeInstanceOf(Error);
   });
 
+  test("a schema-shape rejection's code names the FIELD, not the array index — stable across which page in `pages` fails (task 12, red-debt item 4)", () => {
+    const badFirst = decodePagesManifest(
+      JSON.stringify({
+        schemaVersion: 1,
+        pages: [
+          { slug: "a", entry: "/etc/passwd" },
+          { slug: "b", entry: "b.tsx" },
+        ],
+      }),
+    );
+    const badSecond = decodePagesManifest(
+      JSON.stringify({
+        schemaVersion: 1,
+        pages: [
+          { slug: "a", entry: "a.tsx" },
+          { slug: "b", entry: "/etc/passwd" },
+        ],
+      }),
+    );
+    if (!(badFirst instanceof Error)) throw new Error("expected an Error");
+    if (!(badSecond instanceof Error)) throw new Error("expected an Error");
+    // The identical mistake at index 0 vs index 1 must report the IDENTICAL code — an agent
+    // branching on `code` cannot be made to track which index a page happened to occupy.
+    expect(badFirst.code).toBe(badSecond.code);
+    expect(badFirst.code).toBe("pages.entry");
+    expect(badFirst.code).not.toContain("0");
+    expect(badSecond.code).not.toContain("1");
+  });
+
   test("rejects an invalid slug, an absolute entry, a backslash entry and a `..` entry", () => {
     const bad = [
       { slug: "Dashboard", entry: "a.tsx" },

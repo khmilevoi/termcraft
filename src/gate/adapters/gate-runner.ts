@@ -5,11 +5,12 @@ import type {
   ManifestSliceResultV1,
   PageMetaExtractionV1,
 } from "core/ports";
+import type { ClosureV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
 // change), so importing the barrel back from here would be a self-referencing cycle.
-import { runGate } from "../model/gate";
+import { runGate, runTreeImports } from "../model/gate";
 import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
@@ -56,6 +57,18 @@ import type { GateError } from "../types";
  * test, a hermetic fixture) can still run the source-only stages standalone — `runGate`'s own
  * `ports.typeCheck` parameter being optional is what makes that fallback honest, never a
  * fabricated pass.
+ *
+ * CLOSED (task 10/12): `runManifestSlice`'s input carries `treePaths` (design tree file
+ * inventory), not the pre-design-tree `presentSlugs` (page slugs) — a slug list could never
+ * honestly answer whether a manifest `entry` resolves to a real file, only `gate/model/
+ * manifest.ts`'s real `checkManifestSlice` (Task 10) already required `treePaths`, and this
+ * bridge simply forwards the port's input to it unchanged.
+ *
+ * CLOSED (task 12): `runPage`'s input carries optional `entryRelPath`/`closure`, forwarded
+ * straight into `gate/model/gate.ts`'s `GateInput` — see that module's own doc for why both
+ * stay optional rather than the port sketch's required shape (measured cost: `core/turns`/
+ * `core/kernel` have no design-tree closure to supply yet, and are production code, not a
+ * fixture this task can mechanically patch).
  */
 
 function createTypeCheckPort(
@@ -82,7 +95,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
 
   async function runManifestSlice(input: {
     readonly manifestText: string;
-    readonly presentSlugs: readonly PageSlug[];
+    readonly treePaths: readonly string[];
   }): Promise<ManifestSliceResultV1> {
     return checkManifestSlice(input);
   }
@@ -92,8 +105,10 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly slug: PageSlug;
     readonly fileName?: string;
     readonly sourcePath?: string;
+    readonly entryRelPath?: string;
+    readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
-    const fileName = input.fileName ?? `${input.slug}.tsx`;
+    const fileName = input.fileName ?? input.entryRelPath ?? `${input.slug}.tsx`;
     // The smoke stage needs a path it can actually resolve on disk (see this file's header,
     // "CLOSED (was FLAGGED)") — `sourcePath` is preferred when a caller staged a real
     // candidate file; `fileName` stays the diagnostics-facing display name regardless.
@@ -103,7 +118,29 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
       ...(deps.checkManifest !== undefined ? { checkManifest: deps.checkManifest } : {}),
       smokeRender: createSmokeRender(deps.smokeRenderer, smokeSourcePath),
     };
-    return runGate({ source: input.source, slug: input.slug, fileName }, ports);
+    return runGate(
+      {
+        source: input.source,
+        slug: input.slug,
+        fileName,
+        ...(input.entryRelPath !== undefined ? { entryRelPath: input.entryRelPath } : {}),
+        ...(input.closure !== undefined ? { closure: input.closure } : {}),
+      },
+      ports,
+    );
+  }
+
+  /**
+   * The whole-tree import allowlist (design §8 step 4). `gate/model/gate.ts`'s own
+   * `runTreeImports` is synchronous — it does no I/O, only token-scanning over the text it is
+   * handed — so this only wraps it in a promise the same way every other method on this port
+   * is async, keeping `core` looking at one uniform shape.
+   */
+  async function runTreeImportsPort(input: {
+    readonly files: ReadonlyMap<string, string>;
+    readonly treePaths: readonly string[];
+  }): Promise<readonly GateError[]> {
+    return runTreeImports(input);
   }
 
   /**
@@ -132,7 +169,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     };
   }
 
-  return { runManifestSlice, runPage, extractPageMeta };
+  return { runManifestSlice, runPage, runTreeImports: runTreeImportsPort, extractPageMeta };
 }
 
 type _Conforms = AssertConforms<GateRunner, ReturnType<typeof createGateRunnerAdapter>>;

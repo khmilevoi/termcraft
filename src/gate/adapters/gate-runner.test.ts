@@ -63,7 +63,7 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  test("runPage() fails a candidate with a forbidden import, never reaching the smoke stage", async () => {
+  test("runPage() no longer scans imports itself — a page with a forbidden import passes the per-page stages (task 12: the import allowlist moved to runTreeImports)", async () => {
     let smokeRan = false;
     const adapter = createGateRunnerAdapter({
       smokeRenderer: {
@@ -77,9 +77,20 @@ describe("createGateRunnerAdapter", () => {
       source: `import { x } from "lodash"\n${cleanSource}`,
       slug: SLUG,
     });
-    expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.kind === "import")).toBe(true);
-    expect(smokeRan).toBe(false);
+    expect(result.errors.some((e) => e.kind === "import")).toBe(false);
+    expect(smokeRan).toBe(true);
+  });
+
+  test("runTreeImports() catches the SAME forbidden import once per turn, over the whole tree", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const badSource = `import { x } from "lodash"\n${cleanSource}`;
+    const errors = await adapter.runTreeImports({
+      files: new Map([["dash.tsx", badSource]]),
+      treePaths: ["dash.tsx"],
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.kind).toBe("import");
+    expect(errors[0]?.file).toBe("dash.tsx");
   });
 
   test("runPage() surfaces a failed smoke render as a smoke-kind error", async () => {
@@ -116,24 +127,30 @@ describe("createGateRunnerAdapter", () => {
     expect(checkManifestCalled).toBe(true);
   });
 
-  test("runManifestSlice() validates a clean manifest slice", async () => {
+  test("runManifestSlice() validates a clean manifest slice — entry resolves against treePaths (design §4)", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const result = await adapter.runManifestSlice({
-      manifestText: JSON.stringify({ pages: ["dash"] }),
-      presentSlugs: [SLUG],
+      manifestText: JSON.stringify({
+        schemaVersion: 1,
+        pages: [{ slug: "dash", entry: "dash.tsx" }],
+      }),
+      treePaths: ["dash.tsx"],
     });
     expect(result.errors).toEqual([]);
-    expect(result.slice).toEqual({ pages: [SLUG], active: null });
+    expect(result.slice).toEqual({ pages: [{ slug: SLUG, entry: "dash.tsx" }], active: null });
   });
 
-  test("runManifestSlice() rejects a manifest listing a page absent from staging", async () => {
+  test("runManifestSlice() rejects an entry that does not resolve to a file in the tree", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const result = await adapter.runManifestSlice({
-      manifestText: JSON.stringify({ pages: ["missing-page"] }),
-      presentSlugs: [SLUG],
+      manifestText: JSON.stringify({
+        schemaVersion: 1,
+        pages: [{ slug: "missing-page", entry: "missing.tsx" }],
+      }),
+      treePaths: ["dash.tsx"],
     });
     expect(result.slice).toBeNull();
-    expect(result.errors.some((e) => e.code === "MANIFEST_UNKNOWN_PAGE")).toBe(true);
+    expect(result.errors.some((e) => e.code === "MANIFEST_ENTRY_UNRESOLVED")).toBe(true);
   });
 
   test("runPage() threads sourcePath into the smoke stage so a REAL disk-resolving renderer finds the staged candidate file", async () => {
@@ -161,6 +178,19 @@ describe("createGateRunnerAdapter", () => {
     expect(
       result.errors.some((e) => e.kind === "smoke" && e.code === "SMOKE_SOURCE_UNREADABLE"),
     ).toBe(true);
+  });
+
+  test("runPage() prefers entryRelPath over the slug-derived default for a contract error's `file`, even when entry is unrelated to slug", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const result = await adapter.runPage({
+      source: brokenContract,
+      slug: SLUG,
+      entryRelPath: "screens/overview/index.tsx",
+      closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
   test("contract: an all-clear candidate matches the fake oracle's own default GateRunResultV1 shape", async () => {

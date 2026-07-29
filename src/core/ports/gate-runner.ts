@@ -1,3 +1,4 @@
+import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug } from "entities/page";
 
 /**
@@ -58,9 +59,18 @@ export interface GateRunResultV1 {
   readonly descriptor: GatePageDescriptorV1 | null;
 }
 
-/** The staging manifest slice `pages.json` (master §6.2): the ordered page slugs the agent left in the turn workspace plus an optional requested active slug. */
+/**
+ * The staging manifest slice `design/pages.json` decodes to (design §4; master §6.2), once
+ * schema validation AND entry resolution both pass — `pages` is `PageEntryV1[]`, not a bare
+ * slug list, because which file a page lives in is `pages.json`'s `entry` value, never
+ * something derivable from the slug alone (task 10/12: this port used to redraw `pages` as
+ * `PageSlug[]`, which cannot carry `entry` at all — the exact gap that made
+ * `gate/adapters/gate-runner.ts`'s bridge to `gate/model/manifest.ts`'s real
+ * `checkManifestSlice` impossible to satisfy honestly). `active` is the manifest's optional
+ * `requestedActivePage`, or `null` when it names none.
+ */
 export interface ManifestSliceV1 {
-  readonly pages: readonly PageSlug[];
+  readonly pages: readonly PageEntryV1[];
   readonly active: PageSlug | null;
 }
 
@@ -99,12 +109,23 @@ export interface PageMetaExtractionV1 {
 }
 
 export interface GateRunner {
-  /** The turn-level manifest-slice check (master §6.3 step 1), run once per turn before the per-page stages. */
+  /**
+   * The turn-level manifest-slice check (master §6.3 step 1; design §8 step 1), run once per
+   * turn before the per-page stages. `treePaths` is entry resolution's universe — every
+   * tree-relative path present in the staged `design/` tree (design §4: "It must resolve to
+   * a real file inside the tree") — NOT the turn's page slugs (`presentSlugs`, this port's
+   * pre-design-tree shape): a slug list cannot answer whether an `entry` resolves to a real
+   * file, only the tree's own inventory can.
+   */
   runManifestSlice(input: {
     readonly manifestText: string;
-    readonly presentSlugs: readonly PageSlug[];
+    readonly treePaths: readonly string[];
   }): Promise<ManifestSliceResultV1>;
-  /** The full per-page pipeline: import allowlist, page contract, type check, determinism lints, then (only if nothing fatal yet) the manifest + smoke stages. */
+  /**
+   * The per-page pipeline: page contract, type check, determinism lints, then (only if
+   * nothing fatal yet) the manifest + smoke stages. The import allowlist does NOT run here
+   * (design §8 step 4) — see {@link runTreeImports}.
+   */
   runPage(input: {
     readonly source: string;
     readonly slug: PageSlug;
@@ -121,7 +142,37 @@ export interface GateRunner {
      * today's `fileName`-or-bare-slug smoke default.
      */
     readonly sourcePath?: string;
+    /**
+     * The tree-relative path `design/pages.json` bound this entry to (design §4) — see
+     * `gate/model/gate.ts`'s `GateInput.entryRelPath` for the full rationale (never derive it
+     * from `slug`). OPTIONAL here for the same measured reason `GateInput` carries it
+     * optionally: `core/turns`/`core/kernel` do not yet have a `DesignTreeReader` to source it
+     * from (FLAGGED for whichever task wires one — 13 or 14, both consume this port).
+     */
+    readonly entryRelPath?: string;
+    /**
+     * The entry's resolved closure (design §7), threaded through for the smoke stage and
+     * future stages (design §8 steps 5 and 8 — see `runTreeImports`'s own doc for why neither
+     * is implemented by this plan). Optional for the same reason as `entryRelPath` above.
+     */
+    readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1>;
+  /**
+   * The whole-tree import allowlist (design §6; §8 step 4), run ONCE per turn — before any
+   * per-page stage, not per page — over every file the tree names. A forbidden import in a
+   * SHARED module (`lib/theme.ts`, reached by every page that imports it) compromises every
+   * page that reaches it; scanning it once here, rather than once per page inside `runPage`,
+   * is what catches it even in a module no page's own source ever runs `runPage` against
+   * directly, and reports it exactly once rather than once per reaching page. `files` is the
+   * text this turn's Gate run holds for each tree-relative path; `treePaths` is the tree's
+   * full inventory (`store`'s `listTree`), which may legitimately name files `files` holds no
+   * text for (a `.json`/`.md`/`.svg` asset — see `gate/model/tree-scan.ts`'s own doc for the
+   * exact contract this enforces).
+   */
+  runTreeImports(input: {
+    readonly files: ReadonlyMap<string, string>;
+    readonly treePaths: readonly string[];
+  }): Promise<readonly GateErrorV1[]>;
   /**
    * The page-contract stage ALONE — parses the page's static `meta` export and nothing else.
    * Deliberately NOT `runPage`: the full pipeline additionally spawns a TypeScript compiler

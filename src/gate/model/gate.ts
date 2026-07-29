@@ -1,8 +1,8 @@
+import type { ClosureV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
 import { makeGateResult } from "./gate-result";
-import { scanImportAllowlist } from "./import-scan";
 import {
   lintDeterminism,
   lintDroppedIds,
@@ -11,6 +11,7 @@ import {
   lintUnpointedElements,
 } from "./lints";
 import { checkPageContract } from "./page-contract";
+import { scanTreeImports } from "./tree-scan";
 
 /**
  * The gate's injected validation stages that need more than the page source
@@ -41,6 +42,40 @@ export interface GatePorts {
 export interface GateInput {
   readonly source: string;
   readonly slug: PageSlug;
+  /**
+   * The tree-relative path `design/pages.json` bound this entry to (design §4) — the
+   * addressing `runTreeImports`'s own whole-tree scan already speaks. Which file a page
+   * lives in is `pages.json`'s `entry` value; NEVER derive it from `slug` — that guess
+   * (`pages/<slug>.tsx`) is exactly the anti-pattern this plan exists to remove, so every
+   * caller this task owns supplies it explicitly (see `fileName`'s fallback below for the
+   * one caller that, today, still cannot).
+   *
+   * OPTIONAL, not required as the port sketch shows it (task-12 review, measured): `core/
+   * turns/model/validation.ts` and `core/kernel/model/handlers/page-descriptors.ts` call
+   * `GateRunner.runPage` today with no entry data to give — neither `core/turns` nor `core/
+   * kernel` has been wired to a `DesignTreeReader`/closure yet, and both are PRODUCTION
+   * code, not a test fixture a mechanical script can patch. Making this required here would
+   * force it required on `core/ports/gate-runner.ts`'s `GateRunner.runPage` too (the same
+   * type), turning every one of those call sites into a genuine new tsc error and, for the
+   * in-memory `GateRunner` fake many currently-green tests share, a genuine new runtime
+   * crash — precisely the cost measurement task 11's own `context` review already
+   * established as prohibitive for an interface change outside this task's Files list.
+   * FLAGGED FOR WHICHEVER TASK WIRES A REAL DESIGN-TREE CLOSURE THROUGH `core/turns`/`core/
+   * kernel` (13 or 14, per this plan's own dependency graph — both consume Task 12): make
+   * this field required, delete `fileName`'s slug-derived fallback below, and update those
+   * callers to supply the real value.
+   */
+  readonly entryRelPath?: string;
+  /**
+   * The entry's resolved closure (design §7) — so the smoke stage and future stages (design
+   * §8 steps 5 and 8: one whole-tree `tsc` program, and smoke scoped to only the pages whose
+   * `closureHash` changed) have it once they land. NEITHER is implemented by this plan (see
+   * `runTreeImports`'s own doc comment below) — `closure` is threaded through today so the
+   * pipeline's shape is already correct, not because any stage here reads it yet. Optional
+   * for the same reason as `entryRelPath` above: no current caller outside this task's Files
+   * list has one to give.
+   */
+  readonly closure?: ClosureV1;
   readonly fileName?: string;
   /** Ids the caller's current selection or open pins reference (`dropped-id`). */
   readonly referencedIds?: readonly string[];
@@ -49,29 +84,27 @@ export interface GateInput {
 }
 
 /**
- * Run the validation gate over one immutable candidate page (master §6.3). The
- * source-only stages always run — the static-import allowlist (§3.1) and the page
- * contract (§4) are fatal; the determinism lints (§6.3) are warnings. The injected
- * `typeCheck` runs next. The manifest + smoke stages run ONLY when nothing fatal
- * has surfaced yet, because a candidate with a forbidden import, a broken contract,
- * or a type error must never be imported/rendered. A candidate passes only when
- * there are zero fatal errors; warnings never reject.
+ * Run the validation gate over one immutable candidate page (master §6.3). The page contract
+ * (§4) is fatal; the determinism lints (§6.3) are warnings. The injected `typeCheck` runs
+ * next. The manifest + smoke stages run ONLY when nothing fatal has surfaced yet, because a
+ * candidate with a broken contract or a type error must never be imported/rendered. A
+ * candidate passes only when there are zero fatal errors; warnings never reject.
+ *
+ * The static-import allowlist (§3.1) does NOT run here (task 12: moved out, into
+ * {@link runTreeImports}, run once per turn over the whole tree — see its own doc comment for
+ * why a per-page scan would be both redundant and incomplete for a shared module).
  */
 export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<GateResult> {
   const errors: GateError[] = [];
   const warnings: GateWarning[] = [];
-  const fileName = input.fileName ?? `${input.slug}.tsx`;
+  // FLAGGED FOR WHICHEVER TASK MAKES `entryRelPath` REQUIRED (see `GateInput.entryRelPath`'s
+  // own doc): the slug-derived `${input.slug}.tsx` fallback is the exact anti-pattern this
+  // plan exists to remove, kept ONLY so a caller that has not been updated yet (today: `core/
+  // turns`, `core/kernel`) keeps its pre-existing display name rather than losing one
+  // entirely. No caller this task owns ever relies on it — every fixture below supplies
+  // `entryRelPath` explicitly, several with an entry deliberately unrelated to their slug.
+  const fileName = input.fileName ?? input.entryRelPath ?? `${input.slug}.tsx`;
 
-  for (const e of scanImportAllowlist(input.source)) {
-    errors.push({
-      kind: "import",
-      code: e.code,
-      message: e.message,
-      file: fileName,
-      line: e.line,
-      column: e.column,
-    });
-  }
   const contract = checkPageContract(input.source);
   for (const e of contract.errors) {
     errors.push({
@@ -97,8 +130,8 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
     contract.meta === null ? null : { slug: input.slug, meta: contract.meta };
 
   // Only mount/render/consult the manifest when the candidate is otherwise safe:
-  // a forbidden import, a broken contract, or a type error means the source cannot
-  // be imported or rendered, so skip the heavier stages.
+  // a broken contract or a type error means the source cannot be imported or
+  // rendered, so skip the heavier stages.
   if (errors.length === 0 && descriptor !== null) {
     if (ports.checkManifest !== undefined)
       errors.push(...(await ports.checkManifest(descriptor, input.source)));
@@ -107,4 +140,35 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   }
 
   return makeGateResult(errors, warnings, descriptor);
+}
+
+/**
+ * The whole-tree import allowlist (design §8 step 4), run ONCE per turn before any per-page
+ * stage. It lives here rather than inside `runGate` because a shared module belongs to no
+ * single page: scanning it per page would report the same violation N times and would miss
+ * it entirely for a module no page reaches.
+ *
+ * NOT YET DONE (design §8 steps 5 and 8, deferred to plan 2): the type check is still ONE
+ * `tsc` program per entry file rather than one over the whole tree, and smoke still runs for
+ * every present page rather than only those whose `closureHash` changed. Both are correct as
+ * they stand — they are simply more expensive than the design's end state.
+ */
+export function runTreeImports(input: {
+  readonly files: ReadonlyMap<string, string>;
+  readonly treePaths: readonly string[];
+}): GateError[] {
+  const present = new Set(input.treePaths);
+  return scanTreeImports({ files: input.files, has: (relPath) => present.has(relPath) }).map(
+    (error) => ({
+      kind: "import" as const,
+      code: error.code,
+      message: error.message,
+      // The TREE-relative path, not a display name: a violation in a shared module must name
+      // the module, and prefixing `design/` here would make the Gate's diagnostics disagree
+      // with the paths `pages.json` and every closure already speak.
+      file: error.file,
+      line: error.line,
+      column: error.column,
+    }),
+  );
 }

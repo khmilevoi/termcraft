@@ -1349,7 +1349,10 @@ async function runTurnStart(
 
     return {
       changedPages,
-      validatedPageSlugs: validation.slice.pages,
+      // `validation.slice.pages` is `PageEntryV1[]` (design §4: `{slug, entry}`, task 10/12),
+      // not a bare slug list — the identity this material carries forward is still just the
+      // slug, so only that field survives here.
+      validatedPageSlugs: validation.slice.pages.map((page) => page.slug),
       requestedActivePage: validation.slice.active,
       agentRecord: {
         kind: "agent",

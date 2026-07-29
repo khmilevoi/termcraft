@@ -110,7 +110,10 @@ describe("runTurnValidation", () => {
     });
   });
 
-  test("passes presentSlugs derived from the input pages to runManifestSlice", async () => {
+  test("calls runManifestSlice with an honest-empty treePaths — FLAGGED, not this module's gap to close (see runTurnValidation's own doc comment)", async () => {
+    // `core/turns` has no `DesignTreeReader`/tree inventory to derive `treePaths` from yet
+    // (see `validation.ts`'s own FLAGGED note) — this pins the current, honest-empty shape so
+    // the day a real inventory is threaded through, this assertion is the one that moves.
     await context.start(async () => {
       const h = harness();
       const pages = [
@@ -119,7 +122,7 @@ describe("runTurnValidation", () => {
       ];
       await wrap(runTurnValidation(h.deps, baseInput(1, pages)));
 
-      expect(h.gateRunner.calls[0]).toEqual({ method: "runManifestSlice", presentSlugCount: 2 });
+      expect(h.gateRunner.calls[0]).toEqual({ method: "runManifestSlice", treePathCount: 0 });
     });
   });
 
@@ -130,7 +133,11 @@ describe("runTurnValidation", () => {
 
       if (result.kind !== "passed")
         throw new Error(`expected passed, got ${JSON.stringify(result)}`);
-      expect(result.slice).toEqual({ pages: [PAGE_HOME], active: null });
+      // The fake's default `runManifestSlice` result is an honest empty (`pages: []`) — it has
+      // no way to synthesize `PageEntryV1[]` out of nothing (see `createFakeGateRunner`'s own
+      // doc comment); a test wanting a specific slice scripts it via
+      // `queueRunManifestSliceResult`.
+      expect(result.slice).toEqual({ pages: [], active: null });
       expect(result.descriptors).toEqual([{ slug: PAGE_HOME, meta: expect.anything() }]);
       expect(result.warnings).toEqual([]);
       expect(h.published).toEqual([]);
@@ -178,8 +185,10 @@ describe("runTurnValidation", () => {
       const machine = machineAtValidating();
       const runPageCalls: { fileName?: string; sourcePath?: string }[] = [];
       const gateRunner: GateRunner = {
-        async runManifestSlice(input) {
-          return { errors: [], slice: { pages: input.presentSlugs, active: null } };
+        // `input.treePaths` cannot be honestly echoed as `PageEntryV1[]` — see
+        // `createFakeGateRunner`'s own doc comment for the same call.
+        async runManifestSlice() {
+          return { errors: [], slice: { pages: [], active: null } };
         },
         // Never reached on this path — this double implements only the two calls the test
         // drives. A loud refusal rather than a fabricated meta.
@@ -194,6 +203,11 @@ describe("runTurnValidation", () => {
               },
             ],
           };
+        },
+        // Never reached on this path either — the whole-tree scan (task 12) is a separate,
+        // once-per-turn call this test does not drive.
+        async runTreeImports() {
+          return [];
         },
         async runPage(input) {
           runPageCalls.push({ fileName: input.fileName, sourcePath: input.sourcePath });

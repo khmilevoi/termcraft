@@ -27,7 +27,7 @@ export { lintDeterminism, lintSilencingAny } from "./model/lints";
 export { createSmokeRender } from "./model/smoke";
 export { smokeResultToErrors } from "./ports/smoke-renderer";
 export type { SmokeRenderer, SmokeRequest, SmokeResult } from "./ports/smoke-renderer";
-export { runGate } from "./model/gate";
+export { runGate, runTreeImports } from "./model/gate";
 export type { GateInput, GatePorts } from "./model/gate";
 
 // ---- adapters (adapter-ring plan, Task 6): the production `core/ports` `GateRunner`

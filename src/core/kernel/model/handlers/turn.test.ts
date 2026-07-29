@@ -1719,9 +1719,12 @@ describe('turnHandlers["turn.start"]', () => {
       readonly sourcePath?: string;
     }[] = [];
     const gateRunner: GateRunner = {
-      runManifestSlice: async (input) => ({
+      // `input.treePaths` (task 10/12) is the tree's flat file-path inventory, not a
+      // `PageEntryV1[]` this double could honestly echo back as `pages` — an empty slice is
+      // the honest default; this test drives `runPage`, not the manifest-slice shape.
+      runManifestSlice: async () => ({
         errors: [],
-        slice: { pages: input.presentSlugs, active: null },
+        slice: { pages: [], active: null },
       }),
       // Never reached on this path — this double implements only the two calls the test
       // drives. A loud refusal rather than a fabricated meta, so a future caller fails here
@@ -1732,6 +1735,9 @@ describe('turnHandlers["turn.start"]', () => {
           { kind: "contract", code: "NOT_STUBBED", message: "extractPageMeta is not stubbed here" },
         ],
       }),
+      // Never reached on this path either — the whole-tree scan (task 12) is a separate,
+      // once-per-turn call this test does not drive.
+      runTreeImports: async () => [],
       runPage: async (input) => {
         capturedRunPageInputs.push(input);
         return {
@@ -1843,9 +1849,10 @@ describe('turnHandlers["turn.start"]', () => {
     let pageCallCount = 0;
     const capturedSourcePaths: (string | undefined)[] = [];
     const gateRunner: GateRunner = {
-      runManifestSlice: async (input) => ({
+      // See the sibling double above: `treePaths` cannot be honestly echoed as `pages`.
+      runManifestSlice: async () => ({
         errors: [],
-        slice: { pages: input.presentSlugs, active: null },
+        slice: { pages: [], active: null },
       }),
       // Never reached on this path — see the sibling double above.
       extractPageMeta: async () => ({
@@ -1854,6 +1861,8 @@ describe('turnHandlers["turn.start"]', () => {
           { kind: "contract", code: "NOT_STUBBED", message: "extractPageMeta is not stubbed here" },
         ],
       }),
+      // Never reached on this path either — see the sibling double above.
+      runTreeImports: async () => [],
       runPage: async (input) => {
         pageCallCount += 1;
         capturedSourcePaths.push(input.sourcePath);

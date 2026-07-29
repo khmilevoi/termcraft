@@ -1,5 +1,4 @@
-import { RUNTIME_ROOT_SPECIFIER, resolveDesignSpecifier } from "entities/design-tree";
-import type { SpecifierRejectedError } from "entities/design-tree";
+import { resolveDesignSpecifier } from "entities/design-tree";
 
 import { computeJsxTextTokenIndices } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
@@ -89,38 +88,6 @@ export function readStaticImportSpecifier(toks: Tok[], importIndex: number): str
 }
 
 /**
- * No tree `context` supplied: nothing beyond the bare runtime root can ever resolve, so this
- * is `scanImportAllowlist`'s pre-Task-11 default rather than a fabricated pass. `from: ""` is
- * an honest empty (per this project's "honest values only" convention) — there is no
- * meaningful tree-relative path to attribute a context-less scan to. Its own `$from`/`$code`
- * never reach a real diagnostic, though: {@link messageFor} substitutes a distinct, honest
- * message on this path instead of the resolver's raw templated one — see its own doc comment.
- */
-const NO_TREE_CONTEXT = { from: "", has: () => false };
-
-/**
- * The user-facing message for one rejected specifier. `resolved.message` (the
- * `SpecifierRejectedError`'s own templated text — `specifier "$specifier" in $from is
- * rejected [$code]: $reason`) is exactly right when a real tree `context` was supplied: `$from`
- * names a real tree-relative path and `[$code]` is a useful machine-readable tag alongside the
- * prose. Neither is true on the {@link NO_TREE_CONTEXT} fallback path (task-11 review, Important
- * 1): `$from` is the honest-empty `""`, so the templated sentence renders a literal double
- * space and an empty `in `, and the internal `[$code]` tag leaks into what is otherwise a
- * page-author-facing diagnostic. This is currently what a REAL user sees on `gate/model
- * /gate.ts`'s `runGate` path (no tree context until Task 12), so a distinct, honest message —
- * one that never interpolates an empty path and never surfaces the internal tag — is used
- * there instead, deliberately worded close to the pre-Task-11 message it replaces.
- */
-function messageFor(
-  resolved: SpecifierRejectedError,
-  specifier: string,
-  hadContext: boolean,
-): string {
-  if (hadContext) return resolved.message;
-  return `import of "${specifier}" is not allowed — this scan has no design tree to resolve a relative import against here, so only the bare "${RUNTIME_ROOT_SPECIFIER}" import is legal`;
-}
-
-/**
  * The AUTHORITATIVE static-import allowlist scan (design §6; runtime-api §3.1). Tokenizes the
  * page source with the TypeScript lexer and classifies EVERY module edge the author
  * wrote — value + type-only imports, side-effect imports, `export … from`
@@ -129,7 +96,7 @@ function messageFor(
  * globals, fatal violations rather than module edges. Exactly two edges are legal
  * anywhere in the tree (design §6): a static `import … from "@termcraft/runtime"`
  * (bare root, no subpath), and a RELATIVE specifier (`./…`, `../…`) that resolves to a
- * real file inside `design/`, per the optional `context` parameter below. A dynamic
+ * real file inside `design/`, per the `context` parameter below. A dynamic
  * import, a re-export, or a require is rejected even when it names the runtime,
  * because one page is one independently-renderable file with no runtime-selected
  * loading. Because this scans the SOURCE tokens (not the transform output), the
@@ -149,18 +116,15 @@ function messageFor(
  * `@termcraft/runtime`" when they wrote a legal relative import with a typo would be a false
  * diagnosis.
  *
- * `context` is OPTIONAL — see the `FLAGGED FOR TASK 12` comment on the parameter itself for why
- * and for when that must stop being true. A caller that omits it — every call site in this
- * file's own test suite that predates Task 11, and `gate/model/gate.ts`'s `runGate` until
- * Task 12 threads a real closure-backed `has()` through it — gets the pre-Task-11 default: the
- * bare runtime root stays legal, and every relative specifier is reported `UNRESOLVED_IMPORT`
- * or `FORBIDDEN_IMPORT` exactly as it would with a real (but empty) tree — there is no tree to
- * resolve anything relative against. That default is an honest "cannot resolve without a
- * tree", never a silently fabricated pass. Its MESSAGE text is deliberately NOT the resolver's
- * raw templated one, though (task-11 review, Important 1): `gate.ts`'s `runGate` is the one
- * live production path with no context, so a caller-facing message that interpolates an empty
- * `from` (a literal double space) or leaks the internal `[BARE_SPECIFIER]`-style tag would be a
- * real UX regression, not a cosmetic one. See {@link messageFor}.
+ * `context` is REQUIRED (Task 12: `gate/model/gate.ts`'s `runGate` no longer calls this function
+ * at all — the whole-tree scan moved to `runTreeImports`/`scanTreeImports`, which always
+ * threads a real, closure-backed `{ from, has }` — so there is no production caller left with
+ * nothing to resolve against, and no honest default to fall back to on its behalf). A caller
+ * with genuinely no tree to check against — a hermetic unit test, say — passes its own
+ * explicit empty context (`{ from: "", has: () => false }`) rather than relying on one baked
+ * in here; the bare runtime root still resolves regardless, and every relative specifier is
+ * reported `UNRESOLVED_IMPORT`/`FORBIDDEN_IMPORT` exactly as it would against a real but empty
+ * tree — an honest "cannot resolve without a tree", never a silently fabricated pass.
  *
  * Dynamic-code detection (§5.8, Important 2/3 of the WP-6a fix pass) is
  * token-level, not a constant-folding evaluator, so it is deliberately not
@@ -259,19 +223,12 @@ function messageFor(
  */
 export function scanImportAllowlist(
   source: string,
-  // FLAGGED FOR TASK 12 (not fixed here — out of Task 11's scope): `context` must become
-  // REQUIRED, not optional, the moment `runGate` can supply a real closure-backed `{ from,
-  // has }` (Task 12's own brief: `runPage({ ..., entryRelPath, closure })`). Until then this
-  // stays optional and `NO_TREE_CONTEXT` below stays reachable — remove both together, and
-  // delete every no-context call site in this file's own test suite in the same change.
-  context?: { readonly from: string; readonly has: (relPath: string) => boolean },
+  context: { readonly from: string; readonly has: (relPath: string) => boolean },
 ): ImportScanError[] {
   const toks = tokenize(source);
   const jsxText = computeJsxTextTokenIndices(toks, source);
   const errors: ImportScanError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
-  const hadContext = context !== undefined;
-  const ctx = context ?? NO_TREE_CONTEXT;
 
   for (let i = 0; i < toks.length; i += 1) {
     const t = toks[i]!;
@@ -295,9 +252,9 @@ export function scanImportAllowlist(
       const specifier = readStaticImportSpecifier(toks, i);
       if (specifier !== null) {
         const resolved = resolveDesignSpecifier({
-          from: ctx.from,
+          from: context.from,
           specifier,
-          has: ctx.has,
+          has: context.has,
         });
         if (resolved instanceof Error) {
           const where = at(t.pos);
@@ -309,7 +266,7 @@ export function scanImportAllowlist(
             // import with a typo would be a false diagnosis.
             code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
             specifier,
-            message: messageFor(resolved, specifier, hadContext),
+            message: resolved.message,
             line: where.line,
             column: where.column,
           });

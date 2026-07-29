@@ -142,9 +142,17 @@ export async function runTurnValidation(
   deps: TurnValidationDeps,
   input: RunTurnValidationInputV1,
 ): Promise<TurnValidationResultV1> {
-  const presentSlugs = input.pages.map((page) => page.pageSlug);
+  // FLAGGED (task-12 review, red-debt item 1's cascade — not fixed here): entry resolution
+  // needs the design tree's full file inventory (design §4), which `core/turns` has no way
+  // to obtain today — neither this module nor its caller (`core/kernel/model/handlers/
+  // turn.ts`'s `buildValidationInput`) is wired to a `DesignTreeReader`/`listTree` yet. An
+  // honest empty is passed rather than a fabricated `presentSlugs`-derived guess (which could
+  // never honestly stand in for a tree's file paths anyway — that IS the bug `GateRunner.
+  // runManifestSlice`'s `presentSlugs -> treePaths` rewiring exists to close). Whichever task
+  // wires a real `DesignTreeReader` through `core/turns`/`core/kernel` (13 or 14) replaces
+  // this with the real inventory.
   const sliceResult = await wrap(
-    deps.gateRunner.runManifestSlice({ manifestText: input.manifestText, presentSlugs }),
+    deps.gateRunner.runManifestSlice({ manifestText: input.manifestText, treePaths: [] }),
   );
 
   const errors: GateErrorV1[] = [...sliceResult.errors];
@@ -166,7 +174,11 @@ export async function runTurnValidation(
   }
 
   if (errors.length === 0) {
-    const slice = sliceResult.slice ?? { pages: presentSlugs, active: null };
+    // `checkManifestSlice`'s own contract never actually pairs zero errors with a null slice
+    // (`gate/model/manifest.ts`) — this is defensive-only. An empty `pages` is the honest
+    // fallback: `PageEntryV1[]` needs a real `entry` per page, which this degenerate branch
+    // has no way to supply (see this function's own `treePaths` note above).
+    const slice = sliceResult.slice ?? { pages: [], active: null };
     // DIAGNOSTIC (infrastructure/debug-log): the Gate passed this candidate -- recorded so a turn's
     // full attempt history (pass/retry/exhausted) is reconstructable from the trace alone, including
     // the warning text itself (not just a count), since a pass can still carry Gate warnings worth

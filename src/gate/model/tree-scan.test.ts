@@ -17,28 +17,60 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     expect(errors[0]?.file).toBe("lib/theme.ts");
   });
 
-  describe("task-11 review, Important 2 — has() broader than files() can never launder an unscanned module", () => {
-    test("a `has` that affirms a path never present in `files` does not let a relative import resolve to it", () => {
-      // Exactly the review's own reproduction: `has` answers true for "lib/legacy.js" but
-      // `files` was never given its source — this pass never actually scanned it. If `has`
-      // alone were trusted, the import below would resolve cleanly and "lib/legacy.js" would
-      // load into a page having never itself been scanned for a forbidden import.
+  describe("task-11 review, Important 2 — a `.ts`/`.tsx` resolution target absent from `files` can never launder an unscanned module", () => {
+    test("a `has` that affirms a `.ts` path never present in `files` does not let a relative import resolve to it", () => {
+      // The review's own reproduction, re-pinned against a `.ts` (not `.js`) target — see the
+      // task-12 review of this file's contract, above `scanTreeImports`: only a `.ts`/`.tsx`
+      // target is held to the "must also be a key in `files`" bar, because only that kind of
+      // file could itself hide a further forbidden import this pass never read. `has` answers
+      // true for "lib/legacy.ts" but `files` was never given its source — this pass never
+      // actually scanned it. If `has` alone were trusted, the import below would resolve
+      // cleanly and "lib/legacy.ts" would load into a page having never itself been scanned
+      // for a forbidden import.
       const errors = scanTreeImports({
-        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.js"\n']]),
-        has: (relPath) => relPath === "lib/legacy.js",
+        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.ts"\n']]),
+        has: (relPath) => relPath === "lib/legacy.ts" || relPath === "pages/home.tsx",
       });
       expect(errors).toHaveLength(1);
       expect(errors[0]?.file).toBe("pages/home.tsx");
       expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
     });
 
-    test("the SAME path is legal once it is also a real key in `files` — the enforcement is an intersection, not an outright ban", () => {
+    test("the SAME `.ts` path is legal once it is also a real key in `files` — the enforcement is an intersection, not an outright ban", () => {
       const errors = scanTreeImports({
         files: new Map([
-          ["pages/home.tsx", 'import x from "../lib/legacy.js"\n'],
-          ["lib/legacy.js", "export const x = 1\n"],
+          ["pages/home.tsx", 'import x from "../lib/legacy.ts"\n'],
+          ["lib/legacy.ts", "export const x = 1\n"],
         ]),
-        has: (relPath) => relPath === "lib/legacy.js" || relPath === "pages/home.tsx",
+        has: (relPath) => relPath === "lib/legacy.ts" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a legitimate cross-file import of a NON-module tree file resolves cleanly even though this pass never scanned its text — the false-fatal the task-12 review closed", () => {
+      // `config.json` is affirmed by `has` (the whole-tree inventory `store`'s `listTree`
+      // would report) but was never given text in `files` — exactly the shape the task-11
+      // draft turned into a false UNRESOLVED_IMPORT purely because of a bare `.json`
+      // extension, unrelated to anything actually wrong with the file.
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import config from "../config.json"\n']]),
+        has: (relPath) => relPath === "config.json" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a non-TS tree file nothing imports never produces a fatal merely from its own presence in the tree", () => {
+      // `store`'s `listTree` enumerates every file under `design/` regardless of extension, so
+      // a real tree legitimately carries files no page ever imports — `notes.md` here. Its
+      // mere membership in `has`'s inventory must never itself become a violation.
+      const errors = scanTreeImports({
+        files: new Map([
+          [
+            "pages/home.tsx",
+            'import { definePage } from "@termcraft/runtime"\nexport const meta = definePage({})\n',
+          ],
+        ]),
+        has: (relPath) => relPath === "pages/home.tsx" || relPath === "notes.md",
       });
       expect(errors).toEqual([]);
     });
