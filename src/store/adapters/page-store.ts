@@ -11,24 +11,45 @@ import { nowIso } from "./types";
 // `createPageStoreAdapter` — the `DesignTreeReader & PageMutations` port over
 // `OpenProject.pages`/`OpenProject.transactions` (plan Task 1).
 //
-// NOT MECHANICALLY RENAMEABLE (plan Task 7, adjacent-file fix beyond the brief's own file
-// list — mirrors Task 6's `DesignTreeStoreNotWiredError` precedent in `store/model/
-// factory.ts` for the identical reason): `PageReader`'s old `readSource(pageSlug)`/
-// `listSlugs()` pair is gone from `core/ports`, replaced by `DesignTreeReader`'s
-// `readTreeFile(relPath)`/`listTree()`/`readManifest()`. `OpenProject.pages`
-// (`store/types.ts`'s `PageStore`) exposes only the OLD `readSource`/`listSlugs` shape — it
-// has no tree-relative read surface to delegate to, because that surface does not exist yet
-// (`store/model/factory.ts`'s `DesignTreeStore`, Task 9's job). Rather than invent one (this
-// plan's single most important rule), `readTreeFile`/`listTree`/`readManifest` below each
-// return an honest "not wired yet" failure — never a fabricated tree read — so this file
-// keeps COMPILING and its test file keeps LOADING (Bun aborts an entire test file on a
-// missing named export; leaving the old `PageReader`/`PageSourceV1` import unresolved would
-// have silently deleted this file's whole test run, masking Task 9's own already-tracked
-// debt instead of leaving it visible). `PageMutations`'s three methods are UNCHANGED below —
-// they already call `open.pages`/`open.manifest`/`open.transactions` methods whose own
-// signatures Task 7 does not touch, and already surface Task 9's `DesignTreeStoreNotWiredError`
-// at runtime via the existing `open.transactions.*` calls (Task 6's placeholder) — so this
-// file does strictly less new work than before, nothing invented.
+// CORRECTED RATIONALE (plan Task 7, fix round 1 — review caught the original comment here
+// stating a false reason): `PageReader`'s old `readSource(pageSlug)`/`listSlugs()` pair is
+// gone from `core/ports`, replaced by `DesignTreeReader`'s `readTreeFile(relPath)`/
+// `listTree()`/`readManifest()`. Removing this file's OWN `readSource`/`listSlugs` methods
+// and replacing them with `DesignTreeReader`'s three was NEVER required to keep anything
+// LOADING — the retired `PageReader`/`PageSourceV1` names were only ever imported here
+// `import type`, which Bun erases before running anything; an unresolved type-only import is
+// a `tsc`-only concern, never a runtime `SyntaxError`. (The genuine load-crash risk this
+// plan's dispatch warns about was a VALUE import — `createFakePageStore` in this file's own
+// test, and in 16 unrelated production test files — which `core/ports/fakes/
+// legacy-page-store.ts` fixes independently of anything below.)
+//
+// The real reason `readTreeFile`/`listTree`/`readManifest` exist on this adapter at all: the
+// bottom-of-file `AssertConforms<DesignTreeReader & PageMutations, ...>` check — the same
+// compile-time convention every adapter in this ring follows (`core/ports/index.ts`'s own
+// doc) — needs a real implementation of every `DesignTreeReader` member to typecheck.
+// `store/model/factory.ts`'s `DesignTreeStore` (Task 9's job) does not exist yet, so these
+// three each return an honest "not wired yet" failure rather than a fabricated tree read.
+//
+// MEASURED REGRESSION, FIXED (fix round 1): the first version of this file DELETED
+// `readSource`/`listSlugs` outright instead of adding the new three alongside them. That
+// broke a REAL runtime caller: `entrypoint/model/create-shell.ts` wires this SAME adapter
+// instance into BOTH `KernelDeps.pageReader` AND `.pageMutations`, and `core/kernel/model/
+// handlers/{page-descriptors,page-pin,preview-export}.ts` (all untouched by this plan until
+// Tasks 13/14) call `.readSource(...)`/`.listSlugs()` on it directly — a real, observed
+// `smoke.test.ts` failure ("`deps.pageReader.listSlugs is not a function`"). Confirmed by
+// reverting and re-running: restoring `readSource`/`listSlugs` (delegating to `open.pages`,
+// unchanged from before this task) makes that exact error disappear; the one `smoke.test.ts`
+// case that still fails afterward ("a host that crash-loops on a LIVE session...") was
+// ALREADY in `red-baseline-after-task-6.txt` before this task touched anything, and still
+// fails for its OWN pre-existing, already-tracked reason (`store/model/factory.ts`'s
+// `listSlugs()` returns `read.pages`, a field Task 5 already removed from `ProjectManifest`
+// — Task 9's debt, not this task's). So both method sets are kept: `readSource`/`listSlugs`
+// for the real, still-relied-upon callers above; `readTreeFile`/`listTree`/`readManifest`
+// for `AssertConforms` and for whichever task migrates those callers onto `DesignTreeReader`
+// for real. `PageMutations`'s three methods are UNCHANGED below — they already call
+// `open.pages`/`open.manifest`/`open.transactions` methods whose own signatures Task 7 does
+// not touch, and already surface Task 9's `DesignTreeStoreNotWiredError` at runtime via the
+// existing `open.transactions.*` calls (Task 6's placeholder).
 // RESOLVED SIGNATURE MISMATCH (plan Task 1, `renameTitle`, "flag, don't guess"): the port
 // takes `(pageSlug, title)`, but `TransactionEngine.renamePageTitle` takes the page's
 // COMPLETE new source bytes (`store/types.ts:260-267`: "the meta.title edit is baked into
@@ -126,6 +147,12 @@ function invalidPageSlugFailure(rawSlug: string, reason: string): FailureDtoV1 {
   };
 }
 
+/** The retired `PageReader`'s own page-source shape (`core/ports/page-store.ts`, before Task 7 deleted it) — kept locally, verbatim, for `readSource` below; never re-exported as a real port. */
+interface LegacyPageSourceV1 {
+  readonly bytes: Uint8Array;
+  readonly sourceHash: Sha256Hex;
+}
+
 /** Shared "not wired yet" refusal for every {@link DesignTreeReader} method below — see this file's header. */
 function designTreeNotWiredFailure(method: string): FailureDtoV1 {
   console.warn(
@@ -139,8 +166,27 @@ function designTreeNotWiredFailure(method: string): FailureDtoV1 {
   };
 }
 
-export function createPageStoreAdapter(deps: StoreAdapterDeps): DesignTreeReader & PageMutations {
+// No explicit return-type annotation (unlike every other adapter's `createXAdapter`): this
+// one genuinely returns MORE than `DesignTreeReader & PageMutations` (see this file's header,
+// "MEASURED REGRESSION, FIXED") — `readSource`/`listSlugs` are real, extra members a
+// still-untouched caller depends on. Annotating the declared type here would trigger an
+// excess-property error on the object literal below; the bottom-of-file `AssertConforms`
+// check still proves the REQUIRED port shape is present, which is the actual guarantee that
+// matters.
+export function createPageStoreAdapter(deps: StoreAdapterDeps) {
   const { open } = deps;
+
+  async function readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | LegacyPageSourceV1> {
+    const result = await open.pages.readSource(pageSlug);
+    if (result instanceof Error) return toFailureDto(result);
+    return result;
+  }
+
+  async function listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]> {
+    const result = await open.pages.listSlugs();
+    if (result instanceof Error) return toFailureDto(result);
+    return result;
+  }
 
   async function readTreeFile(relPath: string): Promise<FailureDtoV1 | DesignTreeFileV1> {
     return designTreeNotWiredFailure(`readTreeFile(${relPath})`);
@@ -208,7 +254,16 @@ export function createPageStoreAdapter(deps: StoreAdapterDeps): DesignTreeReader
     return undefined;
   }
 
-  return { readTreeFile, listTree, readManifest, renameTitle, reorder, remove };
+  return {
+    readSource,
+    listSlugs,
+    readTreeFile,
+    listTree,
+    readManifest,
+    renameTitle,
+    reorder,
+    remove,
+  };
 }
 
 type _Conforms = AssertConforms<

@@ -24,6 +24,16 @@ function notFound(relPath: string): FailureDtoV1 {
   };
 }
 
+/** `reorder()`'s own port doc (`design-store.ts`): "the exact permutation of already-listed slugs — never a subset or an added/removed identity." Named per which invariant broke, matching the sibling `notFound` above. */
+function reorderInvariantFailure(reason: string): FailureDtoV1 {
+  return {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: `reorder() rejected: ${reason}`,
+    details: { reason },
+  };
+}
+
 /** A deterministic, valid-looking 64-hex-char digest derived from a seed — mirrors `fakes/staging.ts`'s own identical helper. */
 function fakeSha256Hex(seed: string): Sha256Hex {
   let h = 0;
@@ -50,7 +60,19 @@ export type DesignStoreCall =
 
 export interface FakeDesignStore extends DesignTreeReader, PageMutations {
   readonly calls: readonly DesignStoreCall[];
-  /** The titles `renameTitle()` has recorded — this fake never mutates a tree file's own bytes. */
+  /**
+   * KNOWN FAKE-FIDELITY GAP (review finding, promoted 5 — read before writing a "rename then
+   * read the file" test against this fake): `renameTitle()`'s own port doc says it
+   * "mechanically rewrites the page's entry file's static `meta.title`", and the REAL adapter
+   * (`store/adapters/page-store.ts`'s `rewriteMetaTitle`) does exactly that. This fake does
+   * NOT — it only records the title here, in `titles`, and never touches `files`' bytes. A
+   * test that renames a page and then expects `readTreeFile()` to reflect the new title WILL
+   * pass against the real adapter and FALSELY pass (or silently prove nothing) against this
+   * fake. Recorded here, not fixed, because reproducing the real adapter's `definePage({...})`
+   * text-rewrite inside a fake would duplicate production logic this ring's fakes are
+   * deliberately "dumb" about (see `fakes/turn-transactions.ts`'s own header: "the fake is
+   * dumb and scriptable, not a re-implementation of the engine").
+   */
   readonly titles: ReadonlyMap<PageSlug, string>;
   failNext(method: DesignStoreFailableMethod, failure: FailureDtoV1): void;
 }
@@ -117,10 +139,25 @@ export function createFakeDesignStore(options: {
     calls.push({ method: "reorder", order });
     const queued = queues.reorder.shift();
     if (queued !== undefined) return queued;
+
     const bySlug = new Map<PageSlug, PageEntryV1>(
       manifest.pages.map((entry) => [entry.slug, entry]),
     );
-    const reordered = order.map((slug) => bySlug.get(slug)).filter((entry) => entry !== undefined);
+    // The port's own doc: "the exact permutation of already-listed slugs — never a subset or
+    // an added/removed identity." Checked both directions rather than silently filtering an
+    // unknown slug out (review finding, promoted 4) — a caller passing a stale/foreign slug
+    // finds out immediately, instead of the fake quietly reordering fewer pages than it holds.
+    if (order.length !== manifest.pages.length) {
+      return reorderInvariantFailure(
+        `order has ${order.length} slugs but the manifest holds ${manifest.pages.length}`,
+      );
+    }
+    const reordered: PageEntryV1[] = [];
+    for (const slug of order) {
+      const entry = bySlug.get(slug);
+      if (entry === undefined) return reorderInvariantFailure(`unknown pageSlug "${slug}"`);
+      reordered.push(entry);
+    }
     manifest = { ...manifest, pages: reordered };
     return undefined;
   }

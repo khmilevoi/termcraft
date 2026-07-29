@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { createFakeDesignStore } from "core/ports/fakes";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
@@ -62,10 +63,14 @@ async function seedHomePage(open: Awaited<ReturnType<typeof createRealProjectFix
 // (red-debt.md), just no longer crashing the whole file on load (Bun aborts a file on a
 // missing named export; this file's own `createFakePageStore` import was one).
 describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
+  // `seedHomePage` deliberately NOT called here (fix round 1 — it always throws today, per
+  // Task 6's `DesignTreeStoreNotWiredError` placeholder on `renamePageTitle`/`reorderPages`,
+  // which would kill this test in setup before it ever asserted anything) — and it is not
+  // needed for this assertion anyway: `readTreeFile`/`listTree`/`readManifest` refuse
+  // UNCONDITIONALLY (see `page-store.ts`'s own `designTreeNotWiredFailure`), seeded or not.
   test("readTreeFile()/listTree()/readManifest() honestly refuse — DesignTreeStore is not wired yet (Task 9)", async () => {
     const { open, deps } = await createRealProjectFixture();
     try {
-      await seedHomePage(open);
       const adapter = createPageStoreAdapter(deps);
 
       const file = await adapter.readTreeFile("pages/home.tsx");
@@ -76,6 +81,30 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
 
       const manifest = await adapter.readManifest();
       expect("code" in manifest).toBe(true);
+    } finally {
+      await open.close();
+    }
+  });
+
+  // Restores the pre-Task-7 GREEN test this file used to carry
+  // ("readSource() on an unlisted slug returns a FailureDtoV1 from both the fake and the real
+  // adapter" — never itself part of Task 9's red-debt, since it asserted an intrinsic
+  // "not found", not the retired `PageReader` contract) under the new `DesignTreeReader`
+  // vocabulary: both sides refuse an unrecognized relPath — the fake because nothing was ever
+  // seeded there, the real adapter because it is honestly not wired yet — same shape, same
+  // pairing, no `seedHomePage` needed on either side.
+  test("readTreeFile() on an unknown relPath refuses in both the fake and the real adapter", async () => {
+    const fake = createFakeDesignStore({
+      manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
+    });
+    const fakeResult = await fake.readTreeFile("pages/missing.tsx");
+    expect("code" in fakeResult).toBe(true);
+
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      const adapter = createPageStoreAdapter(deps);
+      const realResult = await adapter.readTreeFile("pages/missing.tsx");
+      expect("code" in realResult).toBe(true);
     } finally {
       await open.close();
     }

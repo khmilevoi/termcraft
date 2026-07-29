@@ -20,10 +20,31 @@ const FAILURE: FailureDtoV1 = {
   details: {},
 };
 
+// `entry` here happens to equal `pages/${slug}.tsx` for CONVENIENCE only, in tests that never
+// assert anything about which relPath a slug resolves to. Do not use this for a test that is
+// meant to prove a lookup goes through `manifest.entry` rather than a slug-shaped guess — the
+// coincidence would make such a test pass identically either way. Use
+// {@link manifestWithEntries} for that (review finding, promoted 3).
 function manifestOf(order: readonly PageSlug[]): PagesManifestV1 {
   return {
     schemaVersion: 1,
     pages: order.map((pageSlug) => ({ slug: pageSlug, entry: `pages/${pageSlug}.tsx` })),
+    requestedActivePage: null,
+  };
+}
+
+/**
+ * Builds a manifest from explicit `(slug, entry)` pairs, deliberately unrelated to each
+ * other where a test needs to prove the plan's central rule: nothing computes a page's file
+ * from its slug (design §3, §7). See {@link manifestOf}'s own doc for why that helper cannot
+ * be used for this.
+ */
+function manifestWithEntries(
+  entries: readonly { readonly slug: PageSlug; readonly entry: string }[],
+): PagesManifestV1 {
+  return {
+    schemaVersion: 1,
+    pages: entries.map(({ slug: pageSlug, entry }) => ({ slug: pageSlug, entry })),
     requestedActivePage: null,
   };
 }
@@ -88,19 +109,56 @@ describe("createFakeDesignStore", () => {
     expect(result.pages.map((entry) => entry.slug)).toEqual([slug("about"), slug("home")]);
   });
 
-  test("remove() drops the page from the manifest order and its own entry file", async () => {
+  // Review finding, promoted 4: the port's own doc (`design-store.ts`) says reorder() takes
+  // "the exact permutation of already-listed slugs — never a subset or an added/removed
+  // identity." Both directions pinned: an order naming a slug the manifest never listed, and
+  // an order that is a genuine subset (silently dropping a tracked slug), are both refused —
+  // the manifest is left completely untouched by the refused call either way.
+  describe("reorder() refuses rather than silently dropping/inventing an identity", () => {
+    test("refuses an order naming an unknown pageSlug", async () => {
+      const store = createFakeDesignStore({ manifest: manifestOf([slug("home")]) });
+      const result = await store.reorder([slug("home"), slug("about")]);
+      if (result === undefined) throw new Error("expected reorder() to refuse this order");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+      const after = await store.readManifest();
+      if ("code" in after) throw new Error("unexpected failure");
+      expect(after.pages.map((entry) => entry.slug)).toEqual([slug("home")]); // untouched
+    });
+
+    test("refuses a genuine subset — never silently drops a tracked slug", async () => {
+      const store = createFakeDesignStore({ manifest: manifestOf([slug("home"), slug("about")]) });
+      const result = await store.reorder([slug("home")]);
+      if (result === undefined) throw new Error("expected reorder() to refuse this order");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+      const after = await store.readManifest();
+      if ("code" in after) throw new Error("unexpected failure");
+      expect(after.pages.map((entry) => entry.slug)).toEqual([slug("home"), slug("about")]); // untouched
+    });
+  });
+
+  // Review finding, promoted 3: `about`'s entry is DELIBERATELY unrelated to its slug
+  // (`views/landing.tsx`, never `pages/about.tsx`) — proves `remove()` deletes by reading
+  // `manifest.entry`, never by guessing a slug-shaped path (the plan's central rule, design
+  // §3, §7). A slug-computed implementation would try to delete the never-seeded
+  // `pages/about.tsx`, silently no-op, and leave `views/landing.tsx` behind — this assertion
+  // catches exactly that.
+  test("remove() drops the page from the manifest order and its own entry file, looked up through the manifest — never a slug-computed path", async () => {
     const store = createFakeDesignStore({
-      manifest: manifestOf([slug("home"), slug("about")]),
+      manifest: manifestWithEntries([
+        { slug: slug("home"), entry: "pages/home.tsx" },
+        { slug: slug("about"), entry: "views/landing.tsx" },
+      ]),
       files: new Map([
         ["pages/home.tsx", fakeDesignTreeFile("home")],
-        ["pages/about.tsx", fakeDesignTreeFile("about")],
+        ["views/landing.tsx", fakeDesignTreeFile("about")],
       ]),
     });
     await store.remove(plan(slug("about")));
     const result = await store.readManifest();
     if ("code" in result) throw new Error("unexpected failure");
     expect(result.pages.map((entry) => entry.slug)).toEqual([slug("home")]);
-    expect("code" in (await store.readTreeFile("pages/about.tsx"))).toBe(true);
+    expect("code" in (await store.readTreeFile("views/landing.tsx"))).toBe(true); // the real entry file is gone
+    expect("code" in (await store.readTreeFile("pages/about.tsx"))).toBe(true); // never existed either way
   });
 
   test("failNext() queues one failure for the named method", async () => {
@@ -112,7 +170,14 @@ describe("createFakeDesignStore", () => {
     expect(second).toBeUndefined();
   });
 
-  test("renameTitle() records the title without touching the manifest or the tree file's own bytes", async () => {
+  // KNOWN FAKE-FIDELITY GAP (review finding, promoted 5 — see `FakeDesignStore.titles`'s own
+  // doc comment for the full rationale): the REAL adapter (`store/adapters/page-store.ts`)
+  // mechanically rewrites the entry file's `meta.title` bytes; this fake only records the
+  // title in `titles` and leaves `files` byte-for-byte untouched. This test PINS that gap —
+  // it does NOT prove renameTitle() is byte-correct, only that this fake's own (deliberately
+  // limited) behavior stays what it currently is. A "rename then read the file and expect the
+  // new title" test would pass against the real adapter and give a FALSE green here.
+  test("renameTitle() records the title without touching the manifest or the tree file's own bytes (fake-fidelity gap, not a real-adapter guarantee)", async () => {
     const store = createFakeDesignStore({
       manifest: manifestOf([slug("home")]),
       files: new Map([["pages/home.tsx", fakeDesignTreeFile("home")]]),
@@ -121,7 +186,7 @@ describe("createFakeDesignStore", () => {
     expect(store.titles.get(slug("home"))).toBe("Home page");
     const file = await store.readTreeFile("pages/home.tsx");
     if ("code" in file) throw new Error("unexpected failure");
-    expect(new TextDecoder().decode(file.bytes)).toBe("home");
+    expect(new TextDecoder().decode(file.bytes)).toBe("home"); // unchanged — the known gap
   });
 
   test("records calls in order with their arguments", async () => {

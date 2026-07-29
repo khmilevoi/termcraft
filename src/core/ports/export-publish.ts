@@ -16,8 +16,11 @@ import type { FileImageV1 } from "./turn-transactions";
  *
  * `export/model/publish.ts`'s `publishExport` already performs the ONE core-side re-CAS
  * (§12.5: settings/identity match + live source-hash re-read) before it ever reaches this
- * port — that is a DOMAIN check `core` owns with its existing `PageReader`/
- * `ProjectWriteCoordinator` ports. `buildExportPublishTransaction`'s own `precondition` is a
+ * port — that is a DOMAIN check `core` owns with its own design-tree read port
+ * (`DesignTreeReader`, `design-store.ts` — `export/model/publish.ts` itself still names it
+ * `PageReader` at this writing; that file is untouched by plan Task 7, still red, and
+ * migrating it is Task 13/14 territory, not a rename this comment should paper over) plus
+ * `ProjectWriteCoordinator`. `buildExportPublishTransaction`'s own `precondition` is a
  * SEPARATE, lower-level re-check the store engine runs right before `intent.json` becomes
  * durable (§4.3 step 3) — it needs live `SafeFs` access `core` never holds, so it is NOT
  * redrawn here; the real adapter (WP-2) builds that closure from its own store-side state,
