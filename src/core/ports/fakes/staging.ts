@@ -10,11 +10,12 @@ import type {
 } from "../staging";
 
 /**
- * In-memory {@link StagingService} fake (6D task brief). `createTurnWorkspace` synthesizes
- * a deterministic root path and file list from `input.turnId`/`pages`/`runtimeDocs`/
- * `manifestSlice` — no real disk write happens, so `snapshotToCandidate`, `retireWorkspace`
- * and `retireCandidate` only need to track which workspace/candidate ids are live, not copy
- * or delete real bytes (kernel-assembly Task 13's own header).
+ * In-memory {@link StagingService} fake (6D task brief; re-keyed to the design tree by plan
+ * Task 7). `createTurnWorkspace` synthesizes a deterministic root path and file list from
+ * `input.turnId`/`treeFiles`/`runtimeDocs` — no real disk write happens, so
+ * `snapshotToCandidate`, `retireWorkspace` and `retireCandidate` only need to track which
+ * workspace/candidate ids are live, not copy or delete real bytes (kernel-assembly Task 13's
+ * own header).
  */
 
 /** A deterministic, valid-looking 64-hex-char {@link Sha256Hex} derived from a seed — no crypto, no randomness. */
@@ -78,13 +79,14 @@ export function createFakeStagingService(): FakeStagingService {
   const foreignCandidateRoots = new Set<string>();
 
   // Per-workspace synthetic content, keyed by `turnId` — built once, at `createTurnWorkspace`
-  // time, from the ONE real byte payload this fake ever actually receives (`manifestSlice`)
-  // plus deterministic (never random) synthetic bytes for every other staged file, since
-  // `StagingPageSourceV1`/`StagingRuntimeDocV1` carry only a `sourcePath` STRING, never real
-  // bytes, for this fake to copy. Copied into `contentByCandidateRoot` (keyed by the frozen
-  // candidate's own root) once `snapshotToCandidate` runs, so `readCandidateFile` can look a
-  // relPath up by the SAME root a caller actually holds after freezing — never by `turnId`,
-  // which `readCandidateFile`'s own port signature never takes.
+  // time, as deterministic (never random) synthetic bytes derived from each staged file's own
+  // `sourcePath`, since `StagingTreeFileV1`/`StagingRuntimeDocV1` carry only a `sourcePath`
+  // STRING, never real bytes, for this fake to copy — `design/pages.json` is an ordinary tree
+  // file now (plan Task 7: no more `manifestSlice` real-byte special case). Copied into
+  // `contentByCandidateRoot` (keyed by the frozen candidate's own root) once
+  // `snapshotToCandidate` runs, so `readCandidateFile` can look a relPath up by the SAME root
+  // a caller actually holds after freezing — never by `turnId`, which `readCandidateFile`'s
+  // own port signature never takes.
   const contentByTurnId = new Map<string, ReadonlyMap<string, Uint8Array>>();
   const contentByCandidateRoot = new Map<string, ReadonlyMap<string, Uint8Array>>();
 
@@ -99,17 +101,16 @@ export function createFakeStagingService(): FakeStagingService {
     const queued = queues.createTurnWorkspace.shift();
     if (queued !== undefined) return queued;
 
-    // Staged under `design/` — the fixed fake-fidelity path (this file's own header):
-    // `store/adapters/staging.ts`'s real `createStagingAdapter` now stages every page and
-    // the manifest slice under `design/` (multi-file design tree design §10, `store/sandbox`'s
-    // `stageAllFiles`), and this fake's `relPath`s must keep matching or the fidelity test
-    // this comment refers to (`store/adapters/staging.test.ts`) silently stops proving anything.
-    // STOPGAP, same as the real adapter it mirrors: `docs/superpowers/plans/2026-07-28-
-    // design-tree-canonical-source.md`'s "Task 8: `store/sandbox` — stage the tree" replaces
-    // this per-page shape with the whole `design/**` tree; update this fake alongside it.
-    const pageFiles: StagedFileV1[] = input.pages.map((page) => ({
-      relPath: `design/pages/${page.pageSlug}.tsx`,
-      sha256: fakeSha256Hex(page.sourcePath),
+    // Staged under `design/<relPath>` — the fixed fake-fidelity path (this file's own
+    // header): `store/adapters/staging.ts`'s real `createStagingAdapter` stages the whole
+    // tree under `design/` (multi-file design tree design §10), and this fake's `relPath`s
+    // must keep matching or the fidelity test this comment refers to
+    // (`store/adapters/staging.test.ts`) silently stops proving anything. `design/pages.json`
+    // is just another entry in `input.treeFiles` now (plan Task 7) — this fake never
+    // fabricates one itself, matching the port's own doc: "no invented pages.json".
+    const treeFileEntries: StagedFileV1[] = input.treeFiles.map((file) => ({
+      relPath: `design/${file.relPath}`,
+      sha256: fakeSha256Hex(file.sourcePath),
       size: 0,
     }));
     const runtimeFiles: StagedFileV1[] = input.runtimeDocs.map((doc) => ({
@@ -117,22 +118,15 @@ export function createFakeStagingService(): FakeStagingService {
       sha256: fakeSha256Hex(doc.sourcePath),
       size: 0,
     }));
-    const manifestFile: StagedFileV1 = {
-      relPath: "design/pages.json",
-      sha256: fakeSha256Hex(`manifest:${input.turnId}`),
-      size: input.manifestSlice.byteLength,
-    };
-    const files = [manifestFile, ...pageFiles, ...runtimeFiles];
+    const files = [...treeFileEntries, ...runtimeFiles];
 
-    // The one real byte payload this fake ever receives (`manifestSlice`) is stored
-    // verbatim; every other staged file gets deterministic synthetic content derived from
-    // its own `sourcePath` — see this function's own header comment on `contentByTurnId`.
+    // Every staged file gets deterministic synthetic content derived from its own
+    // `sourcePath` — see this function's own header comment on `contentByTurnId`.
     const content = new Map<string, Uint8Array>();
-    content.set(manifestFile.relPath, input.manifestSlice);
-    for (const page of input.pages) {
+    for (const file of input.treeFiles) {
       content.set(
-        `design/pages/${page.pageSlug}.tsx`,
-        new TextEncoder().encode(`fake-page-source:${page.sourcePath}`),
+        `design/${file.relPath}`,
+        new TextEncoder().encode(`fake-tree-file:${file.sourcePath}`),
       );
     }
     for (const doc of input.runtimeDocs) {

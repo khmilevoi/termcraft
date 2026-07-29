@@ -3,6 +3,12 @@ import type { PageSlug } from "entities/page";
 
 import type { ReadSetFileSnapshotV1 } from "./staging";
 
+// CONTROLLER RULING (plan Task 7 dispatch, red-debt.md "Owner: Task 7"): `project.toml` no
+// longer carries page order (plan Task 5) — `ProjectManifestV1` below therefore ALSO drops
+// `pages`, matching the store-side `ProjectManifest` it mirrors. The Kernel's page
+// enumeration comes from `DesignTreeReader.readManifest()` (`design-store.ts`), the sole
+// page-order and page-identity authority, never from this port.
+
 /**
  * The open-project facade `core` needs at startup (turn-durability §12 / storage-identity
  * §14.1): lease identity, the portable manifest, and the machine-local workspace state.
@@ -30,10 +36,13 @@ import type { ReadSetFileSnapshotV1 } from "./staging";
 export type TargetStackV1 = "rust-ratatui" | "go-bubbletea" | "js-opentui" | "generic";
 
 /**
- * `.termcraft/project.toml`'s five semantic fields (storage-identity §5.1), minus nothing —
- * this is the whole portable manifest, deliberately narrow: no active page, active chat,
- * backend, model, effort, preview/UI setting, session id, or Git status lives here (§5.1,
- * §16.1) — see `WorkspaceStateV1` below for all of that.
+ * `.termcraft/project.toml`'s four semantic fields (storage-identity §5.1, `format_version =
+ * 2` per plan Task 5), deliberately narrow: no active page, active chat, backend, model,
+ * effort, preview/UI setting, session id, or Git status lives here (§5.1, §16.1) — see
+ * `WorkspaceStateV1` below for all of that. `pages` is GONE (plan Task 5): `project.toml` no
+ * longer carries page order or identity at all — `design/pages.json`'s `entry` map is the
+ * sole authority for both, read through `DesignTreeReader.readManifest()` (`design-store.ts`),
+ * never through this port.
  */
 export interface ProjectManifestV1 {
   readonly projectId: string;
@@ -41,8 +50,6 @@ export interface ProjectManifestV1 {
   /** UTC RFC 3339. */
   readonly createdAt: string;
   readonly targetStack: TargetStackV1;
-  /** Ordered, duplicate-free: listing/tab order, NOT page identity allocation (§5.1). */
-  readonly pages: readonly PageSlug[];
 }
 
 export type PreviewSizeModeV1 = "auto" | "preset" | "custom";

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { createFakePageStore } from "core/ports/fakes";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
@@ -52,40 +51,31 @@ async function seedHomePage(open: Awaited<ReturnType<typeof createRealProjectFix
   if (reordered instanceof Error) throw new Error(`fixture bug: ${reordered.message}`);
 }
 
+// NOTE (plan Task 7, adjacent-file fix beyond the brief's own file list): `PageReader`
+// (`readSource`/`listSlugs`) is gone from `core/ports`, replaced by `DesignTreeReader`
+// (`readTreeFile`/`listTree`/`readManifest`) — `store/adapters/page-store.ts`'s real
+// adapter has no `DesignTreeStore` to delegate to yet (Task 9's job) and honestly refuses
+// every `DesignTreeReader` call instead of fabricating a tree read; see that file's own
+// header. These reader-shaped tests are rewritten to assert exactly that refusal rather
+// than exercising a read this codebase cannot honestly perform yet. The `PageMutations`
+// tests below are otherwise UNCHANGED — same test names, same already-known Task 9 debt
+// (red-debt.md), just no longer crashing the whole file on load (Bun aborts a file on a
+// missing named export; this file's own `createFakePageStore` import was one).
 describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
-  test("listSlugs()/readSource() see a page seeded through the real transaction engine", async () => {
-    const fake = createFakePageStore({ order: [HOME_SLUG] });
-    const fakeSlugs = await fake.listSlugs();
-    expect(fakeSlugs).toEqual([HOME_SLUG]);
-
+  test("readTreeFile()/listTree()/readManifest() honestly refuse — DesignTreeStore is not wired yet (Task 9)", async () => {
     const { open, deps } = await createRealProjectFixture();
     try {
       await seedHomePage(open);
       const adapter = createPageStoreAdapter(deps);
 
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
-      expect(slugs).toEqual([HOME_SLUG]);
+      const file = await adapter.readTreeFile("pages/home.tsx");
+      expect("code" in file).toBe(true);
 
-      const source = await adapter.readSource(HOME_SLUG);
-      if ("code" in source) throw new Error("fixture bug: readSource failed");
-      expect(new TextDecoder().decode(source.bytes)).toBe(HOME_SOURCE);
-      expect(source.sourceHash).toMatch(/^[0-9a-f]{64}$/);
-    } finally {
-      await open.close();
-    }
-  });
+      const tree = await adapter.listTree();
+      expect("code" in tree).toBe(true);
 
-  test("readSource() on an unlisted slug returns a FailureDtoV1 from both the fake and the real adapter", async () => {
-    const fake = createFakePageStore({ order: [] });
-    const fakeResult = await fake.readSource(HOME_SLUG);
-    expect("code" in fakeResult).toBe(true);
-
-    const { open, deps } = await createRealProjectFixture();
-    try {
-      const adapter = createPageStoreAdapter(deps);
-      const realResult = await adapter.readSource(HOME_SLUG);
-      expect("code" in realResult).toBe(true);
+      const manifest = await adapter.readManifest();
+      expect("code" in manifest).toBe(true);
     } finally {
       await open.close();
     }
@@ -100,8 +90,10 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
       const renamed = await adapter.renameTitle(HOME_SLUG, "New Title");
       expect(renamed).toBeUndefined();
 
-      const source = await adapter.readSource(HOME_SLUG);
-      if ("code" in source) throw new Error("fixture bug: readSource failed");
+      // Verified via the store's own `PageStore.readSource` directly — `DesignTreeReader`'s
+      // new `readTreeFile` cannot honestly perform this read yet (see this file's header).
+      const source = await open.pages.readSource(HOME_SLUG);
+      if (source instanceof Error) throw new Error(`fixture bug: ${source.message}`);
       const text = new TextDecoder().decode(source.bytes);
       expect(text).toContain('title: "New Title"');
       expect(text).toContain("kitApiVersion: 1");
@@ -121,8 +113,8 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
 
       const reordered = await adapter.reorder([HOME_SLUG]);
       expect(reordered).toBeUndefined();
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
+      const slugs = await open.pages.listSlugs();
+      if (slugs instanceof Error) throw new Error(`fixture bug: ${slugs.message}`);
       expect(slugs).toEqual([HOME_SLUG]);
     } finally {
       await open.close();
@@ -147,12 +139,12 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
       });
       expect(removed).toBeUndefined();
 
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
+      const slugs = await open.pages.listSlugs();
+      if (slugs instanceof Error) throw new Error(`fixture bug: ${slugs.message}`);
       expect(slugs).toEqual([]);
 
-      const source = await adapter.readSource(HOME_SLUG);
-      expect("code" in source).toBe(true);
+      const source = await open.pages.readSource(HOME_SLUG);
+      expect(source instanceof Error).toBe(true);
     } finally {
       await open.close();
     }
@@ -197,8 +189,8 @@ describe("createPageStoreAdapter — contract test (fake vs. real)", () => {
       expect(manifestReadCalls).toBe(0);
 
       // The valid, existing page is untouched by the rejected plan.
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
+      const slugs = await open.pages.listSlugs();
+      if (slugs instanceof Error) throw new Error(`fixture bug: ${slugs.message}`);
       expect(slugs).toEqual([HOME_SLUG]);
     } finally {
       await open.close();

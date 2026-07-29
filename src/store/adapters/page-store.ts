@@ -1,5 +1,6 @@
-import type { AssertConforms, PageMutations, PageReader, PageSourceV1 } from "core/ports";
-import type { FailureDtoV1, PageRemovePlanV1 } from "core/protocol";
+import type { AssertConforms, DesignTreeFileV1, DesignTreeReader, PageMutations } from "core/ports";
+import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol";
+import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 
@@ -7,9 +8,27 @@ import { toFailureDto } from "./failure";
 import type { StoreAdapterDeps } from "./types";
 import { nowIso } from "./types";
 
-// `createPageStoreAdapter` — the `PageReader & PageMutations` port over `OpenProject.pages`/
-// `OpenProject.transactions` (plan Task 1).
+// `createPageStoreAdapter` — the `DesignTreeReader & PageMutations` port over
+// `OpenProject.pages`/`OpenProject.transactions` (plan Task 1).
 //
+// NOT MECHANICALLY RENAMEABLE (plan Task 7, adjacent-file fix beyond the brief's own file
+// list — mirrors Task 6's `DesignTreeStoreNotWiredError` precedent in `store/model/
+// factory.ts` for the identical reason): `PageReader`'s old `readSource(pageSlug)`/
+// `listSlugs()` pair is gone from `core/ports`, replaced by `DesignTreeReader`'s
+// `readTreeFile(relPath)`/`listTree()`/`readManifest()`. `OpenProject.pages`
+// (`store/types.ts`'s `PageStore`) exposes only the OLD `readSource`/`listSlugs` shape — it
+// has no tree-relative read surface to delegate to, because that surface does not exist yet
+// (`store/model/factory.ts`'s `DesignTreeStore`, Task 9's job). Rather than invent one (this
+// plan's single most important rule), `readTreeFile`/`listTree`/`readManifest` below each
+// return an honest "not wired yet" failure — never a fabricated tree read — so this file
+// keeps COMPILING and its test file keeps LOADING (Bun aborts an entire test file on a
+// missing named export; leaving the old `PageReader`/`PageSourceV1` import unresolved would
+// have silently deleted this file's whole test run, masking Task 9's own already-tracked
+// debt instead of leaving it visible). `PageMutations`'s three methods are UNCHANGED below —
+// they already call `open.pages`/`open.manifest`/`open.transactions` methods whose own
+// signatures Task 7 does not touch, and already surface Task 9's `DesignTreeStoreNotWiredError`
+// at runtime via the existing `open.transactions.*` calls (Task 6's placeholder) — so this
+// file does strictly less new work than before, nothing invented.
 // RESOLVED SIGNATURE MISMATCH (plan Task 1, `renameTitle`, "flag, don't guess"): the port
 // takes `(pageSlug, title)`, but `TransactionEngine.renamePageTitle` takes the page's
 // COMPLETE new source bytes (`store/types.ts:260-267`: "the meta.title edit is baked into
@@ -107,19 +126,35 @@ function invalidPageSlugFailure(rawSlug: string, reason: string): FailureDtoV1 {
   };
 }
 
-export function createPageStoreAdapter(deps: StoreAdapterDeps): PageReader & PageMutations {
+/** Shared "not wired yet" refusal for every {@link DesignTreeReader} method below — see this file's header. */
+function designTreeNotWiredFailure(method: string): FailureDtoV1 {
+  console.warn(
+    `store/adapters/page-store: ${method} cannot read the design tree yet — DesignTreeStore is not wired into this adapter (plan Task 9)`,
+  );
+  return {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: `${method} is not yet implemented — the design tree is not wired into this adapter`,
+    details: { method },
+  };
+}
+
+export function createPageStoreAdapter(deps: StoreAdapterDeps): DesignTreeReader & PageMutations {
   const { open } = deps;
 
-  async function readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | PageSourceV1> {
-    const result = await open.pages.readSource(pageSlug);
-    if (result instanceof Error) return toFailureDto(result);
-    return result;
+  async function readTreeFile(relPath: string): Promise<FailureDtoV1 | DesignTreeFileV1> {
+    return designTreeNotWiredFailure(`readTreeFile(${relPath})`);
   }
 
-  async function listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]> {
-    const result = await open.pages.listSlugs();
-    if (result instanceof Error) return toFailureDto(result);
-    return result;
+  async function listTree(): Promise<
+    | FailureDtoV1
+    | readonly { readonly relPath: string; readonly sha256: Sha256Hex; readonly size: number }[]
+  > {
+    return designTreeNotWiredFailure("listTree()");
+  }
+
+  async function readManifest(): Promise<FailureDtoV1 | PagesManifestV1> {
+    return designTreeNotWiredFailure("readManifest()");
   }
 
   async function renameTitle(pageSlug: PageSlug, title: string): Promise<FailureDtoV1 | undefined> {
@@ -173,10 +208,10 @@ export function createPageStoreAdapter(deps: StoreAdapterDeps): PageReader & Pag
     return undefined;
   }
 
-  return { readSource, listSlugs, renameTitle, reorder, remove };
+  return { readTreeFile, listTree, readManifest, renameTitle, reorder, remove };
 }
 
 type _Conforms = AssertConforms<
-  PageReader & PageMutations,
+  DesignTreeReader & PageMutations,
   ReturnType<typeof createPageStoreAdapter>
 >;

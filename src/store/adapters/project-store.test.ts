@@ -13,7 +13,7 @@ describe("createProjectStoreAdapter — contract test (fake vs. real)", () => {
     const fakeManifest = await fake.readManifest();
     if ("code" in fakeManifest) throw new Error("fixture bug: fake readManifest failed");
     expect(fakeManifest.name).toBe("Contract Co");
-    expect(fakeManifest.pages).toEqual([]);
+    expect("pages" in fakeManifest).toBe(false);
 
     const { open, deps } = await createRealProjectFixture({ name: "Contract Co" });
     try {
@@ -21,7 +21,7 @@ describe("createProjectStoreAdapter — contract test (fake vs. real)", () => {
       const realManifest = await realAdapter.readManifest();
       if ("code" in realManifest) throw new Error("fixture bug: real readManifest failed");
       expect(realManifest.name).toBe("Contract Co");
-      expect(realManifest.pages).toEqual([]);
+      expect("pages" in realManifest).toBe(false);
       expect(realManifest.targetStack).toBe("generic");
       expect(() => new Date(realManifest.createdAt).toISOString()).not.toThrow();
     } finally {

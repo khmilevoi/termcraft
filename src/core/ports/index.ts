@@ -63,13 +63,13 @@ export type {
   ChatPageCursorV1,
   ChatReader,
 } from "./chat-store";
-export type { PageMutations, PageReader, PageSourceV1 } from "./page-store";
+export type { DesignTreeFileV1, DesignTreeReader, PageMutations } from "./design-store";
 export type { PinMutations, PinReader } from "./pin-store";
 
 // ---- turn transactions + the project-write mutex ----------------------------------------
 export type {
   AppendBaseV1,
-  ChangedPageOpV1,
+  ChangedDesignFileOpV1,
   FileImageV1,
   ResolvedPinAppendV1,
   TurnAdmissionInputV1,
@@ -102,9 +102,9 @@ export type {
   ReadSetFileSnapshotV1,
   StagedFileV1,
   StagedTurnReadSetV1,
-  StagingPageSourceV1,
   StagingRuntimeDocV1,
   StagingService,
+  StagingTreeFileV1,
   TurnWorkspaceV1,
 } from "./staging";
 export type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "./trust";

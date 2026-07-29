@@ -1,17 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import type { FailureDtoV1 } from "core/protocol";
-import { parsePageSlug } from "entities/page";
-import type { PageSlug } from "entities/page";
 
 import type { CreateTurnWorkspaceInputV1 } from "../staging";
 import { createFakeStagingService } from "./staging";
-
-function slug(value: string): PageSlug {
-  const parsed = parsePageSlug(value);
-  if (parsed instanceof Error) throw parsed;
-  return parsed;
-}
 
 const FAILURE: FailureDtoV1 = {
   code: "PERSISTENCE_FAILED",
@@ -23,18 +15,49 @@ const FAILURE: FailureDtoV1 = {
 const input: CreateTurnWorkspaceInputV1 = {
   turnId: "t1",
   targetChatId: "chat-1",
-  pages: [{ pageSlug: slug("home"), sourcePath: "C:/proj/pages/home/index.tsx" }],
-  manifestSlice: new Uint8Array([1, 2]),
+  treeFiles: [
+    { relPath: "pages.json", sourcePath: "C:/proj/.termcraft/design/pages.json" },
+    { relPath: "pages/home.tsx", sourcePath: "C:/proj/.termcraft/design/pages/home.tsx" },
+  ],
   runtimeDocs: [],
   readSet: {
     manifest: null,
-    canonicalPages: [],
+    designFiles: [],
     chat: { length: 0, prefixSha256: "a".repeat(64) },
     pins: [],
   },
 };
 
 describe("createFakeStagingService", () => {
+  // Brief's TDD step 1 verbatim, adapted to the established factory name
+  // (`createFakeStagingService`, not the brief's `createStagingFake` — see the report's
+  // divergence note).
+  test("the staging fake echoes the tree it was given, with no invented pages.json", async () => {
+    const staging = createFakeStagingService();
+    const workspace = await staging.createTurnWorkspace({
+      turnId: "t1",
+      targetChatId: "chat-1",
+      treeFiles: [
+        { relPath: "pages.json", sourcePath: "/p/.termcraft/design/pages.json" },
+        { relPath: "pages/home.tsx", sourcePath: "/p/.termcraft/design/pages/home.tsx" },
+        { relPath: "lib/theme.ts", sourcePath: "/p/.termcraft/design/lib/theme.ts" },
+      ],
+      runtimeDocs: [],
+      readSet: {
+        manifest: null,
+        designFiles: [],
+        chat: { length: 0, prefixSha256: "a".repeat(64) },
+        pins: [],
+      },
+    });
+    if ("code" in workspace) throw new Error(workspace.safeMessage);
+    expect(workspace.files.map((file) => file.relPath).sort()).toEqual([
+      "design/lib/theme.ts",
+      "design/pages.json",
+      "design/pages/home.tsx",
+    ]);
+  });
+
   test("createTurnWorkspace() builds a workspace rooted at a path derived from turnId", async () => {
     const service = createFakeStagingService();
     const workspace = await service.createTurnWorkspace(input);
@@ -87,7 +110,7 @@ describe("createFakeStagingService", () => {
   });
 
   describe("readCandidateFile()", () => {
-    test("reads back the exact manifest-slice bytes handed to createTurnWorkspace(), by the candidate's own root and the manifest's own relPath", async () => {
+    test("reads back SOME deterministic bytes for the staged pages.json, by the candidate's own root and its own relPath", async () => {
       const service = createFakeStagingService();
       const workspace = await service.createTurnWorkspace(input);
       if ("code" in workspace) throw new Error("unexpected failure");
@@ -97,9 +120,11 @@ describe("createFakeStagingService", () => {
       const manifestFile = candidate.files.find((f) => f.relPath === "design/pages.json");
       if (manifestFile === undefined) throw new Error("expected a pages.json entry");
 
-      const bytes = await service.readCandidateFile(candidate.root, manifestFile.relPath);
-      if ("code" in bytes) throw new Error("unexpected failure");
-      expect(bytes).toEqual(input.manifestSlice);
+      const first = await service.readCandidateFile(candidate.root, manifestFile.relPath);
+      const second = await service.readCandidateFile(candidate.root, manifestFile.relPath);
+      if ("code" in first || "code" in second) throw new Error("unexpected failure");
+      expect(first.length).toBeGreaterThan(0);
+      expect(first).toEqual(second); // deterministic, not random per call
     });
 
     test("reads back SOME deterministic bytes for a staged page file", async () => {

@@ -15,18 +15,17 @@ import type { StoreAdapterDeps } from "./types";
 // `createTurnTransactionsAdapter` — the `TurnTransactionService` port over
 // `OpenProject.transactions`'s `admitTurn`/`finalizeTurn`/`terminalizeTurn` (plan Task 2).
 //
-// `TurnReadSetV1`/`ChangedPageOpV1`/`ResolvedPinAppendV1`/`TurnTerminalRecordV1` are
-// structurally IDENTICAL to store's `TurnReadSet`/`ChangedPageOp`/`ResolvedPinAppend`/
+// `TurnReadSetV1`/`ChangedDesignFileOpV1`/`ResolvedPinAppendV1`/`TurnTerminalRecordV1` are
+// structurally IDENTICAL to store's `TurnReadSet`/`ChangedDesignFileOp`/`ResolvedPinAppend`/
 // `TurnTerminalRecord` (the latter two reuse `entities/pin`/`entities/chat` verbatim on both
 // sides), so they pass straight through with no field-by-field mapping.
 //
-// RESOLVED GAP (honest adapter-level composition): store's `TurnFinalizeInput` additionally
-// requires `manifestBefore: ProjectManifest` — the portable manifest AS OBSERVED AT THE START
-// of finalization — which `TurnFinalizeInputV1` never carries (it is not a per-call fact the
-// port needs to expose; the engine's own CAS re-check inside `finalizeTurn` re-observes the
-// manifest anyway). This adapter reads it via `open.manifest.read()` immediately before
-// calling `finalizeTurn`, mirroring the identical pattern `page-store.ts`'s `reorder`/`remove`
-// already use for the same store input field.
+// GAP CLOSED (plan Task 7): store's `TurnFinalizeInput` no longer carries `manifestBefore`
+// (plan Task 5 — `project.toml` carries no page order, so finalization never derives a
+// manifest write from one; the engine's own CAS re-check inside `finalizeTurn` re-observes
+// `readSet.manifest` instead). This adapter therefore no longer reads the manifest before
+// calling `finalizeTurn` either — `input.readSet`/`input.changedFiles`/`input.changedPageSlugs`
+// pass straight through.
 //
 // CAS mapping: a `finalize()` failure that is `SourceChangedError`/`StaleError` is mapped by
 // `toFailureDto` onto `APPLY_SOURCE_CHANGED`/`APPLY_STALE` with the correct `details.part` —
@@ -52,16 +51,12 @@ export function createTurnTransactionsAdapter(deps: StoreAdapterDeps): TurnTrans
   }
 
   async function finalize(input: TurnFinalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1> {
-    const manifestBefore = await open.manifest.read();
-    if (manifestBefore instanceof Error) return toFailureDto(manifestBefore);
-
     const result = await open.transactions.finalizeTurn({
       transactionId: deps.uuidv7(),
       turnId: input.turnId,
       targetChatId: input.targetChatId,
-      changedPages: input.changedPages,
-      validatedPageSlugs: input.validatedPageSlugs,
-      manifestBefore,
+      changedFiles: input.changedFiles,
+      changedPageSlugs: input.changedPageSlugs,
       requestedActivePage: input.requestedActivePage,
       agentRecord: input.agentRecord,
       resolvedPins: input.resolvedPins,

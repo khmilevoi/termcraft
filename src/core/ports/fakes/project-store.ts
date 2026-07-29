@@ -87,7 +87,6 @@ export function createFakeProjectStore(options: {
     name: "Fake Project",
     createdAt: "2024-01-01T00:00:00.000Z",
     targetStack: "generic",
-    pages: [],
     ...options.manifest,
   };
   let state: WorkspaceStateV1 = { ...DEFAULT_WORKSPACE_STATE, ...options.workspaceState };

@@ -50,13 +50,14 @@ export interface AppendBaseV1 {
 
 /**
  * The full send-time read set turn-durability §7.5 re-checks immediately before intent:
- * `project.toml`'s image, every canonical page exposed to the agent (including
- * expected-absent entries for a potential new target), the captured chat's append base, and
- * every contributing comments log's append base.
+ * `project.toml`'s image, every design-tree file exposed to the agent — keyed by
+ * TREE-relative path, never the `design/` prefix (including expected-absent entries for a
+ * potential new target) — the captured chat's append base, and every contributing comments
+ * log's append base.
  */
 export interface TurnReadSetV1 {
   readonly manifest: FileImageV1;
-  readonly canonicalPages: ReadonlyMap<PageSlug, FileImageV1>;
+  readonly designFiles: ReadonlyMap<string, FileImageV1>;
   readonly chat: AppendBaseV1;
   readonly pins: ReadonlyMap<PageSlug, AppendBaseV1>;
 }
@@ -78,10 +79,11 @@ export interface TurnAdmissionInputV1 {
 
 // ---- finalization (§7.4, §7.5) ------------------------------------------------------------
 
-export interface ChangedPageOpV1 {
-  readonly pageSlug: PageSlug;
+export interface ChangedDesignFileOpV1 {
+  /** Tree-relative — never the `design/` prefix. */
+  readonly relPath: string;
   readonly change: "replace" | "delete";
-  /** Required when `change === "replace"` — the page's complete new bytes. */
+  /** Required when `change === "replace"` — the file's complete new bytes. */
   readonly newBytes?: Uint8Array;
 }
 
@@ -91,19 +93,26 @@ export interface ResolvedPinAppendV1 {
   readonly event: PinStatusEvent;
 }
 
+/**
+ * `project.toml` no longer carries page order (plan Task 5) — `pages.json`'s `entry` map is
+ * the sole ordering/location authority (multi-file design tree design §3, §7). Finalization
+ * therefore never derives a `project.toml` write from a validated slug array; it only
+ * re-CASes the already-durable manifest image (`readSet.manifest`) and commits whatever
+ * design-tree files the turn actually touched.
+ */
 export interface TurnFinalizeInputV1 {
   readonly turnId: string;
   readonly targetChatId: string;
-  /** Gate-validated diff; empty means no canonical page changed. */
-  readonly changedPages: readonly ChangedPageOpV1[];
-  /** The validated `pages.json` ordered slug array (turn-durability §7.4 item 2). */
-  readonly validatedPageSlugs: readonly PageSlug[];
+  /** Gate-validated diff over tree-relative paths; empty means no design file changed. */
+  readonly changedFiles: readonly ChangedDesignFileOpV1[];
   /** Present only when the candidate explicitly requests a different active page (§7.4 item 3). */
   readonly requestedActivePage?: PageSlug | null;
   /** Fully built by the caller: `changedPages`/`warnings`/`text` are Gate/agent outcomes this port never computes. */
   readonly agentRecord: ChatAgentRecord;
-  /** Every sent pin resolved by this turn — the adapter filters this down to `changedPages` internally (§7.4 item 5: "an empty diff resolves no pin"). */
+  /** Every sent pin resolved by this turn — filtered internally to pages whose closure changed (§7.4 item 5), via `changedPageSlugs` below. */
   readonly resolvedPins: readonly ResolvedPinAppendV1[];
+  /** The slugs whose CLOSURE changed this turn (design §7) — the pin-resolution filter. Derived by the caller from the closure diff, never from a file path: a page can change without its own entry file's bytes moving when a shared module it depends on changed instead. */
+  readonly changedPageSlugs: readonly PageSlug[];
   readonly readSet: TurnReadSetV1;
   readonly createdAt: string;
 }
@@ -124,14 +133,14 @@ export interface TurnTransactionService {
   /** Append exactly the user record to `targetChatId`, committed BEFORE any agent process starts (invariant 9, §7.2 step 3). */
   admit(input: TurnAdmissionInputV1): Promise<FailureDtoV1 | TurnCommitV1>;
   /**
-   * Changed canonical pages -> derived manifest -> optional active-page effect -> one agent
-   * record -> filtered pin resolutions, all inside one transaction whose precondition is the
-   * full send-time CAS against `readSet` (§7.4, §7.5). `FailureDtoV1.code` surfaces
-   * `APPLY_SOURCE_CHANGED` (`details.part: "page" | "manifest"`) or `APPLY_STALE`
-   * (`details.part: "chat" | "pins"`) on a CAS mismatch — kernel-command-contract §11.2's
-   * two typed-detail codes, never a generic write failure for these two cases.
+   * Changed design-tree files -> optional active-page effect -> one agent record -> filtered
+   * pin resolutions, all inside one transaction whose precondition is the full send-time CAS
+   * against `readSet` (§7.4, §7.5). `FailureDtoV1.code` surfaces `APPLY_SOURCE_CHANGED`
+   * (`details.part: "manifest" | "design:<relPath>"`) or `APPLY_STALE` (`details.part: "chat"
+   * | "pins"`) on a CAS mismatch — kernel-command-contract §11.2's two typed-detail codes,
+   * never a generic write failure for these two cases.
    */
   finalize(input: TurnFinalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1>;
-  /** Appends exactly one terminal system record; never touches pages, manifest, or pins (§7.6). Idempotent per `turnId` (§7.7: "terminalizes exactly once"). */
+  /** Appends exactly one terminal system record; never touches design-tree files, manifest, or pins (§7.6). Idempotent per `turnId` (§7.7: "terminalizes exactly once"). */
   terminalize(input: TurnTerminalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1>;
 }

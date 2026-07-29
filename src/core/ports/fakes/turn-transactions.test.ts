@@ -61,13 +61,13 @@ function finalize(resolvedPins: readonly ResolvedPinAppendV1[]): TurnFinalizeInp
   return {
     turnId: "t1",
     targetChatId: "chat-1",
-    changedPages: [{ pageSlug: slug("home"), change: "replace", newBytes: new Uint8Array([1]) }],
-    validatedPageSlugs: [slug("home")],
+    changedFiles: [{ relPath: "pages/home.tsx", change: "replace", newBytes: new Uint8Array([1]) }],
+    changedPageSlugs: [slug("home")],
     agentRecord,
     resolvedPins,
     readSet: {
       manifest: { state: "absent" },
-      canonicalPages: new Map(),
+      designFiles: new Map(),
       chat: { length: 0, prefixSha256: "a".repeat(64) },
       pins: new Map(),
     },
@@ -91,7 +91,7 @@ describe("createFakeTurnTransactionService", () => {
     expect(first.transactionId).not.toBe(second.transactionId);
   });
 
-  test("finalize() filters resolvedPins down to pages present in changedPages (§7.4 item 5)", async () => {
+  test("finalize() filters resolvedPins down to pages present in changedPageSlugs (§7.4 item 5)", async () => {
     const service = createFakeTurnTransactionService();
     const onChangedPage: ResolvedPinAppendV1 = {
       pageSlug: slug("home"),
@@ -122,7 +122,7 @@ describe("createFakeTurnTransactionService", () => {
     expect(call.appliedResolvedPins).toEqual([onChangedPage]);
   });
 
-  test("finalize() with an empty changedPages diff resolves no pin", async () => {
+  test("finalize() with an empty changedFiles diff resolves no pin", async () => {
     const service = createFakeTurnTransactionService();
     const pin: ResolvedPinAppendV1 = {
       pageSlug: slug("home"),
@@ -135,7 +135,7 @@ describe("createFakeTurnTransactionService", () => {
         ts: "2024-01-01T00:01:00.000Z",
       },
     };
-    await service.finalize({ ...finalize([pin]), changedPages: [] });
+    await service.finalize({ ...finalize([pin]), changedFiles: [] });
     const call = service.calls.find((c) => c.method === "finalize");
     if (call === undefined || call.method !== "finalize")
       throw new Error("finalize was not recorded");

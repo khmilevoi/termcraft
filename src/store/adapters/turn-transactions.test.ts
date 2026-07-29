@@ -31,7 +31,7 @@ async function currentReadSet(
       sha256: sha256Hex(manifestBytes),
       size: manifestBytes.byteLength,
     },
-    canonicalPages: new Map(),
+    designFiles: new Map(),
     chat: { length: doc.validPrefixBytes, prefixSha256: doc.prefixSha256 },
     pins: new Map(),
   };
@@ -112,8 +112,8 @@ describe("createTurnTransactionsAdapter — contract test (fake vs. real)", () =
       const finalized = await adapter.finalize({
         turnId,
         targetChatId: chatId,
-        changedPages: [],
-        validatedPageSlugs: [],
+        changedFiles: [],
+        changedPageSlugs: [],
         agentRecord,
         resolvedPins: [],
         readSet,
@@ -177,8 +177,8 @@ describe("createTurnTransactionsAdapter — contract test (fake vs. real)", () =
       const finalized = await adapter.finalize({
         turnId,
         targetChatId: chatId,
-        changedPages: [],
-        validatedPageSlugs: [],
+        changedFiles: [],
+        changedPageSlugs: [],
         agentRecord,
         resolvedPins: [],
         readSet: staleReadSet,

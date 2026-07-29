@@ -18,10 +18,11 @@ import type {
  * dumb and scriptable, not a re-implementation of `store/transaction`'s engine).
  *
  * `finalize()` DOES apply the one filtering rule turn-durability §7.4 item 5 fixes and
- * this port's own doc restates — "the adapter filters this down to `changedPages`
- * internally... an empty diff resolves no pin" — because that filter is the exact
- * behavior 6F's tests need to observe happening, not a policy a test should have to
- * script per call.
+ * this port's own doc restates — "filtered internally to pages whose closure changed... an
+ * empty diff resolves no pin" — because that filter is the exact behavior 6F's tests need to
+ * observe happening, not a policy a test should have to script per call. The filter is by
+ * `changedPageSlugs` (the caller's closure diff), gated on `changedFiles` being non-empty at
+ * all — mirroring `store/transaction/model/wrappers.ts`'s `finalizeTurn` verbatim.
  */
 
 export type TurnTransactionFailableMethod = "admit" | "finalize" | "terminalize";
@@ -67,9 +68,11 @@ export function createFakeTurnTransactionService(): FakeTurnTransactionService {
   }
 
   async function finalize(input: TurnFinalizeInputV1): Promise<FailureDtoV1 | TurnCommitV1> {
-    const appliedResolvedPins = input.resolvedPins.filter((resolved) =>
-      input.changedPages.some((changed) => changed.pageSlug === resolved.pageSlug),
-    );
+    const changedSlugs = new Set(input.changedPageSlugs);
+    const appliedResolvedPins =
+      input.changedFiles.length === 0
+        ? []
+        : input.resolvedPins.filter((resolved) => changedSlugs.has(resolved.pageSlug));
     calls.push({ method: "finalize", input, appliedResolvedPins });
     const queued = queues.finalize.shift();
     if (queued !== undefined) return queued;

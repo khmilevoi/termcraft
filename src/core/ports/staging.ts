@@ -16,9 +16,14 @@ import type { PageSlug } from "entities/page";
  * agent's job in this same slice, not a blocker on the port's shape.
  */
 
-/** One canonical page to stage, already resolved to a readable source path by the caller. */
-export interface StagingPageSourceV1 {
-  readonly pageSlug: PageSlug;
+/**
+ * One file of the canonical design tree to stage, already resolved to a readable absolute
+ * path by the caller. `relPath` is TREE-relative (`pages/home.tsx`), and the workspace copy
+ * lands at the SAME tree-relative path — which is what makes design §10's hard requirement
+ * hold: because the two trees agree, no import specifier is ever rewritten on apply.
+ */
+export interface StagingTreeFileV1 {
+  readonly relPath: string;
   readonly sourcePath: string;
 }
 
@@ -44,25 +49,29 @@ export interface ReadSetAppendBaseV1 {
  * The STAGING-TIME read set (decision C6 — renamed `StagedTurnReadSet` on the store side to
  * stop colliding with `store/transaction`'s finalize-time `TurnReadSet`; see
  * `turn-transactions.ts`'s header for the full note and the 1:1-translation seam this type
- * feeds). `snapshot: null` on a canonical-page entry marks an expected-absence — a
- * potential new target that did not exist at admission time.
+ * feeds). `snapshot: null` on a design-file entry marks an expected-absence — a potential
+ * new target that did not exist at admission time.
  */
 export interface StagedTurnReadSetV1 {
   readonly manifest: ReadSetFileSnapshotV1 | null;
-  readonly canonicalPages: readonly {
-    readonly pageSlug: PageSlug;
+  readonly designFiles: readonly {
+    readonly relPath: string;
     readonly snapshot: ReadSetFileSnapshotV1 | null;
   }[];
   readonly chat: ReadSetAppendBaseV1;
   readonly pins: readonly { readonly pageSlug: PageSlug; readonly base: ReadSetAppendBaseV1 }[];
 }
 
+/**
+ * NOTE (multi-file design tree design §4, §10): `pages.json` is no longer synthesized per
+ * turn from `project.toml`. It is a real file inside the canonical tree that the agent edits
+ * directly, and staging copies it verbatim like every other tree file. There is no manifest
+ * slice any more.
+ */
 export interface CreateTurnWorkspaceInputV1 {
   readonly turnId: string;
   readonly targetChatId: string;
-  readonly pages: readonly StagingPageSourceV1[];
-  /** The already-assembled `pages.json` bytes — synthesized fresh per turn, never copied from an existing file. */
-  readonly manifestSlice: Uint8Array;
+  readonly treeFiles: readonly StagingTreeFileV1[];
   readonly runtimeDocs: readonly StagingRuntimeDocV1[];
   readonly readSet: StagedTurnReadSetV1;
 }

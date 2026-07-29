@@ -26,7 +26,6 @@ function toManifestV1(manifest: ProjectManifest): ProjectManifestV1 {
     name: manifest.name,
     createdAt: manifest.createdAt,
     targetStack: manifest.targetStack,
-    pages: manifest.pages,
   };
 }
 

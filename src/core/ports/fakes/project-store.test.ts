@@ -21,10 +21,10 @@ const FAILURE: FailureDtoV1 = {
 
 describe("createFakeProjectStore", () => {
   test("readManifest() returns the constructed manifest by default", async () => {
-    const store = createFakeProjectStore({ root: "C:/proj", manifest: { pages: [slug("home")] } });
+    const store = createFakeProjectStore({ root: "C:/proj", manifest: { name: "Contract Co" } });
     const result = await store.readManifest();
     if (result instanceof Object && "code" in result) throw new Error("unexpected failure");
-    expect(result.pages).toEqual([slug("home")]);
+    expect(result.name).toBe("Contract Co");
     expect(store.root).toBe("C:/proj");
     expect(store.lease).toEqual({ root: "C:/proj" });
   });
@@ -86,7 +86,7 @@ describe("createFakeProjectStore", () => {
     test("returns a deterministic hash+size derived from the constructed manifest", async () => {
       const store = createFakeProjectStore({
         root: "C:/proj",
-        manifest: { pages: [slug("home")] },
+        manifest: { name: "Snapshot Co" },
       });
       const first = await store.readManifestSnapshot();
       const second = await store.readManifestSnapshot();
