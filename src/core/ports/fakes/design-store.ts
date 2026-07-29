@@ -152,6 +152,14 @@ export function createFakeDesignStore(options: {
         `order has ${order.length} slugs but the manifest holds ${manifest.pages.length}`,
       );
     }
+    // A DUPLICATED slug (review finding, Task 9): `[home, home]` against `[home, about]`
+    // passes the length check above and, without this, silently drops `about` — exactly the
+    // class of bug the length check was added to eliminate. Checked before the resolve loop
+    // so a duplicate is refused before any lookup, matching the length check's own "before
+    // any write" ordering.
+    if (new Set(order).size !== order.length) {
+      return reorderInvariantFailure("order names a duplicate pageSlug");
+    }
     const reordered: PageEntryV1[] = [];
     for (const slug of order) {
       const entry = bySlug.get(slug);

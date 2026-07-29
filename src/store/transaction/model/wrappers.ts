@@ -233,10 +233,11 @@ function fileImageForBefore(base: AppendBase): FileImage {
  * caller can build its own `replace`/`delete` operations from the same current-state
  * observation this file's own wrappers already use, reusing the primitive rather than
  * re-implementing the identical `readFile`/`isNotFound` dance — currently
- * `store/adapters/export-publish.ts`'s pre-publish re-observe (§10 step 3). (Not, as of the
- * design-tree canonical source plan, `store/model/factory.ts`'s named page methods: Task 6
- * deleted their slug→path resolution along with `canonicalPagePath`, so they no longer call
- * this — see `factory.ts`'s `DesignTreeStoreNotWiredError`.)
+ * `store/adapters/export-publish.ts`'s pre-publish re-observe (§10 step 3), and — as of the
+ * design-tree canonical source plan's Task 9 — `store/model/factory.ts`'s own
+ * `renamePageTitle`/`reorderPages`/`removePage`/`buildPagesManifestOperation`, which observe
+ * a design-tree file's or `design/pages.json`'s current image the same way every other
+ * wrapper in this file does.
  */
 export function observeFileImage(fs: TransactionFsDeps, relPath: string): SafeFsError | FileImage {
   const bytes = fs.safeFs.readFile(relPath);

@@ -124,7 +124,7 @@ flowchart LR
    `store/` groups by concern (`safe-fs`, `lease`, `trust`, `toml`, `jsonl`,
    `transaction`, `sandbox`, `migration`, `projections`) rather than by the
    `chats/`/`pages/`/`pins/`/`git/` split this document originally sketched. The
-   `ManifestStore`/`WorkspaceStateStore`/`ChatStore`/`PinStore`/`PageStore` port
+   `ManifestStore`/`WorkspaceStateStore`/`ChatStore`/`PinStore`/`DesignTreeStore` port
    contracts are assembled from those submodules inside
    `store`'s own composition root (see Source anchors), not held in their own
    top-level folders — and no `git/` submodule exists: the Git adapter item 4
@@ -649,7 +649,7 @@ vendor tier's own pre-split run-loop file.
 - `src/store/model/factory.ts` — the composition root inside `store`: assembles
   `safe-fs`/`lease`/`trust`/`toml`/`jsonl`/`transaction`/`sandbox`/`migration`/
   `projections` into the `Store` port, including the `ManifestStore`/
-  `WorkspaceStateStore`/`ChatStore`/`PinStore`/`PageStore` facades the store port
+  `WorkspaceStateStore`/`ChatStore`/`PinStore`/`DesignTreeStore` facades the store port
   contract declares
 - `src/store/toml/model/gitignore.ts` — the only Git-adjacent code that exists
   today, and explicitly not the `GitHistory`/`GitCommitter` adapter: its own comment

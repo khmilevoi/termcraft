@@ -3,13 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { encodePagesManifest } from "entities/design-tree";
+import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 import { uuidv7 } from "infrastructure/uuid";
 import { computeSessionPrefixHash } from "store/jsonl";
 
-import type { StoreDeps } from "../types";
+import type { OpenProject, StoreDeps } from "../types";
 import { createStore, nodeStoreDeps } from "./factory";
 
 // Blocker B3 (phase-6 plan §2): six MVP commands (`chat.create`, `page.renameTitle`,
@@ -55,6 +57,31 @@ async function freshOpenProject() {
   if (opened instanceof Error)
     throw new Error(`fixture bug: createProject failed: ${opened.message}`);
   return opened;
+}
+
+// ---- design-tree seeding (design §3, §4) -----------------------------------------------
+//
+// `createProject` mints no `design/pages.json` (Task 16's own "tree-less project"
+// territory, red-debt.md) and `reorderPages`/`removePage` only ever REORDER/DROP already-
+// listed entries — neither ever invents a new one (`PageMutations.reorder`'s own port doc:
+// "never a subset or an added/removed identity"). So every test below that needs an
+// EXISTING manifest entry writes `design/pages.json` (and its entry files) directly on
+// disk first, bypassing the transaction engine — this file's subject is the engine's named
+// methods acting on an already-listed page, not how a page gets listed in the first place
+// (that is the agent-turn/Gate path, out of this file's scope).
+
+function designPath(opened: OpenProject, relPath: string): string {
+  return path.join(opened.root, ".termcraft", "design", ...relPath.split("/"));
+}
+
+function seedDesignFile(opened: OpenProject, relPath: string, bytes: Uint8Array): void {
+  const abs = designPath(opened, relPath);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, bytes);
+}
+
+function seedManifest(opened: OpenProject, manifest: PagesManifestV1): void {
+  seedDesignFile(opened, "pages.json", new TextEncoder().encode(encodePagesManifest(manifest)));
 }
 
 describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () => {
@@ -224,39 +251,45 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     }
   }, 20_000);
 
-  test("renamePageTitle replaces one canonical page's source bytes — page.renameTitle, both create and edit", async () => {
+  test("renamePageTitle replaces one design-tree page's source bytes at its manifest-resolved entryRelPath — page.renameTitle, both create and edit", async () => {
     const opened = await freshOpenProject();
     try {
+      // Deliberately unrelated to the slug (design §3, §7's central rule) — an entry equal
+      // to `pages/home.tsx` could never distinguish a manifest lookup from a slug guess.
       const home = slug("home");
+      const entryRelPath = "screens/home-view.tsx";
+
       const v1 = new TextEncoder().encode("export const meta = { title: 'Home' }\n");
       const created = await opened.transactions.renamePageTitle({
         transactionId: uuidv7(),
         actionId: uuidv7(),
         pageSlug: home,
+        entryRelPath,
         newBytes: v1,
         createdAt: TS,
       });
       if (created instanceof Error) throw created;
 
-      const readV1 = await opened.pages.readSource(home);
+      const readV1 = await opened.pages.readTreeFile(entryRelPath);
       if (readV1 instanceof Error) throw new Error(`fixture bug: ${readV1.message}`);
       expect(new TextDecoder().decode(readV1.bytes)).toBe(
         "export const meta = { title: 'Home' }\n",
       );
 
-      // Edit: the SAME page, new bytes — proves the oldImage CAS is observed fresh each call,
-      // not merely a create-new that would conflict on a second write.
+      // Edit: the SAME entry, new bytes — proves the oldImage CAS is observed fresh each
+      // call, not merely a create-new that would conflict on a second write.
       const v2 = new TextEncoder().encode("export const meta = { title: 'Welcome Home' }\n");
       const edited = await opened.transactions.renamePageTitle({
         transactionId: uuidv7(),
         actionId: uuidv7(),
         pageSlug: home,
+        entryRelPath,
         newBytes: v2,
         createdAt: TS,
       });
       if (edited instanceof Error) throw edited;
 
-      const readV2 = await opened.pages.readSource(home);
+      const readV2 = await opened.pages.readTreeFile(entryRelPath);
       if (readV2 instanceof Error) throw new Error(`fixture bug: ${readV2.message}`);
       expect(new TextDecoder().decode(readV2.bytes)).toBe(
         "export const meta = { title: 'Welcome Home' }\n",
@@ -266,43 +299,52 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     }
   }, 20_000);
 
-  test("reorderPages rewrites project.toml's page order — page.reorder, including the already-current no-op", async () => {
+  test("reorderPages rewrites design/pages.json, not project.toml — page.reorder, including the already-current no-op", async () => {
     const opened = await freshOpenProject();
     try {
-      const manifestEmpty = await opened.manifest.read();
-      if (manifestEmpty instanceof Error) throw new Error(`fixture bug: ${manifestEmpty.message}`);
-      expect(manifestEmpty.pages).toEqual([]);
-
       const home = slug("home");
       const about = slug("about");
-      const added = await opened.transactions.reorderPages({
-        transactionId: uuidv7(),
-        actionId: uuidv7(),
-        manifestBefore: manifestEmpty,
-        orderedSlugs: [home, about],
-        createdAt: TS,
+      // Entries deliberately unrelated to their own slugs (design §3, §7).
+      const homeEntry = "screens/home-view.tsx";
+      const aboutEntry = "panels/about-panel.tsx";
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: homeEntry },
+          { slug: about, entry: aboutEntry },
+        ],
+        requestedActivePage: null,
       });
-      if (added instanceof Error) throw added;
 
-      const manifestAdded = await opened.manifest.read();
-      if (manifestAdded instanceof Error) throw new Error(`fixture bug: ${manifestAdded.message}`);
-      expect(manifestAdded.pages).toEqual([home, about]);
+      const projectTomlBefore = opened.safeFs.readFile("project.toml");
+
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+      expect(manifestBefore.pages.map((page) => page.slug)).toEqual([home, about]);
 
       // Reorder to the opposite order.
       const reordered = await opened.transactions.reorderPages({
         transactionId: uuidv7(),
         actionId: uuidv7(),
-        manifestBefore: manifestAdded,
+        manifestBefore,
         orderedSlugs: [about, home],
         createdAt: TS,
       });
       if (reordered instanceof Error) throw reordered;
-      const manifestReordered = await opened.manifest.read();
+      const manifestReordered = await opened.pages.readManifest();
       if (manifestReordered instanceof Error)
         throw new Error(`fixture bug: ${manifestReordered.message}`);
-      expect(manifestReordered.pages).toEqual([about, home]);
+      expect(manifestReordered.pages).toEqual([
+        { slug: about, entry: aboutEntry },
+        { slug: home, entry: homeEntry },
+      ]);
+      // `project.toml` never carries page order as of format_version 2 — untouched by the
+      // rewrite above.
+      expect(opened.safeFs.readFile("project.toml")).toEqual(projectTomlBefore);
 
-      // Already-current order: a legal no-op transaction, not a special-cased rejection.
+      // Already-current order: a legal, zero-operation transaction, not a special-cased
+      // rejection.
       const noop = await opened.transactions.reorderPages({
         transactionId: uuidv7(),
         actionId: uuidv7(),
@@ -312,41 +354,79 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       });
       if (noop instanceof Error) throw noop;
       expect(noop.operations).toEqual([]);
-      const manifestAfterNoop = await opened.manifest.read();
+      const manifestAfterNoop = await opened.pages.readManifest();
       if (manifestAfterNoop instanceof Error)
         throw new Error(`fixture bug: ${manifestAfterNoop.message}`);
-      expect(manifestAfterNoop.pages).toEqual([about, home]);
+      expect(manifestAfterNoop.pages).toEqual([
+        { slug: about, entry: aboutEntry },
+        { slug: home, entry: homeEntry },
+      ]);
     } finally {
       await opened.close();
     }
   }, 20_000);
 
-  test("removePage drops a page from the manifest and deletes its canonical source and comments log — page.removeConfirm", async () => {
+  test("reorderPages refuses an order that is not an exact permutation of the manifest's own slugs, without writing", async () => {
     const opened = await freshOpenProject();
     try {
       const home = slug("home");
       const about = slug("about");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: "screens/home-view.tsx" }],
+        requestedActivePage: null,
+      });
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
 
-      const manifestEmpty = await opened.manifest.read();
-      if (manifestEmpty instanceof Error) throw new Error(`fixture bug: ${manifestEmpty.message}`);
-      const added = await opened.transactions.reorderPages({
+      const rejected = await opened.transactions.reorderPages({
         transactionId: uuidv7(),
         actionId: uuidv7(),
-        manifestBefore: manifestEmpty,
-        orderedSlugs: [home, about],
+        manifestBefore,
+        orderedSlugs: [home, about], // `about` is not a listed slug
         createdAt: TS,
       });
-      if (added instanceof Error) throw added;
+      expect(rejected instanceof Error).toBe(true);
 
-      const homeBytes = new TextEncoder().encode("export const meta = { title: 'Home' }\n");
-      const wroteHome = await opened.transactions.renamePageTitle({
-        transactionId: uuidv7(),
-        actionId: uuidv7(),
-        pageSlug: home,
-        newBytes: homeBytes,
-        createdAt: TS,
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual(manifestBefore.pages); // untouched
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("removePage drops the manifest entry, the entry FILE and the pin log — and nothing else", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const about = slug("about");
+      // Entries deliberately unrelated to their own slugs — proves `removePage` deletes by
+      // reading `manifest.entry`, never by guessing a slug-shaped path.
+      const homeEntry = "screens/home-view.tsx";
+      const aboutEntry = "panels/about-panel.tsx";
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [
+          { slug: home, entry: homeEntry },
+          { slug: about, entry: aboutEntry },
+        ],
+        requestedActivePage: null,
       });
-      if (wroteHome instanceof Error) throw wroteHome;
+      seedDesignFile(opened, homeEntry, new TextEncoder().encode("export default home;\n"));
+      seedDesignFile(opened, aboutEntry, new TextEncoder().encode("export default about;\n"));
+      // Both pages import this — removePage must NEVER delete a shared module (design §8
+      // step 3: the design refuses to auto-delete a dead module), even one the removed
+      // page's own entry happened to reach.
+      seedDesignFile(
+        opened,
+        "lib/theme.ts",
+        new TextEncoder().encode("export const theme = {};\n"),
+      );
+
+      const manifest = await opened.manifest.read();
+      if (manifest instanceof Error) throw new Error(`fixture bug: ${manifest.message}`);
 
       const event: PinCreatedEvent = {
         kind: "pin:created",
@@ -362,13 +442,13 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
         transactionId: uuidv7(),
         actionId: uuidv7(),
         pageSlug: home,
-        projectId: manifestEmpty.projectId,
+        projectId: manifest.projectId,
         event,
         createdAt: TS,
       });
       if (pinned instanceof Error) throw pinned;
 
-      const manifestBefore = await opened.manifest.read();
+      const manifestBefore = await opened.pages.readManifest();
       if (manifestBefore instanceof Error)
         throw new Error(`fixture bug: ${manifestBefore.message}`);
       const removed = await opened.transactions.removePage({
@@ -380,36 +460,39 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       });
       if (removed instanceof Error) throw removed;
 
-      const manifestAfter = await opened.manifest.read();
+      const manifestAfter = await opened.pages.readManifest();
       if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
-      expect(manifestAfter.pages).toEqual([about]);
+      expect(manifestAfter.pages).toEqual([{ slug: about, entry: aboutEntry }]);
 
-      const sourceAfter = await opened.pages.readSource(home);
-      expect(sourceAfter instanceof Error).toBe(true); // canonical source is gone
+      const sourceAfter = await opened.pages.readTreeFile(homeEntry);
+      expect(sourceAfter instanceof Error).toBe(true); // the entry file is gone
 
       const pinsAfter = await opened.pins.fold(home);
       expect(pinsAfter).toEqual([]); // comments log is gone too — folding an absent log is `[]`
+
+      // A module the removed page shared is NEVER deleted.
+      const themeAfter = await opened.pages.readTreeFile("lib/theme.ts");
+      expect(themeAfter instanceof Error).toBe(false);
+
+      // The sibling page's own entry is untouched.
+      const aboutAfter = await opened.pages.readTreeFile(aboutEntry);
+      expect(aboutAfter instanceof Error).toBe(false);
     } finally {
       await opened.close();
     }
   }, 20_000);
 
-  test("removePage on a page with no canonical source/comments yet is a clean no-op delete, not an error", async () => {
+  test("removePage on a page with no entry file/comments yet is a clean no-op delete, not an error", async () => {
     const opened = await freshOpenProject();
     try {
       const home = slug("home");
-      const manifestEmpty = await opened.manifest.read();
-      if (manifestEmpty instanceof Error) throw new Error(`fixture bug: ${manifestEmpty.message}`);
-      const added = await opened.transactions.reorderPages({
-        transactionId: uuidv7(),
-        actionId: uuidv7(),
-        manifestBefore: manifestEmpty,
-        orderedSlugs: [home],
-        createdAt: TS,
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: "screens/home-view.tsx" }],
+        requestedActivePage: null,
       });
-      if (added instanceof Error) throw added;
 
-      const manifestBefore = await opened.manifest.read();
+      const manifestBefore = await opened.pages.readManifest();
       if (manifestBefore instanceof Error)
         throw new Error(`fixture bug: ${manifestBefore.message}`);
       const removed = await opened.transactions.removePage({
@@ -421,9 +504,99 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
       });
       if (removed instanceof Error) throw removed;
 
-      const manifestAfter = await opened.manifest.read();
+      const manifestAfter = await opened.pages.readManifest();
       if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
       expect(manifestAfter.pages).toEqual([]);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  // Design decision (task-9-brief.md's own open question: "how removePage should treat a
+  // slug absent from the manifest"): idempotent, matching the no-op-delete case just above —
+  // a retry of an already-completed removal (or a plan built against a slug some OTHER path
+  // already dropped) must not fail. The pin log is still cleaned up regardless, since pins
+  // key by slug independently of manifest membership.
+  test("removePage on a pageSlug already absent from the manifest is a legal no-op on the manifest, and still cleans up any stray pin log", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const home = slug("home");
+      const ghost = slug("ghost"); // never listed
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: "screens/home-view.tsx" }],
+        requestedActivePage: null,
+      });
+
+      const manifest = await opened.manifest.read();
+      if (manifest instanceof Error) throw new Error(`fixture bug: ${manifest.message}`);
+      const event: PinCreatedEvent = {
+        kind: "pin:created",
+        recordId: uuidv7(),
+        pinId: uuidv7(),
+        element: "button-1",
+        fx: 0.5,
+        fy: 0.5,
+        text: "note",
+        ts: TS,
+      };
+      const pinned = await opened.transactions.appendPinEvent({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        pageSlug: ghost,
+        projectId: manifest.projectId,
+        event,
+        createdAt: TS,
+      });
+      if (pinned instanceof Error) throw pinned;
+
+      const manifestBefore = await opened.pages.readManifest();
+      if (manifestBefore instanceof Error)
+        throw new Error(`fixture bug: ${manifestBefore.message}`);
+      const removed = await opened.transactions.removePage({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        manifestBefore,
+        pageSlug: ghost,
+        createdAt: TS,
+      });
+      if (removed instanceof Error) throw removed;
+
+      const manifestAfter = await opened.pages.readManifest();
+      if (manifestAfter instanceof Error) throw new Error(`fixture bug: ${manifestAfter.message}`);
+      expect(manifestAfter.pages).toEqual([{ slug: home, entry: "screens/home-view.tsx" }]); // untouched
+
+      const pinsAfter = await opened.pins.fold(ghost);
+      expect(pinsAfter).toEqual([]); // the stray pin log is gone
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("listTree enumerates every design-tree file with its hash, sorted by relPath — [] when design/ does not exist yet", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const empty = await opened.pages.listTree();
+      if (empty instanceof Error) throw new Error(`fixture bug: ${empty.message}`);
+      expect(empty).toEqual([]); // an absent `design/` is an honest empty tree, not a failure
+
+      const home = slug("home");
+      seedManifest(opened, {
+        schemaVersion: 1,
+        pages: [{ slug: home, entry: "screens/home-view.tsx" }],
+        requestedActivePage: null,
+      });
+      seedDesignFile(opened, "screens/home-view.tsx", new TextEncoder().encode("home"));
+      seedDesignFile(opened, "lib/theme.ts", new TextEncoder().encode("theme"));
+
+      const inventory = await opened.pages.listTree();
+      if (inventory instanceof Error) throw new Error(`fixture bug: ${inventory.message}`);
+      expect(inventory.map((file) => file.relPath).sort()).toEqual([
+        "lib/theme.ts",
+        "pages.json",
+        "screens/home-view.tsx",
+      ]);
+      expect(inventory.every((file) => file.size > 0)).toBe(true);
     } finally {
       await opened.close();
     }

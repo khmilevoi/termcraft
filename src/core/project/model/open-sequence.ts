@@ -4,19 +4,35 @@ import type {
   ChatReader,
   ExportPublishPort,
   GitIdentityV1,
-  PageReader,
   PinReader,
   ProjectStore,
   RecoveryService,
   TrustGate,
   TrustSubjectV1,
 } from "core/ports";
-import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
+import type { CommandRejectionCode, FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
 import type { IntendedRecoveryDomainV1, OpenSequenceStepV1, TrustDecisionV1 } from "../types";
 import { scanOrphanTurns } from "./orphan-turn-scan";
 import { type RecoveryRoutingMachines, routeProjectRecovery } from "./recovery-routing";
 import { buildTrustStatus, grantImplicitTrust, resolveTrustDecision } from "./trust";
+
+/**
+ * `PageReader` (`readSource(pageSlug)`/`listSlugs()`) was retired from `core/ports` by the
+ * design-tree canonical source plan's Task 7, replaced by `DesignTreeReader`. This module
+ * has NO production caller (the real version gate is `migrationsGate` in
+ * `store/model/factory.ts` — confirmed by earlier research in this plan), so it is not
+ * rewired onto `DesignTreeReader` for real; this local shim, mirroring `core/ports/fakes/
+ * legacy-page-store.ts`'s own identical shape, exists only to keep this file compiling
+ * against its own (dead) `pageReader` dependency.
+ */
+interface LegacyPageReader {
+  readSource(
+    pageSlug: PageSlug,
+  ): Promise<FailureDtoV1 | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
+  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>;
+}
 
 /**
  * TD §12's ordered startup sequence (lines 1057-1084), end to end through Kernel `ready`
@@ -78,7 +94,7 @@ export interface OpenSequenceDeps {
   readonly recoverPendingMigrations: () => Promise<FailureDtoV1 | undefined>;
   readonly validateSchemas: () => Promise<FailureDtoV1 | undefined>;
 
-  readonly pageReader: PageReader;
+  readonly pageReader: LegacyPageReader;
   readonly pinReader: PinReader;
   readonly chatReader: ChatReader;
   /** TD §12 step 9's "...export pointer..." (WP-5 Phase C task C3) — only `readPointer()` is ever called here, never `publish()`. */

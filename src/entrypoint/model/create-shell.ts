@@ -370,31 +370,38 @@ export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
 
 /**
  * "At least one page, or at least one chat" (fix-bundle spec §2.4). Both signals are already
- * available at open with no extra I/O beyond one manifest read and one chat listing:
- * `project.toml` carries the `pages` list the open sequence reads anyway, and chat presence
- * comes free with Gap E's listing (`ChatStore.list()`, `store/model/chat-listing.ts`).
+ * available at open with no extra I/O beyond one design-tree manifest read and one chat
+ * listing: `design/pages.json` is the sole page-order/identity authority as of the
+ * design-tree canonical source plan (`ProjectManifestV1`/`ProjectManifest` carries no
+ * `pages` field as of format_version 2), and chat presence comes free with Gap E's listing
+ * (`ChatStore.list()`, `store/model/chat-listing.ts`).
  *
- * A read failure resolves `"unknown"`, never `"no-content"` (fix round 1, Finding 1) — logged
- * either way (errore rule 21). `"unknown"` is folded into a dispatch-anyway decision by
+ * A read failure — including a project with no `design/pages.json` file yet, since this
+ * probe does not decide that ambiguity (Task 16's own "tree-less project" territory,
+ * red-debt.md) — resolves `"unknown"`, never `"no-content"` (fix round 1, Finding 1; ruling
+ * reaffirmed for the design-tree read by the design-tree canonical source plan's own
+ * controller: "a design-tree read failure routes as 'no readable content' — the same as a
+ * corrupt manifest — and the failure is logged, never silently swallowed") — logged either
+ * way (errore rule 21). `"unknown"` is folded into a dispatch-anyway decision by
  * {@link resolveShellLaunch}, not into a silent Home: the Kernel's own open sequence
  * (`core/kernel/model/handlers/project.ts`'s `runProjectReadySequence`) re-reads the same two
  * facts and is the one place a genuine failure can reach the event stream a real client
  * observes — this composition-root probe's own `console.warn` fires during shell composition,
  * before `createUiRoot` has even taken the terminal, so it is not user-visible on its own.
  *
- * Exported — narrowed to `Pick<OpenProject, "manifest" | "chats">` — so `create-shell.test.ts`
+ * Exported — narrowed to `Pick<OpenProject, "chats" | "pages">` — so `create-shell.test.ts`
  * can drive both failure branches directly against a narrow fake: a TRANSIENT failure on either
  * read, occurring AFTER `store.openProject` already succeeded, has no seam the real `Store`
  * exposes to inject honestly (a corrupt manifest, for one, would already have failed
  * `store.openProject` itself, before this function is ever called).
  */
 export async function probeProjectContent(
-  open: Pick<OpenProject, "chats" | "manifest">,
+  open: Pick<OpenProject, "chats" | "pages">,
 ): Promise<ProjectContentProbeV1> {
-  const manifest = await open.manifest.read();
+  const manifest = await open.pages.readManifest();
   if (manifest instanceof Error) {
     console.warn(
-      `termcraft: could not read the manifest to route the launch (${manifest.message}) — routing as unknown, not "no content"`,
+      `termcraft: could not read the design tree manifest to route the launch (${manifest.message}) — routing as unknown, not "no content"`,
     );
     return "unknown";
   }

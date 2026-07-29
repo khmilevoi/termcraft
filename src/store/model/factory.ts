@@ -4,6 +4,14 @@ import path from "node:path";
 import * as errore from "errore";
 
 import type { ChatHeader, ChatSystemErrorRecord } from "entities/chat";
+import {
+  DESIGN_DIRNAME,
+  PAGES_MANIFEST_RELPATH,
+  decodePagesManifest,
+  encodePagesManifest,
+} from "entities/design-tree";
+import type { PageEntryV1, PagesManifestInvalidError, PagesManifestV1 } from "entities/design-tree";
+import type { PageSlug } from "entities/page";
 import { foldPins } from "entities/pin";
 import { systemClock } from "infrastructure/clock";
 import { durableFileWrite, flushDir, probeDurability } from "infrastructure/durability";
@@ -50,6 +58,8 @@ import {
 } from "store/projections";
 import {
   FsAccessError,
+  MAX_PATH_COMPONENTS,
+  NAMESPACE_LIMITS,
   createSafeProjectFs,
   isNotFound,
   nodeSafeFsDeps,
@@ -78,20 +88,22 @@ import {
   admitTurn,
   // `canonicalPagePath` and `buildManifestOperation` are DELETED (design-tree canonical
   // source plan, Task 6): a page's file is now whatever `design/pages.json`'s `entry` says,
-  // never computed from its slug. Rewiring `readSource`/`renamePageTitle`/`reorderPages`/
-  // `removePage` onto `pages.json`-based resolution (`DesignTreeStore`) is Task 9's job, not
-  // Task 6's — every affected method below returns `DesignTreeStoreNotWiredError` instead of
-  // referencing either deleted export (see that class's own doc comment). `pageCommentsPath`
-  // was RENAMED, not deleted (pin logs are still slug-keyed, design §3) — its call sites
-  // below now use `pinsJsonlPath`, a mechanical rename with no behavior change.
+  // never computed from its slug. `renamePageTitle`/`reorderPages`/`removePage`/`readSource`
+  // below resolve a page's file through `PagesManifestV1`'s `entry` map instead (Task 9),
+  // built from `designFilePath`/`observeFileImage` the same way every other wrapper in
+  // `store/transaction` already does. `pageCommentsPath` was RENAMED, not deleted (pin logs
+  // are still slug-keyed, design §3) — its call sites below use `pinsJsonlPath`, a
+  // mechanical rename with no behavior change.
   buildPinEventOperations,
   buildWorkspaceLocalPatchOperation,
   chatJsonlPath,
   createWriteMutex,
+  designFilePath,
   ensureJournalFormat,
   finalizeTurn,
   nodeRecoveryFsDeps,
   nodeTransactionFsDeps,
+  observeFileImage,
   pinsJsonlPath,
   readJournalFormat,
   recoverTransactions,
@@ -119,10 +131,10 @@ import type {
   ChatStore,
   CreateChatInput,
   CreateProjectInput,
+  DesignTreeStore,
   ManifestStore,
   OpenProject,
   OrphanTurnOutcome,
-  PageStore,
   PinStore,
   ProjectionStore,
   RemovePageInput,
@@ -168,23 +180,22 @@ export class ProjectAlreadyExistsError extends errore.createTaggedError({
   message: "a project already exists at $root",
 }) {}
 
-/**
- * KNOWN GAP, not this task's to close (design-tree canonical source plan, Task 6 boundary):
- * `renamePageTitle`/`reorderPages`/`removePage`/`PageStore.readSource` used to resolve a
- * page's on-disk location from its slug via `store/transaction`'s `canonicalPagePath`, and
- * `reorderPages`/`removePage` used to derive a `project.toml` page-order rewrite via
- * `buildManifestOperation`. Both are deleted (Task 6): a page's file is now whatever
- * `design/pages.json`'s `entry` says, and the agent may move it anywhere in the tree — the
- * plan's single most important rule is that nothing computes a page's file from its slug.
- * Wiring the real replacement (`DesignTreeStore`, reading `pages.json`) is Task 9's job, not
- * this task's — until it lands, every affected method below returns this typed error
- * immediately, rather than referencing a deleted export. This is a deliberate, honest
- * "not yet implemented" value (CLAUDE.md "Honest values only"), not a guessed bridge.
- */
-export class DesignTreeStoreNotWiredError extends errore.createTaggedError({
-  name: "DesignTreeStoreNotWiredError",
-  message:
-    "$method cannot resolve a page's design-tree location yet — DesignTreeStore is not wired into this factory (plan Task 9)",
+/** `design/` nests deeper than its namespace's own ceiling — refused rather than walked forever (design §3.1's depth-8 budget, `store/safe-fs`'s `NAMESPACE_LIMITS["design-source"]`). */
+export class DesignTreeTooDeepError extends errore.createTaggedError({
+  name: "DesignTreeTooDeepError",
+  message: "design/$relPath exceeds the design-source depth ceiling of $maxDepth",
+}) {}
+
+/** `design/pages.json` currently lists no entry for `pageSlug` — `DesignTreeStore.readSource`'s manifest lookup found nothing to resolve (never a slug-computed path guess, design §3, §7). */
+export class PageEntryNotFoundError extends errore.createTaggedError({
+  name: "PageEntryNotFoundError",
+  message: "design/pages.json has no entry for page slug $pageSlug",
+}) {}
+
+/** `reorderPages` was asked for an order that is not an exact permutation of `manifestBefore.pages`'s own slugs — never a subset, a superset, or a duplicate (`PageMutations.reorder`'s own port doc, `core/ports/design-store.ts`). */
+export class ReorderPagesInvalidOrderError extends errore.createTaggedError({
+  name: "ReorderPagesInvalidOrderError",
+  message: "reorderPages: $reason",
 }) {}
 
 // ---- production dependency wiring --------------------------------------------------
@@ -280,6 +291,62 @@ function payloadMapOf(payload?: readonly [string, Uint8Array]): Map<string, Uint
   return payload === undefined ? new Map() : new Map([payload]);
 }
 
+// ---- design-tree page mutations (design §3, §4, §7) -----------------------------------
+//
+// `store/transaction/model/wrappers.ts`'s own `BuiltOperation`/`indexOperations`/
+// `collectPayloads` are not exported (they are that file's private assembly detail), so the
+// identical small shape is declared locally here rather than widening that module's public
+// surface for three call sites.
+
+interface BuiltPageOperation {
+  readonly operation: TransactionOperation;
+  readonly payload?: readonly [string, Uint8Array];
+}
+
+function indexPageOperations(
+  built: readonly BuiltPageOperation[],
+): readonly TransactionOperation[] {
+  return built.map((entry, index) => ({ ...entry.operation, index }));
+}
+
+function collectPagePayloads(
+  built: readonly BuiltPageOperation[],
+): ReadonlyMap<string, Uint8Array> {
+  return new Map(built.flatMap((entry) => (entry.payload === undefined ? [] : [entry.payload])));
+}
+
+/** The `design/pages.json` replace operation for a new manifest — the single writer of page order (`reorderPages`/`removePage`). */
+function buildPagesManifestOperation(
+  deps: TransactionWrapperDeps,
+  next: PagesManifestV1,
+): SafeFsError | BuiltPageOperation {
+  const target = designFilePath(PAGES_MANIFEST_RELPATH);
+  const oldImage = observeFileImage(deps.fs, target);
+  if (oldImage instanceof Error) return oldImage;
+  const bytes = new TextEncoder().encode(encodePagesManifest(next));
+  const payloadId = deps.append.newPayloadId();
+  return {
+    operation: {
+      index: 0,
+      target,
+      mode: "replace",
+      oldImage,
+      newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength },
+      payloadId,
+    },
+    payload: [payloadId, bytes],
+  };
+}
+
+/** Read `design/pages.json` straight off `safeFs`, decoded and validated (design §4). Shared by `readManifest`, `readSource`, and `listSlugs` — they are plain object-literal methods, not class methods, so calling one from another through `this` is not available. */
+function readManifestFromDisk(
+  safeFs: SafeProjectFs,
+): SafeFsError | PagesManifestInvalidError | PagesManifestV1 {
+  const file = safeFs.readFile(designFilePath(PAGES_MANIFEST_RELPATH));
+  if (file instanceof Error) return file;
+  return decodePagesManifest(new TextDecoder().decode(file));
+}
+
 /**
  * `mutex` is created ONCE by the caller (`openProject`/`createProject`) and threaded in
  * here rather than created internally, so the SAME instance can also be exposed as
@@ -319,10 +386,10 @@ function makeTransactionEngine(
     // ---- named domain methods (phase-6 blocker B3) -----------------------------------
     // `core` never learns `TransactionOperation`'s shape: each method below builds its own
     // operation(s) from the already-landed builders (`buildWorkspaceLocalPatchOperation`,
-    // `buildStandalonePinEventOperation`) and runs them through the same `runProjectMutation`
-    // base engine every other project mutation already uses. EXCEPT `renamePageTitle`/
-    // `reorderPages`/`removePage`, which are blocked pending Task 9 — see
-    // `DesignTreeStoreNotWiredError`'s doc comment.
+    // `buildStandalonePinEventOperation`) — or, for `renamePageTitle`/`reorderPages`/
+    // `removePage`, from this file's own `buildPagesManifestOperation`/`observeFileImage` —
+    // and runs them through the same `runProjectMutation` base engine every other project
+    // mutation already uses.
 
     async createChat(input: CreateChatInput) {
       return withPermit(mutex, async (permit) => {
@@ -398,20 +465,164 @@ function makeTransactionEngine(
       });
     },
 
-    // `renamePageTitle`/`reorderPages`/`removePage` are BLOCKED pending Task 9's
-    // `DesignTreeStore` (see `DesignTreeStoreNotWiredError`'s doc comment above) — each
-    // returns that typed error immediately rather than referencing the deleted
-    // `canonicalPagePath`/`buildManifestOperation`.
-    async renamePageTitle(_input: RenamePageTitleInput) {
-      return new DesignTreeStoreNotWiredError({ method: "renamePageTitle" });
+    /**
+     * `page.renameTitle`: `input.entryRelPath` names the exact tree-relative file to
+     * replace — resolved by the CALLER through `design/pages.json` (design §3, §7). This
+     * method never reads the manifest itself; it only observes and replaces one file.
+     */
+    async renamePageTitle(input: RenamePageTitleInput) {
+      return withPermit(mutex, async (permit) => {
+        const target = designFilePath(input.entryRelPath);
+        const oldImage = observeFileImage(fs, target);
+        if (oldImage instanceof Error) return oldImage;
+        const payloadId = deps.uuidv7();
+        const operation: TransactionOperation = {
+          index: 0,
+          target,
+          mode: "replace",
+          oldImage,
+          newImage: {
+            state: "file",
+            sha256: sha256Hex(input.newBytes),
+            size: input.newBytes.byteLength,
+          },
+          payloadId,
+        };
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "title-edit",
+          operations: [operation],
+          payloads: new Map([[payloadId, input.newBytes]]),
+          createdAt: input.createdAt,
+        });
+      });
     },
 
-    async reorderPages(_input: ReorderPagesInput) {
-      return new DesignTreeStoreNotWiredError({ method: "reorderPages" });
+    /**
+     * `page.reorder`: reorders `manifestBefore.pages` by `orderedSlugs`, refusing an order
+     * that is not an exact permutation of the manifest's own slugs — never a subset, a
+     * superset, or a duplicate. Each entry keeps its own `entry` value; reordering never
+     * moves a page's source file. Already-current order is a legal, zero-operation
+     * transaction, not a special-cased rejection.
+     */
+    async reorderPages(input: ReorderPagesInput) {
+      return withPermit(mutex, async (permit) => {
+        const bySlug = new Map(input.manifestBefore.pages.map((entry) => [entry.slug, entry]));
+        const seen = new Set<PageSlug>();
+        const reordered: PageEntryV1[] = [];
+        for (const slug of input.orderedSlugs) {
+          if (seen.has(slug))
+            return new ReorderPagesInvalidOrderError({ reason: `duplicate pageSlug "${slug}"` });
+          seen.add(slug);
+          const entry = bySlug.get(slug);
+          if (entry === undefined)
+            return new ReorderPagesInvalidOrderError({ reason: `unknown pageSlug "${slug}"` });
+          reordered.push(entry);
+        }
+        if (seen.size !== bySlug.size) {
+          return new ReorderPagesInvalidOrderError({
+            reason: `orderedSlugs names ${seen.size} of the manifest's ${bySlug.size} pages — every listed slug must appear exactly once`,
+          });
+        }
+
+        const unchanged = reordered.every(
+          (entry, index) => entry.slug === input.manifestBefore.pages[index]?.slug,
+        );
+
+        const built: BuiltPageOperation[] = [];
+        if (!unchanged) {
+          const nextManifest: PagesManifestV1 = { ...input.manifestBefore, pages: reordered };
+          const manifestOp = buildPagesManifestOperation(wrapperDeps, nextManifest);
+          if (manifestOp instanceof Error) return manifestOp;
+          built.push(manifestOp);
+        }
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "page-reorder",
+          operations: indexPageOperations(built),
+          payloads: collectPagePayloads(built),
+          createdAt: input.createdAt,
+        });
+      });
     },
 
-    async removePage(_input: RemovePageInput) {
-      return new DesignTreeStoreNotWiredError({ method: "removePage" });
+    /**
+     * `page.removeConfirm`: drops the manifest entry (if any), deletes its entry file (if
+     * any), and deletes its pin log — nothing else. A shared module the removed page's
+     * entry imported is NEVER deleted (design §8 step 3: the design refuses to auto-delete a
+     * dead module). A slug already absent from the manifest is a legal no-op on that half
+     * (idempotent retry); a page with no entry file yet only deletes its pin log.
+     */
+    async removePage(input: RemovePageInput) {
+      return withPermit(mutex, async (permit) => {
+        const entry = input.manifestBefore.pages.find((page) => page.slug === input.pageSlug);
+        const nextPages = input.manifestBefore.pages.filter((page) => page.slug !== input.pageSlug);
+        const nextRequestedActivePage =
+          input.manifestBefore.requestedActivePage === input.pageSlug
+            ? null
+            : input.manifestBefore.requestedActivePage;
+        const manifestChanged =
+          nextPages.length !== input.manifestBefore.pages.length ||
+          nextRequestedActivePage !== input.manifestBefore.requestedActivePage;
+
+        const built: BuiltPageOperation[] = [];
+        if (manifestChanged) {
+          const nextManifest: PagesManifestV1 = {
+            ...input.manifestBefore,
+            pages: nextPages,
+            requestedActivePage: nextRequestedActivePage,
+          };
+          const manifestOp = buildPagesManifestOperation(wrapperDeps, nextManifest);
+          if (manifestOp instanceof Error) return manifestOp;
+          built.push(manifestOp);
+        }
+
+        if (entry !== undefined) {
+          const target = designFilePath(entry.entry);
+          const oldImage = observeFileImage(fs, target);
+          if (oldImage instanceof Error) return oldImage;
+          built.push({
+            operation: {
+              index: 0,
+              target,
+              mode: "delete",
+              oldImage,
+              newImage: { state: "absent" },
+            },
+          });
+        }
+
+        const pinsTarget = pinsJsonlPath(input.pageSlug);
+        const pinsOldImage = observeFileImage(fs, pinsTarget);
+        if (pinsOldImage instanceof Error) return pinsOldImage;
+        built.push({
+          operation: {
+            index: 0,
+            target: pinsTarget,
+            mode: "delete",
+            oldImage: pinsOldImage,
+            newImage: { state: "absent" },
+          },
+        });
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "page-remove",
+          operations: indexPageOperations(built),
+          payloads: collectPagePayloads(built),
+          createdAt: input.createdAt,
+        });
+      });
     },
 
     async appendPinEvent(input: AppendPinEventInput) {
@@ -526,19 +737,116 @@ function makeWorkspaceStateStore(safeFs: SafeProjectFs): WorkspaceStateStore {
   };
 }
 
-// ---- pages + pins -----------------------------------------------------------------------
+// ---- design tree + pins (design §3, §4, §6) ----------------------------------------------
 
-function makePageStore(safeFs: SafeProjectFs, manifest: ManifestStore): PageStore {
+function makeDesignTreeStore(safeFs: SafeProjectFs): DesignTreeStore {
   return {
-    // Blocked pending Task 9's `DesignTreeStore` — see `DesignTreeStoreNotWiredError`'s doc
-    // comment; `safeFs` is intentionally unused here until that lands.
-    async readSource(_pageSlug) {
-      return new DesignTreeStoreNotWiredError({ method: "readSource" });
+    /**
+     * Resolves `pageSlug` through `design/pages.json`'s `entry` map — never a slug-computed
+     * path (design §3, §7). `PageEntryNotFoundError` when the manifest lists no entry for
+     * `pageSlug`; every other manifest/file read failure propagates as-is.
+     */
+    async readSource(pageSlug) {
+      const manifest = readManifestFromDisk(safeFs);
+      if (manifest instanceof Error) return manifest;
+      const entry = manifest.pages.find((page) => page.slug === pageSlug);
+      if (entry === undefined) return new PageEntryNotFoundError({ pageSlug });
+      const bytes = safeFs.readFile(designFilePath(entry.entry));
+      if (bytes instanceof Error) return bytes;
+      return { bytes, sourceHash: sha256Hex(bytes) };
     },
+
+    /**
+     * Pre-plan contract kept verbatim: `[]` for a project with no `design/pages.json` yet
+     * (created before its first turn — Task 16's own "tree-less project" territory,
+     * red-debt.md), never an error — this method predates the design-tree plan and its own
+     * "[] for none" contract must keep holding. `readManifest` below makes no such
+     * allowance for that same missing-file case (deliberately, see its own comment): this is
+     * a narrow, test-driven exception scoped to this one pre-existing convenience method,
+     * not a general policy this task is deciding on Task 16's behalf.
+     */
     async listSlugs() {
-      const read = await manifest.read();
-      if (read instanceof Error) return read;
-      return read.pages;
+      const manifest = readManifestFromDisk(safeFs);
+      if (manifest instanceof Error) {
+        if (manifest instanceof FsAccessError && isNotFound(manifest)) return [];
+        return manifest;
+      }
+      return manifest.pages.map((page) => page.slug);
+    },
+
+    async readTreeFile(relPath) {
+      const bytes = safeFs.readFile(designFilePath(relPath));
+      if (bytes instanceof Error) return bytes;
+      return { bytes, sha256: sha256Hex(bytes) };
+    },
+
+    /**
+     * Walk `design/` and return every file with its hash. The walk goes through `safeFs`, so
+     * a symlink/junction/reparse point anywhere in the tree is rejected rather than followed
+     * (design §6's "a specifier whose resolution passes through a symlink … is fatal" —
+     * enforced here, at the one place tree-relative paths become real ones). Iterative with
+     * an explicit depth guard rather than recursive, so a pathological tree cannot spin or
+     * blow the stack; the guard is the namespace's own ceiling, not a second invented number.
+     *
+     * DIVERGENCE from the brief's own pseudocode (CLAUDE.md "edit the file that actually
+     * declares it"): `SafeProjectFs` has no `readDir` method — `list(relDir)` is the real
+     * name — and its `stat()` returns only `{size}`, never `isDirectory` (`checkManagedLeaf`
+     * REJECTS a directory target outright, so `stat()` on one already fails). This walk
+     * tells a file from a directory by trying `readFile` first — the common case, and a
+     * success also hands back the bytes this method needs to hash anyway — and falling back
+     * to `list` only when that fails; whichever call succeeds decides what the entry is, so
+     * nothing here string-matches an error's free-text `reason`.
+     */
+    async listTree() {
+      const maxDepth = NAMESPACE_LIMITS["design-source"].maxDepth ?? MAX_PATH_COMPONENTS;
+      const files: { relPath: string; sha256: string; size: number }[] = [];
+      const queue: { relPath: string; depth: number }[] = [{ relPath: "", depth: 1 }];
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (current === undefined) break;
+        if (current.depth > maxDepth)
+          return new DesignTreeTooDeepError({ relPath: current.relPath, maxDepth });
+
+        const dirRelPath =
+          current.relPath === "" ? DESIGN_DIRNAME : `${DESIGN_DIRNAME}/${current.relPath}`;
+        const names = safeFs.list(dirRelPath);
+        if (names instanceof Error) {
+          // An absent `design/` is an honest empty tree, not a failure: a project created
+          // before its first turn may have no other file yet.
+          if (names instanceof FsAccessError && isNotFound(names) && current.relPath === "")
+            return [];
+          return names;
+        }
+
+        for (const name of names) {
+          const childRel = current.relPath === "" ? name : `${current.relPath}/${name}`;
+          const childProjectRel = `${DESIGN_DIRNAME}/${childRel}`;
+
+          const bytes = safeFs.readFile(childProjectRel);
+          if (!(bytes instanceof Error)) {
+            files.push({ relPath: childRel, sha256: sha256Hex(bytes), size: bytes.byteLength });
+            continue;
+          }
+
+          const subNames = safeFs.list(childProjectRel);
+          if (!(subNames instanceof Error)) {
+            queue.push({ relPath: childRel, depth: current.depth + 1 });
+            continue;
+          }
+
+          // Neither a readable leaf nor a directory — surface the leaf read's own rejection
+          // (e.g. a reparse point, an oversized file): more specific than the directory
+          // listing's own generic failure for the same path.
+          return bytes;
+        }
+      }
+
+      return files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+    },
+
+    async readManifest() {
+      return readManifestFromDisk(safeFs);
     },
   };
 }
@@ -1122,7 +1430,7 @@ function assembleOpenProject(input: {
     workspaceState: workspaceStateStore,
     chats: makeChatStore(safeFs, deps, projectId),
     pins: makePinStore(safeFs, projectId),
-    pages: makePageStore(safeFs, manifestStore),
+    pages: makeDesignTreeStore(safeFs),
     trust: makeTrustStore(deps),
     projections: makeProjectionStore(safeFs, deps),
     staging: makeStagingStore(deps),

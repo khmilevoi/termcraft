@@ -109,12 +109,16 @@ describe("createFakeDesignStore", () => {
     expect(result.pages.map((entry) => entry.slug)).toEqual([slug("about"), slug("home")]);
   });
 
-  // Review finding, promoted 4: the port's own doc (`design-store.ts`) says reorder() takes
-  // "the exact permutation of already-listed slugs — never a subset or an added/removed
-  // identity." Both directions pinned: an order naming a slug the manifest never listed, and
-  // an order that is a genuine subset (silently dropping a tracked slug), are both refused —
-  // the manifest is left completely untouched by the refused call either way.
-  describe("reorder() refuses rather than silently dropping/inventing an identity", () => {
+  // Review finding, promoted 4 (and its own Task 9 follow-up): the port's own doc
+  // (`design-store.ts`) says reorder() takes "the exact permutation of already-listed slugs
+  // — never a subset or an added/removed identity." THREE cases pinned, not merely "both
+  // directions" as an earlier version of this comment overclaimed: an order naming a slug
+  // the manifest never listed, an order that is a genuine subset (silently dropping a
+  // tracked slug), and a DUPLICATED slug (`[home, home]` against `[home, about]` — same
+  // length as the manifest, so the length check alone lets it through and would otherwise
+  // silently drop `about`, the exact class of bug this whole guard exists to eliminate). All
+  // three leave the manifest completely untouched.
+  describe("reorder() refuses rather than silently dropping/inventing/duplicating an identity", () => {
     test("refuses an order naming an unknown pageSlug", async () => {
       const store = createFakeDesignStore({ manifest: manifestOf([slug("home")]) });
       const result = await store.reorder([slug("home"), slug("about")]);
@@ -133,6 +137,16 @@ describe("createFakeDesignStore", () => {
       const after = await store.readManifest();
       if ("code" in after) throw new Error("unexpected failure");
       expect(after.pages.map((entry) => entry.slug)).toEqual([slug("home"), slug("about")]); // untouched
+    });
+
+    test("refuses a duplicated pageSlug — same length as the manifest, but never a silent drop of the other tracked slug", async () => {
+      const store = createFakeDesignStore({ manifest: manifestOf([slug("home"), slug("about")]) });
+      const result = await store.reorder([slug("home"), slug("home")]);
+      if (result === undefined) throw new Error("expected reorder() to refuse this order");
+      expect(result.code).toBe("PERSISTENCE_FAILED");
+      const after = await store.readManifest();
+      if ("code" in after) throw new Error("unexpected failure");
+      expect(after.pages.map((entry) => entry.slug)).toEqual([slug("home"), slug("about")]); // untouched, `about` not dropped
     });
   });
 

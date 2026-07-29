@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createFakePinStore } from "core/ports/fakes";
+import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent, PinEvent } from "entities/pin";
@@ -128,12 +129,23 @@ describe("createPinStoreAdapter — contract test (fake vs. real)", () => {
     try {
       const adapter = createPinStoreAdapter(deps);
 
-      // `findPageForPin` scans `open.pages.listSlugs()` — the manifest's own ordering
-      // authority (storage-identity §5.1) — so the page must be LISTED before its comments
-      // log is in scope, matching `listSlugs()`'s own "= the manifest's pages array" doc.
-      const manifestBefore = await open.manifest.read();
-      if (manifestBefore instanceof Error)
-        throw new Error(`fixture bug: ${manifestBefore.message}`);
+      // `findPageForPin` scans `open.pages.listSlugs()` — `design/pages.json`'s own ordering
+      // authority (design §3) — so the page must be LISTED before its comments log is in
+      // scope, matching `listSlugs()`'s own "= the manifest's pages array" doc. A freshly
+      // created project has no `design/pages.json` on disk yet, so `manifestBefore` here is
+      // deliberately in the OPPOSITE order from `orderedSlugs` below — `reorderPages` treats
+      // a caller-supplied order that already matches `manifestBefore.pages` as a legal
+      // zero-operation transaction, which would never actually create the manifest file this
+      // test needs on disk. Entries are deliberately unrelated to their slugs (design §3,
+      // §7's central rule: nothing computes a page's file from its slug).
+      const manifestBefore: PagesManifestV1 = {
+        schemaVersion: 1,
+        pages: [
+          { slug: ABOUT_SLUG, entry: "screens/about-view.tsx" },
+          { slug: HOME_SLUG, entry: "screens/home-view.tsx" },
+        ],
+        requestedActivePage: null,
+      };
       const listed = await open.transactions.reorderPages({
         transactionId: uuidv7(),
         actionId: uuidv7(),

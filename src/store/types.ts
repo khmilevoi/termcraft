@@ -1,4 +1,5 @@
 import type { ChatHeader, ChatRecord } from "entities/chat";
+import type { PagesManifestInvalidError, PagesManifestV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import type { Pin, PinEvent } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
@@ -52,7 +53,7 @@ import type {
 } from "store/transaction";
 import type { TrustStore } from "store/trust";
 
-import type { JsonlOpenError } from "./model/factory";
+import type { DesignTreeTooDeepError, JsonlOpenError } from "./model/factory";
 
 // This is the STORE PORT CONTRACT (plan "Store port shapes"): the shapes `core/ports/`
 // lifts verbatim in phase 6. Every already-landed submodule (`store/lease`, `store/trust`,
@@ -207,28 +208,55 @@ export interface PinStore {
   fold(pageSlug: PageSlug): Promise<SafeFsError | JsonlOpenError | readonly Pin[]>;
 }
 
-// ---- pages (storage-identity §3.2, staging §9) -------------------------------------
+// ---- pages / design tree (storage-identity §3.2, staging §9, design §3/§4) ---------------
 
-export interface PageStore {
+/**
+ * The design-tree read surface `OpenProject.pages` exposes (multi-file design tree design
+ * §3/§4). `readTreeFile`/`listTree`/`readManifest` are the plan's three new reader methods,
+ * introduced by Task 9; `readSource`/`listSlugs` are the PRE-EXISTING convenience methods
+ * `store/adapters/page-store.ts` (`design-store.ts`) still calls directly on behalf of real
+ * kernel-handler callers that have not yet migrated onto the new three (Task 14's job —
+ * see `core/ports/fakes/legacy-page-store.ts`'s own header for the full rationale). Both
+ * halves resolve a page's file through `design/pages.json`'s `entry`, NEVER by computing a
+ * path from a slug (design §3, §7's central rule) — `readSource` looks the slug up in the
+ * manifest first, exactly like `renamePageTitle`'s caller does.
+ */
+export interface DesignTreeStore {
   /**
-   * `Error` rather than the narrower `SafeFsError` (matching `TransactionEngine`'s own
-   * `renamePageTitle`/`reorderPages`/`removePage` — the identical "blocked pending Task 9"
-   * shape just below): the current implementation returns `DesignTreeStoreNotWiredError`
-   * (`store/model/factory.ts`) until `DesignTreeStore` is wired in, not a `SafeFsError`.
+   * A page's current bytes, resolved through the manifest's `entry` for `pageSlug`. `Error`
+   * rather than the narrower `SafeFsError`: a manifest read can also fail as
+   * `PagesManifestInvalidError`, and a slug absent from the manifest is its own
+   * `PageEntryNotFoundError` (`store/model/factory.ts`).
    */
   readSource(
     pageSlug: PageSlug,
   ): Promise<Error | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
   /**
    * The ordered page slugs a page's listing/tab order and identity allocation are drawn
-   * from. As of project.toml format_version 2 (task 5), `ProjectManifest` carries no
-   * `pages` field — `design/pages.json`, inside the authored design tree, is now the sole
-   * ordering authority (multi-file design tree design §3). This method's implementation is
-   * NOT yet updated to read it (task 9's `store/model/factory.ts`).
+   * from, read off `design/pages.json` (design §3) — `project.toml` carries no page order
+   * as of format_version 2 (Task 5). A project with no `design/pages.json` file yet (created
+   * before its first turn) resolves `[]`, matching this method's own pre-plan contract; any
+   * OTHER manifest read failure (a genuinely corrupt file) still propagates. `readManifest`
+   * below makes no such allowance for the missing-file case — that is Task 16's decision to
+   * make (`docs/architecture`'s red-window debt ledger), not this method's.
    */
-  listSlugs(): Promise<
-    SafeFsError | ManifestCorruptError | ManifestTooNewError | readonly PageSlug[]
+  listSlugs(): Promise<SafeFsError | PagesManifestInvalidError | readonly PageSlug[]>;
+  /** One tree file's current bytes and hash, by TREE-relative path (never `design/`-prefixed). */
+  readTreeFile(
+    relPath: string,
+  ): Promise<SafeFsError | { readonly bytes: Uint8Array; readonly sha256: Sha256Hex }>;
+  /**
+   * Every file under `design/`, as `(relPath, sha256, size)` — no bytes, sorted by relPath.
+   * A `design/` directory that does not exist yet resolves `[]` (an honest empty tree, not a
+   * failure).
+   */
+  listTree(): Promise<
+    | SafeFsError
+    | DesignTreeTooDeepError
+    | readonly { readonly relPath: string; readonly sha256: Sha256Hex; readonly size: number }[]
   >;
+  /** The decoded `design/pages.json` — the sole page-order and page-identity authority. */
+  readManifest(): Promise<SafeFsError | PagesManifestInvalidError | PagesManifestV1>;
 }
 
 // ---- transaction engine (turn-durability §4) ---------------------------------------
@@ -272,12 +300,10 @@ export type TransactionError =
 // (`buildWorkspaceLocalPatchOperation`, `buildStandalonePinEventOperation`,
 // `observeFileImage`) and runs them through the same `runProjectMutation` base engine
 // every other project mutation uses — `core` sees only these named methods and their
-// plain-data inputs. EXCEPT `renamePageTitle`/`reorderPages`/`removePage`: the
-// design-tree canonical source plan (Task 6) deleted the builder these three relied on
-// (`buildManifestOperation` — `project.toml` no longer carries page order) along with the
-// slug→path helper (`canonicalPagePath`) their target resolution used, so all three are
-// currently blocked pending Task 9's `DesignTreeStore` — see their own doc comments below
-// and `store/model/factory.ts`'s `DesignTreeStoreNotWiredError`.
+// plain-data inputs. `renamePageTitle`/`reorderPages`/`removePage` build their own
+// `design/pages.json` replace/delete operations the same way (Task 9's
+// `buildPagesManifestOperation`, `store/model/factory.ts`) — a page's file is whatever the
+// manifest's `entry` says, never computed from its slug (design §3, §7).
 
 export interface CreateChatInput {
   readonly transactionId: string;
@@ -307,6 +333,12 @@ export interface RenamePageTitleInput {
   readonly transactionId: string;
   readonly actionId: string;
   readonly pageSlug: PageSlug;
+  /**
+   * The TREE-relative path `design/pages.json` currently binds `pageSlug` to — resolved by
+   * the CALLER (`store/adapters/design-store.ts`) by reading the manifest first, never
+   * guessed from `pageSlug` itself (design §3, §7). The engine targets exactly this path.
+   */
+  readonly entryRelPath: string;
   /** The page's complete new source bytes (the `meta.title` edit is baked into the source by the caller — a page title is not a manifest field, entities/page's `PageMeta`). */
   readonly newBytes: Uint8Array;
   readonly createdAt: string;
@@ -316,13 +348,12 @@ export interface ReorderPagesInput {
   readonly transactionId: string;
   readonly actionId: string;
   /**
-   * The portable manifest as currently on disk — read by the caller first. `project.toml`
-   * no longer carries page order (Task 5) and `TurnFinalizeInput` correspondingly dropped
-   * its own `manifestBefore` field (Task 6); this one is unused by the current
-   * (`DesignTreeStoreNotWiredError`-blocked) implementation and is expected to go the same
-   * way once Task 9 rewires `reorderPages` onto `pages.json`.
+   * `design/pages.json` as currently on disk — read by the caller first (`project.toml` no
+   * longer carries page order as of Task 5). `orderedSlugs` must be an exact permutation of
+   * `manifestBefore.pages`' own slugs — never a subset, a superset, or a duplicate; each
+   * entry keeps its own `entry` value, so reordering never moves a page's source file.
    */
-  readonly manifestBefore: ProjectManifest;
+  readonly manifestBefore: PagesManifestV1;
   readonly orderedSlugs: readonly PageSlug[];
   readonly createdAt: string;
 }
@@ -330,7 +361,7 @@ export interface ReorderPagesInput {
 export interface RemovePageInput {
   readonly transactionId: string;
   readonly actionId: string;
-  readonly manifestBefore: ProjectManifest;
+  readonly manifestBefore: PagesManifestV1;
   readonly pageSlug: PageSlug;
   readonly createdAt: string;
 }
@@ -390,22 +421,23 @@ export interface TransactionEngine {
   /** Active-page write (storage-identity §6.1). */
   setActivePage(input: SetActivePageInput): Promise<Error | CommittedMarker>;
   /**
-   * `page.renameTitle`: replaces one page's design source bytes in place. BLOCKED pending
-   * Task 9's `DesignTreeStore` (design-tree canonical source plan, Task 6): resolving the
-   * page's file from its slug used `store/transaction`'s now-deleted `canonicalPagePath`,
-   * which this codebase never replaces with a slug→path guess — the current implementation
-   * returns `DesignTreeStoreNotWiredError` (`store/model/factory.ts`) until `pages.json`
-   * resolution lands.
+   * `page.renameTitle`: replaces one page's design source bytes in place, targeting
+   * `input.entryRelPath` — never a path computed from `input.pageSlug` (design §3, §7).
    */
   renamePageTitle(input: RenamePageTitleInput): Promise<Error | CommittedMarker>;
   /**
-   * `page.reorder`. BLOCKED pending Task 9, same as `renamePageTitle` above — and its own
-   * premise ("rewrites `project.toml`'s page order") is retired regardless: `project.toml`
-   * carries no page order as of format_version 2 (Task 5), so the real replacement will not
-   * write a manifest either.
+   * `page.reorder`: replaces only `design/pages.json`'s page order in one transaction.
+   * `orderedSlugs` must be an exact permutation of `manifestBefore.pages`'s own slugs
+   * (`ReorderPagesInvalidOrderError` otherwise); an order that already matches the current
+   * one is a legal empty (zero-operation) transaction, not a special-cased rejection.
    */
   reorderPages(input: ReorderPagesInput): Promise<Error | CommittedMarker>;
-  /** `page.removeConfirm`. BLOCKED pending Task 9, same as `renamePageTitle` above. */
+  /**
+   * `page.removeConfirm`: drops the manifest entry (if any), deletes the entry's design-tree
+   * file (if any), and deletes its pin log — and touches nothing else. A slug absent from
+   * `manifestBefore.pages` is a legal no-op on the manifest half (idempotent retry), and a
+   * page with no entry file yet only deletes its pin log.
+   */
   removePage(input: RemovePageInput): Promise<Error | CommittedMarker>;
   /** `pin.setStatus` (and standalone `pin:created`): one append-only comments-log event. */
   appendPinEvent(input: AppendPinEventInput): Promise<Error | CommittedMarker>;
@@ -528,7 +560,7 @@ export interface OpenProject {
   readonly workspaceState: WorkspaceStateStore;
   readonly chats: ChatStore;
   readonly pins: PinStore;
-  readonly pages: PageStore;
+  readonly pages: DesignTreeStore;
   readonly trust: TrustStore;
   readonly projections: ProjectionStore;
   readonly staging: StagingStore;
@@ -558,4 +590,7 @@ export type {
   JsonlOpenError,
   ProjectLayoutError,
   ProjectAlreadyExistsError,
+  DesignTreeTooDeepError,
+  PageEntryNotFoundError,
+  ReorderPagesInvalidOrderError,
 } from "./model/factory";

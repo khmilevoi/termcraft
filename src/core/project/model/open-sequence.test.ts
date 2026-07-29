@@ -320,7 +320,10 @@ describe("runOpenSequence — step ordering", () => {
   test("step 9 (content validation: a listed page unreadable) blocks before trust is ever resolved", async () => {
     await context.start(async () => {
       const log: string[] = [];
-      const store = createFakeProjectStore({ root: "/fake", manifest: { pages: [slug("home")] } });
+      // The page list this test needs comes from `pageReader.listSlugs()` below, not the
+      // portable manifest (`ProjectManifestV1` carries no `pages` field as of format_version
+      // 2) — `store`'s own manifest content is irrelevant to this test.
+      const store = createFakeProjectStore({ root: "/fake" });
       const m = machines();
       const pageReader = createFakePageStore({ order: [slug("home")] }); // no seeded source -> readSource() fails
       const trustGate = createFakeTrustGate();

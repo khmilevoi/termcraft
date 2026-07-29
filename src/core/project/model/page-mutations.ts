@@ -1,7 +1,7 @@
 import { wrap } from "@reatom/core";
 
-import type { PageMutations, PageReader, ProjectStore, ProjectWriteCoordinator } from "core/ports";
-import type { FailureDtoV1, PageRemovePlanV1, UUIDv7 } from "core/protocol";
+import type { PageMutations, ProjectStore, ProjectWriteCoordinator } from "core/ports";
+import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex, UUIDv7 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 
 import {
@@ -12,12 +12,36 @@ import {
 } from "./page-remove-plan";
 
 /**
+ * `PageReader` (`readSource(pageSlug)`/`listSlugs()`) was retired from `core/ports` by the
+ * design-tree canonical source plan's Task 7, replaced by `DesignTreeReader`
+ * (`readTreeFile(relPath)`/`listTree()`/`readManifest()`). This module still calls
+ * `readSource`/`listSlugs` below (see `gatherFreshFacts`/`reorder`) because its real
+ * production caller — `core/kernel/model/handlers/page-pin.ts`'s `pageStoreOf` — still wires
+ * the SAME two methods off `KernelDeps.pageReader`, which the real store adapter
+ * (`store/adapters/design-store.ts`) still exposes for exactly this reason (that adapter's
+ * own header: kept for real, still-relied-upon callers, not retired here). Migrating this
+ * module onto `DesignTreeReader`'s `readManifest()`/`readTreeFile()` is a `core/kernel/**`
+ * task (Task 14, red-debt.md), not this one's — so the retired port shape is kept LOCALLY,
+ * verbatim, mirroring `core/ports/fakes/legacy-page-store.ts`'s own identical shim, rather
+ * than importing a fakes-only module into production code.
+ */
+interface LegacyPageSourceV1 {
+  readonly bytes: Uint8Array;
+  readonly sourceHash: Sha256Hex;
+}
+
+interface LegacyPageReader {
+  readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | LegacyPageSourceV1>;
+  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>;
+}
+
+/**
  * The four page mutation commands (kernel-command-contract §8.2): `page.renameTitle`,
  * `page.reorder`, `page.removeConfirm`, `page.removeDiscardPlan`. `page.removePlan`'s own
  * mint orchestration lives in `page-remove-plan.ts` (see that file's header) — this module
  * is the other three-and-a-half.
  *
- * Every mutation here goes through `PageReader`/`PageMutations`/`ProjectStore`/
+ * Every mutation here goes through `LegacyPageReader`/`PageMutations`/`ProjectStore`/
  * `ProjectWriteCoordinator` (`core/ports`) — no direct I/O. `renameTitle`/`reorder` do not
  * build a `page.descriptorsChanged` event themselves: that requires re-running Gate over
  * the mutated page (`core/ports/gate-runner.ts`), a capability outside this module; the
@@ -37,7 +61,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface RenameTitleDeps {
-  readonly pageStore: PageReader & PageMutations;
+  readonly pageStore: LegacyPageReader & PageMutations;
   readonly planLedger: PageRemovePlanLedger;
 }
 
@@ -72,7 +96,7 @@ export type ReorderPagesResultV1 =
   | { readonly kind: "invalid-permutation" };
 
 export interface ReorderDeps {
-  readonly pageStore: PageReader & PageMutations;
+  readonly pageStore: LegacyPageReader & PageMutations;
   readonly planLedger: PageRemovePlanLedger;
 }
 
@@ -143,7 +167,7 @@ export type ConfirmPageRemoveResultV1 =
   | { readonly kind: "failure"; readonly failure: FailureDtoV1 };
 
 export interface ConfirmPageRemoveDeps {
-  readonly pageStore: PageReader & PageMutations;
+  readonly pageStore: LegacyPageReader & PageMutations;
   readonly projectStore: ProjectStore;
   readonly planLedger: PageRemovePlanLedger;
   readonly mutex: ProjectWriteCoordinator;

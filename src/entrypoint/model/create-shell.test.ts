@@ -7,22 +7,16 @@ import type { Kernel } from "core/kernel";
 import type { GateRunResultV1, PreviewFrameV1, PreviewIdentityV1 } from "core/ports";
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
+import { PagesManifestInvalidError, encodePagesManifest } from "entities/design-tree";
+import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { uuidv7 } from "infrastructure/uuid";
 import { JsonlOpenError, createStore, nodeStoreDeps } from "store";
-import type { ChatListEntry, ChatStore, ManifestStore, OpenProject } from "store";
+import type { ChatListEntry, ChatStore, DesignTreeStore, OpenProject } from "store";
 import { FsAccessError } from "store/safe-fs";
-import {
-  ManifestCorruptError,
-  PROJECT_MANIFEST_FILENAME,
-  WORKSPACE_STATE_FILENAME,
-  decodeProjectManifest,
-  encodeProjectManifest,
-} from "store/toml";
-import type { ProjectManifest } from "store/toml";
-import { designFilePath } from "store/transaction";
+import { WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import {
@@ -86,14 +80,19 @@ function testDeps(): ShellDeps {
 }
 
 /**
- * A real on-disk project whose manifest lists one page and whose `chats/` directory does not
- * exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose
- * (fix-bundle spec §2.4/§2.5): `chats/` is git-ignored, so a project checked out from Git carries
- * pages but zero chats. Built by creating a real project through the Store (so `.termcraft/`'s
- * manifest/lease/durability plumbing is genuine, not hand-rolled), then editing the on-disk
- * manifest to add a page and removing the two paths a clone never carries: `chats/` and
- * `workspace.local.toml` (both hard-local/git-ignored, `store/toml/model/gitignore.ts`) — this is
- * what `git clone` would actually leave behind, not what `createProject` happens to leave behind.
+ * A real on-disk project whose `design/pages.json` lists one page and whose `chats/`
+ * directory does not exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment
+ * names as its real purpose (fix-bundle spec §2.4/§2.5): `chats/` is git-ignored, so a
+ * project checked out from Git carries the authored design tree but zero chats. Built by
+ * creating a real project through the Store (so `.termcraft/`'s manifest/lease/durability
+ * plumbing is genuine, not hand-rolled), then writing `design/pages.json` and its one
+ * entry file directly (Task 5 removed `pages` from `ProjectManifest`; `design/pages.json`,
+ * inside the authored tree, is the sole page-order authority now) and removing the two
+ * paths a clone never carries: `chats/` and `workspace.local.toml` (both hard-local/
+ * git-ignored, `store/toml/model/gitignore.ts`) — this is what `git clone` would actually
+ * leave behind, not what `createProject` happens to leave behind. The entry's path is
+ * deliberately unrelated to its slug (design §3, §7's central rule: nothing computes a
+ * page's file from its slug).
  */
 async function projectWithPagesAndNoChats(): Promise<string> {
   const scratch = makeScratchDir("termcraft-shell-gap-d-clone-");
@@ -113,17 +112,18 @@ async function projectWithPagesAndNoChats(): Promise<string> {
   if (home instanceof Error) throw home;
 
   const termcraftDir = path.join(root, ".termcraft");
-  const manifestPath = path.join(termcraftDir, PROJECT_MANIFEST_FILENAME);
-  const manifest = decodeProjectManifest(fs.readFileSync(manifestPath, "utf8"));
-  if (manifest instanceof Error) throw manifest;
-  fs.writeFileSync(manifestPath, encodeProjectManifest({ ...manifest, pages: [home] }));
-
-  // `canonicalPagePath` is retired (design-tree canonical source plan, Task 6) — this fixture
-  // only needs SOME page-shaped file on disk for the content probe under test, not a real
-  // `pages.json`-resolved location, so `designFilePath` stands in with a synthetic tree path.
-  const pagePath = path.join(termcraftDir, designFilePath(`pages/${home}.tsx`));
-  fs.mkdirSync(path.dirname(pagePath), { recursive: true });
-  fs.writeFileSync(pagePath, "export default function Home() { return null }\n");
+  const designDir = path.join(termcraftDir, "design");
+  const entryRelPath = "screens/home-view.tsx";
+  const manifest: PagesManifestV1 = {
+    schemaVersion: 1,
+    pages: [{ slug: home, entry: entryRelPath }],
+    requestedActivePage: null,
+  };
+  fs.mkdirSync(designDir, { recursive: true });
+  fs.writeFileSync(path.join(designDir, "pages.json"), encodePagesManifest(manifest));
+  const entryPath = path.join(designDir, ...entryRelPath.split("/"));
+  fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+  fs.writeFileSync(entryPath, "export default function Home() { return null }\n");
 
   fs.rmSync(path.join(termcraftDir, "chats"), { recursive: true, force: true });
   fs.rmSync(path.join(termcraftDir, WORKSPACE_STATE_FILENAME), { force: true });
@@ -146,6 +146,21 @@ async function createAndCloseRealProject(prefix: string): Promise<string> {
 }
 
 /**
+ * Writes an EXPLICIT, empty `design/pages.json` (`pages: []`) — never simply leaving the
+ * file absent. `readManifest()`'s behavior on a MISSING `design/pages.json` (a project
+ * created before its first turn) is deliberately unspecified by this plan and left for a
+ * later task to decide (red-debt.md's own "tree-less project" ambiguity); an explicit empty
+ * manifest sidesteps that undecided case entirely, letting `probeProjectContent` legitimately
+ * observe "the design tree definitely has zero pages" rather than "the read failed".
+ */
+function seedEmptyPagesManifest(root: string): void {
+  const designDir = path.join(root, ".termcraft", "design");
+  fs.mkdirSync(designDir, { recursive: true });
+  const manifest: PagesManifestV1 = { schemaVersion: 1, pages: [], requestedActivePage: null };
+  fs.writeFileSync(path.join(designDir, "pages.json"), encodePagesManifest(manifest));
+}
+
+/**
  * A real on-disk project with zero pages and its auto-minted FIRST CHAT still present (fix round
  * 1: `probeProjectContent`'s chats-list branch, `create-shell.ts:376-382`, had no test at all) —
  * "typed a message, nothing has generated yet" on a relaunch. `createProject` always mints a
@@ -153,7 +168,9 @@ async function createAndCloseRealProject(prefix: string): Promise<string> {
  * first landed page — reachable on real disk with no cleanup beyond closing the first session.
  */
 async function existingProjectWithChatOnly(): Promise<string> {
-  return createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
+  const root = await createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
+  seedEmptyPagesManifest(root);
+  return root;
 }
 
 /**
@@ -167,21 +184,22 @@ async function existingProjectWithChatOnly(): Promise<string> {
  */
 async function existingProjectWithNothing(): Promise<string> {
   const root = await createAndCloseRealProject("termcraft-shell-gap-d-empty-existing-");
+  seedEmptyPagesManifest(root);
   fs.rmSync(path.join(root, ".termcraft", "chats"), { recursive: true, force: true });
   return root;
 }
 
-/** A structurally valid `ProjectManifest` naming exactly the pages `probeProjectContent` (fix
- *  round 1) actually reads — every other field is a fixed placeholder, since nothing under test
- *  reads them. */
-function fakeManifest(pages: readonly PageSlug[]): ProjectManifest {
+/**
+ * A structurally valid `PagesManifestV1` naming exactly the pages `probeProjectContent`
+ * (fix round 1; re-pointed at `design/pages.json` by the design-tree canonical source plan's
+ * Task 9) actually reads — every entry's `entry` path is deliberately unrelated to its own
+ * slug (design §3, §7's central rule), even though this probe only ever reads `.length`.
+ */
+function fakePagesManifest(pages: readonly PageSlug[]): PagesManifestV1 {
   return {
-    formatVersion: 1,
-    projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
-    name: "Fake",
-    createdAt: "2024-01-01T00:00:00.000Z",
-    targetStack: "js-opentui",
-    pages,
+    schemaVersion: 1,
+    pages: pages.map((pageSlug) => ({ slug: pageSlug, entry: `screens/${pageSlug}-view.tsx` })),
+    requestedActivePage: null,
   };
 }
 
@@ -189,21 +207,41 @@ function fakeChatListEntry(chatId: string): ChatListEntry {
   return { chatId, createdAt: "2024-01-01T00:00:00.000Z", firstUserText: null };
 }
 
+/** A stand-in failure for a `DesignTreeStore` method this fixture never actually exercises — `probeProjectContent` only ever calls `pages.readManifest()`, but the type still requires a body for every member. */
+function unusedDesignTreeFailure(method: string): PagesManifestInvalidError {
+  return new PagesManifestInvalidError({
+    code: "UNUSED",
+    reason: `${method} not used by this fake`,
+  });
+}
+
 /**
- * A minimal `Pick<OpenProject, "chats" | "manifest">` double for `probeProjectContent` (fix
+ * A minimal `Pick<OpenProject, "chats" | "pages">` double for `probeProjectContent` (fix
  * round 1, Finding 1) — the two failure branches it introduces need a TRANSIENT read failure
  * occurring AFTER a successful `store.openProject`, which the real `Store` has no seam to inject
- * honestly (see `probeProjectContent`'s own doc comment in `create-shell.ts`): a corrupt manifest
- * would already have failed `store.openProject` itself, before this function is ever reached.
- * `.chats.open` is never called by `probeProjectContent` but still needs a type-correct body —
- * `ChatStore` requires it — so it returns a real, if unused, `JsonlOpenError` rather than a cast.
+ * honestly (see `probeProjectContent`'s own doc comment in `create-shell.ts`): a corrupt
+ * `design/pages.json` would already have failed `store.openProject` itself... except it would
+ * NOT — `openProject` never reads the design tree at all — but this fixture still drives the
+ * failure branch directly rather than relying on real disk corruption, matching this file's own
+ * established pattern for the chats-list failure branch below. `.chats.open`/`pages.readSource`/
+ * `.listSlugs`/`.readTreeFile`/`.listTree` are never called by `probeProjectContent` but still
+ * need type-correct bodies — `ChatStore`/`DesignTreeStore` require them — so each returns a real,
+ * if unused, error rather than a cast.
  */
 function fakeContentSource(options: {
-  readonly manifest: Awaited<ReturnType<ManifestStore["read"]>>;
+  readonly manifest: Awaited<ReturnType<DesignTreeStore["readManifest"]>>;
   readonly chats?: Awaited<ReturnType<ChatStore["list"]>>;
-}): Pick<OpenProject, "chats" | "manifest"> {
+}): Pick<OpenProject, "chats" | "pages"> {
   return {
-    manifest: { read: () => Promise.resolve(options.manifest) },
+    pages: {
+      readSource: () => Promise.resolve(unusedDesignTreeFailure("readSource")),
+      listSlugs: () => Promise.resolve(unusedDesignTreeFailure("listSlugs")),
+      readTreeFile: () =>
+        Promise.resolve(new FsAccessError({ op: "readTreeFile", path: "unused", code: "UNUSED" })),
+      listTree: () =>
+        Promise.resolve(new FsAccessError({ op: "listTree", path: "unused", code: "UNUSED" })),
+      readManifest: () => Promise.resolve(options.manifest),
+    },
     chats: {
       open: () =>
         Promise.resolve(
@@ -461,28 +499,27 @@ describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", ()
   })();
 
   test("has-content when the manifest lists at least one page", async () => {
-    const open = fakeContentSource({ manifest: fakeManifest([HOME]) });
+    const open = fakeContentSource({ manifest: fakePagesManifest([HOME]) });
     expect(await probeProjectContent(open)).toBe("has-content");
   });
 
   test("has-content when pages are empty but at least one chat exists", async () => {
     const open = fakeContentSource({
-      manifest: fakeManifest([]),
+      manifest: fakePagesManifest([]),
       chats: [fakeChatListEntry(uuidv7())],
     });
     expect(await probeProjectContent(open)).toBe("has-content");
   });
 
   test("no-content only when BOTH reads succeed and both come back empty", async () => {
-    const open = fakeContentSource({ manifest: fakeManifest([]), chats: [] });
+    const open = fakeContentSource({ manifest: fakePagesManifest([]), chats: [] });
     expect(await probeProjectContent(open)).toBe("no-content");
   });
 
-  test("unknown, logged, when the manifest read fails — never folded into no-content", async () => {
+  test("unknown, logged, when the design-tree manifest read fails — never folded into no-content", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     const open = fakeContentSource({
-      manifest: new ManifestCorruptError({
-        file: "project.toml",
+      manifest: new PagesManifestInvalidError({
         code: "PARSE_FAILED",
         reason: "simulated transient read failure",
       }),
@@ -495,7 +532,7 @@ describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", ()
   test("unknown, logged, when the chat listing fails — never folded into no-content", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     const open = fakeContentSource({
-      manifest: fakeManifest([]),
+      manifest: fakePagesManifest([]),
       chats: new FsAccessError({ op: "list", path: "chats", code: "EBUSY" }),
     });
     expect(await probeProjectContent(open)).toBe("unknown");

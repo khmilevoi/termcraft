@@ -1,8 +1,14 @@
 import type { FailureDtoV1 } from "core/protocol";
+import { PagesManifestInvalidError } from "entities/design-tree";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
 import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease";
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
-import { JsonlOpenError } from "store/model/factory";
+import {
+  DesignTreeTooDeepError,
+  JsonlOpenError,
+  PageEntryNotFoundError,
+  ReorderPagesInvalidOrderError,
+} from "store/model/factory";
 import {
   DiagnosticsStoreIoError,
   PageMetaCacheIoError,
@@ -222,6 +228,67 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   if (error instanceof MigrationBackupFailedError) {
     return {
       code: "MIGRATION_BACKUP_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `design/pages.json` itself (`entities/design-tree`'s `decodePagesManifest`) is invalid —
+   * bad JSON, an unknown field, a duplicate slug, a malformed `entry`, or a
+   * `requestedActivePage` naming an unlisted slug (design §4's fatal list). Same generic
+   * durable-read fault as `ManifestCorruptError` just above; the closed v1 union has no
+   * dedicated "design manifest invalid" code.
+   */
+  if (error instanceof PagesManifestInvalidError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `DesignTreeStore.listTree()` (`store/model/factory.ts`, design-tree canonical source
+   * plan Task 9): `design/` nests deeper than the `design-source` namespace's own depth
+   * ceiling. A refusal, not a corruption — but the closed v1 union has no dedicated
+   * "tree too deep" code, so it folds to the same generic durable-fault bucket.
+   */
+  if (error instanceof DesignTreeTooDeepError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `DesignTreeStore.readSource()` (Task 9): `design/pages.json` lists no entry for the
+   * requested page slug — never a slug-computed path guess (design §3, §7). A legitimate,
+   * expected outcome (an unlisted/stale slug), not itself a bug, but the closed v1 union has
+   * no dedicated "no entry for this slug" code either.
+   */
+  if (error instanceof PageEntryNotFoundError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TransactionEngine.reorderPages()` (Task 9): `orderedSlugs` is not an exact permutation
+   * of the manifest's own slugs — a subset, a superset, or a duplicate (`PageMutations.reorder`'s
+   * own port doc). A caller-input validation failure, mapped the same way `TurnFinalizeInputError`
+   * above is: the closed v1 union has no dedicated "invalid input" code.
+   */
+  if (error instanceof ReorderPagesInvalidOrderError) {
+    return {
+      code: "PERSISTENCE_FAILED",
       retryable: false,
       safeMessage: safeMessageOf(error),
       details: {},

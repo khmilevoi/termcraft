@@ -25,6 +25,7 @@ export type {
   CreateChatInput,
   CreateProjectInput,
   CreateTurnWorkspaceInput,
+  DesignTreeStore,
   GitIdentity,
   LeaseAdvisory,
   LeaseError,
@@ -36,7 +37,6 @@ export type {
   OpenProject,
   OrphanTurnOutcome,
   PageCursor,
-  PageStore,
   PinStore,
   ProjectionStore,
   ProjectLease,
@@ -83,9 +83,12 @@ export type {
 // Tagged error classes are values (usable with `instanceof`) as well as types, so they are
 // re-exported here rather than under `export type` above.
 export {
+  DesignTreeTooDeepError,
   JsonlOpenError,
+  PageEntryNotFoundError,
   ProjectAlreadyExistsError,
   ProjectLayoutError,
+  ReorderPagesInvalidOrderError,
   createStore,
   nodeStoreDeps,
   toTxOutcome,
@@ -122,7 +125,7 @@ export type { StoreAdapterDeps } from "./adapters/types";
 export { toFailureDto } from "./adapters/failure";
 export { createProjectStoreAdapter } from "./adapters/project-store";
 export { createChatStoreAdapter } from "./adapters/chat-store";
-export { createPageStoreAdapter } from "./adapters/page-store";
+export { createPageStoreAdapter } from "./adapters/design-store";
 export { createPinStoreAdapter } from "./adapters/pin-store";
 export { createStagingAdapter } from "./adapters/staging";
 export { createTurnTransactionsAdapter } from "./adapters/turn-transactions";
