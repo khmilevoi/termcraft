@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { RUNTIME_ROOT_SPECIFIER } from "entities/design-tree";
+
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist } from "./import-scan";
 
@@ -572,5 +574,42 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     // A specifier that climbs ABOVE the default empty root genuinely escapes it — honest
     // ESCAPES_TREE, mapped to FORBIDDEN_IMPORT, not a fabricated UNRESOLVED_IMPORT.
     expect(scanImportAllowlist('import x from "../lib/theme"\n')[0]?.code).toBe("FORBIDDEN_IMPORT");
+  });
+
+  describe("task-11 review, Important 1 — the no-context message stays honest, never leaks internals", () => {
+    // `gate/model/gate.ts`'s `runGate` is the one live production path that calls this
+    // function with no `context` (until Task 12). A user hitting a forbidden import there must
+    // never see the resolver's raw `SpecifierRejectedError` template — it interpolates the
+    // no-context default's empty `from` (a literal double space, `"in  is"`) and leaks the
+    // internal `[BARE_SPECIFIER]`-style tag. Pinning the shape here, not just the code, so the
+    // next change to this message is a deliberate one.
+    test("a foreign bare specifier with no context gets the pre-Task-11-shaped message, not the resolver's raw template", () => {
+      const message = scanImportAllowlist('import x from "react"\n')[0]?.message;
+      expect(message).toBeDefined();
+      expect(message).toContain('"react"');
+      expect(message).toContain(RUNTIME_ROOT_SPECIFIER);
+      // Never the resolver's internal machinery: no empty-`from` artifact, no leaked tag.
+      expect(message).not.toContain("$from");
+      expect(message).not.toContain(" in  is");
+      expect(message).not.toContain("[BARE_SPECIFIER]");
+    });
+
+    test("an unresolvable-but-legal-shaped relative specifier with no context also gets the honest message, not the raw template", () => {
+      const message = scanImportAllowlist('import x from "./lib/theme"\n')[0]?.message;
+      expect(message).toBeDefined();
+      expect(message).toContain('"./lib/theme"');
+      expect(message).not.toContain("[UNRESOLVED]");
+      expect(message).not.toContain(" in  is");
+    });
+
+    test("the SAME rejection with a real context still gets the resolver's own detailed message — the honest-default rewrite is scoped to the no-context path only", () => {
+      const message = scanImportAllowlist('import x from "react"\n', ctx)[0]?.message;
+      expect(message).toBeDefined();
+      // Ctx-bearing calls are unaffected by the no-context rewrite: the resolver's own
+      // templated message, `from`/`code` included, is exactly what tree-scan's per-file
+      // attribution needs to stay useful.
+      expect(message).toContain(ctx.from);
+      expect(message).toContain("[BARE_SPECIFIER]");
+    });
   });
 });

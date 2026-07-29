@@ -15,6 +15,7 @@ export type {
 export { makeGateResult, isPassing } from "./model/gate-result";
 export { scanImportAllowlist } from "./model/import-scan";
 export type { ImportScanError } from "./model/import-scan";
+export { scanModuleEdges, scanTreeImports } from "./model/tree-scan";
 export { checkPageContract } from "./model/page-contract";
 export type { PageContractError, PageContractResult } from "./model/page-contract";
 export { resolveCompilerPath, CompilerExtractError } from "./model/tsc-extract";

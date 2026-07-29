@@ -17,6 +17,33 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     expect(errors[0]?.file).toBe("lib/theme.ts");
   });
 
+  describe("task-11 review, Important 2 — has() broader than files() can never launder an unscanned module", () => {
+    test("a `has` that affirms a path never present in `files` does not let a relative import resolve to it", () => {
+      // Exactly the review's own reproduction: `has` answers true for "lib/legacy.js" but
+      // `files` was never given its source — this pass never actually scanned it. If `has`
+      // alone were trusted, the import below would resolve cleanly and "lib/legacy.js" would
+      // load into a page having never itself been scanned for a forbidden import.
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.js"\n']]),
+        has: (relPath) => relPath === "lib/legacy.js",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("the SAME path is legal once it is also a real key in `files` — the enforcement is an intersection, not an outright ban", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/legacy.js"\n'],
+          ["lib/legacy.js", "export const x = 1\n"],
+        ]),
+        has: (relPath) => relPath === "lib/legacy.js" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toEqual([]);
+    });
+  });
+
   test("scanModuleEdges returns only static import specifiers, runtime included", () => {
     expect(
       scanModuleEdges(
