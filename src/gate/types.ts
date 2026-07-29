@@ -1,3 +1,4 @@
+import type { PageEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug } from "entities/page";
 
 /**
@@ -52,6 +53,20 @@ export interface GateWarning {
 export interface PageDescriptor {
   readonly slug: PageSlug;
   readonly meta: PageMeta;
+}
+
+/**
+ * The staging manifest slice `design/pages.json` decodes to, once schema validation AND
+ * entry resolution both pass (design §4, `gate/model/manifest.ts`'s `checkManifestSlice`).
+ * `pages` preserves the manifest's own array order — design §4: "The array order is the page
+ * order" — and each entry carries the tree-relative `entry` path `pages.json` bound it to,
+ * NOT a slug-derived guess: which file a page lives in is `pages.json`'s `entry` value, never
+ * something derived from the slug. `active` is the manifest's optional `requestedActivePage`,
+ * or `null` when it names none.
+ */
+export interface ManifestSlice {
+  readonly pages: readonly PageEntryV1[];
+  readonly active: PageSlug | null;
 }
 
 /**

@@ -9,6 +9,7 @@ export type {
   GateResult,
   GateWarning,
   GateWarningKind,
+  ManifestSlice,
   PageDescriptor,
 } from "./types";
 export { makeGateResult, isPassing } from "./model/gate-result";
@@ -20,7 +21,7 @@ export { resolveCompilerPath, CompilerExtractError } from "./model/tsc-extract";
 export { createTypeChecker, TypeCheckUnavailableError } from "./model/type-check";
 export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
-export type { ManifestSlice, ManifestScanInput, ManifestScanResult } from "./model/manifest";
+export type { ManifestScanInput, ManifestScanResult } from "./model/manifest";
 export { lintDeterminism, lintSilencingAny } from "./model/lints";
 export { createSmokeRender } from "./model/smoke";
 export { smokeResultToErrors } from "./ports/smoke-renderer";
