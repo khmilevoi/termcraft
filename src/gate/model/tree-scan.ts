@@ -1,57 +1,112 @@
-import path from "node:path";
-
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
 
 export { scanModuleEdges };
 
 /**
- * Every extension Bun's own module loader executes as JS/TS source — verified by running
- * `.mts`/`.cts` fixtures through Bun 1.3.14 directly (task-12 review round 2: the round-1 set
- * omitted both, and Bun executes each with full TypeScript syntax exactly like `.ts`). This is
- * NOT derived from any other constant in this codebase, because none covers "what counts as
- * code": `entities/design-tree`'s `RESOLUTION_EXTENSIONS` is only the extensionless-PROBE list
- * (`.tsx`/`.ts`, design §6), and `store/safe-fs/model/limits.ts`'s `design-source` classifier
- * has no extension grammar at all — design places no restriction on what an agent may write
- * under `design/`, so nothing stops `design/lib/theme.mts` or `design/lib/theme.MTS` existing.
- * Hand-maintained against Bun's own documented/observed loader behavior; the round-1 over-claim
- * that this list matched "design §6's import surface" exactly is corrected — this states only
- * what Bun's loader actually does with each extension, no more.
+ * The tree-relative path's own file extension — the substring from, and including, its LAST
+ * `.` in the basename — lowercased, or `""` when the basename has no `.` at all. Hand-written
+ * rather than `node:path`'s `extname` (task-12 review round 3, Minor — round 2 used it):
+ * tree-relative paths are ALWAYS forward-slash, never an OS path (this plan's own vocabulary),
+ * and `node:path`'s default export is platform-flavored (`path.win32` on Windows, whose
+ * backslash handling differs from posix's `extname` on the same string). Not exploitable
+ * today — `store/safe-fs`'s own path rules already reject an embedded backslash before this
+ * module ever sees the path — but there is no reason to couple a forward-slash-only module to
+ * platform behavior it does not need, and `entities/design-tree`'s own `specifier.ts` avoids
+ * `node:path` for the identical reason.
  *
- * Matched via {@link isCodeFile}'s `path.extname(...).toLowerCase()`, not a raw `endsWith` scan
- * (round-1's shape) — round-1's `endsWith` was case-SENSITIVE, so `lib/mod.TS` was silently
- * treated as non-code even though Bun executes it identically to `lib/mod.ts`. Both Windows and
- * macOS filesystems are case-insensitive and `store`'s `listTree` returns a name exactly as
- * written on disk, so a path's extension casing carries no information about what the file
- * actually is; comparing the normalized extension against a `Set` closes that gap at both of
- * this module's enforcement points in one place, rather than needing a case-insensitive variant
- * of each list membership check.
+ * Deliberately NOT `node:path`'s own "dotfile" convention either, under which a name that is
+ * ENTIRELY an extension (`.ts`) is treated as having NO extension at all
+ * (`path.extname(".ts") === ""`, `path.extname("lib/.mjs") === ""`) — that convention is
+ * exactly what let `design/.ts`/`lib/.mjs` sail through `isCodeFile` unscanned in round 2
+ * (task-12 review round 3, Important: proven by running both names through Bun directly —
+ * Bun executes each as TypeScript identically to `lib/mod.ts`). Here `.ts` gives back `.ts`,
+ * not `""`.
  */
-const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+function extensionOf(relPath: string): string {
+  const slash = relPath.lastIndexOf("/");
+  const name = slash === -1 ? relPath : relPath.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot).toLowerCase();
+}
 
 /**
- * True for a tree-relative path that can itself contain executable JS/TS syntax — imports,
- * `eval`/`Function`, `require`, re-exports. Used at BOTH of this module's enforcement points
- * (task-12 review round 1, Importants 2 and 3; round 2, the extension-set/case-sensitivity
- * fix — one predicate, so all of them can never disagree about what "code" means):
+ * Known-DATA extensions — the ONLY extensions {@link isCodeFile} treats as non-code. This is a
+ * DENYLIST, not an allowlist of known-code extensions (rounds 1 and 2's shape) — a deliberate
+ * reversal (task-12 review round 3, Important). An allowlist's UNKNOWN case defaults to "not
+ * code", and at both of this module's enforcement points that default points the UNSAFE way:
+ * an extension nobody thought to add (round 2's own `.mts`/`.cts` gap), a dotfile whose whole
+ * name IS an extension (`.ts`), or a file with no extension at all (`lib/README`, which Bun
+ * also executes as TypeScript when run directly) would each silently escape both the scan
+ * loop (its own forbidden import/`eval` never seen — a SILENT bypass) and `effectiveHas` (an
+ * unscanned resolution target treated as safe — also SILENT). A denylist's unknown case
+ * defaults to "code" instead, so the exact same three gaps become: the scan loop tokenizes a
+ * file that turns out to hold no import syntax at all (a no-op — nothing fires), or
+ * `effectiveHas` demands the file's own text be present in `files` before a relative import
+ * may resolve to it (a LOUD, fixable `UNRESOLVED_IMPORT`). Both of those are a refusal an
+ * author can see and correct (rename the file, or extend this list); neither is a bypass
+ * nobody is ever told about.
+ *
+ * This is weighed directly against the false-fatal risk the flip reopens: a genuine data
+ * asset whose extension is absent from this list gets tokenized as JS/TS, so content that
+ * merely happens to spell `eval`/`require`/an import keyword could trip a false violation
+ * (exactly the class round 1 closed for `.md`/`.json`, but only for extensions ON this list).
+ * That risk is accepted deliberately — a loud, wrong refusal on an asset is recoverable; a
+ * silent pass on a real forbidden import is not recoverable at all, because nothing ever told
+ * anyone it happened. THIS LIST IS NOT EXHAUSTIVE BY DESIGN: anything absent from it defaults
+ * to "code", which is the safe direction here, so completeness of this list only affects how
+ * much ordinary, legitimate asset content gets needlessly tokenized — never whether a real
+ * violation goes unseen. Extend it as real, false-fatal-prone asset types are found; there is
+ * no requirement to enumerate every possible non-code extension up front.
+ */
+const DATA_EXTENSIONS = new Set([
+  ".json",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".lock",
+  ".css",
+  ".html",
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".bmp",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".map",
+]);
+
+/**
+ * True for a tree-relative path this module treats as potentially holding executable JS/TS
+ * syntax — imports, `eval`/`Function`, `require`, re-exports — i.e. every path whose own
+ * extension ({@link extensionOf}) is NOT in {@link DATA_EXTENSIONS}. Used at BOTH of this
+ * module's enforcement points (rounds 1 through 3 — one predicate, so none of them can ever
+ * disagree about what "code" means):
  *
  * 1. the scan loop below must SKIP a non-code file even when its text sits in `input.files`,
  *    because feeding prose or JSON through a JS/TS tokenizer risks a false fatal on content
- *    that merely happens to spell a banned identifier (`"Do not use eval in pages."` inside a
- *    `.md` file tripped `EVAL_CALL` before this fix — the same class of defect as Task 9's
- *    byte-comparison, a guard rejecting valid input);
+ *    that merely happens to spell a banned identifier (round 1's `.md`/`.json` fix);
  * 2. `effectiveHas` below must REQUIRE a code file's presence in `files` before trusting a
- *    resolution to it, because any {@link CODE_EXTENSIONS} target can itself hide a further
+ *    resolution to it, because any file this predicate calls "code" can itself hide a further
  *    forbidden import this pass never read (task-11 review, Important 2's hazard).
  *
- * A non-code target (`.json`, `.md`, `.svg`, anything else `store`'s `listTree` enumerates
- * under `design/`) needs neither: it carries no import syntax to miss, so requiring its
- * presence in `files` (point 2) or scanning its bytes as if it were code (point 1) would each
- * manufacture a fatal out of a file's mere existence or content, never out of anything actually
- * wrong with it.
+ * A genuinely non-code target (anything {@link DATA_EXTENSIONS} names) needs neither: it
+ * carries no import syntax to miss, so requiring its presence in `files` (point 2) or
+ * scanning its bytes as if it were code (point 1) would each manufacture a fatal out of a
+ * file's mere existence or content, never out of anything actually wrong with it.
  */
 function isCodeFile(relPath: string): boolean {
-  return CODE_EXTENSIONS.has(path.extname(relPath).toLowerCase());
+  return !DATA_EXTENSIONS.has(extensionOf(relPath));
 }
 
 /**
@@ -66,10 +121,10 @@ function isCodeFile(relPath: string): boolean {
  * un-missable — a NON-code file in `input.files` is skipped outright ({@link isCodeFile}),
  * never tokenized as JS/TS.
  *
- * THE CONTRACT (task-12 review — see the plan's red-debt ledger, item 3, and round 1's
- * Importants 2/3): `input.has` is the caller's whole-tree inventory — it is legitimately
- * broader than `input.files`, whose keys are only the files THIS pass was given source text
- * for. `store`'s `listTree` enumerates every file under `design/` regardless of extension, so a
+ * THE CONTRACT (task-12 review — see the plan's red-debt ledger, item 3, and rounds 1-3's own
+ * findings): `input.has` is the caller's whole-tree inventory — it is legitimately broader
+ * than `input.files`, whose keys are only the files THIS pass was given source text for.
+ * `store`'s `listTree` enumerates every file under `design/` regardless of extension, so a
  * real tree legitimately contains `.json`/`.md`/`.svg` files a page may resolve a relative
  * import to (design §6 places no extension restriction on a resolution TARGET, only on the
  * extensionless PROBE) without ever needing their text scanned — {@link isCodeFile} draws that
@@ -82,10 +137,11 @@ function isCodeFile(relPath: string): boolean {
  * byte-comparison, which bricked two user commands by rejecting valid input. `effectiveHas`
  * below is the enforcement of this narrower, honest invariant: a code resolution target absent
  * from `files` still reports `UNRESOLVED_IMPORT` (Important 2's hazard stays fatal for every
- * extension {@link CODE_EXTENSIONS} names, matched case-insensitively — round 2 closed the
- * `.mts`/`.cts` and casing gaps left in round 1), but nothing else does. `runTreeImports`
- * (`gate/model/gate.ts`) is the caller this was written for: `has` is backed by the whole-tree
- * `treePaths`, `files` by whatever text this particular turn's Gate run actually holds.
+ * extension NOT in {@link DATA_EXTENSIONS}, matched case-insensitively and including dotfiles
+ * and extensionless names — round 3 closed the gaps rounds 1 and 2 each left open), but
+ * nothing else does. `runTreeImports` (`gate/model/gate.ts`) is the caller this was written
+ * for: `has` is backed by the whole-tree `treePaths`, `files` by whatever text this particular
+ * turn's Gate run actually holds.
  */
 export function scanTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;

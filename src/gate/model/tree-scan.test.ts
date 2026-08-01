@@ -181,12 +181,88 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
     });
+  });
 
-    test("a file whose name merely CONTAINS a code extension as a substring (`notes.cts.bak`) is not treated as code — proves the match is on the real extension (`path.extname`), not a substring scan, so widening the set did not become `scan everything`", () => {
+  describe("task-12 review round 3 — CODE_EXTENSIONS was an allowlist whose UNKNOWN case failed open; flipped to a DATA_EXTENSIONS denylist whose unknown case is code", () => {
+    test('a bare `.ts` dotfile (the WHOLE name is the extension) is scanned as code, not silently skipped — `path.extname(".ts")` returns `""` under Node/Bun\'s dotfile convention, which round 2\'s implementation trusted', () => {
+      // Proven by execution against real Bun before choosing this fix: `rtk bun run` on a
+      // fixture literally named `.ts` executed it as TypeScript, identically to `mod.ts`. A
+      // path.extname-based predicate (round 2's shape) returns "" for this name, so it was
+      // classified as non-code and its own forbidden import was never scanned — a silent miss.
       const errors = scanTreeImports({
-        files: new Map([
-          ["notes.cts.bak", "eval is mentioned here but this is not a code file.\n"],
-        ]),
+        files: new Map([[".ts", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe(".ts");
+      expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    });
+
+    test("a `.mjs` dotfile nested under a directory (`lib/.mjs`) is scanned as code, not silently skipped", () => {
+      const errors = scanTreeImports({
+        files: new Map([["lib/.mjs", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/.mjs");
+      expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    });
+
+    test("an UNSCANNED `.ts` dotfile target `has` affirms is STILL fatal — the `effectiveHas` mirror of the dotfile scan-loop gap", () => {
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../.ts"\n']]),
+        has: (relPath) => relPath === ".ts" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("a file with NO extension at all (`lib/README`) is scanned as code, not silently skipped — Bun also executes an extensionless file as TypeScript when run directly", () => {
+      const errors = scanTreeImports({
+        files: new Map([["lib/README", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/README");
+      expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    });
+
+    test("an UNSCANNED extensionless target `has` affirms is STILL fatal — the `effectiveHas` mirror of the extensionless scan-loop gap", () => {
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../lib/README"\n']]),
+        has: (relPath) => relPath === "lib/README" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test('a genuinely non-code file (`.yaml`, not previously exercised) still passes cleanly — the denylist flip did not become "scan everything"', () => {
+      const errors = scanTreeImports({
+        files: new Map([["config.yaml", "note: do not eval this file, it is not code\n"]]),
+        has: () => true,
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a file whose real trailing extension is CODE despite an earlier substring that looks like data (`component.md.ts`) is scanned — proves DATA_EXTENSIONS is matched against the real last extension, not a substring probe over the whole name", () => {
+      // If a broken re-implementation matched via `DATA_EXTENSIONS.some((d) => name.includes(d))`
+      // instead of the real trailing extension, "component.md.ts".includes(".md") is true, so
+      // this file would be wrongly classified as DATA and its own forbidden import silently
+      // missed — the security-relevant direction, now that the default points the other way.
+      const errors = scanTreeImports({
+        files: new Map([["component.md.ts", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("component.md.ts");
+      expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    });
+
+    test("a file whose real trailing extension is DATA despite an earlier substring that looks like code (`script.ts.md`) still passes cleanly — the mirror of the previous test", () => {
+      const errors = scanTreeImports({
+        files: new Map([["script.ts.md", "eval is mentioned here but this is prose, not code.\n"]]),
         has: () => true,
       });
       expect(errors).toEqual([]);
