@@ -175,8 +175,9 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
  * own ordering), a page containing a forbidden import, `eval(...)`, or `new Function(...)`
  * passes the whole Gate and reaches the smoke render — see `core/ports/gate-runner.ts`'s
  * `GateRunner.runTreeImports` for the matching flag on the port side, and `gate/adapters/
- * gate-runner.test.ts`'s "documents a known security gap" test for the pinned, currently-true
- * consequence.
+ * gate-runner.test.ts:66`'s "KNOWN SECURITY GAP, NOT CORRECT BEHAVIOR" test (round-2 fix: the
+ * prior locator here named a test that does not exist under either title) for the pinned,
+ * currently-true consequence.
  */
 export function runTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;

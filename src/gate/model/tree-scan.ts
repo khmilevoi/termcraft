@@ -1,28 +1,39 @@
+import path from "node:path";
+
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
 
 export { scanModuleEdges };
 
 /**
- * Every extension design §6's import surface treats as executable JS/TS syntax — deliberately
- * BROADER than `entities/design-tree`'s `RESOLUTION_EXTENSIONS` (design §6's PROBE list for an
- * EXTENSIONLESS specifier, `.tsx`/`.ts` only, and stops there): an explicit-extension specifier
- * legally resolves to any real tree file "as written" (design §6), including a `.js`/`.jsx`/
- * `.mjs`/`.cjs` module the probe would never reach on its own, and every one of those can carry
- * a forbidden import, a re-export, a `require`, or an `eval`/`new Function` call exactly like a
- * `.ts`/`.tsx` file can (task-12 review round 1, Important 3 — the prior draft used
- * `RESOLUTION_EXTENSIONS` here directly, which silently re-opened the `.js` hole Important 2 of
- * the task-11 review had closed: `RESOLUTION_EXTENSIONS` answers "what does the PROBE try",
- * not "what counts as code", and conflating the two let `../lib/legacy.js` resolve cleanly
- * without ever being scanned).
+ * Every extension Bun's own module loader executes as JS/TS source — verified by running
+ * `.mts`/`.cts` fixtures through Bun 1.3.14 directly (task-12 review round 2: the round-1 set
+ * omitted both, and Bun executes each with full TypeScript syntax exactly like `.ts`). This is
+ * NOT derived from any other constant in this codebase, because none covers "what counts as
+ * code": `entities/design-tree`'s `RESOLUTION_EXTENSIONS` is only the extensionless-PROBE list
+ * (`.tsx`/`.ts`, design §6), and `store/safe-fs/model/limits.ts`'s `design-source` classifier
+ * has no extension grammar at all — design places no restriction on what an agent may write
+ * under `design/`, so nothing stops `design/lib/theme.mts` or `design/lib/theme.MTS` existing.
+ * Hand-maintained against Bun's own documented/observed loader behavior; the round-1 over-claim
+ * that this list matched "design §6's import surface" exactly is corrected — this states only
+ * what Bun's loader actually does with each extension, no more.
+ *
+ * Matched via {@link isCodeFile}'s `path.extname(...).toLowerCase()`, not a raw `endsWith` scan
+ * (round-1's shape) — round-1's `endsWith` was case-SENSITIVE, so `lib/mod.TS` was silently
+ * treated as non-code even though Bun executes it identically to `lib/mod.ts`. Both Windows and
+ * macOS filesystems are case-insensitive and `store`'s `listTree` returns a name exactly as
+ * written on disk, so a path's extension casing carries no information about what the file
+ * actually is; comparing the normalized extension against a `Set` closes that gap at both of
+ * this module's enforcement points in one place, rather than needing a case-insensitive variant
+ * of each list membership check.
  */
-const CODE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"] as const;
+const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 
 /**
  * True for a tree-relative path that can itself contain executable JS/TS syntax — imports,
  * `eval`/`Function`, `require`, re-exports. Used at BOTH of this module's enforcement points
- * (task-12 review round 1, Importants 2 and 3 — one predicate, so the two can never disagree
- * about what "code" means):
+ * (task-12 review round 1, Importants 2 and 3; round 2, the extension-set/case-sensitivity
+ * fix — one predicate, so all of them can never disagree about what "code" means):
  *
  * 1. the scan loop below must SKIP a non-code file even when its text sits in `input.files`,
  *    because feeding prose or JSON through a JS/TS tokenizer risks a false fatal on content
@@ -30,8 +41,8 @@ const CODE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"] as const;
  *    `.md` file tripped `EVAL_CALL` before this fix — the same class of defect as Task 9's
  *    byte-comparison, a guard rejecting valid input);
  * 2. `effectiveHas` below must REQUIRE a code file's presence in `files` before trusting a
- *    resolution to it, because a `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` target can itself hide
- *    a further forbidden import this pass never read (task-11 review, Important 2's hazard).
+ *    resolution to it, because any {@link CODE_EXTENSIONS} target can itself hide a further
+ *    forbidden import this pass never read (task-11 review, Important 2's hazard).
  *
  * A non-code target (`.json`, `.md`, `.svg`, anything else `store`'s `listTree` enumerates
  * under `design/`) needs neither: it carries no import syntax to miss, so requiring its
@@ -40,7 +51,7 @@ const CODE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"] as const;
  * wrong with it.
  */
 function isCodeFile(relPath: string): boolean {
-  return CODE_EXTENSIONS.some((extension) => relPath.endsWith(extension));
+  return CODE_EXTENSIONS.has(path.extname(relPath).toLowerCase());
 }
 
 /**
@@ -70,8 +81,9 @@ function isCodeFile(relPath: string): boolean {
  * tree, unrelated to anything wrong with it — the same class of defect as Task 9's
  * byte-comparison, which bricked two user commands by rejecting valid input. `effectiveHas`
  * below is the enforcement of this narrower, honest invariant: a code resolution target absent
- * from `files` still reports `UNRESOLVED_IMPORT` (Important 2's hazard stays fatal — including
- * `.js`/`.jsx`/`.mjs`/`.cjs`, not only `.ts`/`.tsx`), but nothing else does. `runTreeImports`
+ * from `files` still reports `UNRESOLVED_IMPORT` (Important 2's hazard stays fatal for every
+ * extension {@link CODE_EXTENSIONS} names, matched case-insensitively — round 2 closed the
+ * `.mts`/`.cts` and casing gaps left in round 1), but nothing else does. `runTreeImports`
  * (`gate/model/gate.ts`) is the caller this was written for: `has` is backed by the whole-tree
  * `treePaths`, `files` by whatever text this particular turn's Gate run actually holds.
  */

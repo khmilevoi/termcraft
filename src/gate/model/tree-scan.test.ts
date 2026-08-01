@@ -126,6 +126,73 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     });
   });
 
+  describe("task-12 review round 2 — CODE_EXTENSIONS was missing `.mts`/`.cts`, and the match was case-sensitive", () => {
+    test("a `.mts` file's own forbidden import is scanned, not silently skipped — round 1's CODE_EXTENSIONS omitted `.mts`/`.cts` even though Bun executes both as TypeScript", () => {
+      // Reproduces the reviewer's finding exactly: before this fix, `isCodeFile` returned false
+      // for `.mts`, so the scan loop's `if (!isCodeFile(from)) continue;` skipped this file's
+      // text entirely — a `node:fs` import inside it would never be caught.
+      const errors = scanTreeImports({
+        files: new Map([["lib/mod.mts", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/mod.mts");
+      expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
+    });
+
+    test("a `.cts` file's own `require(...)` call is scanned, not silently skipped", () => {
+      const errors = scanTreeImports({
+        files: new Map([["lib/mod.cts", 'const fs = require("fs")\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/mod.cts");
+      expect(errors[0]?.code).toBe("REQUIRE_CALL");
+    });
+
+    test("a `.cts` target `has` affirms but `files` never scanned is STILL fatal, matching `.ts`'s own treatment (the `effectiveHas` mirror of the scan-loop gap)", () => {
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.cts"\n']]),
+        has: (relPath) => relPath === "lib/legacy.cts" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("a `.TS` file (uppercase extension) is scanned exactly like `.ts` — filesystems are case-insensitive, so the match must be too", () => {
+      // Round 1's `isCodeFile` used `relPath.endsWith(extension)` against a lowercase-only
+      // list, so `.endsWith(".ts")` on `"lib/mod.TS"` was false and this file's own forbidden
+      // import was never scanned — a real bypass on Windows/macOS, where `lib/mod.TS` and
+      // `lib/mod.ts` name the same file.
+      const errors = scanTreeImports({
+        files: new Map([["lib/mod.TS", 'import fs from "node:fs"\n']]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/mod.TS");
+    });
+
+    test("a `.TS` (uppercase) target `has` affirms but `files` never scanned is STILL fatal", () => {
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.TS"\n']]),
+        has: (relPath) => relPath === "lib/legacy.TS" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("a file whose name merely CONTAINS a code extension as a substring (`notes.cts.bak`) is not treated as code — proves the match is on the real extension (`path.extname`), not a substring scan, so widening the set did not become `scan everything`", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["notes.cts.bak", "eval is mentioned here but this is not a code file.\n"],
+        ]),
+        has: () => true,
+      });
+      expect(errors).toEqual([]);
+    });
+  });
+
   test("scanModuleEdges returns only static import specifiers, runtime included", () => {
     expect(
       scanModuleEdges(
