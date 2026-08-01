@@ -376,3 +376,58 @@ describe("scanJsx terminates on a scanner that stops advancing (task-12 review r
     ]);
   });
 });
+
+describe("readElement's memo (task-12b — the superlinear re-lex `scanJsx`'s doc used to only record)", () => {
+  test("deeply nested UNTERMINATED input returns instead of compounding, and reports the same nothing", async () => {
+    // `attemptElement` rewinds a failed attempt and the caller re-scans the same characters as
+    // code, so before the memo the attempt at nesting level i cost `A(i+1) + A(i+2) + …` —
+    // exactly 2x per level. Measured through `tokenize` + `computeJsxTextTokenIndices`, warmed
+    // up: 32 chars 0.4ms, 64 chars 47.6ms, 88 chars 2 155ms, 96 chars 12 971ms. The 256-char
+    // source below is 40 levels deeper than the 96-char row, i.e. about 10^12 times its cost —
+    // it does not finish in any budget without the memo, so this test FAILS (killed subprocess,
+    // non-zero exit, no output line) the moment `readElement`'s memo is removed. With it: ~1ms.
+    //
+    // The shape is not adversarial: `"<a>{".repeat(k)` is what an agent leaves behind when it
+    // stops mid-page. It contains no `#`, triggers no `scannerStalled`, and `scanTreeImports`
+    // reports ZERO errors for it, so every millisecond was wasted work — and `runTreeImports`
+    // is synchronous, so it was wasted ON the event loop.
+    //
+    // OUT OF PROCESS with an external kill for the same reason as the `#` tests above: `bun
+    // test`'s own timeout is a timer on the loop a synchronous spin blocks, so an in-process
+    // version would wedge the suite instead of failing it.
+    const sources = ["<a>{".repeat(64), "<a x={".repeat(64), "<a>{<b>{".repeat(32)];
+    const { exitCode, lines } = await scanJsxInSubprocess(sources, 20_000);
+    expect(lines.map((line) => line.source)).toEqual(sources);
+    expect(exitCode).toBe(0);
+    expect(lines.map((line) => line.elements)).toEqual([0, 0, 0]);
+  }, 40_000);
+
+  test("a memo HIT replays the rows the first read left behind — `<><a/>`", () => {
+    // The 6-character witness, found by fuzzing a memo that replays only the verdict against the
+    // real one. The Fragment at 0 fails (EOF before `</>`), but the `<a/>` it walked over was
+    // already committed and survives its truncation (`readElement`'s attribute/child rollback
+    // asymmetry). The driver then re-reaches that same `<` at offset 2 and HITS the memo — so if
+    // the hit did not replay the delta, the element would vanish and `lints.ts`'s
+    // `lintUnpointedElements` would stop seeing it. Verified identical on HEAD's jsx.ts.
+    expect(scanJsx("<><a/>")).toEqual({
+      elements: [{ tagName: "a", hasId: false, pos: 2 }],
+      textRanges: [],
+    });
+  });
+
+  test("a memo HIT restores the scanner position the first read ended on — `<><><>t</></>`", () => {
+    // The 13-character witness, found the same way against a memo that replays the verdict and
+    // the delta but leaves the scanner where the caller's own `<` scan parked it. Without the
+    // restore the driver re-reads the confirmed element's body and records its text run a second
+    // time (`textRanges` becomes `[[6,7],[6,7]]`). `computeJsxTextTokenIndices` would merge that
+    // pair away, but `scanJsx`'s own result is a published contract — `lints.ts` reads it too —
+    // so it is pinned here rather than assumed harmless. Verified identical on HEAD's jsx.ts.
+    expect(scanJsx("<><><>t</></>")).toEqual({
+      elements: [
+        { tagName: "", hasId: false, pos: 4 },
+        { tagName: "", hasId: false, pos: 2 },
+      ],
+      textRanges: [{ pos: 6, end: 7 }],
+    });
+  });
+});

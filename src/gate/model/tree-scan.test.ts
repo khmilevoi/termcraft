@@ -454,6 +454,149 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     }, 40_000);
   });
 
+  describe("task-12b — the two defects in this perimeter that Task 14's wiring would have made live", () => {
+    test("defect A — a deeply nested UNTERMINATED page body TERMINATES through the real whole-tree scan", async () => {
+      // The reachability half of `jsx.ts`'s memo, pinned at THIS module's perimeter:
+      // `scanTreeImports` -> `scanImportAllowlist` -> `computeJsxTextTokenIndices` -> `scanJsx`.
+      // `"<a>{".repeat(k)` is what an agent leaves behind when it stops mid-page; it contains no
+      // `#`, trips no `scannerStalled`, and yields ZERO errors, so every millisecond of it was
+      // wasted work. Before the memo the cost doubled per nesting level — 96 chars took 12 971ms
+      // through this same path — so the 256-char source below finishes in no budget at all and
+      // this test fails (subprocess killed, no output, non-zero exit) if the memo is removed.
+      // `runTreeImports` is SYNCHRONOUS and Task 14 calls it once per turn, so the pre-fix cost
+      // was paid on the event loop with no timeout, no cancellation and no error.
+      //
+      // OUT OF PROCESS under an external kill, for the reason spelled out on the `Dockerfile`
+      // test above: `bun test`'s own timeout cannot interrupt a synchronous spin.
+      const modulePath = `${import.meta.dir.replaceAll("\\", "/")}/tree-scan.ts`;
+      const files = { "pages/home.tsx": "<a>{".repeat(64) };
+      const script = [
+        `const { scanTreeImports } = await import(${JSON.stringify(modulePath)});`,
+        `const files = new Map(Object.entries(${JSON.stringify(files)}));`,
+        `const errors = scanTreeImports({ files, has: () => true });`,
+        `console.log(JSON.stringify({ count: errors.length }));`,
+      ].join("\n");
+      const proc = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => proc.kill(), 20_000);
+      const stdout = await new Response(proc.stdout).text();
+      await proc.exited;
+      clearTimeout(timer);
+
+      expect(stdout.trim()).toBe('{"count":0}');
+      expect(proc.exitCode).toBe(0);
+    }, 40_000);
+
+    // Defect B. MEASURED on the real mount path (`await import(<absolute path>)`, what
+    // `host/session/model/source-mount.ts:137` does), Bun 1.3.14, each case in its own directory
+    // so Bun's module cache cannot alias one onto another across a case-insensitive filesystem:
+    // with BOTH `lib/foo` and `lib/foo.tsx` present, `import "./lib/foo"` executes `lib/foo` —
+    // the exact extensionless file wins. (`lib/foo.ts` + `lib/foo.tsx` executes `lib/foo.tsx`,
+    // which agrees with `RESOLUTION_EXTENSIONS`, so there is no resolver/loader divergence to
+    // close — only this module's own laundering.)
+    test("an UNSCANNED extensionless target is not laundered by a scanned `.tsx` SIBLING — the file Bun would load is the one that must have been scanned", () => {
+      // The bypass, verbatim: before this fix these exact inputs returned `[]`. `effectiveHas`
+      // answered false for "lib/foo" (present, executed, never scanned), `resolveDesignSpecifier`
+      // read that false as "no such file" and probed on, and "lib/foo.tsx" — a DIFFERENT file,
+      // scanned — satisfied the import. Bun would then load and execute "lib/foo", whose text
+      // this pass never read and which could hide any further forbidden import, `eval` or
+      // `new Function` at all.
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/foo"\n'],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("the same tree with `lib/foo` ALSO scanned resolves cleanly — the fix is an intersection, not a ban on trees that hold both names", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/foo"\n'],
+          ["lib/foo", "export const x = 1\n"],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("an EXPLICIT `./foo.tsx` import still resolves cleanly next to an unscanned `lib/foo` — the refusal is scoped to the probe, not to the name", () => {
+      // The false-diagnosis direction, and the reason the refusal is a latch over
+      // `resolveDesignSpecifier`'s own probe sequence rather than a rule about names: asked about
+      // "lib/foo.tsx", this predicate cannot see whether the author wrote `./foo` (where it is a
+      // probe candidate for a file Bun would NOT load) or `./foo.tsx` (where it is the exact
+      // target Bun WILL load). Measured: with both present, `import "./lib/foo.tsx"` executes
+      // `lib/foo.tsx`. Refusing it here would be a fatal on valid input — the class of defect
+      // that has already cost this branch twice.
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/foo.tsx"\n'],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("both specifiers in ONE file: `./foo` is fatal and the very next `./foo.tsx` is not — the latch clears itself inside one specifier's probe", () => {
+      // The exactness claim in `createEffectiveHas`'s doc, executed: after refusing an
+      // extensionless base, the predicate refuses exactly `RESOLUTION_EXTENSIONS.length` further
+      // calls (the probe, which cannot stop early on two refusals) and then answers normally. A
+      // latch that stayed armed one call too long would report TWO errors here.
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import a from "../lib/foo"\nimport b from "../lib/foo.tsx"\n'],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.line).toBe(1);
+    });
+
+    test("an unrelated import right after a refused extensionless one is judged on its own merits", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import a from "../lib/foo"\nimport b from "../lib/bar.tsx"\n'],
+          ["lib/bar.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo", "lib/bar.tsx"].includes(relPath),
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.line).toBe(1);
+    });
+
+    test("an unscanned `lib/foo.ts` next to a scanned `lib/foo.tsx` still resolves cleanly for `./foo` — measured, Bun loads the `.tsx`", () => {
+      // The row that is NOT a bypass, kept as the discriminator against over-fixing: the probe
+      // order `.tsx` then `.ts` matches what Bun executes when both exist, so the file that will
+      // actually be loaded here IS the scanned one. A fix that refused every probe candidate
+      // whenever any sibling was unscanned would fail this test.
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/foo"\n'],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo.ts", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a NON-code sibling never arms the refusal — an unscanned `lib/foo.json` beside a scanned `lib/foo.tsx` changes nothing", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["pages/home.tsx", 'import x from "../lib/foo"\n'],
+          ["lib/foo.tsx", "export const x = 1\n"],
+        ]),
+        has: (relPath) => ["pages/home.tsx", "lib/foo.json", "lib/foo.tsx"].includes(relPath),
+      });
+      expect(errors).toEqual([]);
+    });
+  });
+
   test("scanModuleEdges returns only static import specifiers, runtime included", () => {
     expect(
       scanModuleEdges(

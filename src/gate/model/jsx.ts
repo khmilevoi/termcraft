@@ -67,14 +67,47 @@ export interface JsxScan {
   readonly textRanges: readonly JsxTextRange[];
 }
 
+/**
+ * Everything ONE completed {@link readElement} produced at one source offset — its verdict, the
+ * scanner position it left behind, and the exact rows it appended to the collector — kept so a
+ * SECOND read of the very same `<` replays it instead of re-lexing the region.
+ *
+ * All four fields are needed, and each one is what makes the replay observationally identical to
+ * a fresh read rather than merely similar:
+ *
+ * - `ok` — the verdict both call sites branch on.
+ * - `end` — the scanner's own `getTokenEnd()`, which IS its scan position, so
+ *   `resetTokenState(end)` leaves the next `scan()`/`scanJsxToken()` reading exactly the
+ *   characters a fresh read would have. Every caller scans before it inspects any token state,
+ *   so nothing observes the difference between "parked after a real token" and "reset to that
+ *   same offset".
+ * - `elements`/`textRanges` — the delta, replayed on a hit. This is not bookkeeping: a FAILED
+ *   read can legitimately leave rows behind (see {@link readElement}'s doc comment on the
+ *   attribute list's missing rollback), and `normalizeElements`/`normalizeRanges` are built to
+ *   absorb exactly those duplicates. Dropping the delta on a memo hit would silently change what
+ *   the scan sees, which is the one thing an optimisation here must never do.
+ */
+interface ElementRead {
+  readonly ok: boolean;
+  readonly end: number;
+  readonly elements: readonly JsxElement[];
+  readonly textRanges: readonly JsxTextRange[];
+}
+
 /** The reader's own mutable accumulator, threaded through every recursive call
  * instead of two separate array parameters. Confirmed elements/text ranges are
  * pushed as they're found; a failed attempt truncates both back to where it
  * started (see `readChildren`), so nothing speculative survives a fail-closed
- * outcome. */
+ * outcome.
+ *
+ * `reads` is this one whole-source read's element memo (see {@link readElement}), keyed by the
+ * source offset of an element's own `<`. It lives here because the collector is already threaded
+ * through every recursive call, and it is created per {@link scanJsx} call because a source
+ * offset only means something against one source. */
 interface Collector {
   readonly elements: JsxElement[];
   readonly textRanges: JsxTextRange[];
+  readonly reads: Map<number, ElementRead>;
 }
 
 /** An open tag `readElement` has finished reading, on its way to
@@ -285,6 +318,67 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
 }
 
 /**
+ * {@link readElementUncached}, memoized on the source offset of the element's own `<` — the
+ * ONLY entry point; every call site below goes through this one.
+ *
+ * WHY, measured on `"<a>{".repeat(k)` — a shape an agent-authored page reaches by simply leaving
+ * elements unterminated, containing no `#` and triggering no `scannerStalled` — through
+ * `tokenize` + `computeJsxTextTokenIndices`, the identical call shape against this module before
+ * and after, warmed up. The whole-perimeter cost (`scanTreeImports` → `scanImportAllowlist` →
+ * here → `scanJsx`) is within noise of the "after" column, and `scanTreeImports` reports ZERO
+ * errors on every row, so every millisecond below was wasted work:
+ *
+ * | chars | before | after |
+ * | --- | --- | --- |
+ * | 32 | 0.4 ms | 0.10 ms |
+ * | 64 | 47.6 ms | 0.08 ms |
+ * | 88 | 2 155 ms | 0.18 ms |
+ * | 96 | 12 971 ms | 0.22 ms |
+ * | 1 600 | never run — the extrapolation is past 10^100 ms | ~30 ms |
+ *
+ * `runTreeImports` (`gate/model/gate.ts`) is SYNCHRONOUS and Task 14 calls it once per turn, so
+ * before this fix a 104-character page body would have blocked the event loop for about half a
+ * minute with no timeout, no cancellation and no error to report.
+ *
+ * THE MECHANISM, confirmed rather than assumed. `attemptElement` rewinds a failed attempt to
+ * `start + 1` and the caller resumes scanning the SAME characters as ordinary code, so a failed
+ * element at offset p is re-attempted at every `<` inside the region it just walked. Each of
+ * those retries recurses the same way, so the attempt at nesting level i costs
+ * `A(i) = A(i+1) + A(i+2) + …`, i.e. exactly `2·A(i+1)` — the measured ~1.9-2.4x per level. The
+ * retries are not redundant in themselves (they are what finds a well-formed element inside a
+ * malformed wrapper, see `attemptElement`'s doc), but re-DERIVING the same element read at the
+ * same offset is: {@link readElementUncached} is a pure function of (source, offset), because
+ * the only state it reads is the scanner's text and position, and its `<` token is always
+ * exactly one character wide (`<=`/`<<` lex as their own kinds). So the second read cannot
+ * differ from the first, and replaying the first is not an approximation of it.
+ *
+ * A MEMO, NOT A LIMITER, on purpose. A depth/iteration cap would silently return a PARTIAL scan
+ * on legitimate input — the one failure mode this module must not have (`scannerStalled`'s doc
+ * makes the same argument for the same reason). This changes no verdict on any input: `ok`, the
+ * scanner position, and the collector delta are all replayed (see {@link ElementRead}).
+ */
+function readElement(scanner: Scanner, collector: Collector): boolean {
+  const start = scanner.getTokenStart();
+  const cached = collector.reads.get(start);
+  if (cached !== undefined) {
+    for (const element of cached.elements) collector.elements.push(element);
+    for (const range of cached.textRanges) collector.textRanges.push(range);
+    scanner.resetTokenState(cached.end);
+    return cached.ok;
+  }
+  const elemStart = collector.elements.length;
+  const textStart = collector.textRanges.length;
+  const ok = readElementUncached(scanner, collector);
+  collector.reads.set(start, {
+    ok,
+    end: scanner.getTokenEnd(),
+    elements: collector.elements.slice(elemStart),
+    textRanges: collector.textRanges.slice(textStart),
+  });
+  return ok;
+}
+
+/**
  * Read one JSX element (or Fragment) starting at its own `<` — already the
  * scanner's current token when this is called, whether from `scanJsx`'s own
  * driver or from a recursive call below. Returns true and records the element
@@ -314,8 +408,13 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
  * the very same nested element again independently and confirms it for real,
  * it is recorded twice; `scanJsx`'s `normalizeElements` is what de-duplicates
  * that, not this function.
+ *
+ * Called ONLY through {@link readElement} above, which memoizes it. This body must therefore
+ * stay a pure function of (the source text, the offset of the `<` the scanner is parked on):
+ * anything it read from ambient state would let two reads of the same offset differ, and the
+ * memo would then change the scan's own result rather than only its cost.
  */
-function readElement(scanner: Scanner, collector: Collector): boolean {
+function readElementUncached(scanner: Scanner, collector: Collector): boolean {
   const pos = scanner.getTokenStart(); // this element's own `<`
   let kind = scanner.scan();
 
@@ -527,16 +626,15 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * literal right after `)`, `<`, or `}`, whose `}` closes an expression
  * container early — with their pinning tests.
  *
- * Also NOT claimed: that this read is linear in the source. `attemptElement`
- * re-lexes a failed attempt's whole region, and on DEEPLY NESTED UNTERMINATED
- * input that backtracking compounds — measured on `"<a>{".repeat(k)`, which
- * contains no `#` and no stall at all: 32 chars in 9ms, 72 chars in 287ms, 88
- * chars in 2359ms, roughly 3.5x per two more levels. That is pre-existing (the
- * numbers above are from this function BEFORE `scannerStalled` was added, and
- * the guard does not change them), it is a separate problem from the stall
- * `scannerStalled` fixes, and it is NOT fixed here — recorded so the next
- * reader finds it stated rather than has to rediscover it. It needs a memo on
- * failed `(position, kind)` attempts, not a limiter.
+ * Still NOT claimed: that this read is linear in the source. `attemptElement`
+ * re-lexes a failed attempt's whole region, so a source region can be walked
+ * more than once. What IS now bounded is how often any ONE element is
+ * DERIVED: {@link readElement} memoizes each `<` offset for the duration of
+ * this call, so the compounding that made `"<a>{".repeat(k)` cost roughly 2x
+ * per extra nesting level — 96 chars took 13 seconds, 8 more chars would have
+ * taken a minute — is gone (96 chars: 0.2ms; 1600 chars: ~30ms). The residual
+ * growth is polynomial, not exponential. See {@link readElement} for the
+ * measurement, the mechanism and why a memo rather than a limiter.
  *
  * Two callers build on this single result: `computeJsxTextTokenIndices`
  * (`import-scan.ts`'s dynamic-code check needs to skip identifier/bracket
@@ -546,7 +644,7 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
 export function scanJsx(source: string): JsxScan {
   const scanner = createScanner(true, LanguageVariant.JSX);
   scanner.setText(source);
-  const collector: Collector = { elements: [], textRanges: [] };
+  const collector: Collector = { elements: [], textRanges: [], reads: new Map() };
   const braces: BraceContext[] = [];
 
   let previous: SyntaxKind = SK.EndOfFile;
