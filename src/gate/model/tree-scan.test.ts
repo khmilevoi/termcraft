@@ -17,16 +17,16 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     expect(errors[0]?.file).toBe("lib/theme.ts");
   });
 
-  describe("task-11 review, Important 2 — a `.ts`/`.tsx` resolution target absent from `files` can never launder an unscanned module", () => {
+  describe("task-11 review, Important 2 — a CODE resolution target absent from `files` can never launder an unscanned module", () => {
     test("a `has` that affirms a `.ts` path never present in `files` does not let a relative import resolve to it", () => {
-      // The review's own reproduction, re-pinned against a `.ts` (not `.js`) target — see the
-      // task-12 review of this file's contract, above `scanTreeImports`: only a `.ts`/`.tsx`
-      // target is held to the "must also be a key in `files`" bar, because only that kind of
-      // file could itself hide a further forbidden import this pass never read. `has` answers
-      // true for "lib/legacy.ts" but `files` was never given its source — this pass never
-      // actually scanned it. If `has` alone were trusted, the import below would resolve
-      // cleanly and "lib/legacy.ts" would load into a page having never itself been scanned
-      // for a forbidden import.
+      // The review's own reproduction, re-pinned against a `.ts` target — see the task-12
+      // review of this file's contract, above `scanTreeImports`: only a CODE target is held to
+      // the "must also be a key in `files`" bar, because only that kind of file could itself
+      // hide a further forbidden import this pass never read. `has` answers true for
+      // "lib/legacy.ts" but `files` was never given its source — this pass never actually
+      // scanned it. If `has` alone were trusted, the import below would resolve cleanly and
+      // "lib/legacy.ts" would load into a page having never itself been scanned for a
+      // forbidden import.
       const errors = scanTreeImports({
         files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.ts"\n']]),
         has: (relPath) => relPath === "lib/legacy.ts" || relPath === "pages/home.tsx",
@@ -47,7 +47,24 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(errors).toEqual([]);
     });
 
-    test("a legitimate cross-file import of a NON-module tree file resolves cleanly even though this pass never scanned its text — the false-fatal the task-12 review closed", () => {
+    test("task-12 review round 1, Important 3 — a `.js` target `has` affirms but `files` never scanned is STILL fatal, not just `.ts`/`.tsx`", () => {
+      // The task-11 review's OWN original reproduction used `.js`. An earlier draft of this
+      // fix keyed the enforcement on `entities/design-tree`'s `RESOLUTION_EXTENSIONS` (the
+      // EXTENSIONLESS-PROBE list, `.tsx`/`.ts` only) rather than "is this file code", which
+      // silently re-opened exactly this hole: a `.js` module could resolve cleanly without
+      // ever being scanned, because `RESOLUTION_EXTENSIONS` was never about `.js` at all.
+      // `.js`/`.jsx`/`.mjs`/`.cjs` all carry the same import/eval/Function surface `.ts`/`.tsx`
+      // does, so they get the same "must also be a key in `files`" treatment.
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import x from "../lib/legacy.js"\n']]),
+        has: (relPath) => relPath === "lib/legacy.js" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("pages/home.tsx");
+      expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
+    });
+
+    test("a legitimate cross-file import of a NON-code tree file resolves cleanly even though this pass never scanned its text — the false-fatal the task-12 review closed", () => {
       // `config.json` is affirmed by `has` (the whole-tree inventory `store`'s `listTree`
       // would report) but was never given text in `files` — exactly the shape the task-11
       // draft turned into a false UNRESOLVED_IMPORT purely because of a bare `.json`
@@ -73,6 +90,39 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
         has: (relPath) => relPath === "pages/home.tsx" || relPath === "notes.md",
       });
       expect(errors).toEqual([]);
+    });
+  });
+
+  describe("task-12 review round 1, Important 2 — a non-code file's own TEXT is never tokenized as JS/TS, even when it sits in `files`", () => {
+    test("a `.md` file whose prose merely spells `eval` produces no violation — scanning it as JS/TS would be the false fatal", () => {
+      // Before this fix: `scanTreeImports` fed EVERY `files` entry through the full JS/TS
+      // allowlist scan unconditionally, so this exact prose tripped `EVAL_CALL` — a real
+      // false fatal on content that is not code at all (task-12 review round 1).
+      const errors = scanTreeImports({
+        files: new Map([["notes.md", "Do not use eval in pages.\n"]]),
+        has: () => true,
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test('a `.json` asset containing the literal strings "eval"/"Function" produces no violation', () => {
+      const errors = scanTreeImports({
+        files: new Map([["data.json", '["eval", "Function"]\n']]),
+        has: () => true,
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a genuine violation in a CODE file is still caught alongside an untouched non-code file in the same pass", () => {
+      const errors = scanTreeImports({
+        files: new Map([
+          ["notes.md", "eval is not allowed on any page.\n"],
+          ["lib/bad.ts", 'import fs from "node:fs"\n'],
+        ]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.file).toBe("lib/bad.ts");
     });
   });
 

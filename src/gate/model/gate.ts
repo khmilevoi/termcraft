@@ -50,16 +50,21 @@ export interface GateInput {
    * caller this task owns supplies it explicitly (see `fileName`'s fallback below for the
    * one caller that, today, still cannot).
    *
-   * OPTIONAL, not required as the port sketch shows it (task-12 review, measured): `core/
-   * turns/model/validation.ts` and `core/kernel/model/handlers/page-descriptors.ts` call
-   * `GateRunner.runPage` today with no entry data to give — neither `core/turns` nor `core/
-   * kernel` has been wired to a `DesignTreeReader`/closure yet, and both are PRODUCTION
-   * code, not a test fixture a mechanical script can patch. Making this required here would
-   * force it required on `core/ports/gate-runner.ts`'s `GateRunner.runPage` too (the same
-   * type), turning every one of those call sites into a genuine new tsc error and, for the
-   * in-memory `GateRunner` fake many currently-green tests share, a genuine new runtime
-   * crash — precisely the cost measurement task 11's own `context` review already
-   * established as prohibitive for an interface change outside this task's Files list.
+   * OPTIONAL, not required as the port sketch shows it. RE-MEASURED for real (task-12 review
+   * round 1 — the prior wording claimed this mirrored task 11's own `context` measurement,
+   * which was an over-claim: that measurement was for a different signature, `import-scan.ts`'s
+   * `scanImportAllowlist`, not this field. Making `entryRelPath`/`closure` required here and on
+   * `core/ports/gate-runner.ts`'s `GateRunner.runPage`, then running `bun x tsc --noEmit`,
+   * produces exactly **19 new errors**: 2 in PRODUCTION, non-test files this task does not own
+   * (`core/turns/model/validation.ts`, `core/kernel/model/handlers/page-descriptors.ts` — both
+   * call `runPage` with no entry data to give, since neither has been wired to a
+   * `DesignTreeReader`/closure yet), 1 inside this task's own adapter
+   * (`gate/adapters/gate-runner.ts`, which forwards its own still-optional `entryRelPath` into
+   * what would become a required `GateInput` field), and 16 across four test files
+   * (`gate/adapters/gate-runner.test.ts`, `core/ports/fakes/gate-runner.test.ts`,
+   * `entrypoint/model/create-shell.test.ts`, `gate/model/smoke.test.ts`) whose fixtures predate
+   * this task. That is a real, current cost, not a guess — reverted after measuring; the fields
+   * stay optional.
    * FLAGGED FOR WHICHEVER TASK WIRES A REAL DESIGN-TREE CLOSURE THROUGH `core/turns`/`core/
    * kernel` (13 or 14, per this plan's own dependency graph — both consume Task 12): make
    * this field required, delete `fileName`'s slug-derived fallback below, and update those
@@ -97,13 +102,21 @@ export interface GateInput {
 export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<GateResult> {
   const errors: GateError[] = [];
   const warnings: GateWarning[] = [];
-  // FLAGGED FOR WHICHEVER TASK MAKES `entryRelPath` REQUIRED (see `GateInput.entryRelPath`'s
-  // own doc): the slug-derived `${input.slug}.tsx` fallback is the exact anti-pattern this
-  // plan exists to remove, kept ONLY so a caller that has not been updated yet (today: `core/
-  // turns`, `core/kernel`) keeps its pre-existing display name rather than losing one
-  // entirely. No caller this task owns ever relies on it — every fixture below supplies
-  // `entryRelPath` explicitly, several with an entry deliberately unrelated to their slug.
-  const fileName = input.fileName ?? input.entryRelPath ?? `${input.slug}.tsx`;
+  // `entryRelPath` OUT-RANKS `fileName` when both are present (task-12 review round 1,
+  // Important 4 — corrected from an earlier, backwards precedence). `entryRelPath` is the
+  // AUTHORITATIVE addressing (`pages.json`'s own `entry` value, design §4); `fileName` is a
+  // caller-supplied display-name OVERRIDE that predates `entryRelPath` and, in every real
+  // caller today (`core/kernel/model/handlers/turn.ts`'s `workspacePageRelPath(pageSlug)`), IS
+  // still slug-derived. Had `fileName` won, the moment a future caller started passing a real
+  // `entryRelPath` ALONGSIDE its existing `fileName` (the natural, incremental way to adopt
+  // it), the authoritative value would have lost silently to the slug guess it exists to
+  // replace, with nothing visibly broken. FLAGGED FOR WHICHEVER TASK MAKES `entryRelPath`
+  // REQUIRED (see `GateInput.entryRelPath`'s own doc): once every caller supplies it, delete
+  // the `fileName`/`${input.slug}.tsx` fallback arms below entirely — they exist only to bridge
+  // `core/turns`/`core/kernel`, which do not supply `entryRelPath` yet. No caller this task
+  // owns ever relies on either fallback arm — every fixture below supplies `entryRelPath`
+  // explicitly, several with an entry deliberately unrelated to their slug.
+  const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
 
   const contract = checkPageContract(input.source);
   for (const e of contract.errors) {
@@ -152,6 +165,18 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
  * `tsc` program per entry file rather than one over the whole tree, and smoke still runs for
  * every present page rather than only those whose `closureHash` changed. Both are correct as
  * they stand — they are simply more expensive than the design's end state.
+ *
+ * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
+ * this function has NO non-test caller today. Moving the import allowlist (and, inside it, the
+ * `eval`/`new Function` dynamic-code ban) out of `runGate` was this task's own mandate, but
+ * nothing in the shipped pipeline calls `runTreeImports` yet — `core/turns/model/
+ * validation.ts` only calls `runManifestSlice`/`runPage`. Until Task 14 wires this into the
+ * turn's validation flow (once per turn, before the per-page `runPage` calls, per design §8's
+ * own ordering), a page containing a forbidden import, `eval(...)`, or `new Function(...)`
+ * passes the whole Gate and reaches the smoke render — see `core/ports/gate-runner.ts`'s
+ * `GateRunner.runTreeImports` for the matching flag on the port side, and `gate/adapters/
+ * gate-runner.test.ts`'s "documents a known security gap" test for the pinned, currently-true
+ * consequence.
  */
 export function runTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;

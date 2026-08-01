@@ -66,6 +66,24 @@ describe("runGate (§6.3 pipeline)", () => {
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
+  test("entryRelPath out-ranks fileName when both are supplied (task-12 review round 1, Important 4)", async () => {
+    // A caller mid-migration to `entryRelPath` (the natural, incremental path: keep the
+    // pre-existing `fileName` around while starting to also pass the authoritative
+    // `entryRelPath`) must have `entryRelPath` win. Before the fix, `fileName` won — the
+    // authoritative value would have lost silently to a stale/slug-derived display name with
+    // nothing visibly broken. Deliberately different values so a regression to the old
+    // precedence flips this assertion, not merely leaves it vacuously true.
+    const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const result = await runGate({
+      source: src,
+      slug: SLUG,
+      fileName: "stale/slug-guess.tsx",
+      entryRelPath: "screens/overview/index.tsx",
+      closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
+    });
+    expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
+  });
+
   test("a determinism warning never fails a candidate", async () => {
     const src = cleanSource.replace("hi", "${Math.random()}");
     const result = await runGate({

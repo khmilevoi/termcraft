@@ -145,9 +145,11 @@ export interface GateRunner {
     /**
      * The tree-relative path `design/pages.json` bound this entry to (design §4) — see
      * `gate/model/gate.ts`'s `GateInput.entryRelPath` for the full rationale (never derive it
-     * from `slug`). OPTIONAL here for the same measured reason `GateInput` carries it
-     * optionally: `core/turns`/`core/kernel` do not yet have a `DesignTreeReader` to source it
-     * from (FLAGGED for whichever task wires one — 13 or 14, both consume this port).
+     * from `slug`) and its own doc comment for the re-measured, itemized cost of making this
+     * required (19 new tsc errors, spanning 2 production files this task does not own). OPTIONAL
+     * here for that same measured reason: `core/turns`/`core/kernel` do not yet have a
+     * `DesignTreeReader` to source it from (FLAGGED for whichever task wires one — 13 or 14,
+     * both consume this port).
      */
     readonly entryRelPath?: string;
     /**
@@ -168,6 +170,13 @@ export interface GateRunner {
    * full inventory (`store`'s `listTree`), which may legitimately name files `files` holds no
    * text for (a `.json`/`.md`/`.svg` asset — see `gate/model/tree-scan.ts`'s own doc for the
    * exact contract this enforces).
+   *
+   * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
+   * declared on this port, implemented by the adapter, but NO production caller invokes it yet
+   * — `core/turns/model/validation.ts` calls only `runManifestSlice`/`runPage`. Task 14 (the
+   * turn's real validation flow) must call this ONCE per turn, before the per-page `runPage`
+   * calls, or the import allowlist (and the `eval`/`new Function` ban inside it) never actually
+   * runs and a forbidden import reaches the smoke render undetected.
    */
   runTreeImports(input: {
     readonly files: ReadonlyMap<string, string>;

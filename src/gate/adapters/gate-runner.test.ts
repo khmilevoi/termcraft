@@ -63,7 +63,22 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  test("runPage() no longer scans imports itself — a page with a forbidden import passes the per-page stages (task 12: the import allowlist moved to runTreeImports)", async () => {
+  test("KNOWN SECURITY GAP, NOT CORRECT BEHAVIOR (task-12 review round 1, registered in red-debt.md as must-wire): runPage() no longer scans imports itself, and nothing else in the shipped pipeline calls runTreeImports() yet, so a forbidden import currently reaches the smoke render", async () => {
+    // This test does NOT assert desired behavior — it pins TODAY's actual gap: `runPage` itself
+    // never scans imports (task 12's own design moved that to `runTreeImports`, run once per
+    // turn over the whole tree). `smokeRan === true` here is the bug, not the feature.
+    //
+    // CORRECTED (task-12 review round 1, finding 1b — the prior wording over-claimed): this
+    // test drives `adapter.runPage(...)` directly, so it will KEEP PASSING even after Task 14
+    // wires `runTreeImports` into `core/turns/model/validation.ts` — that wiring changes what
+    // the TURN does around `runPage`, not what `runPage` itself does. It only fails if
+    // `runPage`/`runGate` starts scanning imports again, a regression of THIS task's own
+    // design — it is NOT a safety net for the wiring ever happening. Task 14 owns proving the
+    // wiring itself works, with its own test in `core/turns/model/validation.test.ts` asserting
+    // that a forbidden import in a shared module fails the TURN, not merely that
+    // `scanTreeImports`/`runTreeImports` can detect it in isolation (see red-debt.md's
+    // SECURITY-CRITICAL entry). See `gate/model/gate.ts`'s `runTreeImports` doc and `core/
+    // ports/gate-runner.ts`'s `GateRunner.runTreeImports` doc for the full flag.
     let smokeRan = false;
     const adapter = createGateRunnerAdapter({
       smokeRenderer: {
@@ -186,6 +201,20 @@ describe("createGateRunnerAdapter", () => {
     const result = await adapter.runPage({
       source: brokenContract,
       slug: SLUG,
+      entryRelPath: "screens/overview/index.tsx",
+      closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
+  });
+
+  test("runPage() has entryRelPath out-rank fileName when both are supplied (task-12 review round 1, Important 4) — a separate copy of runGate's own precedence, mirrored here because this adapter also uses fileName for smokeSourcePath", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const result = await adapter.runPage({
+      source: brokenContract,
+      slug: SLUG,
+      fileName: "stale/slug-guess.tsx",
       entryRelPath: "screens/overview/index.tsx",
       closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
     });

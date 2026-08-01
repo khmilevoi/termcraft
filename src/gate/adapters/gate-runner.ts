@@ -108,7 +108,11 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly entryRelPath?: string;
     readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
-    const fileName = input.fileName ?? input.entryRelPath ?? `${input.slug}.tsx`;
+    // `entryRelPath` out-ranks `fileName` — see `gate/model/gate.ts`'s own `runGate` for the
+    // full rationale (task-12 review round 1, Important 4). Mirrored here, not delegated to
+    // `runGate`'s own fallback, because this adapter ALSO uses `fileName` for
+    // `smokeSourcePath` below and both must agree on which value actually won.
+    const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
     // The smoke stage needs a path it can actually resolve on disk (see this file's header,
     // "CLOSED (was FLAGGED)") — `sourcePath` is preferred when a caller staged a real
     // candidate file; `fileName` stays the diagnostics-facing display name regardless.
