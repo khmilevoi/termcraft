@@ -303,3 +303,76 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
     });
   });
 });
+
+/**
+ * Run `scanJsx` over each source in a SEPARATE Bun process under a hard wall-clock budget,
+ * printing one JSON line per source as it finishes.
+ *
+ * A plain in-process test cannot do this job. `bun test`'s own per-test timeout is a timer on
+ * the very event loop a synchronous spin blocks, so a regression here would WEDGE the whole
+ * suite instead of failing it — measured, not assumed: a `test(..., () => { for (;;) {} },
+ * 1000)` never timed out and had to be killed from outside. Printing one line PER SOURCE is
+ * what makes a regression name the shape it hung on, rather than only reporting "no output".
+ */
+async function scanJsxInSubprocess(sources: readonly string[], budgetMs: number) {
+  const modulePath = `${import.meta.dir.replaceAll("\\", "/")}/jsx.ts`;
+  const script = [
+    `const { scanJsx } = await import(${JSON.stringify(modulePath)});`,
+    `for (const source of ${JSON.stringify(sources)}) {`,
+    `  const scan = scanJsx(source);`,
+    `  console.log(JSON.stringify({ source, elements: scan.elements.length }));`,
+    `}`,
+  ].join("\n");
+  const proc = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => proc.kill(), budgetMs);
+  const stdout = await new Response(proc.stdout).text();
+  await proc.exited;
+  clearTimeout(timer);
+  const lines = stdout
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { source: string; elements: number });
+  return { exitCode: proc.exitCode, lines };
+}
+
+describe("scanJsx terminates on a scanner that stops advancing (task-12 review round 4, Critical 1)", () => {
+  test("every `#` shape that used to spin forever now returns", async () => {
+    // The TypeScript scanner returns `PrivateIdentifier@p..p` — zero width — indefinitely for a
+    // `#` that is not followed by an identifier start, so three of this module's four `for (;;)`
+    // drivers spun with no timeout, no cancellation and no error. `runTreeImports` is
+    // synchronous, so this blocked the event loop outright. Each source below was verified to
+    // HANG (killed at a 12s budget) on the pre-fix reader and to return in under 2ms after it;
+    // together they cover all three spinning loops — the whole-source driver (`#`,
+    // `# comment`, `const x = 1 # 2`, `<p>x</p>#`), `skipExpressionContainer` (`<p>{# }</p>`,
+    // `<box>{a # b}</box>`, `` `${# }` ``), and `readElement`'s attribute list (`<p #>x</p>`).
+    const sources = [
+      "#",
+      "# comment",
+      "const x = 1 # 2",
+      "<p>x</p>#",
+      "<p>{# }</p>",
+      "<box>{a # b}</box>",
+      "`${# }`",
+      "<p #>x</p>",
+    ];
+    const { exitCode, lines } = await scanJsxInSubprocess(sources, 20_000);
+    expect(lines.map((line) => line.source)).toEqual(sources);
+    expect(exitCode).toBe(0);
+    // Terminating is not enough on its own: an element BEFORE the stall must still be read, or
+    // the guard would be closing the hang by throwing the whole read away.
+    expect(lines.find((line) => line.source === "<p>x</p>#")?.elements).toBe(1);
+  }, 40_000);
+
+  test("a `#` inside genuine JSX children TEXT is unaffected — it never reached a stalling scan", () => {
+    // Safe to run in-process: measured on the PRE-fix reader, `<p># Heading</p>` already
+    // returned in under 1ms, because `readChildren` reads children with `scanJsxToken()`, which
+    // lexes `#` as ordinary text. Worth pinning anyway — it is the shape an agent actually
+    // writes, and it is the "valid input still passes" half of the guard: the fix must not have
+    // turned a heading into a failed read.
+    const { elements, textRanges } = scanJsx("<p># Heading</p>");
+    expect(elements).toEqual([{ tagName: "p", hasId: false, pos: 0 }]);
+    expect(textRanges.map((range) => "<p># Heading</p>".slice(range.pos, range.end))).toEqual([
+      "# Heading",
+    ]);
+  });
+});

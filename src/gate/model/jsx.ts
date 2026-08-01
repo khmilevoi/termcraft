@@ -147,6 +147,40 @@ function endsExpression(kind: SyntaxKind): boolean {
 }
 
 /**
+ * True when the token the scanner has JUST produced is ZERO-WIDTH and is not the end of the
+ * file — `getTokenStart() === getTokenEnd()`, i.e. the scan consumed no characters, so the next
+ * identical call consumes none either and every `for (;;)` driver below would spin forever.
+ *
+ * This is a real, reachable state, not a defensive hypothetical: the TypeScript scanner returns
+ * `PrivateIdentifier@p..p` indefinitely for a `#` that is not followed by an identifier start
+ * (measured — `#`, `# comment`, `const x = 1 # 2` each produce that token forever, while the
+ * legal `class C { #x = 1 }` produces `PrivateIdentifier@10..12` and advances normally). `#` is
+ * the comment character of every extensionless file the tree may legitimately hold
+ * (`Dockerfile`, `Makefile`, `README`), and `tree-scan.ts`'s measured perimeter classifies those
+ * as code and feeds them here, so the shape arrives through ordinary content rather than
+ * through an attack.
+ *
+ * `./lexer`'s `tokenize` survives the same input only because of the `source.length + 1` cap on
+ * its own loop. This is the same backstop in exact rather than proxy form, and the difference
+ * matters HERE specifically: `tokenize` never rewinds, so counting its iterations against the
+ * source length is provably safe there, whereas this reader BACKTRACKS
+ * (`attemptElement`'s `resetTokenState` rewinds and re-lexes a failed attempt's region), so no
+ * iteration bound is self-evidently large enough to never truncate a legitimate read — and a
+ * bound chosen too small silently returns a PARTIAL scan, which is the one failure mode this
+ * module must not have. Comparing a single token's own start against its own end needs no bound
+ * at all: it costs O(1), never compares across iterations, so backtracking cannot confuse it,
+ * and it names the actual defect rather than approximating it.
+ *
+ * Every caller treats a stall as the malformed-input case it already has: the drivers stop, and
+ * the element readers fail closed. Nothing is newly trusted — the unread region stays visible
+ * to `import-scan.ts` as ordinary CODE rather than as exempted JSX text, which is the same
+ * direction `scanJsx`'s doc comment describes for every other malformed shape.
+ */
+function scannerStalled(scanner: Scanner, kind: SyntaxKind): boolean {
+  return kind !== SK.EndOfFile && scanner.getTokenStart() === scanner.getTokenEnd();
+}
+
+/**
  * Scan the next CODE token for either of this reader's two code drivers: the
  * whole-source one in `scanJsx` and the per-container one in
  * `skipExpressionContainer`. Template literals are followed across their
@@ -232,6 +266,9 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
   for (;;) {
     const kind = scanCode(scanner, braces, previous);
     if (kind === SK.EndOfFile) return false;
+    // A stalled scanner (see `scannerStalled`) is treated exactly like the unterminated `{`
+    // below it: this container never closes, so the enclosing element fails closed.
+    if (scannerStalled(scanner, kind)) return false;
     // Stop right on the container's OWN matching `}` — do not consume one more
     // token past it: the caller (an attribute value, or JSX children) expects
     // the scanner positioned exactly after this `}`, and an unconditional extra
@@ -293,6 +330,10 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
   let hasId = false;
   kind = name.next;
   for (;;) {
+    // A stalled scanner (see `scannerStalled`) is nothing this attribute list can consume —
+    // `<p #>x</p>` reaches here — so fail the element closed, the same outcome every other
+    // illegal token in attribute position already gets at the bottom of this loop.
+    if (scannerStalled(scanner, kind)) return false;
     if (tokenIsIdentifierOrKeyword(kind)) {
       kind = scanner.scanJsxIdentifier();
       const isBareIdCandidate = scanner.getTokenText() === "id";
@@ -377,6 +418,12 @@ function readChildren(scanner: Scanner, open: OpenTag, collector: Collector): bo
 
   for (;;) {
     const kind = scanner.scanJsxToken();
+    // Symmetry with the three loops above. `scanJsxToken` has NOT been observed to stall —
+    // measured over `<p></p>`, `<p> </p>`, `<p>a</p>`, `<p>#</p>`, `<p>{x}{y}</p>`,
+    // `<p><b/></p>`: zero zero-width non-EOF tokens, and `<p># Heading</p>` reads fine on the
+    // real reader — so this guard is inert today and is here so the last `for (;;)` in the
+    // module is not the one left able to spin.
+    if (scannerStalled(scanner, kind)) break;
     if (kind === SK.JsxText || kind === SK.JsxTextAllWhiteSpaces) {
       collector.textRanges.push({ pos: scanner.getTokenStart(), end: scanner.getTokenEnd() });
       continue;
@@ -480,6 +527,17 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * literal right after `)`, `<`, or `}`, whose `}` closes an expression
  * container early — with their pinning tests.
  *
+ * Also NOT claimed: that this read is linear in the source. `attemptElement`
+ * re-lexes a failed attempt's whole region, and on DEEPLY NESTED UNTERMINATED
+ * input that backtracking compounds — measured on `"<a>{".repeat(k)`, which
+ * contains no `#` and no stall at all: 32 chars in 9ms, 72 chars in 287ms, 88
+ * chars in 2359ms, roughly 3.5x per two more levels. That is pre-existing (the
+ * numbers above are from this function BEFORE `scannerStalled` was added, and
+ * the guard does not change them), it is a separate problem from the stall
+ * `scannerStalled` fixes, and it is NOT fixed here — recorded so the next
+ * reader finds it stated rather than has to rediscover it. It needs a memo on
+ * failed `(position, kind)` attempts, not a limiter.
+ *
  * Two callers build on this single result: `computeJsxTextTokenIndices`
  * (`import-scan.ts`'s dynamic-code check needs to skip identifier/bracket
  * tokens that are JSX prose) and `lintUnpointedElements` (`lints.ts` needs
@@ -495,6 +553,10 @@ export function scanJsx(source: string): JsxScan {
   for (;;) {
     const kind = scanCode(scanner, braces, previous);
     if (kind === SK.EndOfFile) break;
+    // A stalled scanner (see `scannerStalled`) ends the read here. Whatever follows is simply
+    // never recognized as JSX, so `import-scan.ts` keeps treating it as ordinary code — the
+    // fail-closed direction, and the same one every malformed shape already takes.
+    if (scannerStalled(scanner, kind)) break;
     if (kind === SK.LessThanToken && !endsExpression(previous)) {
       previous = attemptElement(scanner, collector) ? SK.GreaterThanToken : SK.LessThanToken;
       continue;

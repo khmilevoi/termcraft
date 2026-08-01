@@ -183,12 +183,13 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     });
   });
 
-  describe("task-12 review round 3 — CODE_EXTENSIONS was an allowlist whose UNKNOWN case failed open; flipped to a DATA_EXTENSIONS denylist whose unknown case is code", () => {
+  describe("task-12 review round 3 — the name shapes `path.extname` mis-reads: a whole-name extension, and no extension at all", () => {
     test('a bare `.ts` dotfile (the WHOLE name is the extension) is scanned as code, not silently skipped — `path.extname(".ts")` returns `""` under Node/Bun\'s dotfile convention, which round 2\'s implementation trusted', () => {
-      // Proven by execution against real Bun before choosing this fix: `rtk bun run` on a
-      // fixture literally named `.ts` executed it as TypeScript, identically to `mod.ts`. A
-      // path.extname-based predicate (round 2's shape) returns "" for this name, so it was
-      // classified as non-code and its own forbidden import was never scanned — a silent miss.
+      // Proven by execution against real Bun before choosing this fix, and re-proven on the
+      // IMPORT path in round 4: `await import()` on a file literally named `.ts` executed its
+      // body as TypeScript, identically to `mod.ts`. A path.extname-based predicate (round 2's
+      // shape) returns "" for this name, so it was classified as non-code and its own forbidden
+      // import was never scanned — a silent miss.
       const errors = scanTreeImports({
         files: new Map([[".ts", 'import fs from "node:fs"\n']]),
         has: () => true,
@@ -218,7 +219,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
     });
 
-    test("a file with NO extension at all (`lib/README`) is scanned as code, not silently skipped — Bun also executes an extensionless file as TypeScript when run directly", () => {
+    test("a file with NO extension at all (`lib/README`) is scanned as code, not silently skipped — Bun executes an extensionless file as TypeScript on the IMPORT path too (round 4's measurement)", () => {
       const errors = scanTreeImports({
         files: new Map([["lib/README", 'import fs from "node:fs"\n']]),
         has: () => true,
@@ -238,7 +239,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
     });
 
-    test('a genuinely non-code file (`.yaml`, not previously exercised) still passes cleanly — the denylist flip did not become "scan everything"', () => {
+    test('a genuinely non-code file (`.yaml`) still passes cleanly — the predicate never became "scan everything"', () => {
       const errors = scanTreeImports({
         files: new Map([["config.yaml", "note: do not eval this file, it is not code\n"]]),
         has: () => true,
@@ -246,11 +247,11 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(errors).toEqual([]);
     });
 
-    test("a file whose real trailing extension is CODE despite an earlier substring that looks like data (`component.md.ts`) is scanned — proves DATA_EXTENSIONS is matched against the real last extension, not a substring probe over the whole name", () => {
-      // If a broken re-implementation matched via `DATA_EXTENSIONS.some((d) => name.includes(d))`
-      // instead of the real trailing extension, "component.md.ts".includes(".md") is true, so
-      // this file would be wrongly classified as DATA and its own forbidden import silently
-      // missed — the security-relevant direction, now that the default points the other way.
+    test("a file whose real trailing extension is CODE despite an earlier substring that looks like data (`component.md.ts`) is scanned — proves the extension is matched against the real last extension, not a substring probe over the whole name", () => {
+      // If a broken re-implementation probed substrings over the whole name instead of taking
+      // the real trailing extension, "component.md.ts" contains ".md", so this file would be
+      // wrongly classified as data and its own forbidden import silently missed — the
+      // security-relevant direction.
       const errors = scanTreeImports({
         files: new Map([["component.md.ts", 'import fs from "node:fs"\n']]),
         has: () => true,
@@ -267,6 +268,190 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       });
       expect(errors).toEqual([]);
     });
+  });
+
+  describe("task-12 review round 4 — the predicate is DERIVED from what Bun's loader executes on the import path, and must equal it row for row", () => {
+    // Every name in these two lists is a MEASURED fact, not a judgement about what "looks like
+    // code": each was written to disk with a real side effect plus an export and `await
+    // import()`ed by absolute path under Bun 1.3.14, exactly the way
+    // `host/session/model/source-mount.ts` mounts a page. The left list executed its body; the
+    // right list came back through a non-executing loader (`{ default: string }` from the
+    // text/file loader, or a JSON/TOML parse error). Deliberately NOT measured with `bun run` —
+    // the CLI entrypoint picks a loader differently from the module graph, and that
+    // disagreement is what made round 3's list wrong in both directions at once.
+    //
+    // These two tests are the standing bar this task kept failing: the SAME source text, keyed
+    // only on the file's name, must be scanned on the left and skipped on the right. Round 1
+    // fails the left list (no `.mts`/`.cts`); round 3's denylist fails the right list (`.csv`,
+    // `.sql`, `.avif`, `.scss`, `.mp4` and 20 more were absent from its 24 names, so all were
+    // scanned and false-fatal'd).
+    const EXECUTED_BY_BUN = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"];
+    const NOT_EXECUTED_BY_BUN = [
+      ".json",
+      ".md",
+      ".markdown",
+      ".txt",
+      ".yml",
+      ".yaml",
+      ".toml",
+      ".lock",
+      ".css",
+      ".html",
+      ".svg",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".webp",
+      ".ico",
+      ".bmp",
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".otf",
+      ".eot",
+      ".map",
+      ".avif",
+      ".csv",
+      ".tsv",
+      ".sql",
+      ".log",
+      ".rst",
+      ".adoc",
+      ".tex",
+      ".scss",
+      ".less",
+      ".styl",
+      ".mdx",
+      ".sh",
+      ".py",
+      ".ini",
+      ".bak",
+      ".wasm",
+      ".pdf",
+      ".mp4",
+      ".tiff",
+      ".patch",
+      ".diff",
+      ".xml",
+      ".pem",
+    ];
+    const FORBIDDEN_SOURCE = 'import fs from "node:fs"\n';
+
+    test("every extension Bun's loader EXECUTES has its own forbidden import scanned", () => {
+      const scanned = EXECUTED_BY_BUN.filter(
+        (extension) =>
+          scanTreeImports({
+            files: new Map([[`lib/mod${extension}`, FORBIDDEN_SOURCE]]),
+            has: () => true,
+          }).length === 1,
+      );
+      expect(scanned).toEqual(EXECUTED_BY_BUN);
+    });
+
+    test("every extension Bun's loader does NOT execute is skipped, even given byte-identical source text", () => {
+      // The failure this closes is Critical 2 of round 3's re-review: one occurrence of a
+      // banned word anywhere in any file outside a 24-item list was fatal, so `LICENSE`,
+      // `CHANGELOG`, `.csv`, `.sql`, `.log`, `.tex` and random `.mp4`/`.pdf` bytes all
+      // false-fatal'd. A file the loader never executes cannot carry a module edge at all.
+      const wronglyScanned = NOT_EXECUTED_BY_BUN.filter(
+        (extension) =>
+          scanTreeImports({
+            files: new Map([[`assets/mod${extension}`, FORBIDDEN_SOURCE]]),
+            has: () => true,
+          }).length !== 0,
+      );
+      expect(wronglyScanned).toEqual([]);
+    });
+
+    test("task-12 review round 3, Important 3 — an import of a real, present `.avif` asset resolves CLEANLY instead of being reported as a file that does not exist", () => {
+      // Round 3 reported `UNRESOLVED_IMPORT` with the message `no file at "assets/logo.avif"`
+      // for a file `has` affirms IS there — a false diagnosis about existence, and arbitrary:
+      // `.webp` passed only because it happened to be one of the 24 names. `effectiveHas` is
+      // now keyed on whether the loader would execute the target, and `.avif` measurably is not
+      // executed, so it needs no scan to be trusted.
+      const errors = scanTreeImports({
+        files: new Map([["pages/home.tsx", 'import logo from "../assets/logo.avif"\n']]),
+        has: (relPath) => relPath === "assets/logo.avif" || relPath === "pages/home.tsx",
+      });
+      expect(errors).toEqual([]);
+    });
+
+    test("a stylesheet's own `@import` is not a module edge — `.scss`/`.less`/`.styl` pass cleanly", () => {
+      // Round 3 tokenized these as JS/TS, where `@import "colors";` lexes as a real import
+      // statement and reported `FORBIDDEN_IMPORT` on an ordinary stylesheet.
+      for (const relPath of ["theme.scss", "theme.less", "theme.styl"]) {
+        expect(
+          scanTreeImports({
+            files: new Map([[relPath, '@import "colors";\n.a { color: red }\n']]),
+            has: () => true,
+          }),
+        ).toEqual([]);
+      }
+    });
+
+    test("a whole-name dotfile that is NOT a code extension (`.env`, `.gitignore`) is DATA — the dotfile shape alone never makes a file code", () => {
+      // The mirror of the `.ts`/`lib/.mjs` tests above, and the discriminator against "treat
+      // every dotfile as code": measured, `.ts` and `lib/.mjs` execute while `.env` and
+      // `.gitignore` come back through the text loader without executing.
+      for (const relPath of [".env", ".gitignore"]) {
+        expect(
+          scanTreeImports({
+            files: new Map([[relPath, "# do not eval\nAPI=1\n"]]),
+            has: () => true,
+          }),
+        ).toEqual([]);
+      }
+    });
+
+    test("an EXTENSIONLESS file stays code — the fail-closed direction the measurement requires, even though it costs a false fatal on extensionless prose", () => {
+      // Stated plainly because it is the residual this predicate consciously leaves: a
+      // `LICENSE` or `CHANGELOG` with no extension really would execute if imported, so it is
+      // scanned, and prose in it that spells a bare `eval` really is refused. The refusal is
+      // loud and fixable (give the file an extension); a silent pass on a file the loader
+      // executes is neither.
+      const errors = scanTreeImports({
+        files: new Map([["LICENSE", "Licensees may not eval the software.\n"]]),
+        has: () => true,
+      });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("EVAL_CALL");
+    });
+
+    test("task-12 review round 4, Critical 1 — an extensionless `Dockerfile` full of `#` comments TERMINATES through the real whole-tree scan", async () => {
+      // The reachability half of the `jsx.ts` fix, pinned at THIS module's own perimeter rather
+      // than at the reader's: `scanTreeImports` -> `scanImportAllowlist` ->
+      // `computeJsxTextTokenIndices` -> `scanJsx`, and an extensionless file is code by this
+      // module's measured predicate, so ordinary `#`-commented tree content reaches the reader.
+      // Before the `jsx.ts` fix this call never returned — no timeout, no cancellation, no
+      // error, and `runTreeImports` is synchronous, so it blocked the event loop outright.
+      //
+      // Runs OUT OF PROCESS on purpose: `bun test`'s per-test timeout is a timer on the very
+      // event loop a synchronous spin blocks, so an in-process version of this test would wedge
+      // the whole suite on a regression instead of failing it (measured — see the same note in
+      // `jsx.test.ts`).
+      const modulePath = `${import.meta.dir.replaceAll("\\", "/")}/tree-scan.ts`;
+      const files = {
+        Dockerfile: "# syntax=docker/dockerfile:1\nFROM node:22\n# install deps\nRUN bun i\n",
+      };
+      const script = [
+        `const { scanTreeImports } = await import(${JSON.stringify(modulePath)});`,
+        `const files = new Map(Object.entries(${JSON.stringify(files)}));`,
+        `const errors = scanTreeImports({ files, has: () => true });`,
+        `console.log(JSON.stringify({ count: errors.length }));`,
+      ].join("\n");
+      const proc = Bun.spawn([process.execPath, "-e", script], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const timer = setTimeout(() => proc.kill(), 20_000);
+      const stdout = await new Response(proc.stdout).text();
+      await proc.exited;
+      clearTimeout(timer);
+
+      expect(stdout.trim()).toBe('{"count":0}');
+      expect(proc.exitCode).toBe(0);
+    }, 40_000);
   });
 
   test("scanModuleEdges returns only static import specifiers, runtime included", () => {
