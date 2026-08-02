@@ -2,7 +2,7 @@ import { resolveDesignSpecifier } from "entities/design-tree";
 
 import { computeJsxTextTokenIndices } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { SyntaxKind, Tok } from "./lexer";
+import type { SourceStreamTruncatedError, SyntaxKind, Tok } from "./lexer";
 
 /**
  * A fatal import-allowlist violation the gate rejects the candidate for (§3.1),
@@ -263,8 +263,11 @@ export function scanImportAllowlist(
     readonly has: (relPath: string) => boolean;
     readonly isScanned: (relPath: string) => boolean;
   },
-): ImportScanError[] {
+): SourceStreamTruncatedError | ImportScanError[] {
   const toks = tokenize(source);
+  // A stream that does not cover the source cannot be scanned for anything — see
+  // `lexer.ts`'s own completeness invariant. Propagated, never treated as "no findings".
+  if (toks instanceof Error) return toks;
   const jsxText = computeJsxTextTokenIndices(toks, source);
   const errors: ImportScanError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
@@ -491,8 +494,9 @@ export function scanImportAllowlist(
  * own DYNAMIC_IMPORT/REEXPORT/REQUIRE_CALL branches, which never touch a closure either — the
  * allowlist scan still catches all three as fatal on its own pass over the same file.
  */
-export function scanModuleEdges(source: string): readonly string[] {
+export function scanModuleEdges(source: string): SourceStreamTruncatedError | readonly string[] {
   const toks = tokenize(source);
+  if (toks instanceof Error) return toks;
   const edges: string[] = [];
   for (let i = 0; i < toks.length; i += 1) {
     if (toks[i]?.kind !== SK.ImportKeyword) continue;

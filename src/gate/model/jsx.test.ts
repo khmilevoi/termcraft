@@ -2,6 +2,20 @@ import { describe, expect, test } from "bun:test";
 
 import { computeJsxTextTokenIndices, readHyphenatedName, scanJsx } from "./jsx";
 import { tokenize } from "./lexer";
+import type { SourceStreamTruncatedError } from "./lexer";
+
+/**
+ * Unwraps `lexer.ts`'s completeness-invariant union at the test boundary (task-14 review round
+ * 2, M6). A fixture whose token stream does not cover its source is a FIXTURE BUG, and it must
+ * say so loudly here — silently reading as "no findings" is precisely the failure mode the
+ * invariant exists to prevent, and a test suite that absorbed it would hide the next one.
+ */
+function scanned<T>(result: SourceStreamTruncatedError | T): T {
+  if (result instanceof Error) {
+    throw new Error(`fixture truncated the token stream: ${result.message}`);
+  }
+  return result;
+}
 
 describe("scanJsx (real recursive-descent JSX reader over the TypeScript scanner, WP-6a fix-pass-3)", () => {
   test("a self-closing tag reports its tag name, id presence, and own `<` position", () => {
@@ -120,19 +134,19 @@ describe("scanJsx (real recursive-descent JSX reader over the TypeScript scanner
 
 describe("readHyphenatedName", () => {
   test("merges a hyphenated identifier chain into one name", () => {
-    const toks = tokenize(`data-id`);
+    const toks = scanned(tokenize(`data-id`));
     expect(readHyphenatedName(toks, 0)?.name).toBe("data-id");
   });
 
   test("returns null when not starting at an Identifier", () => {
-    const toks = tokenize(`"x"`);
+    const toks = scanned(tokenize(`"x"`));
     expect(readHyphenatedName(toks, 0)).toBeNull();
   });
 });
 
 describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebuilt fix-pass-3)", () => {
   function textValuesOf(source: string): string[] {
-    const toks = tokenize(source);
+    const toks = scanned(tokenize(source));
     const idx = computeJsxTextTokenIndices(toks, source);
     return [...idx].sort((a, b) => a - b).map((i) => toks[i]!.value || `<${toks[i]!.kind}>`);
   }
@@ -161,7 +175,7 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
   });
 
   test("nested elements are each recognized independently, their own text marked", () => {
-    const toks = tokenize(`<box>hello<text id="t">world</text></box>`);
+    const toks = scanned(tokenize(`<box>hello<text id="t">world</text></box>`));
     const idx = computeJsxTextTokenIndices(toks, `<box>hello<text id="t">world</text></box>`);
     const values = [...idx].map((i) => toks[i]!.value);
     expect(values.sort()).toEqual(["hello", "world"]);
@@ -188,7 +202,7 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
 
   test("a Fragment nested inside a named element is recognized independently", () => {
     const src = `<box><>hello</></box>`;
-    const toks = tokenize(src);
+    const toks = scanned(tokenize(src));
     const idx = computeJsxTextTokenIndices(toks, src);
     expect([...idx].map((i) => toks[i]!.value)).toEqual(["hello"]);
   });

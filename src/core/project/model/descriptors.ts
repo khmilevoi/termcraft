@@ -97,7 +97,12 @@ function entryNotFound(pageSlug: PageSlug): FailureDtoV1 {
  *     tree-relative one. Every entry would then miss the exact test and a broken manifest
  *     would read as empty. `readonly string[]` cannot distinguish the two vocabularies in the
  *     type, so it is detected at runtime and refused — a caller bug must not present as an
- *     empty project.
+ *     empty project. NARROWED (task-14 review round 2, M2): the evidence is `design/pages.json`
+ *     present WHILE tree-relative `pages.json` is absent — the one shape only a vocabulary
+ *     mistake produces. The round-1 test was "any path starts with `design/`", which FALSE-FIRED
+ *     on a legal tree: `entryPathSchema` permits `design/tokens.ts` as a tree-relative path, so
+ *     a `design/` SUBDIRECTORY inside the tree is ordinary, and the check turned an honest empty
+ *     page order into an `abortEarlyAdmission` on `turn.start`.
  *
  * Every branch that discards a `FailureDtoV1` logs it first (errore rule 21: an error that is
  * not propagated must still leave a trace). Before this round all three discarded silently.
@@ -112,22 +117,24 @@ export async function readPageOrder(
   const paths = treePaths ?? (await readTreePaths(designReader, manifest));
   if ("code" in paths) return paths;
 
-  // The caller handed us project-relative paths. Refusing beats guessing: silently stripping a
-  // `design/` prefix would make this function accept two vocabularies, and the plan fixes
-  // exactly one for this argument.
-  const misvocabulary = paths.find((relPath) => relPath.startsWith(`${DESIGN_DIRNAME}/`));
-  if (misvocabulary !== undefined) {
-    console.warn(
-      `core/project/descriptors: readPageOrder was given PROJECT-relative treePaths (e.g. "${misvocabulary}"); it requires TREE-relative paths, so the manifest failure is propagated rather than read as an empty project`,
-    );
-    return manifest;
-  }
-
+  // Present as the file itself, or as a DIRECTORY of that name — either way the tree has
+  // something at `pages.json`, so the read/decode failure above is real.
   const manifestPresent = paths.some(
     (relPath) =>
       relPath === PAGES_MANIFEST_RELPATH || relPath.startsWith(`${PAGES_MANIFEST_RELPATH}/`),
   );
   if (manifestPresent) return manifest;
+
+  // The caller handed us project-relative paths — the ONE shape only a vocabulary mistake
+  // produces: the project-relative manifest path is there while the tree-relative one is not.
+  // Refusing beats guessing: silently stripping a `design/` prefix would make this function
+  // accept two vocabularies, and the plan fixes exactly one for this argument.
+  if (paths.includes(`${DESIGN_DIRNAME}/${PAGES_MANIFEST_RELPATH}`)) {
+    console.warn(
+      `core/project/descriptors: readPageOrder was given PROJECT-relative treePaths (they name "${DESIGN_DIRNAME}/${PAGES_MANIFEST_RELPATH}" but no "${PAGES_MANIFEST_RELPATH}"); it requires TREE-relative paths, so the manifest failure is propagated rather than read as an empty project`,
+    );
+    return manifest;
+  }
 
   // The one honest empty: the tree names no manifest, so there is nothing to have failed.
   console.warn(

@@ -282,20 +282,30 @@ export function scanTreeImports(input: {
   const isScanned = (relPath: string) => isTrustedTarget(input, relPath);
   for (const [from, source] of input.files) {
     if (!isCodeFile(from)) continue;
-    // The one uncontrolled boundary in this module: `./jsx`'s reader is recursive descent, so the
-    // ENGINE — not any code here — can throw on deep enough nesting. See
-    // {@link TreeFileUnscannableError} for the measurement and for why nothing is rethrown.
+    // TWO WAYS THIS FILE CAN FAIL TO BE SCANNED, both fail-closed to the same code:
+    //   - `scanImportAllowlist` RETURNS a `SourceStreamTruncatedError` when the token stream
+    //     does not cover the source (`lexer.ts`'s completeness invariant). Controlled code,
+    //     reported as a value — no `try` involved (task-14 review round 2, M6).
+    //   - the ENGINE throws: `./jsx`'s reader is recursive descent and can overflow the stack
+    //     on deep enough nesting. That is the one UNCONTROLLED boundary in this module, and
+    //     the only thing `errore.try` is here for. See {@link TreeFileUnscannableError}.
     const scanned = errore.try({
       try: () => scanImportAllowlist(source, { from, has: input.has, isScanned }),
       catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
     });
     if (scanned instanceof Error) {
+      // A wrapped engine throw carries `cause`; a returned truncation is already the reason.
       const cause = scanned.cause;
-      const reason = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+      const reason =
+        cause === undefined
+          ? scanned.message
+          : cause instanceof Error
+            ? `${cause.name}: ${cause.message}`
+            : String(cause);
       errors.push({
         code: "UNSCANNABLE_SOURCE",
         specifier: "",
-        message: `${scanned.message} — ${reason}`,
+        message: cause === undefined ? `"${from}": ${reason}` : `${scanned.message} — ${reason}`,
         line: 1,
         column: 1,
         file: from,

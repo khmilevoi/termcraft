@@ -2,7 +2,21 @@ import { describe, expect, test } from "bun:test";
 
 import { resolveClosure } from "entities/design-tree";
 
+import type { SourceStreamTruncatedError } from "./lexer";
 import { scanModuleEdges, scanTreeImports } from "./tree-scan";
+
+/**
+ * Unwraps `lexer.ts`'s completeness-invariant union at the test boundary (task-14 review round
+ * 2, M6). A fixture whose token stream does not cover its source is a FIXTURE BUG, and it must
+ * say so loudly here — silently reading as "no findings" is precisely the failure mode the
+ * invariant exists to prevent, and a test suite that absorbed it would hide the next one.
+ */
+function scanned<T>(result: SourceStreamTruncatedError | T): T {
+  if (result instanceof Error) {
+    throw new Error(`fixture truncated the token stream: ${result.message}`);
+  }
+  return result;
+}
 
 describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritative scan)", () => {
   test("scanTreeImports reports the file each violation is in", () => {
@@ -762,8 +776,10 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
 
   test("scanModuleEdges returns only static import specifiers, runtime included", () => {
     expect(
-      scanModuleEdges(
-        'import { definePage } from "@termcraft/runtime"\nimport t from "../lib/theme"\n',
+      scanned(
+        scanModuleEdges(
+          'import { definePage } from "@termcraft/runtime"\nimport t from "../lib/theme"\n',
+        ),
       ),
     ).toEqual(["@termcraft/runtime", "../lib/theme"]);
   });
@@ -844,7 +860,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
   });
 
   test("a file with no import at all produces no edges and no violations", () => {
-    expect(scanModuleEdges("export const x = 1\n")).toEqual([]);
+    expect(scanned(scanModuleEdges("export const x = 1\n"))).toEqual([]);
     const errors = scanTreeImports({
       files: new Map([["lib/pure.ts", "export const x = 1\n"]]),
       has: () => true,
@@ -861,10 +877,46 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     const closure = resolveClosure({
       entry: "pages/a.tsx",
       has,
-      edgesOf: (relPath) => scanModuleEdges(files.get(relPath) ?? ""),
+      edgesOf: (relPath) => scanned(scanModuleEdges(files.get(relPath) ?? "")),
     });
     expect(closure instanceof Error).toBe(false);
     if (closure instanceof Error) return;
     expect(closure.files).toEqual(["lib/b.ts", "pages/a.tsx"]);
+  });
+});
+
+/**
+ * THE FLAT SCAN'S OWN TRUNCATION PROPAGATION (task-14 review round 2, found by mutation while
+ * checking M6). `scanImportAllowlist` returns `SourceStreamTruncatedError | ImportScanError[]`
+ * now; `scanTreeImports` must turn that into a fatal for the file.
+ *
+ * WHY THIS TEST EXISTS AT THIS LEVEL: mutating `scanImportAllowlist` to swallow the truncation
+ * (`return []` instead of the error) killed NOTHING in the whole suite — the turn-level
+ * perimeter test still passed, because the CLOSURE WALK (`scanModuleEdges` -> `edgesUnreadable`)
+ * independently reported the same file. So the flat scan's own propagation was untested, and the
+ * end-to-end test was passing for a different reason than it claimed. This pins the flat scan
+ * alone, with no closure walk involved.
+ */
+describe("scanTreeImports — a file whose token stream does not cover it is fatal", () => {
+  const TRUNCATED = `export const G = () => <Text>\uFFFD</Text>\nimport fs from "node:fs"\n`;
+
+  test("reports UNSCANNABLE_SOURCE for the truncated file, naming it", () => {
+    const files = new Map([["lib/theme.tsx", TRUNCATED]]);
+    const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+    expect(errors.map((e) => `${e.code}@${e.file}`)).toEqual(["UNSCANNABLE_SOURCE@lib/theme.tsx"]);
+  });
+
+  test("the truncation is never read as 'no findings' — a clean sibling still scans normally", () => {
+    // Both halves in one scan: the truncated file must be fatal AND the untruncated one must
+    // still report its own real violation, so the fatal is not a blanket refusal of the tree.
+    const files = new Map([
+      ["lib/theme.tsx", TRUNCATED],
+      ["lib/other.ts", `import fs from "node:fs"\nexport const x = fs\n`],
+    ]);
+    const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+    expect(errors.map((e) => `${e.code}@${e.file}`).sort()).toEqual([
+      "FORBIDDEN_IMPORT@lib/other.ts",
+      "UNSCANNABLE_SOURCE@lib/theme.tsx",
+    ]);
   });
 });

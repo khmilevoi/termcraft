@@ -1,7 +1,7 @@
 import type { PageMeta } from "entities/page";
 
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { SyntaxKind, Tok } from "./lexer";
+import type { SourceStreamTruncatedError, SyntaxKind, Tok } from "./lexer";
 
 /** kit API versions this gate accepts (runtime-api §7.1). MVP ships version 1 only. */
 const SUPPORTED_KIT_API_VERSIONS = new Set<number>([1]);
@@ -103,8 +103,11 @@ const BINDING_KEYWORDS = new Set<SyntaxKind>([SK.ConstKeyword, SK.LetKeyword, SK
  * `kitApiVersion` is a supported integer; and there is a default `reatomComponent`
  * export. Returns the parsed `PageMeta` when the contract holds.
  */
-export function checkPageContract(source: string): PageContractResult {
+export function checkPageContract(source: string): SourceStreamTruncatedError | PageContractResult {
   const toks = tokenize(source);
+  // See `lexer.ts`'s completeness invariant: an incomplete stream cannot be checked for a
+  // `meta` export it may simply have truncated away.
+  if (toks instanceof Error) return toks;
   const errors: PageContractError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
   const err = (code: PageContractError["code"], message: string, pos: number) =>

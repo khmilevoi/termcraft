@@ -14,7 +14,8 @@ import { type TurnValidationDeps, runTurnValidation } from "core/turns";
 import { buildGateRunner } from "./create-shell";
 
 /**
- * THE IMPORT PERIMETER, PROVEN AT THE TURN LEVEL (red-debt.md's SECURITY-CRITICAL must-wire;
+ * THE IMPORT PERIMETER'S WIRING, PROVEN AT THE TURN LEVEL (red-debt.md's SECURITY-CRITICAL
+ * must-wire;
  * task-14-supplement §1).
  *
  * `GateRunner.runTreeImports` — the whole-tree import allowlist and, inside it, design §5.8's
@@ -33,9 +34,16 @@ import { buildGateRunner } from "./create-shell";
  * fatal to the turn.
  *
  * EVERY VIOLATION HERE SITS IN A SHARED MODULE NO PAGE NAMES DIRECTLY:
- * `pages/home.tsx` -> `lib/theme.ts` -> the violation. That is the shape `runPage` structurally
- * cannot catch (it only ever sees one entry's own source), and it is the shape the supplement
- * requires proof for.
+ * `pages/home.tsx` -> the shared module -> the violation. That is the shape `runPage`
+ * structurally cannot catch (it only ever sees one entry's own source), and it is the shape the
+ * supplement requires proof for.
+ *
+ * WHAT THIS FILE DOES NOT PROVE (task-14 review round 2): that the scan SEES the whole of every
+ * file. These rows prove the CALLER exists, runs once per turn in the right order, and makes
+ * each tested violation fatal to the turn. Source-coverage completeness is `gate/model/lexer.ts`'s
+ * concern and is still OPEN there — an unterminated block comment opened in JSX text truncates
+ * the token stream with no signal at all, and Bun executes such a file. A separate task owns
+ * that. "The perimeter is wired and proven for these forms" is the whole claim here.
  */
 
 const TURN_ID = "0192f6f0-0000-7000-8000-0000000014aa" as UUIDv7;
@@ -176,15 +184,28 @@ describe("the turn's import perimeter, through the real gate adapter", () => {
       // The U+FFFD must sit at a TOKEN position — in JSX text here, exactly as the executed
       // exploit had it. Inside a string literal or a comment the scanner lexes straight past
       // it and the violations below ARE reported; that case is the sibling assertion.
+      //
+      // THE MODULE IS `.tsx`, DELIBERATELY (task-14 review round 2, M3). Round 1 put this JSX
+      // source in `lib/theme.ts`, and `Bun.Transpiler({loader:"ts"})` REJECTS that
+      // (`Unexpected ï`) — so the fixture pinned a form the runtime would never have executed,
+      // which is the entire basis for calling the truncation a bypass. `.tsx` transpiles, so
+      // this fixture is the executable one. The extensionless specifier `../lib/theme` still
+      // resolves to it (`foo > foo.tsx > foo.ts`, the measured order in `tree-scan.ts`).
       const exploit = `export const Glyph = () => <Text>�</Text>\nimport fs from "node:fs"\nexport const e = eval("1")\n`;
-      const errors = await validateTree(sharedModuleTree(exploit));
+      const tree = (theme: string): ReadonlyMap<string, string> =>
+        new Map([
+          ["pages.json", MANIFEST],
+          ["pages/home.tsx", CLEAN_PAGE],
+          ["lib/theme.tsx", theme],
+        ]);
+      const errors = await validateTree(tree(exploit));
       expect(errors.map((e) => e.code)).toContain("UNSCANNABLE_SOURCE");
-      expect(errors.find((e) => e.code === "UNSCANNABLE_SOURCE")?.file).toBe("lib/theme.ts");
+      expect(errors.find((e) => e.code === "UNSCANNABLE_SOURCE")?.file).toBe("lib/theme.tsx");
 
       // THE BEFORE/AFTER, in one test: the identical file with the marker replaced by an
       // ordinary character reports every violation the truncated one hid. Without this, a
       // guard that refused the tree for any reason at all would satisfy the assertion above.
-      const control = await validateTree(sharedModuleTree(exploit.replace("�", "x")));
+      const control = await validateTree(tree(exploit.replace("�", "x")));
       expect(control.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
       expect(control.map((e) => e.code)).toContain("EVAL_CALL");
     });

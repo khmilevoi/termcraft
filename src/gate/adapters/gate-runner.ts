@@ -215,6 +215,8 @@ function readClosureEdges(
     walk.sourceMissing.add(relPath);
     return [];
   }
+  // As in `tree-scan.ts`: a RETURNED `SourceStreamTruncatedError` (controlled code, the
+  // completeness invariant) or a THROWN engine stack overflow (the one uncontrolled boundary).
   const edges = errore.try({
     try: () => scanModuleEdges(source),
     catch: (cause) => new ClosureEdgesUnreadableError({ file: relPath, cause }),
@@ -223,7 +225,11 @@ function readClosureEdges(
     const cause = edges.cause;
     walk.edgesUnreadable.set(
       relPath,
-      cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+      cause === undefined
+        ? edges.message
+        : cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : String(cause),
     );
     return [];
   }
@@ -604,6 +610,25 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   }): Promise<PageMetaExtractionV1> {
     const fileName = `${input.slug}.tsx`;
     const contract = checkPageContract(input.source);
+    if (contract instanceof Error) {
+      // A source whose token stream does not cover it has no readable `meta` — reporting
+      // `meta: null` with the real reason beats reporting "this page declares no settings",
+      // which would be a false diagnosis (this method's own doc: a page that fails one stage
+      // still has a perfectly readable `meta`, and the converse must be just as honest).
+      return {
+        meta: null,
+        errors: [
+          {
+            kind: "contract" as const,
+            code: "UNSCANNABLE_SOURCE",
+            message: `${fileName}: ${contract.message}`,
+            file: fileName,
+            line: 1,
+            column: 1,
+          },
+        ],
+      };
+    }
     return {
       meta: contract.meta,
       errors: contract.errors.map((error) => ({

@@ -266,6 +266,46 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
     });
   });
 
+  test("VALID INPUT: a tree with a legal `design/` SUBDIRECTORY is NOT mistaken for the wrong vocabulary", async () => {
+    // THE COMPANION THIS BRANCH HAS PAID FOR TWICE (task-14 review round 2, M2). `design/` is a
+    // perfectly legal directory INSIDE the tree — `entryPathSchema` permits `design/tokens.ts`
+    // as a tree-relative path — so "any path starts with design/" is evidence of nothing. The
+    // round-1 guard used exactly that test and false-fired here, turning an honest empty page
+    // order into an `abortEarlyAdmission` on `turn.start`. Measured before the fix:
+    //   FAILURE "design/pages.json does not exist"
+    //   warn: readPageOrder was given PROJECT-relative treePaths (e.g. "design/tokens.ts")
+    // The accusation was also false on its face: on this path the values come from our OWN
+    // `listTree()`, where the vocabulary is guaranteed by construction.
+    await context.start(async () => {
+      const store = createFakeDesignStore({
+        manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
+        files: new Map([
+          ["design/tokens.ts", { bytes: HOME_BYTES, sha256: HASH_A }],
+          ["lib/theme.ts", { bytes: HOME_BYTES, sha256: HASH_B }],
+        ]),
+      });
+      store.failNext("readManifest", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "design/pages.json does not exist",
+        details: {},
+      });
+      const order = await wrap(readPageOrder(store));
+      expect(order).toEqual([]);
+    });
+  });
+
+  test("VALID INPUT: caller-supplied tree-relative paths that include a `design/` subdirectory still resolve normally", async () => {
+    await context.start(async () => {
+      const store = storeWith(new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HASH_A }]]));
+      const order = await wrap(
+        readPageOrder(store, ["pages.json", "design/tokens.ts", HOME_ENTRY]),
+      );
+      if ("code" in order) throw new Error(`expected the manifest, got ${order.safeMessage}`);
+      expect(order.map((entry) => entry.slug)).toEqual([HOME]);
+    });
+  });
+
   test("PROJECT-relative treePaths are refused, not silently read as an empty project", async () => {
     // The second measured conflation: `readonly string[]` cannot distinguish the two path
     // vocabularies, so a caller passing `design/pages.json` would miss the test and turn a

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { PageSlug } from "entities/page";
 
+import type { SourceStreamTruncatedError } from "./lexer";
 import {
   lintDeterminism,
   lintDroppedIds,
@@ -9,6 +10,19 @@ import {
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
+
+/**
+ * Unwraps `lexer.ts`'s completeness-invariant union at the test boundary (task-14 review round
+ * 2, M6). A fixture whose token stream does not cover its source is a FIXTURE BUG, and it must
+ * say so loudly here — silently reading as "no findings" is precisely the failure mode the
+ * invariant exists to prevent, and a test suite that absorbed it would hide the next one.
+ */
+function scanned<T>(result: SourceStreamTruncatedError | T): T {
+  if (result instanceof Error) {
+    throw new Error(`fixture truncated the token stream: ${result.message}`);
+  }
+  return result;
+}
 
 /**
  * THE TURN THIS LINT COMES FROM (2026-07-27). The gate rejected a candidate with two
@@ -21,32 +35,36 @@ import {
  */
 describe("lintSilencingAny (an `any` written to make a type error go away)", () => {
   test("a page with no `any` produces no warnings", () => {
-    expect(lintSilencingAny(`const n: number = 1\nconst s = String(n)\n`)).toEqual([]);
+    expect(scanned(lintSilencingAny(`const n: number = 1\nconst s = String(n)\n`))).toEqual([]);
   });
 
   test("an annotated parameter warns", () => {
-    const w = lintSilencingAny(`const setPalette = action((ctx: any, id: string) => {})\n`);
+    const w = scanned(
+      lintSilencingAny(`const setPalette = action((ctx: any, id: string) => {})\n`),
+    );
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("silencing-any");
     expect(w[0]?.line).toBe(1);
   });
 
   test("an `as any` assertion warns", () => {
-    const w = lintSilencingAny(`const page = mod.default as any\n`);
+    const w = scanned(lintSilencingAny(`const page = mod.default as any\n`));
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("silencing-any");
   });
 
   test("an object property or member named `any` is not an annotation and does not warn", () => {
-    expect(lintSilencingAny(`const o = { any: 1 }\nconst v = o.any\n`)).toEqual([]);
+    expect(scanned(lintSilencingAny(`const o = { any: 1 }\nconst v = o.any\n`))).toEqual([]);
   });
 
   test("the word `any` inside a string or an identifier does not warn", () => {
-    expect(lintSilencingAny(`const label = "any color"\nconst anything = 2\n`)).toEqual([]);
+    expect(scanned(lintSilencingAny(`const label = "any color"\nconst anything = 2\n`))).toEqual(
+      [],
+    );
   });
 
   test("every occurrence is reported, each at its own position", () => {
-    const w = lintSilencingAny(`function f(a: any) {}\n\nfunction g(b: any) {}\n`);
+    const w = scanned(lintSilencingAny(`function f(a: any) {}\n\nfunction g(b: any) {}\n`));
     expect(w).toHaveLength(2);
     expect(w[0]?.line).toBe(1);
     expect(w[1]?.line).toBe(3);
@@ -55,35 +73,37 @@ describe("lintSilencingAny (an `any` written to make a type error go away)", () 
 
 describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("a deterministic page produces no warnings", () => {
-    expect(lintDeterminism(`const rows = [1, 2, 3].map((n) => n * 2)\n`)).toEqual([]);
+    expect(scanned(lintDeterminism(`const rows = [1, 2, 3].map((n) => n * 2)\n`))).toEqual([]);
   });
 
   test("setTimeout / setInterval each warn as an unguarded timer", () => {
-    const w = lintDeterminism(`setTimeout(() => {}, 10)\nsetInterval(() => {}, 10)\n`);
+    const w = scanned(lintDeterminism(`setTimeout(() => {}, 10)\nsetInterval(() => {}, 10)\n`));
     expect(w).toHaveLength(2);
     expect(w.every((x) => x.kind === "unguarded-timer")).toBe(true);
   });
 
   test("Math.random warns as unguarded randomness", () => {
-    const w = lintDeterminism(`const r = Math.random()\n`);
+    const w = scanned(lintDeterminism(`const r = Math.random()\n`));
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("unguarded-randomness");
   });
 
   test("Date.now / performance.now warn as unguarded timers", () => {
-    const w = lintDeterminism(`const a = Date.now()\nconst b = performance.now()\n`);
+    const w = scanned(lintDeterminism(`const a = Date.now()\nconst b = performance.now()\n`));
     expect(w).toHaveLength(2);
     expect(w.every((x) => x.kind === "unguarded-timer")).toBe(true);
   });
 
   test("a property access unrelated to time/randomness does not warn", () => {
     expect(
-      lintDeterminism(`const x = obj.now\nconst y = Math.max(1, 2)\nconst z = user.random\n`),
+      scanned(
+        lintDeterminism(`const x = obj.now\nconst y = Math.max(1, 2)\nconst z = user.random\n`),
+      ),
     ).toEqual([]);
   });
 
   test("warnings carry a source position", () => {
-    const w = lintDeterminism(`\nconst r = Math.random()\n`);
+    const w = scanned(lintDeterminism(`\nconst r = Math.random()\n`));
     expect(w[0]?.line).toBe(2);
   });
 });
@@ -91,40 +111,39 @@ describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
 describe("lintDroppedIds (§6.3 dropped-id warning)", () => {
   test("absent referencedIds skips the lint entirely (gate stays runnable standalone)", () => {
     const src = `export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)\n`;
-    expect(lintDroppedIds(src)).toEqual([]);
+    expect(scanned(lintDroppedIds(src))).toEqual([]);
   });
 
   test("a referenced id still present in the candidate produces no warning", () => {
     const src = `export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)\n`;
-    expect(lintDroppedIds(src, ["p", "t"])).toEqual([]);
+    expect(scanned(lintDroppedIds(src, ["p", "t"]))).toEqual([]);
   });
 
   test("a referenced id absent from the candidate's ids warns dropped-id", () => {
     const src = `export default reatomComponent(() => <Panel id="p">hi</Panel>)\n`;
-    const w = lintDroppedIds(src, ["p", "cpu-gauge"]);
+    const w = scanned(lintDroppedIds(src, ["p", "cpu-gauge"]));
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("dropped-id");
     expect(w[0]?.message).toContain("cpu-gauge");
   });
 
   test("every dropped id is reported, not just the first", () => {
-    const w = lintDroppedIds(`export default reatomComponent(() => <Panel id="p" />)\n`, [
-      "a",
-      "b",
-    ]);
+    const w = scanned(
+      lintDroppedIds(`export default reatomComponent(() => <Panel id="p" />)\n`, ["a", "b"]),
+    );
     expect(w).toHaveLength(2);
   });
 
   test('an id bound via object-property form (`id: "x"`) also counts as present', () => {
     const src = `const props = { id: "cpu-gauge" }\n`;
-    expect(lintDroppedIds(src, ["cpu-gauge"])).toEqual([]);
+    expect(scanned(lintDroppedIds(src, ["cpu-gauge"]))).toEqual([]);
   });
 
   test("a `data-id` prop is NOT mistaken for a declared `id` (Minor 4)", () => {
     // Before the fix, `extractDeclaredIds` matched the bare token text "id" —
     // the second half of the hyphenated `data-id` — and silently counted
     // "cpu" as if the candidate had declared `id="cpu"`.
-    const w = lintDroppedIds(`export default () => <box data-id="cpu">x</box>\n`, ["cpu"]);
+    const w = scanned(lintDroppedIds(`export default () => <box data-id="cpu">x</box>\n`, ["cpu"]));
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("dropped-id");
     expect(w[0]?.message).toContain("cpu");
@@ -281,27 +300,29 @@ describe("lintUnlistedNavigation (§6.3 unlisted-navigation warning)", () => {
   const SETTINGS = "settings" as PageSlug;
 
   test("absent listedSlugs skips the lint entirely (gate stays runnable standalone)", () => {
-    expect(lintUnlistedNavigation(`usePages().goTo("nowhere")\n`)).toEqual([]);
+    expect(scanned(lintUnlistedNavigation(`usePages().goTo("nowhere")\n`))).toEqual([]);
   });
 
   test("navigation to a listed slug produces no warning", () => {
-    const w = lintUnlistedNavigation(`usePages().goTo("settings")\n`, [DASH, SETTINGS]);
+    const w = scanned(lintUnlistedNavigation(`usePages().goTo("settings")\n`, [DASH, SETTINGS]));
     expect(w).toEqual([]);
   });
 
   test("navigation to a slug absent from the list warns unlisted-navigation", () => {
-    const w = lintUnlistedNavigation(`usePages().goTo("missing")\n`, [DASH]);
+    const w = scanned(lintUnlistedNavigation(`usePages().goTo("missing")\n`, [DASH]));
     expect(w).toHaveLength(1);
     expect(w[0]?.kind).toBe("unlisted-navigation");
     expect(w[0]?.message).toContain("missing");
   });
 
   test("every unlisted navigation call is reported, not just the first", () => {
-    const w = lintUnlistedNavigation(`usePages().goTo("a")\nusePages().goTo("b")\n`, [DASH]);
+    const w = scanned(
+      lintUnlistedNavigation(`usePages().goTo("a")\nusePages().goTo("b")\n`, [DASH]),
+    );
     expect(w).toHaveLength(2);
   });
 
   test("a .goTo call not chained off usePages() is not mistaken for navigation", () => {
-    expect(lintUnlistedNavigation(`foo.goTo("missing")\n`, [DASH])).toEqual([]);
+    expect(scanned(lintUnlistedNavigation(`foo.goTo("missing")\n`, [DASH]))).toEqual([]);
   });
 });

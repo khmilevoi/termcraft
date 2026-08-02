@@ -105,6 +105,16 @@ export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxK
  * span runs to the end of the file. Enforced here rather than in any one scan,
  * because every one of them shares the assumption.
  *
+ * WHAT THIS DOES NOT CLOSE (round 2). The invariant catches a scanner that SAYS
+ * it declined to lex a span. It does NOT make this module's parse agree with the
+ * parse the runtime executes: an unterminated block comment opened in JSX TEXT
+ * truncates the stream with no signal at all, because the scanner is built with
+ * `skipTrivia = true` and SKIPS comments rather than returning them — so no
+ * trivia kind is surfaced, and `getTokenEnd()` still reaches `source.length`.
+ * Bun transpiles and runs such a file while this module sees only a prefix. That
+ * is a differential-parse problem, larger than any one guard, and it is owned by
+ * a separate task. Nothing here claims the perimeter is closed.
+ *
  * MEASURED, and this is why the guard is stated as "no trivia kind" rather than
  * as any one character or kind. `�` — which is precisely what
  * `TextDecoder` produces for ANY invalid UTF-8 byte, and `core/kernel`'s turn
@@ -112,8 +122,13 @@ export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxK
  * emit `NonTextFileMarkerTrivia` (its binary-file detector) spanning from that
  * offset to EOF. One `�` at a token position therefore erased 61 of 132
  * characters from the stream, taking `import fs from "node:fs"`, `eval(...)`,
- * `require(...)` and `new Function(...)` with them, and Bun EXECUTES that
- * module (verified by `await import()`-ing it: the side effect ran). Through
+ * `require(...)` and `new Function(...)` with them — and Bun EXECUTES such a
+ * module, measured under the `tsx` loader (which transpiles it) and by
+ * `await import()`-ing a `.tsx` fixture whose side effect ran. CORRECTED in
+ * round 2 (M3): the first draft cited a `.ts` fixture containing JSX, which
+ * `Bun.Transpiler({loader:"ts"})` REJECTS (`Unexpected ï`) — so that fixture
+ * lacked the executability the claim rested on. The conclusion is unchanged;
+ * the `.tsx` form is what carries it. Through
  * the real perimeter, before this guard: zero violations reported; the same
  * file with the `�` replaced by `x`: all four. For a SHARED module the
  * whole-tree scan is the only check there is, so that was a total bypass.
@@ -128,13 +143,15 @@ export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxK
  *
  * PROVEN NOT TO OVER-FIRE, not assumed: `scan()` returns no trivia kind for
  * ordinary sources, a `#!` shebang, a leading BOM, comments, whitespace, or
- * even git conflict markers — and all 886 of the repository's own `.ts`/`.tsx`
- * files tokenize with zero refusals (`lexer.test.ts`'s corpus test re-runs that
- * measurement, so it cannot go stale silently).
- * The one behaviour change is stated on {@link SourceStreamTruncatedError}'s
- * own test: a legal source with `�` at a token position is now REFUSED.
+ * even git conflict markers — and all 884 of the repository's own `src/`
+ * `.ts`/`.tsx` files tokenize with zero refusals. `lexer.test.ts`'s corpus test
+ * re-runs that measurement AND asserts the count exactly, so this number and
+ * that walk cannot drift apart (round 2, M4: this said 886, counting files
+ * outside `src/` the test never visits). The one behaviour change is stated on
+ * {@link SourceStreamTruncatedError}'s own test: a source Bun DOES execute,
+ * carrying `�` at a token position, is now REFUSED.
  */
-export function tokenize(source: string): Tok[] {
+export function tokenize(source: string): SourceStreamTruncatedError | Tok[] {
   const scanner = createScanner(true, LanguageVariant.Standard);
   scanner.setText(source);
   const toks: Tok[] = [];
@@ -149,7 +166,7 @@ export function tokenize(source: string): Tok[] {
     if (TRIVIA_KINDS.has(kind)) {
       // The span the scanner declined to lex — reported by its start offset, which is where
       // coverage of this file actually stopped.
-      throw new SourceStreamTruncatedError({
+      return new SourceStreamTruncatedError({
         reason: `the scanner returned ${kindName(kind)} at offset ${scanner.getTokenStart()}, so the ${scanner.getTokenEnd() - scanner.getTokenStart()} character(s) from there were never lexed`,
       });
     }
@@ -183,7 +200,7 @@ export function tokenize(source: string): Tok[] {
       // Unreachable now that every iteration advances at least one character (above), but kept
       // as defense in depth — and it FAILS CLOSED rather than returning the partial stream the
       // way it used to, because a silent partial stream is the whole defect C1 names.
-      throw new SourceStreamTruncatedError({
+      return new SourceStreamTruncatedError({
         reason: `the scanner produced more than ${cap} tokens for a ${source.length}-character source without reaching end-of-file`,
       });
     }
@@ -201,10 +218,16 @@ export function tokenize(source: string): Tok[] {
 
 /**
  * {@link tokenize} could not produce a token stream covering the whole source, so nothing
- * downstream may treat the tokens it saw as that file's complete content. Carried as a throw so
- * every existing fail-closed converter picks it up unchanged: `tree-scan.ts`'s
- * `TreeFileUnscannableError` (-> `UNSCANNABLE_SOURCE`), `gate/adapters/gate-runner.ts`'s
- * `ClosureEdgesUnreadableError` (-> `edges-unreadable`), and `gate.ts`'s per-page catch.
+ * downstream may treat the tokens it saw as that file's complete content.
+ *
+ * RETURNED AS A VALUE, NOT THROWN (task-14 review round 2, M6). Round 1 threw it and caught it
+ * with `errore.try` in `gate.ts` — but `tokenize` is this module's OWN code, and the project
+ * constraint permits `errore.try` only at UNCONTROLLED boundaries (a third-party library, the
+ * engine). The union is both errore-correct and materially safer here: it makes `tsc` enumerate
+ * every consumer of `tokenize` rather than leaving "is a truncated stream getting through
+ * somewhere else?" to reasoning — which matters, because this defect has now reopened twice.
+ * The genuine uncontrolled boundary that remains is `./jsx`'s recursive-descent reader, which
+ * the ENGINE can overflow; that one is still an `errore.try`, in `tree-scan.ts` and `gate.ts`.
  */
 export class SourceStreamTruncatedError extends errore.createTaggedError({
   name: "SourceStreamTruncatedError",
@@ -222,7 +245,7 @@ export class SourceStreamTruncatedError extends errore.createTaggedError({
  * stale the same way the next time a trivia kind is added. Reading the names keeps the guard
  * correct across a TypeScript upgrade without anyone remembering to update it.
  */
-const TRIVIA_KINDS: ReadonlySet<number> = new Set(
+export const TRIVIA_KINDS: ReadonlySet<number> = new Set(
   Object.entries(SyntaxKind)
     .filter(([name, value]) => typeof value === "number" && name.endsWith("Trivia"))
     .map(([, value]) => value as number),

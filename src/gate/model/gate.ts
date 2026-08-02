@@ -28,6 +28,32 @@ class PageSourceUnscannableError extends errore.createTaggedError({
 }) {}
 
 /**
+ * The one fatal {@link runGate} returns for a page whose source could not be read to the end,
+ * whichever of the two mechanisms reported it — a returned `SourceStreamTruncatedError` or a
+ * caught engine throw. `cause` is unwrapped when present so the diagnostic names the real
+ * reason (a stack overflow's own message, say) rather than only the wrapper's.
+ */
+function unscannablePage(fileName: string, error: Error): GateResult {
+  const cause = error.cause;
+  const message =
+    cause instanceof Error ? `${error.message} — ${cause.name}: ${cause.message}` : error.message;
+  return createGateResult(
+    [
+      {
+        kind: "contract",
+        code: "UNSCANNABLE_SOURCE",
+        message: `${fileName}: ${message}`,
+        file: fileName,
+        line: 1,
+        column: 1,
+      },
+    ],
+    [],
+    null,
+  );
+}
+
+/**
  * The gate's injected validation stages that need more than the page source
  * (code-structure ports). Each is optional so the pipeline runs the source-only
  * checks standalone and gains the heavier stages as they are wired: `typeCheck`
@@ -132,55 +158,40 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   // explicitly, several with an entry deliberately unrelated to their slug.
   const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
 
-  // THE LEXER IS AN UNCONTROLLED BOUNDARY HERE TOO (task-14 review round 1, C1). Every call
-  // below tokenizes, and `tokenize` now FAILS CLOSED on a source it cannot cover completely
-  // (`lexer.ts`'s `SourceStreamTruncatedError`) rather than silently returning a partial
-  // stream. Unprotected, that throw would escape `runGate` -> `runPage` -> the port -> the
-  // turn, turning a page that must be REJECTED into a crashed turn. Caught here so it becomes
-  // an ordinary fatal for this page.
+  // A SOURCE THIS PAGE'S SCANS COULD NOT READ TO THE END IS A FATAL FOR THE PAGE, never a
+  // silent pass and never an escaped throw (task-14 review round 1, C1). `UNSCANNABLE_SOURCE`
+  // is deliberately the SAME code the whole-tree scan uses for the same fact, on the
+  // `contract` kind because here it is the page's own source. One fact, one code.
   //
-  // Caught BROADLY, not narrowed to that one error type — the identical reasoning
-  // `tree-scan.ts`'s `TreeFileUnscannableError` states for the whole-tree scan: narrowing puts
-  // this function in the business of deciding which internal failures are "expected", and a
-  // rethrow lands in exactly the caller that cannot handle it. Every throw becomes a loud
-  // rejected page naming itself instead.
-  //
-  // `UNSCANNABLE_SOURCE` is deliberately the SAME code the whole-tree scan uses for the same
-  // fact ("this file's source could not be read to the end"), on the `contract` kind because
-  // here it is the page's own source. One fact, one code.
-  const lexed = errore.try({
-    try: () => ({
-      contract: checkPageContract(input.source),
-      warnings: [
-        ...lintDeterminism(input.source),
-        ...lintSilencingAny(input.source),
-        ...lintDroppedIds(input.source, input.referencedIds),
-        ...lintUnpointedElements(input.source),
-        ...lintUnlistedNavigation(input.source, input.listedSlugs),
-      ],
-    }),
-    catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
-  });
-  if (lexed instanceof Error) {
-    const cause = lexed.cause;
-    const reason = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
-    return createGateResult(
-      [
-        {
-          kind: "contract",
-          code: "UNSCANNABLE_SOURCE",
-          message: `${lexed.message} — ${reason}`,
-          file: fileName,
-          line: 1,
-          column: 1,
-        },
-      ],
-      [],
-      null,
-    );
+  // TWO DIFFERENT MECHANISMS, DELIBERATELY (task-14 review round 2, M6):
+  //   - `checkPageContract` and the token-based lints RETURN
+  //     `SourceStreamTruncatedError | …` now, because `tokenize` is `gate`'s own controlled
+  //     code and the project constraint permits `errore.try` only at UNCONTROLLED boundaries.
+  //     They are ordinary `instanceof Error` checks.
+  //   - `lintUnpointedElements` is the one genuine uncontrolled boundary left in this
+  //     function: it runs `./jsx`'s recursive-descent reader, which the ENGINE can overflow on
+  //     deep enough nesting. A throw from code this module does not own is exactly what
+  //     `errore.try` is for, and it stays.
+  const contract = checkPageContract(input.source);
+  if (contract instanceof Error) return unscannablePage(fileName, contract);
+
+  for (const lint of [
+    lintDeterminism(input.source),
+    lintSilencingAny(input.source),
+    lintDroppedIds(input.source, input.referencedIds),
+    lintUnlistedNavigation(input.source, input.listedSlugs),
+  ]) {
+    if (lint instanceof Error) return unscannablePage(fileName, lint);
+    warnings.push(...lint);
   }
 
-  const contract = lexed.contract;
+  const unpointed = errore.try({
+    try: () => lintUnpointedElements(input.source),
+    catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
+  });
+  if (unpointed instanceof Error) return unscannablePage(fileName, unpointed);
+  warnings.push(...unpointed);
+
   for (const e of contract.errors) {
     errors.push({
       kind: "contract",
@@ -191,7 +202,6 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
       column: e.column,
     });
   }
-  warnings.push(...lexed.warnings);
 
   if (ports.typeCheck !== undefined) {
     errors.push(...(await ports.typeCheck(input.source, fileName)));
@@ -244,6 +254,15 @@ export function hasTreePath(treePaths: readonly string[]): (relPath: string) => 
  * `eval(...)`, `new Function(...)`, `require(...)` or a dynamic `import()` passed the whole
  * Gate and reached the smoke render.
  *
+ *
+ * WIRED IS NOT THE SAME AS CLOSED (task-14 review round 2). The CALLER exists and the six
+ * forbidden forms above are proven end to end. The SCAN'S OWN SOURCE COVERAGE is a separate,
+ * still-open problem: `lexer.ts`'s completeness invariant catches a scanner that says it
+ * declined to lex a span, but an unterminated block comment opened in JSX TEXT truncates the
+ * token stream with no signal at all (`skipTrivia = true` means comments are SKIPPED, never
+ * returned), and Bun executes such a file while this scan sees a prefix. That is a
+ * differential-parse problem owned by a separate task. Nothing here may be read as "the Gate
+ * enforces its perimeter" without that qualification.
  * The wiring is proven END TO END, not asserted: `src/entrypoint/model/turn-import-perimeter
  * .test.ts` drives the REAL adapter through the REAL `runTurnValidation` and rejects each of
  * those six forms placed in a SHARED module (`lib/theme.ts`) that no page names directly —

@@ -2,6 +2,20 @@ import { describe, expect, test } from "bun:test";
 
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist } from "./import-scan";
+import type { SourceStreamTruncatedError } from "./lexer";
+
+/**
+ * Unwraps `lexer.ts`'s completeness-invariant union at the test boundary (task-14 review round
+ * 2, M6). A fixture whose token stream does not cover its source is a FIXTURE BUG, and it must
+ * say so loudly here — silently reading as "no findings" is precisely the failure mode the
+ * invariant exists to prevent, and a test suite that absorbed it would hide the next one.
+ */
+function scanned<T>(result: SourceStreamTruncatedError | T): T {
+  if (result instanceof Error) {
+    throw new Error(`fixture truncated the token stream: ${result.message}`);
+  }
+  return result;
+}
 
 const clean = `import { definePage, Panel, Text, atom, reatomComponent } from "@termcraft/runtime"
 export const meta = definePage({ kitApiVersion: 1, title: "X", minSize: { w: 80, h: 24 }, theme: "dark-default" })
@@ -30,19 +44,21 @@ const NONE = { from: "", has: () => false, isScanned: () => true };
 
 describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () => {
   test("a clean page importing only the bare runtime root passes", () => {
-    expect(scanImportAllowlist(clean, NONE)).toEqual([]);
+    expect(scanned(scanImportAllowlist(clean, NONE))).toEqual([]);
   });
 
   test("a type-only import from the runtime root is legal", () => {
-    const errors = scanImportAllowlist(
-      `import type { PageMeta } from "@termcraft/runtime"\nexport const x = 1\n`,
-      NONE,
+    const errors = scanned(
+      scanImportAllowlist(
+        `import type { PageMeta } from "@termcraft/runtime"\nexport const x = 1\n`,
+        NONE,
+      ),
     );
     expect(errors).toEqual([]);
   });
 
   test("a value import from a foreign module is rejected", () => {
-    const errors = scanImportAllowlist(`import { useState } from "react"\n`, NONE);
+    const errors = scanned(scanImportAllowlist(`import { useState } from "react"\n`, NONE));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
     expect(errors[0]?.message).toContain("react");
@@ -53,15 +69,14 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     // empty tree nothing can ever resolve, so the precise code is UNRESOLVED_IMPORT, not the
     // old blanket FORBIDDEN_IMPORT. See the context-aware describe block below for the
     // resolving case.
-    const errors = scanImportAllowlist(`import type { X } from "./local"\n`, NONE);
+    const errors = scanned(scanImportAllowlist(`import type { X } from "./local"\n`, NONE));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
   });
 
   test("a runtime subpath is rejected (only the bare root is legal)", () => {
-    const errors = scanImportAllowlist(
-      `import { jsx } from "@termcraft/runtime/jsx-runtime"\n`,
-      NONE,
+    const errors = scanned(
+      scanImportAllowlist(`import { jsx } from "@termcraft/runtime/jsx-runtime"\n`, NONE),
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
@@ -70,131 +85,136 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   test("a side-effect import is rejected even from the runtime root reasons aside — foreign is rejected", () => {
     // Same reason as the type-only case above: `./side-effect` is a legal relative shape that
     // simply cannot resolve against `NONE`'s empty tree, so it is UNRESOLVED_IMPORT now.
-    expect(scanImportAllowlist(`import "./side-effect"\n`, NONE)[0]?.code).toBe(
+    expect(scanned(scanImportAllowlist(`import "./side-effect"\n`, NONE))[0]?.code).toBe(
       "UNRESOLVED_IMPORT",
     );
   });
 
   test("a dynamic import is rejected even when it names the runtime", () => {
-    const errors = scanImportAllowlist(`const m = await import("@termcraft/runtime")\n`, NONE);
+    const errors = scanned(
+      scanImportAllowlist(`const m = await import("@termcraft/runtime")\n`, NONE),
+    );
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("DYNAMIC_IMPORT");
   });
 
   test("a re-export from the runtime is rejected (one page, no runtime-selected loading)", () => {
-    const errors = scanImportAllowlist(`export { atom } from "@termcraft/runtime"\n`, NONE);
+    const errors = scanned(
+      scanImportAllowlist(`export { atom } from "@termcraft/runtime"\n`, NONE),
+    );
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("REEXPORT");
   });
 
   test("a bare re-export of a foreign module is rejected", () => {
-    expect(scanImportAllowlist(`export * from "./other"\n`, NONE)[0]?.code).toBe("REEXPORT");
+    expect(scanned(scanImportAllowlist(`export * from "./other"\n`, NONE))[0]?.code).toBe(
+      "REEXPORT",
+    );
   });
 
   test("a CJS require is rejected", () => {
-    const errors = scanImportAllowlist(`const react = require("react")\n`, NONE);
+    const errors = scanned(scanImportAllowlist(`const react = require("react")\n`, NONE));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("REQUIRE_CALL");
   });
 
   test("a local export is NOT a module edge (no false positive)", () => {
-    expect(scanImportAllowlist(`export const label = "danger"\nexport default 1\n`, NONE)).toEqual(
-      [],
-    );
+    expect(
+      scanned(scanImportAllowlist(`export const label = "danger"\nexport default 1\n`, NONE)),
+    ).toEqual([]);
   });
 
   test("import.meta is not a module edge", () => {
-    expect(scanImportAllowlist(`const u = import.meta.url\n`, NONE)).toEqual([]);
+    expect(scanned(scanImportAllowlist(`const u = import.meta.url\n`, NONE))).toEqual([]);
   });
 
   test("a JSX string-attribute value is not mistaken for an import specifier", () => {
     const src = `import { Text } from "@termcraft/runtime"\nexport default () => <Text id="t" color="danger">hi "quoted"</Text>\n`;
-    expect(scanImportAllowlist(src, NONE)).toEqual([]);
+    expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
   });
 
   test("reports every offending edge, not just the first", () => {
-    const errors = scanImportAllowlist(
-      `import "react"\nimport { x } from "lodash"\nrequire("fs")\n`,
-      NONE,
+    const errors = scanned(
+      scanImportAllowlist(`import "react"\nimport { x } from "lodash"\nrequire("fs")\n`, NONE),
     );
     expect(errors.length).toBe(3);
   });
 
   test("an eval(...) call is rejected as fatal dynamic code (§5.8)", () => {
-    const errors = scanImportAllowlist(`const x = eval("1 + 1")\n`, NONE);
+    const errors = scanned(scanImportAllowlist(`const x = eval("1 + 1")\n`, NONE));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("EVAL_CALL");
     expect(errors[0]?.message).toContain("eval");
   });
 
   test("a new Function(...) construction is rejected as fatal dynamic code (§5.8)", () => {
-    const errors = scanImportAllowlist(`const f = new Function("a", "return a")\n`, NONE);
+    const errors = scanned(scanImportAllowlist(`const f = new Function("a", "return a")\n`, NONE));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("FUNCTION_CALL");
     expect(errors[0]?.message).toContain("Function");
   });
 
   test("a method named eval on some object is not mistaken for the global eval", () => {
-    expect(scanImportAllowlist(`obj.eval("x")\n`, NONE)).toEqual([]);
+    expect(scanned(scanImportAllowlist(`obj.eval("x")\n`, NONE))).toEqual([]);
   });
 
   describe("Important 2 — optional chaining before eval is not a fatal false rejection", () => {
     test("obj?.eval(...) is not mistaken for the global eval", () => {
-      expect(scanImportAllowlist(`obj?.eval("x")\n`, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(`obj?.eval("x")\n`, NONE))).toEqual([]);
     });
   });
 
   describe("Important 3 — eval/Function evasions the token scanner now catches", () => {
     test('a bare eval reference smuggled through the comma operator ((0, eval)("x")) is caught', () => {
-      const errors = scanImportAllowlist(`(0, eval)("x")\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`(0, eval)("x")\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("an eval reference aliased to a variable then invoked later is caught at the point of reference", () => {
-      const errors = scanImportAllowlist(`const e = eval\ne("x")\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`const e = eval\ne("x")\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("a bare eval reference with no call at all is still caught (assignment alone reaches the capability)", () => {
-      const errors = scanImportAllowlist(`const e = eval\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`const e = eval\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test('a computed-string eval access (globalThis["eval"](...)) is caught', () => {
-      const errors = scanImportAllowlist(`globalThis["eval"]("x")\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`globalThis["eval"]("x")\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test('a bare Function call without new (Function("a", "return a")(1)) is caught', () => {
-      const errors = scanImportAllowlist(`Function("a", "return a")(1)\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`Function("a", "return a")(1)\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test('a computed-string Function access (g["Function"](...)) is caught', () => {
-      const errors = scanImportAllowlist(`g["Function"]("a", "return a")\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`g["Function"]("a", "return a")\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test("a method named Function on some object is not mistaken for the global Function", () => {
-      expect(scanImportAllowlist(`obj.Function("x")\n`, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(`obj.Function("x")\n`, NONE))).toEqual([]);
     });
 
     test("a bare `Function` type annotation (never called) is not flagged — it is TypeScript's own callback type", () => {
-      expect(scanImportAllowlist(`let onClick: Function\n`, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(`let onClick: Function\n`, NONE))).toEqual([]);
     });
 
     test("`Function` as a generic type argument, uncalled, is not flagged (`Map<string, Function>`)", () => {
-      expect(scanImportAllowlist(`let m: Map<string, Function>\n`, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(`let m: Map<string, Function>\n`, NONE))).toEqual([]);
     });
 
     test("a page defining a property/method literally named `eval` is flagged too — accepted over-approximation (§5.8)", () => {
-      const errors = scanImportAllowlist(`const o = { eval() { return 1 } }\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`const o = { eval() { return 1 } }\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -205,7 +225,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // and `{expr} />` would both be misread as regex openers), so a regex
       // body is lexed as ordinary tokens and the word inside it reads as a
       // bare `eval` reference.
-      const errors = scanImportAllowlist(`const re = /eval/\n`, NONE);
+      const errors = scanned(scanImportAllowlist(`const re = /eval/\n`, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -217,7 +237,9 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // reference is deliberately not flagged; once it is only ever called
       // through a differently-named alias, no "Function"/"eval" token remains
       // anywhere near the call for a token scanner to catch.
-      expect(scanImportAllowlist(`const F = Function\nnew F("a", "return a")\n`, NONE)).toEqual([]);
+      expect(
+        scanned(scanImportAllowlist(`const F = Function\nnew F("a", "return a")\n`, NONE)),
+      ).toEqual([]);
     });
 
     test('KNOWN GAP: a variable-mediated computed-member key (`const key = "eval"; g[key](...)`)', () => {
@@ -225,14 +247,16 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // StringLiteral directly inside the brackets; once the string is held in
       // a variable first, the bracket contents are an Identifier, not a
       // literal, and the check does not follow the reference.
-      expect(scanImportAllowlist(`const key = "eval"\nglobalThis[key]("x")\n`, NONE)).toEqual([]);
+      expect(
+        scanned(scanImportAllowlist(`const key = "eval"\nglobalThis[key]("x")\n`, NONE)),
+      ).toEqual([]);
     });
 
     test('KNOWN GAP: a concatenation-built computed-member key (`g["ev" + "al"](...)`)', () => {
       // Same reason as the variable-mediated key above, one step earlier: the
       // bracket holds two StringLiterals and a `+`, so neither one equals
       // "eval", and this scan folds no constants.
-      expect(scanImportAllowlist(`globalThis["ev" + "al"]("x")\n`, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(`globalThis["ev" + "al"]("x")\n`, NONE))).toEqual([]);
     });
 
     test("KNOWN GAP: a regex literal in STATEMENT position after `)` closes an expression container early", () => {
@@ -243,7 +267,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // its character class then closes the container early, so everything
       // after it — here the real `eval("2")` — is mis-read as JSX children text.
       const src = `export default () => <box id="b">{(() => { if (x) /[}]/.test(s) })() + eval("2")}</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("KNOWN GAP: the classic constructor-chain sandbox escape names neither `eval` nor `Function`", () => {
@@ -252,7 +276,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // `"constructor"` property reads and never writes the token "Function"
       // or "eval" anywhere — a token scanner has nothing to key off at all.
       expect(
-        scanImportAllowlist(`[]["constructor"]["constructor"]("return this")()\n`, NONE),
+        scanned(scanImportAllowlist(`[]["constructor"]["constructor"]("return this")()\n`, NONE)),
       ).toEqual([]);
     });
   });
@@ -264,12 +288,12 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     // above does; see `scanCode`'s own KNOWN GAP doc comment in `./jsx`.
     test("KNOWN GAP: a regex literal right after `<` closes an expression container early, hiding a real eval(...) call", () => {
       const src = `export default () => <box id="b">{x < /[}]/.test(s) && eval("1")}</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("KNOWN GAP: a regex literal right after `}` closes an expression container early, hiding a real eval(...) call", () => {
       const src = `export default () => <box id="b">{ {} /[}]/.test(s) && eval("1")}</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
 
@@ -285,7 +309,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // tail's literal text absorbs everything up to the next backtick —
       // including the real call.
       const src = 'const s = `${/[}]/ && eval("x")}`\n';
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("KNOWN GAP: a `{` inside a regex character class is pushed as a phantom brace, and the template's own closing backtick then opens a fresh, unterminated literal", () => {
@@ -296,7 +320,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // else in the file — swallowing every later statement, including the
       // real `eval("2")`.
       const src = 'const s = `${/[{]/.test(a)}`\nconst z = eval("2")\n';
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("KNOWN GAP: the same desync through a genuinely unterminated template swallows the rest of the file, JSX included", () => {
@@ -305,67 +329,67 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // everything after the opening backtick, the real `eval` call included,
       // into one token that is never split back apart.
       const src = '<box id="b">{`${0}\nconst z = eval("2")\n';
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
 
   describe("Finding 4 (fix pass 5) — a namespaced attribute name no longer fatally rejects the element's own text", () => {
     test('`<box xml:lang="en" id="b">eval is banned</box>` is legal JSX and is not fatally rejected', () => {
       const src = `export default () => <box xml:lang="en" id="b">eval is banned</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
 
   describe("Important 1 (fix pass 2) — JSX children text is not scanned as code", () => {
     test("prose containing the bare word `eval` as a JSX text child is not fatally rejected", () => {
       const src = `export default () => <Text id="t">Never use eval here</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose containing `Function (` as a JSX text child is not fatally rejected", () => {
       const src = `export default () => <Text id="t">Function (beta)</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("the bare word `eval` as the WHOLE JSX text child is not fatally rejected", () => {
       const src = `export default () => <Text id="t">eval</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test('a computed-access-shaped sentence (`globalThis["eval"]`) as JSX text is not fatally rejected', () => {
       const src = `export default () => <Text id="t">try globalThis["eval"]</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("a real eval(...) call inside a JSX expression container is still rejected", () => {
       const src = `export default () => <Text id="t">{eval("1")}</Text>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("a real Function(...) call inside a JSX expression container is still rejected", () => {
       const src = `export default () => <Text id="t">{Function("a", "return a")}</Text>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test("a real eval(...) call inside a JSX element nested within an expression container is still rejected", () => {
       const src = `export default () => <box>{cond && <text id="t">{eval("1")}</text>}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("prose in a JSX element nested inside an expression container is not fatally rejected", () => {
       const src = `export default () => <box>{cond && <text id="t">eval here</text>}</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose containing `eval` inside a bare Fragment (`<>...</>`) is not fatally rejected", () => {
       const src = `export default () => <>Never use eval here</>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("an uncalled generic type-argument list (`Array<Foo>`) does not mask a later real eval(...) call as JSX text", () => {
@@ -374,7 +398,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // even attempts `Foo` as a tag name and nothing here can be masked as
       // JSX text.
       const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -386,19 +410,19 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // swallows the rest of the line INCLUDING `</Text>`, so the closing tag
       // never confirms and `eval` is read as a live reference again.
       const src = `export default () => <Text id="t">eval isn't allowed on this page</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose containing an em dash and an apostrophe (`eval — don't`) does not fatally reject the page", () => {
       const src = `export default () => <Text id="t">eval — don't</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose containing `//` does not open a code-mode line comment that swallows the closing tag", () => {
       // Before fix-pass-3: `//` opens a code-mode line comment that eats
       // `</Text>` the same way the apostrophe case eats it via a string.
       const src = `export default () => <Text id="t">eval // never</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("a dangling close tag after an uncalled generic type argument does not launder a real eval(...) call as JSX text", () => {
@@ -411,7 +435,7 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // means `Foo` is never attempted as a tag, so nothing ever hunts for a
       // close tag to pair it with.
       const src = `let xs: Array<Foo> = []\nconst z = eval("2")\n</Foo>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -420,35 +444,35 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   describe("Critical 1 (fix pass 4) — a template literal or regex no longer hides dynamic code", () => {
     test("eval(...) after a template literal in a JSX expression container is caught", () => {
       const src = `export default () => <box id="b">{\`\${0}\`+eval("x")}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("new Function(...) after a template literal in an expression container is caught", () => {
       const src = `export default () => <box id="b">{\`\${0}\`+new Function("return 1")}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("FUNCTION_CALL");
     });
 
     test('globalThis["eval"](...) after a template literal in an expression container is caught', () => {
       const src = `export default () => <box id="b">{\`\${0}\`+globalThis["eval"]("x")}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("eval(...) after a regex literal holding a `}` in an expression container is caught", () => {
       const src = `export default () => <box id="b">{/[}]/.test(s) ? eval("1") : 0}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("eval(...) inside a template interpolation itself is caught", () => {
       const src = `export default () => <box id="b">{\`v=\${eval("1")}\`}</box>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -457,50 +481,52 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       // Same root cause, opposite direction: before this pass the tail
       // `} eval is not allowed\`` was re-lexed as code, so a page describing
       // `eval` in an interpolated string was fatally rejected.
-      expect(scanImportAllowlist("const s = `n=${1} eval is not allowed`\n", NONE)).toEqual([]);
+      expect(
+        scanned(scanImportAllowlist("const s = `n=${1} eval is not allowed`\n", NONE)),
+      ).toEqual([]);
     });
   });
 
   describe("Important 2 (fix pass 4) — spread attributes and dotted tag names keep prose readable", () => {
     test("prose in an element carrying a spread attribute is not fatally rejected", () => {
       const src = `export default () => <Text id="t" {...rest}>eval isn't allowed on this page</Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose in a member-expression tag (`<Kit.Text>`) is not fatally rejected", () => {
       const src = `export default () => <Kit.Text id="t">eval isn't allowed</Kit.Text>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose in an element whose attribute value is a template literal is not fatally rejected", () => {
       const src = `export default () => <box label={\`R\${n}\`}>eval isn't allowed</box>\n`;
-      expect(scanImportAllowlist(src, NONE)).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("a real eval(...) inside a spread-attribute element's container is still caught", () => {
       const src = `export default () => <Text id="t" {...rest}>{eval("1")}</Text>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("a real eval(...) inside a dotted-tag element's container is still caught", () => {
       const src = `export default () => <Kit.Text id="t">{eval("1")}</Kit.Text>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("a real eval(...) inside the spread attribute's OWN expression is still caught", () => {
       const src = `export default () => <Text id="t" {...{ e: eval }}>prose</Text>\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
     test("a mismatched dotted close tag does not launder a real eval(...) call as JSX text", () => {
       const src = `export default () => <Kit.Text id="t">x</Kit.Other>\nconst z = eval("2")\n`;
-      const errors = scanImportAllowlist(src, NONE);
+      const errors = scanned(scanImportAllowlist(src, NONE));
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
@@ -509,15 +535,15 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
 
 describe("scanImportAllowlist — context-aware relative resolution (design §6, Task 11)", () => {
   test("a relative import that resolves inside the tree is accepted", () => {
-    expect(scanImportAllowlist('import { theme } from "../lib/theme"\n', ctx)).toEqual([]);
-    expect(scanImportAllowlist('import G from "../widgets/gauge.tsx"\n', ctx)).toEqual([]);
-    expect(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n', ctx)).toEqual(
-      [],
-    );
+    expect(scanned(scanImportAllowlist('import { theme } from "../lib/theme"\n', ctx))).toEqual([]);
+    expect(scanned(scanImportAllowlist('import G from "../widgets/gauge.tsx"\n', ctx))).toEqual([]);
+    expect(
+      scanned(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n', ctx)),
+    ).toEqual([]);
   });
 
   test("a relative import that does not resolve is UNRESOLVED_IMPORT with the resolver's reason", () => {
-    const errors = scanImportAllowlist('import x from "../lib/missing"\n', ctx);
+    const errors = scanned(scanImportAllowlist('import x from "../lib/missing"\n', ctx));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
     expect(errors[0]?.message).toContain("directory-index");
@@ -537,14 +563,18 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
       ['const x = require("../lib/theme")\n', "REQUIRE_CALL"],
     ];
     for (const [source, code] of cases) {
-      const errors = scanImportAllowlist(source, ctx);
+      const errors = scanned(scanImportAllowlist(source, ctx));
       expect(errors[0]?.code).toBe(code);
     }
   });
 
   test("a type-only relative import is scanned exactly like a value import", () => {
-    expect(scanImportAllowlist('import type { T } from "../lib/theme"\n', ctx)).toEqual([]);
-    expect(scanImportAllowlist('import type { T } from "../lib/nope"\n', ctx)).toHaveLength(1);
+    expect(scanned(scanImportAllowlist('import type { T } from "../lib/theme"\n', ctx))).toEqual(
+      [],
+    );
+    expect(
+      scanned(scanImportAllowlist('import type { T } from "../lib/nope"\n', ctx)),
+    ).toHaveLength(1);
   });
 
   // --- adversarial coverage beyond the brief's own samples (Your Job, step 3) ---
@@ -552,32 +582,36 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
   test("a specifier that resolves via the extension probe picks .tsx before .ts when both exist", () => {
     const bothExist = (relPath: string) =>
       new Set(["widgets/panel.tsx", "widgets/panel.ts"]).has(relPath);
-    const errors = scanImportAllowlist('import P from "../widgets/panel"\n', {
-      from: "pages/dashboard.tsx",
-      has: bothExist,
-      isScanned: () => true,
-    });
+    const errors = scanned(
+      scanImportAllowlist('import P from "../widgets/panel"\n', {
+        from: "pages/dashboard.tsx",
+        has: bothExist,
+        isScanned: () => true,
+      }),
+    );
     expect(errors).toEqual([]);
   });
 
   test("a specifier resolves via the .ts fallback probe when no .tsx file exists", () => {
     const onlyTs = (relPath: string) => relPath === "lib/theme.ts";
-    const errors = scanImportAllowlist('import t from "../lib/theme"\n', {
-      from: "pages/dashboard.tsx",
-      has: onlyTs,
-      isScanned: () => true,
-    });
+    const errors = scanned(
+      scanImportAllowlist('import t from "../lib/theme"\n', {
+        from: "pages/dashboard.tsx",
+        has: onlyTs,
+        isScanned: () => true,
+      }),
+    );
     expect(errors).toEqual([]);
   });
 
   test("a scoped bare package (@acme/widgets) is FORBIDDEN_IMPORT, not silently treated as relative", () => {
-    const errors = scanImportAllowlist('import x from "@acme/widgets"\n', ctx);
+    const errors = scanned(scanImportAllowlist('import x from "@acme/widgets"\n', ctx));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
   });
 
   test("node:fs stays FORBIDDEN_IMPORT under a real tree context too, not only the context-less default", () => {
-    const errors = scanImportAllowlist('import fs from "node:fs"\n', ctx);
+    const errors = scanned(scanImportAllowlist('import fs from "node:fs"\n', ctx));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("FORBIDDEN_IMPORT");
   });
@@ -586,31 +620,33 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     // "../package.json" from "pages/dashboard.tsx" normalizes to "package.json" — a file that
     // genuinely exists at this repo's root. `ctx.has` knows nothing about it, so if resolution
     // ever silently fell back to real disk I/O this would wrongly resolve; it must not.
-    const errors = scanImportAllowlist('import pkg from "../package.json"\n', ctx);
+    const errors = scanned(scanImportAllowlist('import pkg from "../package.json"\n', ctx));
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("UNRESOLVED_IMPORT");
   });
 
   test("against NONE's honest-empty tree, only the bare runtime root stays legal", () => {
-    expect(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n', NONE)).toEqual(
-      [],
+    expect(
+      scanned(scanImportAllowlist('import { definePage } from "@termcraft/runtime"\n', NONE)),
+    ).toEqual([]);
+    expect(scanned(scanImportAllowlist('import x from "react"\n', NONE))[0]?.code).toBe(
+      "FORBIDDEN_IMPORT",
     );
-    expect(scanImportAllowlist('import x from "react"\n', NONE)[0]?.code).toBe("FORBIDDEN_IMPORT");
     // A specifier that stays inside NONE's empty `from: ""` root is UNRESOLVED_IMPORT —
     // nothing can resolve without a real tree, but the SHAPE is legal.
-    expect(scanImportAllowlist('import x from "./lib/theme"\n', NONE)[0]?.code).toBe(
+    expect(scanned(scanImportAllowlist('import x from "./lib/theme"\n', NONE))[0]?.code).toBe(
       "UNRESOLVED_IMPORT",
     );
     // A specifier that climbs ABOVE the empty root genuinely escapes it — honest
     // ESCAPES_TREE, mapped to FORBIDDEN_IMPORT, not a fabricated UNRESOLVED_IMPORT.
-    expect(scanImportAllowlist('import x from "../lib/theme"\n', NONE)[0]?.code).toBe(
+    expect(scanned(scanImportAllowlist('import x from "../lib/theme"\n', NONE))[0]?.code).toBe(
       "FORBIDDEN_IMPORT",
     );
   });
 
   describe("the rejection message is always the resolver's own — `context` is mandatory, so there is no separate no-context wording to keep honest", () => {
     test("a rejection's message carries the specifier, the resolver's `[code]` tag, and the real `from` it was scanned against", () => {
-      const message = scanImportAllowlist('import x from "react"\n', ctx)[0]?.message;
+      const message = scanned(scanImportAllowlist('import x from "react"\n', ctx))[0]?.message;
       expect(message).toBeDefined();
       expect(message).toContain(ctx.from);
       expect(message).toContain("[BARE_SPECIFIER]");

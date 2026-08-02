@@ -302,3 +302,33 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
     expect(result.errors[0]).toBeUndefined();
   });
 });
+
+/**
+ * THE PER-PAGE PATH'S TRUNCATION HANDLING (task-14 review round 2, found by mutation while
+ * checking M6). `checkPageContract` and the token-based lints return
+ * `SourceStreamTruncatedError | …` now, and `runGate` must turn that into a fatal for the page.
+ *
+ * WHY: mutating `checkPageContract` to swallow the truncation (returning an empty, meta-less
+ * result) killed NOTHING in the whole suite. The turn-level tests all place the truncation in a
+ * SHARED module, where the whole-tree scan catches it — so the ENTRY-page path, which is the
+ * only one `runGate` owns, had no coverage at all.
+ */
+describe("runGate — a page whose own source cannot be read to the end", () => {
+  const TRUNCATED = `export const G = () => <Text>\uFFFD</Text>\nimport fs from "node:fs"\n`;
+
+  test("rejects the page with UNSCANNABLE_SOURCE instead of reporting a missing contract", async () => {
+    const result = await runGate({ source: TRUNCATED, slug: "home" as PageSlug });
+    expect(result.ok).toBe(false);
+    // The CODE matters: a truncated stream also has no `meta` in it, so a naive implementation
+    // reports "this page declares no meta" — a false diagnosis that sends the agent to fix a
+    // contract that is probably fine.
+    expect(result.errors.map((e) => e.code)).toEqual(["UNSCANNABLE_SOURCE"]);
+    expect(result.descriptor).toBeNull();
+  });
+
+  test("a page carrying the same character in a STRING is unaffected — no over-fire", async () => {
+    const clean = `export const meta = definePage({ title: "\uFFFD", minSize: { w: 80, h: 24 }, theme: "dark-default", kitApiVersion: 1 })\n`;
+    const result = await runGate({ source: clean, slug: "home" as PageSlug });
+    expect(result.errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
+  });
+});
