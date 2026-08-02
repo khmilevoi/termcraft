@@ -188,7 +188,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       // surface owns the keys, not a second independently derived export-popup check (M14 fix).
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
       composerValue: deps.local.composer(),
-      homeHealth: deps.local.homeHealth(),
+      agentHealth: deps.local.agentHealth(),
       homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
       projectOpening: deps.mirror.project().opening,
@@ -254,7 +254,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         id="app-home"
         width={size.w}
         height={size.h}
-        health={deps.local.homeHealth()}
+        health={deps.local.agentHealth()}
         prompt={deps.local.prompt()}
         combo={homeCombo(deps.local.agentSelection())}
         rows={homeSlashOpen ? filterSlashRows(deps.local.prompt(), deps.actionContext()) : []}

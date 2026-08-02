@@ -20,7 +20,8 @@ import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
-import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
+import type { HomeAgentSelection } from "ui/home";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
@@ -87,15 +88,17 @@ export interface UiLocalState {
    */
   readonly exportDismissed: Atom<UUIDv7 | null>;
   /**
-   * The Home agent-health reading (M15) — Home's `health` prop reads this instead of a
-   * hardcoded literal. There is no Kernel command that reports agent health (Home is shown
-   * *before* any project opens, so there is no `kernel.snapshot` to read either), so this atom's
-   * lifecycle is: seeded with {@link DEFAULT_HOME_HEALTH} as a synchronous pre-probe placeholder
-   * (Home's very first paint cannot await a Promise), then `createUiDeps` fires
-   * {@link UiDeps.refreshHomeHealth} once at startup to replace it with the injected probe's
-   * real reading, and again on every `home-recheck` — the SAME probe path, not a duplicated one.
+   * The agent-health reading (M15). Home's `health` prop and the Workspace status bar's badge
+   * both read this — one probe, two surfaces (2026-08-02). There is no Kernel command that
+   * reports agent health (Home is shown *before* any project opens, so there is no
+   * `kernel.snapshot` to read either), so this atom's lifecycle is: seeded with
+   * {@link DEFAULT_AGENT_HEALTH} as a synchronous pre-probe placeholder (the first paint cannot
+   * await a Promise), then `createUiDeps` fires {@link UiDeps.refreshAgentHealth} once at startup
+   * to replace it with the injected probe's real reading, and again on every `home-recheck` — the
+   * SAME probe path, not a duplicated one. There is deliberately NO Workspace re-check: the badge
+   * is the reading taken at startup and it is never refreshed for the life of the process.
    */
-  readonly homeHealth: Atom<HomeAgentHealth>;
+  readonly agentHealth: Atom<AgentHealth>;
   /**
    * The agent/model/effort triple Home's combo renders (finding §2.7). Seeded SYNCHRONOUSLY by the
    * composition root, because it is a synchronous fact: it must not wait behind the CLI health
@@ -164,12 +167,12 @@ export interface UiDeps {
    */
   readonly activePageSlug: Computed<string | null>;
   /**
-   * Re-runs the agent-health probe and updates {@link UiLocalState.homeHealth} (M15's
+   * Re-runs the agent-health probe and updates {@link UiLocalState.agentHealth} (M15's
    * `home-recheck` intent calls this). Named and `withAsync`-extended per RTM-A02/A03; a fresh
    * probe result always replaces the previous one, matching a manual user-triggered re-check
    * rather than a cached/derived read.
    */
-  readonly refreshHomeHealth: () => Promise<void>;
+  readonly refreshAgentHealth: () => Promise<void>;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10): `applyIntent`'s `exit` intent (the `q`
    * keys on the agent-missing/too-small-terminal screens) and the `/exit` slash command both
@@ -189,7 +192,7 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 
 /**
  * The Home agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
- * probe once at startup (see `refreshHomeHealth()` below), but Home's very first render happens
+ * probe once at startup (see `refreshAgentHealth()` below), but Home's very first render happens
  * synchronously, before that probe's Promise can resolve — a component render cannot await one.
  * This value only ever shows for that first frame. The real CLI-checking probe IS wired by
  * default now (phase-8 Task 9 / WP-5, `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`
@@ -209,17 +212,17 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 // mock's Codex sample; it is still overwritten by the injected probe's real reading the moment
 // it resolves (M22).
 //
-// `HomeAgentHealth` has had no `model`/`effort`/`version` fields since phase-8 Task 13 split
+// `AgentHealth` has had no `model`/`effort`/`version` fields since phase-8 Task 13 split
 // them out (finding §2.7): Home's combo reads the SEPARATE, synchronous `local.agentSelection`
 // atom below, seeded directly by the composition root at construction rather than riding this
 // health probe's promise.
-const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
+const DEFAULT_AGENT_HEALTH: AgentHealth = {
   kind: "checking",
   agent: "claude",
 };
 
 /**
- * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_HOME_HEALTH}
+ * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_AGENT_HEALTH}
  * (finding §2.7, phase-8 Task 15), and CORRECTED to never be `ready` (fix round 1, Finding 1 —
  * CRITICAL). This constant is the value {@link createUiDeps}'s own default `agentHealthProbe`
  * parameter resolves to whenever NO probe is injected — and that default is REACHABLE IN
@@ -235,9 +238,9 @@ const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
  * the design's own "health unconfirmed" bucket (`homeHealth('shutdown')`) is the literal truth
  * for "no probe ran at all", the most extreme case of "not confirmed". Never `ready` — that
  * specific claim is reserved for an actual passing `AgentBackend.healthCheck()` reading
- * (`entrypoint/model/agent-health.ts`'s `homeHealthFromAgentInfo`, `case "ready"`).
+ * (`entrypoint/model/agent-health.ts`'s `agentHealthFromAgentInfo`, `case "ready"`).
  */
-const DEFAULT_PROBE_RESOLUTION: HomeAgentHealth = {
+const DEFAULT_PROBE_RESOLUTION: AgentHealth = {
   kind: "advisory",
   agent: "claude",
   panel: "shutdown",
@@ -253,9 +256,8 @@ export function createUiDeps(
   // checks the agent CLI on PATH; tests inject a fake. The default resolves to an honest
   // `advisory` reading — NEVER `ready` (fix round 1, Finding 1) — see
   // {@link DEFAULT_PROBE_RESOLUTION}'s own doc comment for why it must differ from both `ready`
-  // and {@link DEFAULT_HOME_HEALTH}.
-  agentHealthProbe: () => Promise<HomeAgentHealth> = () =>
-    Promise.resolve(DEFAULT_PROBE_RESOLUTION),
+  // and {@link DEFAULT_AGENT_HEALTH}.
+  agentHealthProbe: () => Promise<AgentHealth> = () => Promise.resolve(DEFAULT_PROBE_RESOLUTION),
   // The named Task 11 / WP-10 injection point: the phase-8 composition root binds this to
   // `RunningApp.close()`. Defaults to a no-op so every existing test/demo construction of
   // `UiDeps` keeps compiling without knowing about shutdown at all.
@@ -752,13 +754,13 @@ export function createUiDeps(
     pinDraft: atom("", "ui.local.pinDraft"),
     pageOverride,
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
-    homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
+    agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
   };
 
-  const refreshHomeHealth = action(async () => {
+  const refreshAgentHealth = action(async () => {
     // SHOW THAT THE PROBE IS RUNNING (defect fix, 2026-07-26). Startup already looked right,
-    // because `homeHealth` is SEEDED `checking` — but a manual `r` re-check only ever wrote the
+    // because `agentHealth` is SEEDED `checking` — but a manual `r` re-check only ever wrote the
     // RESULT, so the previous verdict (`✗ claude not signed in`, say) sat unchanged on screen
     // for the probe's whole run, up to the 20s timeout. A user who fixed the cause and pressed
     // `r` had no way to tell whether anything was happening. Re-entering `checking` first reuses
@@ -767,18 +769,18 @@ export function createUiDeps(
     //
     // The agent name is carried over from the reading being replaced: it is the same agent being
     // re-probed, and every member of the union carries it, so nothing is invented here.
-    local.homeHealth.set({ kind: "checking", agent: local.homeHealth().agent });
+    local.agentHealth.set({ kind: "checking", agent: local.agentHealth().agent });
     const result = await wrap(agentHealthProbe());
-    local.homeHealth.set(result);
-  }, "ui.app.refreshHomeHealth").extend(withAsync());
+    local.agentHealth.set(result);
+  }, "ui.app.refreshAgentHealth").extend(withAsync());
 
   // M15 lifecycle fix: fire the SAME probe path `home-recheck` uses once here, at startup,
-  // instead of only seeding `homeHealth` from the placeholder above. A real phase-8 probe
+  // instead of only seeding `agentHealth` from the placeholder above. A real phase-8 probe
   // reporting a missing agent now surfaces as soon as it resolves — not only after a manual
   // `r` re-check. Fire-and-forget like every other dispatch in this module (`void slashSelection`
-  // above primes a computed the same way): the result lands in `local.homeHealth`, which Home
+  // above primes a computed the same way): the result lands in `local.agentHealth`, which Home
   // re-reads reactively.
-  void refreshHomeHealth();
+  void refreshAgentHealth();
 
   const deps: UiDeps = {
     port,
@@ -794,7 +796,7 @@ export function createUiDeps(
     interaction,
     local,
     activePageSlug,
-    refreshHomeHealth,
+    refreshAgentHealth,
     requestExit,
   };
   return deps;

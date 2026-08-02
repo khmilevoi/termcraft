@@ -1,7 +1,8 @@
 /**
  * `entrypoint/model/agent-health.ts` — phase-8 Task 9 (design §WP-5): the real Home health
  * probe. This file imports BOTH `agent` (backend/domain types — `AgentBackend`, `AgentInfo`)
- * and `ui/home` (presentation types — `HomeAgentHealth`) directly, which is normally forbidden
+ * and `ui/agent-health` (the presentation type — `AgentHealth`) directly, which is normally
+ * forbidden
  * (`docs/architecture/code-structure.md`: "`ui` sees only core boundary types +
  * `PreviewSession` — never `store`, never host stdio, never `agent`"). `entrypoint` is the one
  * exception: it is the composition root, "the ONE place allowed to import across modules" —
@@ -12,10 +13,10 @@ import * as errore from "errore";
 
 import type { AgentBackend, AgentInfo } from "agent";
 import type { AgentRegistry } from "core/ports";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 
 /**
- * Map from one `AgentBackend.healthCheck()` reading to Home's five-outcome `HomeAgentHealth`
+ * Map from one `AgentBackend.healthCheck()` reading to Home's five-outcome `AgentHealth`
  * (finding §2.7, phase-8 Task 15) — pure aside from one incidental diagnostic `console.warn`
  * (the `sandbox-degraded` branch, errore rule 21: a fact this function does not propagate into
  * its return value must still be logged). Exhaustive over every `AgentHealthState` variant
@@ -23,7 +24,7 @@ import type { HomeAgentHealth } from "ui/home";
  * `default` arm — TypeScript's own control-flow analysis makes a seventh variant added later a
  * `tsc` failure here, not a silent "ready".
  *
- * `HomeAgentHealth` carries no `version` field: `AgentInfo` never had one to report (only
+ * `AgentHealth` carries no `version` field: `AgentInfo` never had one to report (only
  * `backendId`, `health`, `account` — `agent/types.ts`), so the field was always a fabrication
  * risk; dropping it is the honest fix, not a placeholder this function still needs to supply.
  *
@@ -46,7 +47,7 @@ import type { HomeAgentHealth } from "ui/home";
  * The other states have no design mock naming their exact text, so their `detail` is this
  * module's own honest wording — documented per branch below, never silently invented.
  */
-export function homeHealthFromAgentInfo(info: AgentInfo): HomeAgentHealth {
+export function agentHealthFromAgentInfo(info: AgentInfo): AgentHealth {
   const { backendId, health } = info;
   switch (health.status) {
     case "ready":
@@ -175,10 +176,10 @@ export function resolveDefaultAgentSelection(
 
 /**
  * Builds the real Home health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
- * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshHomeHealth` actually calls.
+ * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshAgentHealth` actually calls.
  *
  * Returns HEALTH ONLY (phase-8 Task 13, finding §2.7): is the CLI there, logged in, healthy?
- * Mapped through {@link homeHealthFromAgentInfo}. It used to also fold in
+ * Mapped through {@link agentHealthFromAgentInfo}. It used to also fold in
  * `capabilities().defaultSelection` — a SEPARATE, synchronous fact with no I/O at all — which
  * meant Home's `agent ‹…› model ‹…› effort ‹…›` combo waited behind this probe's real cold
  * spawn (up to `DEFAULT_PROBE_DEADLINE_MS`, 20 s) for a value that was available at
@@ -193,7 +194,7 @@ export function resolveDefaultAgentSelection(
  * signed-out user (finding §2.7): the old `present: false` mapping made the same over-claim a
  * probe timeout did — see `agent/health/model/probe.ts`'s `inconclusive` for the sibling fix.
  */
-export function createAgentHealthProbe(backend: AgentBackend): () => Promise<HomeAgentHealth> {
+export function createAgentHealthProbe(backend: AgentBackend): () => Promise<AgentHealth> {
   return async () => {
     const info = await backend.healthCheck().catch(
       (cause: unknown) =>
@@ -212,6 +213,6 @@ export function createAgentHealthProbe(backend: AgentBackend): () => Promise<Hom
         detail: info.message,
       };
     }
-    return homeHealthFromAgentInfo(info);
+    return agentHealthFromAgentInfo(info);
   };
 }

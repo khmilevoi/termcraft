@@ -176,7 +176,7 @@ describe("runApp", () => {
 
       // `resolveAgentHealthProbe` builds the probe from the registry's sole backend and
       // `createUiDeps` fires it once, fire-and-forget, the moment the UI root is constructed
-      // (`ui/app/model/deps.ts`'s own `void refreshHomeHealth()`) — proving `runApp` actually
+      // (`ui/app/model/deps.ts`'s own `void refreshAgentHealth()`) — proving `runApp` actually
       // wired the real probe through, not merely that it compiled.
       await tick();
       expect(backend.calls.some((call) => call.method === "healthCheck")).toBe(true);

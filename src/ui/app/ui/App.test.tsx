@@ -5,7 +5,7 @@ import { MouseButtons } from "@opentui/core/testing";
 import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import { FRESH_CHAT_LABEL } from "ui/popups";
 import { requestGeometry } from "ui/preview";
@@ -64,7 +64,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   test("the startup probe surfaces a missing agent without a manual recheck, and r re-checks it (M15, finding §2.7)", async () => {
     const kernel = createFakeKernel();
     // The probe itself reports the CLI missing on its first call (the startup probe
-    // `createUiDeps` now fires — no manual `local.homeHealth.set` needed to reach this state,
+    // `createUiDeps` now fires — no manual `local.agentHealth.set` needed to reach this state,
     // reproducing a real phase-8 probe's first reading) and recovers on the second call (the
     // `r` re-check).
     let calls = 0;
@@ -259,7 +259,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
   test("paints agent · model · effort on the first frame, before any probe resolves (finding §2.7, phase-8 Task 13)", async () => {
     const kernel = createFakeKernel();
-    const neverResolves = () => new Promise<HomeAgentHealth>(() => {});
+    const neverResolves = () => new Promise<AgentHealth>(() => {});
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 40 },
@@ -416,7 +416,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       height: 36,
     });
     open = renderer;
-    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.agentHealth()));
 
     await renderer.act(() => renderer.mockInput.typeText("/"));
     const menu = await renderer.waitForFrame(
@@ -831,7 +831,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     // renders identically during `checking`, so Enter below needs the outcome to have actually
     // settled to something that allows submit (the default test probe resolves to `advisory`,
     // never `ready` — fix round 1, Finding 1), not merely the first seeded frame.
-    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.agentHealth()));
 
     await renderer.act(() => renderer.mockInput.typeText("build a dashboard"));
     expect(await renderer.waitForFrame((frame) => frame.includes("build a dashboard"))).toContain(

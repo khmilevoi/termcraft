@@ -5,7 +5,7 @@ import { context } from "@reatom/core";
 import type { PreviewFrameV1 } from "core/ports";
 import type { CommandResultV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import {
   TEST_NONCE,
@@ -239,7 +239,7 @@ describe("createUiDeps Home health probe (M15)", () => {
 
     // A real probe reporting a missing agent surfaces without a manual `r` re-check.
     expect(calls).toBeGreaterThanOrEqual(1);
-    expect(deps.local.homeHealth()).toEqual({
+    expect(deps.local.agentHealth()).toEqual({
       kind: "missing",
       agent: "claude",
       detail: "claude CLI not found",
@@ -254,7 +254,7 @@ describe("createUiDeps Home health probe (M15)", () => {
 
     await tick();
 
-    expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "ready", agent: "claude" });
   });
 
   // REGRESSION GUARD for fix round 1, Finding 1 (CRITICAL): the DEFAULT probe (no
@@ -271,11 +271,11 @@ describe("createUiDeps Home health probe (M15)", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 }); // no agentHealthProbe: the production demo-mode / empty-catalog path
 
     // The synchronous pre-probe seed — honest `checking`, never `ready` (finding §2.7 itself).
-    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "checking", agent: "claude" });
 
     await tick();
 
-    const settled = deps.local.homeHealth();
+    const settled = deps.local.agentHealth();
     expect(settled.kind).not.toBe("ready");
     expect(settled.kind).toBe("advisory");
     // Still usable — advisory permits submit — just never on a fabricated "verified" claim.
@@ -581,16 +581,16 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
   });
 });
 
-describe("createUiDeps refreshHomeHealth", () => {
+describe("createUiDeps refreshAgentHealth", () => {
   test("re-enters `checking` while the probe runs, so a manual `r` re-check is visible", async () => {
     // A hand-driven probe: each call hands back a promise this test settles when it chooses,
     // so the mid-probe state is observable rather than raced against.
-    const pending: ((value: HomeAgentHealth) => void)[] = [];
+    const pending: ((value: AgentHealth) => void)[] = [];
     const probe = () =>
-      new Promise<HomeAgentHealth>((resolve) => {
+      new Promise<AgentHealth>((resolve) => {
         pending.push(resolve);
       });
-    const settle = (value: HomeAgentHealth) => {
+    const settle = (value: AgentHealth) => {
       const resolve = pending.shift();
       if (resolve === undefined) throw new Error("fixture bug: no probe in flight to settle");
       resolve(value);
@@ -602,16 +602,16 @@ describe("createUiDeps refreshHomeHealth", () => {
     // when they fix the cause and press `r`.
     settle({ kind: "blocked", agent: "claude", panel: "login", detail: "not signed in" });
     await tick();
-    expect(deps.local.homeHealth().kind).toBe("blocked");
+    expect(deps.local.agentHealth().kind).toBe("blocked");
 
     // The re-check itself. Without this fix the stale `blocked` verdict stayed on screen for the
     // probe's entire run (up to 20s), with nothing to say a re-check was happening at all.
-    void deps.refreshHomeHealth();
-    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+    void deps.refreshAgentHealth();
+    expect(deps.local.agentHealth()).toEqual({ kind: "checking", agent: "claude" });
 
     settle({ kind: "ready", agent: "claude" });
     await tick();
-    expect(deps.local.homeHealth().kind).toBe("ready");
+    expect(deps.local.agentHealth().kind).toBe("ready");
   });
 });
 

@@ -726,7 +726,7 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
-    expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "ready", agent: "claude" });
   });
 
   test("home-recheck reflects a still-missing agent from the probe", async () => {
@@ -736,7 +736,7 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
-    expect(deps.local.homeHealth()).toEqual({
+    expect(deps.local.agentHealth()).toEqual({
       kind: "missing",
       agent: "claude",
       detail: "claude CLI not found",

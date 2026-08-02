@@ -3,7 +3,7 @@ import * as errore from "errore";
 import type { AgentRegistry } from "core/ports";
 import type { UInt64String, UUIDv7 } from "core/protocol";
 import { type UiRootAdapters, type UiRootHandle, createUiRoot } from "ui";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import type { AnyEventEnvelope, EventEnvelopeV1, KernelPort } from "ui/kernel";
 import { createDispatcher } from "ui/kernel";
 
@@ -214,7 +214,7 @@ async function closeShell(shell: AppShell, boundary: ProcessBoundary): Promise<v
 }
 
 /**
- * Builds Home's real health probe from the shell's agent registry (phase-8 Task 9 / WP-5). Since
+ * Builds the real agent-health probe from the shell's agent registry (phase-8 Task 9 / WP-5). Since
  * phase-8 Task 13 (finding §2.7) this reports HEALTH only — the sibling synchronous fact, the
  * registry's declared default agent/model/effort, is resolved separately by
  * `resolveDefaultAgentSelection` (`./agent-health.ts`) and passed straight into `createUiRoot`'s
@@ -234,7 +234,7 @@ async function closeShell(shell: AppShell, boundary: ProcessBoundary): Promise<v
  */
 function resolveAgentHealthProbe(
   registry: AgentRegistry | null,
-): (() => Promise<HomeAgentHealth>) | undefined {
+): (() => Promise<AgentHealth>) | undefined {
   if (registry === null) return undefined;
   const [sole] = registry.list();
   if (sole === undefined) return undefined;

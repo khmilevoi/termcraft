@@ -7,7 +7,8 @@ import {
   resumeConsolePassthrough,
   suspendConsolePassthrough,
 } from "infrastructure/debug-log";
-import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
+import type { HomeAgentSelection } from "ui/home";
 import type { KernelPort } from "ui/kernel";
 
 import { App } from "../ui/App";
@@ -42,7 +43,7 @@ export interface UiRootOptions {
    * existing `createUiRoot` call keeps compiling — `createUiDeps`'s own fourth parameter
    * already defaults to today's pre-probe placeholder reading when this is omitted.
    */
-  readonly agentHealthProbe?: () => Promise<HomeAgentHealth>;
+  readonly agentHealthProbe?: () => Promise<AgentHealth>;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10), forwarded verbatim into
    * `createUiDeps`'s fifth parameter — see `deps.ts`'s `UiDeps.requestExit` for the full

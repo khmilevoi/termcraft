@@ -4,8 +4,8 @@ import type { AgentBackend } from "agent";
 import { createFakeAgentBackend, createFakeAgentRegistry } from "core/ports/fakes";
 
 import {
+  agentHealthFromAgentInfo,
   createAgentHealthProbe,
-  homeHealthFromAgentInfo,
   resolveDefaultAgentSelection,
 } from "./agent-health";
 
@@ -21,21 +21,21 @@ const CAPABILITIES = {
   defaultSelection: { model: "claude-sonnet-5", effort: "high" as const },
 };
 
-describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes)", () => {
+describe("agentHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes)", () => {
   test("ready carries the backend id, and no detail at all", () => {
-    const health = homeHealthFromAgentInfo({ ...base, health: { status: "ready" } });
+    const health = agentHealthFromAgentInfo({ ...base, health: { status: "ready" } });
 
     expect(health).toEqual({ kind: "ready", agent: "claude" });
   });
 
   test("not-installed is the missing-agent state (full-screen takeover)", () => {
-    const health = homeHealthFromAgentInfo({ ...base, health: { status: "not-installed" } });
+    const health = agentHealthFromAgentInfo({ ...base, health: { status: "not-installed" } });
 
     expect(health).toEqual({ kind: "missing", agent: "claude", detail: "claude CLI not found" });
   });
 
   test("not-logged-in is blocked/login, and says so honestly — never the version design's sample carries", () => {
-    const health = homeHealthFromAgentInfo({ ...base, health: { status: "not-logged-in" } });
+    const health = agentHealthFromAgentInfo({ ...base, health: { status: "not-logged-in" } });
 
     expect(health).toEqual({
       kind: "blocked",
@@ -53,7 +53,7 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
   // would be rejected. `blocked/latched` is the honest mapping — no design mock covers this
   // cause, so `HomeHealthPanel`'s own `panelSpec` documents the divergence.
   test("an unconfirmed exit is blocked/latched — a confirmed lockout, never advisory and never ready", () => {
-    const health = homeHealthFromAgentInfo({
+    const health = agentHealthFromAgentInfo({
       ...base,
       health: { status: "unhealthy-unconfirmed-exit" },
     });
@@ -70,7 +70,7 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
   // verdict (deadline/abort/clean-close — `agent/health/model/probe.ts`'s `inconclusive`), which
   // proves nothing about whether a turn would work — unlike the confirmed latch above.
   test("probe-inconclusive is advisory/shutdown — genuinely unproven, submit stays allowed", () => {
-    const health = homeHealthFromAgentInfo({
+    const health = agentHealthFromAgentInfo({
       ...base,
       health: { status: "probe-inconclusive" },
     });
@@ -91,7 +91,7 @@ describe("homeHealthFromAgentInfo (finding §2.7, phase-8 Task 15: five outcomes
   // is not silently discarded, though (fix round 1, Minor finding) — it is logged.
   test("sandbox-degraded is advisory/sandbox, with design's own fixed wording, and logs the backend's own cause", () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => undefined);
-    const health = homeHealthFromAgentInfo({
+    const health = agentHealthFromAgentInfo({
       ...base,
       health: { status: "sandbox-degraded", detail: "seatbelt unavailable" },
     });

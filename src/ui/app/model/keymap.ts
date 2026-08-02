@@ -1,5 +1,5 @@
 import { resolveHotkey } from "ui/actions";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import type { ScreenKind } from "ui/mirror";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
@@ -44,7 +44,7 @@ export interface KeyContext {
    * `advisory`) keeps the idle prompt genuinely live with no extra key —
    * {@link homeSubmitAllowed} alone decides whether Enter submits.
    */
-  readonly homeHealth: HomeAgentHealth;
+  readonly agentHealth: AgentHealth;
   /**
    * Home's own prompt text (M15). Only read on `screen === "home"`, for two purposes now:
    * guarding `blocked`'s literal `q`-quits key (fix round 2, Minor finding; escape route
@@ -232,7 +232,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // own status bar names is inert there (design `homeErr()` `:727` — CORRECTED fix round 1,
     // Finding 2, was miscited `:583`, a chat-colour branch inside `chatSeq()` unrelated to Home —
     // `this.statusBar(b,h-1,[...],[['r','re-check'],['q','quit']]);`).
-    if (context.homeHealth.kind === "missing") {
+    if (context.agentHealth.kind === "missing") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q") return { kind: "exit" };
       return { kind: "none" };
@@ -246,7 +246,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // with), matching design's own `homeHealth()` hint row (`:194`, which reads literal `q` for
     // BOTH branches) — GUARDED, see `KeyContext.homePrompt`'s own doc comment: `q` exits only
     // once nothing typed is left to lose.
-    if (context.homeHealth.kind === "blocked") {
+    if (context.agentHealth.kind === "blocked") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q" && context.homePrompt.length === 0) return { kind: "exit" };
       // CORRECTED (fix round 3): `backspace` is the escape route the `q` guard above needs —
@@ -265,7 +265,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // steal a character from live typing, the exact bug just fixed for `blocked` above.
     if (RETURN_NAMES.has(key.name)) {
       if (context.projectOpening) return { kind: "none" };
-      return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
+      return homeSubmitAllowed(context.agentHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
     if (key.name === "backspace") return { kind: "home-backspace" };
     // §3.10: `/` as the first character of an empty primary input opens the slash menu — the Home
@@ -274,7 +274,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // already-open menu is served by the same code and needs nothing further here. Only reachable
     // from this point in the function at all when `missing`/`blocked` already returned above —
     // §3.10's "the menu is only reachable when the prompt is live" (Task 15's health gate) falls
-    // out of that ordering for free, not from a second check on `context.homeHealth` here.
+    // out of that ordering for free, not from a second check on `context.agentHealth` here.
     if (key.sequence === "/" && context.homePrompt.length === 0) return { kind: "slash-open" };
     const ch = printableChar(key);
     if (ch !== null) return { kind: "home-input", ch };

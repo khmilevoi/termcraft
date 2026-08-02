@@ -1,3 +1,4 @@
+import type { AgentHealth } from "ui/agent-health";
 import { SlashMenu } from "ui/slash-menu";
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
@@ -6,7 +7,7 @@ import { TextInput } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { homeSubmitAllowed } from "../types";
-import type { HomeAgentHealth, HomeCombo, HomeProps } from "../types";
+import type { HomeCombo, HomeProps } from "../types";
 import { HomeHealthPanel } from "./HomeHealthPanel";
 import { HomeOpenFailurePanel } from "./HomeOpenFailurePanel";
 
@@ -49,7 +50,7 @@ function fitsModelHint(iw: number, combo: HomeCombo): boolean {
  * fix round 1 Finding 5). `ready` gets none — its `page` text below is the entire status-bar
  * footprint.
  */
-function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
+function homeStatusBadge(health: AgentHealth): StatusBarHintBadge | null {
   if (health.kind === "checking") {
     // Design draws this glyph as a static `⠹` too (`:148`,`:158` — a static mockup cannot
     // animate) — DIVERGENCE (fix round 1, Minor finding): this component's OWN `⠹` here is
@@ -103,7 +104,7 @@ function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
  * own `q`→`/exit` precedent above exists specifically to avoid that class of bug. A shown-but-
  * unwired hint would mislead, so none is shown; `keymap.ts` wires no `r` handler for `advisory`.
  */
-function homeIdleHintKeys(health: HomeAgentHealth, opening: boolean): readonly StatusBarHintKey[] {
+function homeIdleHintKeys(health: AgentHealth, opening: boolean): readonly StatusBarHintKey[] {
   // `opening` refuses submit for the same reason `checking` does — the command would be rejected
   // — so it wears the same `dis` treatment rather than advertising a key that does nothing.
   const submitKey: StatusBarHintKey =
@@ -361,7 +362,7 @@ interface HomeAgentMissingProps {
   readonly id: string;
   readonly width: number;
   readonly height: number;
-  readonly health: Extract<HomeAgentHealth, { kind: "missing" }>;
+  readonly health: Extract<AgentHealth, { kind: "missing" }>;
 }
 
 /** The agent-missing error variant (design `homeErr()`), replacing the whole screen. */
@@ -400,7 +401,7 @@ function HomeAgentMissing(props: HomeAgentMissingProps) {
           <text id={`${props.id}-agent-missing`} fg={SHELL_PALETTE.red} attributes={BOLD}>
             {
               // WP-5 (phase-8 Task 9): the probe (`entrypoint/model/agent-health.ts`'s
-              // `homeHealthFromAgentInfo`) distinguishes several not-ready reasons, but only
+              // `agentHealthFromAgentInfo`) distinguishes several not-ready reasons, but only
               // `missing` (no CLI at all) reaches this full-screen takeover any more (finding
               // §2.7, phase-8 Task 15) — `blocked`/`advisory` render `HomeHealthPanel` instead.
               // design/01-home.dc.html's `homeErr()` (design/termcraft-engine.js:720 —
