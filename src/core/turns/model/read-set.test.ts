@@ -106,6 +106,12 @@ describe("toFinalizeReadSet", () => {
       }),
     );
     expect(duplicated).toBeInstanceOf(ReadSetTranslationError);
+    // Asserting only `toBeInstanceOf` would still pass for the WRONG message (or one naming the
+    // wrong label/key) — the message is what actually tells an operator which array and which
+    // key collided (task-13 review round 1, Minor M8).
+    expect((duplicated as ReadSetTranslationError).message).toBe(
+      'cannot translate the staged read set: designFiles lists "lib/theme.ts" more than once',
+    );
   });
 
   test("a duplicate pins slug is an error too", () => {
@@ -118,6 +124,9 @@ describe("toFinalizeReadSet", () => {
       }),
     );
     expect(duplicated).toBeInstanceOf(ReadSetTranslationError);
+    expect((duplicated as ReadSetTranslationError).message).toBe(
+      'cannot translate the staged read set: pins lists "home" more than once',
+    );
   });
 
   test("empty arrays translate to empty maps, not to a missing read set", () => {

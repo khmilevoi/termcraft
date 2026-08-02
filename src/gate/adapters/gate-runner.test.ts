@@ -99,13 +99,91 @@ describe("createGateRunnerAdapter", () => {
   test("runTreeImports() catches the SAME forbidden import once per turn, over the whole tree", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const badSource = `import { x } from "lodash"\n${cleanSource}`;
-    const errors = await adapter.runTreeImports({
+    const result = await adapter.runTreeImports({
       files: new Map([["dash.tsx", badSource]]),
       treePaths: ["dash.tsx"],
+      pages: [],
     });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.kind).toBe("import");
-    expect(errors[0]?.file).toBe("dash.tsx");
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.kind).toBe("import");
+    expect(result.errors[0]?.file).toBe("dash.tsx");
+  });
+
+  describe("runTreeImports() closures (task-13 review round 1, Critical C1)", () => {
+    test("a page's closure reaches a module TRANSITIVELY, not just its own entry's direct imports", async () => {
+      // pages/a.tsx -> lib/theme.ts -> lib/tokens.ts: a shallow (entry-only, or one-hop) closure
+      // would pass this test with `lib/tokens.ts` missing, and would then report "nothing
+      // changed" for every consumer when only `lib/tokens.ts` itself edits (design §7's own
+      // whole point) — the exact bug this task exists to prevent.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const entrySource = `import { x } from "../lib/theme"\n${cleanSource}`;
+      const themeSource = `import { y } from "./tokens"\nexport const x = 1`;
+      const tokensSource = `export const y = 2`;
+      const files = new Map([
+        ["pages/a.tsx", entrySource],
+        ["lib/theme.ts", themeSource],
+        ["lib/tokens.ts", tokensSource],
+      ]);
+      const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.closures).toHaveLength(1);
+      const closure = result.closures[0];
+      expect(closure?.slug).toBe("a" as PageSlug);
+      expect([...(closure?.files ?? [])].sort()).toEqual([
+        "lib/theme.ts",
+        "lib/tokens.ts",
+        "pages/a.tsx",
+      ]);
+    });
+
+    test("two distinct slugs sharing one module each get the shared file in their own closure", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const themeSource = `export const x = 1`;
+      const files = new Map([
+        ["pages/a.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["pages/b.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["lib/theme.ts", themeSource],
+      ]);
+      const treePaths = ["pages/a.tsx", "pages/b.tsx", "lib/theme.ts"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [
+          { slug: "a" as PageSlug, entry: "pages/a.tsx" },
+          { slug: "b" as PageSlug, entry: "pages/b.tsx" },
+        ],
+      });
+
+      expect(result.errors).toEqual([]);
+      const bySlug = new Map(result.closures.map((c) => [c.slug, [...c.files].sort()]));
+      expect(bySlug.get("a" as PageSlug)).toEqual(["lib/theme.ts", "pages/a.tsx"]);
+      expect(bySlug.get("b" as PageSlug)).toEqual(["lib/theme.ts", "pages/b.tsx"]);
+    });
+
+    test("an unresolvable edge inside the closure is reported and the slug's closure is absent, not partial", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/a.tsx", `import { x } from "../lib/missing"\n${cleanSource}`],
+      ]);
+      const treePaths = ["pages/a.tsx"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
+      });
+
+      expect(result.closures).toEqual([]);
+      expect(result.errors.some((e) => e.kind === "import")).toBe(true);
+    });
   });
 
   test("runPage() surfaces a failed smoke render as a smoke-kind error", async () => {

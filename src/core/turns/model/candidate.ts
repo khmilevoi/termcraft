@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import type { StateMachine, TurnAction, TurnState } from "core/machines";
 import type {
+  CandidatePageSetV1,
   StagedFileV1,
   StagedTurnReadSetV1,
   StagingService,
@@ -41,13 +42,29 @@ import type { PageSlug } from "entities/page";
  *
  * `manifestText` IS the one deliberate exception, not an oversight: Gate's
  * `runManifestSlice`/schema validation needs the manifest's actual bytes, not merely its
- * hash, and nothing else in `core/turns` has ever read a candidate file's content back
- * (`StagingService.readCandidateFile`'s own doc names this precise gap, "Gap 3" —
- * `TurnCandidateV1` used to carry only hashes/sizes, leaving no way to reconstruct Gate's
- * `manifestText` from a frozen candidate at all). Reading it once, here, at freeze time —
- * this function is already async — means every downstream consumer (Gate's manifest-slice
- * check, a caller building `treePaths`) reads it off the candidate directly, never
- * re-deriving or re-fetching it a second time.
+ * hash. `StagingService.readCandidateFile`'s own doc names three things `TurnCandidateV1`
+ * used to have no way to reconstruct from a frozen candidate ("Gap 3") — the manifest text,
+ * each page's own `source` for `runPage`, and finalize's changed-file bytes. Only the FIRST
+ * is closed here: `manifestText`, read once at freeze time (this function is already async),
+ * so a caller building Gate's manifest-slice input reads it off the candidate directly rather
+ * than re-fetching it. The other two remain open — reading arbitrary page/changed-file bytes
+ * back is a per-caller concern (`buildValidationInput`/`buildFinalizeInput`), not something
+ * this module can honestly do once, up front, without knowing which files a caller will ask
+ * for.
+ *
+ * AN ABSENT `design/pages.json` IS AN HONEST ABSENCE, NEVER A FAILED READ (task-13 review
+ * round 1, Important I2). `readCandidateFile`'s own contract requires `relPath` to be one of
+ * the candidate's own `StagedFileV1.relPath` entries (`core/ports/staging.ts`) — calling it
+ * for a path the candidate does not list is out of contract by construction, not merely
+ * unlikely. So this module checks `candidate.files` FIRST: when the manifest is not listed,
+ * `manifestText` is the honest empty string and `readCandidateFile` is never called at all.
+ * An empty `manifestText` then fails Gate's own manifest-slice check exactly like any other
+ * malformed manifest — a normal, RETRYABLE Gate rejection the agent can act on — never the
+ * non-retryable `PERSISTENCE_FAILED` infrastructure death an out-of-contract read would
+ * otherwise produce (a manifest problem must reach the same retry loop every OTHER Gate
+ * rejection does). A read that fails for a manifest the candidate DOES list is still a
+ * genuine failure (`{kind:"failed"}`) — the port's own contract guarantees success there, so
+ * a failure is abnormal, not an expected shape.
  */
 
 export interface FreezeTurnCandidateDeps {
@@ -112,6 +129,22 @@ function toDesignTreeFiles(files: readonly StagedFileV1[]): readonly StagedFileV
  * whose `snapshot` is `null` (staging's own "expected-absent target" marker) is simply
  * omitted — there is nothing to carry a hash for, and omitting it is exactly what makes such
  * a target read back as `"added"` once `diffTreeInventory` sees it appear in the candidate.
+ *
+ * NO DUPLICATE-`relPath` DEFENSE HERE (task-13 review round 1, Minor M3 — flagged, not fixed):
+ * a duplicate silently keeps the LAST occurrence, unlike `read-set.ts`'s `toFinalizeReadSet`
+ * (`toMap`), which REFUSES the identical shape of duplicate on the very same
+ * `StagedTurnReadSetV1.designFiles` array. CHECKED, NOT MERELY ASSUMED, that this asymmetry has
+ * no real producer to reach it today: `grep -rn "designFiles:" src --include=*.ts | grep -v
+ * test` finds no production code anywhere in this repository that constructs a
+ * `StagedTurnReadSetV1.designFiles` array literal — the real assembly (a `listTree()` walk
+ * over `design/`, keyed by each file's own real path, which cannot enumerate the same path
+ * twice) is explicitly Task 14's own upcoming work (`task-14-brief.md`, Step 1: "producing both
+ * `treeFiles` and `readSet.designFiles`"). So today only a hand-built TEST fixture can ever
+ * construct a duplicate here, never a real caller. Whichever task wires that real producer
+ * (Task 14) should either confirm a filesystem walk keeps this unreachable for real, or give
+ * this function the identical `ReadSetTranslationError`-shaped refusal `toMap` already has —
+ * this comment is the flag that the decision is still open, not a claim it is already safe in
+ * production.
  */
 function toBeforeInventory(designFiles: StagedTurnReadSetV1["designFiles"]): DesignTreeInventoryV1 {
   const entries: DesignFileEntryV1[] = [];
@@ -180,6 +213,15 @@ export function diffTreeInventory(
  * own. Wiring a real caller is Task 14's job (`.superpowers/sdd/2026-07-28-design-tree-
  * canonical-source/red-debt.md`'s own SECURITY-CRITICAL entry); this function is a pure,
  * independently testable primitive over whatever closures a caller hands it.
+ *
+ * DEDUPLICATED BY CONSTRUCTION (task-13 review round 1, Minor M2): `input.closures` is a raw
+ * list this function does not control the shape of, and nothing upstream guarantees one slug
+ * names at most one closure — a duplicate slug entry would otherwise be filtered and mapped
+ * twice, emitting the SAME slug twice into the result. That would double the resolved-pin
+ * append `finalize.ts`'s `resolveSentPinAppends` builds for it (never a correctness bug there,
+ * `resolveSentPinAppends` itself is keyed by pin, not by page — but still a needless, confusing
+ * duplicate for any caller that assumes a slug set). Returned through a `Set`, so the result is
+ * duplicate-free regardless of what `input.closures` contains.
  */
 export function selectChangedPages(input: {
   readonly closures: readonly { readonly slug: PageSlug; readonly files: readonly string[] }[];
@@ -188,13 +230,27 @@ export function selectChangedPages(input: {
 }): readonly PageSlug[] {
   const before = inventorySha256(input.beforeInventory);
   const after = inventorySha256(input.afterInventory);
-  return input.closures
-    .filter((closure) => {
-      const beforeHash = computeClosureHash({ files: closure.files, sha256Of: before });
-      const afterHash = computeClosureHash({ files: closure.files, sha256Of: after });
-      return beforeHash === null || afterHash === null || beforeHash !== afterHash;
-    })
-    .map((closure) => closure.slug);
+  const changed = input.closures.filter((closure) => {
+    const beforeHash = computeClosureHash({ files: closure.files, sha256Of: before });
+    const afterHash = computeClosureHash({ files: closure.files, sha256Of: after });
+    return beforeHash === null || afterHash === null || beforeHash !== afterHash;
+  });
+  return [...new Set(changed.map((closure) => closure.slug))];
+}
+
+/**
+ * The frozen candidate's own `design/pages.json` bytes, or an honest empty when the manifest
+ * is not one of the candidate's OWN listed files — never an out-of-contract
+ * `readCandidateFile` call for a path the candidate does not carry (this file's header,
+ * "AN ABSENT design/pages.json IS AN HONEST ABSENCE").
+ */
+async function readManifestBytes(
+  staging: StagingService,
+  candidate: CandidatePageSetV1,
+): Promise<FailureDtoV1 | Uint8Array> {
+  const manifestListed = candidate.files.some((file) => file.relPath === MANIFEST_PROJECT_RELPATH);
+  if (!manifestListed) return new Uint8Array(0);
+  return wrap(staging.readCandidateFile(candidate.root, MANIFEST_PROJECT_RELPATH));
 }
 
 /**
@@ -212,9 +268,7 @@ export async function freezeTurnCandidate(
   const captured = deps.machine.apply("candidateCaptured");
   if (captured.kind === "illegal") return { kind: "illegal", code: captured.code };
 
-  const manifestBytes = await wrap(
-    deps.staging.readCandidateFile(candidate.root, MANIFEST_PROJECT_RELPATH),
-  );
+  const manifestBytes = await readManifestBytes(deps.staging, candidate);
   if ("code" in manifestBytes) return { kind: "failed", failure: manifestBytes };
 
   const beforeInventory = toBeforeInventory(input.workspace.readSet.designFiles);

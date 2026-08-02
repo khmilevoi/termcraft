@@ -108,6 +108,31 @@ export interface PageMetaExtractionV1 {
   readonly errors: readonly GateErrorV1[];
 }
 
+/**
+ * One manifest entry's resolved closure (design §7): `slug` is the identity, `files` is the
+ * transitive tree-relative file set `entities/design-tree`'s `resolveClosure` walked from
+ * `entry` — sorted, always including `entry` itself. This is `core/turns/model/candidate.ts`'s
+ * `selectChangedPages` own `closures` input, structurally — that function is typed against an
+ * inline shape rather than this name so it stays independently testable with no port import,
+ * but the two must never drift, since this is its one real producer.
+ */
+export interface GateClosureV1 {
+  readonly slug: PageSlug;
+  readonly files: readonly string[];
+}
+
+/**
+ * {@link GateRunner.runTreeImports}'s result: the flat allowlist errors alongside every
+ * manifest entry's resolved closure. Both come out of the SAME whole-tree scan/resolve pass —
+ * splitting them into two port calls would mean walking the tree's import graph twice (once
+ * per method) for no reason, since the adapter already has everything it needs (the tree's
+ * file text, the resolved manifest entries) to produce both in one call.
+ */
+export interface RunTreeImportsResultV1 {
+  readonly errors: readonly GateErrorV1[];
+  readonly closures: readonly GateClosureV1[];
+}
+
 export interface GateRunner {
   /**
    * The turn-level manifest-slice check (master §6.3 step 1; design §8 step 1), run once per
@@ -171,6 +196,14 @@ export interface GateRunner {
    * text for (a `.json`/`.md`/`.svg` asset — see `gate/model/tree-scan.ts`'s own doc for the
    * exact contract this enforces).
    *
+   * `pages` is the validated manifest's own entry list (`ManifestSliceV1.pages` — a caller
+   * runs `runManifestSlice` first, per design §8's own step ordering, and threads its `slice
+   * .pages` through here) — what makes {@link RunTreeImportsResultV1.closures} possible at
+   * all: a closure is walked FROM an entry, and the entry-to-slug binding is `pages.json`'s
+   * own job, never derivable from a slug (task-13 review round 1, Critical C1 — the same
+   * whole-tree scan this method already runs is what resolves every entry's transitive file
+   * set, so producing `closures` here costs no second tree walk).
+   *
    * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
    * declared on this port, implemented by the adapter, but NO production caller invokes it yet
    * — `core/turns/model/validation.ts` calls only `runManifestSlice`/`runPage`. Task 14 (the
@@ -181,7 +214,8 @@ export interface GateRunner {
   runTreeImports(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
-  }): Promise<readonly GateErrorV1[]>;
+    readonly pages: readonly PageEntryV1[];
+  }): Promise<RunTreeImportsResultV1>;
   /**
    * The page-contract stage ALONE — parses the page's static `meta` export and nothing else.
    * Deliberately NOT `runPage`: the full pipeline additionally spawns a TypeScript compiler

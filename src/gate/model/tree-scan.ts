@@ -154,8 +154,13 @@ const EXECUTED_AS_CODE_EXTENSIONS = new Set([
  * Both follow from the same measured fact and would be wrong under any other reading of it: a
  * non-executed target carries no import syntax to miss, so demanding its text (point 2) or
  * tokenizing its bytes (point 1) could only ever produce a false diagnosis.
+ *
+ * Exported (task-13 review round 1, Critical C1) so `gate/adapters/gate-runner.ts`'s closure
+ * resolution can reuse this SAME measured predicate for its own `edgesOf` — a file this
+ * returns false for has no import syntax to walk either, and re-deriving a second "is this
+ * code" test there would risk the two disagreeing about what counts as code.
  */
-function isCodeFile(relPath: string): boolean {
+export function isCodeFile(relPath: string): boolean {
   const extension = extensionOf(relPath);
   return extension === "" || EXECUTED_AS_CODE_EXTENSIONS.has(extension);
 }

@@ -1,11 +1,14 @@
 import type {
   AssertConforms,
+  GateClosureV1,
   GateRunResultV1,
   GateRunner,
   ManifestSliceResultV1,
   PageMetaExtractionV1,
+  RunTreeImportsResultV1,
 } from "core/ports";
-import type { ClosureV1 } from "entities/design-tree";
+import { resolveClosure } from "entities/design-tree";
+import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
@@ -15,6 +18,7 @@ import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
+import { isCodeFile, scanModuleEdges } from "../model/tree-scan";
 import { createTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
 import type { GateError } from "../types";
@@ -69,6 +73,15 @@ import type { GateError } from "../types";
  * stay optional rather than the port sketch's required shape (measured cost: `core/turns`/
  * `core/kernel` have no design-tree closure to supply yet, and are production code, not a
  * fixture this task can mechanically patch).
+ *
+ * CLOSED (task-13 review round 1, Critical C1): `runTreeImports`'s result now carries
+ * `closures` alongside `errors` — one per `input.pages` entry, resolved by `entities/
+ * design-tree`'s `resolveClosure` walking `edgesOf` (`../model/tree-scan`'s `scanModuleEdges`,
+ * the SAME edge reader `scanImportAllowlist` itself uses, so the closure walk and the
+ * allowlist scan can never disagree about what a file imports) over the SAME `has`
+ * (`treePaths`) the flat allowlist scan already resolves against. One whole-tree pass now
+ * produces both results; `core` still never imports `gate` — only this adapter, behind the
+ * port, does the resolving.
  */
 
 function createTypeCheckPort(
@@ -135,16 +148,79 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   }
 
   /**
-   * The whole-tree import allowlist (design §8 step 4). `gate/model/gate.ts`'s own
-   * `runTreeImports` is synchronous — it does no I/O, only token-scanning over the text it is
-   * handed — so this only wraps it in a promise the same way every other method on this port
-   * is async, keeping `core` looking at one uniform shape.
+   * One manifest entry's edge reader for {@link resolveClosure}: the SAME file text
+   * `runTreeImports` itself scans, read back through `scanModuleEdges` (the raw-edge sibling
+   * of `scanImportAllowlist` — both share `readStaticImportSpecifier`, so the closure walk
+   * can never see a different import graph than the allowlist scan just checked). A relPath
+   * that is not code ({@link isCodeFile}) or whose text `files` does not hold answers `[]` —
+   * no edges to walk, not a resolution failure: an asset can be a legal closure member (design
+   * §6 places no extension restriction on a resolution TARGET) and simply has nothing to scan.
+   */
+  function edgesOf(files: ReadonlyMap<string, string>, relPath: string): readonly string[] {
+    if (!isCodeFile(relPath)) return [];
+    const source = files.get(relPath);
+    if (source === undefined) return [];
+    return scanModuleEdges(source);
+  }
+
+  /**
+   * Resolves every manifest entry's closure (design §7) over the SAME whole-tree inventory
+   * `treePaths` the flat allowlist scan below already resolves against. A closure that cannot
+   * be resolved (an edge anywhere in it is illegal or missing — {@link resolveClosure}'s own
+   * doc: "an illegal edge ANYWHERE in the closure is fatal here rather than merely skipped")
+   * reports a `GateErrorV1` naming the page and is simply ABSENT from `closures` — never a
+   * fabricated partial file list. This does not fail open: the SAME edge is independently
+   * caught by the flat per-file scan below too (`scanTreeImports` scans every code file
+   * unconditionally, reachable or not), so a candidate whose closure fails to resolve already
+   * carries a fatal error and never reaches a caller that would consult its (absent) closure.
+   */
+  function resolveClosuresFor(input: {
+    readonly pages: readonly PageEntryV1[];
+    readonly files: ReadonlyMap<string, string>;
+    readonly treePaths: readonly string[];
+  }): { readonly closures: readonly GateClosureV1[]; readonly errors: readonly GateError[] } {
+    const present = new Set(input.treePaths);
+    const has = (relPath: string) => present.has(relPath);
+    const closures: GateClosureV1[] = [];
+    const errors: GateError[] = [];
+    for (const page of input.pages) {
+      const resolved = resolveClosure({
+        entry: page.entry,
+        has,
+        edgesOf: (relPath) => edgesOf(input.files, relPath),
+      });
+      if (resolved instanceof Error) {
+        // Same code mapping `scanImportAllowlist` uses for the identical `SpecifierRejectedError`
+        // (`gate/model/import-scan.ts`): "UNRESOLVED" is usually a typo or a missing file, every
+        // other code is a rule violation.
+        errors.push({
+          kind: "import",
+          code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
+          message: `page "${page.slug}": ${resolved.message}`,
+          file: String(resolved.from),
+        });
+        continue;
+      }
+      closures.push({ slug: page.slug, files: resolved.files });
+    }
+    return { closures, errors };
+  }
+
+  /**
+   * The whole-tree import allowlist (design §8 step 4) plus every manifest entry's resolved
+   * closure (task-13 review round 1, Critical C1 — see this file's header). `gate/model/
+   * gate.ts`'s own `runTreeImports` is synchronous — it does no I/O, only token-scanning over
+   * the text it is handed — so this only wraps it in a promise the same way every other method
+   * on this port is async, keeping `core` looking at one uniform shape.
    */
   async function runTreeImportsPort(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
-  }): Promise<readonly GateError[]> {
-    return runTreeImports(input);
+    readonly pages: readonly PageEntryV1[];
+  }): Promise<RunTreeImportsResultV1> {
+    const scanErrors = runTreeImports(input);
+    const { closures, errors: closureErrors } = resolveClosuresFor(input);
+    return { errors: [...scanErrors, ...closureErrors], closures };
   }
 
   /**

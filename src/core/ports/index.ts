@@ -129,6 +129,7 @@ export type {
 
 // ---- gate ---------------------------------------------------------------------------------
 export type {
+  GateClosureV1,
   GateErrorKindV1,
   GateErrorV1,
   GatePageDescriptorV1,
@@ -139,6 +140,7 @@ export type {
   ManifestSliceResultV1,
   ManifestSliceV1,
   PageMetaExtractionV1,
+  RunTreeImportsResultV1,
 } from "./gate-runner";
 export { PAGE_META_EXTRACTOR_VERSION } from "./gate-runner";
 

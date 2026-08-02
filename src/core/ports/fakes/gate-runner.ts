@@ -1,12 +1,12 @@
-import type { ClosureV1 } from "entities/design-tree";
+import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type {
-  GateErrorV1,
   GateRunResultV1,
   GateRunner,
   ManifestSliceResultV1,
   PageMetaExtractionV1,
+  RunTreeImportsResultV1,
 } from "../gate-runner";
 import type { AssertConforms } from "../index";
 
@@ -30,6 +30,7 @@ export type GateRunnerCall =
       readonly method: "runTreeImports";
       readonly fileCount: number;
       readonly treePathCount: number;
+      readonly pageCount: number;
     }
   | { readonly method: "extractPageMeta"; readonly slug: PageSlug };
 
@@ -40,7 +41,7 @@ export interface FakeGateRunner extends GateRunner {
   /** Queues the next `runManifestSlice()` result (FIFO), one shot. */
   queueRunManifestSliceResult(result: ManifestSliceResultV1): void;
   /** Queues the next `runTreeImports()` result (FIFO), one shot. */
-  queueRunTreeImportsResult(result: readonly GateErrorV1[]): void;
+  queueRunTreeImportsResult(result: RunTreeImportsResultV1): void;
   /** Queues the next `extractPageMeta()` result (FIFO), one shot — a failing extraction is one with `meta: null` and a non-empty `errors`. */
   queueExtractPageMetaResult(result: PageMetaExtractionV1): void;
 }
@@ -49,7 +50,7 @@ export function createFakeGateRunner(): FakeGateRunner {
   const calls: GateRunnerCall[] = [];
   const pageResults: GateRunResultV1[] = [];
   const manifestResults: ManifestSliceResultV1[] = [];
-  const treeImportsResults: (readonly GateErrorV1[])[] = [];
+  const treeImportsResults: RunTreeImportsResultV1[] = [];
   const extractionResults: PageMetaExtractionV1[] = [];
 
   function queueRunPageResult(result: GateRunResultV1): void {
@@ -64,7 +65,7 @@ export function createFakeGateRunner(): FakeGateRunner {
     manifestResults.push(result);
   }
 
-  function queueRunTreeImportsResult(result: readonly GateErrorV1[]): void {
+  function queueRunTreeImportsResult(result: RunTreeImportsResultV1): void {
     treeImportsResults.push(result);
   }
 
@@ -113,15 +114,21 @@ export function createFakeGateRunner(): FakeGateRunner {
   async function runTreeImports(input: {
     files: ReadonlyMap<string, string>;
     treePaths: readonly string[];
-  }): Promise<readonly GateErrorV1[]> {
+    pages: readonly PageEntryV1[];
+  }): Promise<RunTreeImportsResultV1> {
     calls.push({
       method: "runTreeImports",
       fileCount: input.files.size,
       treePathCount: input.treePaths.length,
+      pageCount: input.pages.length,
     });
     const queued = treeImportsResults.shift();
     if (queued !== undefined) return queued;
-    return [];
+    // Honest empty, not a fabricated closure walk: this in-memory fake has no real import
+    // scanner to derive edges from (that scanner lives in `gate`, which `core/ports` may not
+    // import) — a test that wants specific closures scripts them via
+    // `queueRunTreeImportsResult` instead of relying on a synthesized default.
+    return { errors: [], closures: [] };
   }
 
   async function extractPageMeta(input: {

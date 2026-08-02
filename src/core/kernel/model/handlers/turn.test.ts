@@ -1737,7 +1737,7 @@ describe('turnHandlers["turn.start"]', () => {
       }),
       // Never reached on this path either — the whole-tree scan (task 12) is a separate,
       // once-per-turn call this test does not drive.
-      runTreeImports: async () => [],
+      runTreeImports: async () => ({ errors: [], closures: [] }),
       runPage: async (input) => {
         capturedRunPageInputs.push(input);
         return {
@@ -1862,7 +1862,7 @@ describe('turnHandlers["turn.start"]', () => {
         ],
       }),
       // Never reached on this path either — see the sibling double above.
-      runTreeImports: async () => [],
+      runTreeImports: async () => ({ errors: [], closures: [] }),
       runPage: async (input) => {
         pageCallCount += 1;
         capturedSourcePaths.push(input.sourcePath);

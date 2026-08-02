@@ -15,9 +15,11 @@ import type {
  *
  * Two shapes exist because the two moments ask different questions. Staging CAPTURES what
  * was on disk when the turn was admitted, so it uses `null` for "no such file" and a plain
- * array keyed by page. Finalization COMPARES that capture against disk under the
- * project-write mutex (turn-durability §7.5), so it wants an explicit `{state:"absent"}`
- * image and map lookup by slug.
+ * array — keyed by TREE-relative path for `designFiles`, by page slug for `pins` (they stopped
+ * sharing one key vocabulary once the design tree replaced the old per-page shape; see
+ * `toMap`'s own doc below). Finalization COMPARES that capture against disk under the
+ * project-write mutex (turn-durability §7.5), so it wants an explicit `{state:"absent"}` image
+ * and a map lookup by that SAME key — `designFiles` by `relPath`, `pins` still by `PageSlug`.
  *
  * This function is the only place the two meet, which makes its two failure modes worth
  * naming:
@@ -27,10 +29,13 @@ import type {
  *    total: every array element becomes a map entry, and `null` becomes an explicit
  *    absent image rather than an omission. "I checked and it was absent" and "I never
  *    checked" must not collapse into the same value.
- * 2. A DUPLICATE SLUG is silently normalized by `new Map(pairs)`, which keeps the last
- *    occurrence and discards the rest. If the duplicates disagreed, the CAS would compare
- *    against whichever happened to be last; if they agreed, the input was already
- *    malformed. Either way it is returned as an error rather than smoothed over.
+ * 2. A DUPLICATE KEY is silently normalized by `new Map(pairs)`, which keeps the last
+ *    occurrence and discards the rest — a duplicate `relPath` in `designFiles`, or a
+ *    duplicate `pageSlug` in `pins` (the array this failure mode was originally named after,
+ *    back when BOTH arrays keyed by slug; `designFiles` no longer does, but the hazard is
+ *    identical either way). If the duplicates disagreed, the CAS would compare against
+ *    whichever happened to be last; if they agreed, the input was already malformed. Either
+ *    way it is returned as an error rather than smoothed over.
  */
 
 /** The staged read set could not be translated without losing or inventing information. */

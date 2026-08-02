@@ -207,7 +207,7 @@ describe("runTurnValidation", () => {
         // Never reached on this path either — the whole-tree scan (task 12) is a separate,
         // once-per-turn call this test does not drive.
         async runTreeImports() {
-          return [];
+          return { errors: [], closures: [] };
         },
         async runPage(input) {
           runPageCalls.push({ fileName: input.fileName, sourcePath: input.sourcePath });

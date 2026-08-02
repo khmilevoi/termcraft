@@ -51,10 +51,19 @@ export interface ReadSetAppendBaseV1 {
  * `turn-transactions.ts`'s header for the full note and the 1:1-translation seam this type
  * feeds). `snapshot: null` on a design-file entry marks an expected-absence — a potential
  * new target that did not exist at admission time.
+ *
+ * `designFiles[].relPath` is TREE-relative — never `design/`-prefixed (the plan's fixed
+ * vocabulary; task-13 review round 1, Minor M9 — declared here explicitly because
+ * `core/turns/model/candidate.ts`'s `toBeforeInventory` silently depends on it: a caller that
+ * passed PROJECT-relative paths instead would diff every design file as both "added" and
+ * "removed" with no type error to catch it). Mirrors `store/sandbox`'s
+ * `DesignFileReadSetEntry` exactly, so `store/adapters/staging.ts` passes `readSet` straight
+ * through with no translation.
  */
 export interface StagedTurnReadSetV1 {
   readonly manifest: ReadSetFileSnapshotV1 | null;
   readonly designFiles: readonly {
+    /** TREE-relative — see this interface's own header. */
     readonly relPath: string;
     readonly snapshot: ReadSetFileSnapshotV1 | null;
   }[];

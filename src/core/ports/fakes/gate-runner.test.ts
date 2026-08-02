@@ -35,24 +35,30 @@ describe("createFakeGateRunner", () => {
     expect(result.slice).toEqual({ pages: [], active: null });
   });
 
-  test("runTreeImports() defaults to no errors, and records the file/tree-path counts", async () => {
+  test("runTreeImports() defaults to no errors and no closures, and records the file/tree-path/page counts", async () => {
     const runner = createFakeGateRunner();
     const result = await runner.runTreeImports({
       files: new Map([["pages/home.tsx", "export const x = 1\n"]]),
       treePaths: ["pages/home.tsx", "lib/theme.ts"],
+      pages: [{ slug: slug("home"), entry: "pages/home.tsx" }],
     });
-    expect(result).toEqual([]);
-    expect(runner.calls).toEqual([{ method: "runTreeImports", fileCount: 1, treePathCount: 2 }]);
+    expect(result).toEqual({ errors: [], closures: [] });
+    expect(runner.calls).toEqual([
+      { method: "runTreeImports", fileCount: 1, treePathCount: 2, pageCount: 1 },
+    ]);
   });
 
   test("queueRunTreeImportsResult() scripts the next runTreeImports() outcome, one shot", async () => {
     const runner = createFakeGateRunner();
-    const scripted = [{ kind: "import" as const, code: "FORBIDDEN_IMPORT", message: "no" }];
+    const scripted = {
+      errors: [{ kind: "import" as const, code: "FORBIDDEN_IMPORT", message: "no" }],
+      closures: [{ slug: slug("home"), files: ["pages/home.tsx"] }],
+    };
     runner.queueRunTreeImportsResult(scripted);
-    const first = await runner.runTreeImports({ files: new Map(), treePaths: [] });
+    const first = await runner.runTreeImports({ files: new Map(), treePaths: [], pages: [] });
     expect(first).toEqual(scripted);
-    const second = await runner.runTreeImports({ files: new Map(), treePaths: [] });
-    expect(second).toEqual([]);
+    const second = await runner.runTreeImports({ files: new Map(), treePaths: [], pages: [] });
+    expect(second).toEqual({ errors: [], closures: [] });
   });
 
   test("queueRunPageResult() scripts the next runPage() outcome, one shot", async () => {

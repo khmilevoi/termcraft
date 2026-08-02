@@ -136,9 +136,14 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
     });
   });
 
-  test("propagates a readCandidateFile (manifest read) failure — the machine already advanced to validating", async () => {
+  test("a design/pages.json read failure IS a genuine failure when the manifest is listed in the candidate's own files — the machine already advanced to validating", async () => {
+    // Distinct from the "absent" test below (task-13 review round 1, Important I2): the
+    // manifest IS one of this candidate's own `StagedFileV1` entries, so `readCandidateFile`
+    // is within contract here — a failure is therefore a genuine infrastructure problem, not
+    // an honest absence.
     await context.start(async () => {
       const h = harness();
+      queueCandidate(h.staging, [{ relPath: "design/pages.json", sha256: SHA_A, size: 2 }]);
       const failure: FailureDtoV1 = {
         code: "PERSISTENCE_FAILED",
         retryable: false,
@@ -153,6 +158,29 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
       // `candidateCaptured` already applied before the manifest read is attempted — the same
       // "already transitioned, then failed" shape `finalize.ts`'s own header documents.
       expect(h.machine.phase()).toBe("validating");
+    });
+  });
+
+  test("an ABSENT design/pages.json is an honest empty manifestText, never a failed read — captured, and readCandidateFile is never called out of contract (task-13 review round 1, Important I2)", async () => {
+    await context.start(async () => {
+      const h = harness();
+      // Deliberately no `design/pages.json` entry — this candidate never staged one (the agent
+      // deleted it, or a fresh tree never had one). A stubbed `readCandidateFile` that would
+      // fail for ANY path proves the code path is never reached at all, not merely that it
+      // happens to succeed.
+      h.staging.readCandidateFile = async () => {
+        throw new Error("readCandidateFile must not be called for an unlisted manifest path");
+      };
+      queueCandidate(h.staging, [
+        { relPath: "design/screens/landing.tsx", sha256: SHA_A, size: 100 },
+      ]);
+
+      const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
+
+      if (result.kind !== "captured")
+        throw new Error(`expected captured, got ${JSON.stringify(result)}`);
+      expect(result.candidate.manifestText).toBe("");
+      expect(h.staging.calls.some((c) => c.method === "readCandidateFile")).toBe(false);
     });
   });
 
@@ -308,6 +336,40 @@ describe("freezeTurnCandidate — snapshotting -> validating", () => {
       ]);
     });
   });
+
+  test("PINS the M9 hazard: a read-set entry using the WRONG (project-relative) vocabulary diffs as both added and removed, never unchanged (task-13 review round 1, Minor M9)", async () => {
+    // `StagedTurnReadSetV1.designFiles[].relPath` is documented TREE-relative
+    // (`core/ports/staging.ts`'s own header) — `toBeforeInventory` silently trusts that. This
+    // test is the canary: if a caller ever violated the vocabulary (passed the `design/`-
+    // prefixed, PROJECT-relative name instead), nothing here throws a type error — the SAME
+    // byte-identical file just silently diffs as both "removed" (its wrong-vocabulary name
+    // never matches the candidate's own tree-relative name) and "added" (the candidate's real
+    // tree-relative name never matches the wrong-vocabulary one). This is exactly the failure
+    // mode the port's own header now documents explicitly, precisely so a future caller cannot
+    // violate it without a code comment telling them not to.
+    await context.start(async () => {
+      const h = harness(
+        baseReadSet({
+          designFiles: [
+            // WRONG: project-relative (`design/`-prefixed), not tree-relative.
+            { relPath: "design/screens/landing.tsx", snapshot: { sha256: SHA_A, size: 100 } },
+          ],
+        }),
+      );
+      queueCandidate(h.staging, [
+        { relPath: "design/screens/landing.tsx", sha256: SHA_A, size: 100 },
+      ]);
+
+      const result = await wrap(freezeTurnCandidate(h.deps, { workspace: h.workspace }));
+      if (result.kind !== "captured")
+        throw new Error(`expected captured, got ${JSON.stringify(result)}`);
+
+      expect(result.candidate.fileChanges).toEqual([
+        { relPath: "design/screens/landing.tsx", change: "removed", sha256: null, size: null },
+        { relPath: "screens/landing.tsx", change: "added", sha256: SHA_A, size: 100 },
+      ]);
+    });
+  });
 });
 
 /** `createDesignTreeInventory`'s own sort/dup-check is exercised by its own suite — this helper only needs an honest, valid inventory. */
@@ -365,6 +427,32 @@ describe("selectChangedPages", () => {
     expect([...changed].sort()).toEqual(["a", "b"] as PageSlug[]);
   });
 
+  test("a duplicate slug across two closure entries is reported exactly once, never twice (task-13 review round 1, Minor M2)", () => {
+    // `input.closures` is a raw list this function does not control the shape of — nothing
+    // upstream guarantees one slug names at most one entry. Two entries naming the SAME slug
+    // (here with different file sets, so both independently qualify as changed) must still
+    // collapse to one reported slug, not two.
+    const before = inventoryOf([
+      ["pages/a.tsx", "aa"],
+      ["lib/theme.ts", "t1"],
+      ["lib/other.ts", "o1"],
+    ]);
+    const after = inventoryOf([
+      ["pages/a.tsx", "aa"],
+      ["lib/theme.ts", "t2"],
+      ["lib/other.ts", "o2"],
+    ]);
+    const changed = selectChangedPages({
+      closures: [
+        { slug: "a" as PageSlug, files: ["pages/a.tsx", "lib/theme.ts"] },
+        { slug: "a" as PageSlug, files: ["pages/a.tsx", "lib/other.ts"] },
+      ],
+      beforeInventory: before,
+      afterInventory: after,
+    });
+    expect(changed).toEqual(["a"] as PageSlug[]);
+  });
+
   test("a page whose closure is byte-identical is NOT reported", () => {
     const inventory = inventoryOf([
       ["pages/a.tsx", "aa"],
@@ -412,7 +500,7 @@ describe("selectChangedPages", () => {
     expect(changed).toEqual(["dashboard"] as PageSlug[]);
   });
 
-  test("a closure file absent from EITHER side is honestly reported as changed, never as 'unchanged'", () => {
+  test("a closure file absent from BEFORE only (present in after) is honestly reported as changed, never as 'unchanged'", () => {
     // `computeClosureHash` returns `null` when it cannot be computed — "I cannot prove it is
     // unchanged" must never collapse into "unchanged" (this function's own doc comment).
     const before = inventoryOf([["pages/a.tsx", "aa"]]); // "lib/theme.ts" missing from before
@@ -420,6 +508,43 @@ describe("selectChangedPages", () => {
       ["pages/a.tsx", "aa"],
       ["lib/theme.ts", "t1"],
     ]);
+    const changed = selectChangedPages({
+      closures: [{ slug: "a" as PageSlug, files: ["pages/a.tsx", "lib/theme.ts"] }],
+      beforeInventory: before,
+      afterInventory: after,
+    });
+    expect(changed).toEqual(["a"] as PageSlug[]);
+  });
+
+  test("a closure file absent from AFTER only (present in before) is honestly reported as changed, never as 'unchanged'", () => {
+    // The mirror of the BEFORE-only test above — a closure file present at send time but
+    // missing from the frozen candidate (e.g. deleted mid-turn) must be exactly as unprovable
+    // as the reverse direction (task-13 review round 1, Important I3).
+    const before = inventoryOf([
+      ["pages/a.tsx", "aa"],
+      ["lib/theme.ts", "t1"],
+    ]);
+    const after = inventoryOf([["pages/a.tsx", "aa"]]); // "lib/theme.ts" missing from after
+    const changed = selectChangedPages({
+      closures: [{ slug: "a" as PageSlug, files: ["pages/a.tsx", "lib/theme.ts"] }],
+      beforeInventory: before,
+      afterInventory: after,
+    });
+    expect(changed).toEqual(["a"] as PageSlug[]);
+  });
+
+  test("a closure file absent from BOTH sides is honestly reported as changed — the load-bearing case neither one-sided test above can prove (task-13 review round 1, Important I3)", () => {
+    // With `beforeHash`/`afterHash` BOTH null, a guard reduced to plain `beforeHash !==
+    // afterHash` (`null !== null` is `false`) would silently report this as UNCHANGED — the
+    // exact "I cannot prove it is unchanged" -> "unchanged" collapse this function's own doc
+    // comment forbids. Neither one-sided test above exercises this: each leaves the OTHER side
+    // a real, non-null hash, so plain `!==` already returns `true` there by coincidence. This
+    // is the one case where the explicit `=== null` guard is the only thing keeping the answer
+    // honest — mutating it away (`beforeHash !== afterHash` alone) makes exactly this test fail
+    // (verified by hand: reverting `selectChangedPages`'s filter to that bare comparison turns
+    // this single test red, all others stay green).
+    const before = inventoryOf([["pages/a.tsx", "aa"]]); // "lib/theme.ts" missing from both...
+    const after = inventoryOf([["pages/a.tsx", "aa"]]); // ...inventories entirely
     const changed = selectChangedPages({
       closures: [{ slug: "a" as PageSlug, files: ["pages/a.tsx", "lib/theme.ts"] }],
       beforeInventory: before,
