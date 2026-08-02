@@ -1,6 +1,5 @@
 import { resolveDesignSpecifier } from "entities/design-tree";
 
-import { computeJsxTextTokenIndices } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { SourceStreamTruncatedError, SyntaxKind, Tok } from "./lexer";
 
@@ -177,84 +176,70 @@ export function readStaticImportSpecifier(toks: Tok[], importIndex: number): str
  * (`globalThis["eval"]`, `g["Function"]`).
  *
  * Forms it knowingly does NOT catch, each pinned by a "KNOWN GAP" test in
- * `import-scan.test.ts`:
+ * `import-scan.test.ts`. Every one of them was RE-TESTED against Bun in task 14b — transpiled
+ * with `Bun.Transpiler` and run through this whole perimeter — and the verdict is recorded
+ * beside it, because "documented gap" is not a resting place for a shape the runtime executes:
  *
  * 1. a bare `Function` reference aliased to another name and invoked through
- *    that alias later (`const F = Function; new F(...)`);
+ *    that alias later (`const F = Function; new F(...)`) — LIVE, and inherent to a token-level
+ *    scan: closing it needs alias tracking, i.e. a binder. Escalated in task 14b's report;
  * 2. a computed-member key held in a variable rather than written as a literal
- *    (`const key = "eval"; g[key](...)`);
+ *    (`const key = "eval"; g[key](...)`) — LIVE, same reason: constant propagation;
  * 3. a computed-member key built by concatenation (`g["ev" + "al"](...)`) —
- *    same reason one step earlier: this scan folds no constants;
+ *    LIVE, same reason one step earlier: this scan folds no constants;
  * 4. indirect access that never writes the token `eval`/`Function` at all,
  *    e.g. the classic `[].constructor.constructor("return this")()`
- *    sandbox-escape chain;
+ *    sandbox-escape chain — LIVE, and unreachable by ANY token-level rule, since the source
+ *    contains neither identifier;
  * 5. a real call sitting after a regular-expression literal whose immediately
  *    preceding token is `)` (in STATEMENT position), `<`, or `}`, inside a JSX
- *    expression container — `./jsx`'s reader reads that `/` as division in
- *    all three cases (see `scanCode`'s own KNOWN GAP note there), so the
- *    regex's own `}` closes the container early, and everything after it in
- *    the container is recorded as children text and therefore skipped below.
- *    All three predecessors are reachable this way, not only `)`;
- * 6. a `}` inside a regular-expression CHARACTER CLASS defeats `./lexer`'s
- *    `{`/template brace-tracking directly in `tokenize` below — a different,
- *    more fundamental layer than gap 5 above (that gap is `./jsx`'s reader
- *    misjudging where a JSX expression container ends; this one is the
- *    WHOLE-FILE token stream itself losing a real token, independent of JSX
- *    entirely, because `tokenize` never re-scans `/` as a regex AT ALL — see
- *    `scanCodeToken`'s own doc comment in `./lexer`). Two shapes, both
- *    swallowing a later `eval(...)`/`Function(...)` into unparsed template
- *    text: the class's own `}` is misread as the enclosing template
- *    interpolation's closing brace, so the literal's tail resumes right there
- *    and absorbs everything up to the next backtick
- *    (`` const s = `${/[}]/ && eval("x")}` ``); or the class's `{` is pushed
- *    as a phantom ordinary brace, so the interpolation's real closing `}`
- *    only pops that phantom, and the template's own genuine closing backtick
- *    right after it is then re-lexed from scratch as a brand-new literal that
- *    swallows every later statement up to the next backtick or EOF
- *    (`` const s = `${/[{]/.test(a)}` `` followed by a later `eval("2")`);
- * 7. the same `tokenize`-level desync, but the source's own template literal
- *    is genuinely unterminated (no closing backtick anywhere in the file) —
- *    the resumed tail then runs straight through EOF and swallows the entire
- *    rest of the file as one token, JSX included
- *    (`` <box id="b">{`${0} `` followed on the next line by `const z =
- *    eval("2")`; this source does not compile, but the scan still owes it a
- *    documented outcome rather than a silent one).
+ *    expression container — `./jsx`'s reader read that `/` as division in all three cases (see
+ *    `scanCode`'s own note there), so the regex's own `}` closed the container early and
+ *    everything after it was recorded as children text. **RE-TESTED AND LARGELY CLOSED in task
+ *    14b**, one predecessor at a time rather than as one row:
+ *    - `<` — was LIVE. Measured: `<box id="b">a{0 < /[}]/.test("s") && eval(…)}b</box>`
+ *      transpiled under Bun, `await import()` ran the `eval`, and this perimeter reported
+ *      nothing. CLOSED — `scanCode` now separates a relational `<` from re-lexed JSX
+ *      punctuation (`jsxPunctuation`), so the regular expression is lexed as one;
+ *    - `)` — CLOSED as a side effect: the JSX-prose FILTER this scan used to apply is gone
+ *      (see below), so a call the reader mislabels as text is still checked as the code token
+ *      it is. Measured caught through the real perimeter;
+ *    - `}` — still read as division, and measured NOT to be a live bypass: only a block or an
+ *      object literal can put a `}` immediately before a `/` in expression position, and a JSX
+ *      expression container holds neither — `Bun.Transpiler` refuses every spelling tried
+ *      (`Unexpected }`), so the runtime never executes such a file;
+ * 6. **CLOSED in task 14b.** A `{` or `}` inside a regular-expression CHARACTER CLASS used to
+ *    defeat the `{`/template brace-tracking in `./lexer`'s `tokenize` itself, swallowing every
+ *    later statement into unparsed template text — measured LIVE through the real perimeter
+ *    (`` const s = `${/[{]/.test('x')}` `` followed by `import "node:fs"` and `eval("1")`:
+ *    Bun transpiled and executed it, this scan reported nothing). `tokenize` now re-scans `/`
+ *    as a regular expression through `./jsx`'s `scanCode`, so the class's braces are inside one
+ *    literal token and the stack never desynchronises. Both shapes are pinned as CLOSED in
+ *    `import-scan.test.ts`;
+ * 7. the same desync with a genuinely UNTERMINATED template literal (no closing backtick
+ *    anywhere in the file) — the resumed tail runs through EOF and swallows the rest of the
+ *    file as one token. NOT a live bypass: measured, `Bun.Transpiler` REJECTS every spelling of
+ *    it (`Unterminated string literal`), so the runtime never executes such a file. It stays
+ *    pinned because the scan still owes it a documented outcome.
  *
- * Accepted OVER-approximations, pinned the same way: a page that merely
+ * Accepted OVER-approximation, pinned the same way: a page that merely
  * defines a property/method literally named `eval` (`{ eval() { return 1 } }`)
- * is flagged, and so is a regular-expression literal whose body spells the word
- * (`/eval/`), because `./lexer`'s CODE-mode `tokenize` deliberately does not
- * re-scan `/` as a regex. Both are unusual enough in a page that carving out an
- * exemption is not worth the catch it would cost.
+ * is flagged. (A regular-expression literal whose body spells the word — `/eval/` — used to be
+ * flagged for the same reason and no longer is: task 14b made `tokenize` lex it as one
+ * `RegularExpressionLiteral`, so the identifier token is gone. That removes a FALSE positive,
+ * not a catch — a regex body cannot execute anything.)
  *
- * The three dynamic-code checks below skip any identifier/bracket token
- * `computeJsxTextTokenIndices` (`./jsx`) marks as JSX children TEXT: without
- * that guard, a page's own display copy — `<Text id="t">Never use eval
- * here</Text>`, `<Text id="t">Function (beta)</Text>` — tripped a FATAL
- * rejection on ordinary prose, which is worse than the gap this check was
- * written to close. The other checks in this scan (import/export/require) are
- * not guarded the same way: each requires a `StringLiteral` specifier
- * immediately in scope, a shape prose essentially never produces, and only
- * `eval`/`Function` were ever observed as false rejections.
- *
- * `computeJsxTextTokenIndices` itself is built on `scanJsx` (`./jsx`), a real
- * recursive-descent reader over the TypeScript scanner's own JSX mode — not
- * the code-token heuristic it replaced. That heuristic's premise (walking
- * CODE-mode tokens to guess where JSX text lives) was unsound: an apostrophe
- * or `//` inside ordinary prose opened a real string literal or line comment
- * that could swallow a page's own closing tag, fatally rejecting its display
- * copy — and, the mirror image, a dangling close tag left over from an
- * unrelated, uncalled generic type argument (`Array<Foo>` … `</Foo>`) could
- * launder a real `eval(...)` in between into "text", silently returning no
- * errors at all. `scanJsx` reads real JSX structure instead (`scanJsxToken`,
- * matching close tags, `{}` expression containers, template literals and
- * regular expressions), which closes both of those shapes; gap 5 above is the
- * boundary-moving shape that survives INSIDE `scanJsx`'s own read, and it is
- * pinned rather than assumed away. See `scanJsx`'s doc comment for the
- * reader's own fail-closed discipline. Gaps 6 and 7 are not inside `scanJsx`
- * at all — they are `tokenize`'s own token stream losing a token before
- * `scanJsx` is ever consulted, so no amount of JSX-awareness in `scanJsx`
- * could have closed them.
+ * NO JSX-PROSE GUARD IS NEEDED HERE ANY MORE (task 14b). The three dynamic-code checks below
+ * used to skip identifier/bracket tokens that a since-deleted `computeJsxTextTokenIndices`
+ * marked as JSX
+ * children TEXT, because without it a page's own display copy — `<Text id="t">Never use eval
+ * here</Text>` — tripped a FATAL rejection on ordinary prose. `./lexer`'s `tokenize` now never
+ * lexes children text as code AT ALL: it skips those ranges outright, so no such token exists
+ * to be filtered. That is the same protection applied one layer earlier, and it is strictly
+ * stronger — the old filter only suppressed the FATAL, while the mis-lexed prose still
+ * swallowed whatever real code followed it on the same line, which is exactly the bypass class
+ * task 14b closed. The oracle's payload-free control corpus (a page whose prose spells `eval`,
+ * `Function`, `//`, `/*` and an apostrophe) reports zero fatals.
  */
 export function scanImportAllowlist(
   source: string,
@@ -268,7 +253,6 @@ export function scanImportAllowlist(
   // A stream that does not cover the source cannot be scanned for anything — see
   // `lexer.ts`'s own completeness invariant. Propagated, never treated as "no findings".
   if (toks instanceof Error) return toks;
-  const jsxText = computeJsxTextTokenIndices(toks, source);
   const errors: ImportScanError[] = [];
   const at = (pos: number) => lineColOf(source, pos);
 
@@ -392,12 +376,13 @@ export function scanImportAllowlist(
     // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
     // flags a page that merely defines a property/method literally named
     // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
-    // (see the module doc comment above). `!jsxText.has(i)` (Important 1) skips
-    // this word when it is JSX children TEXT, not a reference.
+    // (see the module doc comment above). No JSX-prose filter is needed here:
+    // `./lexer`'s `tokenize` never lexes children text as code at all, so this
+    // word cannot reach the stream as an identifier when it is display copy
+    // (task 14b — see the module doc comment).
     if (
       t.kind === SK.Identifier &&
       t.value === "eval" &&
-      !jsxText.has(i) &&
       toks[i - 1]?.kind !== SK.DotToken &&
       toks[i - 1]?.kind !== SK.QuestionDotToken
     ) {
@@ -422,16 +407,14 @@ export function scanImportAllowlist(
     // object exactly like `new Function(...)` does per the spec), so one
     // check covers both forms; a `.Function(...)`/`?.Function(...)` method
     // call on some other object is, symmetrically with `eval`, not the global.
-    // `!jsxText.has(i)` (Important 1) skips this word when it is JSX children
-    // TEXT — e.g. `<Text id="t">Function (beta)</Text>` — rather than a call;
-    // note the space in "Function (beta)" still lexes as adjacent tokens
-    // (`Function`, `(`, `beta`, `)`), so without the guard this shape would
-    // still match `next?.kind === SK.OpenParenToken` and fatally reject prose.
+    // Display copy — `<Text id="t">Function (beta)</Text>`, which lexes as the
+    // adjacent tokens `Function`, `(`, `beta`, `)` and so would otherwise match
+    // — cannot reach this check at all now: `./lexer`'s `tokenize` skips JSX
+    // children text rather than lexing it (task 14b).
     if (
       t.kind === SK.Identifier &&
       t.value === "Function" &&
       next?.kind === SK.OpenParenToken &&
-      !jsxText.has(i) &&
       toks[i - 1]?.kind !== SK.DotToken &&
       toks[i - 1]?.kind !== SK.QuestionDotToken
     ) {
@@ -455,11 +438,10 @@ export function scanImportAllowlist(
     // built through concatenation or held in a variable first
     // (`"ev" + "al"`, `const k = "eval"; g[k]`) is NOT caught — this is a
     // token-level scan, not a constant-folding evaluator (see the module doc
-    // comment's pinned "KNOWN GAP" list). `!jsxText.has(i)` (Important 1)
-    // skips this shape inside JSX children text too, for the same reason.
+    // comment's pinned "KNOWN GAP" list). This shape cannot appear inside JSX
+    // children text either, for the same reason as the two checks above.
     if (
       t.kind === SK.OpenBracketToken &&
-      !jsxText.has(i) &&
       (toks[i - 1]?.kind === SK.Identifier ||
         toks[i - 1]?.kind === SK.CloseParenToken ||
         toks[i - 1]?.kind === SK.CloseBracketToken ||

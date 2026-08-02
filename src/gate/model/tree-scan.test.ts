@@ -435,7 +435,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     test("task-12 review round 4, Critical 1 — an extensionless `Dockerfile` full of `#` comments TERMINATES through the real whole-tree scan", async () => {
       // The reachability half of the `jsx.ts` fix, pinned at THIS module's own perimeter rather
       // than at the reader's: `scanTreeImports` -> `scanImportAllowlist` ->
-      // `computeJsxTextTokenIndices` -> `scanJsx`, and an extensionless file is code by this
+      // `tokenize` -> `readJsxTextRanges` -> `scanJsx`, and an extensionless file is code by this
       // module's measured predicate, so ordinary `#`-commented tree content reaches the reader.
       // Before the `jsx.ts` fix this call never returned — no timeout, no cancellation, no
       // error, and `runTreeImports` is synchronous, so it blocked the event loop outright.
@@ -471,7 +471,8 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
   describe("task-12b — the two defects in this perimeter that Task 14's wiring would have made live", () => {
     test("defect A — a deeply nested UNTERMINATED page body TERMINATES through the real whole-tree scan", async () => {
       // The reachability half of `jsx.ts`'s memo, pinned at THIS module's perimeter:
-      // `scanTreeImports` -> `scanImportAllowlist` -> `computeJsxTextTokenIndices` -> `scanJsx`.
+      // `scanTreeImports` -> `scanImportAllowlist` -> `tokenize` -> `readJsxTextRanges` ->
+      // `scanJsx`.
       // `"<a>{".repeat(k)` is what an agent leaves behind when it stops mid-page; it contains no
       // `#`, trips no `scannerStalled`, and yields ZERO errors, so every millisecond of it was
       // wasted work. Before the memo the cost doubled per nesting level — 96 chars took 12 971ms
@@ -898,7 +899,19 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
  * alone, with no closure walk involved.
  */
 describe("scanTreeImports — a file whose token stream does not cover it is fatal", () => {
-  const TRUNCATED = `export const G = () => <Text>\uFFFD</Text>\nimport fs from "node:fs"\n`;
+  // RE-POINTED in task 14b at a fixture Bun ACCEPTS AND EXECUTES. Round 2's fixture put a
+  // U+FFFD in JSX TEXT, which the lexer now reads as the prose it is — Bun does too — so that
+  // source is fully scanned and reports its real violations rather than refusing. What still
+  // cannot be covered is a code-mode token that swallows a whole prose run: JSX attribute
+  // strings do not process `\` escapes and code-mode strings do, so `a="x\"` ends the attribute
+  // for the runtime while the code lexer reads on through `>hi</Text>` and past it. Measured:
+  // `Bun.Transpiler({loader:"tsx"})` accepts this source and `await import()` runs it, while
+  // `tokenize` refuses it — the fail-closed direction, on a file the runtime really would run.
+  const TRUNCATED = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+
+  test("the fixture really is one Bun ACCEPTS — otherwise the fatal below would be free", () => {
+    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(TRUNCATED)).not.toThrow();
+  });
 
   test("reports UNSCANNABLE_SOURCE for the truncated file, naming it", () => {
     const files = new Map([["lib/theme.tsx", TRUNCATED]]);

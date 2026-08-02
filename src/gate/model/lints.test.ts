@@ -326,3 +326,45 @@ describe("lintUnlistedNavigation (§6.3 unlisted-navigation warning)", () => {
     expect(scanned(lintUnlistedNavigation(`foo.goTo("missing")\n`, [DASH]))).toEqual([]);
   });
 });
+
+/**
+ * THE LEVEL PIN (task 14b). `tokenize` returns `SourceStreamTruncatedError | …`, and EVERY
+ * consumer must propagate it rather than read it as "nothing found". Round 2 established the
+ * pattern by mutation; task 14b re-ran that mutation at every level and found THREE that killed
+ * nothing at all — this one among them, because a sibling reader in the same pipeline reported
+ * the same file first and the end-to-end test was green for that reason instead.
+ *
+ * These tests take the level in ISOLATION, with no pipeline around it, so mutating exactly this
+ * propagation reddens exactly these tests.
+ *
+ * THE FIXTURE IS ONE BUN ACCEPTS AND EXECUTES: JSX attribute strings do not process `\` escapes
+ * and code-mode strings do, so `a="x\"` ends the attribute for the runtime while the code lexer
+ * reads on through `>hi</Text>` and past it.
+ */
+const TRUNCATING = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+const COVERED = `export const G = () => <Text a="x">hi</Text>\nimport fs from "node:fs"\n`;
+
+describe("the token-based lints — a stream that does not cover the source is an ERROR, never zero warnings", () => {
+  test("lintDeterminism returns the truncation rather than []", () => {
+    expect(lintDeterminism(TRUNCATING)).toBeInstanceOf(Error);
+  });
+
+  test("lintSilencingAny returns the truncation rather than []", () => {
+    expect(lintSilencingAny(TRUNCATING)).toBeInstanceOf(Error);
+  });
+
+  test("lintDroppedIds returns the truncation rather than []", () => {
+    expect(lintDroppedIds(TRUNCATING, ["a"])).toBeInstanceOf(Error);
+  });
+
+  test("lintUnlistedNavigation returns the truncation rather than []", () => {
+    expect(lintUnlistedNavigation(TRUNCATING, ["home" as PageSlug])).toBeInstanceOf(Error);
+  });
+
+  test("…and every one of them still runs on the covered sibling — not a blanket refusal", () => {
+    expect(scanned(lintDeterminism(COVERED))).toEqual([]);
+    expect(scanned(lintSilencingAny(COVERED))).toEqual([]);
+    expect(scanned(lintDroppedIds(COVERED, []))).toEqual([]);
+    expect(scanned(lintUnlistedNavigation(COVERED, []))).toEqual([]);
+  });
+});

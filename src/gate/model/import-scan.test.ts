@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ImportScanError } from "./import-scan";
-import { scanImportAllowlist } from "./import-scan";
+import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
 import type { SourceStreamTruncatedError } from "./lexer";
 
 /**
@@ -219,15 +219,19 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
-    test("a regex literal whose BODY spells `eval` is flagged too — accepted over-approximation", () => {
-      // `./lexer`'s CODE-mode `tokenize` deliberately does not re-scan `/` as a
-      // regular expression (it lexes JSX punctuation as code, where `</Text>`
-      // and `{expr} />` would both be misread as regex openers), so a regex
-      // body is lexed as ordinary tokens and the word inside it reads as a
-      // bare `eval` reference.
-      const errors = scanned(scanImportAllowlist(`const re = /eval/\n`, NONE));
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.code).toBe("EVAL_CALL");
+    test("a regex literal whose BODY spells `eval` is NOT flagged — the over-approximation is gone (task 14b)", () => {
+      // BEHAVIOUR CHANGE, and it removes a FALSE POSITIVE rather than a catch: a regular
+      // expression's body cannot execute anything, so flagging `/eval/` only ever rejected legal
+      // code. It used to be flagged because `./lexer`'s `tokenize` never re-scanned `/` as a
+      // regular expression, so the body was lexed as ordinary tokens and the word inside it read
+      // as a bare `eval` reference. `tokenize` now goes through `./jsx`'s `scanCode` — the same
+      // re-scan the JSX reader uses — which is what also closed KNOWN GAPS 6 and 6b below.
+      expect(scanned(scanImportAllowlist(`const re = /eval/\n`, NONE))).toEqual([]);
+      // …and a REAL call one character away is still caught, so the re-scan did not blind the
+      // check. Without this companion, "never flag anything near a slash" would pass the line
+      // above.
+      const real = scanned(scanImportAllowlist(`const re = /x/\nconst v = eval("1")\n`, NONE));
+      expect(real.map((e) => e.code)).toEqual(["EVAL_CALL"]);
     });
   });
 
@@ -281,54 +285,92 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     });
   });
 
-  describe("Important 2 (fix pass 5) — the `<`/`}` regex-predecessor gap is reachable too, not just `)`", () => {
-    // `./jsx`'s `scanCode` reads `/` as division after `)`, `<`, OR `}` — a
-    // prior pass's comments claimed only `)` could actually hide a call. Both
-    // of these hide a real `eval("1")` exactly the way the `)` KNOWN GAP test
-    // above does; see `scanCode`'s own KNOWN GAP doc comment in `./jsx`.
-    test("KNOWN GAP: a regex literal right after `<` closes an expression container early, hiding a real eval(...) call", () => {
+  describe("Important 2 (fix pass 5) — the `<` half of that gap is CLOSED (task 14b); the `}` half is unreachable", () => {
+    // `./jsx`'s `scanCode` used to read `/` as division after `)`, `<`, OR `}`.
+    //
+    // THE `<` HALF IS CLOSED. It was on that list because a re-lexed `</tag>` also puts a `/`
+    // right after a `<`, but the two are distinguishable: a `<` reaching the reader's ordinary
+    // path did so BECAUSE its predecessor ended an expression, i.e. it is a relational operator
+    // and a regular expression may legally follow. `scanCode`'s `jsxPunctuation` parameter is
+    // that distinction. Measured before the fix, through the real perimeter AND `await
+    // import()`: `<box id="b">a{0 < /[}]/.test("s") && eval(...)}b</box>` transpiled, executed
+    // its `eval`, and reported nothing.
+    test("CLOSED: a regex literal right after `<` no longer closes the container early", () => {
       const src = `export default () => <box id="b">{x < /[}]/.test(s) && eval("1")}</box>\n`;
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
+    });
+
+    test("CLOSED, in the spelling Bun actually executes", () => {
+      const src = `export const el = <box id="b">a{0 < /[}]/.test("}") && eval("1")}b</box>;\n`;
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
+    });
+
+    test("the valid-input companion: a genuine `a < b` comparison in a container is untouched", () => {
+      // Without this, "flag everything after a `<`" would satisfy the two rows above, and every
+      // page comparing two numbers inside a container would break.
+      const src = `export const el = <box id="b">a{w < h && "small"}b</box>;\n`;
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
-    test("KNOWN GAP: a regex literal right after `}` closes an expression container early, hiding a real eval(...) call", () => {
+    test("KNOWN GAP `}`: still read as division, and MEASURED not to be a live bypass — Bun rejects it", () => {
+      // The `}` exclusion stays: a re-lexed `{expr} />` puts a `/` right after a `}`, and
+      // unlike the `<` case there is no local signal separating that from real code. It costs
+      // no live bypass, and that is measured rather than assumed: only a block or an object
+      // literal can put a `}` immediately before a `/` in expression position, and a JSX
+      // expression container holds neither — `Bun.Transpiler` refuses every spelling tried
+      // (`Unexpected }`), so the runtime never executes such a file.
       const src = `export default () => <box id="b">{ {} /[}]/.test(s) && eval("1")}</box>\n`;
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).toThrow();
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
 
-  describe("Important 1 (fix pass 5) — braces inside a regex body defeat tokenize()'s own template tracking", () => {
-    // A DIFFERENT, more fundamental layer than the two describe blocks above:
-    // these gaps live in `./lexer`'s `tokenize` itself, the WHOLE-FILE token
-    // stream `scanImportAllowlist` scans directly — no JSX involved at all in
-    // the first two. `tokenize` never re-scans `/` as a regex (see
-    // `scanCodeToken`'s own doc comment), so a brace inside a regex character
-    // class desyncs its `{`/template brace-tracking stack.
-    test("KNOWN GAP: a `}` inside a regex character class is misread as the enclosing template's own closing brace", () => {
-      // The class's own `}` resumes the template's tail right there, so the
-      // tail's literal text absorbs everything up to the next backtick —
-      // including the real call.
+  describe("KNOWN GAPS 6 and 6b are CLOSED (task 14b) — braces inside a regex body no longer desync tokenize()", () => {
+    // These two lived in `./lexer`'s `tokenize` itself — the WHOLE-FILE token stream
+    // `scanImportAllowlist` scans directly, no JSX involved — because `tokenize` never re-scanned
+    // `/` as a regular expression, so a brace inside a character class desynchronised its
+    // `{`/template stack and swallowed the rest of the file into unparsed template text.
+    //
+    // GAP 6b WAS MEASURED LIVE, not theoretical: `Bun.Transpiler` accepted the third fixture
+    // below and `await import()` ran it, while the whole real perimeter reported NO violations.
+    // "Documented gap" was the wrong verdict for it. `tokenize` now shares `./jsx`'s `scanCode`,
+    // so the character class is inside one `RegularExpressionLiteral` token and the stack holds.
+    test("CLOSED: a `}` inside a regex character class no longer resumes the template's tail early", () => {
       const src = 'const s = `${/[}]/ && eval("x")}`\n';
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
     });
 
-    test("KNOWN GAP: a `{` inside a regex character class is pushed as a phantom brace, and the template's own closing backtick then opens a fresh, unterminated literal", () => {
-      // The class's `{` is treated as an ordinary brace open; the
-      // interpolation's real closing `}` only pops that phantom, so the
-      // template's own genuine closing backtick right after it is re-lexed
-      // from scratch as a brand-new literal with no matching close anywhere
-      // else in the file — swallowing every later statement, including the
-      // real `eval("2")`.
+    test("CLOSED: a `{` inside a regex character class no longer opens a fresh literal that swallows the file", () => {
       const src = 'const s = `${/[{]/.test(a)}`\nconst z = eval("2")\n';
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
+    });
+
+    test("CLOSED, and this is the executable spelling the reviewer measured through the real perimeter", () => {
+      const src = 'const s = `${/[{]/.test("x")}`\nimport "node:fs"\neval("1")\n';
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+      expect(
+        scanned(scanImportAllowlist(src, NONE))
+          .map((e) => e.code)
+          .sort(),
+      ).toEqual(["EVAL_CALL", "FORBIDDEN_IMPORT"]);
+    });
+
+    test("the valid-input companion: an ordinary interpolated template still reports nothing", () => {
+      // Without this, "flag everything near a backtick" would satisfy the three rows above.
+      const src = "const s = `a${1}b${2}c`\nexport const t = s\n";
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
-    test("KNOWN GAP: the same desync through a genuinely unterminated template swallows the rest of the file, JSX included", () => {
-      // No closing backtick exists anywhere in this source (it does not
-      // compile) — the resumed tail scan runs straight through EOF, absorbing
-      // everything after the opening backtick, the real `eval` call included,
-      // into one token that is never split back apart.
+    test("KNOWN GAP 7 stays open, and is NOT a live bypass: Bun rejects every unterminated template", () => {
+      // No closing backtick exists anywhere in this source — the resumed tail scan runs through
+      // end of file, absorbing the real `eval` call into one token. RE-TESTED in task 14b
+      // against the runtime rather than left as an inventory row: `Bun.Transpiler` refuses it
+      // (`Unterminated string literal`), so no such file is ever executed. It stays pinned
+      // because the scan still owes it a documented outcome.
       const src = '<box id="b">{`${0}\nconst z = eval("2")\n';
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).toThrow();
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
@@ -651,5 +693,42 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
       expect(message).toContain(ctx.from);
       expect(message).toContain("[BARE_SPECIFIER]");
     });
+  });
+});
+
+/**
+ * THE LEVEL PIN (task 14b). `tokenize` returns `SourceStreamTruncatedError | …`, and EVERY
+ * consumer must propagate it rather than read it as "nothing found". Round 2 established the
+ * pattern by mutation; task 14b re-ran that mutation at every level and found THREE that killed
+ * nothing at all — this one among them, because a sibling reader in the same pipeline reported
+ * the same file first and the end-to-end test was green for that reason instead.
+ *
+ * These tests take the level in ISOLATION, with no pipeline around it, so mutating exactly this
+ * propagation reddens exactly these tests.
+ *
+ * THE FIXTURE IS ONE BUN ACCEPTS AND EXECUTES: JSX attribute strings do not process `\` escapes
+ * and code-mode strings do, so `a="x\"` ends the attribute for the runtime while the code lexer
+ * reads on through `>hi</Text>` and past it.
+ */
+const TRUNCATING = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+const COVERED = `export const G = () => <Text a="x">hi</Text>\nimport fs from "node:fs"\n`;
+
+describe("scanModuleEdges — a stream that does not cover the source is an ERROR, never an empty edge list", () => {
+  test("the fixture really is one Bun accepts, so a silent empty edge list would understate a real closure", () => {
+    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(TRUNCATING)).not.toThrow();
+    expect(
+      new Bun.Transpiler({ loader: "tsx" }).scanImports(TRUNCATING).map((i) => i.path),
+    ).toContain("node:fs");
+  });
+
+  test("returns the truncation rather than []", () => {
+    // `[]` here is indistinguishable from "this file imports nothing", which is exactly the
+    // silent "this page did not change" mode Task 13 exists to kill: the closure walk would
+    // stop at this file and every page reaching it would report an unchanged closure hash.
+    expect(scanModuleEdges(TRUNCATING)).toBeInstanceOf(Error);
+  });
+
+  test("…and the covered sibling still returns its real edge, so this is not a blanket refusal", () => {
+    expect(scanned(scanModuleEdges(COVERED))).toEqual(["node:fs"]);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { computeJsxTextTokenIndices, readHyphenatedName, scanJsx } from "./jsx";
+import { readHyphenatedName, readJsxTextRanges, scanJsx } from "./jsx";
 import { tokenize } from "./lexer";
 import type { SourceStreamTruncatedError } from "./lexer";
 
@@ -144,127 +144,141 @@ describe("readHyphenatedName", () => {
   });
 });
 
-describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebuilt fix-pass-3)", () => {
-  function textValuesOf(source: string): string[] {
-    const toks = scanned(tokenize(source));
-    const idx = computeJsxTextTokenIndices(toks, source);
-    return [...idx].sort((a, b) => a - b).map((i) => toks[i]!.value || `<${toks[i]!.kind}>`);
-  }
-
-  /** The children-text runs themselves, as source slices — the clearest way to
-   * show WHERE a text/code boundary landed, rather than which tokens fell in. */
+describe("readJsxTextRanges — where the runtime reads TEXT, and therefore where `tokenize` refuses to lex code", () => {
+  /**
+   * The children-text runs as source slices, normalized exactly as `./lexer`'s `tokenize`
+   * consumes them.
+   *
+   * RE-POINTED in task 14b, from `computeJsxTextTokenIndices` (deleted) to the ranges
+   * themselves. That function answered "which CODE tokens fell inside JSX prose", so that
+   * `import-scan.ts` could filter them back out of its `eval`/`Function` checks. Filtering was
+   * the wrong layer: the mis-lexed prose token was still IN the stream, and an apostrophe or a
+   * `/*` in prose still swallowed whatever real code followed it — 94 measured differential
+   * divergences. `tokenize` now skips these ranges outright, so the question the old function
+   * asked has exactly one answer on every input (no tokens at all), and it is asserted as an
+   * invariant by {@link expectNoTokenInsideText} below rather than fixture by fixture.
+   */
   function textRunsOf(source: string): string[] {
-    return scanJsx(source).textRanges.map((range) => source.slice(range.pos, range.end));
+    return readJsxTextRanges(source).map((range) => source.slice(range.pos, range.end));
   }
 
-  test("children text between a tag's `>` and its closing tag is marked", () => {
-    expect(textValuesOf(`<Text id="t">hello world</Text>`)).toEqual(["hello", "world"]);
+  /**
+   * THE MECHANISM-1 INVARIANT: no token `tokenize` emits may START inside a JSX children-text
+   * range. This is what makes an apostrophe in prose stop being a string opener — the code
+   * scanner is never positioned inside the prose to open one.
+   */
+  function expectNoTokenInsideText(source: string): void {
+    const ranges = readJsxTextRanges(source);
+    const inside = scanned(tokenize(source)).filter((t) =>
+      ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
+    );
+    expect(inside).toEqual([]);
+  }
+
+  test("children text between a tag's `>` and its closing tag is one run", () => {
+    expect(textRunsOf(`<Text id="t">hello world</Text>`)).toEqual(["hello world"]);
+    expectNoTokenInsideText(`<Text id="t">hello world</Text>`);
   });
 
   test("a self-closing tag has no text region at all", () => {
-    expect(textValuesOf(`<box color="fg" />`)).toEqual([]);
+    expect(textRunsOf(`<box color="fg" />`)).toEqual([]);
   });
 
-  test("an expression container's contents are never marked as text", () => {
-    expect(textValuesOf(`<Text id="t">{eval("1")}</Text>`)).toEqual([]);
+  test("an expression container's contents are never text — its code stays code", () => {
+    const source = `<Text id="t">{eval("1")}</Text>`;
+    expect(textRunsOf(source)).toEqual([]);
+    // …and the container's `eval` really is still in the stream, not merely un-marked.
+    expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(true);
   });
 
-  test("text either side of an expression container is marked, the container itself is not", () => {
-    const values = textValuesOf(`<Text id="t">before{x}after</Text>`);
-    expect(values).toEqual(["before", "after"]);
+  test("text either side of an expression container is text, the container itself is not", () => {
+    expect(textRunsOf(`<Text id="t">before{x}after</Text>`)).toEqual(["before", "after"]);
+    expectNoTokenInsideText(`<Text id="t">before{x}after</Text>`);
   });
 
-  test("nested elements are each recognized independently, their own text marked", () => {
-    const toks = scanned(tokenize(`<box>hello<text id="t">world</text></box>`));
-    const idx = computeJsxTextTokenIndices(toks, `<box>hello<text id="t">world</text></box>`);
-    const values = [...idx].map((i) => toks[i]!.value);
-    expect(values.sort()).toEqual(["hello", "world"]);
+  test("nested elements are each recognized independently, their own text runs kept apart", () => {
+    expect(textRunsOf(`<box>hello<text id="t">world</text></box>`)).toEqual(["hello", "world"]);
   });
 
-  test("an unclosed, tag-shaped generic (`Array<Foo>`) marks nothing — never even attempted as a tag", () => {
-    expect(textValuesOf(`let xs: Array<Foo> = []\nconst z = eval("2")\n`)).toEqual([]);
+  test("an unclosed, tag-shaped generic (`Array<Foo>`) yields no text — never even attempted as a tag", () => {
+    expect(textRunsOf(`let xs: Array<Foo> = []\nconst z = eval("2")\n`)).toEqual([]);
   });
 
   test("a dangling close tag left over from an uncalled generic does not launder real code as text (fix-pass-3)", () => {
     // Before fix-pass-3: `Array<Foo>` read as a plausible childless open tag,
     // and this LATER, unrelated `</Foo>` was accepted as its matching close,
     // marking everything in between (including the real `eval("2")`) as text.
-    expect(textValuesOf(`let xs: Array<Foo> = []\nconst z = eval("2")\n</Foo>\n`)).toEqual([]);
+    expect(textRunsOf(`let xs: Array<Foo> = []\nconst z = eval("2")\n</Foo>\n`)).toEqual([]);
   });
 
-  test("a mismatched closing-tag name is not treated as a match — nothing is marked", () => {
-    expect(textValuesOf(`<box>hi</text>\nconst z = eval("2")\n`)).toEqual([]);
+  test("a mismatched closing-tag name is not treated as a match — nothing is text", () => {
+    expect(textRunsOf(`<box>hi</text>\nconst z = eval("2")\n`)).toEqual([]);
   });
 
-  test("a bare Fragment's children text is marked too, even though it names no tag", () => {
-    expect(textValuesOf(`<>hello world</>`)).toEqual(["hello", "world"]);
+  test("a bare Fragment's children text is a run too, even though it names no tag", () => {
+    expect(textRunsOf(`<>hello world</>`)).toEqual(["hello world"]);
   });
 
   test("a Fragment nested inside a named element is recognized independently", () => {
-    const src = `<box><>hello</></box>`;
-    const toks = scanned(tokenize(src));
-    const idx = computeJsxTextTokenIndices(toks, src);
-    expect([...idx].map((i) => toks[i]!.value)).toEqual(["hello"]);
+    expect(textRunsOf(`<box><>hello</></box>`)).toEqual(["hello"]);
   });
 
-  test("an unclosed bare Fragment marks nothing (same matching-close discipline as named tags)", () => {
-    expect(textValuesOf(`<>\nconst z = eval("2")\n`)).toEqual([]);
+  test("an unclosed bare Fragment yields nothing (same matching-close discipline as named tags)", () => {
+    expect(textRunsOf(`<>\nconst z = eval("2")\n`)).toEqual([]);
   });
 
-  describe("prose containing code-mode punctuation still closes the tag correctly (fix-pass-3)", () => {
-    test("an apostrophe (`isn't`) does not open a code-mode string that swallows the closing tag", () => {
-      // The apostrophe still opens a CODE-mode string literal that runs past
-      // `</Text>` — the code stream is lexed independently — but the whole
-      // mis-lexed token starts inside the text range, so every token here is
-      // skipped and nothing outside the range is marked.
-      expect(textValuesOf(`<Text id="t">eval isn't allowed here</Text>`)).toEqual([
-        "eval",
-        "isn",
-        "t allowed here</Text>",
-      ]);
+  describe("prose containing code-mode punctuation is TEXT, and `tokenize` never lexes it (task 14b)", () => {
+    test("an apostrophe (`isn't`) opens no string literal at all now — the whole run is one text range", () => {
+      // BEFORE task 14b the apostrophe DID open a code-mode string literal that ran past
+      // `</Text>`; the old filter merely suppressed the fatal it caused, while the mis-lexed
+      // token still swallowed everything after it on the line. Measured through the real
+      // perimeter, `<p>it's</p>; import "node:fs"; eval("1");` reported NO violations while Bun
+      // executed all of it. Now the prose is skipped and the code after it is lexed.
+      const source = `<Text id="t">eval isn't allowed here</Text>`;
+      expect(textRunsOf(source)).toEqual(["eval isn't allowed here"]);
+      expectNoTokenInsideText(source);
+      expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(false);
     });
 
-    test("`//` does not open a code-mode line comment that swallows the closing tag", () => {
-      // `// never</Text>` is code-mode trivia, so `eval` is the only code token
-      // left inside the text range — and it is marked, not read as a reference.
-      expect(textValuesOf(`<Text id="t">eval // never</Text>`)).toEqual(["eval"]);
+    test("`//` opens no line comment that swallows the closing tag", () => {
+      const source = `<Text id="t">eval // never</Text>`;
+      expect(textRunsOf(source)).toEqual(["eval // never"]);
+      expectNoTokenInsideText(source);
+      expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(false);
     });
   });
 
   describe("an expression container lexes the code that is actually there (fix pass 4)", () => {
     test("a template literal's interpolation `}` does not close the container early", () => {
-      expect(textValuesOf('<box id="b">a{`${0}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{`${0}`+eval("x")}b</box>')).toEqual(["a", "b"]);
     });
 
     test("a template literal with several interpolations is followed to its own tail", () => {
-      expect(textValuesOf('<box id="b">a{`${0}m${1}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{`${0}m${1}`+eval("x")}b</box>')).toEqual(["a", "b"]);
     });
 
     test("a nested template literal inside an interpolation is tracked to its own tail", () => {
-      expect(textValuesOf('<box id="b">a{`${`${x}`}`+eval("x")}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{`${`${x}`}`+eval("x")}b</box>')).toEqual(["a", "b"]);
     });
 
     test("a regex literal's `}` does not close the container early", () => {
-      expect(textValuesOf('<box id="b">a{/[}]/.test(s) ? eval("1") : 0}b</box>')).toEqual([
-        "a",
-        "b",
-      ]);
+      expect(textRunsOf('<box id="b">a{/[}]/.test(s) ? eval("1") : 0}b</box>')).toEqual(["a", "b"]);
     });
 
     test("division is not mistaken for a regex literal", () => {
-      expect(textValuesOf('<box id="b">a{w / h / 2}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{w / h / 2}b</box>')).toEqual(["a", "b"]);
     });
 
     test("an object literal in a container still balances", () => {
-      expect(textValuesOf('<box id="b">a{fn({ k: 1 })}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{fn({ k: 1 })}b</box>')).toEqual(["a", "b"]);
     });
 
     test("an arrow-function body in a container still balances", () => {
-      expect(textValuesOf('<box id="b">a{xs.map((i) => { return i })}b</box>')).toEqual(["a", "b"]);
+      expect(textRunsOf('<box id="b">a{xs.map((i) => { return i })}b</box>')).toEqual(["a", "b"]);
     });
 
     test("a nested container inside a nested element still balances", () => {
-      expect(textValuesOf('<box id="b">a{c && <text id="t">n{`${v}`}m</text>}b</box>')).toEqual([
+      expect(textRunsOf('<box id="b">a{c && <text id="t">n{`${v}`}m</text>}b</box>')).toEqual([
         "a",
         "n",
         "m",
@@ -273,47 +287,62 @@ describe("computeJsxTextTokenIndices (WP-6a fix-pass-2, Important 1; reader rebu
     });
 
     test("an unterminated template literal in a container fails closed — nothing is text", () => {
-      expect(textValuesOf('<box id="b">a{`${0}b</box>')).toEqual([]);
+      expect(textRunsOf('<box id="b">a{`${0}b</box>')).toEqual([]);
     });
 
     test("an attribute value holding a template literal leaves the children text readable", () => {
-      expect(textValuesOf("<box label={`R${n}`}>raw</box>")).toEqual(["raw"]);
+      expect(textRunsOf("<box label={`R${n}`}>raw</box>")).toEqual(["raw"]);
     });
 
     test("a spread attribute leaves the children text readable", () => {
-      expect(textValuesOf("<box {...rest}>raw</box>")).toEqual(["raw"]);
+      expect(textRunsOf("<box {...rest}>raw</box>")).toEqual(["raw"]);
     });
 
     test("a spread attribute's own expression is code, never text", () => {
-      expect(textValuesOf("<box {...{ e: eval }}>raw</box>")).toEqual(["raw"]);
+      expect(textRunsOf("<box {...{ e: eval }}>raw</box>")).toEqual(["raw"]);
     });
 
-    test("a dotted tag's children text is marked, the close tag is not", () => {
-      expect(textValuesOf(`<Kit.Text id="t">hello world</Kit.Text>`)).toEqual(["hello", "world"]);
+    test("a dotted tag's children text is one run, the close tag is not part of it", () => {
+      expect(textRunsOf(`<Kit.Text id="t">hello world</Kit.Text>`)).toEqual(["hello world"]);
     });
 
-    test("a mismatched dotted close tag marks nothing at all", () => {
-      expect(textValuesOf(`<Kit.Text id="t">hello</Kit.Other>\nconst z = eval("2")\n`)).toEqual([]);
+    test("a mismatched dotted close tag yields nothing at all", () => {
+      expect(textRunsOf(`<Kit.Text id="t">hello</Kit.Other>\nconst z = eval("2")\n`)).toEqual([]);
     });
 
-    test("KNOWN GAP: a regex literal right after `<` or `}` is read as division, hiding a real call just like `)` does", () => {
-      // `scanCode` refuses to re-scan `/` as a regex after `<` or `}` because
-      // this reader re-lexes a FAILED element attempt's own JSX punctuation as
-      // code, where `</tag>` and `{expr} />` put a `/` right after exactly
-      // those tokens. The cost is these two shapes: the `}` inside the
-      // character class closes the container early, and the rest of the
-      // container — including a REAL call, not just a harmless `.source`
-      // access — is recorded as children text. All three predecessors (`)`,
-      // `<`, `}`) are reachable this way; `)` is pinned at the reachable-call
-      // level in `import-scan.test.ts`, alongside these same two.
+    test("the `<` predecessor is CLOSED and the `}` one is not (task 14b)", () => {
+      // `scanCode` used to refuse to re-scan `/` as a regex after EITHER `<` or `}`, because
+      // this reader re-lexes a FAILED element attempt's own JSX punctuation as code, where
+      // `</tag>` and `{expr} />` put a `/` right after exactly those tokens. The cost was that
+      // the `}` inside the character class closed the container early and the rest of it —
+      // including a REAL call — was recorded as children text.
+      //
+      // The `<` half is now distinguished by `jsxPunctuation`: a `<` that reached the ordinary
+      // path did so BECAUSE its predecessor ended an expression, so it is a relational operator
+      // and a regular expression may legally follow it. The whole container is code again.
       expect(textRunsOf('<box id="b">a{x < /[}]/.test(s) && eval("1")}b</box>')).toEqual([
         "a",
-        ']/.test(s) && eval("1")}b',
+        "b",
       ]);
+      // The `}` half stays, and is MEASURED not to be a live bypass: `Bun.Transpiler` rejects
+      // every spelling of a regular expression opening right after a `}` in expression
+      // position (`Unexpected }`), because only a block or an object literal can put a `}`
+      // there and a JSX expression container holds neither.
+      expect(() =>
+        new Bun.Transpiler({ loader: "tsx" }).transformSync(
+          'export const el = <box id="b">a{ {} /[}]/.test(s) && eval("1")}b</box>;',
+        ),
+      ).toThrow();
       expect(textRunsOf('<box id="b">a{ {} /[}]/.test(s) && eval("1")}b</box>')).toEqual([
         "a",
         ']/.test(s) && eval("1")}b',
       ]);
+    });
+
+    test("a genuine relational `<` inside a container is still just a comparison", () => {
+      // The valid-input companion for the re-scan above: `w < h` must stay two operands and an
+      // operator, with the container's own `}` still closing it.
+      expect(textRunsOf('<box id="b">a{w < h && "x"}b</box>')).toEqual(["a", "b"]);
     });
   });
 });
@@ -395,7 +424,7 @@ describe("readElement's memo (task-12b — the superlinear re-lex `scanJsx`'s do
   test("deeply nested UNTERMINATED input returns instead of compounding, and reports the same nothing", async () => {
     // `attemptElement` rewinds a failed attempt and the caller re-scans the same characters as
     // code, so before the memo the attempt at nesting level i cost `A(i+1) + A(i+2) + …` —
-    // exactly 2x per level. Measured through `tokenize` + `computeJsxTextTokenIndices`, warmed
+    // exactly 2x per level. Measured through `tokenize`, which reaches this reader, warmed
     // up: 32 chars 0.4ms, 64 chars 47.6ms, 88 chars 2 155ms, 96 chars 12 971ms. The 256-char
     // source below is 40 levels deeper than the 96-char row, i.e. about 10^12 times its cost —
     // it does not finish in any budget without the memo, so this test FAILS (killed subprocess,
@@ -433,7 +462,7 @@ describe("readElement's memo (task-12b — the superlinear re-lex `scanJsx`'s do
     // The 13-character witness, found the same way against a memo that replays the verdict and
     // the delta but leaves the scanner where the caller's own `<` scan parked it. Without the
     // restore the driver re-reads the confirmed element's body and records its text run a second
-    // time (`textRanges` becomes `[[6,7],[6,7]]`). `computeJsxTextTokenIndices` would merge that
+    // time (`textRanges` becomes `[[6,7],[6,7]]`). `readJsxTextRanges` would merge that
     // pair away, but `scanJsx`'s own result is a published contract — `lints.ts` reads it too —
     // so it is pinned here rather than assumed harmless. Verified identical on HEAD's jsx.ts.
     expect(scanJsx("<><><>t</></>")).toEqual({

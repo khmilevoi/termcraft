@@ -141,13 +141,20 @@ interface ClosureWalkV1 {
  * the turn pipeline rather than reject a page — the same reasoning, and the same fail-closed
  * outcome, as `gate/model/tree-scan.ts`'s own `TreeFileUnscannableError`.
  *
- * NO INPUT IS KNOWN TO REACH THIS. `scanTreeImports`' measured throw source is `./jsx`'s
- * recursive-descent reader (`computeJsxTextTokenIndices`), which `scanModuleEdges` does not
- * call at all; measured here under Bun 1.3.14, `scanModuleEdges` on `"<a>{".repeat(k)` returns
- * normally with its real edge list at k = 32 000 (where `scanImportAllowlist` throws) and again
- * at k = 200 000. What would falsify that and make this branch live: a throw source inside
- * `tokenize` itself, or inside `readStaticImportSpecifier`'s own bounded loop. The guard stays
- * because the engine, not this module, owns the stack.
+ * THIS BRANCH IS NOW LIVE, and task 14b is what made it so. It used to be unreachable: the
+ * measured throw source is `./jsx`'s recursive-descent reader, and `scanModuleEdges` did not
+ * call it at all — measured under Bun 1.3.14, `scanModuleEdges` on `"<a>{".repeat(k)` returned
+ * its real edge list at k = 32 000 (where `scanImportAllowlist` already threw) and again at
+ * k = 200 000. `tokenize` now consults that same reader for every source, so both readers
+ * overflow on the same input, and this converter is what keeps that a rejected page rather than
+ * a crashed turn.
+ *
+ * THE COST IS A DIAGNOSTIC, NOT AN ENFORCEMENT. Where the flat scan and the closure walk used to
+ * disagree — one refusing the file, the other still reporting its forbidden import — they now
+ * agree, so such a file yields one fatal instead of two. `gate-runner.test.ts`'s closure-invariant
+ * table pins that row, including that the page is still blocked. Two readers with two different
+ * parses is the hazard task 14b exists to remove: a closure built from a different reading than
+ * the allowlist's is exactly what lets an unscanned module load.
  */
 class ClosureEdgesUnreadableError extends errore.createTaggedError({
   name: "ClosureEdgesUnreadableError",

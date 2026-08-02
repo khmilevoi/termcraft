@@ -95,3 +95,35 @@ describe("checkPageContract (runtime-api §4)", () => {
     ).toBe(true);
   });
 });
+
+/**
+ * THE LEVEL PIN (task 14b). `tokenize` returns `SourceStreamTruncatedError | …`, and EVERY
+ * consumer must propagate it rather than read it as "nothing found". Round 2 established the
+ * pattern by mutation; task 14b re-ran that mutation at every level and found THREE that killed
+ * nothing at all — this one among them, because a sibling reader in the same pipeline reported
+ * the same file first and the end-to-end test was green for that reason instead.
+ *
+ * These tests take the level in ISOLATION, with no pipeline around it, so mutating exactly this
+ * propagation reddens exactly these tests.
+ *
+ * THE FIXTURE IS ONE BUN ACCEPTS AND EXECUTES: JSX attribute strings do not process `\` escapes
+ * and code-mode strings do, so `a="x\"` ends the attribute for the runtime while the code lexer
+ * reads on through `>hi</Text>` and past it.
+ */
+const TRUNCATING = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+const COVERED = `export const G = () => <Text a="x">hi</Text>\nimport fs from "node:fs"\n`;
+
+describe("checkPageContract — a stream that does not cover the source is an ERROR, never a meta-less result", () => {
+  test("returns the truncation rather than a contract verdict", () => {
+    // A truncated stream also has no `meta` in it, so swallowing the error reports "this page
+    // declares no meta" — a false diagnosis that sends the agent to fix a contract that is
+    // probably fine, while the forbidden import it actually hides goes unchecked.
+    expect(checkPageContract(TRUNCATING)).toBeInstanceOf(Error);
+  });
+
+  test("…and the covered sibling still gets a real verdict, so this is not a blanket refusal", () => {
+    const result = scanned(checkPageContract(COVERED));
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.meta).toBeNull();
+  });
+});

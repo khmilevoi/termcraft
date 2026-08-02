@@ -484,14 +484,27 @@ describe("createGateRunnerAdapter", () => {
         closures: [],
       },
       {
-        name: "a file the flat scan cannot tokenize that ALSO holds a forbidden import — the closure walk is the only reader that sees it",
+        name: "a file the flat scan cannot tokenize is still FATAL, and still blocks its page, when the closure walk cannot read it either",
         history:
-          "dba54e9: 1 (UNSCANNABLE_SOURCE only). eeaf80f: 2 — it reported the `node:fs` import too. 45e278a: 1 — the FORBIDDEN_IMPORT VANISHED (round 3 Critical (b)).",
+          "dba54e9: 1 (UNSCANNABLE_SOURCE only). eeaf80f: 2 — it reported the `node:fs` import too. 45e278a: 1 — the FORBIDDEN_IMPORT VANISHED (round 3 Critical (b)). task 14b: 1 again, and this time by construction rather than by accident — see below.",
+        // CHANGED IN TASK 14b, deliberately, and the security property is unchanged. The closure
+        // walk is still run over this file — `readClosureEdges` still refuses to skip a file the
+        // flat scan reported `UNSCANNABLE_SOURCE` for, which is round 3's Critical (b) — but
+        // `scanModuleEdges` now reads the source through the SAME parse the flat scan uses
+        // (`tokenize` -> `readJsxTextRanges` -> `scanJsx`), so this 32 000-element unterminated
+        // body overflows the engine's stack in BOTH readers instead of only the first. The
+        // second reader's separate `FORBIDDEN_IMPORT` line is therefore gone.
+        //
+        // That is a loss of DIAGNOSTIC DETAIL, not of enforcement, and the row asserts as much:
+        // the fatal is still raised, still attributed to `pages/a.tsx`, and still blocks page
+        // `a`, so the turn is rejected exactly as before. Two readers with two different parses
+        // is the very hazard task 14b exists to remove — a closure built from a different
+        // reading than the allowlist's is what lets an unscanned module load — so the two
+        // agreeing here, including about what they cannot read, is the intended outcome.
         files: [["pages/a.tsx", UNSCANNABLE]],
         treePaths: ["pages/a.tsx"],
         pages: [entry("a", "pages/a.tsx")],
         errors: [
-          'import/FORBIDDEN_IMPORT @ pages/a.tsx:-:- blocked=[a] :: specifier "node:fs" in pages/a.tsx is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed — found by the closure walk because "pages/a.tsx" was never scanned in full',
           'import/UNSCANNABLE_SOURCE @ pages/a.tsx:1:1 blocked=[a] :: the import scan could not read "pages/a.tsx" to the end — RangeError: Maximum call stack size exceeded.',
         ],
         closures: [],

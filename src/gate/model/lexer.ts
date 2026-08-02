@@ -1,209 +1,172 @@
 import * as errore from "errore";
 import { LanguageVariant, SyntaxKind, createScanner } from "typescript/unstable/ast";
-import type { Scanner } from "typescript/unstable/ast";
+
+import { opensJsxPunctuation, readJsxTextRanges, scanCode } from "./jsx";
+import type { JsxTextRange } from "./jsx";
+import { SK, lineColOf, scanCodeToken } from "./scanner";
+import type { BraceContext, SyntaxKind as SyntaxKindType, Tok } from "./scanner";
+
+export { SK, lineColOf, scanCodeToken };
+export type { BraceContext, SyntaxKind, Tok };
 
 /**
- * Short alias for the unstable AST `SyntaxKind` enum, which every gate scan compares
- * against. NOTE: the end-of-file member is `EndOfFile` (=1), NOT `EndOfFileToken`.
- */
-export const SK = SyntaxKind;
-
-/** The token-kind type behind {@link SK}, re-exported so the gate's scans keep the
- * unstable AST package as a single import seam. */
-export type { SyntaxKind };
-
-/** One lexed token: its kind, its string value (for literals/identifiers), and its start offset. */
-export interface Tok {
-  readonly kind: SyntaxKind;
-  readonly value: string;
-  readonly pos: number;
-}
-
-/**
- * What one open `{` currently in scope actually is. `scan()` cannot tell the two
- * apart on its own, yet they close differently: a real brace — a block, an
- * object literal, a JSX expression container — is closed by a plain
- * `CloseBraceToken`, while the `${` that opened a template literal's
- * interpolation is closed by a `}` that RESUMES the literal (in `` `a${x}b` ``
- * the `` }b` `` is one more template token, not code, and only
- * `reScanTemplateToken` lexes it that way — see `node_modules/typescript/dist/
- * ast/scanner.d.ts`). Callers thread a stack of these through
- * {@link scanCodeToken}, innermost last.
- */
-export type BraceContext = "brace" | "template";
-
-/**
- * Scan the next CODE token, keeping `braces` up to date and resolving the one
- * token a plain `scan()` classifies wrongly: the `}` that resumes a template
- * literal. Left unresolved, the scanner reads that `}` as a brace and then
- * takes the literal's own closing backtick as the START of a fresh template,
- * swallowing everything after it (up to the next backtick, or to EOF) into one
- * literal token — which is how a real `eval(...)` written after an interpolated
- * string used to disappear from the token stream entirely.
+ * Tokenize a page source the way the RUNTIME reads it. Shared by every gate scan — the import
+ * allowlist, design §5.8's `eval`/`Function` ban, the page contract, the determinism lints — so
+ * all of them reason about one reading of the file.
  *
- * Deliberately NOT handled here: re-scanning `/` as a regular expression.
- * {@link tokenize} below lexes a page's JSX punctuation as code too, and there
- * `</Text>` and `{expr} />` both put a `/` in a position no expression has just
- * ended — `reScanSlashToken` would happily turn either into a regex literal
- * that swallows the rest of the line. `./jsx`'s reader knows when it is
- * genuinely inside code, so it layers that re-scan on top of this step itself.
- */
-export function scanCodeToken(scanner: Scanner, braces: BraceContext[]): SyntaxKind {
-  const kind = scanner.scan();
-  if (kind === SK.OpenBraceToken) {
-    braces.push("brace");
-    return kind;
-  }
-  if (kind === SK.TemplateHead) {
-    braces.push("template");
-    return kind;
-  }
-  if (kind !== SK.CloseBraceToken) return kind;
-  if (braces[braces.length - 1] !== "template") {
-    braces.pop(); // a stray `}` with an empty stack pops nothing — harmless
-    return kind;
-  }
-  // `}…${` (TemplateMiddle) keeps the interpolation context open for the next
-  // span; `}…` ` (TemplateTail) ends the literal. An UNTERMINATED literal also
-  // comes back as a tail, with the scanner parked at EOF. That is a real
-  // fail-closed guarantee for `./jsx`'s reader — its own caller
-  // (`attemptElement`) treats hitting EOF before a matching `}` as a failed
-  // read and falls back to ordinary code, never to text — but it is NOT one
-  // for {@link tokenize} below: an unterminated template literal has no such
-  // fallback there, so the swallowed span (everything from the unmatched
-  // opening backtick to EOF) simply never produces the separate tokens a real
-  // `eval`/`Function` reference inside it would need to be caught by (KNOWN
-  // GAP, pinned in `import-scan.test.ts`).
-  const resumed = scanner.reScanTemplateToken(false);
-  if (resumed !== SK.TemplateMiddle) braces.pop();
-  return resumed;
-}
-
-/**
- * Tokenize a page source with the TypeScript lexer. Shared by the gate's source
- * scans (import allowlist, page contract) so both read exactly the tokens the
- * author wrote — never the transform's injected edges. Template literals are
- * followed across their interpolations ({@link scanCodeToken}), so the text
- * spans of `` `a${x}b` `` stay literal tokens and the code between them stays
- * code. The `source.length + 1` cap is a hard backstop against a wrong terminal-
- * token assumption spinning the loop.
+ * ---------------------------------------------------------------------------------------------
+ * THE INVARIANT (task 14b). **The gate's view of a source must cover everything the runtime will
+ * execute.** Where it cannot, this function returns a {@link SourceStreamTruncatedError} naming
+ * the offset; it is never silently under-scanned.
  *
- * Not followed correctly: a `}` inside a regular-expression body (never
- * re-scanned as one here, by design — see {@link scanCodeToken}'s own doc
- * comment) can desync this same brace/template tracking and swallow real code
- * — including an unterminated template's tail running straight through EOF
- * with no failure signal at all. `import-scan.ts`'s own KNOWN GAP inventory is
- * where every reproduced shape of this is named and pinned; this function
- * does not special-case any of them.
+ * That is one property, enforced here rather than in any one scan, because every scan built on
+ * this function treats the tokens it is given AS the file and none of them can check that claim
+ * for itself. Three separate bypasses reached the shipped perimeter before it was stated this
+ * way, each closed by a guard aimed at the one input a reviewer had found, and each defeated by
+ * the next shape. The four mechanisms below are the ones a DIFFERENTIAL ORACLE
+ * (`lexer.oracle.test.ts`) measured as necessary and sufficient over its corpus — not a fourth
+ * guess:
  *
- * THE COMPLETENESS INVARIANT (task-14 review round 1, Critical C1). Every scan
- * built on this function — the import allowlist, the `eval`/`Function` ban, the
- * page contract, every determinism lint — reasons about the tokens it is given
- * as if they were the file. Nothing checked that they WERE. They are not,
- * whenever `scan()` hands back a TRIVIA kind: a trivia kind returned (rather
- * than skipped) is the scanner saying it DECLINED TO LEX that span, and the
- * span runs to the end of the file. Enforced here rather than in any one scan,
- * because every one of them shares the assumption.
+ * 1. **JSX children TEXT is skipped, not lexed** ({@link readJsxTextRanges}). This is the one
+ *    that closes the differential-parse class. Bun parses a `.tsx`/`.jsx` file with a JSX
+ *    parser, in which children text is TEXT: `it's` is prose, `a // b` is prose, `a /* b` is
+ *    prose, `#7ad7ff` is prose, a backtick is prose. A CODE-mode lexer started inside that prose
+ *    reads them as a string opener, a line comment, a block comment running to end of file, a
+ *    zero-width private identifier, and a template literal — each of which then swallows the
+ *    real code that follows. Measured through the real `scanTreeImports` perimeter against Bun's
+ *    own parse: **94 sources that Bun accepts and whose `import`/`eval` the gate could not see**
+ *    (see `lexer.oracle.test.ts` for the corpus and the counts).
+ * 2. **`/` is re-scanned as a regular expression where one can legally start** (`./jsx`'s
+ *    `scanCode`, the same implementation the JSX reader uses). Without it a `{` or `}` written
+ *    inside a regular expression's character class desynchronised the template/brace stack and
+ *    swallowed the rest of the file into one literal token — `import-scan.ts`'s KNOWN GAPS 6 and
+ *    6b, of which 6b was measured live: `` const s = `${/[{]/.test('x')}` `` followed by
+ *    `import "node:fs"` and `eval("1")` transpiled fine under Bun and reported NO violations.
+ * 3. **Coverage is accounted for, character by character** ({@link firstUnaccountedOffset}).
+ *    Every source offset must belong to an emitted token, to a skipped JSX text range, to
+ *    whitespace, to a TERMINATED comment, or to a leading shebang. Anything else — an
+ *    unterminated `/*` that ran to end of file, a span the scanner declined to lex, a
+ *    zero-width stall — is a region of the file the stream does not account for, and it fails
+ *    closed. This is what makes the invariant a property of the OUTPUT rather than a list of
+ *    known-bad inputs.
+ * 4. **No token may swallow a JSX text range whole.** A code-mode token that starts before a
+ *    prose run and ends at or after its end has read the runtime's TEXT as CODE and kept going
+ *    — the two parses have diverged, and the stream cannot be trusted. (A token that merely
+ *    overlaps the START of a run is tolerated: only multi-character punctuation can do that —
+ *    `>` merging with a leading `=`/`>` of the prose — and mechanism 1 then resumes at the run's
+ *    end, so no identifier can be mis-read as code.)
  *
- * WHAT THIS DOES NOT CLOSE (round 2). The invariant catches a scanner that SAYS
- * it declined to lex a span. It does NOT make this module's parse agree with the
- * parse the runtime executes: an unterminated block comment opened in JSX TEXT
- * truncates the stream with no signal at all, because the scanner is built with
- * `skipTrivia = true` and SKIPS comments rather than returning them — so no
- * trivia kind is surfaced, and `getTokenEnd()` still reaches `source.length`.
- * Bun transpiles and runs such a file while this module sees only a prefix. That
- * is a differential-parse problem, larger than any one guard, and it is owned by
- * a separate task. Nothing here claims the perimeter is closed.
+ * WHAT THIS DOES NOT CLAIM. Not that the gate's parse equals Bun's in general — this is a
+ * scanner driven by a JSX reader, not Bun's parser. The claim is the narrower, measurable one
+ * the oracle checks: over its corpus there is no source that **Bun accepts while the gate saw
+ * less than all of it**. `import-scan.ts`'s KNOWN GAP inventory records the residual shapes,
+ * each re-tested against Bun in task 14b's report with a live/unreachable verdict. What would
+ * falsify the claim is a single oracle row with a non-empty `underImport`/`underEval`.
  *
- * MEASURED, and this is why the guard is stated as "no trivia kind" rather than
- * as any one character or kind. `�` — which is precisely what
- * `TextDecoder` produces for ANY invalid UTF-8 byte, and `core/kernel`'s turn
- * staging decodes every tree file through it unfiltered — makes the scanner
- * emit `NonTextFileMarkerTrivia` (its binary-file detector) spanning from that
- * offset to EOF. One `�` at a token position therefore erased 61 of 132
- * characters from the stream, taking `import fs from "node:fs"`, `eval(...)`,
- * `require(...)` and `new Function(...)` with them — and Bun EXECUTES such a
- * module, measured under the `tsx` loader (which transpiles it) and by
- * `await import()`-ing a `.tsx` fixture whose side effect ran. CORRECTED in
- * round 2 (M3): the first draft cited a `.ts` fixture containing JSX, which
- * `Bun.Transpiler({loader:"ts"})` REJECTS (`Unexpected ï`) — so that fixture
- * lacked the executability the claim rested on. The conclusion is unchanged;
- * the `.tsx` form is what carries it. Through
- * the real perimeter, before this guard: zero violations reported; the same
- * file with the `�` replaced by `x`: all four. For a SHARED module the
- * whole-tree scan is the only check there is, so that was a total bypass.
- *
- * DELIBERATELY NOT a `�` check, and not a position check either. A
- * position check is what this guard was first written as, and it does not work:
- * measured, the scanner's `getTokenEnd()` at EOF still reports `source.length`
- * for the truncated file (132 = 132), because the trivia token itself spans the
- * swallowed region. The trivia-kind test is both the correct mechanism and the
- * general one — it catches any present or future kind the scanner surfaces to
- * say "I did not lex this", not the one character a probe happened to find.
- *
- * PROVEN NOT TO OVER-FIRE, not assumed: `scan()` returns no trivia kind for
- * ordinary sources, a `#!` shebang, a leading BOM, comments, whitespace, or
- * even git conflict markers — and all 884 of the repository's own `src/`
- * `.ts`/`.tsx` files tokenize with zero refusals. `lexer.test.ts`'s corpus test
- * re-runs that measurement AND asserts the count exactly, so this number and
- * that walk cannot drift apart (round 2, M4: this said 886, counting files
- * outside `src/` the test never visits). The one behaviour change is stated on
- * {@link SourceStreamTruncatedError}'s own test: a source Bun DOES execute,
- * carrying `�` at a token position, is now REFUSED.
+ * The `source.length + 1` cap is a hard backstop against a wrong terminal-token assumption
+ * spinning the loop; every iteration already advances at least one character, so it is defense
+ * in depth, and it FAILS CLOSED rather than returning the partial stream it used to.
  */
 export function tokenize(source: string): SourceStreamTruncatedError | Tok[] {
+  const textRanges = readJsxTextRanges(source);
   const scanner = createScanner(true, LanguageVariant.Standard);
   scanner.setText(source);
   const toks: Tok[] = [];
   const braces: BraceContext[] = [];
   const cap = source.length + 1;
   let guard = 0;
-  for (
-    let kind = scanCodeToken(scanner, braces);
-    kind !== SK.EndOfFile;
-    kind = scanCodeToken(scanner, braces)
-  ) {
+  let previous: SyntaxKindType = SK.EndOfFile;
+  // True while the previous token is a JSX `<` rather than a relational operator — the one
+  // thing `scanCode` cannot derive, and what keeps `</box>`'s `/` a division while letting
+  // `a < /[}]/.test(x)`'s be the regular expression it really is (see `opensJsxPunctuation`).
+  let jsxPunctuation = false;
+  let range = 0; // the first text range that may still be ahead of the scan position
+  let covered = 0; // the highest offset the stream accounts for, for mechanism 3
+
+  for (;;) {
+    // MECHANISM 1 — never begin a code scan inside JSX children text. The scanner's own
+    // `getTokenEnd()` IS its scan position, so this is asked before every scan, including the
+    // first (position 0) and the one right after a token that reached into a text run.
+    const at = scanner.getTokenEnd();
+    while (range < textRanges.length && textRanges[range]!.end <= at) range += 1;
+    const ahead = textRanges[range];
+    if (ahead !== undefined && ahead.pos <= at && at < ahead.end) {
+      covered = Math.max(covered, ahead.end);
+      scanner.resetTokenState(ahead.end);
+      range += 1;
+      // A text run always ends at `<`, `{` or end of file (`scanJsxToken` stops at exactly
+      // those), so the next code token can never be a `/` whose regex-versus-division reading
+      // depends on what came before the prose.
+      previous = SK.EndOfFile;
+      jsxPunctuation = false;
+      continue;
+    }
+
+    const kind = scanCode(scanner, braces, previous, jsxPunctuation);
+    const start = scanner.getTokenStart();
+    const end = scanner.getTokenEnd();
+
+    if (kind === SK.EndOfFile) {
+      const gap = firstUnaccountedOffset(source, covered, source.length);
+      if (gap !== null) return unaccounted(source, gap);
+      return toks;
+    }
     if (TRIVIA_KINDS.has(kind)) {
-      // The span the scanner declined to lex — reported by its start offset, which is where
-      // coverage of this file actually stopped.
+      // The scanner RETURNING a trivia kind is it saying it DECLINED TO LEX that span — its
+      // binary-file detector (`NonTextFileMarkerTrivia`, which any invalid UTF-8 byte decodes
+      // into) is the measured case, and it spans from that offset to end of file. Reported by
+      // its start offset, which is where coverage of this file actually stopped.
       return new SourceStreamTruncatedError({
-        reason: `the scanner returned ${kindName(kind)} at offset ${scanner.getTokenStart()}, so the ${scanner.getTokenEnd() - scanner.getTokenStart()} character(s) from there were never lexed`,
+        reason: `the scanner returned ${kindName(kind)} at offset ${start}, so the ${end - start} character(s) from there were never lexed`,
       });
     }
-    if (scanner.getTokenEnd() === scanner.getTokenStart()) {
+    if (end === start) {
       // A ZERO-WIDTH token that is not end-of-file: the scanner consumed nothing, so scanning
-      // again from here returns the same token forever. Resume one character later instead.
+      // again from here returns the same token forever. Resume one character later instead, and
+      // count that character as accounted for.
       //
-      // MEASURED, and this is a REAL, PRE-EXISTING, REACHABLE TRUNCATION that enforcing the
-      // invariant above is what surfaced (task-14 review round 1, found while proving C1's fix
-      // does not over-fire). A `#` that is not the start of a legal private identifier —
-      // `<Text>#7ad7ff</Text>`, a hex colour in JSX text, which this project's entire palette
-      // is made of (`design/termcraft-engine.js`'s `pal`) — makes `scan()` return
-      // `PrivateIdentifier` at zero width, forever. The old loop's `guard <= cap` condition
-      // caught the spin and SILENTLY RETURNED the partial token list, so everything after the
-      // `#` was unscanned: exactly C1's bypass shape, through a character a design page is far
-      // more likely to contain. Four of the repository's own 886 `.ts`/`.tsx` files were
-      // already being truncated this way (`host/protocol/model/frame.ts`,
-      // `runtime/model/tokens.test.ts`, `ui/chat/model/markdown-lite.ts`,
-      // `ui/theme/model/palette.test.ts`).
+      // ADVANCING, not failing closed, and the difference is measured rather than argued. A
+      // sweep of every code point in U+0000..U+02FF through `createScanner(true, Standard)`
+      // finds EXACTLY ONE stalling character: `#` (`scan()` answers `PrivateIdentifier` at zero
+      // width forever). A `#` that IS followed by an identifier start is a legal private
+      // identifier and lexes normally with a real width, so the stall only ever happens on a
+      // LONE `#` — a character the runtime cannot execute either (`Bun.Transpiler` rejects it
+      // outside a shebang or a private field). Skipping it therefore hides nothing: it can be
+      // no import, no `eval`, no `require`, and every subsequent character is still offered to
+      // the scanner, so the stream still covers the code.
       //
-      // ADVANCING, not failing closed, and the difference matters: skipping ONE character at an
-      // offset where no token exists cannot hide an import, an `eval` or a `require` — every
-      // subsequent character is still offered to the scanner, so the stream still covers the
-      // source. Failing closed here instead would refuse every design page that renders a hex
-      // colour, which is the "tightened guard bricks a real command" failure this branch has
-      // already paid for twice.
-      scanner.resetTokenState(scanner.getTokenStart() + 1);
+      // Failing closed here instead was implemented and MEASURED first: it refuses an
+      // extensionless `Dockerfile` of `#` comments, which `tree-scan.ts`'s measured predicate
+      // classifies as code — the "tightened guard bricks a real input" failure this branch has
+      // already paid for twice. The oracle reports the same zero divergences either way, so the
+      // policy that costs no false rejection is the correct one.
+      covered = Math.max(covered, start + 1);
+      scanner.resetTokenState(start + 1);
+      jsxPunctuation = opensJsxPunctuation(kind, previous);
+      previous = kind;
       continue;
     }
     if (guard > cap) {
-      // Unreachable now that every iteration advances at least one character (above), but kept
-      // as defense in depth — and it FAILS CLOSED rather than returning the partial stream the
-      // way it used to, because a silent partial stream is the whole defect C1 names.
       return new SourceStreamTruncatedError({
         reason: `the scanner produced more than ${cap} tokens for a ${source.length}-character source without reaching end-of-file`,
       });
     }
+    // MECHANISM 4 — this token read a whole prose run as code and kept going, so the gate's
+    // parse and the runtime's have diverged about where code even is.
+    const swallowed = textRanges.find((r) => start <= r.pos && end >= r.end);
+    if (swallowed !== undefined) {
+      return new SourceStreamTruncatedError({
+        reason: `the ${kindName(kind)} at offset ${start} swallows the JSX text the runtime reads at offsets ${swallowed.pos}..${swallowed.end}, so this stream and the runtime's parse disagree about which characters are code`,
+      });
+    }
+    // MECHANISM 3 — everything between the last accounted-for offset and this token must be
+    // whitespace, a terminated comment or a leading shebang.
+    if (start > covered) {
+      const gap = firstUnaccountedOffset(source, covered, start);
+      if (gap !== null) return unaccounted(source, gap);
+    }
+    covered = Math.max(covered, end);
+
     guard += 1;
     const value =
       kind === SK.StringLiteral || kind === SK.NumericLiteral
@@ -211,10 +174,68 @@ export function tokenize(source: string): SourceStreamTruncatedError | Tok[] {
         : kind === SK.Identifier
           ? scanner.getTokenText()
           : "";
-    toks.push({ kind, value, pos: scanner.getTokenStart() });
+    toks.push({ kind, value, pos: start });
+    jsxPunctuation = opensJsxPunctuation(kind, previous);
+    previous = kind;
   }
-  return toks;
 }
+
+/** The refusal mechanism 3 raises, naming the offset where the stream stops accounting for the source. */
+function unaccounted(source: string, offset: number): SourceStreamTruncatedError {
+  const where = lineColOf(source, offset);
+  return new SourceStreamTruncatedError({
+    reason: `no token accounts for the source at offset ${offset} (line ${where.line}, column ${where.column}), so the ${source.length - offset} character(s) from there may hold code this scan never saw`,
+  });
+}
+
+/**
+ * The first offset in `[from, to)` that the token stream does not account for, or `null` when
+ * every character in the span is one the runtime does not execute either.
+ *
+ * WHAT COUNTS AS ACCOUNTED FOR, and why each entry is on the list rather than assumed:
+ *
+ * - **whitespace**, including the byte-order mark, which JavaScript's own `\s` class covers;
+ * - **a terminated comment** — `/*…*` + `/`, or `//…` up to a newline or end of file. Bun strips
+ *   exactly these, so a gap made of them hides nothing the runtime runs;
+ * - **a `#!` shebang on the first line**, which the scanner skips and Bun accepts.
+ *
+ * Everything else is a region the scanner walked past without telling anyone: the measured case
+ * is an UNTERMINATED `/*`, which `createScanner(true, …)` SKIPS (it does not return a comment
+ * kind, so no trivia guard can see it) and runs to end of file. In JSX children that shape is
+ * prose and is already skipped by `tokenize`'s mechanism 1; anywhere else the runtime refuses
+ * the file outright, so failing closed here agrees with it rather than over-firing.
+ */
+function firstUnaccountedOffset(source: string, from: number, to: number): number | null {
+  let i = from;
+  while (i < to) {
+    const char = source[i]!;
+    if (WHITESPACE.test(char)) {
+      i += 1;
+      continue;
+    }
+    if (i === 0 && source.startsWith("#!")) {
+      const eol = source.indexOf("\n", 2);
+      i = eol === -1 ? to : eol + 1;
+      continue;
+    }
+    if (source.startsWith("//", i)) {
+      const eol = source.indexOf("\n", i + 2);
+      i = eol === -1 ? to : eol + 1;
+      continue;
+    }
+    if (source.startsWith("/*", i)) {
+      const close = source.indexOf("*/", i + 2);
+      if (close === -1) return i; // unterminated — everything from here on was never lexed
+      i = close + 2;
+      continue;
+    }
+    return i;
+  }
+  return null;
+}
+
+/** One character of JavaScript whitespace, byte-order mark included (`\s` covers `﻿`). */
+const WHITESPACE = /\s/u;
 
 /**
  * {@link tokenize} could not produce a token stream covering the whole source, so nothing
@@ -252,22 +273,9 @@ export const TRIVIA_KINDS: ReadonlySet<number> = new Set(
 );
 
 /** The enum member name for a kind, for diagnostics — `String(kind)` when the reverse mapping has none. */
-function kindName(kind: SyntaxKind): string {
+function kindName(kind: SyntaxKindType): string {
   const name = (SyntaxKind as unknown as Record<number, string | undefined>)[kind];
   return name ?? String(kind);
 }
 
-/** Convert a source offset to 1-based line/column for diagnostics. */
-export function lineColOf(source: string, pos: number): { line: number; column: number } {
-  let line = 1;
-  let column = 1;
-  for (let i = 0; i < pos && i < source.length; i += 1) {
-    if (source[i] === "\n") {
-      line += 1;
-      column = 1;
-    } else {
-      column += 1;
-    }
-  }
-  return { line, column };
-}
+export type { JsxTextRange };
