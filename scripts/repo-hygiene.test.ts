@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
 
 /**
  * A raw NUL in a tracked source makes `grep`/ripgrep classify the file as BINARY: they print
@@ -12,7 +13,7 @@ import { describe, expect, test } from "bun:test";
  * demonstrably had them). Counting the bytes is what works.
  */
 describe("repository hygiene", () => {
-  test("no tracked TypeScript source contains a raw NUL byte", async () => {
+  test("no tracked TypeScript source contains a raw NUL byte", () => {
     const listed = Bun.spawnSync(["git", "ls-files", "*.ts", "*.tsx"], { stdout: "pipe" });
     expect(listed.exitCode).toBe(0);
 
@@ -24,12 +25,9 @@ describe("repository hygiene", () => {
 
     const offenders: string[] = [];
     for (const path of paths) {
-      const bytes = await Bun.file(path).bytes();
+      const bytes = fs.readFileSync(path);
       if (bytes.includes(0)) offenders.push(path);
     }
     expect(offenders).toEqual([]);
-  }, 120_000); // measured ~70s for a sequential Bun.file().bytes() scan of ~950 files on
-  // Windows (vs. ~200ms via a sync read of the same files) — this is Bun's per-file async
-  // open overhead on this platform, not a hang; the default 5s bun:test timeout is too
-  // short here regardless of the NUL fix below.
+  });
 });
