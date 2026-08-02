@@ -1113,12 +1113,7 @@ describe("workspace-first launch (2026-08-02)", () => {
     projectExists: true,
   } as const;
 
-  // TASK 5 (test.todo): the Workspace's own opening chrome (the "OPENING" status-bar chip and
-  // the "opening project…" text) does not exist yet — `deriveScreen` already routes an existing
-  // project's pending startup open to "workspace" (Task 3), but nothing under `ui/workspace`
-  // renders the empty-project case any differently from a filled one yet. Un-todo once Task 5
-  // lands that chrome; the body below is the full, unweakened assertion set.
-  test.todo("an existing project mounts the Workspace shell, not Home, before anything opens", async () => {
+  test("an existing project mounts the Workspace shell, not Home, before anything opens", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, existingEnv);
     const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
       width: 120,
@@ -1160,10 +1155,11 @@ describe("workspace-first launch (2026-08-02)", () => {
     });
     open = renderer;
     // The pre-emit checkpoint: `deriveScreen` already mounts "workspace" for this pending,
-    // project-less startup open (Task 3) before the Workspace's own opening chrome exists
-    // (Task 5's "OPENING" chip) — this is what proves the routing today without needing that
-    // chrome, and what guarantees the App has actually settled before the blockOpen below.
+    // project-less startup open (Task 3), and the Workspace's own opening chrome (Task 5's
+    // "OPENING" chip) now renders for it — this guarantees the App has actually settled before
+    // the blockOpen below, and confirms both the routing and the chrome it drives.
     expect(deps.screen()).toBe("workspace");
+    await renderer.waitForFrame((frame) => frame.includes("OPENING"));
 
     await renderer.act(() =>
       kernel.emit(
@@ -1193,9 +1189,7 @@ describe("workspace-first launch (2026-08-02)", () => {
     expect(text).not.toContain("OPENING");
   });
 
-  // TASK 5 (test.todo): see the first test's note — `finishOpen` filling in the Workspace is
-  // only observable once the empty-project "opening project…" chrome exists to disappear.
-  test.todo("finishOpen turns the opening Workspace into a filled one", async () => {
+  test("finishOpen turns the opening Workspace into a filled one", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
     const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {

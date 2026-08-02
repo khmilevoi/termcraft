@@ -515,6 +515,18 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // task-5 (workspace-first launch): a bare `createUiDeps` now means `projectId === null`
+    // reads as a pending startup open (the design's `wsOpening`), which drops this exact hint
+    // row — apply a snapshot so this test keeps exercising the already-open, `STATIC` hint row
+    // it is actually about, not opening chrome.
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
@@ -545,6 +557,16 @@ describe("Workspace action-derived hotkey hints", () => {
    */
   test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // task-5 (workspace-first launch): see the note on the sibling test above — a bare
+    // `createUiDeps` now reads as a pending startup open, which drops this row entirely.
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
@@ -1199,5 +1221,119 @@ describe("Workspace preview pane header", () => {
     const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
     expect(ruleRun).toBeDefined();
     expect(ruleRun && extractRgb(ruleRun.fg)).toBe(SHELL_PALETTE.amber);
+  });
+});
+
+describe("Workspace while the project is opening (design 30-workspace-first-launch, wsOpening)", () => {
+  /** `mirror.project().projectId === null` is the whole condition — a fresh `UiDeps` with no
+   *  snapshot applied is exactly that state. */
+  const openingDeps = () => createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+
+  test("the preview centres the design's own two lines and never the zero-pages EmptyState", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("opening project…");
+    expect(text).toContain("reading .termcraft — preview arrives when it's ready");
+    // §20's line asserts a DIFFERENT fact — a finished project that genuinely has no pages.
+    expect(text).not.toContain("No pages yet — describe what to build");
+  });
+
+  test("no spinner: a spinner is turn vocabulary and nothing here is a turn", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+
+    expect(findRun(rows, "⠹ generating")).toBeUndefined();
+    const line = findRun(rows, "opening project…");
+    expect(line && extractRgb(line.fg)).toBe(SHELL_PALETTE.amber);
+  });
+
+  test("the page slot carries the opening phrase and the mode chip reads OPENING, not STATIC", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("OPENING");
+    expect(text).not.toContain("STATIC");
+  });
+
+  test("the composer stays live with the opening placeholder and a disabled send key", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+
+    // The empty, focused composer draws its cursor OVER the placeholder's first cell
+    // (`TextInput.tsx`: "Empty AND focused: the placeholder's first cell IS the cursor") — the
+    // same established pattern this file's own `sk for changes…` check
+    // (`Workspace.test.tsx` action-hotkey suite, matching `Composer.test.tsx`'s "sk for
+    // changes…") already relies on, so the leading "p" of "project opening…" is never a text
+    // run; match from the second character on instead.
+    expect(text).toContain("roject opening…");
+    expect(text).toContain("send");
+    const sendKey = findRun(rows, " ⏎ ");
+    expect(sendKey && extractRgb(sendKey.fg)).toBe(SHELL_PALETTE.faint);
+    // F2/F3/F4 have nothing to act on yet — no preview, no page to tweak or interact with.
+    expect(text).not.toContain("tweaks");
+    // `allText` flattens the whole frame, and bare "act" is a substring of ordinary prose
+    // ("interact", "compact", "exactly") — asserting the bare substring would pass or fail for
+    // reasons unrelated to the F4 hint key. Match the key row's own rendering instead: a hint
+    // key's label always comes wrapped as ` ${label} ` (`StatusBar.tsx`'s `key[1]` text run,
+    // the same delimited form `findRun(rows, " ⏎ ")` above and `run.text === " esc "` elsewhere
+    // in this file already rely on), so " act " only ever matches a real `act` hint key.
+    expect(rows.flat().some((run) => run.text.includes(" act "))).toBe(false);
+  });
+
+  test("at the 80-column floor the size segment drops and the phrase shortens", async () => {
+    const handle = await createHeadlessRenderer({ w: 80, h: 24 });
+    open = handle;
+    handle.mount(
+      <Workspace deps={createUiDeps(createFakeKernel(), { w: 80, h: 24 })} readOnly={false} />,
+    );
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+
+    expect(text).toContain("opening…");
+    // The preview region's own `OpeningState` headline is unconditionally "opening project…" —
+    // design `wsOpening`'s `ctr` calls carry no `narrow` branch at all, only the STATUS BAR's
+    // own page-slot phrase shortens at the floor. Checking the whole flattened frame for the
+    // full phrase's absence would wrongly fail on that unrelated headline; scope the check to
+    // the status bar's own row instead (the same "status bar is the frame's bottom row" pattern
+    // the idle-key-row test above already uses).
+    const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
+    expect(statusRow).not.toContain("opening project…");
+    expect(text).not.toContain("80×24");
+  });
+
+  test("an open project renders the ordinary Workspace, not the opening chrome", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).not.toContain("OPENING");
+    expect(text).not.toContain("opening project…");
+    expect(text).toContain("STATIC");
   });
 });

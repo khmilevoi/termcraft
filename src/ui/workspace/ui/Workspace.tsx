@@ -23,6 +23,7 @@ import {
   FrameView,
   HostCrashPanel,
   HostUnavailablePanel,
+  OpeningState,
   PreviewOverlays,
   acknowledgeFrame,
   frameLocalPoint,
@@ -148,6 +149,9 @@ function hintKeys(
   );
 }
 
+/** design `wsOpening`'s own key row (`design/termcraft-engine.js:247`). */
+const OPENING_HINT_KEYS: readonly StatusBarHintKey[] = [["⏎", "send", "dis"]];
+
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
 function terminalRecordLines(
   turn: Extract<TurnMirror, { phase: "terminal" }>,
@@ -257,11 +261,12 @@ function renderTabs(
   );
 }
 
-/** Selects the preview region content: enlarge is handled by the App; here empty/error/frame/ready. */
+/** Selects the preview region content: enlarge is handled by the App; here opening/empty/error/frame/ready. */
 function renderPreviewRegion(
   preview: PreviewMirror,
   uiFrame: UiPreviewFrame | null,
   hasPages: boolean,
+  opening: boolean,
   region: CellSize,
   interaction: Readonly<{
     pins: readonly PinDtoV1[];
@@ -273,6 +278,15 @@ function renderPreviewRegion(
     onMouseDown: (event: MouseEvent) => void;
   }>,
 ) {
+  // FIRST, ahead of every other branch. "There are no pages" and "the pages have not been read
+  // yet" are different facts, and only this one is true while `projectId` is null — the preview
+  // machine cannot have failed or halted for a project that has not opened, so no branch below
+  // is being pre-empted. Design `wsOpening` (`design/30-workspace-first-launch.dc.html`).
+  if (opening) {
+    return <OpeningState id="ws-preview-opening" width={region.w} height={region.h} />;
+  }
+  // every existing branch below stays exactly as it is: failed -> circuit-open -> !hasPages ->
+  // frame -> "preparing preview…"
   if (preview.phase === "failed") {
     return (
       <ErrorPanel
@@ -376,6 +390,14 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const size = terminal();
   const turn = mirror.turn();
   const preview = mirror.preview();
+  // `projectId === null` inside a mounted Workspace means exactly one thing: `deriveScreen`
+  // routed a pending startup open here and the Kernel's ready sequence has not published
+  // anything yet (`ui/mirror/model/screen.ts`). No new flag is needed for it.
+  const opening = mirror.project().projectId === null;
+  // design `wsOpening`'s own `narrow` (`termcraft-engine.js:235`): at the floor the size segment
+  // is dropped and the phrase shortens, the same restraint the idle shell already applies below
+  // 100 columns.
+  const narrow = size.w < 100;
   const descriptors = mirror.pageDescriptors();
   // The page the Workspace is showing — the tab-strip pick when there is one, else the Kernel's
   // own active slug (`../model/page-selection.ts`). Read ONCE here so the tab strip, the pin
@@ -527,13 +549,15 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     if (event.button === MouseButton.RIGHT) return requestAtMouse("pin", event);
     if (event.button === MouseButton.LEFT) requestAtMouse("select", event);
   }, "ui.Workspace.onPreviewMouseDown");
-  const composerPlaceholder = props.readOnly
-    ? "read-only — Send disabled"
-    : turn.phase === "running"
-      ? "generating… esc to cancel"
-      : composerFocused
-        ? "Ask for changes…"
-        : "tab → focus composer";
+  const composerPlaceholder = opening
+    ? "project opening…"
+    : props.readOnly
+      ? "read-only — Send disabled"
+      : turn.phase === "running"
+        ? "generating… esc to cancel"
+        : composerFocused
+          ? "Ask for changes…"
+          : "tab → focus composer";
 
   return (
     <box
@@ -724,7 +748,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           />
           {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
           <box id="ws-preview-gap" height={1} />
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {
+          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, opening, previewRegion, {
             pins,
             pendingPin,
             selectionRect,
@@ -738,9 +762,31 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       <StatusBar
         id="ws-status"
         width={w}
-        mode={modeChip(turn, fullscreen, props.readOnly, previewHalt)}
-        page={activePageSlug !== null ? { text: activePageSlug, fg: "dim" } : null}
-        size={{ w, h, min: minSize }}
+        // DIVERGENCE (design sample data + no runtime source): `wsOpening` opens its bar with a
+        // ` codex · gpt5.5 · high ` chip. `StatusBar` has no combo segment at all — every workspace
+        // frame after §07 passes `combo:false`, which is exactly what `buildLeftSegments` implements —
+        // and while the project is opening `mirror.agentIdentity()` is still null, so there is no
+        // honest value to draw. The segment is dropped; every other segment of the opening bar is
+        // implemented verbatim.
+        mode={
+          // design `wsOpening`: ` OPENING `, not ` STATIC `. STATIC asserts a finished,
+          // unchanging design, which is exactly the claim this state cannot make.
+          opening
+            ? { text: "OPENING", fg: "bg", bg: "amber" }
+            : modeChip(turn, fullscreen, props.readOnly, previewHalt)
+        }
+        page={
+          // The page slot is FILLED, not dropped: there is no page slug yet, so it carries
+          // Home's own phrase for the same state, verbatim (design `wsOpening`, and
+          // `Home.tsx:335` for the identical slot choice).
+          opening
+            ? { text: narrow ? "opening…" : "opening project…", fg: "amber", bold: true }
+            : activePageSlug !== null
+              ? { text: activePageSlug, fg: "dim" }
+              : null
+        }
+        // design `wsOpening`: the size segment is one of the two things dropped at the floor.
+        size={opening && narrow ? null : { w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
@@ -762,7 +808,13 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   }
                 : null
         }
-        hintKeys={hintKeys(turn, fullscreen, previewHalt)}
+        hintKeys={
+          // design `wsOpening`: `keys:[['⏎','send','dis']]` and nothing else. F2/F3/F4 are
+          // dropped rather than drawn inert — none of the three has anything to act on yet (no
+          // preview, no page to tweak or interact with), and Home's own `checking` state shows
+          // the same restraint.
+          opening ? OPENING_HINT_KEYS : hintKeys(turn, fullscreen, previewHalt)
+        }
       />
     </box>
   );

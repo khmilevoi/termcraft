@@ -31,6 +31,8 @@ export type { PreviewOverlaysProps } from "./ui/PreviewOverlays";
 export { PreviewOverlays } from "./ui/PreviewOverlays";
 export type { EmptyStateProps } from "./ui/EmptyState";
 export { EmptyState } from "./ui/EmptyState";
+export type { OpeningStateProps } from "./ui/OpeningState";
+export { OpeningState } from "./ui/OpeningState";
 export type { ErrorPanelProps } from "./ui/ErrorPanel";
 export { ErrorPanel } from "./ui/ErrorPanel";
 export type { HostCrashPanelProps } from "./ui/HostCrashPanel";
