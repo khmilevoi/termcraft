@@ -237,6 +237,14 @@ export interface GateRunner {
    * to reach it: a bad import in a module three pages share is one `errors` entry naming the
    * module, with all three slugs in `blockedPages`.
    *
+   * "EXACTLY ONE" is enforced, not assumed (task-13 review round 4, M-1). Both limbs are keyed
+   * by SLUG, so two `pages` entries sharing a slug would otherwise satisfy both at once — one
+   * entry resolving into `closures` while the other lands in some `blockedPages`, measured. The
+   * adapter therefore raises `DUPLICATE_SLUG` itself and blocks EVERY entry carrying a repeated
+   * slug, rather than relying on `entities/design-tree`'s `decodePagesManifest` having refused
+   * it upstream: this method accepts `pages` independently of that decoder, and a guarantee that
+   * lives only in another module's prose is the shape that produced round 3's Critical.
+   *
    * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
    * declared on this port, implemented by the adapter, but NO production caller invokes it yet
    * — `core/turns/model/validation.ts` calls only `runManifestSlice`/`runPage`. Task 14 (the

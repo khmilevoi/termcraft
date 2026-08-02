@@ -9,7 +9,7 @@ import type {
   PageMetaExtractionV1,
   RunTreeImportsResultV1,
 } from "core/ports";
-import { resolveClosure } from "entities/design-tree";
+import { PAGES_MANIFEST_RELPATH, resolveClosure } from "entities/design-tree";
 import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
@@ -23,7 +23,7 @@ import { createSmokeRender } from "../model/smoke";
 import { isCodeFile, scanModuleEdges } from "../model/tree-scan";
 import { createTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
-import type { GateError } from "../types";
+import type { GateError, GateErrorKind } from "../types";
 
 /**
  * `createGateRunnerAdapter`: the production `GateRunner` over `gate`'s real `runGate`/
@@ -118,7 +118,11 @@ interface ClosureBlockerV1 {
   /** Identity of the underlying FACT, so N pages blocked by it produce one diagnostic. */
   readonly key: string;
   /** The diagnostic this pass must raise itself, or `null` when the flat scan already did. */
-  readonly own: { readonly code: string; readonly message: string } | null;
+  readonly own: {
+    readonly kind: GateErrorKind;
+    readonly code: string;
+    readonly message: string;
+  } | null;
 }
 
 /** What one page's closure walk observed, alongside the walk's own success or refusal. */
@@ -227,6 +231,38 @@ function readClosureEdges(
 }
 
 /**
+ * The blocker raised for EVERY entry whose slug `pages` lists more than once (round 4, M-1).
+ *
+ * WHY THIS IS ENFORCED HERE AND NOT LEFT TO THE MANIFEST DECODER. Both halves of this pass's
+ * result — `closures` and {@link GateErrorV1.blockedPages} — are keyed by SLUG, so two entries
+ * sharing one slug make the port's "EXACTLY ONE of these holds" absolute false by construction:
+ * measured on `pages=[{a,"pages/a.tsx"},{a,"pages/ghost.tsx"}]`, `a` appeared in `closures` AND
+ * in a diagnostic's `blockedPages` at once. `entities/design-tree`'s `decodePagesManifest`
+ * already refuses a duplicate slug under this same `DUPLICATE_SLUG` code, but `runTreeImports`
+ * accepts `pages` independently of it — and "the guarantee holds because another module checks
+ * it" is the exact prose-guarantee shape that produced round 3's Critical (a). One `Set` closes
+ * it structurally instead.
+ *
+ * `file` is the manifest's own TREE-relative path, deliberately not `gate/model/manifest.ts`'s
+ * project-relative `design/pages.json`: every `file` this method emits is tree-relative (see
+ * `gate/model/gate.ts`'s `runTreeImports`, which pins that vocabulary), and mixing the two
+ * inside one error list would be worse than the two methods differing.
+ */
+function duplicateSlugBlocker(slug: PageSlug): ClosureBlockerV1 {
+  return {
+    file: PAGES_MANIFEST_RELPATH,
+    key: JSON.stringify(["duplicate-slug", slug]),
+    own: {
+      // The decoder's own code, reused rather than a second name for one rule; `manifest` kind
+      // for the same reason — the broken thing is the manifest, not an import.
+      kind: "manifest",
+      code: "DUPLICATE_SLUG",
+      message: `"${slug}" is listed more than once, so no closure can be keyed to it`,
+    },
+  };
+}
+
+/**
  * Walk one manifest entry's closure (design §7) and report every fact that stops this pass
  * PROVING the result complete. `files` is `null` exactly when the walk itself refused, and a
  * non-empty `blockers` is what excludes the slug from `closures` — never a partial file list.
@@ -245,24 +281,30 @@ function walkPageClosure(
     readonly scannedInFull: (relPath: string) => boolean;
     /** Files the flat scan already flagged under {@link CLOSURE_UNVERIFIABLE_SCAN_CODES}. */
     readonly unverifiable: ReadonlySet<string>;
+    /** True when `pages` lists this slug more than once — see {@link duplicateSlugBlocker}. */
+    readonly isDuplicateSlug: (slug: PageSlug) => boolean;
   },
 ): { readonly files: readonly string[] | null; readonly blockers: readonly ClosureBlockerV1[] } {
+  const blockers: ClosureBlockerV1[] = [];
+  // Checked FIRST, and deliberately WITHOUT short-circuiting the walk: a duplicated slug still
+  // gets its own entry walked, so whatever else is wrong with that entry is still reported
+  // (round 4, M-1 — an early return here would have made the second entry's own
+  // `UNRESOLVED_IMPORT` disappear, the exact defect class round 3 was brought in to fix).
+  if (context.isDuplicateSlug(page.slug)) blockers.push(duplicateSlugBlocker(page.slug));
+
   if (!context.has(page.entry)) {
-    return {
-      files: null,
-      blockers: [
-        {
-          file: page.entry,
-          key: `entry-unresolved ${page.entry}`,
-          // Raised unconditionally: the flat scan iterates `files`, so it never says anything
-          // about an entry AS an entry, whatever else it may report about that same path.
-          own: {
-            code: "UNRESOLVED_IMPORT",
-            message: `the manifest entry "${page.entry}" names no file in the tree, so no closure can be walked from it`,
-          },
-        },
-      ],
-    };
+    blockers.push({
+      file: page.entry,
+      key: JSON.stringify(["entry-unresolved", page.entry]),
+      // Raised unconditionally: the flat scan iterates `files`, so it never says anything
+      // about an entry AS an entry, whatever else it may report about that same path.
+      own: {
+        kind: "import",
+        code: "UNRESOLVED_IMPORT",
+        message: `the manifest entry "${page.entry}" names no file in the tree, so no closure can be walked from it`,
+      },
+    });
+    return { files: null, blockers };
   }
 
   const walk = createClosureWalk();
@@ -271,13 +313,12 @@ function walkPageClosure(
     has: context.has,
     edgesOf: (relPath) => readClosureEdges(context.files, relPath, walk),
   });
-  const blockers: ClosureBlockerV1[] = [];
 
   if (resolved instanceof Error) {
     const from = String(resolved.from);
     blockers.push({
       file: from,
-      key: `edge-rejected ${from} ${String(resolved.specifier)}`,
+      key: JSON.stringify(["edge-rejected", from, String(resolved.specifier)]),
       // The ONE suppression in this pass, and it is computed rather than argued. When the flat
       // scan read `from` to the end it ran `scanImportAllowlist` over that exact source with
       // this exact `has`; that function resolves every static import through the SAME
@@ -294,6 +335,7 @@ function walkPageClosure(
             // The same code mapping `scanImportAllowlist` applies to the identical
             // `SpecifierRejectedError`: "UNRESOLVED" is usually a typo or a missing file, every
             // other code is a rule violation.
+            kind: "import",
             code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
             message: `${resolved.message} — found by the closure walk because "${from}" was never scanned in full`,
           },
@@ -303,12 +345,13 @@ function walkPageClosure(
   for (const relPath of walk.sourceMissing) {
     blockers.push({
       file: relPath,
-      key: `source-missing ${relPath}`,
+      key: JSON.stringify(["source-missing", relPath]),
       // Raised once per missing FILE, not once per page reaching it. The flat scan's own
       // `UNSCANNED_IMPORT` is a different fact about a different file (the IMPORTER, not the
       // missing module) and does not exist at all when the missing file is a page's own entry,
       // which is the shape that silently truncated a closure to one file in round 1.
       own: {
+        kind: "import",
         code: "CLOSURE_SOURCE_MISSING",
         message: `"${relPath}" is named by the tree but this pass was given no source for it, so no page closure reaching it can be verified complete`,
       },
@@ -318,10 +361,11 @@ function walkPageClosure(
   for (const [relPath, reason] of walk.edgesUnreadable) {
     blockers.push({
       file: relPath,
-      key: `edges-unreadable ${relPath}`,
+      key: JSON.stringify(["edges-unreadable", relPath]),
       own: context.unverifiable.has(relPath)
         ? null
         : {
+            kind: "import",
             code: "UNSCANNABLE_SOURCE",
             message: `the closure walk could not read the module edges of "${relPath}" to the end — ${reason}`,
           },
@@ -334,7 +378,7 @@ function walkPageClosure(
     if (!context.unverifiable.has(relPath)) continue;
     blockers.push({
       file: relPath,
-      key: `edge-list-unverifiable ${relPath}`,
+      key: JSON.stringify(["edge-list-unverifiable", relPath]),
       own: null, // by construction: `unverifiable` is built FROM the flat scan's own diagnostics
     });
   }
@@ -415,15 +459,33 @@ export function resolveTreeClosures(input: {
   const scannedInFull = (relPath: string) =>
     isCodeFile(relPath) && input.files.has(relPath) && !unscannable.has(relPath);
 
+  // Every slug `pages` lists more than once — see {@link duplicateSlugBlocker} for why this
+  // pass owns the check rather than trusting the manifest decoder that also makes it.
+  const slugCounts = new Map<PageSlug, number>();
+  for (const page of input.pages) slugCounts.set(page.slug, (slugCounts.get(page.slug) ?? 0) + 1);
+  const isDuplicateSlug = (slug: PageSlug) => (slugCounts.get(slug) ?? 0) > 1;
+
   const closures: GateClosureV1[] = [];
   const blockedAt = new Map<string, Set<PageSlug>>();
   const raised = new Map<
     string,
-    { readonly file: string; readonly code: string; readonly message: string; slugs: Set<PageSlug> }
+    {
+      readonly file: string;
+      readonly kind: GateErrorKind;
+      readonly code: string;
+      readonly message: string;
+      slugs: Set<PageSlug>;
+    }
   >();
 
   for (const page of input.pages) {
-    const walked = walkPageClosure(page, { files: input.files, has, scannedInFull, unverifiable });
+    const walked = walkPageClosure(page, {
+      files: input.files,
+      has,
+      scannedInFull,
+      unverifiable,
+      isDuplicateSlug,
+    });
     if (walked.blockers.length === 0 && walked.files !== null) {
       closures.push({ slug: page.slug, files: walked.files });
       continue;
@@ -445,7 +507,7 @@ export function resolveTreeClosures(input: {
     return slugs === undefined ? error : { ...error, blockedPages: sortedSlugs(slugs) };
   });
   const walkErrors = [...raised.values()].map((entry) => ({
-    kind: "import" as const,
+    kind: entry.kind,
     code: entry.code,
     message: entry.message,
     file: entry.file,

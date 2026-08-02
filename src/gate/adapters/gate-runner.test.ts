@@ -344,13 +344,29 @@ describe("createGateRunnerAdapter", () => {
      *  `TreeFileUnscannableError` doc: returns at 24 000 characters, throws at 32 000). */
     const UNSCANNABLE = `import fs from "node:fs"\n${"<a>{".repeat(32000)}`;
 
+    /**
+     * EVERY field of a diagnostic, not just its shape (task-13 review round 4, M-5): `kind`,
+     * `code`, `file`, `line:column` and the full `message` text, plus the blocked slugs. Round
+     * 3's renderer compared only `(code, file, blockedPages)`, so a regression that kept the
+     * structure and lost the wording or the position would have passed this table — and position
+     * was load-bearing in round 3's own Critical (b), where the copy WITH a position is the one
+     * that survives. `-` marks a field the diagnostic genuinely does not carry: the closure walk
+     * resolves specifiers, not token offsets, so its own diagnostics have no line/column to give
+     * and that absence is pinned here rather than papered over with an invented `1:1`.
+     *
+     * `UNSCANNABLE_SOURCE`'s message ends in Bun's OWN `RangeError` text, reproduced verbatim
+     * rather than normalized. If a Bun upgrade rewords it this row fails loudly and one string is
+     * updated — which is the correct outcome, since that text reaches the agent's retry prompt.
+     */
     const renderErrors = (errors: readonly GateErrorV1[]): readonly string[] =>
       errors
         .map(
           (error) =>
-            `${error.code} @ ${String(error.file)}${
+            `${error.kind}/${error.code} @ ${error.file ?? "-"}:${error.line ?? "-"}:${
+              error.column ?? "-"
+            }${
               error.blockedPages === undefined ? "" : ` blocked=[${error.blockedPages.join(",")}]`
-            }`,
+            } :: ${error.message}`,
         )
         .sort();
 
@@ -370,7 +386,9 @@ describe("createGateRunnerAdapter", () => {
         ],
         treePaths: ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["CLOSURE_SOURCE_MISSING @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/CLOSURE_SOURCE_MISSING @ pages/a.tsx:-:- blocked=[a] :: "pages/a.tsx" is named by the tree but this pass was given no source for it, so no page closure reaching it can be verified complete',
+        ],
         closures: [],
       },
       {
@@ -380,7 +398,9 @@ describe("createGateRunnerAdapter", () => {
         files: [["lib/theme.ts", `export const x = 1`]],
         treePaths: ["lib/theme.ts"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["UNRESOLVED_IMPORT @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/UNRESOLVED_IMPORT @ pages/a.tsx:-:- blocked=[a] :: the manifest entry "pages/a.tsx" names no file in the tree, so no closure can be walked from it',
+        ],
         closures: [],
       },
       {
@@ -392,8 +412,35 @@ describe("createGateRunnerAdapter", () => {
         ],
         treePaths: ["lib/theme.ts"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["UNRESOLVED_IMPORT @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/UNRESOLVED_IMPORT @ pages/a.tsx:-:- blocked=[a] :: the manifest entry "pages/a.tsx" names no file in the tree, so no closure can be walked from it',
+        ],
         closures: [],
+      },
+      {
+        name: "a DUPLICATE slug — both limbs of the port's `EXACTLY ONE` would otherwise hold at once",
+        history:
+          "283d5f6 (the reviewer's own probe): `closures: [a: [pages/a.tsx]]` AND `UNRESOLVED_IMPORT @ pages/ghost.tsx blocked=[a]` — the resolving entry took the first limb while the failing one took the second, falsifying the CONTRACT's absolute (round 4, M-1). dba54e9/eeaf80f: no such check existed.",
+        files: [["pages/a.tsx", META]],
+        treePaths: ["pages/a.tsx"],
+        pages: [entry("a", "pages/a.tsx"), entry("a", "pages/ghost.tsx")],
+        // The second entry's OWN diagnostic is still reported — blocking on a duplicate slug must
+        // not swallow what is separately wrong with the entry (see `walkPageClosure`).
+        errors: [
+          'import/UNRESOLVED_IMPORT @ pages/ghost.tsx:-:- blocked=[a] :: the manifest entry "pages/ghost.tsx" names no file in the tree, so no closure can be walked from it',
+          'manifest/DUPLICATE_SLUG @ pages.json:-:- blocked=[a] :: "a" is listed more than once, so no closure can be keyed to it',
+        ],
+        closures: [],
+      },
+      {
+        name: "VALID INPUT STILL PASSES the new duplicate-slug guard: two DIFFERENT slugs may name the SAME entry",
+        history:
+          "New in round 4. `gate/model/manifest.ts`'s own doc: design §4 makes a duplicate SLUG fatal and a shared ENTRY ordinary — two identities rendering one component is legal.",
+        files: [["pages/shared.tsx", META]],
+        treePaths: ["pages/shared.tsx"],
+        pages: [entry("a", "pages/shared.tsx"), entry("b", "pages/shared.tsx")],
+        errors: [],
+        closures: ["a: [pages/shared.tsx]", "b: [pages/shared.tsx]"],
       },
       {
         name: "a reachable module in `treePaths` with no text in `files`, reached by ONE page",
@@ -406,8 +453,8 @@ describe("createGateRunnerAdapter", () => {
         treePaths: ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"],
         pages: [entry("a", "pages/a.tsx")],
         errors: [
-          "CLOSURE_SOURCE_MISSING @ lib/tokens.ts blocked=[a]",
-          "UNSCANNED_IMPORT @ lib/theme.ts",
+          'import/CLOSURE_SOURCE_MISSING @ lib/tokens.ts:-:- blocked=[a] :: "lib/tokens.ts" is named by the tree but this pass was given no source for it, so no page closure reaching it can be verified complete',
+          'import/UNSCANNED_IMPORT @ lib/theme.ts:1:1 :: "./tokens" resolves to "lib/tokens.ts", which the loader executes but this scan was never given the source of — it cannot be checked for a forbidden import, `eval` or `new Function`',
         ],
         closures: [],
       },
@@ -426,8 +473,8 @@ describe("createGateRunnerAdapter", () => {
         // Byte-for-byte the row above's diagnostics, only `blocked` widens: one fact, one
         // diagnostic, three attributions.
         errors: [
-          "CLOSURE_SOURCE_MISSING @ lib/tokens.ts blocked=[a,b,c]",
-          "UNSCANNED_IMPORT @ lib/theme.ts",
+          'import/CLOSURE_SOURCE_MISSING @ lib/tokens.ts:-:- blocked=[a,b,c] :: "lib/tokens.ts" is named by the tree but this pass was given no source for it, so no page closure reaching it can be verified complete',
+          'import/UNSCANNED_IMPORT @ lib/theme.ts:1:1 :: "./tokens" resolves to "lib/tokens.ts", which the loader executes but this scan was never given the source of — it cannot be checked for a forbidden import, `eval` or `new Function`',
         ],
         closures: [],
       },
@@ -439,8 +486,8 @@ describe("createGateRunnerAdapter", () => {
         treePaths: ["pages/a.tsx"],
         pages: [entry("a", "pages/a.tsx")],
         errors: [
-          "FORBIDDEN_IMPORT @ pages/a.tsx blocked=[a]",
-          "UNSCANNABLE_SOURCE @ pages/a.tsx blocked=[a]",
+          'import/FORBIDDEN_IMPORT @ pages/a.tsx:-:- blocked=[a] :: specifier "node:fs" in pages/a.tsx is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed — found by the closure walk because "pages/a.tsx" was never scanned in full',
+          'import/UNSCANNABLE_SOURCE @ pages/a.tsx:1:1 blocked=[a] :: the import scan could not read "pages/a.tsx" to the end — RangeError: Maximum call stack size exceeded.',
         ],
         closures: [],
       },
@@ -456,12 +503,19 @@ describe("createGateRunnerAdapter", () => {
         ],
         treePaths: ["pages/a.tsx", "pages/b.tsx", "pages/c.tsx", "lib/theme.ts"],
         pages: [entry("a", "pages/a.tsx"), entry("b", "pages/b.tsx"), entry("c", "pages/c.tsx")],
-        errors: ["FORBIDDEN_IMPORT @ lib/theme.ts blocked=[a,b,c]"],
+        errors: [
+          'import/FORBIDDEN_IMPORT @ lib/theme.ts:1:1 blocked=[a,b,c] :: specifier "node:fs" in lib/theme.ts is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+        ],
         closures: [],
       },
       {
         name: "a violation in a module NO page reaches is still reported, and the reaching page's own closure is still returned",
-        history: "1 diagnostic on all three revisions; only 45e278a and this round return `a`.",
+        // CORRECTED (round 4, M-3): the round-3 wording here said "only 45e278a and this round
+        // return `a`", which the reviewer disproved by executing a restored `eeaf80f` — it
+        // returns `a: [pages/a.tsx]` too. Only `dba54e9`, which resolved no closures at all,
+        // returns none.
+        history:
+          "1 diagnostic on all three revisions. `dba54e9` returns no closure (it resolved none); `eeaf80f`, `45e278a` and this round all return `a: [pages/a.tsx]`.",
         files: [
           ["pages/a.tsx", META],
           ["lib/orphan.ts", `import fs from "node:fs"\nexport const x = 1`],
@@ -470,7 +524,9 @@ describe("createGateRunnerAdapter", () => {
         pages: [entry("a", "pages/a.tsx")],
         // No `blocked=` — an orphan's violation blocks nobody's closure, and claiming otherwise
         // would be exactly the kind of false attribution `blockedPages` exists to avoid.
-        errors: ["FORBIDDEN_IMPORT @ lib/orphan.ts"],
+        errors: [
+          'import/FORBIDDEN_IMPORT @ lib/orphan.ts:1:1 :: specifier "node:fs" in lib/orphan.ts is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+        ],
         closures: ["a: [pages/a.tsx]"],
       },
       {
@@ -480,7 +536,9 @@ describe("createGateRunnerAdapter", () => {
         files: [["pages/a.tsx", `import fs from "node:fs"\n${META}`]],
         treePaths: ["pages/a.tsx"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["FORBIDDEN_IMPORT @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/FORBIDDEN_IMPORT @ pages/a.tsx:1:1 blocked=[a] :: specifier "node:fs" in pages/a.tsx is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+        ],
         closures: [],
       },
       {
@@ -495,7 +553,10 @@ describe("createGateRunnerAdapter", () => {
         pages: [entry("a", "pages/a.tsx")],
         // No NEW diagnostic: the flat scan already reports the re-export exactly once, and the
         // page is attributed onto that very entry rather than getting a second one.
-        errors: ["FORBIDDEN_IMPORT @ lib/theme.ts", "REEXPORT @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/FORBIDDEN_IMPORT @ lib/theme.ts:1:1 :: specifier "node:fs" in lib/theme.ts is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+          'import/REEXPORT @ pages/a.tsx:1:1 blocked=[a] :: re-export from "../lib/theme" is not allowed — a page exports no module edge',
+        ],
         closures: [],
       },
       {
@@ -507,7 +568,10 @@ describe("createGateRunnerAdapter", () => {
         ],
         treePaths: ["pages/a.tsx", "lib/theme.ts"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["DYNAMIC_IMPORT @ pages/a.tsx blocked=[a]", "FORBIDDEN_IMPORT @ lib/theme.ts"],
+        errors: [
+          'import/DYNAMIC_IMPORT @ pages/a.tsx:1:11 blocked=[a] :: dynamic import("../lib/theme") is not allowed — a page loads no runtime-selected code',
+          'import/FORBIDDEN_IMPORT @ lib/theme.ts:1:1 :: specifier "node:fs" in lib/theme.ts is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+        ],
         closures: [],
       },
       {
@@ -519,7 +583,10 @@ describe("createGateRunnerAdapter", () => {
         ],
         treePaths: ["pages/a.tsx", "lib/theme.ts"],
         pages: [entry("a", "pages/a.tsx")],
-        errors: ["FORBIDDEN_IMPORT @ lib/theme.ts", "REQUIRE_CALL @ pages/a.tsx blocked=[a]"],
+        errors: [
+          'import/FORBIDDEN_IMPORT @ lib/theme.ts:1:1 :: specifier "node:fs" in lib/theme.ts is rejected [BARE_SPECIFIER]: only "@termcraft/runtime" and relative specifiers are allowed',
+          'import/REQUIRE_CALL @ pages/a.tsx:1:11 blocked=[a] :: require("../lib/theme") is not allowed — a page uses no CommonJS load',
+        ],
         closures: [],
       },
       {
