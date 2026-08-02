@@ -1,7 +1,8 @@
 import { wrap } from "@reatom/core";
 
 import type { ExportAction, ExportState, StateMachine } from "core/machines";
-import type { PageReader, ProjectWriteCoordinator } from "core/ports";
+import type { DesignTreeReader, ProjectWriteCoordinator } from "core/ports";
+import { readPageEntrySource, readPageOrder } from "core/project";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -51,7 +52,13 @@ import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "
 export interface CaptureExportSnapshotDeps {
   readonly machine: StateMachine<ExportState, ExportAction>;
   readonly projectWrite: ProjectWriteCoordinator;
-  readonly pageReader: PageReader;
+  /**
+   * RETYPED BY TASK 14 (was `pageReader: PageReader`, a port `core/ports` had already
+   * deleted, so this field was silently `any`). A page's bytes come from the entry
+   * `design/pages.json` binds to its slug — `core/project`'s `readPageEntrySource` — never
+   * from a path computed out of the slug.
+   */
+  readonly designReader: DesignTreeReader;
   readonly clock: Clock;
 }
 
@@ -84,9 +91,19 @@ export async function captureExportSnapshot(
 
   const permit = await wrap(deps.projectWrite.acquire());
 
+  // `design/pages.json` read ONCE for the whole capture, not once per page: a permit-held
+  // window must not re-read the same document N times, and two reads inside one snapshot could
+  // in principle disagree.
+  const entries = await wrap(readPageOrder(deps.designReader));
+  if ("code" in entries) {
+    deps.projectWrite.release(permit);
+    deps.machine.apply("kernel.export.fail");
+    return { kind: "failed", failure: entries };
+  }
+
   const pages: ExportPageSnapshotV1[] = [];
   for (const page of input.pages) {
-    const source = await wrap(deps.pageReader.readSource(page.pageSlug));
+    const source = await wrap(readPageEntrySource(deps.designReader, page.pageSlug, entries));
     if ("code" in source) {
       deps.projectWrite.release(permit);
       deps.machine.apply("kernel.export.fail");

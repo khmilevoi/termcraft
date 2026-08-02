@@ -146,13 +146,30 @@ function toDesignTreeFiles(files: readonly StagedFileV1[]): readonly StagedFileV
  * this comment is the flag that the decision is still open, not a claim it is already safe in
  * production.
  */
-function toBeforeInventory(designFiles: StagedTurnReadSetV1["designFiles"]): DesignTreeInventoryV1 {
+export function readSetTreeInventory(
+  designFiles: StagedTurnReadSetV1["designFiles"],
+): DesignTreeInventoryV1 {
   const entries: DesignFileEntryV1[] = [];
   for (const file of designFiles) {
     if (file.snapshot === null) continue;
     entries.push({ relPath: file.relPath, sha256: file.snapshot.sha256 });
   }
   return { files: entries };
+}
+
+/**
+ * The CANDIDATE side of the same comparison — a `DesignTreeInventoryV1` over
+ * {@link TurnCandidateV1.treeFiles}, which already speaks tree-relative paths.
+ *
+ * Exported alongside {@link readSetTreeInventory} (task 14) so `selectChangedPages`' one
+ * production caller (`core/kernel/model/handlers/turn.ts`'s `buildFinalizeInput`) builds BOTH
+ * sides of the diff from this module rather than open-coding two inventory constructions of
+ * its own. Both sides must agree on the same two conventions — tree-relative paths, and
+ * "expected-absent means omitted, not a null hash" — and a caller re-deriving either one is
+ * how the two sides come to disagree.
+ */
+export function candidateTreeInventory(treeFiles: readonly StagedFileV1[]): DesignTreeInventoryV1 {
+  return { files: treeFiles.map((file) => ({ relPath: file.relPath, sha256: file.sha256 })) };
 }
 
 /**
@@ -276,7 +293,7 @@ export async function freezeTurnCandidate(
   const manifestBytes = await readManifestBytes(deps.staging, candidate);
   if ("code" in manifestBytes) return { kind: "failed", failure: manifestBytes };
 
-  const beforeInventory = toBeforeInventory(input.workspace.readSet.designFiles);
+  const beforeInventory = readSetTreeInventory(input.workspace.readSet.designFiles);
   const treeFiles = toDesignTreeFiles(candidate.files);
   const { fileChanges } = diffTreeInventory(beforeInventory, treeFiles);
 

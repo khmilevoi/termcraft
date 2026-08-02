@@ -161,9 +161,15 @@ function baseRunTurnInput(): RunTurnInputV1 {
   return {
     admission: baseAdmission(),
     baseTask: baseTask(),
+    // WHOLE-TREE material (task 14). The fake `GateRunner`'s `runManifestSlice` returns an
+    // honest-empty slice unless a test queues one, so no `runPage` call fires from this
+    // default — which is correct: which pages exist is now decided by decoding the
+    // manifest, and an empty/undecodable manifest legitimately names none.
     buildValidationInput: () => ({
       manifestText: "[]",
-      pages: [{ pageSlug: PAGE_HOME, source: "export default function Home() {}" }],
+      treePaths: ["screens/landing.tsx"],
+      files: new Map([["screens/landing.tsx", "export default function Home() {}"]]),
+      designRoot: "/fake-candidate/design",
     }),
     buildFinalizeInput: ({ turnId, attempt }) => ({
       changedFiles: [
@@ -223,6 +229,21 @@ function harness(
   const staging = createFakeStagingService();
   const agentBackend = createFakeAgentBackend();
   const gateRunner = createFakeGateRunner();
+  // ONE manifest entry, always — `runTurnValidation` decides which pages to run `runPage`
+  // against by decoding the candidate's `design/pages.json`, and this fake's honest-empty
+  // default slice names none. Without this every Gate-outcome test below would run ZERO pages
+  // and pass vacuously. Wrapped rather than replaced so the call still reaches the fake's own
+  // `calls` log, which several tests assert the ordering of. The entry is
+  // `screens/landing.tsx`, matching `buildValidationInput`'s own `files` map and deliberately
+  // NOT derivable from the slug.
+  const originalRunManifestSlice = gateRunner.runManifestSlice.bind(gateRunner);
+  gateRunner.runManifestSlice = async (input) => {
+    const result = await originalRunManifestSlice(input);
+    return {
+      errors: result.errors,
+      slice: { pages: [{ slug: PAGE_HOME, entry: "screens/landing.tsx" }], active: null },
+    };
+  };
   const published: unknown[] = [];
 
   // Traces the exact task each attempt started with (the fake's own call log only records
@@ -328,7 +349,11 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       if (capturedCandidateRoot === null)
         throw new Error("expected buildFinalizeInput to have captured a candidate root");
       expect(retireCall.root).toBe(capturedCandidateRoot);
-      expect(h.gateRunner.calls.map((c) => c.method)).toEqual(["runManifestSlice", "runPage"]);
+      expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
+        "runManifestSlice",
+        "runTreeImports",
+        "runPage",
+      ]);
       expect(h.startedTasks.length).toBe(1);
       expect(h.startedTasks[0]?.workspacePath).not.toBe("/unset");
     });
@@ -365,6 +390,7 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
           file: null,
           line: null,
           column: null,
+          blockedPages: null,
         },
       ]);
 
@@ -375,11 +401,15 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       expect(h.startedTasks[1]?.userMessage).toContain("Gate rejected the previous attempt");
       expect(h.startedTasks[1]?.userMessage).toContain("TS2322");
 
-      // Two full validation passes: manifest-slice + one page, twice.
+      // Two FULL validation passes: manifest slice + whole-tree import scan + one page,
+      // twice. The import scan is per-ATTEMPT, not per-turn: a retry restages and refreezes,
+      // so the tree it must vouch for is a different tree.
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
         "runManifestSlice",
+        "runTreeImports",
         "runPage",
         "runManifestSlice",
+        "runTreeImports",
         "runPage",
       ]);
     });

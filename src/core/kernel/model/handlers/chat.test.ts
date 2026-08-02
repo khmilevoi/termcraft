@@ -26,13 +26,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -188,7 +188,7 @@ function buildTestContext(overrides?: {
   return context.start(() => {
     const chatStore = createFakeChatStore({ clock: slugClock() });
     const projectStore = createFakeProjectStore({ root: "/test-root" });
-    const pageStore = createFakePageStore({ order: [] });
+    const pageStore = createFakeDesignStoreForPages({ pages: [] });
     const pinStore = createFakePinStore();
     const clock = slugClock();
 
@@ -196,7 +196,7 @@ function buildTestContext(overrides?: {
       projectStore,
       chatReader: overrides?.chatReader ?? chatStore,
       chatMutations: overrides?.chatMutations ?? chatStore,
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       pinReader: pinStore,
       pinMutations: pinStore,

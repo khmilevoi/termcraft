@@ -240,9 +240,9 @@ describe("createDesignStoreAdapter — contract test (fake vs. real)", () => {
       });
       expect(removed).toBeUndefined();
 
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
-      expect(slugs).toEqual([ABOUT_SLUG]);
+      const manifest = await adapter.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      expect(manifest.pages.map((entry) => entry.slug)).toEqual([ABOUT_SLUG]);
 
       const homeFile = await adapter.readTreeFile(HOME_ENTRY);
       expect("code" in homeFile).toBe(true);
@@ -296,9 +296,9 @@ describe("createDesignStoreAdapter — contract test (fake vs. real)", () => {
       expect(manifestReadCalls).toBe(0);
 
       // The valid, existing page is untouched by the rejected plan.
-      const slugs = await adapter.listSlugs();
-      if ("code" in slugs) throw new Error("fixture bug: listSlugs failed");
-      expect(slugs).toEqual([HOME_SLUG]);
+      const manifest = await adapter.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      expect(manifest.pages.map((entry) => entry.slug)).toEqual([HOME_SLUG]);
     } finally {
       await open.close();
     }

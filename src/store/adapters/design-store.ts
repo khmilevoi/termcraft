@@ -13,14 +13,14 @@ import { nowIso } from "./types";
 //
 // `readTreeFile`/`listTree`/`readManifest` now delegate to the real `DesignTreeStore`
 // (`store/model/factory.ts`'s `makeDesignTreeStore`, Task 9) instead of the placeholder
-// `designTreeNotWiredFailure` refusal Task 7 left here. `readSource`/`listSlugs` are KEPT,
-// UNCHANGED in shape, delegating to `open.pages.readSource`/`.listSlugs()` (also now really
-// wired, Task 9): `entrypoint/model/create-shell.ts` wires this SAME adapter instance into
-// BOTH `KernelDeps.pageReader` AND `.pageMutations`, and `core/kernel/model/handlers/
-// {page-descriptors,page-pin,preview-export}.ts` (untouched by this plan until Tasks 13/14)
-// call `.readSource(...)`/`.listSlugs()` on it directly — retiring those two methods here is
-// that later task's job, not this one's (see `core/ports/fakes/legacy-page-store.ts`'s own
-// header for the fuller rationale).
+// `designTreeNotWiredFailure` refusal Task 7 left here. `readSource`/`listSlugs` — the retired
+// `PageReader` pair this adapter kept alive for still-untouched callers — are DELETED as of
+// task 14, together with their `LegacyPageSourceV1` shape: `entrypoint/model/create-shell.ts`
+// now wires this instance into `KernelDeps.designReader`, and every former caller
+// (`core/kernel/model/handlers/{page-descriptors,page-pin,preview-export,selection-model,
+// turn}.ts`, `core/project/model/{page-mutations,open-sequence}.ts`, `core/export/model/
+// {snapshot,publish}.ts`) reads through `design/pages.json`'s own `entry` instead. Nothing in
+// `src/` computes a page's file path from its slug any more.
 //
 // RESOLVED SIGNATURE MISMATCH (plan Task 1, `renameTitle`, "flag, don't guess"): the port
 // takes `(pageSlug, title)`, but `TransactionEngine.renamePageTitle` targets an explicit
@@ -129,32 +129,14 @@ function pageEntryNotFoundFailure(pageSlug: PageSlug): FailureDtoV1 {
   };
 }
 
-/** The retired `PageReader`'s own page-source shape (`core/ports/page-store.ts`, before Task 7 deleted it) — kept locally, verbatim, for `readSource` below; never re-exported as a real port. */
-interface LegacyPageSourceV1 {
-  readonly bytes: Uint8Array;
-  readonly sourceHash: Sha256Hex;
-}
-
-// No explicit return-type annotation (unlike every other adapter's `createXAdapter`): this
-// one genuinely returns MORE than `DesignTreeReader & PageMutations` (see this file's header)
-// — `readSource`/`listSlugs` are real, extra members a still-untouched caller depends on.
-// Annotating the declared type here would trigger an excess-property error on the object
-// literal below; the bottom-of-file `AssertConforms` check still proves the REQUIRED port
-// shape is present, which is the actual guarantee that matters.
-export function createDesignStoreAdapter(deps: StoreAdapterDeps) {
+// The declared return type is BACK (task 14): the deliberately-dropped annotation existed
+// only so the extra `readSource`/`listSlugs` members would not trip an excess-property error.
+// Both are gone with their last caller, so the adapter returns exactly the port again and the
+// annotation can state it — a stronger guarantee than the bottom-of-file `AssertConforms`
+// check alone, which proves the required members are PRESENT but never that no extra,
+// slug-shaped reader has crept back in.
+export function createDesignStoreAdapter(deps: StoreAdapterDeps): DesignTreeReader & PageMutations {
   const { open } = deps;
-
-  async function readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | LegacyPageSourceV1> {
-    const result = await open.pages.readSource(pageSlug);
-    if (result instanceof Error) return toFailureDto(result);
-    return result;
-  }
-
-  async function listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]> {
-    const result = await open.pages.listSlugs();
-    if (result instanceof Error) return toFailureDto(result);
-    return result;
-  }
 
   async function readTreeFile(relPath: string): Promise<FailureDtoV1 | DesignTreeFileV1> {
     const result = await open.pages.readTreeFile(relPath);
@@ -241,8 +223,6 @@ export function createDesignStoreAdapter(deps: StoreAdapterDeps) {
   }
 
   return {
-    readSource,
-    listSlugs,
     readTreeFile,
     listTree,
     readManifest,

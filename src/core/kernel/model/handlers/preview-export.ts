@@ -25,6 +25,7 @@ import {
   type WorkspaceStateV1,
 } from "core/ports";
 import type { PreviewCommandOutcomeV1 } from "core/preview";
+import { readPageEntrySource, readPageOrder } from "core/project";
 import {
   type CapabilityStateV1,
   type CommandPayloadByKindV1,
@@ -34,9 +35,11 @@ import {
   canonicalHash,
   isUuidv7,
 } from "core/protocol";
+import type { PageEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
+import { designTreeFilePath } from "./page-descriptors";
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
 import { noOpOutcome, startedOutcome } from "./types";
 
@@ -127,7 +130,7 @@ import { noOpOutcome, startedOutcome } from "./types";
  * extraction rather than refused — see {@link extractAndCachePageMeta} for why the miss path
  * had to become recoverable. Nothing here invents a theme/size/version either way.
  *
- * `sourcePath` is not fabricated either: {@link canonicalPageSourcePath} (below) is the real
+ * `sourcePath` is not fabricated either: `designTreeFilePath` (`./page-descriptors`) is the real
  * CANONICAL page-storage convention the host child resolves with `Bun.file` — see that
  * function's own doc comment for the full citation and for the substitution bug this task
  * (MVP blocker fix bundle, Task 10) corrected here.
@@ -140,23 +143,17 @@ export interface ResolvedPageSettingsV1 {
   readonly theme: string;
 }
 
-/** The directory canonical project state lives in, under the project root (storage-identity §4). */
-const PROJECT_STATE_DIRNAME = ".termcraft";
-
 /**
- * CANONICAL page storage, ABSOLUTE — the host child resolves this with `Bun.file(sourcePath)`
- * inside a fresh scratch directory (`host/session/model/source-mount.ts`), so a relative path
- * never resolves there.
+ * CANONICAL tree-file storage, ABSOLUTE — the host child resolves this with
+ * `Bun.file(sourcePath)` inside a fresh scratch directory (`host/session/model/
+ * source-mount.ts`), so a relative path never resolves there.
  *
- * CORRECTED 2026-07-26 (MVP blocker fix bundle, Task 10): this used to return the agent
- * WORKSPACE's flat `pages/<slug>.tsx` — the exact substitution Gap G made on the turn path
- * (`handlers/turn.ts`). It was invisible because the preview router's session-establishing entry
- * points had never executed in production. `store/safe-fs/model/limits.ts:134-135` states the
- * distinction in prose; `core` may not import `store`, so the convention is transcribed here.
+ * REPLACED `canonicalPageSourcePath(projectRoot, pageSlug)` (task 14): that helper derived
+ * `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG, which the multi-file design tree retires.
+ * `treeRelPath` now always arrives from `design/pages.json`'s own `entry`, via
+ * `core/project`'s `readPageEntrySource`. Re-exported from `./page-descriptors` rather than
+ * copied a second time — one `.termcraft/design/` convention, one place.
  */
-function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
-  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
-}
 
 /**
  * A page whose source is readable but whose static `meta` export does not parse — the ONLY
@@ -224,8 +221,10 @@ async function extractAndCachePageMeta(
 async function resolvePageSettings(
   deps: HandlerContext["deps"],
   pageSlug: PageSlug,
+  /** An already-read `design/pages.json` page list, when the caller has one — a loop over every page reads the manifest ONCE rather than once per page. */
+  pages?: readonly PageEntryV1[],
 ): Promise<FailureDtoV1 | ResolvedPageSettingsV1> {
-  const source = await deps.pageReader.readSource(pageSlug);
+  const source = await readPageEntrySource(deps.designReader, pageSlug, pages);
   if ("code" in source) return source;
 
   const key: PageMetaKeyV1 = {
@@ -244,7 +243,7 @@ async function resolvePageSettings(
 
   return {
     sourceHash: source.sourceHash,
-    sourcePath: canonicalPageSourcePath(deps.projectStore.root, pageSlug),
+    sourcePath: designTreeFilePath(deps.projectStore.root, source.relPath),
     kitApiVersion: meta.kitApiVersion,
     minSize: meta.minSize,
     theme: meta.theme,
@@ -333,7 +332,7 @@ function previewStateChangedEvent(
  * async, so it must run inside `launchOperation`'s `run`, per `HandlerContext`'s own doc).
  *
  * ASYNC half (`run`): resolve the page's current-source settings (best-effort,
- * `resolvePageSettings`, now resolving `sourcePath` through {@link canonicalPageSourcePath} —
+ * `resolvePageSettings`, now resolving `sourcePath` through `designTreeFilePath` —
  * Task 10's fix), derive size/theme/capabilities from `WorkspaceStateV1`, call
  * `HostSupervisorPort.preview` directly, and on success set the session + source-kind
  * (`context.setActivePreviewSession`, which also seeds `context.previewSessionCommands`'s
@@ -734,7 +733,7 @@ export function hostCircuitOpenedEvents(
 
 /**
  * `sourceHash` is `null` only when `resolvePageSettings` failed before ever reading the
- * page's live source (i.e. `pageReader.readSource` itself failed) — the one case with no
+ * page's live source (i.e. the manifest lookup or that entry's tree read failed) — the one case with no
  * real hash to report. `PreviewFailurePayloadV1.sourceHash` is non-nullable, so this falls
  * back to 64 zero characters, a schema-valid but clearly-not-a-real-digest placeholder,
  * documented here rather than silently passed off as a real hash.
@@ -1299,7 +1298,7 @@ function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
 /**
  * Every project page's `ExportPageInputV1` (§7.5/§12.5: "the exact ordered page list ... and
  * resolved settings"), in manifest order — `manifestIndex` is each page's own position in
- * `PageReader.listSlugs()`'s own returned order, the project's real page order (§11.4's
+ * `design/pages.json`'s own array order, the project's real page order (§11.4's
  * "project page order (manifest order)"). Reuses `resolvePageSettings` above VERBATIM for
  * every page — this file's own header used to name this exact extension as export.start's
  * "second, narrower, compounding gap"; it closes the same way `resolvePageSettings`'s own
@@ -1309,12 +1308,13 @@ function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
 async function resolveExportPageInputs(
   context: HandlerContext,
 ): Promise<FailureDtoV1 | readonly ExportPageInputV1[]> {
-  const slugs = await context.deps.pageReader.listSlugs();
-  if ("code" in slugs) return slugs;
+  const entries = await readPageOrder(context.deps.designReader);
+  if ("code" in entries) return entries;
 
   const pages: ExportPageInputV1[] = [];
-  for (const [manifestIndex, pageSlug] of slugs.entries()) {
-    const settings = await resolvePageSettings(context.deps, pageSlug);
+  for (const [manifestIndex, entry] of entries.entries()) {
+    const pageSlug = entry.slug;
+    const settings = await resolvePageSettings(context.deps, pageSlug, entries);
     if ("code" in settings) return settings;
     pages.push({
       pageSlug,
@@ -1459,7 +1459,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
   const captureDeps: CaptureExportSnapshotDeps = {
     machine: context.exportRunner.machine,
     projectWrite: context.deps.projectWrite,
-    pageReader: context.deps.pageReader,
+    designReader: context.deps.designReader,
     clock: context.deps.clock,
   };
   const captured = await wrap(captureExportSnapshot(captureDeps, { pages }));
@@ -1588,7 +1588,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
   const publishDeps: PublishExportDeps = {
     machine: context.exportRunner.machine,
     projectWrite: context.deps.projectWrite,
-    pageReader: context.deps.pageReader,
+    designReader: context.deps.designReader,
     clock: context.deps.clock,
     exportPublish: context.deps.exportPublish,
   };

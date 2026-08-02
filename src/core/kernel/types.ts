@@ -4,6 +4,7 @@ import type {
   AgentRegistry,
   ChatMutations,
   ChatReader,
+  DesignTreeReader,
   DiagnosticsCache,
   ExportPublishPort,
   ExportRenderPort,
@@ -11,7 +12,6 @@ import type {
   HostSupervisorPort,
   PageMetaCache,
   PageMutations,
-  PageReader,
   PinMutations,
   PinReader,
   PreviewFrameV1,
@@ -59,7 +59,16 @@ export interface KernelDeps {
   readonly projectStore: ProjectStore;
   readonly chatReader: ChatReader;
   readonly chatMutations: ChatMutations;
-  readonly pageReader: PageReader;
+  /**
+   * The canonical design tree's read surface (`core/ports/design-store.ts`). RENAMED AND
+   * RETYPED BY TASK 14 from `pageReader: PageReader`, which named a port `core/ports` had
+   * already deleted — so this field silently degraded to `any` and EVERY kernel handler's
+   * reader call was unchecked. The name moves with the type deliberately: `PageReader`
+   * promised `readSource(slug)`/`listSlugs()`, and a slug does not name a file in the design
+   * tree — `design/pages.json`'s `entry` does. Keeping the old name over the new port would
+   * have left every call site reading as if that promise still held.
+   */
+  readonly designReader: DesignTreeReader;
   readonly pageMutations: PageMutations;
   readonly pinReader: PinReader;
   readonly pinMutations: PinMutations;

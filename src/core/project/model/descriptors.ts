@@ -1,6 +1,16 @@
+import { wrap } from "@reatom/core";
 import * as errore from "errore";
 
-import type { EventPayloadByKindV1, PageDescriptorChangeV1, PageDescriptorV1 } from "core/protocol";
+import type { DesignTreeReader } from "core/ports";
+import type {
+  EventPayloadByKindV1,
+  FailureDtoV1,
+  PageDescriptorChangeV1,
+  PageDescriptorV1,
+  Sha256Hex,
+} from "core/protocol";
+import { PAGES_MANIFEST_RELPATH } from "entities/design-tree";
+import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 /**
@@ -26,6 +36,94 @@ type PageDescriptorsChangedReasonV1 = PageDescriptorsChangedPayloadV1["reason"];
  * `descriptors` field UNCHANGED so "complete and ordered" is a fact about the caller's
  * input, not something this module could silently reorder or drop from.
  */
+
+/**
+ * One page's entry file, read through `design/pages.json` (task 14; brief step 5: "read the
+ * manifest, find the slug's entry, `readTreeFile(entry)` ... extract that two-step into one
+ * shared helper rather than repeating it three times").
+ *
+ * `relPath` is the TREE-relative path the manifest bound to the slug — carried alongside the
+ * bytes because every caller needs it for something (a Gate `sourcePath`, a `changedFiles`
+ * op, a display name) and re-deriving it would mean a second manifest read.
+ */
+export interface PageEntrySourceV1 {
+  readonly pageSlug: PageSlug;
+  readonly relPath: string;
+  readonly bytes: Uint8Array;
+  readonly sourceHash: Sha256Hex;
+}
+
+/** The `design/pages.json` entry `pageSlug` is bound to, or a typed refusal naming which half failed. */
+function entryNotFound(pageSlug: PageSlug): FailureDtoV1 {
+  return {
+    code: "PERSISTENCE_FAILED",
+    retryable: false,
+    safeMessage: `design/pages.json lists no entry for page "${pageSlug}"`,
+    details: { pageSlug },
+  };
+}
+
+/**
+ * The manifest's page order — `design/pages.json`'s array order IS page order (design §4), so
+ * this is the project's one page-identity and ordering authority. The replacement for the
+ * retired `PageReader.listSlugs()`, which promised the same list from a port that had no way
+ * to know it.
+ *
+ * A TREE WITH NO MANIFEST IS AN EMPTY PAGE ORDER, NOT A FAILURE — and the difference is
+ * decided STRUCTURALLY, never by matching on a failure's prose. A freshly created project has
+ * no `design/pages.json` until its first turn writes one, and the retired `listSlugs()` had a
+ * documented allowance for exactly that ("`[]` for a project with no `design/pages.json` yet
+ * ... never an error", `store/model/factory.ts`). `DesignTreeReader.readManifest()`
+ * deliberately makes no such allowance — what a tree-less project looks like on disk is
+ * Task 16's own question (red-debt.md) — so the allowance lives HERE instead, at the one seam
+ * that lost it when task 14 retired `listSlugs`' last caller.
+ *
+ * The test is whether the tree ITSELF names `pages.json`: absent from the inventory means the
+ * project genuinely has no manifest yet (honest empty order); present means the read/decode
+ * failure is real and is propagated. `treePaths` lets a caller that already walked the tree
+ * (`core/kernel`'s turn staging) answer that without a second `listTree()`; the extra walk is
+ * paid only on the failure path otherwise. If the inventory ITSELF cannot be read, the
+ * original manifest failure is returned unchanged — never masked by a second one.
+ */
+export async function readPageOrder(
+  designReader: DesignTreeReader,
+  treePaths?: readonly string[],
+): Promise<FailureDtoV1 | readonly PageEntryV1[]> {
+  const manifest = await wrap(designReader.readManifest());
+  if (!("code" in manifest)) return manifest.pages;
+
+  if (treePaths !== undefined) {
+    return treePaths.includes(PAGES_MANIFEST_RELPATH) ? manifest : [];
+  }
+  const listed = await wrap(designReader.listTree());
+  if ("code" in listed) return manifest;
+  return listed.some((file) => file.relPath === PAGES_MANIFEST_RELPATH) ? manifest : [];
+}
+
+/**
+ * THE TWO-STEP, IN ONE PLACE: read `design/pages.json`, find `pageSlug`'s own `entry`, then
+ * read THAT tree file. Nothing here computes a path from a slug — that mapping is exactly what
+ * the multi-file design tree retires (design §3, §7), and the reason `PageReader.readSource`
+ * could not survive it.
+ *
+ * Takes an already-read `pages` list when the caller has one (every loop over all pages does),
+ * so a per-page read never re-reads the manifest once per page.
+ */
+export async function readPageEntrySource(
+  designReader: DesignTreeReader,
+  pageSlug: PageSlug,
+  pages?: readonly PageEntryV1[],
+): Promise<FailureDtoV1 | PageEntrySourceV1> {
+  const entries = pages ?? (await wrap(readPageOrder(designReader)));
+  if ("code" in entries) return entries;
+
+  const entry = entries.find((candidate) => candidate.slug === pageSlug);
+  if (entry === undefined) return entryNotFound(pageSlug);
+
+  const file = await wrap(designReader.readTreeFile(entry.entry));
+  if ("code" in file) return file;
+  return { pageSlug, relPath: entry.entry, bytes: file.bytes, sourceHash: file.sha256 };
+}
 
 /** A caller supplied a malformed descriptor list — most concretely, a duplicate `pageSlug`. */
 export class PageDescriptorsAssemblyError extends errore.createTaggedError({

@@ -245,12 +245,21 @@ export interface GateRunner {
    * it upstream: this method accepts `pages` independently of that decoder, and a guarantee that
    * lives only in another module's prose is the shape that produced round 3's Critical.
    *
-   * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
-   * declared on this port, implemented by the adapter, but NO production caller invokes it yet
-   * — `core/turns/model/validation.ts` calls only `runManifestSlice`/`runPage`. Task 14 (the
-   * turn's real validation flow) must call this ONCE per turn, before the per-page `runPage`
-   * calls, or the import allowlist (and the `eval`/`new Function` ban inside it) never actually
-   * runs and a forbidden import reaches the smoke render undetected.
+   * WIRED (task 14 — the red-debt.md SECURITY-CRITICAL must-wire is closed).
+   * `core/turns/model/validation.ts` calls this ONCE per turn, after `runManifestSlice` and
+   * before any per-page `runPage`, threading `slice.pages` through as `pages`. It is called
+   * UNCONDITIONALLY, including when the manifest itself failed to decode (with an empty
+   * `pages`): the flat allowlist scan covers every code file in the tree regardless of which
+   * pages exist, so skipping it on a bad manifest would hide every import violation behind a
+   * manifest typo and spend one of only four attempts learning about just one of them.
+   *
+   * The turn's verdict over the returned `errors` is WHOLE-TREE — any error rejects the turn,
+   * and nothing filters by `file` or by {@link GateErrorV1.blockedPages}. That is a deliberate
+   * choice, not an omission: `gate/model/tree-scan.ts`'s `isTrustedTarget` vouches for an
+   * importer whose target is a key in `files` even when that target's OWN scan threw, which is
+   * harmless under one flat verdict and becomes a fail-open the moment a consumer attributes
+   * rejections per page or per file (task-12b review round 1, Minor M4). `blockedPages` is
+   * carried to the agent as a diagnostic, never consulted to decide pass/fail.
    */
   runTreeImports(input: {
     readonly files: ReadonlyMap<string, string>;

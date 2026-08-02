@@ -65,22 +65,27 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  test("KNOWN SECURITY GAP, NOT CORRECT BEHAVIOR (task-12 review round 1, registered in red-debt.md as must-wire): runPage() no longer scans imports itself, and nothing else in the shipped pipeline calls runTreeImports() yet, so a forbidden import currently reaches the smoke render", async () => {
-    // This test does NOT assert desired behavior — it pins TODAY's actual gap: `runPage` itself
-    // never scans imports (task 12's own design moved that to `runTreeImports`, run once per
-    // turn over the whole tree). `smokeRan === true` here is the bug, not the feature.
+  test("runPage() deliberately does not scan imports — the whole-tree scan owns that, and the TURN is what makes it fatal (task 14 wired it; this pins the split, not a gap)", async () => {
+    // RETITLED AND RE-FRAMED BY TASK 14. This test used to be called "KNOWN SECURITY GAP, NOT
+    // CORRECT BEHAVIOR" and its body said `smokeRan === true` "is the bug, not the feature".
+    // Both claims rested on the same premise — that NOTHING in the shipped pipeline called
+    // `runTreeImports`, so a forbidden import reached the smoke render undetected. Task 14
+    // wired `core/turns/model/validation.ts` to call it once per turn, before any `runPage`,
+    // so the premise is now false and the old title asserted a hole that no longer exists. A
+    // test that pins a security hole as intended behaviour is worse than no test, which is why
+    // this is corrected rather than merely re-passing.
     //
-    // CORRECTED (task-12 review round 1, finding 1b — the prior wording over-claimed): this
-    // test drives `adapter.runPage(...)` directly, so it will KEEP PASSING even after Task 14
-    // wires `runTreeImports` into `core/turns/model/validation.ts` — that wiring changes what
-    // the TURN does around `runPage`, not what `runPage` itself does. It only fails if
-    // `runPage`/`runGate` starts scanning imports again, a regression of THIS task's own
-    // design — it is NOT a safety net for the wiring ever happening. Task 14 owns proving the
-    // wiring itself works, with its own test in `core/turns/model/validation.test.ts` asserting
-    // that a forbidden import in a shared module fails the TURN, not merely that
-    // `scanTreeImports`/`runTreeImports` can detect it in isolation (see red-debt.md's
-    // SECURITY-CRITICAL entry). See `gate/model/gate.ts`'s `runTreeImports` doc and `core/
-    // ports/gate-runner.ts`'s `GateRunner.runTreeImports` doc for the full flag.
+    // WHAT IT PINS NOW, unchanged in substance: `runPage` scans no imports of its own. That is
+    // task 12's deliberate design (a shared module belongs to no single page — scanning per
+    // page both misses a module no page's own source is run against and reports one violation
+    // once per reaching page), and it must stay true or the split silently regresses. It is
+    // NOT the wiring proof: this test drives `adapter.runPage(...)` directly, so it would keep
+    // passing even if the turn stopped calling `runTreeImports` entirely. That proof lives in
+    // `src/entrypoint/model/turn-import-perimeter.test.ts` (the REAL adapter through the REAL
+    // `runTurnValidation`, one row per forbidden form in a SHARED module no page names) and in
+    // `core/turns/model/validation.test.ts` (the call shape, and that its errors reject the
+    // turn). `smokeRan === true` below is therefore correct: the page's own source is clean,
+    // and the forbidden import in it is the whole tree's problem, caught before this stage.
     let smokeRan = false;
     const adapter = createGateRunnerAdapter({
       smokeRenderer: {

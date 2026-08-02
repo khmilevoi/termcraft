@@ -12,20 +12,20 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { BackendCapabilities, PageSourceV1 } from "core/ports";
+import type { BackendCapabilities, DesignTreeFileV1 } from "core/ports";
 import {
   type FakeProjectStore,
   createFakeAgentBackend,
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -92,7 +92,7 @@ interface TestContext {
  * schemas — never just count them.
  */
 function buildTestContext(options?: {
-  readonly pageSources?: ReadonlyMap<PageSlug, PageSourceV1>;
+  readonly pageSources?: ReadonlyMap<PageSlug, DesignTreeFileV1>;
   readonly backends?: readonly ReturnType<typeof createFakeAgentBackend>[];
 }): TestContext {
   return context.start(() => {
@@ -114,8 +114,14 @@ function buildTestContext(options?: {
     };
 
     const chatStore = createFakeChatStore();
-    const pageSources = options?.pageSources ?? new Map<PageSlug, PageSourceV1>();
-    const pageStore = createFakePageStore({ order: [...pageSources.keys()], sources: pageSources });
+    const pageSources = options?.pageSources ?? new Map<PageSlug, DesignTreeFileV1>();
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [...pageSources.entries()].map(([pageSlug, file]) => ({
+        pageSlug,
+        bytes: file.bytes,
+        sha256: file.sha256,
+      })),
+    });
     const pinStore = createFakePinStore();
     const projectStore = createFakeProjectStore({ root: "/test-root" });
     const clock: Clock = { now: () => new Date(1_700_000_000_000) };
@@ -124,7 +130,7 @@ function buildTestContext(options?: {
       projectStore,
       chatReader: chatStore,
       chatMutations: chatStore,
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       pinReader: pinStore,
       pinMutations: pinStore,
@@ -238,7 +244,7 @@ describe('selectionHandlers["selection.clear"]', () => {
 describe('selectionHandlers["selection.set"]', () => {
   test("returns a synchronous started outcome and launches exactly one operation", () => {
     const { handlerContext, getLaunchedOperations } = buildTestContext({
-      pageSources: new Map([[HOME, { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }]]),
+      pageSources: new Map([[HOME, { bytes: new Uint8Array(), sha256: "a".repeat(64) }]]),
     });
 
     const outcome = selectionHandlers["selection.set"](
@@ -254,7 +260,7 @@ describe('selectionHandlers["selection.set"]', () => {
   test("the launched operation resolves a schema-valid selection.changed once the page source is read", async () => {
     const sourceHash = "b".repeat(64);
     const { handlerContext, getLaunchedOperations } = buildTestContext({
-      pageSources: new Map([[HOME, { bytes: new Uint8Array([1, 2, 3]), sourceHash }]]),
+      pageSources: new Map([[HOME, { bytes: new Uint8Array([1, 2, 3]), sha256: sourceHash }]]),
     });
 
     selectionHandlers["selection.set"]({ pageSlug: HOME, elementId: "el-1" }, handlerContext);

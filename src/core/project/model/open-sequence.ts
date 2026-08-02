@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import type {
   ChatReader,
+  DesignTreeReader,
   ExportPublishPort,
   GitIdentityV1,
   PinReader,
@@ -10,29 +11,13 @@ import type {
   TrustGate,
   TrustSubjectV1,
 } from "core/ports";
-import type { CommandRejectionCode, FailureDtoV1, Sha256Hex } from "core/protocol";
-import type { PageSlug } from "entities/page";
+import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 
 import type { IntendedRecoveryDomainV1, OpenSequenceStepV1, TrustDecisionV1 } from "../types";
+import { readPageEntrySource, readPageOrder } from "./descriptors";
 import { scanOrphanTurns } from "./orphan-turn-scan";
 import { type RecoveryRoutingMachines, routeProjectRecovery } from "./recovery-routing";
 import { buildTrustStatus, grantImplicitTrust, resolveTrustDecision } from "./trust";
-
-/**
- * `PageReader` (`readSource(pageSlug)`/`listSlugs()`) was retired from `core/ports` by the
- * design-tree canonical source plan's Task 7, replaced by `DesignTreeReader`. This module
- * has NO production caller (the real version gate is `migrationsGate` in
- * `store/model/factory.ts` — confirmed by earlier research in this plan), so it is not
- * rewired onto `DesignTreeReader` for real; this local shim, mirroring `core/ports/fakes/
- * legacy-page-store.ts`'s own identical shape, exists only to keep this file compiling
- * against its own (dead) `pageReader` dependency.
- */
-interface LegacyPageReader {
-  readSource(
-    pageSlug: PageSlug,
-  ): Promise<FailureDtoV1 | { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }>;
-  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>;
-}
 
 /**
  * TD §12's ordered startup sequence (lines 1057-1084), end to end through Kernel `ready`
@@ -94,7 +79,7 @@ export interface OpenSequenceDeps {
   readonly recoverPendingMigrations: () => Promise<FailureDtoV1 | undefined>;
   readonly validateSchemas: () => Promise<FailureDtoV1 | undefined>;
 
-  readonly pageReader: LegacyPageReader;
+  readonly designReader: DesignTreeReader;
   readonly pinReader: PinReader;
   readonly chatReader: ChatReader;
   /** TD §12 step 9's "...export pointer..." (WP-5 Phase C task C3) — only `readPointer()` is ever called here, never `publish()`. */
@@ -139,14 +124,17 @@ async function validateProjectContents(
   const workspaceState = await store.readWorkspaceState();
   if ("code" in workspaceState) return workspaceState;
 
-  const slugs = await deps.pageReader.listSlugs();
-  if ("code" in slugs) return slugs;
+  // `design/pages.json`, read ONCE, is the page-identity authority — TD step 9's "canonical
+  // pages" are whatever entries it names, never files derived from a slug (task 14; this
+  // module previously carried a local copy of the retired `PageReader` shape).
+  const pages = await readPageOrder(deps.designReader);
+  if ("code" in pages) return pages;
 
-  for (const pageSlug of slugs) {
-    const source = await deps.pageReader.readSource(pageSlug);
+  for (const entry of pages) {
+    const source = await readPageEntrySource(deps.designReader, entry.slug, pages);
     if ("code" in source) return source;
 
-    const pins = await deps.pinReader.fold(pageSlug);
+    const pins = await deps.pinReader.fold(entry.slug);
     if ("code" in pins) return pins;
   }
 

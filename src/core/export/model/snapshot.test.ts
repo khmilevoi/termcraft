@@ -3,7 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { context, wrap } from "@reatom/core";
 
 import { reatomExportStateMachine } from "core/machines";
-import { createFakePageStore, createFakeProjectWriteCoordinator } from "core/ports/fakes";
+import {
+  createFakeDesignStoreForPages,
+  createFakeProjectWriteCoordinator,
+  defaultFakeEntry,
+} from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
@@ -58,23 +62,22 @@ const ABOUT_HASH = "b".repeat(64);
 function setup() {
   const machine = reatomExportStateMachine();
   const projectWrite = createFakeProjectWriteCoordinator();
-  const pageReader = createFakePageStore({
-    order: [slug("home"), slug("about")],
-    sources: new Map([
-      [slug("home"), { bytes: HOME_BYTES, sourceHash: HOME_HASH }],
-      [slug("about"), { bytes: ABOUT_BYTES, sourceHash: ABOUT_HASH }],
-    ]),
+  const designReader = createFakeDesignStoreForPages({
+    pages: [
+      { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
+      { pageSlug: slug("about"), bytes: ABOUT_BYTES, sha256: ABOUT_HASH },
+    ],
   });
   const clock = manualClock(1_700_000_000_000);
-  return { machine, projectWrite, pageReader, clock };
+  return { machine, projectWrite, designReader, clock };
 }
 
 describe("captureExportSnapshot", () => {
   test("rejects NO_PAGES for an empty page list without touching the machine or the mutex", async () => {
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, designReader, clock } = setup();
       const call = captureExportSnapshot(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, designReader, clock },
         { pages: [] },
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
@@ -88,13 +91,13 @@ describe("captureExportSnapshot", () => {
   });
 
   test("captures ordered pages with fresh bytes/hash, releases the permit, and reaches rendering", async () => {
-    const { call, readPhase, pageReader } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+    const { call, readPhase, designReader } = context.start(() => {
+      const { machine, projectWrite, designReader, clock } = setup();
       const call = captureExportSnapshot(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, designReader, clock },
         { pages: [HOME_INPUT, ABOUT_INPUT] },
       );
-      return { call, readPhase: wrap(() => machine.phase()), pageReader };
+      return { call, readPhase: wrap(() => machine.phase()), designReader };
     });
 
     const result = await call;
@@ -107,12 +110,19 @@ describe("captureExportSnapshot", () => {
     ]);
     expect(result.snapshot.capturedAt).toBe("2023-11-14T22:13:20.000Z");
     expect(readPhase()).toBe("rendering");
-    expect(pageReader.calls.map((c) => c.method)).toEqual(["readSource", "readSource"]);
+    // `design/pages.json` read exactly ONCE for the whole permit-held capture, then one
+    // `readTreeFile` per page's own entry. Not once per page: two reads inside one snapshot
+    // could in principle disagree, and this window is supposed to be one coherent read.
+    expect(designReader.calls.map((c) => c.method)).toEqual([
+      "readManifest",
+      "readTreeFile",
+      "readTreeFile",
+    ]);
   });
 
   test("acquires the permit before reading any page and releases it before returning", async () => {
     const { call, order } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
+      const { machine, projectWrite, designReader, clock } = setup();
       const order: string[] = [];
       const tracedProjectWrite = {
         ...projectWrite,
@@ -126,14 +136,14 @@ describe("captureExportSnapshot", () => {
         },
       };
       const tracedPageReader = {
-        ...pageReader,
-        readSource: async (pageSlug: PageSlug) => {
-          order.push(`readSource:${pageSlug}`);
-          return pageReader.readSource(pageSlug);
+        ...designReader,
+        readTreeFile: async (relPath: string) => {
+          order.push(`readTreeFile:${relPath}`);
+          return designReader.readTreeFile(relPath);
         },
       };
       const call = captureExportSnapshot(
-        { machine, projectWrite: tracedProjectWrite, pageReader: tracedPageReader, clock },
+        { machine, projectWrite: tracedProjectWrite, designReader: tracedPageReader, clock },
         { pages: [HOME_INPUT, ABOUT_INPUT] },
       );
       return { call, order };
@@ -141,28 +151,33 @@ describe("captureExportSnapshot", () => {
 
     await call;
 
-    expect(order).toEqual(["acquire", "readSource:home", "readSource:about", "release"]);
+    expect(order).toEqual([
+      "acquire",
+      `readTreeFile:${defaultFakeEntry(slug("home"))}`,
+      `readTreeFile:${defaultFakeEntry(slug("about"))}`,
+      "release",
+    ]);
   });
 
   test("rejects with OPERATION_BUSY and touches no port when the export machine is not idle", async () => {
-    const { call, projectWrite, pageReader } = context.start(() => {
+    const { call, projectWrite, designReader } = context.start(() => {
       const machine = reatomExportStateMachine();
       machine.apply("kernel.export.begin"); // now "preparing", not "idle"
       const projectWrite = createFakeProjectWriteCoordinator();
-      const pageReader = createFakePageStore({ order: [], sources: new Map() });
+      const designReader = createFakeDesignStoreForPages({ pages: [] });
       const clock = manualClock(1_700_000_000_000);
       const call = captureExportSnapshot(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, designReader, clock },
         { pages: [HOME_INPUT] },
       );
-      return { call, projectWrite, pageReader };
+      return { call, projectWrite, designReader };
     });
 
     const result = await call;
 
     expect(result).toEqual({ kind: "illegal", code: "OPERATION_BUSY" });
     expect(projectWrite.calls).toEqual([]);
-    expect(pageReader.calls).toEqual([]);
+    expect(designReader.calls).toEqual([]);
   });
 
   test("a page read failure releases the permit, fails the machine back to idle, and reports the failure", async () => {
@@ -173,10 +188,10 @@ describe("captureExportSnapshot", () => {
       details: {},
     };
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock } = setup();
-      pageReader.failNext("readSource", FAILURE);
+      const { machine, projectWrite, designReader, clock } = setup();
+      designReader.failNext("readTreeFile", FAILURE);
       const call = captureExportSnapshot(
-        { machine, projectWrite, pageReader, clock },
+        { machine, projectWrite, designReader, clock },
         { pages: [HOME_INPUT, ABOUT_INPUT] },
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };

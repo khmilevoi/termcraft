@@ -177,7 +177,7 @@ async function interactiveShell(
     projectStore: createProjectStoreAdapter(storeAdapterDeps),
     chatReader: chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,

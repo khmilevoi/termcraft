@@ -11,6 +11,7 @@ import {
   buildPageDescriptorsChangedPayload,
   buildTrustStatus,
   grantImplicitTrust,
+  readPageOrder,
   scanOrphanTurns,
 } from "core/project";
 import {
@@ -589,15 +590,17 @@ async function runProjectReadySequence(
   // ready already carries preview enabled.
   events.push(...enablePreviewIfTrusted(context, trust));
 
-  const slugs = await wrap(deps.pageReader.listSlugs());
+  // `design/pages.json`, not `project.toml`: the manifest's array order IS page order
+  // (design §4), and `ProjectManifestV1` stopped carrying `pages` in task 7.
+  const pages = await wrap(readPageOrder(deps.designReader));
   // `...events` carries forward whatever `enablePreviewIfTrusted` already applied above — the
   // preview machine's `disabled -> idle` transition already happened (a real machine mutation,
   // not a pending one), so a block reached AFTER it must still publish that fact rather than
   // silently drop it: an applied-but-unpublished transition would desynchronize every
   // subscriber from the Kernel's own true state.
-  if ("code" in slugs) return [...events, ...blockOpen(context, "page-list-failed", slugs)];
+  if ("code" in pages) return [...events, ...blockOpen(context, "page-list-failed", pages)];
 
-  const descriptors = await wrap(buildPageDescriptors(context, slugs));
+  const descriptors = await wrap(buildPageDescriptors(context, pages));
   if ("code" in descriptors) {
     return [...events, ...blockOpen(context, "page-source-read-failed", descriptors)];
   }
@@ -613,7 +616,12 @@ async function runProjectReadySequence(
     return [...events, ...blockOpen(context, "export-pointer-read-failed", pointer)];
   }
 
-  const activePageSlug = workspaceStateResult.state.activePageSlug ?? manifest.pages[0] ?? null;
+  // WAS `manifest.pages[0]` (task 7 deleted `ProjectManifestV1.pages`, so this read was
+  // `undefined.pages` at RUNTIME — the throw `entrypoint/model/smoke.test.ts` reported as
+  // "Unhandled error between tests", via `launchOperation "kernel.project.beginCreate" threw
+  // unexpectedly`. It typechecked as an error and crashed as a TypeError; both are gone with
+  // this line.) The design tree's own first page is the honest fallback.
+  const activePageSlug = workspaceStateResult.state.activePageSlug ?? pages[0]?.slug ?? null;
   const descriptorsPayload = buildPageDescriptorsChangedPayload(
     "project-open",
     [],

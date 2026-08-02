@@ -16,13 +16,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -72,7 +72,7 @@ function slug(value: string) {
 /** Matches `deferred.test.ts`'s own helper — see that file's comment. */
 function buildDeps(): KernelDeps {
   const chatStore = createFakeChatStore();
-  const pageStore = createFakePageStore({ order: [] });
+  const pageStore = createFakeDesignStoreForPages({ pages: [] });
   const pinStore = createFakePinStore();
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
 
@@ -80,7 +80,7 @@ function buildDeps(): KernelDeps {
     projectStore: createFakeProjectStore({ root: "/test-root" }),
     chatReader: chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,

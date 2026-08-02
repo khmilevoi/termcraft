@@ -183,6 +183,13 @@ const BACKEND_CAPABILITIES: BackendCapabilities = {
 /** A minimal page the real Gate's source-only stages (import-scan, page-contract, lints)
  *  genuinely accept on the first attempt — the same shape `gate/model/gate.test.ts`'s own
  *  `cleanSource` fixture already proves passes `runGate` standalone. */
+/**
+ * The tree-relative `entry` `design/pages.json` binds to `home` in this smoke's fixture —
+ * deliberately NOT `pages/home.tsx`, so no downstream step can pass by deriving a page's file
+ * from its slug (design §3, §7: the manifest is the only binding).
+ */
+const HOME_ENTRY_REL_PATH = "screens/home/index.tsx";
+
 const HOME_PAGE_SOURCE = `import { definePage, reatomComponent, Panel, Text } from "@termcraft/runtime"
 export const meta = definePage({ kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark-default" })
 export default reatomComponent(() => <Panel id="p"><Text id="t">hello from the fake agent</Text></Panel>)
@@ -395,7 +402,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
     projectStore,
     chatReader: chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,
@@ -526,11 +533,26 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // "the fake agent edits staging": a REAL page file plus a REAL manifest-slice update
       // are written into the REAL turn workspace the staging adapter minted on disk —
       // exactly the bytes the real Gate/candidate-freeze pipeline reads back.
-      fs.mkdirSync(path.join(workspacePath, "pages"), { recursive: true });
-      fs.writeFileSync(path.join(workspacePath, "pages", "home.tsx"), HOME_PAGE_SOURCE, "utf8");
+      // THE DESIGN TREE'S OWN LAYOUT (task 14; design §3, §10): the whole tree lives under
+      // `design/`, `pages.json` is a REAL file inside it, and a page's file is whatever that
+      // manifest's `entry` names — here `screens/home/index.tsx`, deliberately NOT
+      // `pages/<slug>.tsx`, so nothing downstream can pass by deriving a path from the slug.
+      // This fixture wrote the retired flat layout (`<workspace>/pages/home.tsx` plus a
+      // `{pages:["home"],active:"home"}` slice) until now, which `store/safe-fs` refuses
+      // outright: "pages/home.tsx is outside every managed namespace of a workspace root".
+      fs.mkdirSync(path.join(workspacePath, "design", "screens", "home"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspacePath, "pages.json"),
-        JSON.stringify({ pages: ["home"], active: "home" }),
+        path.join(workspacePath, "design", "screens", "home", "index.tsx"),
+        HOME_PAGE_SOURCE,
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(workspacePath, "design", "pages.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          pages: [{ slug: "home", entry: HOME_ENTRY_REL_PATH }],
+          requestedActivePage: "home",
+        }),
         "utf8",
       );
 
@@ -570,17 +592,24 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // store, not merely through an in-memory transition: the canonical page now exists on
       // disk under the project's `.termcraft` root (`store/transaction/model/wrappers.ts`'s
       // own `canonicalPagePath`), with the fake agent's exact bytes.
-      const canonicalHomePath = path.join(root, ".termcraft", "pages", "home", "page.tsx");
+      // CANONICAL storage is `.termcraft/design/<entry>` now — the tree, verbatim, at the same
+      // tree-relative path the workspace used, which is what makes design §10's "no specifier
+      // is ever rewritten on apply" true.
+      const canonicalHomePath = path.join(
+        root,
+        ".termcraft",
+        "design",
+        ...HOME_ENTRY_REL_PATH.split("/"),
+      );
       expect(fs.existsSync(canonicalHomePath)).toBe(true);
       expect(fs.readFileSync(canonicalHomePath, "utf8")).toBe(HOME_PAGE_SOURCE);
 
       // The turn workspace's own staged copy is still there too (never retired on a
       // successful path until the candidate itself is superseded) — real edits, real disk,
       // start to finish.
-      expect(fs.existsSync(path.join(workspacePath, "pages", "home.tsx"))).toBe(true);
-      expect(fs.readFileSync(path.join(workspacePath, "pages", "home.tsx"), "utf8")).toBe(
-        HOME_PAGE_SOURCE,
-      );
+      const stagedHomePath = path.join(workspacePath, "design", ...HOME_ENTRY_REL_PATH.split("/"));
+      expect(fs.existsSync(stagedHomePath)).toBe(true);
+      expect(fs.readFileSync(stagedHomePath, "utf8")).toBe(HOME_PAGE_SOURCE);
 
       // LINK 3 "render" and LINK 4 "export" are NOT asserted below — extending this test to
       // drive them against the now-genuinely-committed page is separate follow-up work (gap
@@ -665,11 +694,26 @@ describe("the preview render-failure regression (2026-07-27)", () => {
       const workspacePath = agentBackend.lastWorkspacePath();
       if (workspacePath === null) throw new Error("fixture bug: no workspace path captured");
 
-      fs.mkdirSync(path.join(workspacePath, "pages"), { recursive: true });
-      fs.writeFileSync(path.join(workspacePath, "pages", "home.tsx"), HOME_PAGE_SOURCE, "utf8");
+      // THE DESIGN TREE'S OWN LAYOUT (task 14; design §3, §10): the whole tree lives under
+      // `design/`, `pages.json` is a REAL file inside it, and a page's file is whatever that
+      // manifest's `entry` names — here `screens/home/index.tsx`, deliberately NOT
+      // `pages/<slug>.tsx`, so nothing downstream can pass by deriving a path from the slug.
+      // This fixture wrote the retired flat layout (`<workspace>/pages/home.tsx` plus a
+      // `{pages:["home"],active:"home"}` slice) until now, which `store/safe-fs` refuses
+      // outright: "pages/home.tsx is outside every managed namespace of a workspace root".
+      fs.mkdirSync(path.join(workspacePath, "design", "screens", "home"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspacePath, "pages.json"),
-        JSON.stringify({ pages: ["home"], active: "home" }),
+        path.join(workspacePath, "design", "screens", "home", "index.tsx"),
+        HOME_PAGE_SOURCE,
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(workspacePath, "design", "pages.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          pages: [{ slug: "home", entry: HOME_ENTRY_REL_PATH }],
+          requestedActivePage: "home",
+        }),
         "utf8",
       );
       const turnTerminal = waitForEvent(

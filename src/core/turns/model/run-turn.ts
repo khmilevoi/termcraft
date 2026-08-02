@@ -47,8 +47,8 @@ import {
   terminalizeTurn,
 } from "./terminalize";
 import {
+  type RunTurnValidationInputV1,
   type TurnValidationDeps,
-  type TurnValidationPageInputV1,
   type TurnValidationResultV1,
   runTurnValidation,
 } from "./validation";
@@ -212,11 +212,16 @@ export interface RunTurnDeps {
   readonly onAdmitted?: (context: TurnContextV1) => void;
 }
 
-/** What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate. */
-export interface RunTurnValidationMaterialV1 {
-  readonly manifestText: string;
-  readonly pages: readonly TurnValidationPageInputV1[];
-}
+/**
+ * What `runTurnValidation` needs beyond `turnId`/`attempt` — built from the frozen candidate.
+ *
+ * Every field is now WHOLE-TREE rather than per-page (task 14): the caller supplies the
+ * candidate's manifest text, its full tree inventory, every tree file's source text, and the
+ * candidate's absolute `design/` root. WHICH pages exist, and which file each one lives in, is
+ * decided inside `runTurnValidation` by decoding that manifest — never by a caller-assembled
+ * page list, which is the slug-shaped page identity the design tree retires.
+ */
+export type RunTurnValidationMaterialV1 = Omit<RunTurnValidationInputV1, "turnId" | "attempt">;
 
 /**
  * `finalizeTurn`'s domain-specific fields — everything this driver cannot derive itself (the
@@ -505,12 +510,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       publish: deps.publish,
     };
     const validation: TurnValidationResultV1 = await wrap(
-      runTurnValidation(validationDeps, {
-        turnId: context.turnId,
-        attempt,
-        manifestText: material.manifestText,
-        pages: material.pages,
-      }),
+      runTurnValidation(validationDeps, { turnId: context.turnId, attempt, ...material }),
     );
 
     if (validation.kind === "exhausted") {

@@ -12,13 +12,13 @@ import type {
 import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -183,14 +183,14 @@ function waitForEvent(
 function buildRelaunchDeps(options: {
   readonly chatStore: ChatReader & ChatMutations;
   readonly projectStore: ReturnType<typeof createFakeProjectStore>;
-  readonly pageStore: ReturnType<typeof createFakePageStore>;
+  readonly pageStore: ReturnType<typeof createFakeDesignStoreForPages>;
 }): KernelDeps {
   const pinStore = createFakePinStore();
   return {
     projectStore: options.projectStore,
     chatReader: options.chatStore,
     chatMutations: options.chatStore,
-    pageReader: options.pageStore,
+    designReader: options.pageStore,
     pageMutations: options.pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,
@@ -273,20 +273,17 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
       // A valid-looking UUIDv7 (fake-fidelity: the real store always mints `projectId` via
       // `uuidv7()`, and `kernel.project.finishOpen`'s own event metadata — §10 smoke
       // closeout — now carries it through a real `UUIDv7`-validating schema).
-      manifest: { projectId: "0192f000-0000-7000-8000-00000000aaaa", pages: [home] },
+      manifest: { projectId: "0192f000-0000-7000-8000-00000000aaaa" },
       workspaceState: { activePageSlug: home, activeChatId: chatId },
     });
-    const pageStore = createFakePageStore({
-      order: [home],
-      sources: new Map([
-        [
-          home,
-          {
-            bytes: new TextEncoder().encode("export const meta = {}"),
-            sourceHash: FAKE_SOURCE_HASH,
-          },
-        ],
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        {
+          pageSlug: home,
+          bytes: new TextEncoder().encode("export const meta = {}"),
+          sha256: FAKE_SOURCE_HASH,
+        },
+      ],
     });
 
     const kernel = createKernel(buildRelaunchDeps({ chatStore, projectStore, pageStore }));

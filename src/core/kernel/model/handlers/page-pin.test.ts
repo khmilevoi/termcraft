@@ -12,8 +12,9 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
+import type { DesignTreeFileV1 } from "core/ports";
 import {
-  type FakePageStore,
+  type FakeDesignStore,
   type FakePinStore,
   type FakeProjectStore,
   type FakeProjectWriteCoordinator,
@@ -21,13 +22,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStore,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -37,6 +38,7 @@ import {
   createFakeStagingService,
   createFakeTrustGate,
   createFakeTurnTransactionService,
+  defaultFakeEntry,
 } from "core/ports/fakes";
 import {
   createFrameBroker,
@@ -46,7 +48,12 @@ import {
   createPreviewSessionCommands,
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import {
+  type FailureDtoV1,
+  type Sha256Hex,
+  type UUIDv7,
+  eventPayloadV1SchemaByKind,
+} from "core/protocol";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { PinEvent } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
@@ -89,7 +96,7 @@ interface LaunchedOperation {
 
 interface TestFixture {
   readonly handlerContext: HandlerContext;
-  readonly pageStore: FakePageStore;
+  readonly pageStore: FakeDesignStore;
   readonly pinStore: FakePinStore;
   readonly projectStore: FakeProjectStore;
   readonly mutex: FakeProjectWriteCoordinator;
@@ -101,15 +108,34 @@ function buildTestContext(options?: {
   readonly pageOrder?: readonly PageSlug[];
   readonly pageSources?: ReadonlyMap<
     PageSlug,
-    { readonly bytes: Uint8Array; readonly sourceHash: string }
+    { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }
   >;
   readonly workspaceActivePageSlug?: PageSlug | null;
 }): TestFixture {
   return context.start(() => {
     const clock = clockAt(NOW);
-    const pageStore = createFakePageStore({
-      order: options?.pageOrder ?? [],
-      sources: options?.pageSources,
+    // Built through `createFakeDesignStore` directly, not the `...ForPages` convenience:
+    // `pageOrder` decides which pages the MANIFEST lists, and `pageSources` decides which of
+    // those entries actually have a FILE. Keeping the two separate is what preserves this
+    // fixture's "listed but unreadable" case — the shape the retired fake expressed as "in
+    // `order`, absent from `sources`" — which several tests below depend on.
+    const pageFiles = new Map<string, DesignTreeFileV1>();
+    for (const [pageSlug, seeded] of options?.pageSources ?? []) {
+      pageFiles.set(defaultFakeEntry(pageSlug), {
+        bytes: seeded.bytes,
+        sha256: seeded.sourceHash,
+      });
+    }
+    const pageStore = createFakeDesignStore({
+      manifest: {
+        schemaVersion: 1,
+        pages: (options?.pageOrder ?? []).map((pageSlug) => ({
+          slug: pageSlug,
+          entry: defaultFakeEntry(pageSlug),
+        })),
+        requestedActivePage: null,
+      },
+      files: pageFiles,
     });
     const pinStore = createFakePinStore();
     const projectStore = createFakeProjectStore({
@@ -123,7 +149,7 @@ function buildTestContext(options?: {
       projectStore,
       chatReader: chatStore,
       chatMutations: chatStore,
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       pinReader: pinStore,
       pinMutations: pinStore,
@@ -353,7 +379,9 @@ describe("pageHandlers['page.reorder']", () => {
     const events = await launch.run();
 
     expect(events).toEqual([]);
-    const listed = await pageStore.listSlugs();
+    const listedManifest = await pageStore.readManifest();
+    if ("code" in listedManifest) throw new Error("fixture bug: readManifest failed");
+    const listed = listedManifest.pages.map((entry) => entry.slug);
     expect(listed).toEqual([slug("about"), slug("home")]);
     expect(handlerContext.pageRemovePlanLedger.current()).toBeNull();
   });
@@ -414,7 +442,7 @@ describe("pageHandlers['page.removePlan']", () => {
     const { handlerContext, pageStore, getLaunches } = buildTestContext({
       pageOrder: [slug("home")],
     });
-    pageStore.failNext("readSource", FAILURE);
+    pageStore.failNext("readTreeFile", FAILURE);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     pageHandlers["page.removePlan"]({ pageSlug: slug("home") }, handlerContext);
@@ -530,7 +558,9 @@ describe("pageHandlers['page.removeConfirm']", () => {
     const events = await launch.run();
 
     expect(events).toEqual([]);
-    const listed = await pageStore.listSlugs();
+    const listedManifest = await pageStore.readManifest();
+    if ("code" in listedManifest) throw new Error("fixture bug: readManifest failed");
+    const listed = listedManifest.pages.map((entry) => entry.slug);
     expect(listed).toEqual([slug("home")]);
     expect(handlerContext.pageRemovePlanLedger.current()).toBeNull();
     expect(mutex.calls.some((c) => c.method === "release")).toBe(true);
@@ -555,7 +585,7 @@ describe("pageHandlers['page.removeConfirm']", () => {
 
   test("logs and performs no write when gathering fresh facts fails (the failure branch, not drift)", async () => {
     const { handlerContext, pageStore, mutex, plan, getLaunches } = setupConfirmScenario();
-    pageStore.failNext("readSource", FAILURE);
+    pageStore.failNext("readTreeFile", FAILURE);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     pageHandlers["page.removeConfirm"]({ pageRemovePlanId: plan.pageRemovePlanId }, handlerContext);

@@ -2,12 +2,13 @@ import { wrap } from "@reatom/core";
 
 import type { ExportAction, ExportState, StateMachine } from "core/machines";
 import type {
+  DesignTreeReader,
   ExportPublishPlanV1,
   ExportPublishPort,
   ExportRenderResultV1,
-  PageReader,
   ProjectWriteCoordinator,
 } from "core/ports";
+import { readPageEntrySource, readPageOrder } from "core/project";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -38,7 +39,7 @@ import { buildExportPublishOperations } from "./publish-plan";
  *    shape `snapshot.ts` originally took as input) must match the captured snapshot's page
  *    set, order, and resolved settings exactly.
  * 2. Live source hash: this function itself re-reads each page's CURRENT hash via
- *    `PageReader` — the one live fact `currentPages` cannot carry on its own — and compares
+ *    the design tree — the one live fact `currentPages` cannot carry on its own — and compares
  *    it against the snapshot's captured hash.
  * Either mismatch is staleness, never a distinct code — §12.5 names exactly one failure
  * for this whole precondition class, `EXPORT_SNAPSHOT_STALE`.
@@ -70,7 +71,13 @@ export interface PublishExportRenderOutcomeV1 {
 export interface PublishExportDeps {
   readonly machine: StateMachine<ExportState, ExportAction>;
   readonly projectWrite: ProjectWriteCoordinator;
-  readonly pageReader: PageReader;
+  /**
+   * RETYPED BY TASK 14 (was `pageReader: PageReader`, a port `core/ports` had already
+   * deleted, so this field was silently `any`). A page's bytes come from the entry
+   * `design/pages.json` binds to its slug — `core/project`'s `readPageEntrySource` — never
+   * from a path computed out of the slug.
+   */
+  readonly designReader: DesignTreeReader;
   readonly clock: Clock;
   readonly exportPublish: ExportPublishPort;
 }
@@ -147,8 +154,16 @@ export async function publishExport(
     };
   }
 
+  // Read ONCE for the whole revalidation window — see `snapshot.ts`'s own note.
+  const entries = await wrap(readPageOrder(deps.designReader));
+  if ("code" in entries) {
+    deps.projectWrite.release(permit);
+    deps.machine.apply("kernel.export.failBeforeIntent");
+    return { kind: "failed", failure: entries };
+  }
+
   for (const page of input.snapshot.pages) {
-    const source = await wrap(deps.pageReader.readSource(page.pageSlug));
+    const source = await wrap(readPageEntrySource(deps.designReader, page.pageSlug, entries));
     if ("code" in source) {
       deps.projectWrite.release(permit);
       deps.machine.apply("kernel.export.failBeforeIntent");

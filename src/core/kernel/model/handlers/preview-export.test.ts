@@ -13,10 +13,10 @@ import {
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
 import {
+  type DesignTreeReader,
   type HostSessionSpecV1,
   type HostSupervisorPort,
   PAGE_META_EXTRACTOR_VERSION,
-  type PageReader,
   type PreviewSession,
 } from "core/ports";
 import {
@@ -24,13 +24,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakePreviewSession,
   createFakeProjectStore,
@@ -41,6 +41,7 @@ import {
   createFakeStagingService,
   createFakeTrustGate,
   createFakeTurnTransactionService,
+  defaultFakeEntry,
 } from "core/ports/fakes";
 import {
   createFrameBroker,
@@ -79,14 +80,14 @@ function buildDeps(overrides?: {
   readonly projectStore?: KernelDeps["projectStore"];
 }): KernelDeps {
   const chatStore = createFakeChatStore();
-  const pageStore = createFakePageStore({
-    order: [HOME],
-    sources: new Map([
-      [
-        HOME,
-        { bytes: new TextEncoder().encode("export const meta = {}"), sourceHash: HOME_SOURCE_HASH },
-      ],
-    ]),
+  const pageStore = createFakeDesignStoreForPages({
+    pages: [
+      {
+        pageSlug: HOME,
+        bytes: new TextEncoder().encode("export const meta = {}"),
+        sha256: HOME_SOURCE_HASH,
+      },
+    ],
   });
   const pinStore = createFakePinStore();
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
@@ -95,7 +96,7 @@ function buildDeps(overrides?: {
     projectStore: overrides?.projectStore ?? createFakeProjectStore({ root: "/test-root" }),
     chatReader: chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,
@@ -610,8 +611,11 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
 
     await selectPageAndSettle(harness, { pageSlug: HOME });
 
+    // CANONICAL storage is `<root>/.termcraft/design/<entry>` as of the design tree — the
+    // entry comes from `design/pages.json`, never from the slug (this fixture's own entry is
+    // `screens/<slug>/view.tsx`, which no slug-derivation in the old code could produce).
     expect(specs[0]?.sourcePath).toBe(
-      `${deps.projectStore.root}/.termcraft/pages/${HOME}/page.tsx`,
+      `${deps.projectStore.root}/.termcraft/design/${defaultFakeEntry(HOME)}`,
     );
   });
 });
@@ -1218,21 +1222,29 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
 
     // The initial `resolveExportPageInputs` (before capture) must succeed — only the
     // SECOND call (the pre-publish re-resolve) fails, exactly the failure this test pins.
-    let listSlugsCalls = 0;
-    const flakyPageReader: PageReader = {
-      readSource: (pageSlug) => deps.pageReader.readSource(pageSlug),
-      listSlugs: async () => {
-        listSlugsCalls += 1;
-        if (listSlugsCalls < 2) return deps.pageReader.listSlugs();
+    // `design/pages.json` is read once per whole-page-list pass, in this fixed order for a
+    // one-page project: (1) `resolveExportPageInputs` before capture, (2)
+    // `captureExportSnapshot`'s own permit-held read, (3) `resolveExportPageInputs` AGAIN for
+    // the pre-publish re-resolve — the one this test makes fail — and (4) `publishExport`,
+    // which this failure means is never reached. Failing from the third is what puts the
+    // failure in the pre-publish window specifically, with the export machine already in
+    // `rendering`; the assertions below would not distinguish it from an earlier failure.
+    let readManifestCalls = 0;
+    const flakyDesignReader: DesignTreeReader = {
+      readTreeFile: (relPath) => deps.designReader.readTreeFile(relPath),
+      listTree: () => deps.designReader.listTree(),
+      readManifest: async () => {
+        readManifestCalls += 1;
+        if (readManifestCalls < 3) return deps.designReader.readManifest();
         return {
           code: "PERSISTENCE_FAILED",
           retryable: false,
-          safeMessage: "listSlugs failed on the pre-publish re-resolve",
+          safeMessage: "readManifest failed on the pre-publish re-resolve",
           details: {},
         };
       },
     };
-    const harness = buildTestContext({ ...deps, pageReader: flakyPageReader });
+    const harness = buildTestContext({ ...deps, designReader: flakyDesignReader });
 
     exportHandlers["export.start"]({}, harness.handlerContext);
     const events = await wrap(harness.launched[0]!.run());
@@ -1266,16 +1278,17 @@ describe("exportHandlers.start — real, end to end (Gap B closure)", () => {
 
     // Fails on the FIRST call — resolveExportPageInputs never even reaches
     // captureExportSnapshot, so the export machine never leaves "idle".
-    const failingPageReader: PageReader = {
-      readSource: (pageSlug) => deps.pageReader.readSource(pageSlug),
-      listSlugs: async () => ({
+    const failingDesignReader: DesignTreeReader = {
+      readTreeFile: (relPath) => deps.designReader.readTreeFile(relPath),
+      listTree: () => deps.designReader.listTree(),
+      readManifest: async () => ({
         code: "PERSISTENCE_FAILED",
         retryable: false,
-        safeMessage: "listSlugs failed before capture",
+        safeMessage: "readManifest failed before capture",
         details: {},
       }),
     };
-    const harness = buildTestContext({ ...deps, pageReader: failingPageReader });
+    const harness = buildTestContext({ ...deps, designReader: failingDesignReader });
 
     exportHandlers["export.start"]({}, harness.handlerContext);
     const events = await wrap(harness.launched[0]!.run());

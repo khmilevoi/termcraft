@@ -7,15 +7,16 @@ import type {
   AgentBackend,
   AgentPromptContextV1,
   AgentTask,
-  ChangedPageOpV1,
+  ChangedDesignFileOpV1,
   ReadSetAppendBaseV1,
-  ReadSetFileSnapshotV1,
   ReasoningEffort,
   SessionPlan,
-  StagingPageSourceV1,
+  StagedTurnReadSetV1,
   StagingService,
+  StagingTreeFileV1,
   TurnWorkspaceV1,
 } from "core/ports";
+import { readPageOrder } from "core/project";
 import {
   type CommandPayloadByKindV1,
   type EventPayloadByKindV1,
@@ -36,18 +37,23 @@ import {
   type RunTurnValidationMaterialV1,
   type TurnCandidateV1,
   advanceSessionCheckpoint,
+  candidateTreeInventory,
   createTurnDeadlines,
   evaluateSessionPlan,
   foldGateDiagnosticsIntoPrompt,
+  readSetTreeInventory,
   runTurn,
+  selectChangedPages,
   terminalizeTurn,
 } from "core/turns";
 import type { ChatSelection } from "entities/chat";
+import { DESIGN_DIRNAME } from "entities/design-tree";
+import type { PageEntryV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { publishPageDescriptorsChanged } from "./page-descriptors";
+import { designTreeFilePath, publishPageDescriptorsChanged } from "./page-descriptors";
 import type {
   CommandOutcomeV1,
   FamilyHandlerMap,
@@ -124,21 +130,27 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   the live `AgentRegistry` does not currently offer is still an IDEMPOTENT REFUSAL, exactly
  *   as before WP-4.
  *
- *   `pages: StagingPageSourceV1[]` / `readSet.canonicalPages`: one entry per
- *   `context.deps.pageReader.listSlugs()` result. Each page's `sourcePath` is built from
- *   `canonicalPageSourcePath(context.deps.projectStore.root, pageSlug)` (below): the CANONICAL
- *   absolute source, `` `${projectRoot}/.termcraft/pages/<slug>/page.tsx` `` (Gap G —
- *   `store/safe-fs/model/limits.ts:134-135`'s own prose, `store/transaction/model/wrappers.ts`'s
- *   `canonicalPagePath`) — NOT the flat `pages/<slug>.tsx` `core/turns/model/candidate.ts`'s own
- *   `PAGE_FILE_PATTERN` documents, which is `workspacePageRelPath`'s staged-workspace/candidate-
- *   relative convention instead. `readSet.canonicalPages`'s own `sha256`/`size` come from the
- *   SAME `PageReader.readSource(pageSlug)` call this handler makes to resolve that fact
- *   honestly (never fabricated) — a read failure for an already-*listed* page blocks admission
- *   with a logged refusal, since `null` on that entry would falsely claim "expected absence."
+ *   `workspace.treeFiles` / `readSet.designFiles`: ONE `DesignTreeReader.listTree()` call
+ *   (task 14). The canonical design tree is staged WHOLE — every file it names, at the SAME
+ *   tree-relative path inside the workspace, which is what makes design §10's hard requirement
+ *   hold (the two trees agree, so no import specifier is ever rewritten on apply). Each entry's
+ *   `sourcePath` is `designTreeFilePath(projectStore.root, relPath)` =
+ *   `` `${projectRoot}/.termcraft/design/<relPath>` ``, and its read-set snapshot's
+ *   `sha256`/`size` come from that SAME `listTree()` result — never a second read, never
+ *   fabricated.
  *
- *   `manifestSlice: Uint8Array`: `JSON.stringify({pages: <the SAME listSlugs() result>,
- *   active: <workspaceState.activePageSlug>})`, UTF-8 encoded — the exact `ManifestSliceV1`
- *   shape (`core/ports/gate-runner.ts`) `pages.json` already carries.
+ *   WHAT THIS REPLACED, AND WHY IT HAD TO GO: a `for (const pageSlug of pageSlugs)` loop over
+ *   `pageReader.listSlugs()`, one `readSource(pageSlug)` per page, plus a SYNTHESIZED
+ *   `manifestSlice: JSON.stringify({pages: <those slugs>, active: <workspaceState>})`. Every
+ *   part of that assumed a slug names a file, which the multi-file design tree retires: a page's
+ *   file is whatever `design/pages.json`'s `entry` says, shared modules belong to no page at
+ *   all, and `pages.json` is a REAL file the agent edits — synthesizing it per turn threw away
+ *   the agent's own edits to page order and identity.
+ *
+ *   `DesignTreeReader.readManifest()` is read ONCE, beside `listTree()`, for the prompt's
+ *   `pageOrder`. A decode failure is an idempotent, logged refusal in the same
+ *   `abortEarlyAdmission` shape the old `listSlugs` failure used — never a fabricated empty
+ *   order, which would tell the agent the project has no pages.
  *
  *   `readSet.manifest`: `context.deps.projectStore.readManifestSnapshot()` — Gap 4's
  *   remaining new primitive this handler itself calls. A failure is an idempotent refusal
@@ -225,8 +237,8 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *   `baseTask.systemPrompt`: NOW REAL (phase-8 WP-3) — `context.deps.agentPromptSource
  *   .systemPrompt(promptContext)`, where `promptContext: AgentPromptContextV1` is built just
  *   above from facts this handler already holds honestly: `activePageSlug`/`pageSlugs` (the
- *   SAME `WorkspaceStateV1.activePageSlug` and `pageReader.listSlugs()` result the manifest
- *   slice above already reads), `kitApiVersion` from `context.deps.exportRender
+ *   SAME `WorkspaceStateV1.activePageSlug` and `readManifest()` page order the staging
+ *   assembly above already reads), `kitApiVersion` from `context.deps.exportRender
  *   .runtimeDeclaration.currentKitApiVersion` (the SAME already-wired constant
  *   `ExportRenderPort` carries — no new `KernelDeps` field needed), and `openPins` folded in
  *   the SAME loop that builds `candidatePins` just above, from the SAME `PinReader.fold`
@@ -442,41 +454,25 @@ function turnStateChangedEvent(
 // --- turn.start — real, composing `runTurn` ------------------------------------------------
 
 /**
- * The agent WORKSPACE's own staged page-file convention (`store/sandbox/model/
- * staging-store.ts`'s `stageAllFiles`, transcribed by `core/turns/model/candidate.ts`'s
- * `PAGE_FILE_PATTERN`): `design/pages/<slug>.tsx`, relative to a STAGED workspace or
- * candidate root — never to the project root. Named for its namespace after Gap G, where the
- * un-namespaced old name (`pageFileRelPath`) let the same helper be joined onto
- * `projectStore.root` and produce a path that does not exist.
+ * One tree file's path INSIDE a staged workspace or frozen candidate: `design/<treeRelPath>`,
+ * relative to that workspace/candidate root — never to the project root.
  *
- * STOPGAP (documented, not silent): `design/` here is `store/sandbox`'s own stopgap
- * destination prefix, not yet the real design-tree closure (multi-file design tree design
- * §10, `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`, "Task 8:
- * `store/sandbox` — stage the tree") — see that file's own header comment.
+ * REPLACES `workspacePageRelPath(pageSlug)` (task 14, and the brief's own named interface
+ * change). That helper computed `design/pages/<slug>.tsx` FROM THE SLUG; this one takes the
+ * tree-relative path the design tree already speaks — the path `design/pages.json` bound to
+ * the page, or a shared module's own path, which belongs to no page at all. The `design/`
+ * prefix is design-mandated, not a stopgap (multi-file design tree design §10: the tree, the
+ * manifest included, lives inside `design/`), and staging copies each file to the SAME
+ * tree-relative path so no import specifier is ever rewritten on apply.
+ *
+ * `designTreeFilePath(projectRoot, treeRelPath)` (`./page-descriptors`) is the PROJECT-root
+ * half of the same convention — `<projectRoot>/.termcraft/design/<treeRelPath>`. The two are
+ * deliberately distinct functions with distinct names: Gap G was one helper being joined onto
+ * both roots.
  */
-function workspacePageRelPath(pageSlug: PageSlug): string {
-  return `design/pages/${pageSlug}.tsx`;
+function workspaceTreeRelPath(treeRelPath: string): string {
+  return `${DESIGN_DIRNAME}/${treeRelPath}`;
 }
-
-/** The directory canonical project state lives in, under the project root (storage-identity §4). */
-const PROJECT_STATE_DIRNAME = ".termcraft";
-
-/**
- * CANONICAL page storage, absolute: `<projectRoot>/.termcraft/pages/<slug>/page.tsx`.
- * `store/safe-fs/model/limits.ts:134-135` states the rule in prose ("deliberately NOT the
- * agent's flat `pages/<slug>.tsx` shape") and `store/transaction/model/wrappers.ts`'s
- * `canonicalPagePath` is its `.termcraft`-relative half. `core` may not import `store`, so the
- * convention is transcribed here rather than shared — the same way `./preview-export.ts` already
- * names `.termcraft/export` for its own destination.
- */
-function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
-  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
-}
-
-// `design/pages.json` is design-mandated (multi-file design tree design §10: the manifest
-// lives INSIDE the tree), not a stopgap — unlike `workspacePageRelPath`'s `design/pages/`
-// prefix above, this exact value survives Task 8's tree-copy rewrite unchanged.
-const MANIFEST_SLICE_REL_PATH = "design/pages.json";
 
 /**
  * Wraps a real `StagingService` so the frozen candidate's own byte content is available
@@ -656,13 +652,41 @@ interface FinalizeSummaryV1 {
   readonly gateWarnings: readonly { readonly kind: string; readonly message: string }[];
 }
 
-function terminalChangedPagesFromCandidate(
+/**
+ * `turn.completed`'s own `changedPages` — the wire DTO is `{pageSlug, sourceHash}`, so each
+ * changed page still needs ONE hash to name it, even though "changed" is now a CLOSURE fact
+ * (design §7: a page changes when any file it reaches changes, including one whose own entry
+ * file's bytes never moved).
+ *
+ * The hash reported is the page's ENTRY FILE's, resolved through the validated manifest and
+ * then through the candidate's own inventory. That is the only honest single hash available:
+ * `sourceHash` on this payload has always meant "the identity of the page's own source", and a
+ * closure hash would be a different quantity under the same field name. A page whose closure
+ * changed but whose entry did not therefore reports its UNCHANGED entry hash — correct for
+ * what the field says, and the reason the field alone can no longer be used to decide whether
+ * a page changed (`changedPageSlugs`, from `selectChangedPages`, is that answer).
+ *
+ * A slug with no manifest entry, or an entry with no file in the candidate, is DROPPED rather
+ * than reported with a fabricated hash — both are unreachable on this path (a passing
+ * validation means every entry resolved in `treePaths`), and each drop logs.
+ */
+function terminalChangedPages(
+  changedPageSlugs: readonly PageSlug[],
+  entries: readonly PageEntryV1[],
   candidate: TurnCandidateV1,
 ): readonly { readonly pageSlug: PageSlug; readonly sourceHash: Sha256Hex }[] {
+  const shaByRelPath = new Map(candidate.treeFiles.map((file) => [file.relPath, file.sha256]));
   const changed: { pageSlug: PageSlug; sourceHash: Sha256Hex }[] = [];
-  for (const change of candidate.changes) {
-    if (change.change === "removed" || change.sha256 === null) continue;
-    changed.push({ pageSlug: change.pageSlug, sourceHash: change.sha256 });
+  for (const pageSlug of changedPageSlugs) {
+    const entry = entries.find((candidateEntry) => candidateEntry.slug === pageSlug);
+    const sourceHash = entry === undefined ? undefined : shaByRelPath.get(entry.entry);
+    if (sourceHash === undefined) {
+      console.warn(
+        `core/kernel/handlers/turn: changed page "${pageSlug}" has no resolvable entry hash in the frozen candidate — omitted from turn.completed's changedPages rather than reported with a fabricated one`,
+      );
+      continue;
+    }
+    changed.push({ pageSlug, sourceHash });
   }
   return changed;
 }
@@ -1135,36 +1159,44 @@ async function runTurnStart(
     return abortEarlyAdmission(context, turnId, { ...manifest, safeMessage: reason });
   }
 
-  const pageSlugs = await wrap(context.deps.pageReader.listSlugs());
-  trace("kernel.turnStart", { step: "listSlugs done" });
-  if ("code" in pageSlugs) {
-    const reason = `turn.start refused — could not list page slugs: ${pageSlugs.safeMessage}`;
+  // THE WHOLE TREE, IN ONE CALL (task 14; brief step 3). `listTree()` is the only enumeration
+  // of the canonical tree — every file it names is staged, and the SAME result supplies each
+  // file's read-set `sha256`/`size`, so the bytes staged and the bytes CAS-checked at finalize
+  // can never come from two different reads.
+  const treeList = await wrap(context.deps.designReader.listTree());
+  trace("kernel.turnStart", { step: "listTree done" });
+  if ("code" in treeList) {
+    const reason = `turn.start refused — could not list the design tree: ${treeList.safeMessage}`;
     console.warn(`core/kernel/handlers/turn: ${reason}`);
-    return abortEarlyAdmission(context, turnId, { ...pageSlugs, safeMessage: reason });
+    return abortEarlyAdmission(context, turnId, { ...treeList, safeMessage: reason });
   }
 
-  const pages: StagingPageSourceV1[] = [];
-  const canonicalPages: { pageSlug: PageSlug; snapshot: ReadSetFileSnapshotV1 | null }[] = [];
-  for (const pageSlug of pageSlugs) {
-    const source = await wrap(context.deps.pageReader.readSource(pageSlug));
-    if ("code" in source) {
-      const reason = `turn.start refused — could not read canonical page "${pageSlug}": ${source.safeMessage}`;
-      console.warn(`core/kernel/handlers/turn: ${reason}`);
-      return abortEarlyAdmission(context, turnId, { ...source, safeMessage: reason });
-    }
-    pages.push({
-      pageSlug,
-      sourcePath: canonicalPageSourcePath(context.deps.projectStore.root, pageSlug),
-    });
-    canonicalPages.push({
-      pageSlug,
-      snapshot: { sha256: source.sourceHash, size: source.bytes.byteLength },
-    });
-  }
+  const treeFiles: StagingTreeFileV1[] = treeList.map((file) => ({
+    relPath: file.relPath,
+    sourcePath: designTreeFilePath(context.deps.projectStore.root, file.relPath),
+  }));
+  const designFiles: StagedTurnReadSetV1["designFiles"] = treeList.map((file) => ({
+    relPath: file.relPath,
+    snapshot: { sha256: file.sha256, size: file.size },
+  }));
 
-  const manifestSlice = new TextEncoder().encode(
-    JSON.stringify({ pages: pageSlugs, active: activePageSlug }),
-  );
+  // `design/pages.json`, decoded — the page-ORDER authority for the agent's prompt. A decode
+  // failure refuses the turn (the brief's own step 3: "refusing the turn on a decode failure
+  // with the same `abortEarlyAdmission` shape the existing `listSlugs` failure uses") rather
+  // than sending the agent an empty page order, which would read as "this project has no
+  // pages" and invite it to recreate them. A tree that does not name `pages.json` AT ALL is a
+  // different fact and IS an honest empty order — a project's first turn is the one that
+  // creates the manifest; `readPageOrder` draws that line structurally (see its own doc), and
+  // is handed the inventory just walked so it never re-walks the tree to do it.
+  const treePathsForOrder = treeList.map((file) => file.relPath);
+  const pageEntries = await wrap(readPageOrder(context.deps.designReader, treePathsForOrder));
+  trace("kernel.turnStart", { step: "readManifest (design tree) done" });
+  if ("code" in pageEntries) {
+    const reason = `turn.start refused — could not decode design/pages.json: ${pageEntries.safeMessage}`;
+    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    return abortEarlyAdmission(context, turnId, { ...pageEntries, safeMessage: reason });
+  }
+  const pageSlugs = pageEntries.map((entry) => entry.slug);
 
   // kernel-command-contract §12.2 item 1 ("captures ... only currently open, resolvable
   // pins") — see this file's header, "candidatePins," for the full rationale. No active page
@@ -1208,7 +1240,11 @@ async function runTurnStart(
   // `selectSeed`. `sessionScopeId` folds in `workspaceIdentity` (the manifest read just
   // above) and a documented `account: null` literal — see this file's own header,
   // "`baseTask.session: SessionPlan`," for the full account/cross-restart rationale.
-  trace("kernel.turnStart", { step: "pages and pins folded", pageCount: pageSlugs.length });
+  trace("kernel.turnStart", {
+    step: "tree and pins folded",
+    treeFileCount: treeFiles.length,
+    pageCount: pageSlugs.length,
+  });
 
   const sessionScopeId = resolvedAgent.agentBackend.sessionScope({
     account: null,
@@ -1244,14 +1280,13 @@ async function runTurnStart(
     ...(selection !== null ? { selection } : {}),
     candidatePins,
     workspace: {
-      pages,
-      manifestSlice,
+      treeFiles,
       // NOW REAL (phase-8 WP-3) — see this file's header, "`runtimeDocs`," for the full
       // citation.
       runtimeDocs: context.deps.agentPromptSource.runtimeDocs(),
       readSet: {
         manifest: manifestSnapshot,
-        canonicalPages,
+        designFiles,
         // NOW REAL (WP-6) — see this file's header, "readSet.pins," for the full citation.
         pins: readSetPins,
       },
@@ -1282,24 +1317,39 @@ async function runTurnStart(
 
   const cachingStaging = createContentCachingStaging(context.deps.staging);
 
+  /**
+   * WHOLE-TREE, NOT PER-PAGE (task 14). `runTurnValidation` decides which pages exist by
+   * decoding the candidate's OWN `design/pages.json`; this builder's job is to hand it the
+   * tree, not a page list.
+   *
+   * `files` carries EVERY tree file's text with no filter of this ring's own — see
+   * `RunTurnValidationInputV1.files`' own doc for why "no predicate" is the only choice that
+   * cannot drift from `gate/model/tree-scan.ts`'s measured `isCodeFile`, and why Task 13's
+   * closure-completeness contract makes a partial map worse than useless (a missing code file
+   * makes its page report "unchanged" forever, or trips a refusal).
+   *
+   * `manifestText` comes straight off `TurnCandidateV1` — `freezeTurnCandidate` already read
+   * `design/pages.json` back at freeze time (task 13), so the separate `decodeCachedUtf8` call
+   * this builder used to make for the same file is gone.
+   */
   const buildValidationInput: RunTurnInputV1["buildValidationInput"] = (
     candidate,
   ): RunTurnValidationMaterialV1 => ({
-    manifestText: decodeCachedUtf8(cachingStaging, candidate.root, MANIFEST_SLICE_REL_PATH),
-    pages: candidate.presentSlugs.map((pageSlug) => ({
-      pageSlug,
-      source: decodeCachedUtf8(cachingStaging, candidate.root, workspacePageRelPath(pageSlug)),
-      // The absolute staged candidate path (`gate/adapters/gate-runner.ts`'s CRITICAL smoke
-      // finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a page's
-      // source via `Bun.file` inside a fresh scratch-directory child process, so a bare
-      // `${slug}.tsx` never resolves there. `TurnValidationPageInputV1.sourcePath`
-      // (`core/turns/model/validation.ts`) carries it through to `GateRunner.runPage`'s own
-      // `sourcePath`, which the Gate smoke stage resolves via `Bun.file`. `fileName` stays the
-      // SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics, so a
-      // turn-validation Gate rejection reports `${slug}.tsx`, never the absolute staged path.
-      fileName: workspacePageRelPath(pageSlug),
-      sourcePath: `${candidate.root}/${workspacePageRelPath(pageSlug)}`,
-    })),
+    manifestText: candidate.manifestText,
+    treePaths: candidate.treeFiles.map((file) => file.relPath),
+    files: new Map(
+      candidate.treeFiles.map((file) => [
+        file.relPath,
+        decodeCachedUtf8(cachingStaging, candidate.root, workspaceTreeRelPath(file.relPath)),
+      ]),
+    ),
+    // The absolute staged candidate `design/` root (`gate/adapters/gate-runner.ts`'s CRITICAL
+    // smoke finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a
+    // page's source via `Bun.file` inside a fresh scratch-directory child process, so a
+    // tree-relative path never resolves there. `runTurnValidation` joins each entry onto it
+    // for `runPage.sourcePath` and passes the SHORT tree-relative name as `fileName`, so a
+    // Gate rejection reports `pages/home.tsx`, never the absolute path.
+    designRoot: `${candidate.root}/${DESIGN_DIRNAME}`,
   });
 
   let finalizeSummary: FinalizeSummaryV1 | null = null;
@@ -1323,45 +1373,64 @@ async function runTurnStart(
     validation,
   }): RunTurnFinalizeMaterialV1 => {
     capturedSessionId = attempt.sessionId;
-    const changedPages: ChangedPageOpV1[] = [];
-    for (const change of candidate.changes) {
+    // THE FILE DIFF: every design-tree file whose bytes moved this turn, tree-relative —
+    // shared modules included, and no longer keyed by page at all (a `lib/theme.ts` edit has
+    // no page of its own to be filed under, which is exactly why `ChangedPageOpV1` could not
+    // survive the design tree).
+    const changedFiles: ChangedDesignFileOpV1[] = [];
+    for (const change of candidate.fileChanges) {
       if (change.change === "removed") {
-        changedPages.push({ pageSlug: change.pageSlug, change: "delete" });
+        changedFiles.push({ relPath: change.relPath, change: "delete" });
         continue;
       }
       const bytes = cachingStaging.readCandidateBytes(
         candidate.root,
-        workspacePageRelPath(change.pageSlug),
+        workspaceTreeRelPath(change.relPath),
       );
       if (bytes === null) {
         console.warn(
-          `core/kernel/handlers/turn: no cached candidate bytes for changed page "${change.pageSlug}" — dropping it from this attempt's finalize diff`,
+          `core/kernel/handlers/turn: no cached candidate bytes for changed file "${change.relPath}" — dropping it from this attempt's finalize diff`,
         );
         continue;
       }
-      changedPages.push({ pageSlug: change.pageSlug, change: "replace", newBytes: bytes });
+      changedFiles.push({ relPath: change.relPath, change: "replace", newBytes: bytes });
     }
 
+    // THE PAGE DIFF, WHICH IS A DIFFERENT QUESTION (design §7). Not derivable from
+    // `changedFiles`: an edit to `lib/theme.ts` changes what every page reaching it renders
+    // while no page entry's own bytes move, so a diff keyed on entry-file hashes reports
+    // "nothing changed" for every such page. `selectChangedPages` compares each entry's
+    // CLOSURE hash across the two inventories, and its `closures` come from the same
+    // whole-tree scan that just enforced the import allowlist — never recomputed here, since
+    // `core` has no specifier resolver and may not import `gate`.
+    //
+    // Both inventories are built by `core/turns`' own exported helpers rather than open-coded
+    // here: the two sides must agree on tree-relative paths and on "expected-absent means
+    // omitted", and a caller re-deriving either one is how they come to disagree.
+    const changedPageSlugs = selectChangedPages({
+      closures: validation.closures,
+      beforeInventory: readSetTreeInventory(designFiles),
+      afterInventory: candidateTreeInventory(candidate.treeFiles),
+    });
+
     finalizeSummary = {
-      changedPages: terminalChangedPagesFromCandidate(candidate),
+      changedPages: terminalChangedPages(changedPageSlugs, validation.slice.pages, candidate),
       gateWarnings: validation.warnings.map((w) => ({ kind: w.kind, message: w.message })),
     };
 
     return {
-      changedPages,
-      // `validation.slice.pages` is `PageEntryV1[]` (design §4: `{slug, entry}`, task 10/12),
-      // not a bare slug list — the identity this material carries forward is still just the
-      // slug, so only that field survives here.
-      validatedPageSlugs: validation.slice.pages.map((page) => page.slug),
+      changedFiles,
+      changedPageSlugs,
       requestedActivePage: validation.slice.active,
       agentRecord: {
         kind: "agent",
         recordId: uuidv7(),
         turnId,
         text: attempt.finalText,
-        changedPages: changedPages
-          .filter((c): c is ChangedPageOpV1 & { change: "replace" } => c.change === "replace")
-          .map((c) => c.pageSlug),
+        // The chat record names PAGES the user can see changed, not the tree files that moved
+        // — a `lib/theme.ts` edit belongs in this list as the pages it altered, and the raw
+        // path would mean nothing in a chat transcript.
+        changedPages: [...changedPageSlugs],
         warnings: validation.warnings.map((w) => ({ kind: w.kind, message: w.message })),
         ts: context.deps.clock.now().toISOString(),
       },

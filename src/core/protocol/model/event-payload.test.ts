@@ -492,6 +492,10 @@ describe("turnGateRejectedPayloadV1Schema", () => {
           file: null,
           line: null,
           column: null,
+          // Widened by task 14 so `runTreeImports`' per-page attribution can cross the wire —
+          // `.nullable()`, never `.optional()`, matching this payload's own convention for
+          // every other widened echo of an optional port field.
+          blockedPages: null,
         },
       ],
       warnings: [
@@ -502,6 +506,36 @@ describe("turnGateRejectedPayloadV1Schema", () => {
 
   test("accepts bounded Gate diagnostics and rejects an unknown key", () => {
     expectStrict(turnGateRejectedPayloadV1Schema, valid);
+  });
+
+  test("a NON-null blockedPages list round-trips the strict schema (task-13 review round 4, M-4)", () => {
+    // The half `blockedPages: null` above cannot prove: this schema is a `z.strictObject`, so
+    // before task 14 widened it the field could not cross the wire AT ALL — a diagnostic
+    // carrying one would have been rejected outright, and `toGateErrorDto` silently dropped it
+    // first so nothing ever noticed. Slugs are parsed by `pageSlugSchema`, not accepted as
+    // free strings, so a malformed attribution is refused here rather than reaching the agent.
+    const attributed = {
+      ...valid,
+      diagnostics: {
+        ...valid.diagnostics,
+        errors: [{ ...valid.diagnostics.errors[0]!, blockedPages: ["home", "calendar"] }],
+      },
+    };
+    const parsed = turnGateRejectedPayloadV1Schema.safeParse(attributed);
+    if (!parsed.success) throw new Error("expected the attributed diagnostic to parse");
+    const attributedError = parsed.data.diagnostics.errors[0];
+    if (attributedError === undefined) throw new Error("expected one parsed diagnostic");
+    expect(attributedError.blockedPages).not.toBeNull();
+    expect((attributedError.blockedPages ?? []).map(String)).toEqual(["home", "calendar"]);
+
+    const malformed = {
+      ...valid,
+      diagnostics: {
+        ...valid.diagnostics,
+        errors: [{ ...valid.diagnostics.errors[0]!, blockedPages: ["Not-A-Slug"] }],
+      },
+    };
+    expect(turnGateRejectedPayloadV1Schema.safeParse(malformed).success).toBe(false);
   });
 
   test("requires an explicit null location, never an omitted one", () => {
@@ -516,7 +550,15 @@ describe("turnGateRejectedPayloadV1Schema", () => {
       diagnostics: {
         ...valid.diagnostics,
         errors: [
-          { kind: "network", code: "X", message: "y", file: null, line: null, column: null },
+          {
+            kind: "network",
+            code: "X",
+            message: "y",
+            file: null,
+            line: null,
+            column: null,
+            blockedPages: null,
+          },
         ],
       },
     };

@@ -2,7 +2,8 @@ import { wrap } from "@reatom/core";
 
 import type { PublishableEventV1 } from "core/mailbox";
 import { createPin, setPinStatus } from "core/pins";
-import type { PageMutations, PageReader } from "core/ports";
+import type { DesignTreeReader, PageMutations } from "core/ports";
+import { readPageEntrySource, readPageOrder } from "core/project";
 import {
   type ConfirmPageRemoveDeps,
   type RenameTitleDeps,
@@ -73,8 +74,8 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  * next revises this family, reusing `handlers/project.ts`'s own already-established pattern.
  */
 
-function pageStoreOf(context: HandlerContext): PageReader & PageMutations {
-  return { ...context.deps.pageReader, ...context.deps.pageMutations };
+function pageStoreOf(context: HandlerContext): DesignTreeReader & PageMutations {
+  return { ...context.deps.designReader, ...context.deps.pageMutations };
 }
 
 // ---------------------------------------------------------------------------
@@ -146,20 +147,21 @@ async function runPageRemovePlan(
   payload: CommandPayloadByKindV1["page.removePlan"],
   context: HandlerContext,
 ): Promise<readonly PublishableEventV1[]> {
-  const { pageReader, projectStore } = context.deps;
+  const { designReader, projectStore } = context.deps;
 
-  const source = await wrap(pageReader.readSource(payload.pageSlug));
+  // ONE manifest read for both facts below: the page order the plan freezes, and the entry
+  // whose bytes give the plan its `sourceHash`. Reading it twice would let the two disagree.
+  const pages = await wrap(readPageOrder(designReader));
+  if ("code" in pages) {
+    console.warn(`core/kernel: page.removePlan could not list pages: ${pages.safeMessage}`);
+    return [];
+  }
+  const orderedPageSlugs = pages.map((entry) => entry.slug);
+
+  const source = await wrap(readPageEntrySource(designReader, payload.pageSlug, pages));
   if ("code" in source) {
     console.warn(
       `core/kernel: page.removePlan could not read "${payload.pageSlug}": ${source.safeMessage}`,
-    );
-    return [];
-  }
-
-  const orderedPageSlugs = await wrap(pageReader.listSlugs());
-  if ("code" in orderedPageSlugs) {
-    console.warn(
-      `core/kernel: page.removePlan could not list pages: ${orderedPageSlugs.safeMessage}`,
     );
     return [];
   }

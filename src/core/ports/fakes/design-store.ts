@@ -1,4 +1,9 @@
 import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol";
+import {
+  PAGES_MANIFEST_RELPATH,
+  PAGES_MANIFEST_SCHEMA_VERSION,
+  encodePagesManifest,
+} from "entities/design-tree";
 import type { PageEntryV1, PagesManifestV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
@@ -199,6 +204,83 @@ export function createFakeDesignStore(options: {
 export function fakeDesignTreeFile(seed: string): DesignTreeFileV1 {
   const bytes = new TextEncoder().encode(seed);
   return { bytes, sha256: fakeSha256Hex(seed) };
+}
+
+/**
+ * A page to seed into {@link createFakeDesignStoreForPages}: its slug, its source bytes, and
+ * — optionally — the tree-relative `entry` `design/pages.json` binds it to.
+ */
+export interface FakeDesignPageV1 {
+  readonly pageSlug: PageSlug;
+  readonly bytes: Uint8Array;
+  readonly sha256: Sha256Hex;
+  /** Defaults to {@link defaultFakeEntry}. Pass an arbitrary path when the test is ABOUT manifest lookup. */
+  readonly entry?: string;
+}
+
+/**
+ * The default `entry` this fixture binds a slug to.
+ *
+ * DELIBERATELY NOT `pages/<slug>.tsx` (task 14; the branch's own recurring test-quality trap:
+ * "a fixture whose `entry` equals `pages/<slug>.tsx` proves nothing about manifest lookup").
+ * That was the exact path the retired `PageReader.readSource(slug)` computed, so a fixture
+ * using it would keep passing against code that still derived a path from the slug instead of
+ * reading `design/pages.json` — which is the one thing every caller migrated in task 14 had to
+ * stop doing.
+ *
+ * It is still a TEMPLATE, and a template is still a function of the slug: this default proves
+ * production does not derive `pages/<slug>.tsx`, not that it derives nothing at all. Tests
+ * whose SUBJECT is the manifest lookup pass a genuinely arbitrary `entry` instead (see
+ * `src/entrypoint/model/turn-import-perimeter.test.ts`'s `screens/landing/main.tsx` row and
+ * `core/turns/model/validation.test.ts`'s own entries).
+ */
+export function defaultFakeEntry(pageSlug: PageSlug): string {
+  return `screens/${pageSlug}/view.tsx`;
+}
+
+/**
+ * A {@link FakeDesignStore} seeded from a page list — the shape the retired
+ * `createFakePageStore({order, sources})` fixture had, re-expressed over a REAL manifest so the
+ * ~16 kernel/export/project test files that used it keep their per-test intent while their
+ * subject reads through `design/pages.json` like production now does.
+ *
+ * `extraFiles` seeds tree files that belong to NO page — shared modules, assets — which is what
+ * makes a fixture able to exercise the design tree's whole point.
+ */
+export function createFakeDesignStoreForPages(options: {
+  readonly pages: readonly FakeDesignPageV1[];
+  readonly extraFiles?: ReadonlyMap<string, DesignTreeFileV1>;
+  readonly requestedActivePage?: PageSlug | null;
+}): FakeDesignStore {
+  const files = new Map<string, DesignTreeFileV1>(options.extraFiles ?? []);
+  const entries: PageEntryV1[] = [];
+  for (const page of options.pages) {
+    const entry = page.entry ?? defaultFakeEntry(page.pageSlug);
+    entries.push({ slug: page.pageSlug, entry });
+    files.set(entry, { bytes: page.bytes, sha256: page.sha256 });
+  }
+  const manifest: PagesManifestV1 = {
+    schemaVersion: PAGES_MANIFEST_SCHEMA_VERSION,
+    pages: entries,
+    requestedActivePage: options.requestedActivePage ?? null,
+  };
+  // `design/pages.json` IS A REAL TREE FILE, so `listTree()` must name it (design §3, §4 — the
+  // manifest lives inside the tree and staging copies it like any other file). Seeded here as
+  // its own encoded bytes rather than left implicit, because two real behaviours depend on the
+  // INVENTORY naming it, not merely on `readManifest()` answering:
+  //   - `core/kernel`'s turn staging stages every path `listTree()` returns, so a fake that
+  //     omitted it would stage a workspace with no manifest at all;
+  //   - `core/project`'s `readPageOrder` distinguishes "this project has no manifest yet" from
+  //     "the manifest is unreadable" by asking whether the tree names `pages.json` — a fake
+  //     that omitted it would turn every scripted `failNext("readManifest", ...)` into a silent
+  //     honest-empty page order, and four tests measured exactly that before this line existed.
+  // `createFakeDesignStore` itself deliberately does NOT do this: a caller using it directly
+  // is the one modelling a tree-less or partially-staged project.
+  files.set(PAGES_MANIFEST_RELPATH, {
+    bytes: new TextEncoder().encode(encodePagesManifest(manifest)),
+    sha256: fakeSha256Hex(`manifest:${entries.map((entry) => entry.entry).join(",")}`),
+  });
+  return createFakeDesignStore({ manifest, files });
 }
 
 type _ReaderConforms = AssertConforms<DesignTreeReader, FakeDesignStore>;

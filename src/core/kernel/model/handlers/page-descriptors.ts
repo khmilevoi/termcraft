@@ -1,8 +1,15 @@
 import { wrap } from "@reatom/core";
 
 import type { PublishableEventV1 } from "core/mailbox";
-import { PageDescriptorsAssemblyError, buildPageDescriptorsChangedPayload } from "core/project";
+import {
+  PageDescriptorsAssemblyError,
+  buildPageDescriptorsChangedPayload,
+  readPageEntrySource,
+  readPageOrder,
+} from "core/project";
 import type { FailureDtoV1, PageDescriptorV1 } from "core/protocol";
+import { DESIGN_DIRNAME } from "entities/design-tree";
+import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type { HandlerContext } from "./types";
@@ -28,17 +35,23 @@ import type { HandlerContext } from "./types";
 const PROJECT_STATE_DIRNAME = ".termcraft";
 
 /**
- * The CANONICAL page's absolute path — `.termcraft/pages/<slug>/page.tsx`, deliberately NOT
- * the agent workspace's flat `pages/<slug>.tsx`. The Gate's smoke stage hands this straight to
- * a host child that resolves it with `Bun.file` from its OWN fresh scratch cwd
- * (`host/session/model/source-mount.ts`'s `loadPage`), so a bare `${slug}.tsx` — the fallback
- * `gate/adapters/gate-runner.ts` applies when no path is supplied — can never resolve there.
- * Omitting it made EVERY descriptor `invalid` with `cannot read source at <slug>.tsx`: the tab
- * strip fell back to the slug, `minSize`/`theme` were lost, and one host child was spawned and
- * thrown away per page on every open and every turn.
+ * One canonical tree file's absolute path — `<projectRoot>/.termcraft/design/<treeRelPath>`.
+ *
+ * REPLACES `canonicalPageSourcePath(projectRoot, pageSlug)` (task 14). That helper computed
+ * `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG, which the multi-file design tree retires
+ * outright: a page's file is whatever `design/pages.json` binds to it, and nothing else may
+ * derive it. `treeRelPath` here always arrives from that manifest lookup
+ * (`readPageEntrySource`), never from a slug.
+ *
+ * The Gate's smoke stage hands this straight to a host child that resolves it with `Bun.file`
+ * from its OWN fresh scratch cwd (`host/session/model/source-mount.ts`'s `loadPage`), so a
+ * tree-relative path — the fallback `gate/adapters/gate-runner.ts` applies when no path is
+ * supplied — can never resolve there. Omitting it made EVERY descriptor `invalid` with
+ * `cannot read source at <slug>.tsx`: the tab strip fell back to the slug, `minSize`/`theme`
+ * were lost, and one host child was spawned and thrown away per page on every open and turn.
  */
-function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): string {
-  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
+export function designTreeFilePath(projectRoot: string, treeRelPath: string): string {
+  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/${DESIGN_DIRNAME}/${treeRelPath}`;
 }
 
 /**
@@ -50,18 +63,21 @@ function canonicalPageSourcePath(projectRoot: string, pageSlug: PageSlug): strin
  */
 export async function buildPageDescriptors(
   context: HandlerContext,
-  slugs: readonly PageSlug[],
+  pages: readonly PageEntryV1[],
 ): Promise<FailureDtoV1 | readonly PageDescriptorV1[]> {
   const descriptors: PageDescriptorV1[] = [];
-  for (const pageSlug of slugs) {
-    const source = await wrap(context.deps.pageReader.readSource(pageSlug));
+  for (const entry of pages) {
+    // The already-read manifest list is threaded through, so this loop reads
+    // `design/pages.json` ONCE for every page rather than once per page.
+    const source = await wrap(readPageEntrySource(context.deps.designReader, entry.slug, pages));
     if ("code" in source) return source;
 
     const result = await wrap(
       context.deps.gateRunner.runPage({
         source: new TextDecoder().decode(source.bytes),
-        slug: pageSlug,
-        sourcePath: canonicalPageSourcePath(context.deps.projectStore.root, pageSlug),
+        slug: entry.slug,
+        sourcePath: designTreeFilePath(context.deps.projectStore.root, source.relPath),
+        entryRelPath: source.relPath,
       }),
     );
 
@@ -69,7 +85,7 @@ export async function buildPageDescriptors(
       const { meta } = result.descriptor;
       descriptors.push({
         status: "ready",
-        pageSlug,
+        pageSlug: entry.slug,
         sourceHash: source.sourceHash,
         title: meta.title,
         minSize: meta.minSize,
@@ -82,7 +98,7 @@ export async function buildPageDescriptors(
     const firstError = result.errors[0];
     descriptors.push({
       status: "invalid",
-      pageSlug,
+      pageSlug: entry.slug,
       sourceHash: source.sourceHash,
       error:
         firstError !== undefined
@@ -121,15 +137,15 @@ export async function publishPageDescriptorsChanged(
   context: HandlerContext,
   reason: "turn-apply",
 ): Promise<readonly PublishableEventV1[]> {
-  const slugs = await wrap(context.deps.pageReader.listSlugs());
-  if ("code" in slugs) {
+  const pages = await wrap(readPageOrder(context.deps.designReader));
+  if ("code" in pages) {
     console.warn(
-      `core/kernel/handlers/page-descriptors: could not list pages for a "${reason}" descriptor announcement: ${slugs.safeMessage}`,
+      `core/kernel/handlers/page-descriptors: could not read design/pages.json for a "${reason}" descriptor announcement: ${pages.safeMessage}`,
     );
     return [];
   }
 
-  const descriptors = await wrap(buildPageDescriptors(context, slugs));
+  const descriptors = await wrap(buildPageDescriptors(context, pages));
   if ("code" in descriptors) {
     console.warn(
       `core/kernel/handlers/page-descriptors: could not read a page source for a "${reason}" descriptor announcement: ${descriptors.safeMessage}`,
@@ -137,7 +153,12 @@ export async function publishPageDescriptorsChanged(
     return [];
   }
 
-  const activePageSlug = await wrap(resolveActivePageSlug(context, slugs));
+  const activePageSlug = await wrap(
+    resolveActivePageSlug(
+      context,
+      pages.map((entry) => entry.slug),
+    ),
+  );
   const payload = buildPageDescriptorsChangedPayload(
     reason,
     context.currentPageDescriptors(),
@@ -158,7 +179,7 @@ export async function publishPageDescriptorsChanged(
  * otherwise the first in the ordered list.
  *
  * The fallback is NOT invented for this file — it is the same rule `handlers/project.ts`'s own
- * open path already applies (`workspaceStateResult.state.activePageSlug ?? manifest.pages[0] ??
+ * open path already applies (`workspaceStateResult.state.activePageSlug ?? pages[0]?.slug ??
  * null`), which is exactly what makes a fresh project's first generated page become the active
  * one instead of leaving the Workspace pointing at nothing.
  *

@@ -34,7 +34,13 @@ export type {
   TurnAttemptStartResultV1,
 } from "./model/attempt";
 
-export { diffTreeInventory, freezeTurnCandidate, selectChangedPages } from "./model/candidate";
+export {
+  candidateTreeInventory,
+  diffTreeInventory,
+  freezeTurnCandidate,
+  readSetTreeInventory,
+  selectChangedPages,
+} from "./model/candidate";
 export type {
   DesignFileChangeKindV1,
   DesignFileChangeV1,
@@ -104,6 +110,5 @@ export { runTurnValidation } from "./model/validation";
 export type {
   RunTurnValidationInputV1,
   TurnValidationDeps,
-  TurnValidationPageInputV1,
   TurnValidationResultV1,
 } from "./model/validation";

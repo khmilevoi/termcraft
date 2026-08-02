@@ -27,13 +27,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -43,6 +43,7 @@ import {
   createFakeStagingService,
   createFakeTrustGate,
   createFakeTurnTransactionService,
+  defaultFakeEntry,
 } from "core/ports/fakes";
 import {
   createFrameBroker,
@@ -52,12 +53,7 @@ import {
   createPreviewSessionCommands,
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
-import {
-  type FailureDtoV1,
-  type Sha256Hex,
-  type UUIDv7,
-  eventPayloadV1SchemaByKind,
-} from "core/protocol";
+import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
 import type { ChatUserRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -198,7 +194,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
     };
 
     const chatStore = createFakeChatStore();
-    const pageStore = createFakePageStore({ order: [] });
+    const pageStore = createFakeDesignStoreForPages({ pages: [] });
     const pinStore = createFakePinStore();
     const projectStore = createFakeProjectStore({ root: "/test-root" });
     const clock: Clock = { now: () => new Date(1_700_000_000_000) };
@@ -207,7 +203,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       projectStore,
       chatReader: chatStore,
       chatMutations: chatStore,
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       pinReader: pinStore,
       pinMutations: pinStore,
@@ -490,22 +486,90 @@ describe('turnHandlers["turn.start"]', () => {
     );
   });
 
-  test("refuses (logged) when a listed page's canonical source cannot be read", async () => {
+  test("the read-set's design-file hashes come from listTree() itself — admission never reads a single file's bytes", async () => {
+    // REPLACES an early-refusal test that no longer has a branch to reach (task 14): the old
+    // assembly called `readSource(slug)` once per page purely to obtain each one's
+    // `sha256`/`size` for the read set, so an unreadable page refused the turn right there.
+    // `listTree()` returns both facts for the WHOLE tree in one walk, so admission performs no
+    // per-file read at all and that refusal branch is gone. A file that genuinely cannot be
+    // copied now fails inside `staging.createTurnWorkspace`, i.e. through admission's own
+    // already-tested `workspace` blocked phase — not silently.
+    //
+    // Pinned as a positive property rather than deleted, because "no byte read at admission"
+    // is exactly what a future edit could quietly undo.
     const HOME = "home" as PageSlug;
-    const pageStore = createFakePageStore({ order: [HOME] }); // no `sources` entry seeded for HOME
-    const { handlerContext, getLaunchedOperations } = buildTestContext({
-      projectStore: selectedProjectStore(),
-      pageReader: pageStore,
-      pageMutations: pageStore,
-      agentRegistry: createFakeAgentRegistry([
-        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        { pageSlug: HOME, bytes: new TextEncoder().encode("home-source"), sha256: "e".repeat(64) },
+      ],
     });
-    await assertEarlyPortRefusalRecoversToIdle(
-      handlerContext,
-      getLaunchedOperations,
-      'could not read canonical page "home"',
-    );
+    const staging = createFakeStagingService();
+    // The design-store calls made up to the moment staging is asked to copy the tree — i.e.
+    // the whole admission window. Everything after it belongs to the post-commit
+    // `page.descriptorsChanged` pass, which legitimately DOES read page bytes.
+    let callsAtStaging: readonly string[] = [];
+    const originalCreateTurnWorkspace = staging.createTurnWorkspace.bind(staging);
+    staging.createTurnWorkspace = async (input) => {
+      callsAtStaging = pageStore.calls.map((c) => c.method);
+      return originalCreateTurnWorkspace(input);
+    };
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      designReader: pageStore,
+      pageMutations: pageStore,
+      staging,
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    turnHandlers["turn.start"]({ text: "hello" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+    for (let i = 0; i < 200; i++) {
+      if (agentBackend.calls.some((c) => c.method === "startTurn")) break;
+      await wrap(Bun.sleep(0));
+    }
+    const start = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (start?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(start.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+
+    const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
+    if (createCall?.method !== "createTurnWorkspace") {
+      throw new Error("expected a createTurnWorkspace call");
+    }
+    // `design/pages.json` is a REAL tree file and is staged like any other (design §3, §10),
+    // so it appears in the read set beside the page's own entry — the retired assembly
+    // SYNTHESIZED a manifest slice per turn instead, discarding whatever the agent had
+    // written to page order and identity.
+    expect(createCall.input.readSet.designFiles).toEqual([
+      { relPath: "pages.json", snapshot: { sha256: expect.any(String), size: expect.any(Number) } },
+      { relPath: defaultFakeEntry(HOME), snapshot: { sha256: "e".repeat(64), size: 11 } },
+    ]);
+    // `readTreeFile` is the only byte-reading method on this port, and admission never calls
+    // it — every hash above came from the `listTree` walk. (After the commit it IS called, by
+    // the `page.descriptorsChanged` pass; the snapshot above is what separates the two.)
+    expect(callsAtStaging).toEqual(["listTree", "readManifest"]);
   });
 
   // Fix round 1: the remaining five of the ten early-refusal branches — untested for recovery
@@ -545,17 +609,17 @@ describe('turnHandlers["turn.start"]', () => {
     );
   });
 
-  test("refuses (logged) when pageReader.listSlugs fails", async () => {
-    const pageStore = createFakePageStore({ order: [] });
-    pageStore.failNext("listSlugs", {
+  test("refuses (logged) when designReader.listTree fails", async () => {
+    const pageStore = createFakeDesignStoreForPages({ pages: [] });
+    pageStore.failNext("listTree", {
       code: "PERSISTENCE_FAILED",
       retryable: true,
-      safeMessage: "page listing unreadable",
+      safeMessage: "design tree unreadable",
       details: {},
     });
     const { handlerContext, getLaunchedOperations } = buildTestContext({
       projectStore: selectedProjectStore(),
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       agentRegistry: createFakeAgentRegistry([
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
@@ -564,7 +628,33 @@ describe('turnHandlers["turn.start"]', () => {
     await assertEarlyPortRefusalRecoversToIdle(
       handlerContext,
       getLaunchedOperations,
-      "page listing unreadable",
+      "design tree unreadable",
+    );
+  });
+
+  test("refuses (logged) when design/pages.json cannot be decoded", async () => {
+    // Brief step 3's own named refusal. The tree LISTS fine (`listTree` succeeds) — only the
+    // manifest decode fails, which is the case a fabricated empty page order would hide by
+    // telling the agent the project has no pages.
+    const pageStore = createFakeDesignStoreForPages({ pages: [] });
+    pageStore.failNext("readManifest", {
+      code: "PERSISTENCE_FAILED",
+      retryable: true,
+      safeMessage: "pages.json is not valid JSON",
+      details: {},
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      projectStore: selectedProjectStore(),
+      designReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([
+        createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
+      ]),
+    });
+    await assertEarlyPortRefusalRecoversToIdle(
+      handlerContext,
+      getLaunchedOperations,
+      "pages.json is not valid JSON",
     );
   });
 
@@ -756,17 +846,14 @@ describe('turnHandlers["turn.start"]', () => {
       chatReader: chatStore,
       chatMutations: chatStore,
       turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
-      pageReader: createFakePageStore({
-        order: [HOME],
-        sources: new Map([
-          [
-            HOME,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: "c".repeat(64),
-            },
-          ],
-        ]),
+      designReader: createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: HOME,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: "c".repeat(64),
+          },
+        ],
       }),
       projectStore: createFakeProjectStore({
         root: "/test-root",
@@ -961,6 +1048,23 @@ describe('turnHandlers["turn.start"]', () => {
     const fakeTransactions = createFakeTurnTransactionService();
     const turnTransactions = withHonestChatAppendBase(fakeTransactions, chatStore);
     const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+
+    // REAL CLOSURES, QUEUED DELIBERATELY (task-13 review round 2, Minor M-d — named as a trap
+    // for exactly this task's fixtures). `createFakeGateRunner`'s honest-empty
+    // `closures: []` default makes `selectChangedPages(...)` return `[]` for EVERY page
+    // unconditionally, which reads as "nothing changed" — so this test's own precondition
+    // ("the turn genuinely changed the pinned page") would be silently false and the assertion
+    // below would fail for a reason unrelated to `sentPins`. Verified by removing this block:
+    // `changedPageSlugs` comes back `[]`.
+    const gateRunner = createFakeGateRunner();
+    gateRunner.queueRunManifestSliceResult({
+      errors: [],
+      slice: { pages: [{ slug: HOME, entry: defaultFakeEntry(HOME) }], active: null },
+    });
+    gateRunner.queueRunTreeImportsResult({
+      errors: [],
+      closures: [{ slug: HOME, files: [defaultFakeEntry(HOME)] }],
+    });
     const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
       chatReader: chatStore,
       chatMutations: chatStore,
@@ -969,17 +1073,14 @@ describe('turnHandlers["turn.start"]', () => {
       pinMutations: pinStore,
       // The pinned page has to actually exist for the turn to produce a diff that touches it —
       // "an empty design diff resolves none" is the rule this test's precondition rests on.
-      pageReader: createFakePageStore({
-        order: [HOME],
-        sources: new Map([
-          [
-            HOME,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: "d".repeat(64),
-            },
-          ],
-        ]),
+      designReader: createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: HOME,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: "d".repeat(64),
+          },
+        ],
       }),
       projectStore: createFakeProjectStore({
         root: "/test-root",
@@ -992,7 +1093,7 @@ describe('turnHandlers["turn.start"]', () => {
         },
       }),
       agentRegistry: createFakeAgentRegistry([agentBackend]),
-      gateRunner: createFakeGateRunner(),
+      gateRunner,
     });
 
     turnHandlers["turn.start"]({ text: "make the button green" }, handlerContext);
@@ -1018,7 +1119,7 @@ describe('turnHandlers["turn.start"]', () => {
     if (finalizeCall?.method !== "finalize") throw new Error("expected a finalize call");
     // The turn genuinely changed the pinned page — the precondition §12.2 item 8 attaches the
     // resolution to ("an empty design diff resolves none").
-    expect(finalizeCall.input.changedPages.map((page) => page.pageSlug)).toContain(HOME);
+    expect(finalizeCall.input.changedPageSlugs).toContain(HOME);
     // THE FIX: `buildFinalizeInput` used to hardcode `sentPins: []`, so `resolveSentPinAppends`
     // always returned nothing and the pin the agent had just addressed stayed open forever.
     expect(
@@ -1157,18 +1258,11 @@ describe('turnHandlers["turn.start"]', () => {
       ts: "2024-01-01T00:00:00.000Z",
     });
 
-    const pageStore = createFakePageStore({
-      order: [HOME, ABOUT],
-      sources: new Map([
-        [
-          HOME,
-          { sourceHash: "a".repeat(64) as Sha256Hex, bytes: new TextEncoder().encode("home") },
-        ],
-        [
-          ABOUT,
-          { sourceHash: "b".repeat(64) as Sha256Hex, bytes: new TextEncoder().encode("about") },
-        ],
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        { pageSlug: HOME, sha256: "a".repeat(64), bytes: new TextEncoder().encode("home") },
+        { pageSlug: ABOUT, sha256: "b".repeat(64), bytes: new TextEncoder().encode("about") },
+      ],
     });
 
     const staging = createFakeStagingService();
@@ -1188,7 +1282,7 @@ describe('turnHandlers["turn.start"]', () => {
       turnTransactions,
       pinReader: pinStore,
       pinMutations: pinStore,
-      pageReader: pageStore,
+      designReader: pageStore,
       staging,
       agentPromptSource: fakePrompts,
       projectStore: createFakeProjectStore({
@@ -1719,12 +1813,12 @@ describe('turnHandlers["turn.start"]', () => {
       readonly sourcePath?: string;
     }[] = [];
     const gateRunner: GateRunner = {
-      // `input.treePaths` (task 10/12) is the tree's flat file-path inventory, not a
-      // `PageEntryV1[]` this double could honestly echo back as `pages` — an empty slice is
-      // the honest default; this test drives `runPage`, not the manifest-slice shape.
+      // The slice IS what decides which pages `runPage` runs for (task 14), so this double
+      // must name the entry — an empty slice would mean zero `runPage` calls and this test
+      // would assert nothing. The entry is deliberately unlike the slug.
       runManifestSlice: async () => ({
         errors: [],
-        slice: { pages: [], active: null },
+        slice: { pages: [{ slug: HOME, entry: defaultFakeEntry(HOME) }], active: null },
       }),
       // Never reached on this path — this double implements only the two calls the test
       // drives. A loud refusal rather than a fabricated meta, so a future caller fails here
@@ -1752,17 +1846,14 @@ describe('turnHandlers["turn.start"]', () => {
       },
     };
 
-    const pageStore = createFakePageStore({
-      order: [HOME],
-      sources: new Map([
-        [
-          HOME,
-          {
-            bytes: new TextEncoder().encode("home-source"),
-            sourceHash: "a".repeat(64) as Sha256Hex,
-          },
-        ],
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        {
+          pageSlug: HOME,
+          bytes: new TextEncoder().encode("home-source"),
+          sha256: "a".repeat(64),
+        },
+      ],
     });
 
     const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
@@ -1779,7 +1870,7 @@ describe('turnHandlers["turn.start"]', () => {
           activeChatId: chatHeader.chatId,
         },
       }),
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       agentRegistry: createFakeAgentRegistry([agentBackend]),
       gateRunner,
@@ -1836,8 +1927,10 @@ describe('turnHandlers["turn.start"]', () => {
     const [call] = capturedRunPageInputs;
     if (call === undefined) throw new Error("expected a captured runPage() call");
     expect(call.slug).toBe(HOME);
-    expect(call.fileName).toBe("design/pages/home.tsx");
-    expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/design/pages/home.tsx`);
+    // The SHORT name is the manifest's own tree-relative `entry` — not `design/`-prefixed,
+    // not slug-derived. The absolute path is that same entry under the candidate's `design/`.
+    expect(call.fileName).toBe(defaultFakeEntry(HOME));
+    expect(call.sourcePath).toBe(`/fake-candidate/${turnId}/design/${defaultFakeEntry(HOME)}`);
   });
 
   test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged path travels separately in `runPage`'s own `sourcePath` (Finding #6)", async () => {
@@ -1849,10 +1942,10 @@ describe('turnHandlers["turn.start"]', () => {
     let pageCallCount = 0;
     const capturedSourcePaths: (string | undefined)[] = [];
     const gateRunner: GateRunner = {
-      // See the sibling double above: `treePaths` cannot be honestly echoed as `pages`.
+      // See the sibling double above: the slice is what drives `runPage` now.
       runManifestSlice: async () => ({
         errors: [],
-        slice: { pages: [], active: null },
+        slice: { pages: [{ slug: HOME, entry: defaultFakeEntry(HOME) }], active: null },
       }),
       // Never reached on this path — see the sibling double above.
       extractPageMeta: async () => ({
@@ -1896,17 +1989,14 @@ describe('turnHandlers["turn.start"]', () => {
       },
     };
 
-    const pageStore = createFakePageStore({
-      order: [HOME],
-      sources: new Map([
-        [
-          HOME,
-          {
-            bytes: new TextEncoder().encode("home-source"),
-            sourceHash: "a".repeat(64) as Sha256Hex,
-          },
-        ],
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        {
+          pageSlug: HOME,
+          bytes: new TextEncoder().encode("home-source"),
+          sha256: "a".repeat(64),
+        },
+      ],
     });
 
     const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
@@ -1923,7 +2013,7 @@ describe('turnHandlers["turn.start"]', () => {
           activeChatId: chatHeader.chatId,
         },
       }),
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       agentRegistry: createFakeAgentRegistry([agentBackend]),
       gateRunner,
@@ -1969,14 +2059,14 @@ describe('turnHandlers["turn.start"]', () => {
     const [firstError] = diagnostics.errors;
     if (firstError === undefined) throw new Error("expected exactly one Gate error");
     // The short display name only — no drive letter, no candidate root, no absolute path.
-    expect(firstError.file).toBe("design/pages/home.tsx");
+    expect(firstError.file).toBe(defaultFakeEntry(HOME));
     expect(firstError.file).not.toContain("/test-root");
     expect(firstError.file).not.toContain("fake-candidate");
     expect(firstError.file).not.toMatch(/^[A-Za-z]:/);
 
     // The absolute staged path travels separately, in its own `sourcePath` field.
     expect(capturedSourcePaths[0]).toMatch(/^\/fake-candidate\//);
-    expect(capturedSourcePaths[0]).toContain("design/pages/home.tsx");
+    expect(capturedSourcePaths[0]).toContain(`design/${defaultFakeEntry(HOME)}`);
 
     await waitForPublishedCount("turn.attemptStarted", 2);
     const secondStart = agentBackend.calls.filter((c) => c.method === "startTurn")[1];
@@ -3080,17 +3170,14 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
     const chatHeader = await chatStore.create();
     if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
 
-    const pageStore = createFakePageStore({
-      order: [HOME],
-      sources: new Map([
-        [
-          HOME,
-          {
-            bytes: new TextEncoder().encode("home-source"),
-            sourceHash: "a".repeat(64) as Sha256Hex,
-          },
-        ],
-      ]),
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [
+        {
+          pageSlug: HOME,
+          bytes: new TextEncoder().encode("home-source"),
+          sha256: "a".repeat(64),
+        },
+      ],
     });
 
     const staging = createFakeStagingService();
@@ -3099,7 +3186,7 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
       chatReader: chatStore,
       chatMutations: chatStore,
       turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
-      pageReader: pageStore,
+      designReader: pageStore,
       pageMutations: pageStore,
       staging,
       projectStore: createFakeProjectStore({
@@ -3139,19 +3226,28 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
     });
     await runPromise;
 
-    // The real bug (Gap G): `pages.push`'s `sourcePath` used to be built from the agent
-    // WORKSPACE's own flat page-file convention (`pages/<slug>.tsx`, joined onto
-    // `projectStore.root`) — a path that never exists on disk, since canonical storage is
-    // `<root>/.termcraft/pages/<slug>/page.tsx` (`store/safe-fs/model/limits.ts:134-135`,
-    // `store/transaction/model/wrappers.ts`'s `canonicalPagePath`). `staging.createTurnWorkspace`
-    // is the one call that receives `admission.workspace.pages` verbatim, so its own captured
-    // `calls` array is the most direct place to prove which convention actually reached it.
+    // The real bug (Gap G, now re-expressed for the design tree): the staged `sourcePath` used
+    // to be built from the agent WORKSPACE's own flat page-file convention
+    // (`pages/<slug>.tsx`, joined onto `projectStore.root`) — a path that never exists on disk.
+    // Canonical storage is `<root>/.termcraft/design/<treeRelPath>`, and `treeRelPath` comes
+    // from `listTree()`, never from the slug (this fixture's own entry is
+    // `screens/<slug>/view.tsx`, which is deliberately NOT what any slug-derivation would
+    // produce). `staging.createTurnWorkspace` is the one call that receives
+    // `admission.workspace.treeFiles` verbatim, so its own captured `calls` array is the most
+    // direct place to prove which convention actually reached it.
     const createCall = staging.calls.find((c) => c.method === "createTurnWorkspace");
     if (createCall?.method !== "createTurnWorkspace") {
       throw new Error("expected a createTurnWorkspace call");
     }
-    expect(createCall.input.pages.map((p) => p.sourcePath)).toEqual([
-      `${deps.projectStore.root}/.termcraft/pages/${HOME}/page.tsx`,
+    expect(createCall.input.treeFiles.map((file) => file.sourcePath)).toEqual([
+      `${deps.projectStore.root}/.termcraft/design/pages.json`,
+      `${deps.projectStore.root}/.termcraft/design/${defaultFakeEntry(HOME)}`,
+    ]);
+    // …and staging received every file at its TREE-relative path, unprefixed — `pages.json`
+    // included, because the manifest is part of the tree and is staged, never synthesized.
+    expect(createCall.input.treeFiles.map((file) => file.relPath)).toEqual([
+      "pages.json",
+      defaultFakeEntry(HOME),
     ]);
   });
 });

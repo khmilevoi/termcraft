@@ -6,8 +6,8 @@ import type { ExportAction, ExportState, StateMachine } from "core/machines";
 import { reatomExportStateMachine } from "core/machines";
 import {
   type FakeCallSequence,
+  createFakeDesignStoreForPages,
   createFakeExportPublish,
-  createFakePageStore,
   createFakeProjectWriteCoordinator,
   createSequence,
 } from "core/ports/fakes";
@@ -79,15 +79,18 @@ function setup(options?: { readonly currentHash?: string; readonly sequence?: Fa
   rawMachine.apply("kernel.export.beginRendering"); // now "rendering", the legal source for beginPublication
   const { machine, actions } = spyMachine(rawMachine);
   const projectWrite = createFakeProjectWriteCoordinator({ sequence: options?.sequence });
-  const pageReader = createFakePageStore({
-    order: [HOME.pageSlug],
-    sources: new Map([
-      [HOME.pageSlug, { bytes: HOME.bytes, sourceHash: options?.currentHash ?? HOME.sourceHash }],
-    ]),
+  const designReader = createFakeDesignStoreForPages({
+    pages: [
+      {
+        pageSlug: HOME.pageSlug,
+        bytes: HOME.bytes,
+        sha256: options?.currentHash ?? HOME.sourceHash,
+      },
+    ],
   });
   const clock = manualClock(1_700_000_000_000);
   const exportPublish = createFakeExportPublish({ sequence: options?.sequence });
-  return { machine, actions, projectWrite, pageReader, clock, exportPublish };
+  return { machine, actions, projectWrite, designReader, clock, exportPublish };
 }
 
 const FILES: readonly ExportPackageFileV1[] = [
@@ -106,13 +109,13 @@ function baseInput(overrides: Partial<PublishExportInputV1> = {}): PublishExport
 
 describe("publishExport", () => {
   test("on a matching snapshot it reacquires, revalidates, records intent, and completes to idle", async () => {
-    const { call, readPhase, projectWrite, pageReader } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+    const { call, readPhase, projectWrite, designReader } = context.start(() => {
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
-      return { call, readPhase: wrap(() => machine.phase()), projectWrite, pageReader };
+      return { call, readPhase: wrap(() => machine.phase()), projectWrite, designReader };
     });
 
     const result = await call;
@@ -127,28 +130,28 @@ describe("publishExport", () => {
       "acquire-granted",
       "release",
     ]);
-    expect(pageReader.calls.map((c) => c.method)).toEqual(["readSource"]);
+    expect(designReader.calls.map((c) => c.method)).toEqual(["readManifest", "readTreeFile"]);
   });
 
   test("rejects with OPERATION_BUSY and touches no port when the export machine is not in rendering", async () => {
-    const { call, projectWrite, pageReader } = context.start(() => {
+    const { call, projectWrite, designReader } = context.start(() => {
       const machine = reatomExportStateMachine(); // stays "idle" — beginPublication is illegal from idle
       const projectWrite = createFakeProjectWriteCoordinator();
-      const pageReader = createFakePageStore({ order: [], sources: new Map() });
+      const designReader = createFakeDesignStoreForPages({ pages: [] });
       const clock = manualClock(1_700_000_000_000);
       const exportPublish = createFakeExportPublish();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
-      return { call, projectWrite, pageReader };
+      return { call, projectWrite, designReader };
     });
 
     const result = await call;
 
     expect(result).toEqual({ kind: "illegal", code: "OPERATION_BUSY" });
     expect(projectWrite.calls).toEqual([]);
-    expect(pageReader.calls).toEqual([]);
+    expect(designReader.calls).toEqual([]);
   });
 
   test("refuses wholesale, before ever reacquiring, when a render failed", async () => {
@@ -159,9 +162,9 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput({ renders: [{ pageSlug: HOME.pageSlug, outcome: FAILURE }] }),
       );
       return { call, projectWrite };
@@ -175,9 +178,9 @@ describe("publishExport", () => {
 
   test("a page-list/settings mismatch is stale: releases, fails before intent, and reports EXPORT_SNAPSHOT_STALE", async () => {
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput({ currentPages: [currentPageInput({ theme: "dark" })] }), // theme drifted since capture
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
@@ -198,11 +201,11 @@ describe("publishExport", () => {
 
   test("a live source-hash drift since capture is stale: releases, fails before intent, and reports EXPORT_SNAPSHOT_STALE", async () => {
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup({
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup({
         currentHash: "c".repeat(64),
       }); // page edited after capture
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
@@ -223,9 +226,9 @@ describe("publishExport", () => {
 
   test("a page-count mismatch (a page removed since capture) is stale", async () => {
     const { call } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput({ currentPages: [] }),
       );
       return { call };
@@ -244,10 +247,10 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, readPhase, projectWrite } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
-      pageReader.failNext("readSource", FAILURE);
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
+      designReader.failNext("readTreeFile", FAILURE);
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite };
@@ -273,9 +276,9 @@ describe("publishExport", () => {
     // actually catches a release-before-publish regression.
     const sequence = createSequence();
     const { call, readPhase, projectWrite, exportPublish } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup({ sequence });
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup({ sequence });
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite, exportPublish };
@@ -321,10 +324,10 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, readPhase, projectWrite, exportPublish, actions } = context.start(() => {
-      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, actions, projectWrite, designReader, clock, exportPublish } = setup();
       exportPublish.failNextRead(READ_FAILURE);
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite, exportPublish, actions };
@@ -345,9 +348,9 @@ describe("publishExport", () => {
 
   test("builds a non-empty plan from the assembled files, keyed by the newly minted generationId", async () => {
     const { call } = context.start(() => {
-      const { machine, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput({
           files: [
             { relPath: "design-prompt.md", bytes: new TextEncoder().encode("prompt") },
@@ -373,10 +376,10 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, readPhase, projectWrite, actions } = context.start(() => {
-      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, actions, projectWrite, designReader, clock, exportPublish } = setup();
       exportPublish.failNext(FAILURE);
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, readPhase: wrap(() => machine.phase()), projectWrite, actions };
@@ -403,10 +406,10 @@ describe("publishExport", () => {
       details: {},
     };
     const { call, actions } = context.start(() => {
-      const { machine, actions, projectWrite, pageReader, clock, exportPublish } = setup();
+      const { machine, actions, projectWrite, designReader, clock, exportPublish } = setup();
       exportPublish.failNext(FAILURE);
       const call = publishExport(
-        { machine, projectWrite, pageReader, clock, exportPublish },
+        { machine, projectWrite, designReader, clock, exportPublish },
         baseInput(),
       );
       return { call, actions };

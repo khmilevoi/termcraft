@@ -22,13 +22,13 @@ import {
   createFakeAgentBackend,
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -302,14 +302,14 @@ function buildDeps(
   agentRegistry: AgentRegistry,
   exportPublish: ExportPublishPort,
 ): KernelDeps {
-  const pageStore = createFakePageStore({
-    order: [HOME],
-    sources: new Map([
-      [
-        HOME,
-        { bytes: new TextEncoder().encode("export const meta = {}"), sourceHash: HOME_SOURCE_HASH },
-      ],
-    ]),
+  const pageStore = createFakeDesignStoreForPages({
+    pages: [
+      {
+        pageSlug: HOME,
+        bytes: new TextEncoder().encode("export const meta = {}"),
+        sha256: HOME_SOURCE_HASH,
+      },
+    ],
   });
   const pinStore = createFakePinStore();
   // Seeded so `export.start`'s real composition can resolve `HOME`'s settings via
@@ -332,7 +332,7 @@ function buildDeps(
     }),
     chatReader: chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,

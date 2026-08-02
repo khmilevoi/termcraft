@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import { type ModelSelectionV1, selectModel, validateModelSelection } from "core/chats";
 import type { PublishableEventV1 } from "core/mailbox";
+import { readPageEntrySource } from "core/project";
 import type { CommandPayloadByKindV1, EventPayloadByKindV1 } from "core/protocol";
 
 import type { KernelDeps } from "../../types";
@@ -30,7 +31,7 @@ import {
  * second time — "do not duplicate" (kernel-assembly plan, Global Constraints). `selection.*`
  * has no such pre-existing orchestration module (`core/chats`, `core/pins`, `core/preview`,
  * and `core/project` all exist; no `core/selection` does), so its two handlers build the
- * `selection.changed` DTO directly against `deps.pageReader`.
+ * `selection.changed` DTO directly against `deps.designReader`.
  *
  * SYNCHRONOUS HANDLER, ASYNC PORTS. `CommandHandler` is a plain synchronous function
  * (`(payload, context) => CommandOutcomeV1`) — but `PageReader.readSource` and
@@ -98,7 +99,8 @@ function selectionChangedEvent(
 
 /**
  * `selection.set`'s async step: resolve the page's CURRENT source hash through
- * `PageReader.readSource` — the only sanctioned way to obtain an authoritative `sourceHash`
+ * `readPageEntrySource` (manifest lookup, then that entry's tree file — never a path derived
+ * from the slug) — the only sanctioned way to obtain an authoritative `sourceHash`
  * (nothing on `HandlerContext`/`KernelStateSnapshot` carries one synchronously). A read
  * failure (unknown/unreadable page) has no failure-event shape to carry it (see this file's
  * header) — logged, then resolved with zero events.
@@ -107,7 +109,7 @@ async function runSelectionSet(
   payload: CommandPayloadByKindV1["selection.set"],
   deps: KernelDeps,
 ): Promise<readonly PublishableEventV1[]> {
-  const source = await wrap(deps.pageReader.readSource(payload.pageSlug));
+  const source = await wrap(readPageEntrySource(deps.designReader, payload.pageSlug));
   if ("code" in source) {
     console.warn(
       `core/kernel: selection.set could not resolve page "${payload.pageSlug}" — ${source.safeMessage}`,

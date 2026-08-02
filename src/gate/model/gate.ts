@@ -178,18 +178,20 @@ export function hasTreePath(treePaths: readonly string[]): (relPath: string) => 
  * every present page rather than only those whose `closureHash` changed. Both are correct as
  * they stand — they are simply more expensive than the design's end state.
  *
- * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
- * this function has NO non-test caller today. Moving the import allowlist (and, inside it, the
- * `eval`/`new Function` dynamic-code ban) out of `runGate` was this task's own mandate, but
- * nothing in the shipped pipeline calls `runTreeImports` yet — `core/turns/model/
- * validation.ts` only calls `runManifestSlice`/`runPage`. Until Task 14 wires this into the
- * turn's validation flow (once per turn, before the per-page `runPage` calls, per design §8's
- * own ordering), a page containing a forbidden import, `eval(...)`, or `new Function(...)`
- * passes the whole Gate and reaches the smoke render — see `core/ports/gate-runner.ts`'s
- * `GateRunner.runTreeImports` for the matching flag on the port side, and `gate/adapters/
- * gate-runner.test.ts:66`'s "KNOWN SECURITY GAP, NOT CORRECT BEHAVIOR" test (round-2 fix: the
- * prior locator here named a test that does not exist under either title) for the pinned,
- * currently-true consequence.
+ * WIRED (task 14 — the red-debt.md entry this used to carry is closed). This function's only
+ * production caller is `gate/adapters/gate-runner.ts`'s `runTreeImports` port method, which
+ * `core/turns/model/validation.ts` now calls ONCE per turn, after the manifest slice and
+ * before any per-page `runPage`, per design §8's own step ordering. Until that landed this
+ * function had NO non-test caller at all, so a page containing a forbidden import,
+ * `eval(...)`, `new Function(...)`, `require(...)` or a dynamic `import()` passed the whole
+ * Gate and reached the smoke render.
+ *
+ * The wiring is proven END TO END, not asserted: `src/entrypoint/model/turn-import-perimeter
+ * .test.ts` drives the REAL adapter through the REAL `runTurnValidation` and rejects each of
+ * those six forms placed in a SHARED module (`lib/theme.ts`) that no page names directly —
+ * the shape `runPage` structurally cannot catch — plus one clean-input row proving the guard
+ * does not over-fire. `core/turns/model/validation.test.ts` pins the complementary half: that
+ * the call happens at all, once, with the WHOLE tree, and that its errors reject the turn.
  */
 export function runTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;

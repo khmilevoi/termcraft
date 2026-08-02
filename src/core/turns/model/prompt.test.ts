@@ -36,7 +36,15 @@ describe("foldGateDiagnosticsIntoPrompt — the diagnostics freshness barrier", 
         nextAttempt: 2 as TurnAttempt,
         diagnostics: diagnostics({
           errors: [
-            { kind: "type", code: "TS2322", message: "boom", file: null, line: null, column: null },
+            {
+              kind: "type",
+              code: "TS2322",
+              message: "boom",
+              file: null,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
           ],
         }),
       }),
@@ -90,6 +98,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               file: "pages/home.tsx",
               line: 12,
               column: 4,
+              blockedPages: null,
             },
             {
               kind: "import",
@@ -98,6 +107,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               file: null,
               line: null,
               column: null,
+              blockedPages: null,
             },
           ],
         }),
@@ -115,7 +125,15 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
       foldInput({
         diagnostics: diagnostics({
           errors: [
-            { kind: "type", code: "TS2322", message: "boom", file: null, line: null, column: null },
+            {
+              kind: "type",
+              code: "TS2322",
+              message: "boom",
+              file: null,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
           ],
           warnings: [
             {
@@ -144,7 +162,15 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
       foldInput({
         diagnostics: diagnostics({
           errors: [
-            { kind: "type", code: "TS2322", message: "boom", file: null, line: null, column: null },
+            {
+              kind: "type",
+              code: "TS2322",
+              message: "boom",
+              file: null,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
           ],
           warnings: [
             { kind: "dropped-id", message: "element lost its stable id", line: null, column: null },
@@ -175,7 +201,15 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
       foldInput({
         diagnostics: diagnostics({
           errors: [
-            { kind: "type", code: "TS2322", message: "boom", file: null, line: null, column: null },
+            {
+              kind: "type",
+              code: "TS2322",
+              message: "boom",
+              file: null,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
           ],
           warnings: [{ kind: "dropped-id", message: "irrelevant", line: null, column: null }],
         }),

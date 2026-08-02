@@ -807,6 +807,29 @@ const turnGateErrorV1Schema = z.strictObject({
   file: z.string().min(1).nullable(),
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
+  /**
+   * Which pages a whole-tree closure blocker actually blocked (`core/ports/gate-runner.ts`'s
+   * `GateErrorV1.blockedPages`), `null` when the diagnostic blocked none.
+   *
+   * WIDENED BY TASK 14 (task-13 review round 4, M-4). The field was added at the port surface
+   * in task 13 so ONE diagnostic per underlying fact could still be attributed to the N pages
+   * it blocked — a forbidden import in a module three pages share is reported once, naming the
+   * module, with all three slugs here, instead of three near-identical copies. It could not
+   * reach any consumer: this schema is a `z.strictObject` with no such key, and
+   * `core/turns/model/validation.ts`'s `toGateErrorDto` listed fields by name. Both are fixed
+   * together — a strict schema that rejected the field would have made carrying it impossible,
+   * and a DTO that dropped it would have made widening the schema pointless.
+   *
+   * `.nullable()`, never `.optional()`, matching this file's own "nullable, never optional"
+   * convention for a widened echo of an optional port field (`file`/`line`/`column` directly
+   * above take the identical treatment for the identical reason).
+   *
+   * This is a DIAGNOSTIC for the agent's retry prompt, never a verdict input: the turn's
+   * pass/fail decision stays whole-tree (`validation.ts`'s own header explains why attributing
+   * rejections per page would turn `gate/model/tree-scan.ts`'s `isTrustedTarget` gap into a
+   * fail-open).
+   */
+  blockedPages: z.array(pageSlugSchema).readonly().nullable(),
 });
 
 const turnGateWarningV1Schema = z.strictObject({

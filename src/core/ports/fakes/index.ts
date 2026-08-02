@@ -43,21 +43,18 @@ export { createFakeProjectStore } from "./project-store";
 export type { ChatStoreCall, ChatStoreFailableMethod, FakeChatStore } from "./chat-store";
 export { createFakeChatStore } from "./chat-store";
 
-export type { DesignStoreCall, DesignStoreFailableMethod, FakeDesignStore } from "./design-store";
-export { createFakeDesignStore, fakeDesignTreeFile } from "./design-store";
-
-// TEMPORARY (plan Task 7 debt — see `legacy-page-store.ts`'s own header for the full
-// rationale): keeps 16 unrelated test files' existing `createFakePageStore` imports
-// resolving, unchanged, until the task that rewires them onto `DesignTreeReader` for real
-// removes this re-export along with the file it comes from.
 export type {
-  FakePageStore,
-  LegacyPageReader,
-  LegacyPageSourceV1,
-  PageStoreCall,
-  PageStoreFailableMethod,
-} from "./legacy-page-store";
-export { createFakePageStore } from "./legacy-page-store";
+  DesignStoreCall,
+  DesignStoreFailableMethod,
+  FakeDesignPageV1,
+  FakeDesignStore,
+} from "./design-store";
+export {
+  createFakeDesignStore,
+  createFakeDesignStoreForPages,
+  defaultFakeEntry,
+  fakeDesignTreeFile,
+} from "./design-store";
 
 export type { PinStoreCall, PinStoreFailableMethod, FakePinStore } from "./pin-store";
 export { createFakePinStore } from "./pin-store";

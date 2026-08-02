@@ -11,8 +11,9 @@ import {
 import type { ProjectStore } from "core/ports";
 import {
   createFakeChatStore,
+  createFakeDesignStore,
+  createFakeDesignStoreForPages,
   createFakeExportPublish,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeRecoveryService,
@@ -97,7 +98,7 @@ function baseDeps(
       log.push("schema-validation");
       return undefined;
     },
-    pageReader: createFakePageStore({ order: [] }),
+    designReader: createFakeDesignStoreForPages({ pages: [] }),
     pinReader: createFakePinStore(),
     chatReader: createFakeChatStore(),
     exportPublish: createFakeExportPublish(),
@@ -287,13 +288,13 @@ describe("runOpenSequence — step ordering", () => {
       const m = machines();
       const recovery = createFakeRecoveryService();
       recovery.failNext("scanOrphanTurns", FAILURE);
-      const pageReader = createFakePageStore({ order: [] });
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader };
+      const designReader = createFakeDesignStoreForPages({ pages: [] });
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, designReader };
 
       const outcome = await wrap(runOpenSequence(deps));
 
       expect(outcome).toEqual({ kind: "blocked", step: "orphan-turn-scan", failure: FAILURE });
-      expect(pageReader.calls).toEqual([]); // content-validation never reached
+      expect(designReader.calls).toEqual([]); // content-validation never reached
     });
   });
 
@@ -305,14 +306,14 @@ describe("runOpenSequence — step ordering", () => {
       const recovery = createFakeRecoveryService({
         orphans: [{ chatId: "chat-a", turnId: "turn-1", terminalized: false }],
       });
-      const pageReader = createFakePageStore({ order: [] });
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, pageReader };
+      const designReader = createFakeDesignStoreForPages({ pages: [] });
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), recovery, designReader };
 
       const outcome = await wrap(runOpenSequence(deps));
 
       if (outcome.kind !== "blocked") throw new Error(`expected blocked, got ${outcome.kind}`);
       expect(outcome.step).toBe("orphan-turn-scan");
-      expect(pageReader.calls).toEqual([]); // content-validation never reached
+      expect(designReader.calls).toEqual([]); // content-validation never reached
       expect(m.project.phase()).toBe("blocked");
     });
   });
@@ -320,14 +321,23 @@ describe("runOpenSequence — step ordering", () => {
   test("step 9 (content validation: a listed page unreadable) blocks before trust is ever resolved", async () => {
     await context.start(async () => {
       const log: string[] = [];
-      // The page list this test needs comes from `pageReader.listSlugs()` below, not the
+      // The page list this test needs comes from `design/pages.json` below, not the
       // portable manifest (`ProjectManifestV1` carries no `pages` field as of format_version
       // 2) — `store`'s own manifest content is irrelevant to this test.
       const store = createFakeProjectStore({ root: "/fake" });
       const m = machines();
-      const pageReader = createFakePageStore({ order: [slug("home")] }); // no seeded source -> readSource() fails
+      // A manifest entry with NO tree file seeded for it: the entry resolves, the
+      // `readTreeFile` of it does not — which is the content-validation failure this test is
+      // about, now expressed through the manifest instead of a slug-derived path.
+      const designReader = createFakeDesignStore({
+        manifest: {
+          schemaVersion: 1,
+          pages: [{ slug: slug("home"), entry: "screens/landing/main.tsx" }],
+          requestedActivePage: null,
+        },
+      });
       const trustGate = createFakeTrustGate();
-      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), pageReader, trustGate };
+      const deps: OpenSequenceDeps = { ...baseDeps(log, store, m), designReader, trustGate };
 
       const outcome = await wrap(runOpenSequence(deps));
 

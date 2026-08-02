@@ -11,8 +11,8 @@ import type {
   RuntimeDeclarationBundleV1,
 } from "core/ports";
 import {
+  createFakeDesignStoreForPages,
   createFakeExportRenderPort,
-  createFakePageStore,
   createFakeProjectWriteCoordinator,
   createFakeRenderCache,
 } from "core/ports/fakes";
@@ -260,9 +260,8 @@ describe("runExportRendering", () => {
     const capturePromise = context.start(() => {
       const machine = reatomExportStateMachine();
       const projectWrite = createFakeProjectWriteCoordinator();
-      const pageReader = createFakePageStore({
-        order: [slug("home")],
-        sources: new Map([[slug("home"), { bytes: HOME.bytes, sourceHash: HOME.sourceHash }]]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: slug("home"), bytes: HOME.bytes, sha256: HOME.sourceHash }],
       });
       const clock = manualClock(1_700_000_000_000);
       const tracedProjectWrite = {
@@ -277,7 +276,7 @@ describe("runExportRendering", () => {
         },
       };
       return captureExportSnapshot(
-        { machine, projectWrite: tracedProjectWrite, pageReader, clock },
+        { machine, projectWrite: tracedProjectWrite, designReader, clock },
         {
           pages: [
             {

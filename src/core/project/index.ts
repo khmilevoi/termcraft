@@ -29,11 +29,14 @@ export { classifyOrphanTurns, scanOrphanTurns } from "./model/orphan-turn-scan";
 export type { RecoveryRoutingMachines, RecoveryRoutingOutcomeV1 } from "./model/recovery-routing";
 export { routeProjectRecovery } from "./model/recovery-routing";
 
-// --- KCC §9 page.descriptorsChanged assembly -----------------------------------------------
+// --- KCC §9 page.descriptorsChanged assembly, and the manifest -> entry -> bytes read ------
 export { PageDescriptorsAssemblyError } from "./model/descriptors";
+export type { PageEntrySourceV1 } from "./model/descriptors";
 export {
   computePageDescriptorChanges,
   buildPageDescriptorsChangedPayload,
+  readPageEntrySource,
+  readPageOrder,
 } from "./model/descriptors";
 
 // --- KCC §8.2 page mutations -----------------------------------------------------------------

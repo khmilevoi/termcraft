@@ -1,9 +1,15 @@
 import { wrap } from "@reatom/core";
 
-import type { PageMutations, ProjectStore, ProjectWriteCoordinator } from "core/ports";
-import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex, UUIDv7 } from "core/protocol";
+import type {
+  DesignTreeReader,
+  PageMutations,
+  ProjectStore,
+  ProjectWriteCoordinator,
+} from "core/ports";
+import type { FailureDtoV1, PageRemovePlanV1, UUIDv7 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 
+import { readPageEntrySource, readPageOrder } from "./descriptors";
 import {
   type FreshPageRemoveFactsV1,
   type PageRemovePlanLedger,
@@ -12,28 +18,12 @@ import {
 } from "./page-remove-plan";
 
 /**
- * `PageReader` (`readSource(pageSlug)`/`listSlugs()`) was retired from `core/ports` by the
- * design-tree canonical source plan's Task 7, replaced by `DesignTreeReader`
- * (`readTreeFile(relPath)`/`listTree()`/`readManifest()`). This module still calls
- * `readSource`/`listSlugs` below (see `gatherFreshFacts`/`reorder`) because its real
- * production caller — `core/kernel/model/handlers/page-pin.ts`'s `pageStoreOf` — still wires
- * the SAME two methods off `KernelDeps.pageReader`, which the real store adapter
- * (`store/adapters/design-store.ts`) still exposes for exactly this reason (that adapter's
- * own header: kept for real, still-relied-upon callers, not retired here). Migrating this
- * module onto `DesignTreeReader`'s `readManifest()`/`readTreeFile()` is a `core/kernel/**`
- * task (Task 14, red-debt.md), not this one's — so the retired port shape is kept LOCALLY,
- * verbatim, mirroring `core/ports/fakes/legacy-page-store.ts`'s own identical shim, rather
- * than importing a fakes-only module into production code.
+ * MIGRATED (task 14, red-debt.md's `src/core/kernel/**` row): the local `LegacyPageReader`
+ * shim this module carried — a verbatim copy of the `PageReader` shape task 7 deleted from
+ * `core/ports` — is gone. Both facts it supplied now come from `./descriptors`'
+ * `readPageOrder`/`readPageEntrySource`, i.e. from `design/pages.json` and the entry it binds
+ * to a slug, never from a path derived from the slug.
  */
-interface LegacyPageSourceV1 {
-  readonly bytes: Uint8Array;
-  readonly sourceHash: Sha256Hex;
-}
-
-interface LegacyPageReader {
-  readSource(pageSlug: PageSlug): Promise<FailureDtoV1 | LegacyPageSourceV1>;
-  listSlugs(): Promise<FailureDtoV1 | readonly PageSlug[]>;
-}
 
 /**
  * The four page mutation commands (kernel-command-contract §8.2): `page.renameTitle`,
@@ -41,7 +31,7 @@ interface LegacyPageReader {
  * mint orchestration lives in `page-remove-plan.ts` (see that file's header) — this module
  * is the other three-and-a-half.
  *
- * Every mutation here goes through `LegacyPageReader`/`PageMutations`/`ProjectStore`/
+ * Every mutation here goes through `DesignTreeReader`/`PageMutations`/`ProjectStore`/
  * `ProjectWriteCoordinator` (`core/ports`) — no direct I/O. `renameTitle`/`reorder` do not
  * build a `page.descriptorsChanged` event themselves: that requires re-running Gate over
  * the mutated page (`core/ports/gate-runner.ts`), a capability outside this module; the
@@ -61,7 +51,7 @@ interface LegacyPageReader {
 // ---------------------------------------------------------------------------
 
 export interface RenameTitleDeps {
-  readonly pageStore: LegacyPageReader & PageMutations;
+  readonly pageStore: DesignTreeReader & PageMutations;
   readonly planLedger: PageRemovePlanLedger;
 }
 
@@ -96,7 +86,7 @@ export type ReorderPagesResultV1 =
   | { readonly kind: "invalid-permutation" };
 
 export interface ReorderDeps {
-  readonly pageStore: LegacyPageReader & PageMutations;
+  readonly pageStore: DesignTreeReader & PageMutations;
   readonly planLedger: PageRemovePlanLedger;
 }
 
@@ -123,8 +113,9 @@ export async function reorder(
   deps: ReorderDeps,
   order: readonly PageSlug[],
 ): Promise<FailureDtoV1 | ReorderPagesResultV1> {
-  const current = await wrap(deps.pageStore.listSlugs());
-  if ("code" in current) return current;
+  const pages = await wrap(readPageOrder(deps.pageStore));
+  if ("code" in pages) return pages;
+  const current = pages.map((entry) => entry.slug);
 
   if (!isExactPermutation(current, order)) return { kind: "invalid-permutation" };
 
@@ -167,7 +158,7 @@ export type ConfirmPageRemoveResultV1 =
   | { readonly kind: "failure"; readonly failure: FailureDtoV1 };
 
 export interface ConfirmPageRemoveDeps {
-  readonly pageStore: LegacyPageReader & PageMutations;
+  readonly pageStore: DesignTreeReader & PageMutations;
   readonly projectStore: ProjectStore;
   readonly planLedger: PageRemovePlanLedger;
   readonly mutex: ProjectWriteCoordinator;
@@ -248,11 +239,14 @@ async function gatherFreshFacts(
   deps: Pick<ConfirmPageRemoveDeps, "pageStore" | "projectStore">,
   plan: PageRemovePlanV1,
 ): Promise<FailureDtoV1 | FreshPageRemoveFactsV1> {
-  const source = await wrap(deps.pageStore.readSource(plan.pageSlug as PageSlug));
-  if ("code" in source) return source;
+  // ONE manifest read backs both facts, so the frozen order and the entry whose bytes give
+  // `sourceHash` can never come from two different reads of `design/pages.json`.
+  const pages = await wrap(readPageOrder(deps.pageStore));
+  if ("code" in pages) return pages;
+  const orderedPageSlugs = pages.map((entry) => entry.slug);
 
-  const orderedPageSlugs = await wrap(deps.pageStore.listSlugs());
-  if ("code" in orderedPageSlugs) return orderedPageSlugs;
+  const source = await wrap(readPageEntrySource(deps.pageStore, plan.pageSlug as PageSlug, pages));
+  if ("code" in source) return source;
 
   const workspace = await wrap(deps.projectStore.readWorkspaceState());
   if ("code" in workspace) return workspace;

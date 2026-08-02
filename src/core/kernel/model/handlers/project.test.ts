@@ -18,13 +18,13 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeChatStore,
+  createFakeDesignStoreForPages,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
   createFakeGateRunner,
   createFakeHostSupervisorPort,
   createFakePageMetaCache,
-  createFakePageStore,
   createFakePinStore,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
@@ -176,7 +176,7 @@ interface TestHarness {
  */
 function buildTestContext(options?: {
   readonly projectStore?: ReturnType<typeof createFakeProjectStore>;
-  readonly pageReader?: ReturnType<typeof createFakePageStore>;
+  readonly designReader?: ReturnType<typeof createFakeDesignStoreForPages>;
   readonly recovery?: ReturnType<typeof createFakeRecoveryService>;
   readonly trustGate?: ReturnType<typeof createFakeTrustGate>;
   readonly chatReader?: ChatReader;
@@ -209,7 +209,7 @@ function buildTestContext(options?: {
   };
 
   const chatStore = createFakeChatStore();
-  const pageStore = options?.pageReader ?? createFakePageStore({ order: [] });
+  const pageStore = options?.designReader ?? createFakeDesignStoreForPages({ pages: [] });
   const pinStore = createFakePinStore();
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
 
@@ -219,7 +219,7 @@ function buildTestContext(options?: {
       createFakeProjectStore({ root: options?.projectRoot ?? "/test-root" }),
     chatReader: options?.chatReader ?? chatStore,
     chatMutations: chatStore,
-    pageReader: pageStore,
+    designReader: pageStore,
     pageMutations: pageStore,
     pinReader: pinStore,
     pinMutations: pinStore,
@@ -458,23 +458,20 @@ describe("project.create", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -595,27 +592,24 @@ describe("project.open", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
       const subject = await trustGate.buildSubject("/fake-root", "fake-project-1", null);
       if ("code" in subject) throw new Error("unexpected failure building the fake subject");
       await trustGate.grant(subject);
 
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       const outcome = projectHandlers["project.open"](
         { root: "/fake-root" },
@@ -641,22 +635,19 @@ describe("project.open", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -677,24 +668,21 @@ describe("project.open", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const exportPublish = createFakeExportPublish();
       exportPublish.failNextRead(FAILURE);
-      const harness = buildTestContext({ projectStore, pageReader, exportPublish });
+      const harness = buildTestContext({ projectStore, designReader, exportPublish });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -723,23 +711,20 @@ describe("project.open", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const exportPublish = createFakeExportPublish(); // readPointer() defaults to null
-      const harness = buildTestContext({ projectStore, pageReader, exportPublish });
+      const harness = buildTestContext({ projectStore, designReader, exportPublish });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -759,20 +744,17 @@ describe("project.open", () => {
       const chatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: chatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
       const userRecordId = uuidv7();
@@ -789,7 +771,7 @@ describe("project.open", () => {
         ],
         prevCursor: null,
       });
-      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const harness = buildTestContext({ projectStore, designReader, chatReader });
 
       const outcome = projectHandlers["project.open"](
         { root: "/fake-root" },
@@ -848,22 +830,19 @@ describe("project.open", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -882,20 +861,17 @@ describe("project.open", () => {
       const chatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: chatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
       // `loadTailResult` is a failure — `createChatReaderStub`'s own `list()` therefore reports
@@ -907,7 +883,7 @@ describe("project.open", () => {
         safeMessage: "disk read failed",
         details: {},
       });
-      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const harness = buildTestContext({ projectStore, designReader, chatReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
@@ -939,20 +915,17 @@ describe("project.open", () => {
       const chatC = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: chatA },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const chatReader: ChatReader = {
         ...createFakeChatStore(),
@@ -972,7 +945,7 @@ describe("project.open", () => {
           ];
         },
       };
-      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const harness = buildTestContext({ projectStore, designReader, chatReader });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -1002,20 +975,17 @@ describe("project.open", () => {
       const chatA = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: chatA },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const chatReader: ChatReader = {
         ...createFakeChatStore(),
@@ -1026,7 +996,7 @@ describe("project.open", () => {
           return FAILURE;
         },
       };
-      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const harness = buildTestContext({ projectStore, designReader, chatReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
@@ -1047,20 +1017,17 @@ describe("project.open", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const header: ChatHeaderV1 = {
         chatId: activeChatId,
@@ -1075,7 +1042,7 @@ describe("project.open", () => {
         prevCursor: null,
       });
       chatReader.list = async () => FAILURE;
-      const harness = buildTestContext({ projectStore, pageReader, chatReader });
+      const harness = buildTestContext({ projectStore, designReader, chatReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
@@ -1098,41 +1065,51 @@ describe("project.open", () => {
     await context.start(async () => {
       const dashboard = slug("dashboard");
       const calendar = slug("calendar");
-      const pageReader = createFakePageStore({
-        order: [dashboard, calendar],
-        sources: new Map([
-          [
-            dashboard,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-          [
-            calendar,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: dashboard,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+            entry: "screens/board/dashboard.tsx",
+          },
+          {
+            pageSlug: calendar,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+            entry: "widgets/cal/index.tsx",
+          },
+        ],
       });
       const gateRunner = createFakeGateRunner();
-      const harness = buildTestContext({ gateRunner, projectRoot: "/tmp/proj", pageReader });
+      const harness = buildTestContext({ gateRunner, projectRoot: "/tmp/proj", designReader });
 
-      await buildPageDescriptors(harness.handlerContext, [dashboard, calendar]);
+      // ENTRIES DELIBERATELY UNLIKE THE SLUG (`screens/board/dashboard.tsx`,
+      // `widgets/cal/index.tsx`): this test is precisely about the Gate receiving the page's
+      // REAL on-disk path, so a fixture whose entry were derivable from the slug would pass
+      // against code that still computed one.
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      await buildPageDescriptors(harness.handlerContext, manifest.pages);
 
       const runPageCalls = gateRunner.calls.filter((call) => call.method === "runPage");
       expect(runPageCalls).toHaveLength(2);
+      // The path is `<root>/.termcraft/design/<entry>`, where `<entry>` is what
+      // `design/pages.json` bound to the slug — NOT `.termcraft/pages/<slug>/page.tsx`, which
+      // this fixture's deliberately-unlike-the-slug entries make impossible to produce by
+      // derivation. `entryRelPath` travels alongside so the Gate knows the page's own
+      // tree-relative identity for specifier resolution.
       expect(runPageCalls[0]).toEqual({
         method: "runPage",
         slug: dashboard,
-        sourcePath: "/tmp/proj/.termcraft/pages/dashboard/page.tsx",
+        entryRelPath: "screens/board/dashboard.tsx",
+        sourcePath: "/tmp/proj/.termcraft/design/screens/board/dashboard.tsx",
       });
       expect(runPageCalls[1]).toEqual({
         method: "runPage",
         slug: calendar,
-        sourcePath: "/tmp/proj/.termcraft/pages/calendar/page.tsx",
+        entryRelPath: "widgets/cal/index.tsx",
+        sourcePath: "/tmp/proj/.termcraft/design/widgets/cal/index.tsx",
       });
     });
   });
@@ -1147,27 +1124,24 @@ describe("project.retryOpen", () => {
       const restoreActionId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const recovery = createFakeRecoveryService({
         classifications: new Map([
           [restoreActionId, { kind: "roll-forward", transactionId: restoreActionId }],
         ]),
       });
-      const harness = buildTestContext({ projectStore, pageReader, recovery });
+      const harness = buildTestContext({ projectStore, designReader, recovery });
 
       // Precondition the guard already confirmed: project "blocked", the named domain "blocked" too.
       harness.machines.project.apply("beginOpen");
@@ -1287,23 +1261,20 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1341,22 +1312,19 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1378,22 +1346,19 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       const createPayload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1421,12 +1386,14 @@ describe("Gap A — enablePreviewIfTrusted", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId: null },
       });
-      const pageReader = createFakePageStore({ order: [home] });
-      pageReader.failNext("listSlugs", FAILURE);
-      const harness = buildTestContext({ projectStore, pageReader });
+      const designReader = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: home, bytes: new Uint8Array(), sha256: FAKE_SOURCE_HASH }],
+      });
+      designReader.failNext("readManifest", FAILURE);
+      const harness = buildTestContext({ projectStore, designReader });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1481,23 +1448,20 @@ describe("Gap C — the first turn from create/open text", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1542,22 +1506,19 @@ describe("Gap C — the first turn from create/open text", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",
@@ -1584,20 +1545,17 @@ describe("Gap C — the first turn from create/open text", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
       // Matching `describe("project.open")`'s own "resolves to trusted when a prior grant
@@ -1608,7 +1566,7 @@ describe("Gap C — the first turn from create/open text", () => {
       if ("code" in subject) throw new Error("unexpected failure building the fake subject");
       await trustGate.grant(subject);
 
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       const payload: CommandPayloadByKindV1["project.open"] = {
         root: "/fake-root",
@@ -1634,27 +1592,24 @@ describe("Gap C — the first turn from create/open text", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       const trustGate = createFakeTrustGate();
       const subject = await trustGate.buildSubject("/fake-root", "fake-project-1", null);
       if ("code" in subject) throw new Error("unexpected failure building the fake subject");
       await trustGate.grant(subject);
 
-      const harness = buildTestContext({ projectStore, pageReader, trustGate });
+      const harness = buildTestContext({ projectStore, designReader, trustGate });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -1682,27 +1637,24 @@ describe("Gap D — an existing project opens into the Workspace", () => {
       const home = slug("home");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         // Zero chats: no chat has ever been made active — exactly the clone shape
         // `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose (pages
         // present, zero chats, since `chats/` is git-ignored as of fix-bundle §2.5).
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
       // The default `chatReader` (`createFakeChatStore()`, unset here) reports zero chats —
       // matching a clone whose `chats/` directory was never checked out.
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       projectHandlers["project.open"]({ root: "/fake-root" }, harness.handlerContext);
       const launches = harness.getLaunchOperations();
@@ -1725,29 +1677,24 @@ describe("Gap D — an existing project opens into the Workspace", () => {
       const about = slug("about");
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home, about] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
-      const pageReader = createFakePageStore({
-        order: [home, about],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-          [
-            about,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+          {
+            pageSlug: about,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       // The composition root's own `openOrCreateProject` (`entrypoint/model/create-shell.ts`)
       // tries `store.openProject` first and NEVER falls back to `store.createProject` once it
@@ -1786,22 +1733,19 @@ describe("Gap D — an existing project opens into the Workspace", () => {
       const activeChatId = uuidv7();
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
-        manifest: { projectId: "fake-project-1", pages: [home] },
+        manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId },
       });
-      const pageReader = createFakePageStore({
-        order: [home],
-        sources: new Map([
-          [
-            home,
-            {
-              bytes: new TextEncoder().encode("export const meta = {}"),
-              sourceHash: FAKE_SOURCE_HASH,
-            },
-          ],
-        ]),
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          {
+            pageSlug: home,
+            bytes: new TextEncoder().encode("export const meta = {}"),
+            sha256: FAKE_SOURCE_HASH,
+          },
+        ],
       });
-      const harness = buildTestContext({ projectStore, pageReader });
+      const harness = buildTestContext({ projectStore, designReader });
 
       const payload: CommandPayloadByKindV1["project.create"] = {
         root: "/fake-root",

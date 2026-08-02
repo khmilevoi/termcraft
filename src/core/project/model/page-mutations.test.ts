@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { context, wrap } from "@reatom/core";
 
 import {
-  createFakePageStore,
+  createFakeDesignStoreForPages,
   createFakeProjectStore,
   createFakeProjectWriteCoordinator,
 } from "core/ports/fakes";
@@ -27,6 +27,10 @@ import { type PageRemovePlanLedger, createPageRemovePlanLedger } from "./page-re
  * a Reatom atom, so their `.calls` logs and awaited methods are safe to read from anywhere.
  */
 
+const PAGE_BYTES = new Uint8Array();
+const HOME_HASH = "a".repeat(64);
+const ABOUT_HASH = "b".repeat(64);
+
 function slug(value: string): PageSlug {
   const parsed = parsePageSlug(value);
   if (parsed instanceof Error) throw parsed;
@@ -47,9 +51,8 @@ const FAILURE: FailureDtoV1 = {
 describe("renameTitle", () => {
   test("rewrites the title through the page store and invalidates any active remove plan", async () => {
     const { call, readCurrent, pageStore } = context.start(() => {
-      const pageStore = createFakePageStore({
-        order: [slug("home")],
-        sources: new Map([[slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }]]),
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
       });
       const planLedger = createPageRemovePlanLedger();
       planLedger.mint({
@@ -76,7 +79,9 @@ describe("renameTitle", () => {
 
   test("propagates a page-store failure and leaves an active plan untouched", async () => {
     const { call, readCurrent } = context.start(() => {
-      const pageStore = createFakePageStore({ order: [slug("home")] });
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
+      });
       pageStore.failNext("renameTitle", FAILURE);
       const planLedger = createPageRemovePlanLedger();
       planLedger.mint({
@@ -101,7 +106,12 @@ describe("renameTitle", () => {
 describe("reorder", () => {
   test("replaces the page order and invalidates any active remove plan", async () => {
     const { call, readCurrent, pageStore } = context.start(() => {
-      const pageStore = createFakePageStore({ order: [slug("home"), slug("about")] });
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+        ],
+      });
       const planLedger = createPageRemovePlanLedger();
       planLedger.mint({
         pageSlug: slug("home"),
@@ -120,14 +130,17 @@ describe("reorder", () => {
 
     expect(result).toEqual({ kind: "reordered" });
     expect(pageStore.calls.some((c) => c.method === "reorder")).toBe(true);
-    const listed = await pageStore.listSlugs();
-    expect(listed).toEqual([slug("about"), slug("home")]);
+    const listed = await pageStore.readManifest();
+    if ("code" in listed) throw new Error("fixture bug: readManifest failed");
+    expect(listed.pages.map((entry) => entry.slug)).toEqual([slug("about"), slug("home")]);
     expect(readCurrent()).toBeNull();
   });
 
   test("rejects a permutation that adds a slug, without writing", async () => {
     const { call, pageStore } = context.start(() => {
-      const pageStore = createFakePageStore({ order: [slug("home")] });
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
+      });
       const planLedger = createPageRemovePlanLedger();
       return { call: reorder({ pageStore, planLedger }, [slug("home"), slug("about")]), pageStore };
     });
@@ -140,7 +153,12 @@ describe("reorder", () => {
 
   test("rejects a permutation that drops a slug, without writing", async () => {
     const { call, pageStore } = context.start(() => {
-      const pageStore = createFakePageStore({ order: [slug("home"), slug("about")] });
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+        ],
+      });
       const planLedger = createPageRemovePlanLedger();
       return { call: reorder({ pageStore, planLedger }, [slug("home")]), pageStore };
     });
@@ -153,7 +171,12 @@ describe("reorder", () => {
 
   test("rejects a permutation with a duplicate slug, without writing", async () => {
     const { call, pageStore } = context.start(() => {
-      const pageStore = createFakePageStore({ order: [slug("home"), slug("about")] });
+      const pageStore = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+        ],
+      });
       const planLedger = createPageRemovePlanLedger();
       return { call: reorder({ pageStore, planLedger }, [slug("home"), slug("home")]), pageStore };
     });
@@ -194,12 +217,11 @@ describe("discardPageRemovePlan", () => {
 });
 
 function setupConfirmScenario() {
-  const pageStore = createFakePageStore({
-    order: [slug("home"), slug("about")],
-    sources: new Map([
-      [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-      [slug("about"), { bytes: new Uint8Array(), sourceHash: "b".repeat(64) }],
-    ]),
+  const pageStore = createFakeDesignStoreForPages({
+    pages: [
+      { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+      { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+    ],
   });
   const projectStore = createFakeProjectStore({
     root: "C:/proj",
@@ -231,13 +253,13 @@ describe("confirmPageRemove", () => {
       };
       const tracedPageStore = {
         ...pageStore,
-        readSource: async (pageSlug: PageSlug) => {
-          order.push("readSource");
-          return pageStore.readSource(pageSlug);
+        readTreeFile: async (relPath: string) => {
+          order.push("readTreeFile");
+          return pageStore.readTreeFile(relPath);
         },
-        listSlugs: async () => {
-          order.push("listSlugs");
-          return pageStore.listSlugs();
+        readManifest: async () => {
+          order.push("readManifest");
+          return pageStore.readManifest();
         },
       };
       const tracedMutex = {
@@ -265,11 +287,12 @@ describe("confirmPageRemove", () => {
     expect(result).toEqual({ kind: "removed", pageSlug: slug("about") });
     expect(order[0]).toBe("acquire");
     expect(order.slice(1)).toEqual(
-      expect.arrayContaining(["readSource", "listSlugs", "readWorkspaceState"]),
+      expect.arrayContaining(["readManifest", "readTreeFile", "readWorkspaceState"]),
     );
     expect(readCurrent()).toBeNull();
-    const listed = await pageStore.listSlugs();
-    expect(listed).toEqual([slug("home")]);
+    const listed = await pageStore.readManifest();
+    if ("code" in listed) throw new Error("fixture bug: readManifest failed");
+    expect(listed.pages.map((entry) => entry.slug)).toEqual([slug("home")]);
     expect(mutex.calls.some((c) => c.method === "release")).toBe(true);
   });
 
@@ -295,12 +318,11 @@ describe("confirmPageRemove", () => {
       const { projectStore, mutex, planLedger, plan } = setupConfirmScenario();
       // Simulate a concurrent write to the plan's target page, bypassing this module, by
       // reading the fresh facts from a store seeded with different source bytes for "about".
-      const mutated = createFakePageStore({
-        order: [slug("home"), slug("about")],
-        sources: new Map([
-          [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-          [slug("about"), { bytes: new Uint8Array(), sourceHash: "c".repeat(64) }],
-        ]),
+      const mutated = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: "c".repeat(64) },
+        ],
       });
       const call = confirmPageRemove(
         { pageStore: mutated, projectStore, planLedger, mutex },
@@ -358,7 +380,7 @@ describe("confirmPageRemove", () => {
   test("propagates a page-store read failure while gathering fresh facts, without writing", async () => {
     const { call, pageStore, mutex } = context.start(() => {
       const { pageStore, projectStore, mutex, planLedger, plan } = setupConfirmScenario();
-      pageStore.failNext("readSource", FAILURE);
+      pageStore.failNext("readTreeFile", FAILURE);
       const call = confirmPageRemove(
         { pageStore, projectStore, planLedger, mutex },
         plan.pageRemovePlanId,
@@ -407,12 +429,12 @@ describe("confirmPageRemove", () => {
       let invalidated = false;
       const tracedPageStore = {
         ...pageStore,
-        listSlugs: async () => {
+        readManifest: async () => {
           if (!invalidated) {
             invalidated = true;
             planLedger.invalidate(); // what recovery / a trust change does
           }
-          return pageStore.listSlugs();
+          return pageStore.readManifest();
         },
       };
 

@@ -10,6 +10,7 @@ import {
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
 import type {
+  GateClosureV1,
   GateErrorV1,
   GatePageDescriptorV1,
   GateRunner,
@@ -17,7 +18,6 @@ import type {
   ManifestSliceV1,
 } from "core/ports";
 import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
-import type { PageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 
 /**
@@ -33,11 +33,38 @@ import { trace } from "infrastructure/debug-log";
  * `beginTerminalization` (exhausted) both belong to "whichever caller decided" — the same
  * documented split `finalize.ts`/`terminalize.ts` use for the identical shape of decision.
  *
- * ORDER: the manifest-slice check (master §6.3 step 1) runs EXACTLY ONCE PER TURN, before any
- * per-page stage — never interleaved, never repeated per page. Every page then runs the full
- * `GateRunner.runPage` pipeline regardless of whether an earlier page already failed, so a
- * rejection carries the COMPLETE set of diagnostics across every page in one report, not just
- * the first failure.
+ * ORDER (design §8's own step numbering): the manifest-slice check (step 1) runs EXACTLY ONCE
+ * PER TURN; the whole-tree import allowlist (step 4) runs EXACTLY ONCE PER TURN immediately
+ * after it; only then does every manifest entry run the per-page `GateRunner.runPage`
+ * pipeline. Neither once-per-turn stage is ever interleaved with, or repeated inside, the
+ * per-page loop. Every entry then runs `runPage` regardless of whether an earlier one already
+ * failed, so a rejection carries the COMPLETE set of diagnostics across every page in one
+ * report, not just the first failure.
+ *
+ * THE IMPORT PERIMETER IS WIRED HERE, AND ONLY HERE (red-debt.md's SECURITY-CRITICAL
+ * must-wire; task-14-supplement §1). `GateRunner.runTreeImports` — the import allowlist and,
+ * inside it, design §5.8's `eval`/`new Function` ban — had NO production caller before task
+ * 14: `runPage` deliberately stopped scanning imports in task 12 (a shared module belongs to
+ * no single page, so scanning per page both misses a module no page's own source is run
+ * against and reports a shared violation once per reaching page). Between those two changes a
+ * page importing `lodash`, calling `require("fs")`, `eval(...)`, `new Function(...)` or a
+ * dynamic `import()` passed the whole Gate and reached the smoke render. The
+ * `runTreeImports` call below is the fix. `src/entrypoint/model/turn-import-perimeter.test.ts`
+ * proves it end to end against the REAL `gate` adapter for each of those six forms placed in a
+ * SHARED module no page names directly; the tests beside this file prove the call shape and
+ * the verdict rule against the port fake.
+ *
+ * THE VERDICT IS WHOLE-TREE, DELIBERATELY (task-12b review round 1, Minor M4 — task 14 owns
+ * the choice). `isTrustedTarget` (`gate/model/tree-scan.ts`) treats "the path is a key in
+ * `files`" as "this pass read that file's source", which is false for a file whose own scan
+ * threw: an importer of it is then vouched for by a file nothing read. That is harmless only
+ * while every consumer decides on `errors.length === 0` over the WHOLE tree, and it becomes a
+ * fail-open the moment a caller attributes rejections per page or per file. This function
+ * therefore keeps one flat verdict: ANY error from ANY stage — manifest slice, whole-tree
+ * scan, or any page — rejects the turn. Nothing here filters by `GateErrorV1.file`, by
+ * `blockedPages`, or by which page a diagnostic names. `blockedPages` is carried across the
+ * DTO boundary for the AGENT's benefit (which pages a shared-module blocker actually blocked),
+ * never consulted to decide the verdict.
  */
 
 export interface TurnValidationDeps {
@@ -46,32 +73,45 @@ export interface TurnValidationDeps {
   readonly publish: (event: PublishableEventV1<"turn.gateRejected">) => void;
 }
 
-export interface TurnValidationPageInputV1 {
-  readonly pageSlug: PageSlug;
-  readonly source: string;
-  readonly fileName?: string;
-  /**
-   * The staged candidate's ABSOLUTE on-disk file path (`core/ports/gate-runner.ts`'s
-   * `runPage.sourcePath` doc) — needed only by the Gate smoke stage, which resolves it via
-   * `Bun.file` in a fresh child-process cwd, so a bare `${slug}.tsx`/short `fileName` never
-   * resolves there. Deliberately separate from `fileName`, which stays the SHORT display name
-   * `runGate` echoes into `GateErrorV1.file` for diagnostics: conflating the two would leak an
-   * absolute filesystem path into user-facing Gate error messages — the defect this field was
-   * added to fix. FIXED (review finding #7 — corrected from an earlier, now-false claim that
-   * `buildValidationInput` still stuffed the absolute path into `fileName`):
-   * `core/kernel/model/handlers/turn.ts`'s `buildValidationInput` now sets `fileName` to the
-   * short `workspacePageRelPath(pageSlug)` display name and `sourcePath` to the absolute staged
-   * candidate path (`${candidate.root}/${workspacePageRelPath(pageSlug)}`) separately, so a
-   * validation Gate rejection reports the short name, never the absolute path.
-   */
-  readonly sourcePath?: string;
-}
-
 export interface RunTurnValidationInputV1 {
   readonly turnId: UUIDv7;
   readonly attempt: TurnAttempt;
+  /** The frozen candidate's own `design/pages.json` text — the only page-identity authority. */
   readonly manifestText: string;
-  readonly pages: readonly TurnValidationPageInputV1[];
+  /**
+   * The candidate's COMPLETE design-tree inventory, TREE-relative (`pages/home.tsx`, never
+   * `design/pages/home.tsx`). This is entry resolution's universe (design §4: an `entry` "must
+   * resolve to a real file inside the tree") AND the allowlist's own `has` — never the turn's
+   * page slugs, which cannot answer whether a path exists.
+   */
+  readonly treePaths: readonly string[];
+  /**
+   * Every tree file's source text, keyed by the SAME tree-relative path as `treePaths` —
+   * complete, with no filter of this ring's own.
+   *
+   * WHY NO FILTER, AND WHY THAT IS THE POINT (task-14-supplement §2; Task 13's
+   * closure-completeness contract on `GateRunner.runTreeImports`). That contract requires
+   * `files` to hold text for every CODE file any page's closure reaches, or the closure is
+   * refused and the page reports "unchanged" forever. `core` may not import `gate`, so any
+   * predicate here deciding "which files are code" would be a SECOND, independently derived
+   * copy of `gate/model/tree-scan.ts`'s measured `isCodeFile` — exactly the divergence that
+   * exported predicate exists to prevent, and exactly the class of second reading that
+   * produced task 13's round-2 Critical. The only filter that cannot drift from `isCodeFile`
+   * is no filter at all: the caller passes EVERY tree file and `gate` alone decides what to
+   * scan (`scanTreeImports` skips a non-code file even when its text is present, so a `.png`'s
+   * bytes cost nothing but the decode). Measured, not assumed, that this is affordable:
+   * 2.3 MB of source across 128 files scans in 453 ms, and 2 MiB of ordinary page source in
+   * one file in 295 ms (probe artifact `t14-budget-probe.ts`).
+   */
+  readonly files: ReadonlyMap<string, string>;
+  /**
+   * The candidate's `design/` directory, ABSOLUTE — the Gate smoke stage resolves
+   * `<designRoot>/<entry>` via `Bun.file` from a fresh child-process cwd, so a tree-relative
+   * path never resolves there (`core/ports/gate-runner.ts`'s `runPage.sourcePath` doc).
+   * Deliberately separate from the short `fileName` this function passes for diagnostics:
+   * conflating them would leak an absolute filesystem path into user-facing Gate messages.
+   */
+  readonly designRoot: string;
 }
 
 type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
@@ -82,6 +122,15 @@ export type TurnValidationResultV1 =
       readonly slice: ManifestSliceV1;
       readonly descriptors: readonly GatePageDescriptorV1[];
       readonly warnings: readonly GateWarningV1[];
+      /**
+       * Every manifest entry's PROVEN-COMPLETE closure, straight from `runTreeImports`
+       * (design §7) — `core/turns/model/candidate.ts`'s `selectChangedPages` input, and the
+       * only thing that makes "an edit to `lib/theme.ts` changed these pages" answerable at
+       * all. A slug missing here on a PASSED validation is impossible by that method's own
+       * CONTRACT: an unprovable closure always carries at least one `errors` entry, and any
+       * error at all means this function never returns `"passed"`.
+       */
+      readonly closures: readonly GateClosureV1[];
     }
   | {
       readonly kind: "retry";
@@ -118,6 +167,20 @@ function toGateErrorDto(error: GateErrorV1): TurnGateDiagnosticsV1["errors"][num
     file: error.file ?? null,
     line: error.line ?? null,
     column: error.column ?? null,
+    // CARRIED, NOT DERIVED (task-13 review round 4, M-4 — task 14's own decision, and the
+    // producer's recommendation, reached independently here for the same reason). Attribution
+    // is a fact about the closure WALK: which file a page's resolution stopped at. A blocked
+    // page is by construction ABSENT from `closures`, so the boundary sees only a set of
+    // diagnostics and a set of resolved pages — the blocked ones are precisely those neither
+    // structure names, and "which diagnostic blocked page X" is not recoverable from that.
+    // Re-deriving it here would mean re-keying on `file`, a second independent reading of the
+    // import graph inside a ring that cannot even see it. So the field crosses verbatim, and
+    // `turnGateErrorV1Schema` (`core/protocol/model/event-payload.ts`) was widened to accept
+    // it. `?? null` follows this file's own `undefined -> null` convention for the widened
+    // echo, so an unattributed diagnostic still reaches the agent — DROPPING one would be the
+    // silent fail-open the field exists to close, since the page is already missing from
+    // `closures` and its diagnostic is the only remaining signal that it was excluded.
+    blockedPages: error.blockedPages ?? null,
   };
 }
 function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnings"][number] {
@@ -142,30 +205,75 @@ export async function runTurnValidation(
   deps: TurnValidationDeps,
   input: RunTurnValidationInputV1,
 ): Promise<TurnValidationResultV1> {
-  // FLAGGED (task-12 review, red-debt item 1's cascade — not fixed here): entry resolution
-  // needs the design tree's full file inventory (design §4), which `core/turns` has no way
-  // to obtain today — neither this module nor its caller (`core/kernel/model/handlers/
-  // turn.ts`'s `buildValidationInput`) is wired to a `DesignTreeReader`/`listTree` yet. An
-  // honest empty is passed rather than a fabricated `presentSlugs`-derived guess (which could
-  // never honestly stand in for a tree's file paths anyway — that IS the bug `GateRunner.
-  // runManifestSlice`'s `presentSlugs -> treePaths` rewiring exists to close). Whichever task
-  // wires a real `DesignTreeReader` through `core/turns`/`core/kernel` (13 or 14) replaces
-  // this with the real inventory.
+  // Design §8 step 1. `treePaths` is the candidate's REAL inventory now (task 14 wired
+  // `DesignTreeReader.listTree()` through `core/kernel`'s staging assembly and
+  // `TurnCandidateV1.treeFiles`), so entry resolution can finally answer "does this `entry`
+  // name a real file" instead of being handed the honest empty this call used to carry.
   const sliceResult = await wrap(
-    deps.gateRunner.runManifestSlice({ manifestText: input.manifestText, treePaths: [] }),
+    deps.gateRunner.runManifestSlice({
+      manifestText: input.manifestText,
+      treePaths: input.treePaths,
+    }),
   );
 
   const errors: GateErrorV1[] = [...sliceResult.errors];
   const warnings: GateWarningV1[] = [];
   const descriptors: GatePageDescriptorV1[] = [];
 
-  for (const page of input.pages) {
+  // Design §8 step 4 — THE IMPORT PERIMETER (see this file's header). Run UNCONDITIONALLY,
+  // even when the manifest itself failed to decode: the flat allowlist scan covers every code
+  // file in the tree regardless of `pages`, so skipping it on a bad manifest would hide every
+  // import violation behind a manifest typo and spend one of only four attempts learning about
+  // just one of the two problems. `pages` is the VALIDATED entry list — a closure is walked
+  // FROM an entry, and the entry-to-slug binding is `pages.json`'s job, never derivable from a
+  // slug — so it is honestly empty when the slice did not decode, and no closure is claimed.
+  const treeImports = await wrap(
+    deps.gateRunner.runTreeImports({
+      files: input.files,
+      treePaths: input.treePaths,
+      pages: sliceResult.slice?.pages ?? [],
+    }),
+  );
+  errors.push(...treeImports.errors);
+
+  const closureBySlug = new Map(treeImports.closures.map((closure) => [closure.slug, closure]));
+
+  // Design §8's per-entry stage. Driven off the VALIDATED manifest, never off a caller-supplied
+  // page list: which file a page lives in is `pages.json`'s `entry` value, and a slug-derived
+  // path is precisely what the design tree retires. An undecodable manifest yields no entries
+  // and therefore no `runPage` calls — `sliceResult.errors` already carries why.
+  for (const entry of sliceResult.slice?.pages ?? []) {
+    const source = input.files.get(entry.entry);
+    if (source === undefined) {
+      // Unreachable while `files` and `treePaths` describe the same candidate inventory (this
+      // function's own `files` contract) AND the slice decoded — `checkManifestSlice` already
+      // refuses an `entry` absent from `treePaths`. Reported as a typed fatal rather than
+      // running `runPage("")`, which would blame the page's own contract for a staging gap.
+      errors.push({
+        kind: "manifest",
+        code: "ENTRY_SOURCE_MISSING",
+        message: `the manifest entry "${entry.entry}" for page "${entry.slug}" resolved in the tree but this turn holds no source for it`,
+        file: entry.entry,
+      });
+      continue;
+    }
+    const closure = closureBySlug.get(entry.slug);
     const pageResult = await wrap(
       deps.gateRunner.runPage({
-        source: page.source,
-        slug: page.pageSlug,
-        ...(page.fileName !== undefined ? { fileName: page.fileName } : {}),
-        ...(page.sourcePath !== undefined ? { sourcePath: page.sourcePath } : {}),
+        source,
+        slug: entry.slug,
+        // The SHORT display name `runGate` echoes into `GateErrorV1.file`, in the same
+        // tree-relative vocabulary every other diagnostic and `pages.json` itself speak —
+        // never the absolute path, which would leak a filesystem location into agent-facing
+        // Gate messages.
+        fileName: entry.entry,
+        sourcePath: `${input.designRoot}/${entry.entry}`,
+        entryRelPath: entry.entry,
+        // Only when this pass PROVED the closure complete. `runTreeImports`' CONTRACT makes
+        // the two cases exclusive: a slug absent from `closures` always carries a fatal in
+        // `errors`, so omitting `closure` here can never quietly hand a downstream stage a
+        // truncated file list — the turn is already rejected.
+        ...(closure !== undefined ? { closure: { entry: entry.entry, files: closure.files } } : {}),
       }),
     );
     errors.push(...pageResult.errors);
@@ -177,7 +285,7 @@ export async function runTurnValidation(
     // `checkManifestSlice`'s own contract never actually pairs zero errors with a null slice
     // (`gate/model/manifest.ts`) — this is defensive-only. An empty `pages` is the honest
     // fallback: `PageEntryV1[]` needs a real `entry` per page, which this degenerate branch
-    // has no way to supply (see this function's own `treePaths` note above).
+    // has no way to supply.
     const slice = sliceResult.slice ?? { pages: [], active: null };
     // DIAGNOSTIC (infrastructure/debug-log): the Gate passed this candidate -- recorded so a turn's
     // full attempt history (pass/retry/exhausted) is reconstructable from the trace alone, including
@@ -190,7 +298,7 @@ export async function runTurnValidation(
       pageCount: descriptors.length,
       warnings: warnings.map(toGateWarningDto),
     });
-    return { kind: "passed", slice, descriptors, warnings };
+    return { kind: "passed", slice, descriptors, warnings, closures: treeImports.closures };
   }
 
   const diagnostics: TurnGateDiagnosticsV1 = {
