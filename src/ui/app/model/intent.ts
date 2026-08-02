@@ -57,14 +57,14 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
       // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the
-      // identical reason. Home can stay mounted for up to ~30s after the composition root's own
-      // startup `project.open` (`run-app.ts`, Gap D) is admitted, because `deriveScreen` only
-      // leaves Home once `finishOpen`'s metadata reaches the mirror — typing during that window
-      // and hitting Enter fires a SECOND `project.open`, rejected `CAPABILITY_UNAVAILABLE` (the
-      // project machine is already `"opening"`, not `"closed"`). Clearing only on `accepted`
-      // means a rejection never discards what the user typed, and the ALREADY-accepted text
-      // (the startup dispatch's own first, successful attempt has no text of its own to clear —
-      // this only ever fires for `home-submit`'s OWN dispatch) does not linger to be resent.
+      // identical reason. NARROWED (workspace-first launch, 2026-08-02): this branch's one
+      // remaining caller is the ⏎ retry after a blocked open, and that retry races Home's own
+      // recovery (`deps.ts`'s `recoverFromBlockedOpen`), which dispatches `project.close` the
+      // instant `blockOpen` lands. Hitting Enter before that close resolves fires `project.open`
+      // while the project machine is still `"blocked"`/`"closing"`, not yet `"closed"`, so the
+      // Kernel rejects it `CAPABILITY_UNAVAILABLE`. Clearing only on `accepted` means that
+      // transient rejection never discards what the user retyped, and the text stays put to be
+      // resent once the recovery actually completes.
       if (deps.env.projectExists) {
         dispatchHomeSubmit(
           dispatcher.dispatch("project.open", { root: deps.env.root, text }),

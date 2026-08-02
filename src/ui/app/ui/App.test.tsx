@@ -1159,11 +1159,11 @@ describe("workspace-first launch (2026-08-02)", () => {
       height: 36,
     });
     open = renderer;
-    // Task 5: once the Workspace's own opening chrome exists, assert
-    // `renderer.captureCharFrame()).toContain("OPENING")` here — `deriveScreen` already mounts
-    // "workspace" for this pending, project-less startup open (Task 3), but nothing renders the
-    // chip yet, so this one assertion is deferred rather than the whole test.
-    // expect(renderer.captureCharFrame()).toContain("OPENING");
+    // The pre-emit checkpoint: `deriveScreen` already mounts "workspace" for this pending,
+    // project-less startup open (Task 3) before the Workspace's own opening chrome exists
+    // (Task 5's "OPENING" chip) — this is what proves the routing today without needing that
+    // chrome, and what guarantees the App has actually settled before the blockOpen below.
+    expect(deps.screen()).toBe("workspace");
 
     await renderer.act(() =>
       kernel.emit(

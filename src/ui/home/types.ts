@@ -70,10 +70,13 @@ export interface HomeProps {
    */
   readonly openFailure: ProjectOpenFailure | null;
   /**
-   * Whether a `project.create`/`project.open` is in flight (`ProjectMirror.opening`). Home stays
-   * mounted throughout — `deriveScreen` only leaves it once `finishOpen`'s metadata lands — so
-   * this is what stops the screen claiming "no project yet" over a project that is actively
-   * loading, and what makes the refused Enter visible before it is pressed.
+   * Whether a `project.create`/`project.open` is in flight (`ProjectMirror.opening`). For a
+   * Home-initiated open — a fresh-directory `create`, or the ⏎ retry after a blocked open — Home
+   * stays mounted throughout: `openFailure` survives `finishClose` (workspace-first launch,
+   * 2026-08-02), so a retry never flashes into the Workspace, and `deriveScreen` only leaves Home
+   * once THIS attempt's own `finishOpen` metadata lands. This is what stops the screen claiming
+   * "no project yet" over a project that is actively loading, and what makes the refused Enter
+   * visible before it is pressed.
    */
   readonly opening: boolean;
 }

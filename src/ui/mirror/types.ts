@@ -86,12 +86,16 @@ export interface ProjectMirror {
    * `kernel.project.beginCreate`/`beginOpen`, cleared by whichever outcome ends it
    * (`finishOpen`, `blockOpen`, `finishClose`).
    *
-   * Exists because `projectId` alone cannot tell "no project" from "a project is opening": the
-   * Kernel's ready sequence is a long multi-step read (manifest, transaction recovery, the
-   * orphan-turn scan, every page's source, the chat tail) that publishes nothing until it ends,
-   * and `deriveScreen` keys only on `projectId`. So a relaunch inside an existing project sat on
-   * a fully live Home for the whole open, whose status bar said "no project yet" — false — and
-   * whose Enter fired a SECOND `project.open` that the machine rejects from `opening`, silently.
+   * Exists because `projectId` alone cannot tell "no project" from "a project is opening" for a
+   * Home-initiated open — a fresh-directory `create`, or the ⏎ retry after a blocked open — since
+   * the Kernel's ready sequence is a long multi-step read (manifest, transaction recovery, the
+   * orphan-turn scan, every page's source, the chat tail) that publishes nothing until it ends.
+   * NARROWED (workspace-first launch, 2026-08-02): `deriveScreen` no longer keys only on
+   * `projectId` — it also keys on `startupOpenPending`/`openFailure`, so an existing project's
+   * OWN startup open now mounts the Workspace immediately instead of sitting on a live Home. This
+   * field's remaining job is the two opens Home still starts itself: without it, Home's status
+   * bar said "no project yet" — false — while one of those was in flight, and its Enter fired a
+   * SECOND `project.create`/`project.open` that the machine rejects from `opening`, silently.
    */
   readonly opening: boolean;
 }

@@ -77,8 +77,10 @@ export interface KeyContext {
    *
    * Enter is refused while it is. Not a new restriction — the Kernel ALREADY refuses it, because
    * `beginOpen`/`beginCreate` are legal only from the project machine's `closed` phase — but it
-   * used to refuse it invisibly: `deriveScreen` keeps Home mounted for the whole (multi-second)
-   * open, so the user pressed Enter on a live-looking prompt and the dispatch came back
+   * used to refuse it invisibly: for a Home-initiated open — a fresh-directory `create`, or the
+   * ⏎ retry after a blocked open, the only opens Home ever sees (workspace-first launch,
+   * 2026-08-02) — `deriveScreen` keeps Home mounted for the whole (multi-second) open, so the
+   * user pressed Enter on a live-looking prompt and the dispatch came back
    * `CAPABILITY_UNAVAILABLE` with nothing on screen to show for it. Refusing here instead lets
    * `Home.tsx` draw the `⏎ create` hint in its `dis` state for the same window, so the refusal
    * is visible BEFORE the key is pressed. The typed text is untouched either way.
