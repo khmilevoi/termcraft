@@ -106,6 +106,39 @@ const FICTION_CARRIERS: readonly (readonly [string, string])[] = [
     "regex with a double quote",
     `let identity: <T>(x: T) => T = (x) => x;\nconst re = /a"b/; %s const re2 = /c"d/;\n// </T>\n`,
   ],
+
+  // THE PAYLOAD AFTER A BOUNDARY THAT LANDS INSIDE A GENUINE STRING (task 14b fix round 3,
+  // Critical 1). Every carrier above closes its fictional run with a `</T>` written in a comment
+  // AFTER the payload, so the payload always sat INSIDE the run. The missing axis is exactly
+  // that transposition: close the run with a `</T>` inside a real STRING LITERAL and put the
+  // payload after it. The boundary then bisects that literal, the next window's quote parity is
+  // off by one against Bun's reading, and everything following becomes the interior of string
+  // tokens — measured at `6a83f3f` as 112 of 112 rows losing every diagnostic AND every closure
+  // edge, while coverage accounting reported the file whole. Coverage is not visibility.
+  [
+    "parity: type alias, tag in a string",
+    `type X = <T extends unknown>(x: T) => T;\nconst s = "</T>"; %s\nexport const probe = 1;\n`,
+  ],
+  [
+    "parity: generic arrow, tag in a string",
+    `const f = <T extends unknown>(x: T) => x;\nconst s = "</T>"; %s\nexport const probe = 1;\n`,
+  ],
+  [
+    "parity: annotation, tag in a string",
+    `const g: <T>(x: T) => T = (x) => x;\nconst s = "</T>"; %s\nexport const probe = 1;\n`,
+  ],
+  [
+    "parity: object-type method, tag in a string",
+    `type O = { m: <T>(x: T) => T };\nconst s = "</T>"; %s\nexport const probe = 1;\n`,
+  ],
+  [
+    "parity: as-cast, tag in a string",
+    `const v = 1 as unknown as <T>(x: T) => T;\nconst s = "</T>"; %s\nexport const probe = 1;\n`,
+  ],
+  // A `{`-in-a-string variant is deliberately ABSENT: measured, an intervening `{` makes
+  // `skipExpressionContainer` fail, so the element is never confirmed and the row would carry no
+  // fiction at all — it would pass by testing ordinary code. The non-vacuity test below is what
+  // caught that, which is exactly why it exists.
 ];
 
 /**
@@ -559,6 +592,25 @@ describe("the differential oracle — Bun's parse against the gate's view", () =
     const carriers = fictionCorpus().filter((r) => r.relPath.endsWith(".tsx"));
     const withFiction = carriers.filter((r) => readJsxTextRanges(r.source).length > 0);
     expect(withFiction.length).toBe(carriers.length);
+  });
+
+  test("…and the parity carriers really do put a boundary INSIDE a string literal", () => {
+    // The second non-vacuity property, for the axis fix round 3 added. A parity row only tests
+    // anything if its run actually ends inside the `"</T>"` literal; if the reader stopped
+    // drawing the boundary there, the rows would pass by testing ordinary code again.
+    const parity = fictionCorpus().filter(
+      (r) => r.name.includes("parity:") && r.relPath.endsWith(".tsx"),
+    );
+    expect(parity.length).toBeGreaterThan(0);
+    for (const row of parity) {
+      const ranges = readJsxTextRanges(row.source);
+      const quote = row.source.indexOf('"');
+      const closingQuote = row.source.indexOf('"', quote + 1);
+      const bisects =
+        ranges.some((r) => r.pos > quote && r.pos <= closingQuote) ||
+        ranges.some((r) => r.end > quote && r.end <= closingQuote);
+      expect([row.name, bisects]).toEqual([row.name, true]);
+    }
   });
 
   test("seeded fuzz over the same alphabet: zero under-scans", () => {

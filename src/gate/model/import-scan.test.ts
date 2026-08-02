@@ -980,3 +980,127 @@ describe("every spelling of a global receiver reaches the global eval", () => {
     }
   });
 });
+
+/**
+ * LITERAL KEY SPELLINGS (task 14b fix round 3, Critical 2). Each of these writes the key in
+ * exactly the form the computed-access check claimed to catch, and each missed it for one
+ * token's worth of reason. All six were measured live: Bun accepts, `await import()` executes
+ * the payload, and the perimeter reported only the import.
+ */
+describe("every LITERAL key spelling reaches the capability", () => {
+  const CAUGHT: readonly (readonly [string, string, "EVAL_CALL" | "FUNCTION_CALL"])[] = [
+    ["optional-chain index", `export const r = (globalThis as any)?.["eval"]("1");`, "EVAL_CALL"],
+    [
+      "optional-chain Function",
+      `export const r = (globalThis as any)?.["Function"]("1")();`,
+      "FUNCTION_CALL",
+    ],
+    ["template key", 'export const r = (globalThis as any)[`eval`]("1");', "EVAL_CALL"],
+    ["destructured computed key", `const { ["eval"]: v } = globalThis as any;`, "EVAL_CALL"],
+    ["destructured string key", `const { "eval": v } = globalThis as any;`, "EVAL_CALL"],
+    ["Reflect.get", `export const r = Reflect.get(globalThis, "eval")("1");`, "EVAL_CALL"],
+    ["plain bracket (control)", `export const r = (globalThis as any)["eval"]("1");`, "EVAL_CALL"],
+  ];
+
+  test("each one is a fatal, naming the right code", () => {
+    for (const [name, body, code] of CAUGHT) {
+      const src = `${body}
+`;
+      expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(src)).not.toThrow();
+      expect([name, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        name,
+        [code],
+      ]);
+    }
+  });
+
+  test("the valid-input companions: the same shapes with any OTHER key are untouched", () => {
+    // Without these, "flag every bracket, every template key and every Reflect.get" would
+    // satisfy the row above and reject ordinary code.
+    for (const src of [
+      `export const v = (globalThis as any)?.["location"];
+`,
+      `export const o = { [\`id\`]: 1 };
+`,
+      `const { ["location"]: l } = globalThis as any;
+export const v = l;
+`,
+      `const { "location": l } = globalThis as any;
+export const v = l;
+`,
+      `export const v = Reflect.get(globalThis, "location");
+`,
+      `export const v = Reflect.ownKeys({});
+`,
+      `export const words = ["eval", "Function"];
+`,
+      `export const o2 = { onClick: 1, "data-id": 2 };
+`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
+    }
+  });
+});
+
+/**
+ * THE UNION OF TWO READINGS (task 14b fix round 3, Critical 1). A window boundary landing inside
+ * a genuine string literal flips this stream's quote parity against Bun's, and everything after
+ * it becomes the interior of string tokens — with coverage accounting entirely satisfied.
+ * Coverage is not visibility. Both scans therefore read the file twice, windowed and linear, and
+ * union what they find.
+ */
+describe("the union restores what a mis-placed boundary hides", () => {
+  /** Carriers whose fictional run ends inside the `"</T>"` literal on the following line. */
+  const CARRIERS: readonly (readonly [string, string])[] = [
+    ["type alias", `type X = <T extends unknown>(x: T) => T;`],
+    ["generic arrow", `const f = <T extends unknown>(x: T) => x;`],
+    ["annotation", `const g: <T>(x: T) => T = (x) => x;`],
+    ["object-type method", `type O = { m: <T>(x: T) => T };`],
+    ["as-cast", `const v = 1 as unknown as <T>(x: T) => T;`],
+  ];
+
+  const PAYLOADS: readonly (readonly [string, string, ImportScanError["code"]])[] = [
+    ["forbidden import", `import "node:fs";`, "FORBIDDEN_IMPORT"],
+    ["require", `const r = require("child_process");`, "REQUIRE_CALL"],
+    ["dynamic import", `const p = import("node:fs");`, "DYNAMIC_IMPORT"],
+    ["re-export", `export * from "node:fs";`, "REEXPORT"],
+    ["eval", `const e = eval("1");`, "EVAL_CALL"],
+    ["Function", `const f2 = new Function("return 1");`, "FUNCTION_CALL"],
+  ];
+
+  test("every carrier x payload is still reported, in a `.tsx` source", () => {
+    for (const [carrierName, carrier] of CARRIERS) {
+      for (const [payloadName, payload, code] of PAYLOADS) {
+        const src = `${carrier}
+const s = "</T>"; ${payload}
+export const probe = 1;
+`;
+        expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+        const codes = scanned(scanImportAllowlist(src, NONE)).map((e) => e.code);
+        expect([carrierName, payloadName, codes.includes(code)]).toEqual([
+          carrierName,
+          payloadName,
+          true,
+        ]);
+      }
+    }
+  });
+
+  test("and the closure EDGE survives too — a lost edge is a file never scanned at all", () => {
+    const src = `type X = <T extends unknown>(x: T) => T;
+const s = "</T>"; import "./util";
+export const probe = 1;
+`;
+    expect([...(scanned(scanModuleEdges(src, "jsx")) as readonly string[])]).toEqual(["./util"]);
+  });
+
+  test("the union does not duplicate a finding both readings see", () => {
+    // Both readings agree on an ordinary source, and the report must not say it twice.
+    const src = `export const T = () => <p>hi</p>;
+import "node:fs";
+`;
+    expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual([
+      "FORBIDDEN_IMPORT",
+    ]);
+  });
+});

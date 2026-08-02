@@ -82,12 +82,19 @@ export type SourceSyntax = "jsx" | "no-jsx";
  *    `createScanner(true, …)` — it returns no comment kind, and end-of-file still reports
  *    `source.length` — so neither a trivia-kind guard nor a positional end check can see it.
  *
- * TOKENS INSIDE A PROSE RUN ARE MARKED, NOT DROPPED ({@link Tok.jsxText}). `import-scan.ts`'s
- * three dynamic-code checks skip a marked token, because a page's own display copy —
- * `<Text>Never use eval here</Text>` — must not trip a FATAL. That filter suppresses a FINDING;
- * it does not remove the span from the stream, so the import/require/re-export checks, the page
- * contract and every lint still see it. That distinction is the whole difference between this
- * round and the last one.
+ * TOKENS CARRY NO PROSE MARK, and nothing downstream suppresses a finding on the strength of
+ * this classification (task 14b fix round 2). A mark exists only to suppress, every suppression
+ * rule tried on this branch was measured to hide a real call, and `import-scan.ts`'s
+ * "NO PROSE SUPPRESSION" section records the trade that replaced them. A window is a BOUNDARY
+ * device and nothing else.
+ *
+ * AND THE BOUNDARY ITSELF IS NOT TRUSTED ALONE (fix round 3, Critical 1). A boundary is drawn
+ * where `./jsx`'s reader thinks a run starts or ends, and that reader can confirm an element the
+ * runtime never sees; when such a run ends on a `<` or `{` sitting INSIDE a genuine string
+ * literal, this stream's quote parity goes off by one against Bun's and everything after it
+ * becomes the interior of string tokens — with every character still "accounted for". Coverage
+ * is not visibility. So `import-scan.ts`'s two scans read this function TWICE, once windowed and
+ * once linear, and union the findings; see `scanImportAllowlist`'s own doc for the measurement.
  *
  * WHAT THIS DOES NOT CLAIM. Not that the gate's parse equals Bun's — this is a scanner driven by
  * a JSX reader, not Bun's parser. The claim is the one the oracle checks
@@ -346,7 +353,13 @@ function lexWindow(input: {
 
     guard += 1;
     const value =
-      kind === SK.StringLiteral || kind === SK.NumericLiteral || kind === SK.Identifier
+      kind === SK.StringLiteral ||
+      kind === SK.NumericLiteral ||
+      kind === SK.Identifier ||
+      // A NO-SUBSTITUTION template is a literal key like any other: `` g[`eval`] `` executes
+      // exactly as `g["eval"]` does (task 14b fix round 3, Critical 2). Only the substitution-free
+      // form carries a usable value; `` `${x}` `` is deliberately not a literal key.
+      kind === SK.NoSubstitutionTemplateLiteral
         ? // COOKED, never raw (task 14b fix round 2, Critical 3): `\u0065val` is a legal spelling
           // of `eval` that Bun executes, and `getTokenText()` hands back the escape unresolved.
           scanner.getTokenValue()

@@ -575,9 +575,12 @@ vendor tier's own pre-split run-loop file.
 - `src/gate/model/import-scan.ts` — the saved-page import allowlist (item 11's last
   forbidden-shape row): only a bare `import ... from "@termcraft/runtime"` is legal;
   the same scan also fatally rejects dynamic-code use (`eval`, `new Function`, and
-  their common evasions), skipping identifier/bracket tokens `./jsx`'s `scanJsx`
-  confirms are genuine JSX children text so a page's own display copy is never
-  mistaken for a live reference
+  their common evasions). It applies NO exemption for a page's own display copy —
+  every suppression rule tried was measured to hide a real call — so the ban
+  over-approximates uniformly and copy containing those words is refused. It reads
+  the token stream twice for a JSX source, once with the JSX reader's text-run
+  boundaries and once linearly, and unions the findings, because neither reading
+  alone is trustworthy
 - `src/host/session/model/resolver.ts` — the runtime resolver plugin item 9
   describes; registers three specifiers (`@termcraft/runtime`, `react/jsx-runtime`,
   `react/jsx-dev-runtime`), not yet the single `@termcraft/runtime/jsx-runtime`

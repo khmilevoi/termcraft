@@ -180,7 +180,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   //
   // THE PAGE'S SYNTAX IS DERIVED FROM ITS OWN PATH, not assumed (task 14b fix round 2, Minor
   // 2). This used to assert "a candidate page is always JSX" because `entryRelPath`/`fileName`
-  // name a `.tsx` entry — but nothing enforces that: `entityPathSchema`
+  // name a `.tsx` entry — but nothing enforces that: `entryPathSchema`
   // (`entities/design-tree`'s `manifest.ts`) places no constraint on the extension, so
   // `pages/a.ts` is a legal entry and Bun parses no JSX in it. `parsesJsx` is the same measured
   // predicate `runTreeImports` uses, so a page and a shared module of the same name are read

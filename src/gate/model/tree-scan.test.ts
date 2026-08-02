@@ -934,39 +934,77 @@ describe("scanTreeImports — a file whose token stream does not cover it is fat
 });
 
 /**
- * THE SYNTAX ARGUMENT IS OBSERVABLE IN THE EDGE LIST (task 14b fix round 2, Important 2).
+ * THE UNION MAKES A WRONG `syntax` HARMLESS FOR THE CLOSURE (task 14b fix round 3).
  *
- * Fix round 1's report claimed the opposite — "the syntax argument only affects marking, and
- * `scanModuleEdges` never consults marks, so passing the wrong one changes no edge list" — and
- * left the corresponding mutation with no killing test on that reasoning. One command disproves
- * it: inside a fictional children-text run a nested `<b/>` splits the run, `tokenize` windows
- * around it, and a string literal spanning the split stops being one token, so its specifier is
- * never seen. A `parsesJsx` mismatch between the flat scan and the closure walk therefore builds
- * DIFFERENT CLOSURES, which is a divergence, not defence in depth.
+ * Fix round 1 claimed `syntax` was unobservable in the edge list; fix round 2 disproved that and
+ * pinned the difference. Round 3's union changes the answer again, and this time in the good
+ * direction: `scanModuleEdges(src, "jsx")` unions the WINDOWED and LINEAR readings, while
+ * `"no-jsx"` is the linear reading alone — so the JSX answer is a strict SUPERSET and a call
+ * site that guesses wrong can only ever walk MORE of the tree, never less. The "this page did
+ * not change" mode Task 13 exists to kill is closed by construction rather than by a test that
+ * has to be remembered.
+ *
+ * Both halves are asserted, because the superset relation is the whole guarantee.
  */
-describe("parsesJsx is load-bearing for the closure, not only for lexing", () => {
+describe("the closure cannot shrink under a wrong `syntax` — the union makes it a superset", () => {
+  /** A `<T>` type-parameter list the JSX reader confirms as an element the runtime never sees. */
   const SPLIT = `let a: <T>(x: T) => T;\nimport "./li<b/>x";\n// </T>\n`;
+  /** The Critical-1 carrier: a boundary landing inside a genuine string literal. */
+  const PARITY = `type X = <T extends unknown>(x: T) => T;\nconst s = "</T>"; import "./util";\nexport const probe = 1;\n`;
 
-  test("the same source yields DIFFERENT edges under the two syntaxes", () => {
-    const asJsx = scanModuleEdges(SPLIT, "jsx");
-    const asCode = scanModuleEdges(SPLIT, "no-jsx");
-    if (asJsx instanceof Error || asCode instanceof Error) throw new Error("unexpected refusal");
-    expect([...asJsx]).not.toEqual([...asCode]);
+  test("the JSX reading is a SUPERSET of the linear one, never a different set", () => {
+    for (const source of [SPLIT, PARITY]) {
+      const asJsx = scanModuleEdges(source, "jsx");
+      const asCode = scanModuleEdges(source, "no-jsx");
+      if (asJsx instanceof Error || asCode instanceof Error) throw new Error("unexpected refusal");
+      for (const edge of asCode)
+        expect([source, edge, [...asJsx]]).toEqual([source, edge, [...asJsx]]);
+      expect([...asCode].every((e) => [...asJsx].includes(e))).toBe(true);
+    }
   });
 
-  test("so both readers must derive it from `parsesJsx`, and this pins that they do", () => {
-    // The flat scan takes `syntax` from `parsesJsx(from)`; the closure walk takes it from
-    // `parsesJsx(relPath)`. Asserting the two agree for the same path is what makes a future
-    // hard-coded `"jsx"` at either call site a test failure rather than a silent divergence.
+  test("the parity carrier's edge survives under BOTH syntaxes — it survived under neither before", () => {
+    // Measured at `6a83f3f`: `edges(jsx)` was `[]` for this source while Bun loaded `./util`.
+    expect([...(scanModuleEdges(PARITY, "jsx") as readonly string[])]).toEqual(["./util"]);
+    expect([...(scanModuleEdges(PARITY, "no-jsx") as readonly string[])]).toEqual(["./util"]);
+  });
+
+  test("and the whole CLOSURE is complete whichever syntax the walk is given", () => {
+    // The shape the review named: a page reaching a module through the parity carrier. If the
+    // carrier's edge is lost, `pages/lib/util.ts` drops out of the closure entirely and the
+    // page's `closureHash` stops changing when that file does.
+    const files = new Map<string, string>([
+      ["pages/p.tsx", `import { x } from "./lib/m"\nexport default () => null\n`],
+      ["pages/lib/m.ts", PARITY],
+      ["pages/lib/util.ts", `export const u = 1\n`],
+    ]);
+    const closureUnder = (forced: "jsx" | "no-jsx" | null): readonly string[] => {
+      const closure = resolveClosure({
+        entry: "pages/p.tsx",
+        has: (p: string) => files.has(p),
+        edgesOf: (rel: string) => {
+          const edges = scanModuleEdges(files.get(rel) ?? "", forced ?? parsesJsx(rel));
+          return edges instanceof Error ? [] : edges;
+        },
+      });
+      if (closure instanceof Error)
+        throw new Error(`unexpected closure failure: ${closure.message}`);
+      return closure.files;
+    };
+    const expected = ["pages/lib/m.ts", "pages/lib/util.ts", "pages/p.tsx"];
+    expect([...closureUnder(null)]).toEqual(expected);
+    expect([...closureUnder("jsx")]).toEqual(expected);
+    expect([...closureUnder("no-jsx")]).toEqual(expected);
+  });
+
+  test("the flat scan and the closure walk still agree specifier for specifier", () => {
     for (const rel of ["lib/m.ts", "lib/m.tsx", "lib/m.mts", "lib/m.jsx", "Dockerfile"]) {
       const walk = scanModuleEdges(SPLIT, parsesJsx(rel));
-      const flat = scanTreeImports({
-        files: new Map([[rel, SPLIT]]),
-        has: (p) => p === rel,
-      });
+      const flat = scanTreeImports({ files: new Map([[rel, SPLIT]]), has: (p) => p === rel });
       if (walk instanceof Error) throw new Error(`unexpected refusal for ${rel}`);
-      // The flat scan reports every specifier it saw; the closure walk lists the same ones.
-      const flatSpecs = flat.filter((e) => e.specifier !== "").map((e) => e.specifier);
+      const flatSpecs = [
+        ...new Set(flat.filter((e) => e.specifier !== "").map((e) => e.specifier)),
+      ];
       expect([rel, [...walk]]).toEqual([rel, flatSpecs]);
     }
   });

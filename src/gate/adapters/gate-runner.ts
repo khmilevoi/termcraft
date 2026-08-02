@@ -619,14 +619,18 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly slug: PageSlug;
   }): Promise<PageMetaExtractionV1> {
     const fileName = `${input.slug}.tsx`;
-    // Derived from the name this method itself builds, never asserted (task 14b fix round 2,
-    // Minor 2). The RESIDUAL is stated rather than hidden: this port takes only a slug, so it
-    // cannot see the manifest's real entry, and the manifest's entry schema does NOT constrain
-    // the extension (`entities/design-tree`'s `manifest.ts`) — a `pages/a.ts` entry is legal and
-    // would be read here as JSX. `runPage` and `runTreeImports`, which do see the real path, use
-    // `parsesJsx` on it; widening `PageMetaExtraction` to carry the entry is the fix and it
-    // belongs with the port, not here.
-    const contract = checkPageContract(input.source, parsesJsx(fileName));
+    // ASSUMED JSX, and said plainly rather than dressed up as a derivation (task 14b fix round 3,
+    // Minor 2). Round 2 wrote `parsesJsx(fileName)` here, which reads like the real predicate but
+    // is constantly `"jsx"` because `fileName` is a `.tsx` name this method just built — a dead
+    // argument that looks like coverage.
+    //
+    // THE RESIDUAL, stated because it is real: this port takes only a SLUG, so it cannot see the
+    // manifest's entry, and `entryPathSchema` (`entities/design-tree`'s `manifest.ts`) does not
+    // constrain the extension — a `pages/a.ts` entry is legal and would be read here as JSX,
+    // which draws children-text boundaries a `.ts` file does not have. It costs nothing today
+    // (this method only reads `meta`, and `import-scan.ts` unions both readings anyway), and the
+    // fix is to widen `PageMetaExtraction` to carry the entry path. That belongs with the port.
+    const contract = checkPageContract(input.source, "jsx");
     if (contract instanceof Error) {
       // A source whose token stream does not cover it has no readable `meta` — reporting
       // `meta: null` with the real reason beats reporting "this page declares no settings",

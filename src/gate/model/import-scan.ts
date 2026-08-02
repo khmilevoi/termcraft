@@ -1,5 +1,6 @@
 import { resolveDesignSpecifier } from "entities/design-tree";
 
+import { readJsxTextRanges } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { SourceStreamTruncatedError, SourceSyntax, SyntaxKind, Tok } from "./lexer";
 
@@ -158,6 +159,52 @@ function isParenthesisedValue(toks: Tok[], index: number): boolean {
   return (
     toks[index + 1]?.kind === SK.CloseParenToken && toks[index + 2]?.kind === SK.OpenParenToken
   );
+}
+
+/**
+ * True where a `[` opens a COMPUTED KEY rather than an array literal: after a value the key
+ * indexes into (an identifier, `this`, a prior call or index result), after the `?.` of an
+ * optional chain, or at the start of a `{ [key]: … }` object/destructuring pattern.
+ *
+ * `?.` and `{` were added in task 14b fix round 3 (Critical 2): `globalThis?.["eval"]("…")` and
+ * `const { ["eval"]: v } = globalThis` were both measured accepted, executed and silent. The
+ * `{`/`,` arms mean an object literal with a computed `"eval"` key is flagged too — the same
+ * accepted over-approximation as a method literally named `eval`.
+ */
+function isComputedKeyPosition(previous: Tok | undefined): boolean {
+  if (previous === undefined) return false;
+  return (
+    previous.kind === SK.Identifier ||
+    previous.kind === SK.CloseParenToken ||
+    previous.kind === SK.CloseBracketToken ||
+    previous.kind === SK.ThisKeyword ||
+    previous.kind === SK.QuestionDotToken ||
+    previous.kind === SK.OpenBraceToken ||
+    previous.kind === SK.CommaToken
+  );
+}
+
+/**
+ * The literal `"eval"`/`"Function"` key inside a `Reflect.get(receiver, key)` call, or `null`.
+ * Scans only to the call's own closing `)`, and only for a literal — no folding.
+ */
+function reflectGetLiteralKey(toks: Tok[], from: number): string | null {
+  let depth = 0;
+  for (let j = from; j < toks.length; j += 1) {
+    const kind = toks[j]!.kind;
+    if (kind === SK.OpenParenToken) depth += 1;
+    else if (kind === SK.CloseParenToken) {
+      if (depth === 0) return null;
+      depth -= 1;
+    } else if (
+      depth === 0 &&
+      (kind === SK.StringLiteral || kind === SK.NoSubstitutionTemplateLiteral)
+    ) {
+      const value = toks[j]!.value;
+      if (value === "eval" || value === "Function") return value;
+    }
+  }
+  return null;
 }
 
 /**
@@ -323,218 +370,319 @@ export function scanImportAllowlist(
     readonly syntax: SourceSyntax;
   },
 ): SourceStreamTruncatedError | ImportScanError[] {
-  const toks = tokenize(source, context.syntax);
+  // THE UNION OF TWO READINGS (task 14b fix round 3, Critical 1). A JSX source is scanned twice:
+  // once with the JSX reader's children-text WINDOWS, and once as one linear pass with no
+  // windows at all — the reading `fd9ec53` used. The findings are unioned.
+  //
+  // WHY, and why not a better boundary predicate. A window boundary is drawn where `./jsx`'s
+  // reader thinks a children-text run starts or ends, and that reader can confirm an element the
+  // runtime never sees. When such a fictional run ends on a `<` or `{` that physically sits
+  // INSIDE a genuine string literal, the next window's quote parity is off by one against Bun's
+  // reading and everything after it becomes the interior of string tokens. Measured: 112 of 112
+  // Bun-accepted rows lost every diagnostic — `FORBIDDEN_IMPORT`, `UNRESOLVED_IMPORT`,
+  // `REQUIRE_CALL`, `DYNAMIC_IMPORT`, `REEXPORT`, `EVAL_CALL`, `FUNCTION_CALL` and the closure
+  // edges — on carriers as ordinary as `type X = <T extends unknown>(x: T) => T` followed by
+  // `const s = "</T>";`.
+  //
+  // No predicate closes that: "do not put a boundary inside a string" needs to know where the
+  // strings are, which is the question the boundary was drawn to answer. Coverage accounting
+  // cannot see it either — every character IS accounted for, just as the interior of a token.
+  // So neither reading is trusted alone. The linear pass cannot be fooled by a boundary because
+  // it has none; the windowed pass is what keeps a page's own prose from swallowing the code
+  // after it. Each covers the other's blind spot, and a finding in either is a finding.
+  //
+  // THE SECOND PASS IS SKIPPED when it cannot differ: with no children-text runs the two
+  // readings are the same lex, so a `.ts`/`.mts`/`.cts` source and a `.tsx` source with no JSX
+  // text pay nothing.
+  const windowed = tokenize(source, context.syntax);
   // A stream that does not cover the source cannot be scanned for anything — see
   // `lexer.ts`'s own completeness invariant. Propagated, never treated as "no findings".
-  if (toks instanceof Error) return toks;
+  if (windowed instanceof Error) return windowed;
+  const readings: Tok[][] = [windowed];
+  if (context.syntax === "jsx" && readJsxTextRanges(source).length > 0) {
+    const linear = tokenize(source, "no-jsx");
+    if (linear instanceof Error) return linear;
+    readings.push(linear);
+  }
+
   const errors: ImportScanError[] = [];
+  const seen = new Set<string>();
   const at = (pos: number) => lineColOf(source, pos);
+  for (const toks of readings) scanTokens(toks);
+  return errors;
 
-  for (let i = 0; i < toks.length; i += 1) {
-    const t = toks[i]!;
-    const next = toks[i + 1];
+  /** One reading's walk. Appends to `errors`, skipping anything the other reading already found. */
+  function scanTokens(toks: Tok[]): void {
+    for (let i = 0; i < toks.length; i += 1) {
+      const t = toks[i]!;
+      const next = toks[i + 1];
 
-    if (t.kind === SK.ImportKeyword) {
-      if (next?.kind === SK.DotToken) continue; // import.meta — not a module edge
-      if (next?.kind === SK.OpenParenToken) {
+      if (t.kind === SK.ImportKeyword) {
+        if (next?.kind === SK.DotToken) continue; // import.meta — not a module edge
+        if (next?.kind === SK.OpenParenToken) {
+          const spec = firstStringFrom(toks, i + 2);
+          const where = at(t.pos);
+          push({
+            code: "DYNAMIC_IMPORT",
+            specifier: spec?.value ?? "",
+            message: `dynamic import("${spec?.value ?? ""}") is not allowed — a page loads no runtime-selected code`,
+            line: where.line,
+            column: where.column,
+          });
+          continue;
+        }
+        // static import (side-effect, default, named, namespace, or type-only).
+        const specifier = readStaticImportSpecifier(toks, i);
+        if (specifier !== null) {
+          const resolved = resolveDesignSpecifier({
+            from: context.from,
+            specifier,
+            has: context.has,
+          });
+          if (resolved instanceof Error) {
+            const where = at(t.pos);
+            push({
+              // A specifier the resolver could not resolve inside the tree is reported
+              // separately from one that is not even a legal SHAPE: the first is usually a typo
+              // or a missing file, the second is a rule violation, and telling a user "you may
+              // only import @termcraft/runtime" when they wrote a perfectly legal relative
+              // import with a typo would be a false diagnosis.
+              code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
+              specifier,
+              message: resolved.message,
+              line: where.line,
+              column: where.column,
+            });
+          } else if (resolved.kind === "file" && !context.isScanned(resolved.relPath)) {
+            // The resolution succeeded and named a real tree file — the very file the loader will
+            // run — but the caller never read that file's source, so this pass cannot say whether
+            // it hides a further forbidden import, `eval` or `new Function`. Its own code, not the
+            // resolver's: the resolver was right, and saying `no file at "…"` here would be a
+            // false claim about a file the author can see in the tree.
+            const where = at(t.pos);
+            push({
+              code: "UNSCANNED_IMPORT",
+              specifier,
+              message: `"${specifier}" resolves to "${resolved.relPath}", which the loader executes but this scan was never given the source of — it cannot be checked for a forbidden import, \`eval\` or \`new Function\``,
+              line: where.line,
+              column: where.column,
+            });
+          }
+        }
+        continue;
+      }
+
+      if (t.kind === SK.ExportKeyword) {
+        // A local declaration export (`export const/function/class/default/type X = …`)
+        // is not a module edge. Only `export {…} from`, `export * from`, and
+        // `export type {…} from` carry a specifier.
+        if (next !== undefined && DECLARATION_STARTS.has(next.kind)) continue;
+        if (next?.kind === SK.TypeKeyword) {
+          const afterType = toks[i + 2];
+          // `export type X = …` (local) vs `export type { … } from …` / `export type * from …`
+          if (
+            afterType !== undefined &&
+            afterType.kind !== SK.OpenBraceToken &&
+            afterType.kind !== SK.AsteriskToken
+          )
+            continue;
+        }
+        let specifier: string | null = null;
+        for (let j = i + 1; j < toks.length; j += 1) {
+          const tj = toks[j]!;
+          if (tj.kind === SK.FromKeyword) {
+            specifier = firstStringFrom(toks, j + 1)?.value ?? null;
+            break;
+          }
+          if (isEdgeBoundary(tj.kind)) break;
+        }
+        if (specifier !== null) {
+          const where = at(t.pos);
+          push({
+            code: "REEXPORT",
+            specifier,
+            message: `re-export from "${specifier}" is not allowed — a page exports no module edge`,
+            line: where.line,
+            column: where.column,
+          });
+        }
+        continue;
+      }
+
+      if (t.kind === SK.RequireKeyword && next?.kind === SK.OpenParenToken) {
         const spec = firstStringFrom(toks, i + 2);
+        if (spec !== null) {
+          const where = at(t.pos);
+          push({
+            code: "REQUIRE_CALL",
+            specifier: spec.value,
+            message: `require("${spec.value}") is not allowed — a page uses no CommonJS load`,
+            line: where.line,
+            column: where.column,
+          });
+        }
+        continue;
+      }
+
+      // `eval` (design §5.8, Important 3) — a bare REFERENCE is flagged, not just
+      // a call: assigning it (`const e = eval`), smuggling it through the comma
+      // operator (`(0, eval)("x")`), or any other indirection all reach the same
+      // dynamic-eval capability the moment the reference exists, so no immediate
+      // `(` is required. A `.eval(...)`/`?.eval(...)` method call on some OTHER
+      // object is not the global — only a bare `eval` not immediately preceded
+      // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
+      // flags a page that merely defines a property/method literally named
+      // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
+      // (see the module doc comment above), AND a page whose display copy contains
+      // the word — `<Text id="t">Never use eval here</Text>` — which is the trade
+      // task 14b fix round 2 took deliberately; see the module doc comment's
+      // "NO PROSE SUPPRESSION" section for why the alternative was worse.
+      if (
+        t.kind === SK.Identifier &&
+        t.value === "eval" &&
+        (!isMemberAccess(toks[i - 1]) || isGlobalReceiver(toks[i - 2]))
+      ) {
         const where = at(t.pos);
-        errors.push({
-          code: "DYNAMIC_IMPORT",
-          specifier: spec?.value ?? "",
-          message: `dynamic import("${spec?.value ?? ""}") is not allowed — a page loads no runtime-selected code`,
+        push({
+          code: "EVAL_CALL",
+          specifier: "",
+          message: "`eval` is not allowed — a page executes no dynamic code",
           line: where.line,
           column: where.column,
         });
         continue;
       }
-      // static import (side-effect, default, named, namespace, or type-only).
-      const specifier = readStaticImportSpecifier(toks, i);
-      if (specifier !== null) {
-        const resolved = resolveDesignSpecifier({
-          from: context.from,
-          specifier,
-          has: context.has,
-        });
-        if (resolved instanceof Error) {
-          const where = at(t.pos);
-          errors.push({
-            // A specifier the resolver could not resolve inside the tree is reported
-            // separately from one that is not even a legal SHAPE: the first is usually a typo
-            // or a missing file, the second is a rule violation, and telling a user "you may
-            // only import @termcraft/runtime" when they wrote a perfectly legal relative
-            // import with a typo would be a false diagnosis.
-            code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
-            specifier,
-            message: resolved.message,
-            line: where.line,
-            column: where.column,
-          });
-        } else if (resolved.kind === "file" && !context.isScanned(resolved.relPath)) {
-          // The resolution succeeded and named a real tree file — the very file the loader will
-          // run — but the caller never read that file's source, so this pass cannot say whether
-          // it hides a further forbidden import, `eval` or `new Function`. Its own code, not the
-          // resolver's: the resolver was right, and saying `no file at "…"` here would be a
-          // false claim about a file the author can see in the tree.
-          const where = at(t.pos);
-          errors.push({
-            code: "UNSCANNED_IMPORT",
-            specifier,
-            message: `"${specifier}" resolves to "${resolved.relPath}", which the loader executes but this scan was never given the source of — it cannot be checked for a forbidden import, \`eval\` or \`new Function\``,
-            line: where.line,
-            column: where.column,
-          });
-        }
-      }
-      continue;
-    }
 
-    if (t.kind === SK.ExportKeyword) {
-      // A local declaration export (`export const/function/class/default/type X = …`)
-      // is not a module edge. Only `export {…} from`, `export * from`, and
-      // `export type {…} from` carry a specifier.
-      if (next !== undefined && DECLARATION_STARTS.has(next.kind)) continue;
-      if (next?.kind === SK.TypeKeyword) {
-        const afterType = toks[i + 2];
-        // `export type X = …` (local) vs `export type { … } from …` / `export type * from …`
-        if (
-          afterType !== undefined &&
-          afterType.kind !== SK.OpenBraceToken &&
-          afterType.kind !== SK.AsteriskToken
-        )
+      // `Function(...)` / `new Function(...)` (design §5.8, Important 3) — a
+      // dynamic-code construction. Only the CALLED form is flagged, unlike bare
+      // `eval` above: `Function` alone is also TypeScript's built-in callback
+      // type (`onClick: Function`, `Map<string, Function>`), so a bare
+      // reference is common, legitimate authored code and must not be flagged —
+      // only an actual invocation reaches the dynamic-construction capability.
+      // `new` is optional (`Function(...)` without it constructs a Function
+      // object exactly like `new Function(...)` does per the spec), so one
+      // check covers both forms; a `.Function(...)`/`?.Function(...)` method
+      // call on some other object is, symmetrically with `eval`, not the global.
+      // Display copy that reads as a call — `<Text id="t">Function (beta)</Text>`,
+      // which lexes as the adjacent tokens `Function`, `(`, `beta`, `)` — is
+      // FLAGGED, the accepted trade described in the module doc comment.
+      if (
+        t.kind === SK.Identifier &&
+        t.value === "Function" &&
+        (next?.kind === SK.OpenParenToken || isParenthesisedValue(toks, i)) &&
+        !isMemberAccess(toks[i - 1])
+      ) {
+        const where = at(t.pos);
+        push({
+          code: "FUNCTION_CALL",
+          specifier: "",
+          message: "Function(...) is not allowed — a page executes no dynamic code",
+          line: where.line,
+          column: where.column,
+        });
+        continue;
+      }
+
+      // Computed-string evasion (design §5.8, Important 3): `globalThis["eval"]` /
+      // `g["Function"]` reach the same globals without ever writing the `eval`/`Function`
+      // IDENTIFIER token. Flagged when the bracket holds a LITERAL key naming one of them — a
+      // string or a substitution-free template — and is not a bare array literal (`["eval"]`
+      // sitting on its own, e.g. in a word list, is not evasion and must not be flagged).
+      //
+      // WIDENED in task 14b fix round 3, Critical 2, after four literal spellings were measured
+      // live (Bun accepts, `await import()` executes, the perimeter reported nothing). Each was
+      // written in exactly the form this check claimed to catch, and each missed it for one
+      // token's worth of reason:
+      //
+      //   globalThis?.["eval"](…)        `?.` is a QuestionDotToken, absent from the receiver set
+      //   globalThis[`eval`](…)          a template key is not a StringLiteral
+      //   const { ["eval"]: v } = g      in a destructuring pattern the token before `[` is `{`
+      //   const { "eval": v } = g        no bracket at all — a string PROPERTY KEY
+      //
+      // A key built through concatenation or held in a variable first (`"ev" + "al"`,
+      // `const k = "eval"; g[k]`) is still NOT caught — that needs constant folding, which this
+      // scan does not do, and it is pinned in the module doc comment's KNOWN GAP list.
+      const literalKey =
+        next !== undefined &&
+        (next.kind === SK.StringLiteral || next.kind === SK.NoSubstitutionTemplateLiteral) &&
+        (next.value === "eval" || next.value === "Function")
+          ? next.value
+          : null;
+
+      if (
+        t.kind === SK.OpenBracketToken &&
+        literalKey !== null &&
+        toks[i + 2]?.kind === SK.CloseBracketToken &&
+        isComputedKeyPosition(toks[i - 1])
+      ) {
+        const where = at(t.pos);
+        push({
+          code: literalKey === "eval" ? "EVAL_CALL" : "FUNCTION_CALL",
+          specifier: "",
+          message: `computed access to "${literalKey}" is not allowed — a page executes no dynamic code`,
+          line: where.line,
+          column: where.column,
+        });
+        continue;
+      }
+
+      // A STRING PROPERTY KEY naming the capability — `const { "eval": v } = globalThis`, and
+      // symmetrically an object literal `{ "eval": fn }`. The second is the same accepted
+      // over-approximation as `{ eval() { return 1 } }`, which this scan has flagged since §5.8
+      // was first implemented; the first is a real, measured, executed bypass.
+      if (
+        (t.kind === SK.StringLiteral || t.kind === SK.NoSubstitutionTemplateLiteral) &&
+        (t.value === "eval" || t.value === "Function") &&
+        next?.kind === SK.ColonToken &&
+        (toks[i - 1]?.kind === SK.OpenBraceToken || toks[i - 1]?.kind === SK.CommaToken)
+      ) {
+        const where = at(t.pos);
+        push({
+          code: t.value === "eval" ? "EVAL_CALL" : "FUNCTION_CALL",
+          specifier: "",
+          message: `a property named "${t.value}" is not allowed — a page executes no dynamic code`,
+          line: where.line,
+          column: where.column,
+        });
+        continue;
+      }
+
+      // `Reflect.get(<anything>, "eval")` — the reflective spelling of the same computed access,
+      // with the key still written literally. Measured live and executed. Nothing here folds
+      // constants: the literal has to be one of the two tokens inside the call's parentheses.
+      if (
+        t.kind === SK.Identifier &&
+        t.value === "Reflect" &&
+        next?.kind === SK.DotToken &&
+        // `get` is `GetKeyword` to the scanner, not an Identifier — the kind it uses for a
+        // getter declaration. Measured, and the one reason this check first read as dead.
+        (toks[i + 2]?.kind === SK.GetKeyword ||
+          (toks[i + 2]?.kind === SK.Identifier && toks[i + 2]?.value === "get")) &&
+        toks[i + 3]?.kind === SK.OpenParenToken
+      ) {
+        const key = reflectGetLiteralKey(toks, i + 4);
+        if (key !== null) {
+          const where = at(t.pos);
+          push({
+            code: key === "eval" ? "EVAL_CALL" : "FUNCTION_CALL",
+            specifier: "",
+            message: `Reflect.get(…, "${key}") is not allowed — a page executes no dynamic code`,
+            line: where.line,
+            column: where.column,
+          });
           continue;
-      }
-      let specifier: string | null = null;
-      for (let j = i + 1; j < toks.length; j += 1) {
-        const tj = toks[j]!;
-        if (tj.kind === SK.FromKeyword) {
-          specifier = firstStringFrom(toks, j + 1)?.value ?? null;
-          break;
         }
-        if (isEdgeBoundary(tj.kind)) break;
       }
-      if (specifier !== null) {
-        const where = at(t.pos);
-        errors.push({
-          code: "REEXPORT",
-          specifier,
-          message: `re-export from "${specifier}" is not allowed — a page exports no module edge`,
-          line: where.line,
-          column: where.column,
-        });
-      }
-      continue;
-    }
-
-    if (t.kind === SK.RequireKeyword && next?.kind === SK.OpenParenToken) {
-      const spec = firstStringFrom(toks, i + 2);
-      if (spec !== null) {
-        const where = at(t.pos);
-        errors.push({
-          code: "REQUIRE_CALL",
-          specifier: spec.value,
-          message: `require("${spec.value}") is not allowed — a page uses no CommonJS load`,
-          line: where.line,
-          column: where.column,
-        });
-      }
-      continue;
-    }
-
-    // `eval` (design §5.8, Important 3) — a bare REFERENCE is flagged, not just
-    // a call: assigning it (`const e = eval`), smuggling it through the comma
-    // operator (`(0, eval)("x")`), or any other indirection all reach the same
-    // dynamic-eval capability the moment the reference exists, so no immediate
-    // `(` is required. A `.eval(...)`/`?.eval(...)` method call on some OTHER
-    // object is not the global — only a bare `eval` not immediately preceded
-    // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
-    // flags a page that merely defines a property/method literally named
-    // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
-    // (see the module doc comment above), AND a page whose display copy contains
-    // the word — `<Text id="t">Never use eval here</Text>` — which is the trade
-    // task 14b fix round 2 took deliberately; see the module doc comment's
-    // "NO PROSE SUPPRESSION" section for why the alternative was worse.
-    if (
-      t.kind === SK.Identifier &&
-      t.value === "eval" &&
-      (!isMemberAccess(toks[i - 1]) || isGlobalReceiver(toks[i - 2]))
-    ) {
-      const where = at(t.pos);
-      errors.push({
-        code: "EVAL_CALL",
-        specifier: "",
-        message: "`eval` is not allowed — a page executes no dynamic code",
-        line: where.line,
-        column: where.column,
-      });
-      continue;
-    }
-
-    // `Function(...)` / `new Function(...)` (design §5.8, Important 3) — a
-    // dynamic-code construction. Only the CALLED form is flagged, unlike bare
-    // `eval` above: `Function` alone is also TypeScript's built-in callback
-    // type (`onClick: Function`, `Map<string, Function>`), so a bare
-    // reference is common, legitimate authored code and must not be flagged —
-    // only an actual invocation reaches the dynamic-construction capability.
-    // `new` is optional (`Function(...)` without it constructs a Function
-    // object exactly like `new Function(...)` does per the spec), so one
-    // check covers both forms; a `.Function(...)`/`?.Function(...)` method
-    // call on some other object is, symmetrically with `eval`, not the global.
-    // Display copy that reads as a call — `<Text id="t">Function (beta)</Text>`,
-    // which lexes as the adjacent tokens `Function`, `(`, `beta`, `)` — is
-    // FLAGGED, the accepted trade described in the module doc comment.
-    if (
-      t.kind === SK.Identifier &&
-      t.value === "Function" &&
-      (next?.kind === SK.OpenParenToken || isParenthesisedValue(toks, i)) &&
-      !isMemberAccess(toks[i - 1])
-    ) {
-      const where = at(t.pos);
-      errors.push({
-        code: "FUNCTION_CALL",
-        specifier: "",
-        message: "Function(...) is not allowed — a page executes no dynamic code",
-        line: where.line,
-        column: where.column,
-      });
-      continue;
-    }
-
-    // Computed-string evasion (design §5.8, Important 3): `globalThis["eval"]`
-    // / `g["Function"]` reach the same globals without ever writing the
-    // `eval`/`Function` IDENTIFIER token. Flagged only when the bracket is a
-    // MEMBER access — preceded by a value (an identifier, `this`, or a prior
-    // call/index result) — not a bare array literal (`["eval"]` sitting on its
-    // own, e.g. in a word list, is not evasion and must not be flagged). A key
-    // built through concatenation or held in a variable first
-    // (`"ev" + "al"`, `const k = "eval"; g[k]`) is NOT caught — this is a
-    // token-level scan, not a constant-folding evaluator (see the module doc
-    // comment's pinned "KNOWN GAP" list). Display copy spelling this shape is
-    // flagged too, on the same trade as the two checks above.
-    if (
-      t.kind === SK.OpenBracketToken &&
-      (toks[i - 1]?.kind === SK.Identifier ||
-        toks[i - 1]?.kind === SK.CloseParenToken ||
-        toks[i - 1]?.kind === SK.CloseBracketToken ||
-        toks[i - 1]?.kind === SK.ThisKeyword) &&
-      next !== undefined &&
-      next.kind === SK.StringLiteral &&
-      (next.value === "eval" || next.value === "Function") &&
-      toks[i + 2]?.kind === SK.CloseBracketToken
-    ) {
-      const where = at(t.pos);
-      errors.push({
-        code: next.value === "eval" ? "EVAL_CALL" : "FUNCTION_CALL",
-        specifier: "",
-        message: `computed access to "${next.value}" is not allowed — a page executes no dynamic code`,
-        line: where.line,
-        column: where.column,
-      });
-      continue;
     }
   }
 
-  return errors;
+  /** Union semantics: the same finding from both readings is reported once. */
+  function push(error: ImportScanError): void {
+    const key = `${error.code}|${error.specifier}|${error.line}|${error.column}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    errors.push(error);
+  }
 }
 
 /**
@@ -551,15 +699,31 @@ export function scanModuleEdges(
   source: string,
   syntax: SourceSyntax,
 ): SourceStreamTruncatedError | readonly string[] {
-  const toks = tokenize(source, syntax);
-  if (toks instanceof Error) return toks;
+  // UNIONED for the same reason {@link scanImportAllowlist} is, and this half matters just as
+  // much: a boundary landing inside a real string literal lost the EDGES too, so a module Bun
+  // loads could be absent from the closure and never scanned at all — Task 13's "this page did
+  // not change" mode. Duplicates are collapsed because a closure is a set of paths.
+  const windowed = tokenize(source, syntax);
+  if (windowed instanceof Error) return windowed;
+  const readings: Tok[][] = [windowed];
+  if (syntax === "jsx" && readJsxTextRanges(source).length > 0) {
+    const linear = tokenize(source, "no-jsx");
+    if (linear instanceof Error) return linear;
+    readings.push(linear);
+  }
   const edges: string[] = [];
-  for (let i = 0; i < toks.length; i += 1) {
-    if (toks[i]?.kind !== SK.ImportKeyword) continue;
-    const next = toks[i + 1];
-    if (next?.kind === SK.DotToken || next?.kind === SK.OpenParenToken) continue;
-    const specifier = readStaticImportSpecifier(toks, i);
-    if (specifier !== null) edges.push(specifier);
+  const seen = new Set<string>();
+  for (const toks of readings) {
+    for (let i = 0; i < toks.length; i += 1) {
+      if (toks[i]?.kind !== SK.ImportKeyword) continue;
+      const next = toks[i + 1];
+      if (next?.kind === SK.DotToken || next?.kind === SK.OpenParenToken) continue;
+      const specifier = readStaticImportSpecifier(toks, i);
+      if (specifier !== null && !seen.has(specifier)) {
+        seen.add(specifier);
+        edges.push(specifier);
+      }
+    }
   }
   return edges;
 }
