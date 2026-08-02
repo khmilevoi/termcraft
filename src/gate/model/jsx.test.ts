@@ -163,17 +163,20 @@ describe("readJsxTextRanges — where the runtime reads TEXT, and therefore wher
   }
 
   /**
-   * THE WINDOW INVARIANT: a token `tokenize` emits carries `jsxText` if and only if it lies
-   * inside a children-text run, and no token spans a boundary. That is what makes an apostrophe
-   * in prose stop being a string opener that reaches the code after `</p>` — without removing
-   * the prose from the stream, which is how real code went invisible in the previous round.
+   * THE WINDOW INVARIANT: no token `tokenize` emits may span a children-text boundary. That is
+   * what makes an apostrophe in prose stop being a string opener that reaches the code after
+   * `</p>` — without removing the prose from the stream, which is how real code went invisible
+   * in an earlier round.
+   *
+   * Asserted as "the code after the run is reached", which is the observable form of it: if a
+   * token had swallowed the boundary there would be no token past the run at all.
    */
   function expectTextIsMarked(source: string): void {
     const ranges = readJsxTextRanges(source);
-    const wrong = scanned(tokenize(source, "jsx")).filter(
-      (t) => t.jsxText !== ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
-    );
-    expect(wrong).toEqual([]);
+    if (ranges.length === 0) return;
+    const last = ranges[ranges.length - 1]!;
+    if (last.end >= source.length) return;
+    expect(scanned(tokenize(source, "jsx")).some((t) => t.pos >= last.end)).toBe(true);
   }
 
   test("children text between a tag's `>` and its closing tag is one run", () => {
@@ -238,23 +241,17 @@ describe("readJsxTextRanges — where the runtime reads TEXT, and therefore wher
       const source = `<Text id="t">eval isn't allowed here</Text>`;
       expect(textRunsOf(source)).toEqual(["eval isn't allowed here"]);
       expectTextIsMarked(source);
-      // The word IS in the stream — marked, so `import-scan.ts` raises no fatal on it, while
-      // every other check still sees the span.
-      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && t.jsxText)).toBe(
-        true,
-      );
-      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && !t.jsxText)).toBe(
-        false,
-      );
+      // The word IS in the stream: prose is lexed, not skipped. Since fix round 2 there is no
+      // mark and no filter, so `import-scan.ts` DOES raise a fatal on it — the uniform
+      // over-approximation that replaced three unsound suppression rules.
+      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval")).toBe(true);
     });
 
     test("`//` opens no line comment that swallows the closing tag", () => {
       const source = `<Text id="t">eval // never</Text>`;
       expect(textRunsOf(source)).toEqual(["eval // never"]);
       expectTextIsMarked(source);
-      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && !t.jsxText)).toBe(
-        false,
-      );
+      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval")).toBe(true);
     });
   });
 

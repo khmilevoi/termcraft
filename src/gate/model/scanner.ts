@@ -24,24 +24,19 @@ export const SK = SyntaxKind;
  * unstable AST package as a single import seam. */
 export type { SyntaxKind };
 
-/** One lexed token: its kind, its string value (for literals/identifiers), and its start offset. */
+/**
+ * One lexed token: its kind, its string value (for literals/identifiers), and its start offset.
+ *
+ * `value` is the scanner's COOKED value, never its raw source text (task 14b fix round 2,
+ * Critical 3). `\u0065val("1")` is a legal, Bun-executed spelling of `eval("1")`, and the raw
+ * text of that identifier is `\u0065val`, so every check comparing an identifier against
+ * `"eval"` or `"Function"` was silent on it — measured on a plain `.ts` module through the real
+ * perimeter. `getTokenValue()` resolves the escape; `getTokenText()` does not.
+ */
 export interface Tok {
   readonly kind: SyntaxKind;
   readonly value: string;
   readonly pos: number;
-  /**
-   * True when this token was lexed inside a run the JSX reader calls children TEXT — a page's
-   * own display copy rather than code.
-   *
-   * MARKED, NOT DROPPED (task 14b fix round 1). Only `import-scan.ts`'s three dynamic-code
-   * checks consult it, and only to avoid a FATAL on prose: `<Text>Never use eval here</Text>`
-   * must not reject a page. The token is still in the stream, so the import/require/re-export
-   * checks, the page contract and every lint see it — which is what keeps a span the JSX reader
-   * mis-classified as text from becoming invisible. The previous round SKIPPED those spans
-   * instead and made real `import`/`require` statements vanish wherever `scanJsx` confirmed an
-   * element Bun does not see.
-   */
-  readonly jsxText: boolean;
 }
 
 /**

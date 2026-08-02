@@ -619,7 +619,14 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly slug: PageSlug;
   }): Promise<PageMetaExtractionV1> {
     const fileName = `${input.slug}.tsx`;
-    const contract = checkPageContract(input.source, "jsx");
+    // Derived from the name this method itself builds, never asserted (task 14b fix round 2,
+    // Minor 2). The RESIDUAL is stated rather than hidden: this port takes only a slug, so it
+    // cannot see the manifest's real entry, and the manifest's entry schema does NOT constrain
+    // the extension (`entities/design-tree`'s `manifest.ts`) — a `pages/a.ts` entry is legal and
+    // would be read here as JSX. `runPage` and `runTreeImports`, which do see the real path, use
+    // `parsesJsx` on it; widening `PageMetaExtraction` to carry the entry is the fix and it
+    // belongs with the port, not here.
+    const contract = checkPageContract(input.source, parsesJsx(fileName));
     if (contract instanceof Error) {
       // A source whose token stream does not cover it has no readable `meta` — reporting
       // `meta: null` with the real reason beats reporting "this page declares no settings",

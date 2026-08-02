@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { resolveClosure } from "entities/design-tree";
 
 import type { SourceStreamTruncatedError } from "./lexer";
-import { scanModuleEdges, scanTreeImports } from "./tree-scan";
+import { parsesJsx, scanModuleEdges, scanTreeImports } from "./tree-scan";
 
 /**
  * Unwraps `lexer.ts`'s completeness-invariant union at the test boundary (task-14 review round
@@ -930,5 +930,44 @@ describe("scanTreeImports — a file whose token stream does not cover it is fat
       "FORBIDDEN_IMPORT@lib/other.ts",
       "UNSCANNABLE_SOURCE@lib/theme.tsx",
     ]);
+  });
+});
+
+/**
+ * THE SYNTAX ARGUMENT IS OBSERVABLE IN THE EDGE LIST (task 14b fix round 2, Important 2).
+ *
+ * Fix round 1's report claimed the opposite — "the syntax argument only affects marking, and
+ * `scanModuleEdges` never consults marks, so passing the wrong one changes no edge list" — and
+ * left the corresponding mutation with no killing test on that reasoning. One command disproves
+ * it: inside a fictional children-text run a nested `<b/>` splits the run, `tokenize` windows
+ * around it, and a string literal spanning the split stops being one token, so its specifier is
+ * never seen. A `parsesJsx` mismatch between the flat scan and the closure walk therefore builds
+ * DIFFERENT CLOSURES, which is a divergence, not defence in depth.
+ */
+describe("parsesJsx is load-bearing for the closure, not only for lexing", () => {
+  const SPLIT = `let a: <T>(x: T) => T;\nimport "./li<b/>x";\n// </T>\n`;
+
+  test("the same source yields DIFFERENT edges under the two syntaxes", () => {
+    const asJsx = scanModuleEdges(SPLIT, "jsx");
+    const asCode = scanModuleEdges(SPLIT, "no-jsx");
+    if (asJsx instanceof Error || asCode instanceof Error) throw new Error("unexpected refusal");
+    expect([...asJsx]).not.toEqual([...asCode]);
+  });
+
+  test("so both readers must derive it from `parsesJsx`, and this pins that they do", () => {
+    // The flat scan takes `syntax` from `parsesJsx(from)`; the closure walk takes it from
+    // `parsesJsx(relPath)`. Asserting the two agree for the same path is what makes a future
+    // hard-coded `"jsx"` at either call site a test failure rather than a silent divergence.
+    for (const rel of ["lib/m.ts", "lib/m.tsx", "lib/m.mts", "lib/m.jsx", "Dockerfile"]) {
+      const walk = scanModuleEdges(SPLIT, parsesJsx(rel));
+      const flat = scanTreeImports({
+        files: new Map([[rel, SPLIT]]),
+        has: (p) => p === rel,
+      });
+      if (walk instanceof Error) throw new Error(`unexpected refusal for ${rel}`);
+      // The flat scan reports every specifier it saw; the closure walk lists the same ones.
+      const flatSpecs = flat.filter((e) => e.specifier !== "").map((e) => e.specifier);
+      expect([rel, [...walk]]).toEqual([rel, flatSpecs]);
+    }
   });
 });

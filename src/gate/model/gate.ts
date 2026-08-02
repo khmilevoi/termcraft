@@ -13,7 +13,7 @@ import {
   lintUnpointedElements,
 } from "./lints";
 import { checkPageContract } from "./page-contract";
-import { scanTreeImports } from "./tree-scan";
+import { parsesJsx, scanTreeImports } from "./tree-scan";
 
 /**
  * One page's own source could not be tokenized to the end (`lexer.ts`'s
@@ -178,19 +178,22 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   //     crash the turn instead of rejecting one page — the whole reason this converter exists.
   //     One `errore.try` around the group, rather than five.
   //
-  // A CANDIDATE PAGE IS ALWAYS JSX. `entryRelPath`/`fileName` both name a `.tsx` entry (see
-  // `fileName`'s own `${input.slug}.tsx` fallback below), and design §5 requires a page to
-  // default-export a component, so there is no non-JSX page for this path to serve.
-  // `runTreeImports` is the entry point that meets arbitrary tree files, and it derives the
-  // syntax per file from `tree-scan.ts`'s measured `parsesJsx`.
+  // THE PAGE'S SYNTAX IS DERIVED FROM ITS OWN PATH, not assumed (task 14b fix round 2, Minor
+  // 2). This used to assert "a candidate page is always JSX" because `entryRelPath`/`fileName`
+  // name a `.tsx` entry — but nothing enforces that: `entityPathSchema`
+  // (`entities/design-tree`'s `manifest.ts`) places no constraint on the extension, so
+  // `pages/a.ts` is a legal entry and Bun parses no JSX in it. `parsesJsx` is the same measured
+  // predicate `runTreeImports` uses, so a page and a shared module of the same name are read
+  // identically.
+  const syntax = parsesJsx(fileName);
   const read = errore.try({
     try: () => ({
-      contract: checkPageContract(input.source, "jsx"),
+      contract: checkPageContract(input.source, syntax),
       lints: [
-        lintDeterminism(input.source, "jsx"),
-        lintSilencingAny(input.source, "jsx"),
-        lintDroppedIds(input.source, "jsx", input.referencedIds),
-        lintUnlistedNavigation(input.source, "jsx", input.listedSlugs),
+        lintDeterminism(input.source, syntax),
+        lintSilencingAny(input.source, syntax),
+        lintDroppedIds(input.source, syntax, input.referencedIds),
+        lintUnlistedNavigation(input.source, syntax, input.listedSlugs),
       ],
       unpointed: lintUnpointedElements(input.source),
     }),

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
+import { readJsxTextRanges } from "./jsx";
 import type { SourceStreamTruncatedError } from "./lexer";
 
 /**
@@ -393,31 +394,56 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   });
 
   describe("Finding 4 (fix pass 5) — a namespaced attribute name no longer fatally rejects the element's own text", () => {
-    test('`<box xml:lang="en" id="b">eval is banned</box>` is legal JSX and is not fatally rejected', () => {
-      const src = `export default () => <box xml:lang="en" id="b">eval is banned</box>\n`;
+    test("a namespaced attribute keeps the element READABLE — its text no longer swallows the tag", () => {
+      // The finding this row pins is about the ELEMENT being confirmed, not about the fatal:
+      // before fix pass 5 a namespaced name failed the element, so its children were lexed as
+      // ordinary code and the closing tag could be swallowed. The element is confirmed now.
+      const src = `export default () => <box xml:lang="en" id="b">dynamic evaluation is banned</box>\n`;
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+      // …and the word itself is refused wherever it appears, which is fix round 2's trade.
+      const withWord = `export default () => <box xml:lang="en" id="b">eval is banned</box>\n`;
+      expect(scanned(scanImportAllowlist(withWord, NONE)).map((e) => e.code)).toEqual([
+        "EVAL_CALL",
+      ]);
     });
   });
 
-  describe("Important 1 (fix pass 2) — JSX children text is not scanned as code", () => {
-    test("prose containing the bare word `eval` as a JSX text child is not fatally rejected", () => {
-      const src = `export default () => <Text id="t">Never use eval here</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+  describe("Important 1 (fix pass 2) — JSX children text IS scanned as code (the fix-round-2 trade)", () => {
+    /**
+     * REVERSED DELIBERATELY in task 14b fix round 2, Critical 1. These rows used to assert that a
+     * page's own display copy never trips §5.8. Three mechanisms were tried to make that true —
+     * filtering marked tokens, skipping the spans in the lexer, then filtering only when a call
+     * parenthesis was adjacent — and every one produced a FALSE NEGATIVE the moment the JSX
+     * reader confirmed an element the runtime does not see. Measured live, all executed by Bun:
+     * `eval ("1")`, `eval` + newline + `("1")`, a bare `eval`, `globalThis["eval"]` and
+     * `new Function ("…")` reported nothing at all.
+     *
+     * So there is no suppression, and prose pays for it: display copy containing `eval`, or
+     * `Function` before a `(`, is REFUSED and the author rephrases. Each row below pins that
+     * trade AND the thing that makes it survivable — the prose still cannot swallow the code
+     * after it, which is the boundary guarantee `./lexer`'s windows provide.
+     */
+    const proseRejected = (src: string, code: "EVAL_CALL" | "FUNCTION_CALL"): void => {
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual([code]);
+    };
+    test("prose containing the bare word `eval` IS rejected — the stated trade", () => {
+      proseRejected(`export default () => <Text id="t">Never use eval here</Text>\n`, "EVAL_CALL");
     });
 
-    test("prose containing `Function (` as a JSX text child is not fatally rejected", () => {
-      const src = `export default () => <Text id="t">Function (beta)</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+    test("prose containing `Function (` IS rejected — the stated trade", () => {
+      proseRejected(`export default () => <Text id="t">Function (beta)</Text>\n`, "FUNCTION_CALL");
     });
 
-    test("the bare word `eval` as the WHOLE JSX text child is not fatally rejected", () => {
-      const src = `export default () => <Text id="t">eval</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+    test("the bare word `eval` as the WHOLE JSX text child IS rejected", () => {
+      proseRejected(`export default () => <Text id="t">eval</Text>\n`, "EVAL_CALL");
     });
 
-    test('a computed-access-shaped sentence (`globalThis["eval"]`) as JSX text is not fatally rejected', () => {
-      const src = `export default () => <Text id="t">try globalThis["eval"]</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+    test('a computed-access-shaped sentence (`globalThis["eval"]`) as JSX text IS rejected', () => {
+      proseRejected(
+        `export default () => <Text id="t">try globalThis["eval"]</Text>\n`,
+        "EVAL_CALL",
+      );
     });
 
     test("a real eval(...) call inside a JSX expression container is still rejected", () => {
@@ -441,14 +467,27 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(errors[0]?.code).toBe("EVAL_CALL");
     });
 
-    test("prose in a JSX element nested inside an expression container is not fatally rejected", () => {
-      const src = `export default () => <box>{cond && <text id="t">eval here</text>}</box>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+    test("prose in a JSX element nested inside an expression container IS rejected", () => {
+      proseRejected(
+        `export default () => <box>{cond && <text id="t">eval here</text>}</box>\n`,
+        "EVAL_CALL",
+      );
     });
 
-    test("prose containing `eval` inside a bare Fragment (`<>...</>`) is not fatally rejected", () => {
-      const src = `export default () => <>Never use eval here</>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+    test("prose containing `eval` inside a bare Fragment (`<>...</>`) IS rejected", () => {
+      proseRejected(`export default () => <>Never use eval here</>\n`, "EVAL_CALL");
+    });
+
+    test("…and prose WITHOUT those words is untouched — the trade is narrow, not a blanket", () => {
+      // The valid-input companion the whole block needs: only the two banned words cost a page.
+      for (const src of [
+        `export default () => <Text id="t">Never use dynamic evaluation here</Text>\n`,
+        `export default () => <Text id="t">it isn't allowed — don't try</Text>\n`,
+        `export default () => <Text id="t">see the docs // for details</Text>\n`,
+        `export default () => <Text id="t">#7ad7ff is the accent</Text>\n`,
+      ]) {
+        expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
+      }
     });
 
     test("an uncalled generic type-argument list (`Array<Foo>`) does not mask a later real eval(...) call as JSX text", () => {
@@ -464,24 +503,35 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
   });
 
   describe("WP-6a fix-pass-3 — the code-token heuristic's unsound premise (§ finding)", () => {
-    test("prose containing an apostrophe (`isn't`) does not swallow the closing tag and fatally reject the page", () => {
+    test("prose containing an apostrophe (`isn't`) does not swallow the closing tag", () => {
       // Before fix-pass-3: the apostrophe opens a code-mode string literal that
       // swallows the rest of the line INCLUDING `</Text>`, so the closing tag
       // never confirms and `eval` is read as a live reference again.
-      const src = `export default () => <Text id="t">eval isn't allowed on this page</Text>\n`;
+      // The word `eval` is deliberately NOT in this copy any more — fix round 2 flags it
+      // wherever it appears — so the row measures the SWALLOW itself: the import written after
+      // the element on the same line must still be seen.
+      const src = `export default () => <Text id="t">it isn't allowed on this page</Text>; import "node:fs";\n`;
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual([
+        "FORBIDDEN_IMPORT",
+      ]);
+    });
+
+    test("prose containing an em dash and an apostrophe does not fatally reject the page", () => {
+      // The apostrophe is the point of this row: before the JSX reader existed it opened a
+      // string that swallowed the closing tag. It still must not.
+      const src = `export default () => <Text id="t">rendering — don't stop</Text>\n`;
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
-    test("prose containing an em dash and an apostrophe (`eval — don't`) does not fatally reject the page", () => {
-      const src = `export default () => <Text id="t">eval — don't</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
-    });
-
-    test("prose containing `//` does not open a code-mode line comment that swallows the closing tag", () => {
+    test("prose containing `//` does not open a line comment that swallows the closing tag", () => {
       // Before fix-pass-3: `//` opens a code-mode line comment that eats
       // `</Text>` the same way the apostrophe case eats it via a string.
-      const src = `export default () => <Text id="t">eval // never</Text>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+      // Same shape as the apostrophe row above, and measured the same way: the import written
+      // after the element on the same line must still be seen.
+      const src = `export default () => <Text id="t">never // here</Text>; import "node:fs";\n`;
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual([
+        "FORBIDDEN_IMPORT",
+      ]);
     });
 
     test("a dangling close tag after an uncalled generic type argument does not launder a real eval(...) call as JSX text", () => {
@@ -548,17 +598,17 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
 
   describe("Important 2 (fix pass 4) — spread attributes and dotted tag names keep prose readable", () => {
     test("prose in an element carrying a spread attribute is not fatally rejected", () => {
-      const src = `export default () => <Text id="t" {...rest}>eval isn't allowed on this page</Text>\n`;
+      const src = `export default () => <Text id="t" {...rest}>this isn't allowed on this page</Text>\n`;
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose in a member-expression tag (`<Kit.Text>`) is not fatally rejected", () => {
-      const src = `export default () => <Kit.Text id="t">eval isn't allowed</Kit.Text>\n`;
+      const src = `export default () => <Kit.Text id="t">this isn't allowed</Kit.Text>\n`;
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
     test("prose in an element whose attribute value is a template literal is not fatally rejected", () => {
-      const src = `export default () => <box label={\`R\${n}\`}>eval isn't allowed</box>\n`;
+      const src = `export default () => <box label={\`R\${n}\`}>this isn't allowed</box>\n`;
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
@@ -818,59 +868,115 @@ describe("KNOWN-GAP spellings closed in fix round 1 (Important 4)", () => {
 });
 
 /**
- * THE PROSE FILTER'S OWN BOUNDARY (task 14b fix round 1). A token the lexer marks as JSX
- * children text is skipped by the three dynamic-code checks so a page's display copy cannot trip
- * a FATAL — but `./jsx`'s reader is not Bun's parser, and where it mis-classifies real code as
- * prose that filter would hide a real call. `isAdjacentCall` is the line between the two, and
- * both sides of it are pinned here.
+ * §5.8 OVER-APPROXIMATES UNIFORMLY (task 14b fix round 2, Critical 1). There is no prose
+ * suppression: an `eval`/`Function` reference is flagged wherever it appears. These rows pin
+ * BOTH directions of that trade, because a later round tempted to re-introduce a filter has to
+ * break one of them to do it.
  */
-describe("the prose filter is bounded by call ADJACENCY", () => {
-  test("prose that merely SAYS eval or Function is not a fatal", () => {
+describe("no prose suppression — the trade, in both directions", () => {
+  /** Every spelling that a suppression rule was measured to let through. All executed by Bun. */
+  const SPELLINGS: readonly (readonly [string, string, "EVAL_CALL" | "FUNCTION_CALL"])[] = [
+    ["adjacent call", `export const r = eval("1");`, "EVAL_CALL"],
+    ["space before paren", `export const r = eval ("1");`, "EVAL_CALL"],
+    ["newline before paren", `export const r = eval\n("1");`, "EVAL_CALL"],
+    ["bare reference", `export const e = eval;`, "EVAL_CALL"],
+    ["computed access", `export const r = (globalThis as any)["eval"]("1");`, "EVAL_CALL"],
+    ["global receiver", `export const r = (globalThis as any).eval("1");`, "EVAL_CALL"],
+    ["Function with a space", `export const f = new Function ("return 1");`, "FUNCTION_CALL"],
+    ["parenthesised Function", `export const f = (Function)("return 1");`, "FUNCTION_CALL"],
+    ["unicode-escaped identifier", `export const r = ${"\\"}u0065val("1");`, "EVAL_CALL"],
+  ];
+
+  test("every spelling is caught in ORDINARY code", () => {
+    for (const [name, body, code] of SPELLINGS) {
+      const src = `${body}\n`;
+      expect([name, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        name,
+        [code],
+      ]);
+    }
+  });
+
+  test("…and every spelling is still caught inside a FICTIONAL prose run", () => {
+    // The carrier makes the JSX reader confirm an element the runtime does not see, so the
+    // payload sits in what the reader calls children text. Under every suppression rule this
+    // branch tried, at least one of these spellings reported nothing while Bun executed it.
+    for (const [name, body, code] of SPELLINGS) {
+      const src = `let identity: <T>(x: T) => T = (x) => x;\n${body}\n// </T>\n`;
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+      expect(readJsxTextRanges(src).length).toBeGreaterThan(0);
+      expect([name, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        name,
+        [code],
+      ]);
+    }
+  });
+
+  test("the cost, pinned: display copy spelling those words is REFUSED", () => {
+    // Stated as a test rather than only in prose, so nobody re-reads the trade as a defect.
+    // The author's fix is a rephrase; `import-scan.ts`'s doc comment says so too.
+    for (const [src, code] of [
+      [`export default () => <Text id="t">Never use eval here</Text>\n`, "EVAL_CALL"],
+      [`export default () => <Text id="t">Function (beta)</Text>\n`, "FUNCTION_CALL"],
+    ] as const) {
+      expect([src, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        src,
+        [code],
+      ]);
+    }
+  });
+
+  test("…and the trade is NARROW: prose without those two words is untouched", () => {
     for (const src of [
-      `export default () => <Text id="t">Never use eval here</Text>\n`,
-      `export default () => <Text id="t">Function (beta)</Text>\n`,
-      `export default () => <Text id="t">call eval (later)</Text>\n`,
+      `export default () => <Text id="t">use dynamic evaluation sparingly</Text>\n`,
+      `export default () => <Text id="t">it isn't allowed — don't try</Text>\n`,
+      `export default () => <Text id="t">see the docs // for details</Text>\n`,
+      `export default () => <Text id="t">a /* b and #7ad7ff</Text>\n`,
     ]) {
       expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
     }
   });
+});
 
-  test("a REAL call the JSX reader mis-classified as prose is still caught", () => {
-    // The measured shape: a `<T>` type-parameter list closed by a `</T>` written in a later
-    // comment makes the reader call everything between them children text. Bun sees code.
-    const src = `let a: <T>(x: T) => T;\nexport const r = eval("1");\n// </T>\n`;
-    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
-    expect(
-      scanned(scanImportAllowlist(src, { ...NONE, syntax: "jsx" })).map((e) => e.code),
-    ).toEqual(["EVAL_CALL"]);
-  });
-
-  test("…and the same holds for `Function(` — BOTH halves of the filter are bounded", () => {
-    // Without this row the `Function` check could keep the blanket filter and nothing would
-    // notice: every other fixture exercising the filter uses `eval`. (Found by mutation.)
-    const src = `let a: <T>(x: T) => T;\nexport const r = new Function("return 1");\n// </T>\n`;
-    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
-    expect(
-      scanned(scanImportAllowlist(src, { ...NONE, syntax: "jsx" })).map((e) => e.code),
-    ).toEqual(["FUNCTION_CALL"]);
-  });
-
-  test("a BARE global identifier receiver is recognised, not only a parenthesised one", () => {
-    // `(globalThis as any).eval(...)` leaves a `)` before the dot, so it exercises a different
-    // arm of `isGlobalReceiver` than `globalThis.eval(...)` does — and only the second one
-    // consults the name list. Both spellings execute. (Found by mutation.)
+/**
+ * The receiver arms of `isGlobalReceiver`, swept (task 14b fix round 2). `(globalThis as any).eval`
+ * leaves a `)` before the dot and `globalThis.eval` leaves an IDENTIFIER, so the two exercise
+ * different arms — and only the second consults the name list. `global` is not even an identifier
+ * to the TypeScript scanner: it answers `GlobalKeyword`, the kind it uses for `declare global {}`,
+ * which is its own third arm and was found by this sweep rather than by inspection.
+ */
+describe("every spelling of a global receiver reaches the global eval", () => {
+  test("bare, parenthesised and keyword receivers are all recognised", () => {
     for (const src of [
-      `export const r = globalThis.eval("1");\n`,
-      `export const r = window.eval("1");\n`,
-      `export const r = self.eval("1");\n`,
-      `export const r = global.eval("1");\n`,
+      `export const r = globalThis.eval("1");
+`,
+      `export const r = window.eval("1");
+`,
+      `export const r = self.eval("1");
+`,
+      `export const r = global.eval("1");
+`,
+      `export const r = (globalThis as any).eval("1");
+`,
+      `export const r = (window as unknown as any).eval("1");
+`,
     ]) {
       expect([src, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
         src,
         ["EVAL_CALL"],
       ]);
     }
-    // …and an ordinary object with a method named `eval` is still not the global.
-    expect(scanned(scanImportAllowlist(`export const r = parser.eval("1");\n`, NONE))).toEqual([]);
+  });
+
+  test("…and an ordinary object's method named `eval` is still not the global", () => {
+    // The valid-input companion: without it, "flag every `.eval(`" would satisfy the row above.
+    for (const src of [
+      `export const r = obj.eval("x");
+`,
+      `export const r = obj?.eval("x");
+`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
+    }
   });
 });

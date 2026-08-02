@@ -88,28 +88,25 @@ describe("mechanism 1 — JSX children TEXT is skipped, never lexed as code", ()
       expect(toks(source).some((t) => t.value === "eval")).toBe(true);
     });
 
-    test(`${label} in prose is MARKED, not dropped — visible to every check, fatal to none`, () => {
-      // The valid-input companion for the same trap, and the distinction fix round 1 turns on.
-      // The prose IS lexed — a span nobody looks at is how real code went invisible — but every
-      // token it produces carries `jsxText`, which is the only thing `import-scan.ts`'s three
-      // dynamic-code checks consult, so display copy raises no fatal.
-      const source = `export const T = () => <p>${trap} eval Function (x)</p>;\n`;
+    test(`${label} in prose is LEXED, and no token it produces reaches past the run`, () => {
+      // The boundary half of the invariant, for the same trap. The prose IS lexed — a span
+      // nobody looks at is how real code went invisible in an earlier round — and the WINDOW is
+      // what stops a token started inside it from reaching the code after `</p>`.
+      //
+      // There is no mark and no prose filter any more (fix round 2, Critical 1): every
+      // suppression rule tried here produced a false negative the moment the JSX reader's
+      // classification was wrong, so §5.8 over-approximates uniformly instead.
+      const source = `export const T = () => <p>${trap} words</p>;
+import fs from "node:fs"
+`;
       expectBunAccepts(source);
       const ranges = readJsxTextRanges(source);
       expect(ranges.length).toBeGreaterThan(0);
-      const inside = toks(source).filter((t) =>
-        ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
-      );
-      expect(inside.every((t) => t.jsxText)).toBe(true);
-      expect(
-        toks(source)
-          .filter((t) => !t.jsxText)
-          .every((t) => !ranges.some((r) => t.pos >= r.pos && t.pos < r.end)),
-      ).toBe(true);
-      // …and no token that began in the prose reaches past its end: that is what stops an
-      // apostrophe or a `/*` from swallowing the code after `</p>`.
       const lastRange = ranges[ranges.length - 1]!;
-      expect(toks(source).some((t) => t.pos >= lastRange.end && !t.jsxText)).toBe(true);
+      // A token exists past the run's end — if one had swallowed the boundary there would be
+      // none, which is exactly the 94-divergence class.
+      expect(toks(source).some((t) => t.pos >= lastRange.end)).toBe(true);
+      expect(kindsIn(source)).toContain(SK.ImportKeyword);
     });
   }
 
@@ -277,7 +274,7 @@ describe("windowed lexing — no token crosses a prose boundary in EITHER direct
     expect(tokenize(source, "jsx")).not.toBeInstanceOf(Error);
     // …and the code AFTER the element is still lexed, which is what the swallow guard was for.
     expect(kindsIn(source)).toContain(SK.ImportKeyword);
-    expect(toks(source).some((t) => t.value === "eval" && !t.jsxText)).toBe(true);
+    expect(toks(source).some((t) => t.value === "eval")).toBe(true);
   });
 
   test("an ordinary attribute is unaffected — the valid-input companion", () => {
@@ -295,7 +292,6 @@ describe("windowed lexing — no token crosses a prose boundary in EITHER direct
     const source = `let a: <T>(x: T) => T;\n${HIDDEN}// </T>\n`;
     expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(source)).not.toThrow();
     const lexed = toks(source, "no-jsx");
-    expect(lexed.every((t) => !t.jsxText)).toBe(true);
     expect(new Set(lexed.map((t) => t.kind))).toContain(SK.ImportKeyword);
     expect(lexed.some((t) => t.value === "eval")).toBe(true);
   });
@@ -356,11 +352,17 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     expect(files.length).toBe(886);
   });
 
-  test("across the corpus, a token is marked `jsxText` if and only if it lies in a prose run", () => {
-    // THE WINDOW INVARIANT, asserted as a property over the whole corpus rather than fixture by
-    // fixture, in BOTH directions. A token inside a run that is not marked would mean the filter
-    // can fatal on display copy; a marked token outside one would mean the filter can hide real
-    // code. Either direction is a defect, and each has been shipped once on this branch.
+  test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
+    // THE WINDOW GUARANTEE, as a property over the whole corpus rather than fixture by fixture,
+    // and stated in the two observable halves a token's `pos` alone can settle:
+    //
+    //  - a run with real content produces at least one token INSIDE it — so prose is lexed, not
+    //    skipped, which is how real code went invisible in fix round 0;
+    //  - and there is a token at or after every run's end, whenever the file continues past it
+    //    — so nothing started inside a run reached the code after `</p>`, which is the
+    //    94-divergence class.
+    //
+    // Both directions have been shipped broken once on this branch, which is why both are here.
     const root = path.resolve(import.meta.dir, "../../..");
     const offenders: string[] = [];
     const walk = (dir: string): void => {
@@ -375,11 +377,16 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
         const source = fs.readFileSync(p, "utf8");
         const result = tokenize(source, "jsx");
         if (result instanceof Error) continue;
-        const ranges = readJsxTextRanges(source);
-        const wrong = result.filter(
-          (t) => t.jsxText !== ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
-        );
-        if (wrong.length > 0) offenders.push(`${path.relative(root, p)}: ${wrong.length}`);
+        const where = path.relative(root, p);
+        for (const range of readJsxTextRanges(source)) {
+          const content = source.slice(range.pos, range.end);
+          if (/\S/.test(content) && !result.some((t) => t.pos >= range.pos && t.pos < range.end)) {
+            offenders.push(`${where}: run ${range.pos}..${range.end} produced no token`);
+          }
+          if (/\S/.test(source.slice(range.end)) && !result.some((t) => t.pos >= range.end)) {
+            offenders.push(`${where}: run ${range.pos}..${range.end} swallowed the rest`);
+          }
+        }
       }
     };
     walk(path.join(root, "src"));
@@ -388,10 +395,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
 });
 
 describe("the loader distinction — a non-JSX source has no prose at all", () => {
-  test("a `.ts` source produces NO jsxText-marked token, even where a JSX reader would see an element", () => {
-    // `parsesJsx` is what keeps `tokenize` from inventing children text in a file Bun parses
-    // with no JSX. Since windowing, a bogus range no longer HIDES anything — it only mis-marks —
-    // so this asserts the marking directly rather than through a violation.
+  test("`parsesJsx` maps every extension the way Bun's own parser does", () => {
+    // `parsesJsx` is what keeps `tokenize` from inventing children-text boundaries in a file Bun
+    // parses with no JSX — and an invented boundary is not cosmetic: it changes the EDGE LIST
+    // (see the closure-agreement test below), so the flat scan and the closure walk must derive
+    // it from this one predicate or they build different closures.
     const source = `let a: <T>(x: T) => T;\nexport const r = 1;\n// </T>\n`;
     expect(parsesJsx("lib/m.ts")).toBe("no-jsx");
     expect(parsesJsx("lib/m.mts")).toBe("no-jsx");
@@ -400,10 +408,9 @@ describe("the loader distinction — a non-JSX source has no prose at all", () =
     expect(parsesJsx("lib/m.jsx")).toBe("jsx");
     expect(parsesJsx("lib/m.js")).toBe("jsx");
     expect(parsesJsx("Dockerfile")).toBe("jsx");
-    expect(toks(source, "no-jsx").some((t) => t.jsxText)).toBe(false);
-    // …and asked as JSX, the same source DOES get a (fictional) prose run — which is exactly
-    // why the loader has to be told, not guessed.
-    expect(toks(source, "jsx").some((t) => t.jsxText)).toBe(true);
+    // …and asked as JSX, the same source DOES get a (fictional) children-text run — which is
+    // exactly why the loader has to be told, not guessed.
+    expect(readJsxTextRanges(source).length).toBeGreaterThan(0);
   });
 
   test("the measurement behind `parsesJsx`, re-run: Bun agrees about every extension", () => {
@@ -424,4 +431,36 @@ describe("the loader distinction — a non-JSX source has no prose at all", () =
     expect(accepts("ts", jsxOnly)).toBe(false);
     expect(accepts("ts", typeAssertionOnly)).toBe(true);
   });
+});
+
+describe("windows are what stop a TERMINATED literal from spanning a prose boundary", () => {
+  // The unterminated case is handled by the `isUnterminated` rewind, so it does not exercise
+  // windows at all — measured, and the reason the window mutation killed nothing until this row
+  // existed. A quote PAIR that brackets the code is the shape only the boundary catches: the
+  // apostrophe in `don't` opens a string that the apostrophe in `won't` closes, swallowing
+  // `</p>` and the import between them.
+  const BRACKETED: readonly (readonly [string, string])[] = [
+    [
+      "apostrophes",
+      `export const T = () => <p>don't</p>; import fs from "node:fs"; // won't
+`,
+    ],
+    [
+      "double quotes",
+      `export const T = () => <p>say "hi</p>; import fs from "node:fs"; // "bye
+`,
+    ],
+    [
+      "backticks",
+      `export const T = () => <p>\`a</p>; import fs from "node:fs"; // \`b
+`,
+    ],
+  ];
+
+  for (const [label, source] of BRACKETED) {
+    test(`a ${label} PAIR bracketing the code does not hide the import`, () => {
+      expectBunAccepts(source);
+      expect(kindsIn(source)).toContain(SK.ImportKeyword);
+    });
+  }
 });

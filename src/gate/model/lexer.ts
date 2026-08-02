@@ -108,16 +108,21 @@ export function tokenize(source: string, syntax: SourceSyntax): SourceStreamTrun
   let covered = 0;
 
   for (const window of windowsOf(source, textRanges)) {
-    // A PROSE window gets its own throwaway brace stack: `scanJsxToken` stops children text at
-    // `{`, so a run can hold an unmatched `}` (measured: Bun accepts `<p>}</p>`), and letting
-    // that pop the real stack would desynchronise every template literal after it.
+    // A PROSE window is lexed EXACTLY like a code window (task 14b fix round 2, Critical 2). It
+    // used to be lexed differently — no regular-expression re-scan, and its coverage satisfied
+    // by construction — on the reasoning that "the runtime executes none of it". That reasoning
+    // is false for a FICTIONAL run, and fictional runs are the whole reason windows exist: with
+    // `/` read as division, a quote or backtick inside a genuine regular expression opened a
+    // string that closed at the next one, and everything between physically left the stream.
+    // Measured live: `const re = /it's/; import "node:fs"; eval("1"); const re2 = /don't/;`
+    // inside a `<T>`/`</T>` fiction lost the §5.8 fatal, the FORBIDDEN_IMPORT *and the closure
+    // edge*. A window is a BOUNDARY device and nothing more.
+    //
+    // The ONE difference that remains is the brace stack: `scanJsxToken` stops children text at
+    // `{`, so a run can hold an unmatched `}` (measured: Bun accepts `<p>}</p>`), and letting a
+    // page's prose pop the real stack would desynchronise every template literal after it. The
+    // throwaway stack keeps that damage inside the window, where the rewinds below bound it.
     const stack = window.jsxText ? [] : braces;
-    // A PROSE window is accounted for in full, by construction: the runtime executes none of it,
-    // so `//` and an unterminated `/*` in a page's own copy are ordinary text rather than spans
-    // the scan lost. Running mechanism 3 inside one would refuse `<p>a /* b</p>` — legal,
-    // Bun-accepted source — which is the over-fire this branch has already paid for twice. The
-    // window is BOUNDED, so this can never reach a character outside the run.
-    if (window.jsxText) covered = Math.max(covered, window.end);
     const lexed = lexWindow({ scanner, source, window, stack, toks, covered, guard, cap });
     if (lexed instanceof Error) return lexed;
     covered = lexed.covered;
@@ -186,10 +191,7 @@ function lexWindow(input: {
   let reached = window.pos;
 
   for (;;) {
-    // Inside a PROSE window a `/` is never a regular expression: a run of children text is not
-    // an expression context, and re-scanning there would let `/…/` swallow prose the same way a
-    // quote would.
-    const kind = scanCode(scanner, stack, previous, jsxPunctuation || window.jsxText);
+    const kind = scanCode(scanner, stack, previous, jsxPunctuation);
     const start = scanner.getTokenStart();
     const end = scanner.getTokenEnd();
 
@@ -218,9 +220,7 @@ function lexWindow(input: {
     const swallowing =
       OPAQUE_KINDS.has(kind) && scanner.isUnterminated()
         ? start
-        : window.jsxText
-          ? firstNonWhitespaceOffset(source, reached, kind === SK.EndOfFile ? window.end : start)
-          : null;
+        : firstUnaccountedOffset(source, reached, kind === SK.EndOfFile ? window.end : start);
     if (swallowing !== null) {
       // The one character rewound past is the OPENER itself — a lone `"`, `` ` `` or `/`, which
       // no runtime executes on its own and which cannot be an import, an `eval` or a `require`.
@@ -346,12 +346,12 @@ function lexWindow(input: {
 
     guard += 1;
     const value =
-      kind === SK.StringLiteral || kind === SK.NumericLiteral
-        ? scanner.getTokenValue()
-        : kind === SK.Identifier
-          ? scanner.getTokenText()
-          : "";
-    toks.push({ kind, value, pos: start, jsxText: window.jsxText });
+      kind === SK.StringLiteral || kind === SK.NumericLiteral || kind === SK.Identifier
+        ? // COOKED, never raw (task 14b fix round 2, Critical 3): `\u0065val` is a legal spelling
+          // of `eval` that Bun executes, and `getTokenText()` hands back the escape unresolved.
+          scanner.getTokenValue()
+        : "";
+    toks.push({ kind, value, pos: start });
     jsxPunctuation = opensJsxPunctuation(kind, previous);
     previous = kind;
   }
@@ -413,14 +413,6 @@ function firstUnaccountedOffset(source: string, from: number, to: number): numbe
 
 /** One character of JavaScript whitespace, byte-order mark included (`\s` covers `﻿`). */
 const WHITESPACE = /\s/u;
-
-/** The first non-whitespace offset in `[from, to)`, or `null` when the span is blank. */
-function firstNonWhitespaceOffset(source: string, from: number, to: number): number | null {
-  for (let i = from; i < to; i += 1) {
-    if (!WHITESPACE.test(source[i]!)) return i;
-  }
-  return null;
-}
 
 /**
  * Token kinds that consume an arbitrary span of source as ONE opaque unit, so whatever they

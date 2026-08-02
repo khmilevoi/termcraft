@@ -161,32 +161,6 @@ function isParenthesisedValue(toks: Tok[], index: number): boolean {
 }
 
 /**
- * True when `word` is IMMEDIATELY followed by `(`, with no space between them — the shape of a
- * real call, `eval("1")` / `Function("…")`, rather than of prose that happens to end in a
- * parenthetical.
- *
- * WHY THIS EXISTS (task 14b fix round 1, Critical 1's residual). A token marked `Tok.jsxText` is
- * normally skipped by the three dynamic-code checks, so a page's own display copy —
- * `<Text id="t">Never use eval here</Text>`, `<Text id="t">Function (beta)</Text>` — cannot trip
- * a FATAL. But `./jsx`'s reader is not Bun's parser: in a `.tsx` source it can confirm an element
- * Bun never sees (a `<T>` type-parameter list closed by a `</T>` written in a later comment), and
- * everything between them is then marked as prose. Measured, that hid a real `eval("1")` from
- * this check while `Bun.Transpiler` accepted the file and `await import()` ran it. `tokenize`'s
- * window model keeps the span VISIBLE — the import, require and re-export checks all still fire
- * on it — and this predicate is what stops the one filter that remains from hiding the call.
- *
- * THE DISCRIMINATOR IS ADJACENCY, chosen because it separates the two MEASURED shapes rather
- * than because it is clever: the prose false-positives this filter was written for put a SPACE
- * before the parenthesis (`Function (beta)`), and a call does not. The cost is an accepted
- * over-approximation, pinned by a test: display copy that spells `eval(`/`Function(` with no
- * space is flagged. That is a loud, correctable rejection (rewrite the copy); the alternative
- * was a live bypass.
- */
-function isAdjacentCall(word: Tok, next: Tok | undefined): boolean {
-  return next?.kind === SK.OpenParenToken && next.pos === word.pos + word.value.length;
-}
-
-/**
  * The AUTHORITATIVE static-import allowlist scan (design §6; runtime-api §3.1). Tokenizes the
  * page source with the TypeScript lexer and classifies EVERY module edge the author
  * wrote — value + type-only imports, side-effect imports, `export … from`
@@ -285,9 +259,10 @@ function isAdjacentCall(word: Tok, next: Tok | undefined): boolean {
  *      transpiled under Bun, `await import()` ran the `eval`, and this perimeter reported
  *      nothing. CLOSED — `scanCode` now separates a relational `<` from re-lexed JSX
  *      punctuation (`jsxPunctuation`), so the regular expression is lexed as one;
- *    - `)` — CLOSED as a side effect: the JSX-prose FILTER this scan used to apply is gone
- *      (see below), so a call the reader mislabels as text is still checked as the code token
- *      it is. Measured caught through the real perimeter;
+ *    - `)` — CLOSED, and now for a structural reason rather than a lucky one: this scan applies
+ *      NO prose suppression at all (see "NO PROSE SUPPRESSION" below), so a call the reader
+ *      mislabels as children text is still checked as the code token it is, whatever spelling
+ *      it uses. Measured caught through the real perimeter;
  *    - `}` — still read as division, and measured NOT to be a live bypass: only a block or an
  *      object literal can put a `}` immediately before a `/` in expression position, and a JSX
  *      expression container holds neither — `Bun.Transpiler` refuses every spelling tried
@@ -313,17 +288,31 @@ function isAdjacentCall(word: Tok, next: Tok | undefined): boolean {
  * `RegularExpressionLiteral`, so the identifier token is gone. That removes a FALSE positive,
  * not a catch — a regex body cannot execute anything.)
  *
- * NO JSX-PROSE GUARD IS NEEDED HERE ANY MORE (task 14b). The three dynamic-code checks below
- * used to skip identifier/bracket tokens that a since-deleted `computeJsxTextTokenIndices`
- * marked as JSX
- * children TEXT, because without it a page's own display copy — `<Text id="t">Never use eval
- * here</Text>` — tripped a FATAL rejection on ordinary prose. `./lexer`'s `tokenize` now never
- * lexes children text as code AT ALL: it skips those ranges outright, so no such token exists
- * to be filtered. That is the same protection applied one layer earlier, and it is strictly
- * stronger — the old filter only suppressed the FATAL, while the mis-lexed prose still
- * swallowed whatever real code followed it on the same line, which is exactly the bypass class
- * task 14b closed. The oracle's payload-free control corpus (a page whose prose spells `eval`,
- * `Function`, `//`, `/*` and an apostrophe) reports zero fatals.
+ * NO PROSE SUPPRESSION (task 14b fix round 2, Critical 1) — a deliberate trade, not an
+ * oversight. Three earlier rounds each tried to keep a page's own display copy from tripping
+ * these checks: by filtering out tokens a JSX reader called children TEXT, then by skipping
+ * those spans in the lexer, then by filtering again but only when a call parenthesis was
+ * immediately adjacent. Every one was a SUPPRESSION RULE, and each produced a FALSE NEGATIVE
+ * the moment the reader's classification was wrong — which it is whenever it confirms an
+ * element the runtime does not see (`let f: <T>(x: T) => T` closed by a `</T>` in a later
+ * comment). Measured live through the real perimeter, every one executed by Bun: `eval ("1")`,
+ * `eval` + newline + `("1")`, a bare `eval` reference, `globalThis["eval"]` and
+ * `new Function ("…")` all reported NOTHING while the adjacency rule was in place.
+ *
+ * A suppression rule that cannot be proved sound is worth less than the over-approximation it
+ * saves, so there is none. §5.8 now over-approximates UNIFORMLY: an `eval`/`Function` reference
+ * is flagged wherever it appears, prose included.
+ *
+ * THE COST, stated plainly because a real page hits it: display copy containing the word `eval`,
+ * or `Function` immediately before a `(`, is REFUSED. `<Text id="t">Never use eval here</Text>`
+ * is rejected and the author rephrases ("the eval capability", "dynamic evaluation"). That is a
+ * loud, correctable, one-line fix; the alternative was a silent bypass of the whole §5.8 ban.
+ * `import-scan.test.ts` pins BOTH directions so neither can drift unnoticed.
+ *
+ * The structural protection those suppression rules were reaching for is still there, in the
+ * right place: `./lexer`'s `tokenize` lexes in WINDOWS bounded by the JSX reader's text runs, so
+ * a page's prose can never swallow the code after it. That is a boundary guarantee, it costs no
+ * detection, and it does not depend on the classification being right.
  */
 export function scanImportAllowlist(
   source: string,
@@ -461,14 +450,13 @@ export function scanImportAllowlist(
     // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
     // flags a page that merely defines a property/method literally named
     // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
-    // (see the module doc comment above). `!t.jsxText` skips this word when it is
-    // a page's own display copy rather than a reference — the token is still in
-    // the stream for every other check, it just does not raise THIS fatal (see
-    // `Tok.jsxText`).
+    // (see the module doc comment above), AND a page whose display copy contains
+    // the word — `<Text id="t">Never use eval here</Text>` — which is the trade
+    // task 14b fix round 2 took deliberately; see the module doc comment's
+    // "NO PROSE SUPPRESSION" section for why the alternative was worse.
     if (
       t.kind === SK.Identifier &&
       t.value === "eval" &&
-      (!t.jsxText || isAdjacentCall(t, next)) &&
       (!isMemberAccess(toks[i - 1]) || isGlobalReceiver(toks[i - 2]))
     ) {
       const where = at(t.pos);
@@ -492,13 +480,12 @@ export function scanImportAllowlist(
     // object exactly like `new Function(...)` does per the spec), so one
     // check covers both forms; a `.Function(...)`/`?.Function(...)` method
     // call on some other object is, symmetrically with `eval`, not the global.
-    // Display copy — `<Text id="t">Function (beta)</Text>`, which lexes as the
-    // adjacent tokens `Function`, `(`, `beta`, `)` and so would otherwise match
-    // — is skipped by `!t.jsxText`, not removed from the stream.
+    // Display copy that reads as a call — `<Text id="t">Function (beta)</Text>`,
+    // which lexes as the adjacent tokens `Function`, `(`, `beta`, `)` — is
+    // FLAGGED, the accepted trade described in the module doc comment.
     if (
       t.kind === SK.Identifier &&
       t.value === "Function" &&
-      (!t.jsxText || isAdjacentCall(t, next)) &&
       (next?.kind === SK.OpenParenToken || isParenthesisedValue(toks, i)) &&
       !isMemberAccess(toks[i - 1])
     ) {
@@ -522,11 +509,10 @@ export function scanImportAllowlist(
     // built through concatenation or held in a variable first
     // (`"ev" + "al"`, `const k = "eval"; g[k]`) is NOT caught — this is a
     // token-level scan, not a constant-folding evaluator (see the module doc
-    // comment's pinned "KNOWN GAP" list). `!t.jsxText` skips this shape inside a
-    // page's own display copy too, for the same reason as the two checks above.
+    // comment's pinned "KNOWN GAP" list). Display copy spelling this shape is
+    // flagged too, on the same trade as the two checks above.
     if (
       t.kind === SK.OpenBracketToken &&
-      !t.jsxText &&
       (toks[i - 1]?.kind === SK.Identifier ||
         toks[i - 1]?.kind === SK.CloseParenToken ||
         toks[i - 1]?.kind === SK.CloseBracketToken ||
