@@ -106,6 +106,21 @@ export interface UiLocalState {
    * the honest empty combo for it, never an invented identity.
    */
   readonly agentSelection: Atom<HomeAgentSelection | null>;
+  /**
+   * Whether the composition root is going to dispatch a startup `project.open` for this run
+   * (workspace-first launch, 2026-08-02) — seeded synchronously from {@link UiEnv.projectExists},
+   * which `create-shell.ts` sets from `ShellLaunchV1.existing`.
+   *
+   * NOT `mirror.project().opening`: that only turns true once the Kernel ADMITS the command, so
+   * between UI mount and admission `projectId` is null and `opening` is false — `deriveScreen`
+   * would show Home for a frame. The composition root knows this fact synchronously, before the
+   * UI mounts, which is why it is an injected environment fact rather than a mirror read.
+   *
+   * Exactly one transition: {@link UiDeps.abandonStartupOpen} sets it false when the startup
+   * dispatch fails or is rejected, because in that case neither `finishOpen` nor `blockOpen` will
+   * ever arrive and `projectId`/`openFailure` would both stay null forever.
+   */
+  readonly startupOpenPending: Atom<boolean>;
 }
 
 /**
@@ -173,6 +188,16 @@ export interface UiDeps {
    * rather than a cached/derived read.
    */
   readonly refreshAgentHealth: () => Promise<void>;
+  /**
+   * Records that the startup `project.open` will never arrive (workspace-first launch) — clears
+   * {@link UiLocalState.startupOpenPending}, which drops the derived screen back to Home.
+   *
+   * A named Reatom ACTION rather than a bare `.set` because `runApp` calls it from a promise
+   * continuation, outside any Reatom frame (RTM-A04). It is not an identity setter (RTM-S01): it
+   * names a real transition — "the startup open will never arrive" — that exactly one caller
+   * makes, on exactly two branches.
+   */
+  readonly abandonStartupOpen: () => void;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10): `applyIntent`'s `exit` intent (the `q`
    * keys on the agent-missing/too-small-terminal screens) and the `/exit` slash command both
@@ -271,6 +296,12 @@ export function createUiDeps(
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
+  // See `UiLocalState.startupOpenPending` for why this is an injected env fact and not a mirror
+  // read. Declared here, above `screen`, because `createScreenAtom` below routes on it.
+  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending");
+  const abandonStartupOpen = action(() => {
+    startupOpenPending.set(false);
+  }, "ui.app.abandonStartupOpen");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
   const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
   const actionContext = computed<ActionContext>(
@@ -756,6 +787,7 @@ export function createUiDeps(
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
+    startupOpenPending,
   };
 
   const refreshAgentHealth = action(async () => {
@@ -797,6 +829,7 @@ export function createUiDeps(
     local,
     activePageSlug,
     refreshAgentHealth,
+    abandonStartupOpen,
     requestExit,
   };
   return deps;

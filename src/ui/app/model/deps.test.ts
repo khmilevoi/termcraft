@@ -720,6 +720,55 @@ describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
   });
 });
 
+describe("createUiDeps startup-open tracking (workspace-first launch)", () => {
+  test("seeds startupOpenPending from env.projectExists", () => {
+    const existing = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: "/tmp/project",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(existing.local.startupOpenPending()).toBe(true);
+  });
+
+  test("defaults to false for a fresh directory (and for every test/demo construction)", () => {
+    const fresh = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(fresh.local.startupOpenPending()).toBe(false);
+  });
+
+  test("abandonStartupOpen clears it — the startup open will never arrive", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: "/tmp/project",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen();
+    expect(deps.local.startupOpenPending()).toBe(false);
+  });
+
+  test("abandonStartupOpen is idempotent — both run-app failure branches may fire", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: "/tmp/project",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen();
+    deps.abandonStartupOpen();
+    expect(deps.local.startupOpenPending()).toBe(false);
+  });
+});
+
 describe("preview resize", () => {
   const sessionReady = (previewSessionId: string, size: { w: number; h: number }) =>
     event("preview.sessionReady", {
