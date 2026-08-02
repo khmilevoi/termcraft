@@ -9,7 +9,7 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">{atom(1, "x")()}
 `;
 
 const HAS = (relPath: string) => new Set(["lib/theme.ts", "widgets/gauge.tsx"]).has(relPath);
-const ctx = { from: "pages/dashboard.tsx", has: HAS };
+const ctx = { from: "pages/dashboard.tsx", has: HAS, isScanned: () => true };
 
 /**
  * `context` is REQUIRED (Task 12: the one production caller that used to omit it,
@@ -18,8 +18,15 @@ const ctx = { from: "pages/dashboard.tsx", has: HAS };
  * context). Every test below that is not itself exercising relative-import RESOLUTION only
  * needs *some* legal context to satisfy the signature — an honest empty tree, exactly what a
  * caller with nothing to resolve against would supply, never a fabricated one.
+ *
+ * `isScanned: () => true` is not a fabrication either, and specifically not a fail-open one: with
+ * `has: () => false` no relative specifier ever RESOLVES, so the post-resolution question this
+ * predicate answers is never reached. The two contexts above that do resolve
+ * (`bothExist`/`onlyTs`) name files whose text those tests deliberately do not model, so the same
+ * answer is the honest one there too — they exercise the resolver's probe order, not this scan's
+ * "was it scanned" bar, which `tree-scan.test.ts` owns end to end.
  */
-const NONE = { from: "", has: () => false };
+const NONE = { from: "", has: () => false, isScanned: () => true };
 
 describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () => {
   test("a clean page importing only the bare runtime root passes", () => {
@@ -548,6 +555,7 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     const errors = scanImportAllowlist('import P from "../widgets/panel"\n', {
       from: "pages/dashboard.tsx",
       has: bothExist,
+      isScanned: () => true,
     });
     expect(errors).toEqual([]);
   });
@@ -557,6 +565,7 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     const errors = scanImportAllowlist('import t from "../lib/theme"\n', {
       from: "pages/dashboard.tsx",
       has: onlyTs,
+      isScanned: () => true,
     });
     expect(errors).toEqual([]);
   });

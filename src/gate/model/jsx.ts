@@ -354,8 +354,24 @@ function skipExpressionContainer(scanner: Scanner, collector: Collector): boolea
  *
  * A MEMO, NOT A LIMITER, on purpose. A depth/iteration cap would silently return a PARTIAL scan
  * on legitimate input — the one failure mode this module must not have (`scannerStalled`'s doc
- * makes the same argument for the same reason). This changes no verdict on any input: `ok`, the
- * scanner position, and the collector delta are all replayed (see {@link ElementRead}).
+ * makes the same argument for the same reason). The memo changes no verdict on any input: `ok`,
+ * the scanner position and the collector delta are all replayed (see {@link ElementRead}), and
+ * that equivalence is executed, not argued — a byte copy of the pre-memo reader against this one
+ * over 888 real repository sources, 30 000 seeded fuzz strings and 144 backtracking-heavy shapes,
+ * zero divergences.
+ *
+ * WHAT IT DOES NOT FIX, stated here rather than only in a report, because the sentence above
+ * reads as reassurance otherwise. The memo bounds how often one element is DERIVED; it does not
+ * make the read linear, and it does not bound the recursion. Measured through `scanTreeImports`,
+ * same shape: 16 000 chars 1 541 ms, 24 000 chars 3 774 ms — seconds of SYNCHRONOUS event-loop
+ * time on a page an agent could produce by running away, with zero errors to show for it. Beyond
+ * that the recursive descent exhausts the JS stack outright (32 000 chars unterminated, 99 996
+ * well-formed). Neither is a regression — the pre-memo reader overflows at the same order of
+ * magnitude on well-formed input, and merely hung before reaching it on unterminated input — but
+ * neither is harmless: `gate/model/gate.ts`'s `runTreeImports` is synchronous and Task 14 gives
+ * it its first caller. `tree-scan.ts`'s `TreeFileUnscannableError` converts the throw into a
+ * fail-closed fatal so it cannot crash that caller; the seconds of blocking are NOT bounded and
+ * are recorded in task-12b's report as an open residual with an owner.
  */
 function readElement(scanner: Scanner, collector: Collector): boolean {
   const start = scanner.getTokenStart();
@@ -633,8 +649,12 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
  * this call, so the compounding that made `"<a>{".repeat(k)` cost roughly 2x
  * per extra nesting level — 96 chars took 13 seconds, 8 more chars would have
  * taken a minute — is gone (96 chars: 0.2ms; 1600 chars: ~30ms). The residual
- * growth is polynomial, not exponential. See {@link readElement} for the
- * measurement, the mechanism and why a memo rather than a limiter.
+ * growth is polynomial, not exponential, and still real: 24 000 chars costs
+ * ~3.8s, and deeper still exhausts the stack. See {@link readElement} for the
+ * measurement, the mechanism, why a memo rather than a limiter, and what the
+ * memo does NOT fix. The memo costs nothing measurable on ordinary input —
+ * the whole 888-file repository corpus through `computeJsxTextTokenIndices`
+ * ran 148.0ms before and 147.3ms after (median of 5 warmed passes).
  *
  * Two callers build on this single result: `computeJsxTextTokenIndices`
  * (`import-scan.ts`'s dynamic-code check needs to skip identifier/bracket

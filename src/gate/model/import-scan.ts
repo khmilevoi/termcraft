@@ -17,11 +17,27 @@ import type { SyntaxKind, Tok } from "./lexer";
  * under a code distinct from `FORBIDDEN_IMPORT` deliberately: telling an author "you may only
  * import @termcraft/runtime" when they wrote a legal relative import with a typo would be a
  * false diagnosis (see this file's `scanImportAllowlist` doc comment for the full rationale).
+ *
+ * `UNSCANNED_IMPORT` (task-12b fix round 1) is the third outcome, and it exists because the other
+ * two were both false about it. The specifier RESOLVED, to a real file that IS in the tree — but
+ * this pass was never given that file's source, so nothing here has checked it for a further
+ * forbidden import, `eval` or `new Function`. Reporting it as `UNRESOLVED_IMPORT` (what
+ * `scanTreeImports` used to force by answering `false` from its own `has`) made the resolver emit
+ * `no file at "lib/foo"` about a file the author can see sitting in the tree — unactionable, and
+ * simply untrue; reporting it as `FORBIDDEN_IMPORT` would claim the author broke a rule they did
+ * not. See {@link scanImportAllowlist}'s `isScanned` parameter.
+ *
+ * `UNSCANNABLE_SOURCE` (task-12b fix round 1) is not a violation the author committed — it is
+ * this scan admitting it could not read the file at all, so nothing about it may be trusted.
+ * `scanTreeImports` raises it, not this function; see its own doc for the one measured cause
+ * (stack exhaustion on absurdly deep JSX nesting) and for why a fatal is the only honest outcome.
  */
 export interface ImportScanError {
   readonly code:
     | "FORBIDDEN_IMPORT"
     | "UNRESOLVED_IMPORT"
+    | "UNSCANNED_IMPORT"
+    | "UNSCANNABLE_SOURCE"
     | "DYNAMIC_IMPORT"
     | "REEXPORT"
     | "REQUIRE_CALL"
@@ -118,13 +134,32 @@ export function readStaticImportSpecifier(toks: Tok[], importIndex: number): str
  *
  * `context` is REQUIRED (Task 12: `gate/model/gate.ts`'s `runGate` no longer calls this function
  * at all — the whole-tree scan moved to `runTreeImports`/`scanTreeImports`, which always
- * threads a real, closure-backed `{ from, has }` — so there is no production caller left with
- * nothing to resolve against, and no honest default to fall back to on its behalf). A caller
- * with genuinely no tree to check against — a hermetic unit test, say — passes its own
- * explicit empty context (`{ from: "", has: () => false }`) rather than relying on one baked
- * in here; the bare runtime root still resolves regardless, and every relative specifier is
- * reported `UNRESOLVED_IMPORT`/`FORBIDDEN_IMPORT` exactly as it would against a real but empty
- * tree — an honest "cannot resolve without a tree", never a silently fabricated pass.
+ * threads a real, closure-backed `{ from, has, isScanned }` — so there is no production caller
+ * left with nothing to resolve against, and no honest default to fall back to on its behalf). A
+ * caller with genuinely no tree to check against — a hermetic unit test, say — passes its own
+ * explicit empty context (`{ from: "", has: () => false, isScanned: () => true }`) rather than
+ * relying on one baked in here; the bare runtime root still resolves regardless, and every
+ * relative specifier is reported `UNRESOLVED_IMPORT`/`FORBIDDEN_IMPORT` exactly as it would
+ * against a real but empty tree — an honest "cannot resolve without a tree", never a silently
+ * fabricated pass.
+ *
+ * `isScanned` is the SECOND, separate question `has` used to be overloaded with, and separating
+ * them is what closes task-12b's Defect B. `has` answers "does the tree hold a file at this
+ * path" — the only question {@link resolveDesignSpecifier} is asking, and the only one whose
+ * `false` it may safely read as "try the next probe candidate". `isScanned` answers "has THIS
+ * pass read that file's source", and it is asked ONCE, about the path resolution actually
+ * settled on. Merging them is a real bypass, not a style point: `scanTreeImports` used to answer
+ * `false` from `has` for a present-but-unscanned file, the resolver read that as "no such file"
+ * and ADVANCED to the next candidate, and a different, scanned sibling then satisfied the import
+ * while Bun loaded the unscanned one (measured on the real mount path — see `tree-scan.ts`'s
+ * `scanTreeImports` doc for the table). A resolution is trustworthy only when the file the
+ * loader will actually run is the file this scan actually read, and only a post-resolution
+ * question can express that.
+ *
+ * `isScanned` is REQUIRED for the same reason `context` is: an optional one would default to
+ * "vouch for everything", a fail-open default on a security perimeter. A caller that genuinely
+ * scans nothing and resolves against nothing passes `() => true` alongside `has: () => false`,
+ * where it can never fire.
  *
  * Dynamic-code detection (§5.8, Important 2/3 of the WP-6a fix pass) is
  * token-level, not a constant-folding evaluator, so it is deliberately not
@@ -223,7 +258,11 @@ export function readStaticImportSpecifier(toks: Tok[], importIndex: number): str
  */
 export function scanImportAllowlist(
   source: string,
-  context: { readonly from: string; readonly has: (relPath: string) => boolean },
+  context: {
+    readonly from: string;
+    readonly has: (relPath: string) => boolean;
+    readonly isScanned: (relPath: string) => boolean;
+  },
 ): ImportScanError[] {
   const toks = tokenize(source);
   const jsxText = computeJsxTextTokenIndices(toks, source);
@@ -267,6 +306,20 @@ export function scanImportAllowlist(
             code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
             specifier,
             message: resolved.message,
+            line: where.line,
+            column: where.column,
+          });
+        } else if (resolved.kind === "file" && !context.isScanned(resolved.relPath)) {
+          // The resolution succeeded and named a real tree file — the very file the loader will
+          // run — but the caller never read that file's source, so this pass cannot say whether
+          // it hides a further forbidden import, `eval` or `new Function`. Its own code, not the
+          // resolver's: the resolver was right, and saying `no file at "…"` here would be a
+          // false claim about a file the author can see in the tree.
+          const where = at(t.pos);
+          errors.push({
+            code: "UNSCANNED_IMPORT",
+            specifier,
+            message: `"${specifier}" resolves to "${resolved.relPath}", which the loader executes but this scan was never given the source of — it cannot be checked for a forbidden import, \`eval\` or \`new Function\``,
             line: where.line,
             column: where.column,
           });

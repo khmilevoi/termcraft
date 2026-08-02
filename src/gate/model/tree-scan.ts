@@ -1,9 +1,39 @@
-import { RESOLUTION_EXTENSIONS } from "entities/design-tree";
+import * as errore from "errore";
 
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
 
 export { scanModuleEdges };
+
+/**
+ * One tree file the allowlist scan could not read to the end. Carried as a value (never thrown
+ * on) so {@link scanTreeImports} can report it as a fatal like any other finding.
+ *
+ * THE ONE MEASURED CAUSE, and why this exists at all. `./jsx`'s reader is recursive descent, so
+ * absurdly deep JSX nesting exhausts the JS stack and the engine throws `RangeError: Maximum call
+ * stack size exceeded`. Measured through this very function under Bun 1.3.14: `"<a>{".repeat(k)`
+ * returns normally at 24 000 characters (3 375 ms, zero errors) and THROWS at 32 000; well-formed
+ * `"<a>".repeat(k) + "x" + "</a>".repeat(k)` returns at 59 998 characters (140 ms) and throws at
+ * 99 996. This is NOT introduced by the element memo — the same shapes overflow at the same order
+ * of magnitude on the pre-memo reader, which simply never got that far on the unterminated one
+ * because it hung first.
+ *
+ * `runTreeImports` (`gate/model/gate.ts`) is SYNCHRONOUS and Task 14 calls it once per turn with
+ * no `try` of its own, so an escaping throw would crash the turn pipeline rather than reject a
+ * page. Converting it here is the fail-closed outcome and the only honest one: the file was not
+ * scanned, so it cannot be vouched for.
+ *
+ * DELIBERATELY NOT discriminated by error type. An earlier draft caught only `RangeError` and
+ * rethrew everything else; that puts this module in the business of deciding which internal
+ * failures are "expected", and a rethrow from here lands in exactly the caller that cannot handle
+ * it. Every throw becomes this fatal instead, with the original attached as `cause` and its name
+ * and message reproduced in the diagnostic, so a genuine bug surfaces as a loud rejected page
+ * naming itself rather than as a silently swallowed error or a crashed turn.
+ */
+class TreeFileUnscannableError extends errore.createTaggedError({
+  name: "TreeFileUnscannableError",
+  message: 'the import scan could not read "$file" to the end',
+}) {}
 
 /**
  * The tree-relative path's own file extension — the substring from, and including, its LAST
@@ -117,9 +147,9 @@ const EXECUTED_AS_CODE_EXTENSIONS = new Set([
  *    `input.files`: feeding prose, JSON or image bytes through a JS/TS tokenizer manufactures
  *    a fatal out of content that merely happens to spell a banned identifier, and the loader
  *    would never have run that content anyway;
- * 2. `effectiveHas` below REQUIRES a file this returns true for to be present in `files` before
- *    trusting a resolution to it, because a file the loader executes can itself hide a further
- *    forbidden import this pass never read (task-11 review, Important 2's hazard).
+ * 2. {@link isTrustedTarget} below REQUIRES a file this returns true for to be present in `files`
+ *    before trusting a RESOLVED import to it, because a file the loader executes can itself hide
+ *    a further forbidden import this pass never read (task-11 review, Important 2's hazard).
  *
  * Both follow from the same measured fact and would be wrong under any other reading of it: a
  * non-executed target carries no import syntax to miss, so demanding its text (point 2) or
@@ -131,92 +161,62 @@ function isCodeFile(relPath: string): boolean {
 }
 
 /**
- * The `has` {@link scanTreeImports} hands to {@link resolveDesignSpecifier}: the caller's own
- * inventory, narrowed to the paths this pass may actually TRUST — and, crucially, narrowed in a
- * way the extensionless probe cannot walk around.
+ * True when this pass may TRUST a resolution target: either the loader never executes it (so it
+ * carries no import syntax to miss), or its source is a key in `files` and was therefore actually
+ * scanned above. Handed to {@link scanImportAllowlist} as `isScanned` — asked ONCE, about the
+ * path {@link resolveDesignSpecifier} settled on, never about a candidate on the way there.
  *
- * THE BUG THIS CLOSES (measured, not reasoned about). The plain predicate —
- * `has(p) && (files.has(p) || !isCodeFile(p))` — answers a boolean, and
- * `resolveDesignSpecifier` reads `false` as "no such file", not as "present, but this pass never
- * scanned it". For an EXTENSIONLESS specifier that difference is a real bypass, because a `false`
- * on the exact path sends the resolver on to its `.tsx`/`.ts` probe, which can then be satisfied
- * by a DIFFERENT file:
- *
- * ```
- * tree: lib/foo (unscanned) + lib/foo.tsx (scanned);  pages/home.tsx: import "../lib/foo"
- * before: [] — clean, on the strength of lib/foo.tsx having been scanned
- * ```
- *
- * WHICH FILE THE LOADER ACTUALLY RUNS decides whether that is a bypass or an artefact, so it was
- * measured on the real mount path (`await import(<absolute path>)`, as
- * `host/session/model/source-mount.ts:137` does), Bun 1.3.14, each case in its OWN directory
- * because Bun's module cache aliases paths across a case-insensitive filesystem otherwise:
+ * THE BUG THIS SHAPE CLOSES, and why the shape is the fix. Rounds 0 and 1 of task-12b both
+ * answered this question through the resolver's own `has`, i.e. by claiming a present-but-
+ * unscanned file did not exist. That merges two different questions into one boolean, and
+ * `resolveDesignSpecifier` cannot tell them apart: it reads `false` as "no such file" and
+ * ADVANCES to the next probe candidate. A different, scanned file then satisfies the import while
+ * Bun loads the unscanned one. Two shapes of it were measured, and the second is why the second
+ * round of latching was abandoned for this post-resolution question:
  *
  * ```
- * siblings present for `import "./lib/foo"`   EXECUTED
- * foo                                         foo
- * foo.ts                                      foo.ts
- * foo.tsx                                     foo.tsx
- * foo + foo.tsx                               foo          <- the exact extensionless file WINS
- * foo + foo.ts                                foo
- * foo + foo.ts + foo.tsx                      foo
- * foo.ts + foo.tsx                            foo.tsx      <- agrees with RESOLUTION_EXTENSIONS
- * foo.js + foo.tsx                            foo.tsx
- * foo.json + foo.tsx                          foo.tsx
- * foo + foo.json                              foo
+ * spec ../lib/foo   present [lib/foo(unscanned), lib/foo.tsx(scanned)]  Bun loads lib/foo
+ * spec ../lib/foo   present [lib/foo.tsx(unscanned), lib/foo.ts(scanned)]  Bun loads lib/foo.tsx
  * ```
  *
- * So Bun and `resolveDesignSpecifier` agree on the ORDER (exact path first, then `.tsx` before
- * `.ts`) — there is no resolver/loader divergence to close. The defect was purely this module's:
- * the Gate accepted an import to `lib/foo.tsx` while Bun would load and execute `lib/foo`, a file
- * whose text this pass never read and which could therefore hide any further forbidden import,
- * `eval` or `new Function` at all.
+ * Both were clean before; the first fell to a latch armed on the exact path, the second slipped
+ * one probe step further down and needed a latch of its own. There is no bound on that game —
+ * every candidate the resolver can advance past is another row — so the question is asked where
+ * it actually belongs instead: after resolution, once, about the file the loader will run.
  *
- * THE FIX. When the EXACT path is refused for being an unscanned code file, the probe candidates
- * that would otherwise substitute for it are refused too — nothing else changes. The whole
- * resolution then fails, honestly, instead of resolving to a file the loader will not load.
- * Expressed as a latch rather than as a rule about names because those are two DIFFERENT
- * questions asked with the same string: `has("lib/foo.tsx")` is a probe candidate when the
- * specifier was `./foo`, and is the exact target when the specifier was `./foo.tsx` — and in the
- * second case Bun really does load `lib/foo.tsx`, so refusing it there would be a false diagnosis
- * on valid input, the failure mode this branch has already paid for twice.
+ * WHY THE RESOLVED PATH IS THE FILE BUN RUNS. Measured on the real mount path (`await
+ * import(<absolute path>)`, as `host/session/model/source-mount.ts:137` does), Bun 1.3.14, each
+ * fixture in its OWN directory because Bun's module cache aliases paths across a case-insensitive
+ * filesystem otherwise. All 32 present-subsets of `{foo, foo.tsx, foo.ts, foo.js, foo.json}`,
+ * plus every explicit specifier, 160 fixtures: for `./lib/foo` Bun's order is
  *
- * WHY THE LATCH IS EXACT rather than approximately right. `resolveDesignSpecifier` calls `has` in
- * one fixed order per specifier: the exact path, then — ONLY when that path's last segment holds
- * no `.` — each of {@link RESOLUTION_EXTENSIONS} in turn, stopping at the first hit. The latch
- * arms only in that same extensionless case ({@link extensionOf} returning `""` is the same
- * condition, from the same string), and it refuses BOTH probes, so exactly
- * `RESOLUTION_EXTENSIONS.length` calls follow before it clears itself — never fewer (the resolver
- * cannot stop early on two refusals) and never more (it has nothing else to ask). Nothing else
- * calls `has`, and the scan is synchronous, so no other call can interleave. A fresh latch per
- * FILE on top of that (see `scanTreeImports`) keeps one file's resolutions from reaching another's
- * even if that reasoning is ever invalidated.
+ * ```
+ * foo > foo.tsx > foo.ts > foo.js > foo.json > foo/index.tsx
+ * ```
+ *
+ * of which `resolveDesignSpecifier`'s own `base > .tsx > .ts` is a strict PREFIX. So wherever the
+ * design resolver resolves at all, it names exactly the file Bun loads; wherever it stops short
+ * (only `.js`/`.json` or a directory index exists) it reports `UNRESOLVED_IMPORT`, which is fatal
+ * — fail closed, never a wrong target. The explicit specifiers agree too: `./lib/foo.tsx` and
+ * `./lib/foo.ts` load only their exact file, and `./lib/foo.js` loads `lib/foo.js` whenever it
+ * exists (its `.ts`/`.tsx` fallback only fires when `lib/foo.js` does NOT exist, where the design
+ * resolver refuses outright). The directory-index tail was measured separately — `foo.tsx`,
+ * `foo.ts`, `foo.js` and `foo.json` each beat `foo/index.tsx`, and an extensionless `foo` cannot
+ * be compared with it at all because one name cannot be both a file and a directory.
+ *
+ * NOT claimed: that Bun's map and §6's are the same map. They are not — Bun also serves
+ * `.js`/`.jsx`/`.mjs`/`.cjs`, `.json` and a directory index for an extensionless specifier, and
+ * §6 deliberately serves none of them. The claim is only the one soundness needs, and it is the
+ * one the matrix checks: §6's order is a PREFIX of Bun's, so §6 never picks a DIFFERENT file than
+ * Bun would — it either picks the same one or refuses. This lemma is executed, not asserted:
+ * `tree-scan.test.ts`'s soundness-matrix test replays all 1215 (present x scanned x specifier)
+ * rows against those measured loader outcomes.
  */
-function createEffectiveHas(input: {
-  readonly files: ReadonlyMap<string, string>;
-  readonly has: (relPath: string) => boolean;
-}): (relPath: string) => boolean {
-  let refusedBase = "";
-  let remainingProbes = 0;
-
-  return (relPath: string): boolean => {
-    if (remainingProbes > 0) {
-      remainingProbes -= 1;
-      if (RESOLUTION_EXTENSIONS.some((extension) => relPath === `${refusedBase}${extension}`))
-        return false;
-      // Not a probe of the refused base, so the resolver has moved on to another specifier and
-      // this path is being asked about on its own merits.
-      remainingProbes = 0;
-    }
-    if (!input.has(relPath)) return false;
-    if (!isCodeFile(relPath)) return true;
-    if (input.files.has(relPath)) return true;
-    if (extensionOf(relPath) === "") {
-      refusedBase = relPath;
-      remainingProbes = RESOLUTION_EXTENSIONS.length;
-    }
-    return false;
-  };
+function isTrustedTarget(
+  input: { readonly files: ReadonlyMap<string, string> },
+  relPath: string,
+): boolean {
+  return !isCodeFile(relPath) || input.files.has(relPath);
 }
 
 /**
@@ -245,29 +245,59 @@ function createEffectiveHas(input: {
  * draft) would turn every legitimate cross-file import of a non-executed tree file into a fatal
  * purely because of its presence in the tree, unrelated to anything wrong with it — the same
  * class of defect as Task 9's byte-comparison, which bricked two user commands by rejecting
- * valid input. {@link createEffectiveHas} is the enforcement of this narrower, honest invariant:
- * an EXECUTED resolution target absent from `files` reports `UNRESOLVED_IMPORT` (task-11 review's
- * Important 2 hazard stays fatal for every extension in {@link EXECUTED_AS_CODE_EXTENSIONS},
- * matched case-insensitively, and for dotfiles and extensionless names), and — this is the part
- * an earlier draft got wrong, see `createEffectiveHas`'s own doc — the `.tsx`/`.ts` probe cannot
- * quietly substitute a scanned SIBLING for such a target either, because Bun measurably loads the
- * exact extensionless file when it exists. Nothing else is refused. `runTreeImports`
- * (`gate/model/gate.ts`) is the caller this was written for: `has` is backed by the whole-tree
- * `treePaths`, `files` by whatever text this particular turn's Gate run actually holds.
+ * valid input.
+ *
+ * WHAT THE CODE BELOW ACTUALLY DOES, stated so the next reader need not re-derive it. `has` is
+ * passed through UNCHANGED — the resolver is answered honestly about what exists, so it resolves
+ * to the file the loader will really run. {@link isTrustedTarget} is then asked ONCE, about that
+ * resolved path, and a target the loader EXECUTES but `files` does not hold is reported
+ * `UNSCANNED_IMPORT` (task-11 review's Important 2 hazard stays fatal for every extension in
+ * {@link EXECUTED_AS_CODE_EXTENSIONS}, matched case-insensitively, and for dotfiles and
+ * extensionless names). Nothing else is refused: a target the loader never executes needs no
+ * source, and a specifier that does not resolve at all is still the resolver's own
+ * `UNRESOLVED_IMPORT`, unchanged.
+ *
+ * That is a change of CODE, not only of wording, from task-12b's round 0, which forced
+ * `UNRESOLVED_IMPORT` by answering `false` from `has` for a present-but-unscanned file. Two
+ * things were wrong with that: the resolver then emitted `no file at "lib/foo"` about a file
+ * sitting in the tree, and — because it reads that `false` as licence to try the NEXT probe
+ * candidate — a scanned sibling could satisfy an import the loader would serve from the unscanned
+ * file. See {@link isTrustedTarget} for the measurement and for why no amount of latching on the
+ * `has` side closes it.
+ *
+ * `runTreeImports` (`gate/model/gate.ts`) is the caller this was written for: `has` is backed by
+ * the whole-tree `treePaths`, `files` by whatever text this particular turn's Gate run actually
+ * holds.
  */
 export function scanTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;
   readonly has: (relPath: string) => boolean;
 }): readonly (ImportScanError & { readonly file: string })[] {
   const errors: (ImportScanError & { readonly file: string })[] = [];
+  const isScanned = (relPath: string) => isTrustedTarget(input, relPath);
   for (const [from, source] of input.files) {
     if (!isCodeFile(from)) continue;
-    // One latch per FILE (see `createEffectiveHas`): the predicate carries a single specifier's
-    // worth of state, and a fresh one per file makes cross-file leakage structurally impossible
-    // rather than merely provable.
-    for (const error of scanImportAllowlist(source, { from, has: createEffectiveHas(input) })) {
-      errors.push({ ...error, file: from });
+    // The one uncontrolled boundary in this module: `./jsx`'s reader is recursive descent, so the
+    // ENGINE — not any code here — can throw on deep enough nesting. See
+    // {@link TreeFileUnscannableError} for the measurement and for why nothing is rethrown.
+    const scanned = errore.try({
+      try: () => scanImportAllowlist(source, { from, has: input.has, isScanned }),
+      catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
+    });
+    if (scanned instanceof Error) {
+      const cause = scanned.cause;
+      const reason = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+      errors.push({
+        code: "UNSCANNABLE_SOURCE",
+        specifier: "",
+        message: `${scanned.message} — ${reason}`,
+        line: 1,
+        column: 1,
+        file: from,
+      });
+      continue;
     }
+    for (const error of scanned) errors.push({ ...error, file: from });
   }
   return errors;
 }
