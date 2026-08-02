@@ -38,12 +38,15 @@ import { buildGateRunner } from "./create-shell";
  * structurally cannot catch (it only ever sees one entry's own source), and it is the shape the
  * supplement requires proof for.
  *
- * WHAT THIS FILE DOES NOT PROVE (task-14 review round 2): that the scan SEES the whole of every
- * file. These rows prove the CALLER exists, runs once per turn in the right order, and makes
- * each tested violation fatal to the turn. Source-coverage completeness is `gate/model/lexer.ts`'s
- * concern and is still OPEN there — an unterminated block comment opened in JSX text truncates
- * the token stream with no signal at all, and Bun executes such a file. A separate task owns
- * that. "The perimeter is wired and proven for these forms" is the whole claim here.
+ * WHAT THIS FILE PROVES, AND WHAT IT DOES NOT. These rows prove the CALLER exists, runs once
+ * per turn in the right order, and makes each tested violation fatal to the turn — plus, since
+ * task 14b, that the differential-parse shapes reach it: a `.ts` module whose "JSX" is fiction
+ * and a `.tsx` module whose prose holds every code-mode trap both report their violations here.
+ *
+ * Source-coverage completeness itself is `gate/model/lexer.ts`'s concern, and it is measured
+ * against Bun's own parse by `gate/model/lexer.oracle.test.ts` rather than by this file. The
+ * residual that remains open is design §5.8's dynamic-code ban (`import-scan.ts`'s KNOWN GAPS
+ * 1-4), registered in the plan's red-debt ledger.
  */
 
 const TURN_ID = "0192f6f0-0000-7000-8000-0000000014aa" as UUIDv7;
@@ -212,48 +215,80 @@ describe("the turn's import perimeter, through the real gate adapter", () => {
     });
   }, 30_000);
 
-  test("a shared module the gate CANNOT cover still fails the TURN, fail-closed", async () => {
-    // The other half of the invariant: where the gate's view cannot cover what the runtime
-    // executes, the file is refused rather than silently under-scanned. JSX attribute strings
-    // do not process `\` escapes and code-mode strings do, so `a="x\"` ends the attribute for
-    // Bun while the code lexer reads on past `>hi</Text>`. Bun ACCEPTS AND EXECUTES this
-    // module, so a silent pass would be a real bypass.
+  test("task 14b fix round 1: a `.ts` shared module whose JSX is FICTION is still fully scanned", async () => {
+    // CRITICAL 1. Bun parses no JSX at all in a `.ts` file, so a `<T>` type-parameter list plus a
+    // `</T>` written in a later comment is not an element to anyone but a JSX reader. The
+    // previous commit asked that reader unconditionally and SKIPPED whatever it called text, so
+    // everything between them left the token stream: measured through THIS harness, the module
+    // reported nothing at all while `Bun.Transpiler` accepted it and `await import()` executed
+    // the payload. `tokenize` now takes the syntax from `tree-scan.ts`'s measured `parsesJsx`.
+    const payload = `eval("1");\nimport fs from "node:fs";\nconst r = require("child_process");\nconst f = new Function("return 1");\n`;
+    const shapes: readonly (readonly [string, string])[] = [
+      ["a `<T>` type annotation", `let a: <T>(x: T) => T;\n${payload}// </T>\n`],
+      ["a closing tag inside a string", `const s = "</T>";\nlet a: <T>(x: T) => T;\n${payload}`],
+      ["an object-type method", `type O = { m: <T>(x: T) => T };\n${payload}// </T>\n`],
+    ];
     await context.start(async () => {
-      const exploit = `export const Glyph = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
-      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(exploit)).not.toThrow();
+      for (const [label, body] of shapes) {
+        expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(body)).not.toThrow();
+        const errors = await validateTree(
+          new Map([
+            ["pages.json", MANIFEST],
+            ["pages/home.tsx", CLEAN_PAGE],
+            ["lib/theme.ts", body],
+          ]),
+        );
+        const codes = errors.map((e) => e.code);
+        for (const code of ["FORBIDDEN_IMPORT", "REQUIRE_CALL", "EVAL_CALL", "FUNCTION_CALL"]) {
+          expect([label, code, codes.includes(code)]).toEqual([label, code, true]);
+        }
+      }
+    });
+  }, 30_000);
+
+  test("a legal Windows path in a prop is NOT refused — the round-1 over-fire is gone", async () => {
+    // The valid-input companion the ruling requires for every tightened guard, and a real
+    // regression the previous commit shipped: `<Text a="C:\Users\">hi</Text>` is legal,
+    // Bun-accepted source that a terminal product can plausibly produce, and it rejected the
+    // whole tree. Windowed lexing bounds the attribute string at the prose boundary instead.
+    await context.start(async () => {
+      const page = `export const Glyph = () => <Text a="C:\\Users\\">hi</Text>\nexport const accent = "#7ad7ff"\n`;
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(page)).not.toThrow();
       const errors = await validateTree(
         new Map([
           ["pages.json", MANIFEST],
           ["pages/home.tsx", CLEAN_PAGE],
-          ["lib/theme.tsx", exploit],
+          ["lib/theme.tsx", page],
         ]),
       );
-      expect(errors.map((e) => e.code)).toContain("UNSCANNABLE_SOURCE");
-      expect(errors.find((e) => e.code === "UNSCANNABLE_SOURCE")?.file).toBe("lib/theme.tsx");
-
-      // THE BEFORE/AFTER, in one test: the identical module one character apart reports every
-      // violation instead of being refused. Without it, a guard that refused the tree for any
-      // reason at all would satisfy the assertion above.
-      const control = await validateTree(
+      expect(errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
+      // …and the same module with a forbidden import still fails, so this is no blanket pass.
+      const bad = await validateTree(
         new Map([
           ["pages.json", MANIFEST],
           ["pages/home.tsx", CLEAN_PAGE],
-          ["lib/theme.tsx", exploit.replace('a="x\\"', 'a="x"')],
+          ["lib/theme.tsx", `${page}import fs from "node:fs"\n`],
         ]),
       );
-      expect(control.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
-      expect(control.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
+      expect(bad.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
     });
   });
 
-  test("a U+FFFD at a CODE token position still fails the TURN — and Bun refuses that file too", async () => {
-    // Round 1's Critical, re-pointed at the position where it is still a truncation. In JSX
-    // TEXT the character is prose (the row above proves the module is scanned there); at a code
-    // token position the scanner answers `NonTextFileMarkerTrivia` spanning to end of file, and
-    // `Bun.Transpiler` rejects the source outright (`Unexpected \u00ef`) — so the refusal now
-    // AGREES with the runtime instead of trading a false rejection for safety.
+  test("a U+FFFD at a CODE token position no longer HIDES anything — every violation is reported", async () => {
+    // Round 1's Critical was that the scanner answers `NonTextFileMarkerTrivia` here, spanning to
+    // end of file, so the import and the `eval` after it left the token stream. Round 1 answered
+    // with a refusal; task 14b fix round 1 answers by RE-LEXING one character on, which reports
+    // the violations instead of only admitting the file was unreadable — and which removed the
+    // last measured over-fire, where the marker sat inside what Bun reads as a comment and a
+    // legal page was rejected for it.
+    //
+    // Bun refuses THIS source outright, so it never reaches the runtime either way; what this
+    // row pins is that the gate now SEES what the file holds.
     await context.start(async () => {
-      const exploit = `export const accent = \uFFFD\nimport fs from "node:fs"\nexport const e = eval("1")\n`;
+      const exploit = `export const accent = �
+import fs from "node:fs"
+export const e = eval("1")
+`;
       expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(exploit)).toThrow();
       const errors = await validateTree(
         new Map([
@@ -262,8 +297,9 @@ describe("the turn's import perimeter, through the real gate adapter", () => {
           ["lib/theme.tsx", exploit],
         ]),
       );
-      expect(errors.map((e) => e.code)).toContain("UNSCANNABLE_SOURCE");
-      expect(errors.find((e) => e.code === "UNSCANNABLE_SOURCE")?.file).toBe("lib/theme.tsx");
+      expect(errors.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
+      expect(errors.map((e) => e.code)).toContain("EVAL_CALL");
+      expect(errors.find((e) => e.code === "FORBIDDEN_IMPORT")?.file).toBe("lib/theme.tsx");
 
       const control = await validateTree(
         new Map([

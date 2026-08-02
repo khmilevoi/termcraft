@@ -23,7 +23,12 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">{atom(1, "x")()}
 `;
 
 const HAS = (relPath: string) => new Set(["lib/theme.ts", "widgets/gauge.tsx"]).has(relPath);
-const ctx = { from: "pages/dashboard.tsx", has: HAS, isScanned: () => true };
+const ctx = {
+  from: "pages/dashboard.tsx",
+  has: HAS,
+  isScanned: () => true,
+  syntax: "jsx" as const,
+};
 
 /**
  * `context` is REQUIRED (Task 12: the one production caller that used to omit it,
@@ -40,7 +45,7 @@ const ctx = { from: "pages/dashboard.tsx", has: HAS, isScanned: () => true };
  * answer is the honest one there too — they exercise the resolver's probe order, not this scan's
  * "was it scanned" bar, which `tree-scan.test.ts` owns end to end.
  */
-const NONE = { from: "", has: () => false, isScanned: () => true };
+const NONE = { from: "", has: () => false, isScanned: () => true, syntax: "jsx" as const };
 
 describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () => {
   test("a clean page importing only the bare runtime root passes", () => {
@@ -263,15 +268,15 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(scanned(scanImportAllowlist(`globalThis["ev" + "al"]("x")\n`, NONE))).toEqual([]);
     });
 
-    test("KNOWN GAP: a regex literal in STATEMENT position after `)` closes an expression container early", () => {
-      // `./jsx`'s reader decides regex-vs-division from the preceding token
-      // (`endsExpression`): a `)` ends a primary expression, so `/` after it is
-      // division everywhere an EXPRESSION can appear. Inside an arrow-function
-      // body a statement-position regex is legal there anyway, and the `}` in
-      // its character class then closes the container early, so everything
-      // after it — here the real `eval("2")` — is mis-read as JSX children text.
+    test("CLOSED (fix round 1): a regex in STATEMENT position after `)` no longer hides the call", () => {
+      // `./jsx`'s reader still reads that `/` as division — telling statement from expression
+      // position needs a parser — so the `}` in its character class still closes the container
+      // early and the reader still calls the tail children text. What CHANGED is that being
+      // called text no longer removes the span from the token stream: `tokenize` lexes it in a
+      // bounded window and MARKS it, and `isAdjacentCall` keeps the one filter that remains from
+      // hiding a real `eval(`. The boundary is still in the wrong place; the call is not.
       const src = `export default () => <box id="b">{(() => { if (x) /[}]/.test(s) })() + eval("2")}</box>\n`;
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
     });
 
     test("KNOWN GAP: the classic constructor-chain sandbox escape names neither `eval` nor `Function`", () => {
@@ -314,16 +319,16 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
-    test("KNOWN GAP `}`: still read as division, and MEASURED not to be a live bypass — Bun rejects it", () => {
-      // The `}` exclusion stays: a re-lexed `{expr} />` puts a `/` right after a `}`, and
-      // unlike the `<` case there is no local signal separating that from real code. It costs
-      // no live bypass, and that is measured rather than assumed: only a block or an object
-      // literal can put a `}` immediately before a `/` in expression position, and a JSX
-      // expression container holds neither — `Bun.Transpiler` refuses every spelling tried
-      // (`Unexpected }`), so the runtime never executes such a file.
+    test("the `}` predecessor: Bun rejects the source outright, AND the call is caught anyway", () => {
+      // The `}` exclusion stays in `scanCode`: a re-lexed `{expr} />` puts a `/` right after a
+      // `}`, and unlike the `<` case there is no local signal separating that from real code.
+      // It costs no live bypass, measured twice over — only a block or an object literal can put
+      // a `}` immediately before a `/` in expression position and a JSX expression container
+      // holds neither, so `Bun.Transpiler` refuses every spelling tried (`Unexpected }`); and
+      // since fix round 1 the mis-placed text boundary no longer hides the call either.
       const src = `export default () => <box id="b">{ {} /[}]/.test(s) && eval("1")}</box>\n`;
       expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).toThrow();
-      expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
     });
   });
 
@@ -363,14 +368,26 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
 
-    test("KNOWN GAP 7 stays open, and is NOT a live bypass: Bun rejects every unterminated template", () => {
-      // No closing backtick exists anywhere in this source — the resumed tail scan runs through
-      // end of file, absorbing the real `eval` call into one token. RE-TESTED in task 14b
-      // against the runtime rather than left as an inventory row: `Bun.Transpiler` refuses it
-      // (`Unterminated string literal`), so no such file is ever executed. It stays pinned
-      // because the scan still owes it a documented outcome.
+    test("KNOWN GAP 7 is CLOSED (fix round 1): an unterminated template no longer swallows the file", () => {
+      // No closing backtick exists anywhere in this source, so the resumed tail scan used to run
+      // through end of file and absorb the real `eval` call into one token. `tokenize` now asks
+      // the scanner's own `isUnterminated()` and, when it says yes, rewinds one character past
+      // the opener and re-lexes the span — so the call is an ordinary token again.
+      //
+      // Bun still refuses THIS source (`Unterminated string literal`), so this exact spelling was
+      // never a live bypass. The same swallow WAS reachable in files Bun accepts, through a
+      // backtick that Bun reads as sitting inside a comment, which is what made closing it
+      // necessary rather than tidy — see `lexer.test.ts`'s mechanism-3 block.
       const src = '<box id="b">{`${0}\nconst z = eval("2")\n';
       expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).toThrow();
+      expect(scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)).toEqual(["EVAL_CALL"]);
+    });
+
+    test("…and an ordinary TERMINATED template is still one token — no findings invented", () => {
+      // The valid-input companion: if the rewind fired on terminated literals too, a page whose
+      // copy mentions `eval` inside a template string would be fatally rejected.
+      const src = 'const s = `never write eval("x") in a page`\nexport const t = s\n';
+      expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
       expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
     });
   });
@@ -627,6 +644,7 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     const errors = scanned(
       scanImportAllowlist('import P from "../widgets/panel"\n', {
         from: "pages/dashboard.tsx",
+        syntax: "jsx",
         has: bothExist,
         isScanned: () => true,
       }),
@@ -639,6 +657,7 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
     const errors = scanned(
       scanImportAllowlist('import t from "../lib/theme"\n', {
         from: "pages/dashboard.tsx",
+        syntax: "jsx",
         has: onlyTs,
         isScanned: () => true,
       }),
@@ -706,29 +725,152 @@ describe("scanImportAllowlist — context-aware relative resolution (design §6,
  * These tests take the level in ISOLATION, with no pipeline around it, so mutating exactly this
  * propagation reddens exactly these tests.
  *
- * THE FIXTURE IS ONE BUN ACCEPTS AND EXECUTES: JSX attribute strings do not process `\` escapes
- * and code-mode strings do, so `a="x\"` ends the attribute for the runtime while the code lexer
- * reads on through `>hi</Text>` and past it.
+ * THE FIXTURE IS DEEP JSX NESTING, and the reason is the shape of fix round 1. `tokenize` no
+ * longer REFUSES anything: wherever it cannot classify a span it re-lexes it one character on,
+ * so it always returns a stream that accounts for the whole source (that is what stopped real
+ * code going invisible, and what removed the last false rejection). The fail-closed arm the
+ * invariant names therefore lives at its one remaining, MEASURED cause — `./jsx`'s
+ * recursive-descent reader exhausting the engine's stack, which THROWS. Each level below must
+ * let that throw pass, not absorb it into an empty result; `scanTreeImports` and `runGate` are
+ * the two places that convert it into `UNSCANNABLE_SOURCE`.
  */
-const TRUNCATING = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
-const COVERED = `export const G = () => <Text a="x">hi</Text>\nimport fs from "node:fs"\n`;
+const UNREADABLE = "<a>{".repeat(32_000);
+const COVERED = `const a = 1;\n/* closed */\nimport fs from "node:fs"\n`;
 
 describe("scanModuleEdges — a stream that does not cover the source is an ERROR, never an empty edge list", () => {
-  test("the fixture really is one Bun accepts, so a silent empty edge list would understate a real closure", () => {
-    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(TRUNCATING)).not.toThrow();
-    expect(
-      new Bun.Transpiler({ loader: "tsx" }).scanImports(TRUNCATING).map((i) => i.path),
-    ).toContain("node:fs");
-  });
-
-  test("returns the truncation rather than []", () => {
+  test("lets the unreadable-source throw PASS rather than returning []", () => {
     // `[]` here is indistinguishable from "this file imports nothing", which is exactly the
     // silent "this page did not change" mode Task 13 exists to kill: the closure walk would
     // stop at this file and every page reaching it would report an unchanged closure hash.
-    expect(scanModuleEdges(TRUNCATING)).toBeInstanceOf(Error);
+    expect(() => scanModuleEdges(UNREADABLE, "jsx")).toThrow();
   });
 
-  test("…and the covered sibling still returns its real edge, so this is not a blanket refusal", () => {
-    expect(scanned(scanModuleEdges(COVERED))).toEqual(["node:fs"]);
+  test("…and an ordinary source still returns its real edge, so this is not a blanket refusal", () => {
+    expect(scanned(scanModuleEdges(COVERED, "jsx"))).toEqual(["node:fs"]);
+  });
+});
+
+/**
+ * IMPORTANT 4 of task 14b's review: spellings of design §5.8's banned capability that the
+ * previous commit declared unclosable while never having tried. Each was measured live — Bun
+ * accepts, `await import()` EXECUTES the payload, and the perimeter reported nothing — and each
+ * needs neither alias tracking nor constant folding, so each is closed here.
+ *
+ * The valid-input companions matter as much as the catches: `Function` is also TypeScript's
+ * built-in callback type, so a rule that flags it in type position rejects ordinary code.
+ */
+describe("KNOWN-GAP spellings closed in fix round 1 (Important 4)", () => {
+  test("a PARENTHESISED `Function` reference that is then called is a call", () => {
+    // The check used to require `(` as the very NEXT token, so one pair of parentheses walked
+    // straight past it.
+    for (const src of [
+      `export const r = new (Function)("return 1")();\n`,
+      `export const r = (Function)("return 1")();\n`,
+      `export const r = (0, Function)("return 1")();\n`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        src,
+        ["FUNCTION_CALL"],
+      ]);
+    }
+  });
+
+  test("`<global>.eval(...)` is the global eval, not a method on some other object", () => {
+    // The check excluded EVERY `.`-prefixed occurrence, so the most obvious spelling of indirect
+    // eval was never caught.
+    for (const src of [
+      `export const r = (globalThis as any).eval("1");\n`,
+      `export const r = (window as any).eval("1");\n`,
+      `export const r = (self as any).eval("1");\n`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        src,
+        ["EVAL_CALL"],
+      ]);
+    }
+  });
+
+  test("the valid-input companions: `Function` in TYPE position is still not a call", () => {
+    // Without these, "flag every `Function` next to a paren" would satisfy the rows above and
+    // reject ordinary TypeScript.
+    for (const src of [
+      `export let m: Map<string, Function>;\n`,
+      `export const f = (cb: Function): void => { void cb; };\n`,
+      `export type H = (cb: Function) => void;\n`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
+    }
+  });
+
+  test("the valid-input companion: an unrelated `.evaluate(...)` is untouched", () => {
+    const src = `export const v = (globalThis as any).parser.evaluate();\n`;
+    expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+  });
+
+  test("KNOWN GAP, still open and now narrower: a DOUBLY parenthesised reference", () => {
+    // Pinned rather than assumed away: following an arbitrary parenthesis nest is the
+    // constant-folding job this scan does not do. Registered with gaps 1-4 in the plan's
+    // red-debt ledger.
+    const src = `export const r = ((Function))("return 1")();\n`;
+    expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(src)).not.toThrow();
+    expect(scanned(scanImportAllowlist(src, NONE))).toEqual([]);
+  });
+});
+
+/**
+ * THE PROSE FILTER'S OWN BOUNDARY (task 14b fix round 1). A token the lexer marks as JSX
+ * children text is skipped by the three dynamic-code checks so a page's display copy cannot trip
+ * a FATAL — but `./jsx`'s reader is not Bun's parser, and where it mis-classifies real code as
+ * prose that filter would hide a real call. `isAdjacentCall` is the line between the two, and
+ * both sides of it are pinned here.
+ */
+describe("the prose filter is bounded by call ADJACENCY", () => {
+  test("prose that merely SAYS eval or Function is not a fatal", () => {
+    for (const src of [
+      `export default () => <Text id="t">Never use eval here</Text>\n`,
+      `export default () => <Text id="t">Function (beta)</Text>\n`,
+      `export default () => <Text id="t">call eval (later)</Text>\n`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE))]).toEqual([src, []]);
+    }
+  });
+
+  test("a REAL call the JSX reader mis-classified as prose is still caught", () => {
+    // The measured shape: a `<T>` type-parameter list closed by a `</T>` written in a later
+    // comment makes the reader call everything between them children text. Bun sees code.
+    const src = `let a: <T>(x: T) => T;\nexport const r = eval("1");\n// </T>\n`;
+    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+    expect(
+      scanned(scanImportAllowlist(src, { ...NONE, syntax: "jsx" })).map((e) => e.code),
+    ).toEqual(["EVAL_CALL"]);
+  });
+
+  test("…and the same holds for `Function(` — BOTH halves of the filter are bounded", () => {
+    // Without this row the `Function` check could keep the blanket filter and nothing would
+    // notice: every other fixture exercising the filter uses `eval`. (Found by mutation.)
+    const src = `let a: <T>(x: T) => T;\nexport const r = new Function("return 1");\n// </T>\n`;
+    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(src)).not.toThrow();
+    expect(
+      scanned(scanImportAllowlist(src, { ...NONE, syntax: "jsx" })).map((e) => e.code),
+    ).toEqual(["FUNCTION_CALL"]);
+  });
+
+  test("a BARE global identifier receiver is recognised, not only a parenthesised one", () => {
+    // `(globalThis as any).eval(...)` leaves a `)` before the dot, so it exercises a different
+    // arm of `isGlobalReceiver` than `globalThis.eval(...)` does — and only the second one
+    // consults the name list. Both spellings execute. (Found by mutation.)
+    for (const src of [
+      `export const r = globalThis.eval("1");\n`,
+      `export const r = window.eval("1");\n`,
+      `export const r = self.eval("1");\n`,
+      `export const r = global.eval("1");\n`,
+    ]) {
+      expect([src, scanned(scanImportAllowlist(src, NONE)).map((e) => e.code)]).toEqual([
+        src,
+        ["EVAL_CALL"],
+      ]);
+    }
+    // …and an ordinary object with a method named `eval` is still not the global.
+    expect(scanned(scanImportAllowlist(`export const r = parser.eval("1");\n`, NONE))).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { resolveDesignSpecifier } from "entities/design-tree";
 
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { SourceStreamTruncatedError, SyntaxKind, Tok } from "./lexer";
+import type { SourceStreamTruncatedError, SourceSyntax, SyntaxKind, Tok } from "./lexer";
 
 /**
  * A fatal import-allowlist violation the gate rejects the candidate for (§3.1),
@@ -100,6 +100,90 @@ export function readStaticImportSpecifier(toks: Tok[], importIndex: number): str
     if (isEdgeBoundary(tj.kind)) return null;
   }
   return null;
+}
+
+/** A `.`/`?.` immediately before an identifier — the member-access shape. */
+function isMemberAccess(previous: Tok | undefined): boolean {
+  return previous?.kind === SK.DotToken || previous?.kind === SK.QuestionDotToken;
+}
+
+/**
+ * The identifiers that name the GLOBAL object, so `<receiver>.eval(...)` is the global `eval`
+ * rather than a method on some unrelated object — plus `)`, which is what a parenthesised or
+ * cast receiver leaves behind (`(globalThis as any).eval("x")`).
+ *
+ * ADDED in task 14b fix round 1 (Important 4). The `eval` check excluded EVERY `.`-prefixed
+ * occurrence, so `globalThis.eval("55")` — the most obvious spelling of indirect eval — was never
+ * caught. Measured: `Bun.Transpiler` accepts it and `await import()` executes it while the whole
+ * perimeter reported nothing. It needs no alias tracking and no constant folding, so it was
+ * inside this layer's reach all along and the escalation that called the whole family unclosable
+ * was wider than what had been proved.
+ *
+ * The `)` arm is an accepted OVER-approximation, in the same spirit as flagging
+ * `{ eval() { return 1 } }`: `someCall().eval(x)` — a method genuinely named `eval` on an
+ * unrelated object — is flagged too. A page defining such a method is unusual enough that the
+ * catch is worth more than the exemption.
+ */
+function isGlobalReceiver(receiver: Tok | undefined): boolean {
+  if (receiver === undefined) return false;
+  if (receiver.kind === SK.CloseParenToken) return true;
+  // `global` is NOT an identifier to the TypeScript scanner — it answers `GlobalKeyword`, the
+  // one it uses for `declare global {}`. Measured, not assumed: without this arm
+  // `global.eval("1")` was the single spelling of the four that slipped through, found by the
+  // test that sweeps all four rather than by inspection.
+  if (receiver.kind === SK.GlobalKeyword) return true;
+  if (receiver.kind !== SK.Identifier) return false;
+  return GLOBAL_OBJECT_NAMES.has(receiver.value);
+}
+
+/** The names a page can reach the global object through, in every runtime this host may use. */
+const GLOBAL_OBJECT_NAMES = new Set(["globalThis", "window", "self", "global"]);
+
+/**
+ * True when `toks[index]` is a bare reference wrapped in parentheses that are then CALLED —
+ * `(Function)("x")`, `(0, Function)("x")`, `new (Function)("x")`.
+ *
+ * ADDED in task 14b fix round 1 (Important 4). The `Function` check fired only when the very NEXT
+ * token was `(`, so one pair of parentheses walked straight past it. All three spellings were
+ * measured: `Bun.Transpiler` accepts them, `await import()` executes them, the perimeter reported
+ * nothing. Recognising them needs no binder — the closing `)` is the token right after the
+ * reference, and the call `(` is the token right after that.
+ *
+ * Deliberately NOT a general expression matcher: it looks exactly one `)` ahead and requires the
+ * call parenthesis immediately behind it, which is the whole of the measured shape. A reference
+ * wrapped twice (`((Function))("x")`) is not caught and is pinned as a KNOWN GAP, because
+ * following an arbitrary parenthesis nest is the constant-folding job this scan does not do.
+ */
+function isParenthesisedValue(toks: Tok[], index: number): boolean {
+  return (
+    toks[index + 1]?.kind === SK.CloseParenToken && toks[index + 2]?.kind === SK.OpenParenToken
+  );
+}
+
+/**
+ * True when `word` is IMMEDIATELY followed by `(`, with no space between them — the shape of a
+ * real call, `eval("1")` / `Function("…")`, rather than of prose that happens to end in a
+ * parenthetical.
+ *
+ * WHY THIS EXISTS (task 14b fix round 1, Critical 1's residual). A token marked `Tok.jsxText` is
+ * normally skipped by the three dynamic-code checks, so a page's own display copy —
+ * `<Text id="t">Never use eval here</Text>`, `<Text id="t">Function (beta)</Text>` — cannot trip
+ * a FATAL. But `./jsx`'s reader is not Bun's parser: in a `.tsx` source it can confirm an element
+ * Bun never sees (a `<T>` type-parameter list closed by a `</T>` written in a later comment), and
+ * everything between them is then marked as prose. Measured, that hid a real `eval("1")` from
+ * this check while `Bun.Transpiler` accepted the file and `await import()` ran it. `tokenize`'s
+ * window model keeps the span VISIBLE — the import, require and re-export checks all still fire
+ * on it — and this predicate is what stops the one filter that remains from hiding the call.
+ *
+ * THE DISCRIMINATOR IS ADJACENCY, chosen because it separates the two MEASURED shapes rather
+ * than because it is clever: the prose false-positives this filter was written for put a SPACE
+ * before the parenthesis (`Function (beta)`), and a call does not. The cost is an accepted
+ * over-approximation, pinned by a test: display copy that spells `eval(`/`Function(` with no
+ * space is flagged. That is a loud, correctable rejection (rewrite the copy); the alternative
+ * was a live bypass.
+ */
+function isAdjacentCall(word: Tok, next: Tok | undefined): boolean {
+  return next?.kind === SK.OpenParenToken && next.pos === word.pos + word.value.length;
 }
 
 /**
@@ -247,9 +331,10 @@ export function scanImportAllowlist(
     readonly from: string;
     readonly has: (relPath: string) => boolean;
     readonly isScanned: (relPath: string) => boolean;
+    readonly syntax: SourceSyntax;
   },
 ): SourceStreamTruncatedError | ImportScanError[] {
-  const toks = tokenize(source);
+  const toks = tokenize(source, context.syntax);
   // A stream that does not cover the source cannot be scanned for anything — see
   // `lexer.ts`'s own completeness invariant. Propagated, never treated as "no findings".
   if (toks instanceof Error) return toks;
@@ -376,15 +461,15 @@ export function scanImportAllowlist(
     // by `.`/`?.` counts (Important 2 folds the `?.` guard in here). This also
     // flags a page that merely defines a property/method literally named
     // `eval` (e.g. `{ eval() { return 1 } }`) — an accepted over-approximation
-    // (see the module doc comment above). No JSX-prose filter is needed here:
-    // `./lexer`'s `tokenize` never lexes children text as code at all, so this
-    // word cannot reach the stream as an identifier when it is display copy
-    // (task 14b — see the module doc comment).
+    // (see the module doc comment above). `!t.jsxText` skips this word when it is
+    // a page's own display copy rather than a reference — the token is still in
+    // the stream for every other check, it just does not raise THIS fatal (see
+    // `Tok.jsxText`).
     if (
       t.kind === SK.Identifier &&
       t.value === "eval" &&
-      toks[i - 1]?.kind !== SK.DotToken &&
-      toks[i - 1]?.kind !== SK.QuestionDotToken
+      (!t.jsxText || isAdjacentCall(t, next)) &&
+      (!isMemberAccess(toks[i - 1]) || isGlobalReceiver(toks[i - 2]))
     ) {
       const where = at(t.pos);
       errors.push({
@@ -409,14 +494,13 @@ export function scanImportAllowlist(
     // call on some other object is, symmetrically with `eval`, not the global.
     // Display copy — `<Text id="t">Function (beta)</Text>`, which lexes as the
     // adjacent tokens `Function`, `(`, `beta`, `)` and so would otherwise match
-    // — cannot reach this check at all now: `./lexer`'s `tokenize` skips JSX
-    // children text rather than lexing it (task 14b).
+    // — is skipped by `!t.jsxText`, not removed from the stream.
     if (
       t.kind === SK.Identifier &&
       t.value === "Function" &&
-      next?.kind === SK.OpenParenToken &&
-      toks[i - 1]?.kind !== SK.DotToken &&
-      toks[i - 1]?.kind !== SK.QuestionDotToken
+      (!t.jsxText || isAdjacentCall(t, next)) &&
+      (next?.kind === SK.OpenParenToken || isParenthesisedValue(toks, i)) &&
+      !isMemberAccess(toks[i - 1])
     ) {
       const where = at(t.pos);
       errors.push({
@@ -438,10 +522,11 @@ export function scanImportAllowlist(
     // built through concatenation or held in a variable first
     // (`"ev" + "al"`, `const k = "eval"; g[k]`) is NOT caught — this is a
     // token-level scan, not a constant-folding evaluator (see the module doc
-    // comment's pinned "KNOWN GAP" list). This shape cannot appear inside JSX
-    // children text either, for the same reason as the two checks above.
+    // comment's pinned "KNOWN GAP" list). `!t.jsxText` skips this shape inside a
+    // page's own display copy too, for the same reason as the two checks above.
     if (
       t.kind === SK.OpenBracketToken &&
+      !t.jsxText &&
       (toks[i - 1]?.kind === SK.Identifier ||
         toks[i - 1]?.kind === SK.CloseParenToken ||
         toks[i - 1]?.kind === SK.CloseBracketToken ||
@@ -476,8 +561,11 @@ export function scanImportAllowlist(
  * own DYNAMIC_IMPORT/REEXPORT/REQUIRE_CALL branches, which never touch a closure either — the
  * allowlist scan still catches all three as fatal on its own pass over the same file.
  */
-export function scanModuleEdges(source: string): SourceStreamTruncatedError | readonly string[] {
-  const toks = tokenize(source);
+export function scanModuleEdges(
+  source: string,
+  syntax: SourceSyntax,
+): SourceStreamTruncatedError | readonly string[] {
+  const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const edges: string[] = [];
   for (let i = 0; i < toks.length; i += 1) {

@@ -20,7 +20,7 @@ import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
-import { isCodeFile, scanModuleEdges } from "../model/tree-scan";
+import { isCodeFile, parsesJsx, scanModuleEdges } from "../model/tree-scan";
 import { createTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
 import type { GateError, GateErrorKind } from "../types";
@@ -225,7 +225,10 @@ function readClosureEdges(
   // As in `tree-scan.ts`: a RETURNED `SourceStreamTruncatedError` (controlled code, the
   // completeness invariant) or a THROWN engine stack overflow (the one uncontrolled boundary).
   const edges = errore.try({
-    try: () => scanModuleEdges(source),
+    // The SAME measured predicate the flat scan uses (`tree-scan.ts`'s `parsesJsx`), so the
+    // closure walk and the allowlist can never disagree about whether this file holds JSX —
+    // a disagreement there is what lets a closure be built from a different reading.
+    try: () => scanModuleEdges(source, parsesJsx(relPath)),
     catch: (cause) => new ClosureEdgesUnreadableError({ file: relPath, cause }),
   });
   if (edges instanceof Error) {
@@ -616,7 +619,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly slug: PageSlug;
   }): Promise<PageMetaExtractionV1> {
     const fileName = `${input.slug}.tsx`;
-    const contract = checkPageContract(input.source);
+    const contract = checkPageContract(input.source, "jsx");
     if (contract instanceof Error) {
       // A source whose token stream does not cover it has no readable `meta` — reporting
       // `meta: null` with the real reason beats reporting "this page declares no settings",

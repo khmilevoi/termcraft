@@ -3,7 +3,7 @@ import type { PageSlug } from "entities/page";
 import type { GateWarning } from "../types";
 import { readHyphenatedName, scanJsx } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { SourceStreamTruncatedError, Tok } from "./lexer";
+import type { SourceStreamTruncatedError, SourceSyntax, Tok } from "./lexer";
 
 /** Global identifiers whose call breaks the deterministic render (§6.3 warning lints). */
 const TIMER_IDENTIFIERS = new Set<string>([
@@ -23,8 +23,11 @@ const NOW_OBJECTS = new Set<string>(["Date", "performance"]);
  * each surfaces one warning at its source position. (`dropped-id`,
  * `unpointed-element`, and `unlisted-navigation` are below.)
  */
-export function lintDeterminism(source: string): SourceStreamTruncatedError | GateWarning[] {
-  const toks = tokenize(source);
+export function lintDeterminism(
+  source: string,
+  syntax: SourceSyntax,
+): SourceStreamTruncatedError | GateWarning[] {
+  const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const warnings: GateWarning[] = [];
   const at = (pos: number) => lineColOf(source, pos);
@@ -79,8 +82,11 @@ export function lintDeterminism(source: string): SourceStreamTruncatedError | Ga
  * as an identifier — so matching the keyword alone would warn on code that has no annotation
  * in it at all. Checking the preceding token is what keeps this precise.
  */
-export function lintSilencingAny(source: string): SourceStreamTruncatedError | GateWarning[] {
-  const toks = tokenize(source);
+export function lintSilencingAny(
+  source: string,
+  syntax: SourceSyntax,
+): SourceStreamTruncatedError | GateWarning[] {
+  const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const warnings: GateWarning[] = [];
 
@@ -211,11 +217,12 @@ function extractDeclaredIds(toks: readonly Tok[]): Set<string> {
  */
 export function lintDroppedIds(
   source: string,
+  syntax: SourceSyntax,
   referencedIds?: readonly string[],
 ): SourceStreamTruncatedError | GateWarning[] {
   if (referencedIds === undefined) return [];
 
-  const toks = tokenize(source);
+  const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const declaredIds = extractDeclaredIds(toks);
   const warnings: GateWarning[] = [];
@@ -243,12 +250,13 @@ export function lintDroppedIds(
  */
 export function lintUnlistedNavigation(
   source: string,
+  syntax: SourceSyntax,
   listedSlugs?: readonly PageSlug[],
 ): SourceStreamTruncatedError | GateWarning[] {
   if (listedSlugs === undefined) return [];
 
   const listed = new Set<string>(listedSlugs);
-  const toks = tokenize(source);
+  const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const warnings: GateWarning[] = [];
   const at = (pos: number) => lineColOf(source, pos);

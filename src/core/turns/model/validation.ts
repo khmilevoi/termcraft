@@ -41,11 +41,12 @@ import { trace } from "infrastructure/debug-log";
  * failed, so a rejection carries the COMPLETE set of diagnostics across every page in one
  * report, not just the first failure.
  *
- * WIRED IS NOT CLOSED (task-14 review round 2): what follows describes the CALLER, which now
- * exists and is proven for the six forbidden forms it names. The scan's own source coverage is
- * a separate, still-open problem — see `gate/model/lexer.ts`'s completeness invariant for what
- * it does and does not catch, and for the differential-parse gap a separate task owns. This
- * module must not be described as making the Gate enforce its perimeter, only as calling it.
+ * WHAT FOLLOWS DESCRIBES THE CALLER, not the perimeter: this module calls the Gate, it is not
+ * the Gate. The scan's own source coverage — a separate problem this file used to say was still
+ * open — is closed by `gate/model/lexer.ts`'s invariant (no classification uncertainty may make
+ * executable code invisible), measured against Bun's own parse by
+ * `gate/model/lexer.oracle.test.ts`. The residual is design §5.8's dynamic-code ban, whose
+ * KNOWN GAPS 1-4 are registered in the plan's red-debt ledger.
  *
  * THE IMPORT PERIMETER IS WIRED HERE, AND ONLY HERE (red-debt.md's SECURITY-CRITICAL
  * must-wire; task-14-supplement §1). `GateRunner.runTreeImports` — the import allowlist and,

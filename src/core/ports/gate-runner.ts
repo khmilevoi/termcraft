@@ -247,10 +247,15 @@ export interface GateRunner {
    *
    * WIRED (task 14 — the red-debt.md SECURITY-CRITICAL must-wire has a caller now).
    *
-   * WIRED IS NOT CLOSED (task-14 review round 2): the caller exists and the tested forbidden
-   * forms are proven end to end, but the scan's own SOURCE COVERAGE is still incomplete —
-   * `gate/model/lexer.ts` documents the remaining differential-parse gap, owned by a separate
-   * task. Do not read this method's existence as "the perimeter holds".
+   * WIRED, AND THE SOURCE-COVERAGE GAP IT USED TO CARRY IS CLOSED (task 14b). Round 2 of task
+   * 14 qualified this with "wired is not closed", because the scan could still be handed a token
+   * stream that did not cover the file. `gate/model/lexer.ts` now states and enforces the
+   * invariant that fixed it — no classification uncertainty may make executable code invisible
+   * — and `gate/model/lexer.oracle.test.ts` measures it against Bun's own parse. What is NOT
+   * closed, and is registered in the plan's red-debt ledger with no owner, is design §5.8's
+   * dynamic-code ban: `import-scan.ts`'s KNOWN GAPS 1-4 reach `eval`/`Function` through alias
+   * and property indirection no token-level scan can follow. Read this method as "the import
+   * perimeter holds; the dynamic-code ban is best-effort".
    * `core/turns/model/validation.ts` calls this ONCE per turn, after `runManifestSlice` and
    * before any per-page `runPage`, threading `slice.pages` through as `pages`. It is called
    * UNCONDITIONALLY, including when the manifest itself failed to decode (with an empty

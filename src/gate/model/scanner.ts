@@ -29,6 +29,19 @@ export interface Tok {
   readonly kind: SyntaxKind;
   readonly value: string;
   readonly pos: number;
+  /**
+   * True when this token was lexed inside a run the JSX reader calls children TEXT — a page's
+   * own display copy rather than code.
+   *
+   * MARKED, NOT DROPPED (task 14b fix round 1). Only `import-scan.ts`'s three dynamic-code
+   * checks consult it, and only to avoid a FATAL on prose: `<Text>Never use eval here</Text>`
+   * must not reject a page. The token is still in the stream, so the import/require/re-export
+   * checks, the page contract and every lint see it — which is what keeps a span the JSX reader
+   * mis-classified as text from becoming invisible. The previous round SKIPPED those spans
+   * instead and made real `import`/`require` statements vanish wherever `scanJsx` confirmed an
+   * element Bun does not see.
+   */
+  readonly jsxText: boolean;
 }
 
 /**

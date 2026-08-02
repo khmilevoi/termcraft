@@ -5,6 +5,7 @@ import type { PageSlug } from "entities/page";
 
 import type { GateError } from "../types";
 import { runGate, runTreeImports } from "./gate";
+import { checkPageContract } from "./page-contract";
 
 const SLUG = "dash" as PageSlug;
 const cleanSource = `import { definePage, reatomComponent, Panel, Text } from "@termcraft/runtime"
@@ -314,18 +315,16 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
  * only one `runGate` owns, had no coverage at all.
  */
 describe("runGate — a page whose own source cannot be read to the end", () => {
-  // RE-POINTED in task 14b at a fixture Bun ACCEPTS AND EXECUTES. Round 2's fixture put a
-  // U+FFFD in JSX TEXT, which the lexer now reads as the prose it is — Bun does too — so that
-  // source is fully scanned and reports its real violations rather than refusing. What still
-  // cannot be covered is a code-mode token that swallows a whole prose run: JSX attribute
-  // strings do not process `\` escapes and code-mode strings do, so `a="x\"` ends the attribute
-  // for the runtime while the code lexer reads on through `>hi</Text>` and past it. Measured:
-  // `Bun.Transpiler({loader:"tsx"})` accepts this source and `await import()` runs it, while
-  // `tokenize` refuses it — the fail-closed direction, on a file the runtime really would run.
-  const TRUNCATED = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+  // RE-POINTED AGAIN in task 14b fix round 1, and the reason IS that round. `tokenize` no longer
+  // refuses anything — wherever it cannot classify a span it re-lexes one character on, so it
+  // always returns a stream accounting for the whole source. The fail-closed arm therefore lives
+  // at its one remaining MEASURED cause: `jsx.ts`'s recursive-descent reader exhausting the
+  // engine's stack on absurd nesting, which THROWS. `runGate` converting that into a rejected
+  // page rather than a crashed turn is what this block pins.
+  const TRUNCATED = "<a>{".repeat(32_000);
 
-  test("the fixture really is one Bun ACCEPTS — otherwise the fatal below would be free", () => {
-    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(TRUNCATED)).not.toThrow();
+  test("the cause really is an engine throw — otherwise the converter below is untested", () => {
+    expect(() => checkPageContract(TRUNCATED, "jsx")).toThrow();
   });
 
   test("rejects the page with UNSCANNABLE_SOURCE instead of reporting a missing contract", async () => {

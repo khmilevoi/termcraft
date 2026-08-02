@@ -6,7 +6,7 @@ import { LanguageVariant, createScanner } from "typescript/unstable/ast";
 
 import { readStaticImportSpecifier } from "./import-scan";
 import { SK, type Tok } from "./lexer";
-import { scanModuleEdges, scanTreeImports } from "./tree-scan";
+import { parsesJsx, scanModuleEdges, scanTreeImports } from "./tree-scan";
 
 /**
  * THE DIFFERENTIAL ORACLE (task 14b) — the harness that decides whether `./lexer`'s invariant
@@ -42,10 +42,10 @@ import { scanModuleEdges, scanTreeImports } from "./tree-scan";
  * A REFUSAL IS NEVER AN UNDER-SCAN. `UNSCANNABLE_SOURCE` is the invariant working: the gate said
  * "I could not read this", the candidate is rejected, and nothing was vouched for.
  *
- * MEASURED AT `fd9ec53`, this file's own base commit, before any of task 14b's changes:
- * **94 UNDER-IMPORT / 94 UNDER-EVAL / 12 OVER-FATAL**. After: **0 / 0 / 0** over 24 972 rows
- * (886 repository sources, 1 020 systematic, 3 072 code points, 20 000 fuzz). The suite runs a
- * bounded slice of the same corpora; the full fuzz sweep is in task 14b's report.
+ * COUNTED HONESTLY (task 14b fix round 1, M6). The corpus SIZE and the rows actually SCANNED
+ * are different numbers, because `Bun.Transpiler` panics — uncatchably — on a few fuzz shapes,
+ * and because the corpora grew between measurements. Each figure below says which it is, and
+ * which corpora it covers; the report carries the same arithmetic.
  *
  * NON-VACUITY is not a claim here, it is a test: {@link legacyEdges} below reproduces the
  * pre-task-14b code-mode lexing, and the last describe block asserts the oracle FLAGS it on the
@@ -109,7 +109,7 @@ function bunView(row: Row): { accepts: boolean; specs: readonly string[] } {
 function gateView(row: Row): { refused: boolean; specs: ReadonlySet<string>; codes: string[] } {
   const files = new Map([[row.relPath, row.source]]);
   const errors = scanTreeImports({ files, has: (p) => files.has(p) });
-  const edges = scanModuleEdges(row.source);
+  const edges = scanModuleEdges(row.source, parsesJsx(row.relPath));
   const specs = new Set<string>(edges instanceof Error ? [] : edges);
   for (const error of errors) if (error.specifier !== "") specs.add(error.specifier);
   return {
@@ -129,8 +129,12 @@ function judge(row: Row): Divergence | null {
   // The OVER metric's ground truth differs per corpus: a REPOSITORY file is legal Bun-accepted
   // source whose imports are genuinely forbidden inside a design tree, so its only over-fire is
   // a refusal; a CONTROL fixture carries no payload at all, so any fatal is a false rejection.
-  const overFatal =
-    row.kind === "repo"
+  // Only a source the RUNTIME accepts can be over-fired on: refusing what Bun refuses is the
+  // guard agreeing with reality, not a false rejection. Without this the `.ts` control rows —
+  // which are JSX in a non-JSX file, and which Bun rejects outright — read as 12 over-fires.
+  const overFatal = !bun.accepts
+    ? []
+    : row.kind === "repo"
       ? gate.codes.filter((c) => c === "UNSCANNABLE_SOURCE")
       : row.kind === "control"
         ? gate.codes
@@ -260,6 +264,17 @@ const SHAPES: readonly ((trap: string, payload: string) => string)[] = [
   (t, p) => `export const el = <box id="b">${t}{${p}}</box>;\n`,
   (t, p) => `const s = \`\${0 < /[{]/.test("x")}\`; // ${t}\n${p};\n`,
   (t, p) => `const s = \`\${0 < /[}]/.test("x")}\`; // ${t}\n${p};\n`,
+  // CLOSING TAG AFTER THE PAYLOAD (task 14b fix round 1, Important 2). Every shape above puts
+  // its closing tag before the payload, so none of them could produce the class Critical 1 was:
+  // an "element" a JSX reader confirms across the payload, using a `</…>` written later in a
+  // comment, a string, or bare. In a `.ts` file that element is pure fiction; in a `.tsx` file
+  // it is fiction whenever the `<` opened a type-parameter list rather than an element.
+  (t, p) => `let a: <T>(x: T) => T; // ${t}\n${p}\n// </T>\n`,
+  (t, p) => `type O = { m: <T>(x: T) => T }; // ${t}\n${p}\nconst end = "</T>";\n`,
+  (t, p) => `const v = 1 as unknown as <T>(x: T) => T; // ${t}\n${p}\n// </T>\n`,
+  (t, p) => `export function f(s: string) { if (1) /<b>/.test(s); } // ${t}\n${p}\n// </b>\n`,
+  (t, p) => `const w = a < b; // ${t}\n${p}\n// </b>\n`,
+  (t, p) => `export const T = () => <p>${t}</p>;\n${p}\n// </p>\n`,
 ];
 
 /** The index of the first CONTAINER-POSITION shape, which takes the expression payload. */
@@ -276,25 +291,34 @@ const CONTAINER_PAYLOAD = `(import("${PAYLOAD_SPEC}"), eval("1"))`;
 function systematicCorpus(): Row[] {
   const rows: Row[] = [];
   let n = 0;
-  for (const trap of TRAPS) {
-    for (const [index, shape] of SHAPES.entries()) {
-      const payload = index >= FIRST_CONTAINER_SHAPE ? CONTAINER_PAYLOAD : PAYLOAD;
-      rows.push({
-        name: `sys[trap=${JSON.stringify(trap)} shape=${index}]`,
-        source: shape(trap, payload),
-        loader: "tsx",
-        relPath: `lib/g${n++}.tsx`,
-        kind: "payload",
-      });
-      // The over-fire control: the identical shape with NO payload. Any fatal is a false
-      // rejection of a page whose display copy merely spells something alarming.
-      rows.push({
-        name: `ctl[trap=${JSON.stringify(trap)} shape=${index}]`,
-        source: shape(trap, ""),
-        loader: "tsx",
-        relPath: `lib/c${n++}.tsx`,
-        kind: "control",
-      });
+  // BOTH LOADERS (task 14b fix round 1, Important 2). The first version of this file generated
+  // every row as `.tsx`, so HALF the differential space was unmeasured — and that half is where
+  // Critical 1 lived: Bun parses no JSX in a `.ts` file while the gate parsed it in every file.
+  // A generator that cannot produce a class is not evidence about that class.
+  for (const [extension, loader] of [
+    [".tsx", "tsx"],
+    [".ts", "ts"],
+  ] as const) {
+    for (const trap of TRAPS) {
+      for (const [index, shape] of SHAPES.entries()) {
+        const payload = index >= FIRST_CONTAINER_SHAPE ? CONTAINER_PAYLOAD : PAYLOAD;
+        rows.push({
+          name: `sys[${extension} trap=${JSON.stringify(trap)} shape=${index}]`,
+          source: shape(trap, payload),
+          loader,
+          relPath: `lib/g${n++}${extension}`,
+          kind: "payload",
+        });
+        // The over-fire control: the identical shape with NO payload. Any fatal is a false
+        // rejection of a page whose display copy merely spells something alarming.
+        rows.push({
+          name: `ctl[${extension} trap=${JSON.stringify(trap)} shape=${index}]`,
+          source: shape(trap, ""),
+          loader,
+          relPath: `lib/c${n++}${extension}`,
+          kind: "control",
+        });
+      }
     }
   }
   return rows;
@@ -396,11 +420,17 @@ function fuzzCorpus(count: number, seed: number): Row[] {
     const length = 3 + Math.floor(rand() * 22);
     let body = "";
     for (let j = 0; j < length; j += 1) body += FUZZ_ATOMS[Math.floor(rand() * FUZZ_ATOMS.length)]!;
+    // SPLICED, not only glued (task 14b fix round 1, Important 2). Gluing the payload before or
+    // after the whole body cannot produce a body that BRACKETS it, which is exactly the shape
+    // Critical 1 needed. A random interior cut can, and it costs nothing.
+    const cut = Math.floor(rand() * (body.length + 1));
+    const spliced = `${body.slice(0, cut)}\n${PAYLOAD}\n${body.slice(cut)}\n`;
+    const jsx = rand() < 0.5;
     rows.push({
       name: `fuzz#${i}`,
-      source: rand() < 0.5 ? `${body}\n${PAYLOAD}\n` : `${PAYLOAD}\n${body}\n`,
-      loader: "tsx",
-      relPath: `lib/f${i}.tsx`,
+      source: spliced,
+      loader: jsx ? "tsx" : "ts",
+      relPath: `lib/f${i}${jsx ? ".tsx" : ".ts"}`,
       kind: "payload",
     });
   }
@@ -413,9 +443,11 @@ describe("the differential oracle — Bun's parse against the gate's view", () =
     expect(report(found)).toEqual([]);
   });
 
-  test("the systematic grid of JSX/TS lexing traps: zero under-scans and zero false fatals", () => {
+  test("the systematic grid of JSX/TS lexing traps, in BOTH loaders: zero under-scans and zero false fatals", () => {
     const rows = systematicCorpus();
-    expect(rows.length).toBe(TRAPS.length * SHAPES.length * 2);
+    // Asserted so a shape or a trap silently disappearing is a failure, not a quieter run.
+    expect(rows.length).toBe(TRAPS.length * SHAPES.length * 2 * 2);
+    expect(rows.filter((r) => r.relPath.endsWith(".ts")).length).toBe(rows.length / 2);
     const found = runCorpus(rows);
     expect(report(found)).toEqual([]);
   });
@@ -434,7 +466,11 @@ describe("the differential oracle — Bun's parse against the gate's view", () =
     // catchable) on roughly 3 in 10 000 of these shapes — measured, 6 of 20 000 — which is why
     // the shipped slice is small enough to have been verified panic-free rather than wrapped in
     // subprocess machinery this file does not otherwise need.
-    const found = runCorpus(fuzzCorpus(1500, 0x14b));
+    // `ORACLE_FUZZ` lets the same generator be swept far wider out of band without a second
+    // copy of it drifting from this one — task 14b's report quotes a 20 000-row run made this
+    // way. The default is what the suite can afford on every run.
+    const count = Number(process.env["ORACLE_FUZZ"] ?? 1500);
+    const found = runCorpus(fuzzCorpus(count, 0x14b));
     expect(report(found)).toEqual([]);
   });
 });
@@ -479,6 +515,7 @@ function legacyEdges(source: string): readonly string[] {
       kind,
       value: kind === SK.StringLiteral ? scanner.getTokenValue() : "",
       pos: scanner.getTokenStart(),
+      jsxText: false,
     });
   }
   const edges: string[] = [];
@@ -535,7 +572,7 @@ describe("the oracle is NOT vacuous — it flags the reading this fix replaced",
 
   test("…and the shipped reading finds it on every one of them", () => {
     for (const [name, source] of HISTORICAL) {
-      const edges = scanModuleEdges(source);
+      const edges = scanModuleEdges(source, "jsx");
       if (edges instanceof Error) throw new Error(`${name}: unexpected refusal — ${edges.message}`);
       expect([name, [...edges]]).toEqual([name, [PAYLOAD_SPEC]]);
       const files = new Map([["lib/theme.tsx", source]]);

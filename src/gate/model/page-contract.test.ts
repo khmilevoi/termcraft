@@ -23,7 +23,7 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
 
 describe("checkPageContract (runtime-api §4)", () => {
   test("a well-formed page passes and yields the parsed meta", () => {
-    const result = scanned(checkPageContract(good));
+    const result = scanned(checkPageContract(good, "jsx"));
     expect(result.errors).toEqual([]);
     expect(result.meta).toEqual({
       kitApiVersion: 1,
@@ -35,63 +35,65 @@ describe("checkPageContract (runtime-api §4)", () => {
 
   test("meta bound to something other than a definePage call is NON_STATIC_META", () => {
     const src = `const raw = { kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" }\nexport const meta = raw\nexport default reatomComponent(() => null)\n`;
-    expect(scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_STATIC_META")).toBe(
-      true,
-    );
+    expect(
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_STATIC_META"),
+    ).toBe(true);
   });
 
   test("a spread inside the meta object is NON_STATIC_META", () => {
     const src = `export const meta = definePage({ ...base, kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
-    expect(scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_STATIC_META")).toBe(
-      true,
-    );
+    expect(
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_STATIC_META"),
+    ).toBe(true);
   });
 
   test("a computed key inside the meta object is NON_STATIC_META", () => {
     const src = `export const meta = definePage({ ["kitApiVersion"]: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
-    expect(scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_STATIC_META")).toBe(
-      true,
-    );
+    expect(
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_STATIC_META"),
+    ).toBe(true);
   });
 
   test("a variable reference as a field value is NON_STATIC_META", () => {
     const src = `export const meta = definePage({ kitApiVersion: VERSION, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
-    expect(scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_STATIC_META")).toBe(
-      true,
-    );
+    expect(
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_STATIC_META"),
+    ).toBe(true);
   });
 
   test("a call as a field value is NON_STATIC_META", () => {
     const src = `export const meta = definePage({ kitApiVersion: 1, title: makeTitle(), minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
-    expect(scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_STATIC_META")).toBe(
-      true,
-    );
+    expect(
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_STATIC_META"),
+    ).toBe(true);
   });
 
   test("a missing required field is MISSING_META_FIELD", () => {
     const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
-    const codes = scanned(checkPageContract(src)).errors.map((e) => e.code);
+    const codes = scanned(checkPageContract(src, "jsx")).errors.map((e) => e.code);
     expect(codes).toContain("MISSING_META_FIELD");
   });
 
   test("an unsupported kitApiVersion is UNSUPPORTED_KIT_API", () => {
     const src = `export const meta = definePage({ kitApiVersion: 99, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
     expect(
-      scanned(checkPageContract(src)).errors.some((e) => e.code === "UNSUPPORTED_KIT_API"),
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "UNSUPPORTED_KIT_API"),
     ).toBe(true);
   });
 
   test("no default export is MISSING_DEFAULT_EXPORT", () => {
     const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\n`;
     expect(
-      scanned(checkPageContract(src)).errors.some((e) => e.code === "MISSING_DEFAULT_EXPORT"),
+      scanned(checkPageContract(src, "jsx")).errors.some(
+        (e) => e.code === "MISSING_DEFAULT_EXPORT",
+      ),
     ).toBe(true);
   });
 
   test("a default export that is not a reatomComponent is NON_REATOM_DEFAULT", () => {
     const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default function Page() { return null }\n`;
     expect(
-      scanned(checkPageContract(src)).errors.some((e) => e.code === "NON_REATOM_DEFAULT"),
+      scanned(checkPageContract(src, "jsx")).errors.some((e) => e.code === "NON_REATOM_DEFAULT"),
     ).toBe(true);
   });
 });
@@ -106,23 +108,28 @@ describe("checkPageContract (runtime-api §4)", () => {
  * These tests take the level in ISOLATION, with no pipeline around it, so mutating exactly this
  * propagation reddens exactly these tests.
  *
- * THE FIXTURE IS ONE BUN ACCEPTS AND EXECUTES: JSX attribute strings do not process `\` escapes
- * and code-mode strings do, so `a="x\"` ends the attribute for the runtime while the code lexer
- * reads on through `>hi</Text>` and past it.
+ * THE FIXTURE IS DEEP JSX NESTING, and the reason is the shape of fix round 1. `tokenize` no
+ * longer REFUSES anything: wherever it cannot classify a span it re-lexes it one character on,
+ * so it always returns a stream that accounts for the whole source (that is what stopped real
+ * code going invisible, and what removed the last false rejection). The fail-closed arm the
+ * invariant names therefore lives at its one remaining, MEASURED cause — `./jsx`'s
+ * recursive-descent reader exhausting the engine's stack, which THROWS. Each level below must
+ * let that throw pass, not absorb it into an empty result; `scanTreeImports` and `runGate` are
+ * the two places that convert it into `UNSCANNABLE_SOURCE`.
  */
-const TRUNCATING = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
-const COVERED = `export const G = () => <Text a="x">hi</Text>\nimport fs from "node:fs"\n`;
+const UNREADABLE = "<a>{".repeat(32_000);
+const COVERED = `const a = 1;\n/* closed */\nimport fs from "node:fs"\n`;
 
 describe("checkPageContract — a stream that does not cover the source is an ERROR, never a meta-less result", () => {
-  test("returns the truncation rather than a contract verdict", () => {
-    // A truncated stream also has no `meta` in it, so swallowing the error reports "this page
-    // declares no meta" — a false diagnosis that sends the agent to fix a contract that is
-    // probably fine, while the forbidden import it actually hides goes unchecked.
-    expect(checkPageContract(TRUNCATING)).toBeInstanceOf(Error);
+  test("lets the unreadable-source throw PASS rather than returning a contract verdict", () => {
+    // An unread stream also has no `meta` in it, so swallowing reports "this page declares no
+    // meta" — a false diagnosis that sends the agent to fix a contract that is probably fine,
+    // while whatever the file actually hides goes unchecked.
+    expect(() => checkPageContract(UNREADABLE, "jsx")).toThrow();
   });
 
-  test("…and the covered sibling still gets a real verdict, so this is not a blanket refusal", () => {
-    const result = scanned(checkPageContract(COVERED));
+  test("…and an ordinary source still gets a real verdict, so this is not a blanket refusal", () => {
+    const result = scanned(checkPageContract(COVERED, "jsx"));
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.meta).toBeNull();
   });

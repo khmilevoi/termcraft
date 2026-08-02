@@ -165,32 +165,47 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   //
   // TWO DIFFERENT MECHANISMS, DELIBERATELY (task-14 review round 2, M6):
   //   - `checkPageContract` and the token-based lints RETURN
-  //     `SourceStreamTruncatedError | …` now, because `tokenize` is `gate`'s own controlled
-  //     code and the project constraint permits `errore.try` only at UNCONTROLLED boundaries.
-  //     They are ordinary `instanceof Error` checks.
-  //   - `lintUnpointedElements` is the one genuine uncontrolled boundary left in this
-  //     function: it runs `./jsx`'s recursive-descent reader, which the ENGINE can overflow on
-  //     deep enough nesting. A throw from code this module does not own is exactly what
-  //     `errore.try` is for, and it stays.
-  const contract = checkPageContract(input.source);
+  //     `SourceStreamTruncatedError | …`, because `tokenize` is `gate`'s own controlled code and
+  //     the project constraint permits `errore.try` only at UNCONTROLLED boundaries. They are
+  //     ordinary `instanceof Error` checks.
+  //   - the ENGINE can still overflow, and since task 14b fix round 1 that boundary is reached
+  //     by EVERY one of these stages, not just `lintUnpointedElements`: `tokenize` now consults
+  //     `./jsx`'s recursive-descent reader for the JSX text ranges it lexes around, so a page
+  //     nested deeply enough throws out of the page contract and the token lints too. Measured:
+  //     `"<a>{".repeat(32_000)` throws `RangeError` from `checkPageContract`,
+  //     `lintDeterminism`, `lintSilencingAny`, `lintDroppedIds` and `lintUnlistedNavigation`
+  //     alike. `runGate` is SYNCHRONOUSLY inside the turn pipeline, so an escaping throw would
+  //     crash the turn instead of rejecting one page — the whole reason this converter exists.
+  //     One `errore.try` around the group, rather than five.
+  //
+  // A CANDIDATE PAGE IS ALWAYS JSX. `entryRelPath`/`fileName` both name a `.tsx` entry (see
+  // `fileName`'s own `${input.slug}.tsx` fallback below), and design §5 requires a page to
+  // default-export a component, so there is no non-JSX page for this path to serve.
+  // `runTreeImports` is the entry point that meets arbitrary tree files, and it derives the
+  // syntax per file from `tree-scan.ts`'s measured `parsesJsx`.
+  const read = errore.try({
+    try: () => ({
+      contract: checkPageContract(input.source, "jsx"),
+      lints: [
+        lintDeterminism(input.source, "jsx"),
+        lintSilencingAny(input.source, "jsx"),
+        lintDroppedIds(input.source, "jsx", input.referencedIds),
+        lintUnlistedNavigation(input.source, "jsx", input.listedSlugs),
+      ],
+      unpointed: lintUnpointedElements(input.source),
+    }),
+    catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
+  });
+  if (read instanceof Error) return unscannablePage(fileName, read);
+
+  const contract = read.contract;
   if (contract instanceof Error) return unscannablePage(fileName, contract);
 
-  for (const lint of [
-    lintDeterminism(input.source),
-    lintSilencingAny(input.source),
-    lintDroppedIds(input.source, input.referencedIds),
-    lintUnlistedNavigation(input.source, input.listedSlugs),
-  ]) {
+  for (const lint of read.lints) {
     if (lint instanceof Error) return unscannablePage(fileName, lint);
     warnings.push(...lint);
   }
-
-  const unpointed = errore.try({
-    try: () => lintUnpointedElements(input.source),
-    catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
-  });
-  if (unpointed instanceof Error) return unscannablePage(fileName, unpointed);
-  warnings.push(...unpointed);
+  warnings.push(...read.unpointed);
 
   for (const e of contract.errors) {
     errors.push({
@@ -255,14 +270,20 @@ export function hasTreePath(treePaths: readonly string[]): (relPath: string) => 
  * Gate and reached the smoke render.
  *
  *
- * WIRED IS NOT THE SAME AS CLOSED (task-14 review round 2). The CALLER exists and the six
- * forbidden forms above are proven end to end. The SCAN'S OWN SOURCE COVERAGE is a separate,
- * still-open problem: `lexer.ts`'s completeness invariant catches a scanner that says it
- * declined to lex a span, but an unterminated block comment opened in JSX TEXT truncates the
- * token stream with no signal at all (`skipTrivia = true` means comments are SKIPPED, never
- * returned), and Bun executes such a file while this scan sees a prefix. That is a
- * differential-parse problem owned by a separate task. Nothing here may be read as "the Gate
- * enforces its perimeter" without that qualification.
+ * THE SOURCE-COVERAGE GAP THIS USED TO CARRY IS CLOSED (task 14b). Round 2 of task 14 warned
+ * that the scan could be handed a token stream that did not cover the file — an unterminated
+ * block comment opened in JSX TEXT truncated it with no signal, and Bun executed such a file
+ * while this scan saw a prefix. `lexer.ts` now states the invariant that fixes it (no
+ * classification uncertainty may make executable code invisible: a span it cannot classify is
+ * scanned as CODE, never skipped and never consumed by a token running past it), and
+ * `lexer.oracle.test.ts` measures it against Bun's own parse over the repository's sources, a
+ * systematic grid in both loaders, every code point in a wide range, and seeded fuzz.
+ *
+ * WHAT IS STILL NOT CLOSED, so this is not read as a clean bill: design §5.8's dynamic-code ban.
+ * `import-scan.ts`'s KNOWN GAPS 1-4 reach `eval`/`Function` through an alias, a variable key, a
+ * concatenated key, or a `constructor.constructor` chain that writes neither identifier — all
+ * four measured live (Bun accepts, `await import()` executes, this scan reports nothing), and
+ * none closable by a token-level rule. Registered in the plan's red-debt ledger with no owner.
  * The wiring is proven END TO END, not asserted: `src/entrypoint/model/turn-import-perimeter
  * .test.ts` drives the REAL adapter through the REAL `runTurnValidation` and rejects each of
  * those six forms placed in a SHARED module (`lib/theme.ts`) that no page names directly —

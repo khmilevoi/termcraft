@@ -3,23 +3,31 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readJsxTextRanges } from "./jsx";
-import { SK, SourceStreamTruncatedError, TRIVIA_KINDS, type Tok, tokenize } from "./lexer";
+import { SK, type SourceSyntax, TRIVIA_KINDS, type Tok, tokenize } from "./lexer";
+import { parsesJsx } from "./tree-scan";
 
 /**
- * THE TOKEN-STREAM INVARIANT: the gate's view of a source must cover everything the runtime
- * will execute, and where it cannot the file must fail closed with a typed refusal naming the
- * offset.
+ * THE TOKEN-STREAM INVARIANT (task 14b, restated in fix round 1): **no classification
+ * uncertainty may make executable code invisible to the scan.** A span `tokenize` cannot
+ * confidently classify is scanned as CODE — it is never silently skipped, and it is never
+ * consumed by a token that runs past it.
  *
  * Every gate scan — the import allowlist, design §5.8's `eval`/`Function` ban, the page
- * contract, the determinism lints — treats `tokenize`'s output as the file, and none of them
- * can check that claim for itself. These tests pin the four mechanisms that make it true, the
- * shapes each one closed, and the valid inputs each one must NOT refuse.
+ * contract, the determinism lints — treats `tokenize`'s output as the file, and none of them can
+ * check that claim for itself. These tests pin the mechanisms that make it true, the shapes each
+ * one closed, and the valid inputs each one must NOT reject.
  *
- * MEASURED, NOT ARGUED (task 14b). The four mechanisms were chosen by running a DIFFERENTIAL
- * ORACLE — `lexer.oracle.test.ts` — that compares Bun's own parse of a source against what this
- * function saw, over the repository's own files, a systematic grid of JSX/TS lexing traps, every
- * code point in U+0000..U+02FF, and seeded fuzz. Before them: 94 sources Bun accepts whose
- * `import` and `eval` this perimeter could not see. After: zero, over 24 972 rows.
+ * WHY THE INVARIANT IS STATED THAT WAY. Both halves of the earlier formulation shipped and both
+ * were broken, one on each horn: lexing JSX children text as CODE let an apostrophe and an
+ * unterminated `/*` swallow the rest of the file (94 measured divergences), and then SKIPPING
+ * what the JSX reader called text made real code vanish wherever that reader confirmed an
+ * element Bun does not see (28 of a 150-row grid, and a regression). Classification is therefore
+ * demoted: it decides where token BOUNDARIES are forced, never whether a span is scanned.
+ *
+ * MEASURED, NOT ARGUED. The mechanisms were chosen by running a DIFFERENTIAL ORACLE —
+ * `lexer.oracle.test.ts` — that compares Bun's own parse of a source against what this function
+ * saw, over the repository's own files, a systematic grid of JSX/TS lexing traps in BOTH loaders,
+ * every code point in U+0000..U+02FF, and seeded fuzz.
  */
 
 const FFFD = "�";
@@ -32,8 +40,8 @@ export const f = new Function("return 1")
 `;
 
 /** Unwraps the union — a fixture that truncates where the test does not expect it must say so. */
-function toks(source: string): Tok[] {
-  const result = tokenize(source);
+function toks(source: string, syntax: SourceSyntax = "jsx"): Tok[] {
+  const result = tokenize(source, syntax);
   if (result instanceof Error) throw new Error(`unexpected truncation: ${result.message}`);
   return result;
 }
@@ -80,16 +88,28 @@ describe("mechanism 1 — JSX children TEXT is skipped, never lexed as code", ()
       expect(toks(source).some((t) => t.value === "eval")).toBe(true);
     });
 
-    test(`${label} in prose is not itself read as code — no false fatal on display copy`, () => {
-      // The valid-input companion for the same trap: the prose alone must produce no token at
-      // all inside the text run, so `import-scan.ts` cannot manufacture a violation out of it.
-      const source = `export const T = () => <p>${trap} eval Function(x)</p>;\n`;
+    test(`${label} in prose is MARKED, not dropped — visible to every check, fatal to none`, () => {
+      // The valid-input companion for the same trap, and the distinction fix round 1 turns on.
+      // The prose IS lexed — a span nobody looks at is how real code went invisible — but every
+      // token it produces carries `jsxText`, which is the only thing `import-scan.ts`'s three
+      // dynamic-code checks consult, so display copy raises no fatal.
+      const source = `export const T = () => <p>${trap} eval Function (x)</p>;\n`;
       expectBunAccepts(source);
       const ranges = readJsxTextRanges(source);
       expect(ranges.length).toBeGreaterThan(0);
+      const inside = toks(source).filter((t) =>
+        ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
+      );
+      expect(inside.every((t) => t.jsxText)).toBe(true);
       expect(
-        toks(source).filter((t) => ranges.some((r) => t.pos >= r.pos && t.pos < r.end)),
-      ).toEqual([]);
+        toks(source)
+          .filter((t) => !t.jsxText)
+          .every((t) => !ranges.some((r) => t.pos >= r.pos && t.pos < r.end)),
+      ).toBe(true);
+      // …and no token that began in the prose reaches past its end: that is what stops an
+      // apostrophe or a `/*` from swallowing the code after `</p>`.
+      const lastRange = ranges[ranges.length - 1]!;
+      expect(toks(source).some((t) => t.pos >= lastRange.end && !t.jsxText)).toBe(true);
     });
   }
 
@@ -138,42 +158,67 @@ describe("mechanism 2 — `/` is re-scanned as a regular expression where one ca
   });
 });
 
-describe("mechanism 3 — every character is accounted for, or the file fails closed", () => {
-  test("an UNTERMINATED `/*` in code is refused, naming the offset — the scanner SKIPS it, so no trivia kind is ever surfaced", () => {
+describe("mechanism 3 — every character is accounted for, and what cannot be is RE-LEXED", () => {
+  test("an UNTERMINATED `/*` in code hides nothing — the span it swallowed is re-lexed", () => {
     // This is the shape that defeated both of round 1's formulations: `createScanner(true, …)`
     // skips comments rather than returning them, so the trivia guard never fires, and the
     // scanner reaches `EndOfFile` at `source.length`, so a positional end-of-file check does not
-    // fire either. Only per-character accounting sees it.
+    // fire either. Only per-character accounting sees it at all.
+    //
+    // ANSWERED BY RE-LEXING, not by refusing (fix round 1). The invariant offers two arms and
+    // this takes the first, because refusing was MEASURED to reject sources Bun ACCEPTS: a `/*`
+    // sitting inside what Bun reads as a `//` line comment becomes live to this scanner whenever
+    // a regular expression upstream was mis-lexed, and the page was then rejected over a comment.
     const source = `const a = 1\n/* never closed\n${HIDDEN}`;
-    const result = tokenize(source);
-    expect(result).toBeInstanceOf(SourceStreamTruncatedError);
-    if (!(result instanceof Error)) throw new Error("expected a truncation");
-    expect(result.message).toContain(`offset ${source.indexOf("/* never")}`);
-    // …and Bun refuses it too, so failing closed AGREES with the runtime rather than over-firing.
     expectBunRejects(source);
+    const kinds = kindsIn(source);
+    expect(kinds).toContain(SK.ImportKeyword);
+    expect(toks(source).some((t) => t.value === "eval")).toBe(true);
+    expect(kinds).toContain(SK.RequireKeyword);
+  });
+
+  test("…and a TERMINATED comment is still just a comment — no findings invented from prose", () => {
+    // The valid-input companion. If the re-lex fired on terminated comments too, every page
+    // whose comments mention `eval` would be fatally rejected.
+    const source = `const a = 1\n/* mentions eval and require here */\nexport const b = a\n`;
+    expectBunAccepts(source);
+    expect(toks(source).some((t) => t.value === "eval")).toBe(false);
+    expect(toks(source).some((t) => t.value === "require")).toBe(false);
   });
 
   test("TERMINATED comments, blank lines, a shebang and a byte-order mark are all accounted for", () => {
     // The valid-input companion for the accounting: if any of these read as unaccounted, the
     // guard would refuse ordinary TypeScript.
-    expect(tokenize(`#!/usr/bin/env bun\n/* a */ // b\n\n${HIDDEN}`)).not.toBeInstanceOf(Error);
-    expect(tokenize(`﻿/* a */\n${HIDDEN}`)).not.toBeInstanceOf(Error);
-    expect(tokenize(`${HIDDEN}// a trailing comment with no newline`)).not.toBeInstanceOf(Error);
+    expect(tokenize(`#!/usr/bin/env bun\n/* a */ // b\n\n${HIDDEN}`, "jsx")).not.toBeInstanceOf(
+      Error,
+    );
+    expect(tokenize(`﻿/* a */\n${HIDDEN}`, "jsx")).not.toBeInstanceOf(Error);
+    expect(tokenize(`${HIDDEN}// a trailing comment with no newline`, "jsx")).not.toBeInstanceOf(
+      Error,
+    );
     expect(kindsIn(`#!/usr/bin/env bun\n/* a */ // b\n\n${HIDDEN}`)).toContain(SK.ImportKeyword);
   });
 
-  test("a span the scanner DECLINES to lex is refused by kind, naming the offset", () => {
+  test("a span the scanner DECLINES to lex hides nothing — it is re-lexed one character on", () => {
     // U+FFFD is what `TextDecoder` yields for ANY invalid UTF-8 byte, and turn staging decodes
     // every tree file through it unfiltered. At a CODE token position the scanner answers
-    // `NonTextFileMarkerTrivia` — its binary-file detector — spanning to end of file.
+    // `NonTextFileMarkerTrivia` — its binary-file detector — spanning to end of file, which is
+    // how task-14 round 1's Critical hid an import, an `eval`, a `require` and a `new Function`
+    // at once.
+    //
+    // ROUND 1 ANSWERED THIS WITH A REFUSAL; task 14b fix round 1 answers it by re-lexing, which
+    // does the same job strictly better. The bypass was "everything after the marker left the
+    // stream" — rewinding one character past it puts every one of those characters back, so all
+    // four violations are REPORTED where a refusal only ever said "I could not read this file".
+    // It also removed the last measured over-fire, where the marker sat inside what Bun reads as
+    // a comment and a legal page was rejected for it.
     const source = `const x = ${FFFD}\n${HIDDEN}`;
-    const result = tokenize(source);
-    expect(result).toBeInstanceOf(SourceStreamTruncatedError);
-    if (!(result instanceof Error)) throw new Error("expected a truncation");
-    expect(result.message).toContain("NonTextFileMarkerTrivia");
-    expect(result.message).toContain(`offset ${source.indexOf(FFFD)}`);
-    // Bun REJECTS this source (`Unexpected ï`), so the refusal is aligned with the runtime.
     expectBunRejects(source);
+    const kinds = kindsIn(source);
+    expect(kinds).toContain(SK.ImportKeyword);
+    expect(toks(source).some((t) => t.value === "eval")).toBe(true);
+    expect(kinds).toContain(SK.RequireKeyword);
+    expect(toks(source).some((t) => t.value === "Function")).toBe(true);
   });
 
   test("ROUND 1'S RESIDUAL IS GONE: U+FFFD in prose, a string or a comment is SCANNED, not refused", () => {
@@ -189,7 +234,7 @@ describe("mechanism 3 — every character is accounted for, or the file fails cl
       `// ${FFFD}\n${HIDDEN}`,
     ]) {
       expectBunAccepts(source);
-      expect(tokenize(source)).not.toBeInstanceOf(Error);
+      expect(tokenize(source, "jsx")).not.toBeInstanceOf(Error);
       expect(kindsIn(source)).toContain(SK.ImportKeyword);
     }
   });
@@ -219,25 +264,40 @@ describe("mechanism 3 — every character is accounted for, or the file fails cl
   });
 });
 
-describe("mechanism 4 — a token that swallows a whole prose run fails closed", () => {
-  test("a JSX attribute string ending in a backslash is refused, naming the run it swallowed", () => {
-    // JSX attribute strings do not process `\` escapes; code-mode strings do. So `a="x\"` ends
-    // the attribute for the runtime while the code lexer reads on through `>hi</Text>` and
-    // whatever follows. Bun ACCEPTS AND EXECUTES this source, so the gate must not pretend it
-    // read it.
-    const source = `export const G = () => <Text a="x\\">hi</Text>\n${HIDDEN}`;
+describe("windowed lexing — no token crosses a prose boundary in EITHER direction", () => {
+  test("a JSX attribute string ending in a backslash no longer refuses the page (round-1 over-fire, fixed)", () => {
+    // JSX attribute strings do not process `\` escapes; code-mode strings do. So `a="C:\Users\"`
+    // ends the attribute for the runtime while the code lexer reads on through `>home</p>`.
+    // The previous commit answered that with a fail-closed refusal, which rejected a legal
+    // Bun-accepted page over a plausible Windows path in a prop. Windowing answers it instead:
+    // the attribute string simply STOPS at the prose boundary, so nothing is swallowed and
+    // nothing is refused.
+    const source = `export const T = () => <p title="C:\\Users\\">home</p>;\n${HIDDEN}`;
     expectBunAccepts(source);
-    const result = tokenize(source);
-    expect(result).toBeInstanceOf(SourceStreamTruncatedError);
-    if (!(result instanceof Error)) throw new Error("expected a truncation");
-    expect(result.message).toContain("swallows the JSX text");
+    expect(tokenize(source, "jsx")).not.toBeInstanceOf(Error);
+    // …and the code AFTER the element is still lexed, which is what the swallow guard was for.
+    expect(kindsIn(source)).toContain(SK.ImportKeyword);
+    expect(toks(source).some((t) => t.value === "eval" && !t.jsxText)).toBe(true);
   });
 
-  test("the same attribute without the trailing backslash still passes — no over-fire", () => {
+  test("an ordinary attribute is unaffected — the valid-input companion", () => {
     const source = `export const G = () => <Text a="x">hi</Text>\n${HIDDEN}`;
     expectBunAccepts(source);
-    expect(tokenize(source)).not.toBeInstanceOf(Error);
+    expect(tokenize(source, "jsx")).not.toBeInstanceOf(Error);
     expect(kindsIn(source)).toContain(SK.ImportKeyword);
+  });
+
+  test("a NON-JSX source gets no prose boundaries at all — a `.ts` file has no JSX to find", () => {
+    // CRITICAL 1 of fix round 1. Bun parses no JSX in `.ts`/`.mts`/`.cts`, so every children-text
+    // range a JSX reader would report there is invented — and the previous commit SKIPPED those
+    // spans, so the code inside them vanished. Measured: this source transpiles, `await import()`
+    // executes it, and the whole perimeter reported nothing.
+    const source = `let a: <T>(x: T) => T;\n${HIDDEN}// </T>\n`;
+    expect(() => new Bun.Transpiler({ loader: "ts" }).transformSync(source)).not.toThrow();
+    const lexed = toks(source, "no-jsx");
+    expect(lexed.every((t) => !t.jsxText)).toBe(true);
+    expect(new Set(lexed.map((t) => t.kind))).toContain(SK.ImportKeyword);
+    expect(lexed.some((t) => t.value === "eval")).toBe(true);
   });
 });
 
@@ -283,7 +343,9 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
 
     const refused: string[] = [];
     for (const file of files) {
-      const result = tokenize(fs.readFileSync(file, "utf8"));
+      // The syntax comes from the SAME measured predicate production uses, so this walk covers
+      // both arms: `.ts`/`.mts`/`.cts` are lexed with no JSX at all, `.tsx` with it.
+      const result = tokenize(fs.readFileSync(file, "utf8"), parsesJsx(file.replaceAll("\\", "/")));
       if (result instanceof Error) refused.push(`${path.relative(root, file)}: ${result.message}`);
     }
     expect(refused).toEqual([]);
@@ -294,10 +356,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     expect(files.length).toBe(886);
   });
 
-  test("no token any repository file produces starts inside a JSX children-text range", () => {
-    // MECHANISM 1, asserted as a property over the whole corpus rather than fixture by fixture.
-    // A single violation would mean the code scanner was positioned inside prose, which is
-    // exactly how an apostrophe becomes a string opener.
+  test("across the corpus, a token is marked `jsxText` if and only if it lies in a prose run", () => {
+    // THE WINDOW INVARIANT, asserted as a property over the whole corpus rather than fixture by
+    // fixture, in BOTH directions. A token inside a run that is not marked would mean the filter
+    // can fatal on display copy; a marked token outside one would mean the filter can hide real
+    // code. Either direction is a defect, and each has been shipped once on this branch.
     const root = path.resolve(import.meta.dir, "../../..");
     const offenders: string[] = [];
     const walk = (dir: string): void => {
@@ -306,18 +369,59 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
         if (entry.isDirectory()) {
           if (entry.name === "node_modules" || entry.name === ".git") continue;
           walk(p);
-        } else if (/\.tsx$/.test(entry.name)) {
-          const source = fs.readFileSync(p, "utf8");
-          const result = tokenize(source);
-          if (result instanceof Error) continue;
-          const ranges = readJsxTextRanges(source);
-          if (ranges.length === 0) continue;
-          const inside = result.filter((t) => ranges.some((r) => t.pos >= r.pos && t.pos < r.end));
-          if (inside.length > 0) offenders.push(`${path.relative(root, p)}: ${inside.length}`);
+          continue;
         }
+        if (!/\.tsx$/.test(entry.name)) continue;
+        const source = fs.readFileSync(p, "utf8");
+        const result = tokenize(source, "jsx");
+        if (result instanceof Error) continue;
+        const ranges = readJsxTextRanges(source);
+        const wrong = result.filter(
+          (t) => t.jsxText !== ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
+        );
+        if (wrong.length > 0) offenders.push(`${path.relative(root, p)}: ${wrong.length}`);
       }
     };
     walk(path.join(root, "src"));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("the loader distinction — a non-JSX source has no prose at all", () => {
+  test("a `.ts` source produces NO jsxText-marked token, even where a JSX reader would see an element", () => {
+    // `parsesJsx` is what keeps `tokenize` from inventing children text in a file Bun parses
+    // with no JSX. Since windowing, a bogus range no longer HIDES anything — it only mis-marks —
+    // so this asserts the marking directly rather than through a violation.
+    const source = `let a: <T>(x: T) => T;\nexport const r = 1;\n// </T>\n`;
+    expect(parsesJsx("lib/m.ts")).toBe("no-jsx");
+    expect(parsesJsx("lib/m.mts")).toBe("no-jsx");
+    expect(parsesJsx("lib/m.cts")).toBe("no-jsx");
+    expect(parsesJsx("lib/m.tsx")).toBe("jsx");
+    expect(parsesJsx("lib/m.jsx")).toBe("jsx");
+    expect(parsesJsx("lib/m.js")).toBe("jsx");
+    expect(parsesJsx("Dockerfile")).toBe("jsx");
+    expect(toks(source, "no-jsx").some((t) => t.jsxText)).toBe(false);
+    // …and asked as JSX, the same source DOES get a (fictional) prose run — which is exactly
+    // why the loader has to be told, not guessed.
+    expect(toks(source, "jsx").some((t) => t.jsxText)).toBe(true);
+  });
+
+  test("the measurement behind `parsesJsx`, re-run: Bun agrees about every extension", () => {
+    // One source valid ONLY as JSX, one valid ONLY as non-JSX. If a Bun upgrade moves an
+    // extension between the two lists, this fails here rather than silently in the perimeter.
+    const jsxOnly = `export const a = <p>hi</p>;\n`;
+    const typeAssertionOnly = `const v: unknown = 1;\nexport const a = <string>v;\n`;
+    const accepts = (loader: "tsx" | "ts", src: string) => {
+      try {
+        new Bun.Transpiler({ loader }).transformSync(src);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(accepts("tsx", jsxOnly)).toBe(true);
+    expect(accepts("tsx", typeAssertionOnly)).toBe(false);
+    expect(accepts("ts", jsxOnly)).toBe(false);
+    expect(accepts("ts", typeAssertionOnly)).toBe(true);
   });
 });

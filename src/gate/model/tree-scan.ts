@@ -2,6 +2,7 @@ import * as errore from "errore";
 
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
+import type { SourceSyntax } from "./lexer";
 
 export { scanModuleEdges };
 
@@ -166,6 +167,45 @@ export function isCodeFile(relPath: string): boolean {
 }
 
 /**
+ * The file extensions whose text Bun's parser reads as JSX. A source outside this set is parsed
+ * with NO JSX at all, so `<` there is always a relational operator or a type-argument opener,
+ * and any JSX "element" a scanner thinks it sees in one is fiction.
+ *
+ * MEASURED, not inherited from the loader table above, because the two questions are different:
+ * {@link EXECUTED_AS_CODE_EXTENSIONS} asks whether Bun RUNS the file, this asks whether Bun's
+ * parser accepts JSX SYNTAX in it, and `.ts` answers yes to the first and no to the second. The
+ * measurement is the same shape — `await import(<absolute path>)`, one directory per fixture,
+ * Bun 1.3.14 — with two sources, one valid ONLY as JSX (`export const a = <p>hi</p>`) and one
+ * valid ONLY as non-JSX (the `<string>v` type assertion, which a JSX parser reads as an unclosed
+ * element):
+ *
+ * ```
+ * .tsx  .jsx  .js  <extensionless>   JSX runs, the type assertion is a Syntax Error   -> JSX
+ * .ts   .mts  .cts                   the element is a Syntax Error, the assertion runs -> no JSX
+ * .mjs  .cjs                         NEITHER runs — plain JS, so no JSX and no types   -> no JSX
+ * ```
+ *
+ * WHY THIS EXISTS AT ALL (task 14b fix round 1, Critical 1). `lexer.ts`'s `tokenize` used to ask
+ * the JSX reader for children-text ranges unconditionally and skip them. In a `.ts` file every
+ * such range is invented, and the code inside it disappeared from the token stream: measured,
+ * `let a: <T>(x: T) => T;` followed by `eval("1")`, `import "node:fs"` and a `// </T>` comment
+ * transpiled under Bun, EXECUTED under `await import()`, and produced ZERO findings through the
+ * real perimeter — while the previous commit had reported the import. One predicate here, asked
+ * by both the whole-tree scan and the closure walk, so the two can never disagree about it.
+ */
+const JSX_PARSED_EXTENSIONS = new Set([".tsx", ".jsx", ".js"]);
+
+/**
+ * True when Bun parses this tree-relative path's text as JSX ({@link JSX_PARSED_EXTENSIONS}), or
+ * when it has no extension at all — measured: an extensionless file runs as TypeScript WITH JSX.
+ * Matching is case-insensitive because {@link extensionOf} lowercases.
+ */
+export function parsesJsx(relPath: string): SourceSyntax {
+  const extension = extensionOf(relPath);
+  return extension === "" || JSX_PARSED_EXTENSIONS.has(extension) ? "jsx" : "no-jsx";
+}
+
+/**
  * True when this pass may TRUST a resolution target: either the loader never executes it (so it
  * carries no import syntax to miss), or its source is a key in `files` and was therefore actually
  * scanned above. Handed to {@link scanImportAllowlist} as `isScanned` — asked ONCE, about the
@@ -290,7 +330,13 @@ export function scanTreeImports(input: {
     //     on deep enough nesting. That is the one UNCONTROLLED boundary in this module, and
     //     the only thing `errore.try` is here for. See {@link TreeFileUnscannableError}.
     const scanned = errore.try({
-      try: () => scanImportAllowlist(source, { from, has: input.has, isScanned }),
+      try: () =>
+        scanImportAllowlist(source, {
+          from,
+          has: input.has,
+          isScanned,
+          syntax: parsesJsx(from),
+        }),
       catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
     });
     if (scanned instanceof Error) {

@@ -780,6 +780,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       scanned(
         scanModuleEdges(
           'import { definePage } from "@termcraft/runtime"\nimport t from "../lib/theme"\n',
+          "jsx",
         ),
       ),
     ).toEqual(["@termcraft/runtime", "../lib/theme"]);
@@ -861,7 +862,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
   });
 
   test("a file with no import at all produces no edges and no violations", () => {
-    expect(scanned(scanModuleEdges("export const x = 1\n"))).toEqual([]);
+    expect(scanned(scanModuleEdges("export const x = 1\n", "jsx"))).toEqual([]);
     const errors = scanTreeImports({
       files: new Map([["lib/pure.ts", "export const x = 1\n"]]),
       has: () => true,
@@ -878,7 +879,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     const closure = resolveClosure({
       entry: "pages/a.tsx",
       has,
-      edgesOf: (relPath) => scanned(scanModuleEdges(files.get(relPath) ?? "")),
+      edgesOf: (relPath) => scanned(scanModuleEdges(files.get(relPath) ?? "", "jsx")),
     });
     expect(closure instanceof Error).toBe(false);
     if (closure instanceof Error) return;
@@ -899,18 +900,16 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
  * alone, with no closure walk involved.
  */
 describe("scanTreeImports — a file whose token stream does not cover it is fatal", () => {
-  // RE-POINTED in task 14b at a fixture Bun ACCEPTS AND EXECUTES. Round 2's fixture put a
-  // U+FFFD in JSX TEXT, which the lexer now reads as the prose it is — Bun does too — so that
-  // source is fully scanned and reports its real violations rather than refusing. What still
-  // cannot be covered is a code-mode token that swallows a whole prose run: JSX attribute
-  // strings do not process `\` escapes and code-mode strings do, so `a="x\"` ends the attribute
-  // for the runtime while the code lexer reads on through `>hi</Text>` and past it. Measured:
-  // `Bun.Transpiler({loader:"tsx"})` accepts this source and `await import()` runs it, while
-  // `tokenize` refuses it — the fail-closed direction, on a file the runtime really would run.
-  const TRUNCATED = `export const G = () => <Text a="x\\">hi</Text>\nimport fs from "node:fs"\n`;
+  // RE-POINTED AGAIN in task 14b fix round 1, and the reason IS that round. `tokenize` no longer
+  // refuses anything — wherever it cannot classify a span it re-lexes one character on, so it
+  // always returns a stream accounting for the whole source. The fail-closed arm therefore lives
+  // at its one remaining MEASURED cause: `jsx.ts`'s recursive-descent reader exhausting the
+  // engine's stack on absurd nesting, which THROWS. This converter is what turns that into a
+  // rejected page instead of a crashed turn.
+  const TRUNCATED = "<a>{".repeat(32_000);
 
-  test("the fixture really is one Bun ACCEPTS — otherwise the fatal below would be free", () => {
-    expect(() => new Bun.Transpiler({ loader: "tsx" }).transformSync(TRUNCATED)).not.toThrow();
+  test("the cause really is an engine throw, not a value — otherwise the converter is untested", () => {
+    expect(() => scanModuleEdges(TRUNCATED, "jsx")).toThrow();
   });
 
   test("reports UNSCANNABLE_SOURCE for the truncated file, naming it", () => {

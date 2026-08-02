@@ -134,12 +134,12 @@ describe("scanJsx (real recursive-descent JSX reader over the TypeScript scanner
 
 describe("readHyphenatedName", () => {
   test("merges a hyphenated identifier chain into one name", () => {
-    const toks = scanned(tokenize(`data-id`));
+    const toks = scanned(tokenize(`data-id`, "jsx"));
     expect(readHyphenatedName(toks, 0)?.name).toBe("data-id");
   });
 
   test("returns null when not starting at an Identifier", () => {
-    const toks = scanned(tokenize(`"x"`));
+    const toks = scanned(tokenize(`"x"`, "jsx"));
     expect(readHyphenatedName(toks, 0)).toBeNull();
   });
 });
@@ -163,21 +163,22 @@ describe("readJsxTextRanges — where the runtime reads TEXT, and therefore wher
   }
 
   /**
-   * THE MECHANISM-1 INVARIANT: no token `tokenize` emits may START inside a JSX children-text
-   * range. This is what makes an apostrophe in prose stop being a string opener — the code
-   * scanner is never positioned inside the prose to open one.
+   * THE WINDOW INVARIANT: a token `tokenize` emits carries `jsxText` if and only if it lies
+   * inside a children-text run, and no token spans a boundary. That is what makes an apostrophe
+   * in prose stop being a string opener that reaches the code after `</p>` — without removing
+   * the prose from the stream, which is how real code went invisible in the previous round.
    */
-  function expectNoTokenInsideText(source: string): void {
+  function expectTextIsMarked(source: string): void {
     const ranges = readJsxTextRanges(source);
-    const inside = scanned(tokenize(source)).filter((t) =>
-      ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
+    const wrong = scanned(tokenize(source, "jsx")).filter(
+      (t) => t.jsxText !== ranges.some((r) => t.pos >= r.pos && t.pos < r.end),
     );
-    expect(inside).toEqual([]);
+    expect(wrong).toEqual([]);
   }
 
   test("children text between a tag's `>` and its closing tag is one run", () => {
     expect(textRunsOf(`<Text id="t">hello world</Text>`)).toEqual(["hello world"]);
-    expectNoTokenInsideText(`<Text id="t">hello world</Text>`);
+    expectTextIsMarked(`<Text id="t">hello world</Text>`);
   });
 
   test("a self-closing tag has no text region at all", () => {
@@ -188,12 +189,12 @@ describe("readJsxTextRanges — where the runtime reads TEXT, and therefore wher
     const source = `<Text id="t">{eval("1")}</Text>`;
     expect(textRunsOf(source)).toEqual([]);
     // …and the container's `eval` really is still in the stream, not merely un-marked.
-    expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(true);
+    expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval")).toBe(true);
   });
 
   test("text either side of an expression container is text, the container itself is not", () => {
     expect(textRunsOf(`<Text id="t">before{x}after</Text>`)).toEqual(["before", "after"]);
-    expectNoTokenInsideText(`<Text id="t">before{x}after</Text>`);
+    expectTextIsMarked(`<Text id="t">before{x}after</Text>`);
   });
 
   test("nested elements are each recognized independently, their own text runs kept apart", () => {
@@ -236,15 +237,24 @@ describe("readJsxTextRanges — where the runtime reads TEXT, and therefore wher
       // executed all of it. Now the prose is skipped and the code after it is lexed.
       const source = `<Text id="t">eval isn't allowed here</Text>`;
       expect(textRunsOf(source)).toEqual(["eval isn't allowed here"]);
-      expectNoTokenInsideText(source);
-      expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(false);
+      expectTextIsMarked(source);
+      // The word IS in the stream — marked, so `import-scan.ts` raises no fatal on it, while
+      // every other check still sees the span.
+      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && t.jsxText)).toBe(
+        true,
+      );
+      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && !t.jsxText)).toBe(
+        false,
+      );
     });
 
     test("`//` opens no line comment that swallows the closing tag", () => {
       const source = `<Text id="t">eval // never</Text>`;
       expect(textRunsOf(source)).toEqual(["eval // never"]);
-      expectNoTokenInsideText(source);
-      expect(scanned(tokenize(source)).some((t) => t.value === "eval")).toBe(false);
+      expectTextIsMarked(source);
+      expect(scanned(tokenize(source, "jsx")).some((t) => t.value === "eval" && !t.jsxText)).toBe(
+        false,
+      );
     });
   });
 
