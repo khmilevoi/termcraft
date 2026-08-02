@@ -65,6 +65,14 @@ export interface UiRootOptions {
 export interface UiRootHandle {
   /** Idempotently tear down the React tree before releasing the terminal renderer. */
   dispose(): void;
+  /**
+   * Tells the mounted UI that the composition root's startup `project.open` will never arrive
+   * (workspace-first launch) — see `UiDeps.abandonStartupOpen`. `runApp` calls this on both
+   * failure branches of that dispatch, in addition to its own `console.error`: without it the
+   * user sits on an empty Workspace shell forever, because neither `finishOpen` nor `blockOpen`
+   * will ever set `projectId` or `openFailure`.
+   */
+  abandonStartupOpen(): void;
 }
 
 export class UiRootError extends errore.createTaggedError({
@@ -149,20 +157,18 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
 
-  const mounted = errore.try(() =>
-    root.render(
-      <App
-        deps={createUiDeps(
-          options.port,
-          { w: renderer.width, h: renderer.height },
-          options.env,
-          options.agentHealthProbe,
-          options.requestExit,
-          options.agentSelection,
-        )}
-      />,
-    ),
+  // Hoisted out of the JSX below so the returned handle can close over it — `abandonStartupOpen`
+  // has to reach the SAME `UiDeps` the mounted tree is reading.
+  const deps = createUiDeps(
+    options.port,
+    { w: renderer.width, h: renderer.height },
+    options.env,
+    options.agentHealthProbe,
+    options.requestExit,
+    options.agentSelection,
   );
+
+  const mounted = errore.try(() => root.render(<App deps={deps} />));
   if (mounted instanceof Error) {
     try {
       renderer.destroy();
@@ -186,6 +192,9 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
         // trace file. In `finally` so a throwing `unmount`/`destroy` cannot skip it.
         resumeConsolePassthrough();
       }
+    },
+    abandonStartupOpen(): void {
+      deps.abandonStartupOpen();
     },
   };
 }

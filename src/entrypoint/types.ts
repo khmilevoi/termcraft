@@ -33,16 +33,21 @@ export interface AppShell {
  * the UI mounts, `.termcraft/` exists on disk in both cases — the shell just created it — so
  * nothing downstream can re-derive them.
  *
- * `hasContent` is the routing predicate: the project holds anything to view or edit — at least
+ * `hasContent` reports whether the project holds anything to view or edit — at least
  * one page, or at least one chat. Its real purpose is the CLONE (pages present, zero chats, since
  * `chats/` is git-ignored as of fix-bundle §2.5), which is exactly the case that most needs the
  * Workspace; `createProject` always mints the first chat header, so "exists but is empty" is
- * practically unreachable and Home stays reachable essentially only for a genuinely fresh
+ * practically unreachable — this field is `false` essentially only for a genuinely fresh
  * directory. `true` also for an EXISTING project whose content could not actually be confirmed
  * (a manifest or chat-listing read failed, fix round 1 Finding 1,
  * `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing here" just because the
- * disk could not answer; the Kernel's own open sequence gets the chance to surface the real
- * failure instead of a silent Home.
+ * disk could not answer; the Kernel's own open sequence still gets the chance to surface the real
+ * failure.
+ *
+ * NO LONGER THE ROUTING PREDICATE (workspace-first launch, 2026-08-02): `existing` is. Both
+ * `run-app.ts`'s startup dispatch and `deriveScreen` read `existing`, because routing on one
+ * fact while dispatching on the other would strand an existing-but-empty project in a Workspace
+ * that never opens. `hasContent` is still computed and still reported; nothing reads it.
  */
 export interface ShellLaunchV1 {
   readonly existing: boolean;

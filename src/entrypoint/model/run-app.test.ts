@@ -5,7 +5,7 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { UiRootAdapters } from "ui";
 import { createFakeKernel, event } from "ui/testing";
 
-import type { ProcessBoundary, ShellWithAgentRegistry, ShutdownSignal } from "../types";
+import type { ProcessBoundary, RunningApp, ShellWithAgentRegistry, ShutdownSignal } from "../types";
 import type { ProcessExit } from "./process-boundary";
 import { AppStartupError, runApp } from "./run-app";
 
@@ -49,6 +49,38 @@ function capturingAdapters(calls: string[]): {
     }),
   });
   return { adapters, requestExit: () => requestExit };
+}
+
+/**
+ * Captures the SAME `UiDeps.abandonStartupOpen` action `createUiRoot`'s returned `UiRootHandle`
+ * closes over (Task 4) — reached the same way `capturingAdapters` above reaches `requestExit`,
+ * off the rendered element's own `props.deps`, since `createUiRoot` itself is real here (only its
+ * `adapters` are injectable) and there is no other seam to observe `root.abandonStartupOpen()`
+ * being called. The captured action is replaced with a spy that still calls through, so a test
+ * can assert whether `runApp`'s Gap D dispatch actually invoked it, on which branch, and how many
+ * times — without this double, an `UiRootHandle`'s `abandonStartupOpen()` call is otherwise
+ * unobservable from outside `runApp`.
+ */
+function abandonCapturingAdapters(calls: string[]): {
+  adapters: UiRootAdapters;
+  abandoned: () => readonly string[];
+} {
+  const abandoned: string[] = [];
+  const adapters = recordingAdapters(calls, {
+    createRoot: () => ({
+      render: (node: unknown) => {
+        calls.push("render");
+        const deps = (node as { props: { deps: { abandonStartupOpen: () => void } } }).props.deps;
+        const original = deps.abandonStartupOpen;
+        deps.abandonStartupOpen = () => {
+          abandoned.push("abandonStartupOpen");
+          original();
+        };
+      },
+      unmount: () => calls.push("unmount"),
+    }),
+  });
+  return { adapters, abandoned: () => abandoned };
 }
 
 /** `agentRegistry` defaults to `null` — the same "no live registry" shape `create-shell.ts`'s
@@ -297,7 +329,14 @@ describe("runApp", () => {
       await app.close();
     });
 
-    test("an existing project reported as empty (existing but no content) also dispatches nothing", async () => {
+    // WORKSPACE-FIRST LAUNCH (2026-08-02): the test this replaced — "an existing project reported
+    // as empty (existing but no content) also dispatches nothing" — asserted the OLD `hasContent`-
+    // gated behaviour for exactly this shell shape. `deriveScreen` (Task 3) now routes every
+    // `existing` project to the Workspace regardless of content, so the startup dispatch has to
+    // read the same fact: routing on `existing` while dispatching on `hasContent` would strand an
+    // existing-but-empty project in a Workspace that never opens. This test is that old test's
+    // deliberate inversion, not a new, unrelated case.
+    test("an existing project with no content dispatches project.open — routing and dispatch share one predicate", async () => {
       const calls: string[] = [];
       const kernel = createFakeKernel();
       const app = await runApp({
@@ -305,11 +344,32 @@ describe("runApp", () => {
         adapters: recordingAdapters(calls),
         process: fakeBoundary(),
       });
-      if (app instanceof Error) throw app;
+      expect(app).not.toBeInstanceOf(Error);
+      expect(
+        kernel.dispatched.filter(
+          (raw) =>
+            typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "project.open",
+        ),
+      ).toHaveLength(1);
+      await (app as RunningApp).close();
+    });
 
-      expect(kernel.dispatched).toEqual([]);
-
-      await app.close();
+    test("a fresh directory dispatches nothing", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: false, hasContent: false }),
+        adapters: recordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      expect(app).not.toBeInstanceOf(Error);
+      expect(
+        kernel.dispatched.filter(
+          (raw) =>
+            typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "project.open",
+        ),
+      ).toHaveLength(0);
+      await (app as RunningApp).close();
     });
 
     test("a rejected startup project.open is logged, not swallowed or thrown", async () => {
@@ -343,6 +403,71 @@ describe("runApp", () => {
 
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
+    });
+
+    // TASK 4: A FAILED STARTUP DISPATCH NOW HAS A REAL SURFACE. Both branches below — a
+    // dispatcher.dispatch REJECTION and a dispatch that itself throws — must call the returned
+    // `UiRootHandle.abandonStartupOpen()` exactly once, on top of the `console.error` the test
+    // above already covers. `createFakeKernel` has no option to force `port.dispatch` itself to
+    // reject (only `setDispatchResult`, which supplies the RESOLVED `CommandResultV1`), so the
+    // "dispatch throws" branch below drives it directly with a `dispatch` override — the
+    // alternative the brief names when the fake cannot be made to reject.
+    test("a rejected startup dispatch abandons the pending open so the UI drops back to Home", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      kernel.setDispatchResult({
+        protocolVersion: 1,
+        commandId: "cmd-1" as never,
+        status: "rejected",
+        currentRevision: "0",
+        code: "CAPABILITY_UNAVAILABLE",
+        reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      const { adapters, abandoned } = abandonCapturingAdapters(calls);
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        adapters,
+        process: fakeBoundary(),
+      });
+      expect(app).not.toBeInstanceOf(Error);
+      expect(abandoned()).toEqual(["abandonStartupOpen"]);
+      await (app as RunningApp).close();
+      errorSpy.mockRestore();
+    });
+
+    test("a startup dispatch that throws also abandons the pending open", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const throwingPort = {
+        ...kernel,
+        dispatch: () => Promise.reject(new Error("kernel port closed")),
+      };
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      const { adapters, abandoned } = abandonCapturingAdapters(calls);
+      const app = await runApp({
+        shell: fakeShell(calls, null, throwingPort, { existing: true, hasContent: true }),
+        adapters,
+        process: fakeBoundary(),
+      });
+      expect(app).not.toBeInstanceOf(Error);
+      expect(abandoned()).toEqual(["abandonStartupOpen"]);
+      await (app as RunningApp).close();
+      errorSpy.mockRestore();
+    });
+
+    test("a successful startup open never abandons the pending flag", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      const { adapters, abandoned } = abandonCapturingAdapters(calls);
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        adapters,
+        process: fakeBoundary(),
+      });
+      expect(app).not.toBeInstanceOf(Error);
+      expect(abandoned()).toEqual([]);
+      await (app as RunningApp).close();
     });
   });
 

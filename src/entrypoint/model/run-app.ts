@@ -125,31 +125,26 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   const app = startShutdownPath(shell, boundary, root, exit);
   closeRef = app.close;
 
-  // Gap D: an existing project holding pages or chats opens straight into the Workspace. This is
-  // the ONE interactive caller of `project.open` — before it, the whole of `src` had exactly one
-  // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
-  // Home no matter what was on disk.
+  // Gap D, revised by the workspace-first launch spec (2026-08-02): an EXISTING project — one
+  // with `.termcraft/` on disk — opens straight into the Workspace. The predicate is
+  // `launch.existing`, not `launch.hasContent`, because `deriveScreen` routes on the same fact:
+  // routing to the Workspace on one fact while dispatching on another would strand an
+  // existing-but-empty project in a Workspace that never opens. This is the ONE interactive
+  // caller of `project.open` — before it, the whole of `src` had exactly one
+  // (`entrypoint/model/run-export.ts`, the headless export driver).
   //
-  // WHAT A FAILED STARTUP OPEN ACTUALLY DOES TODAY — the spec ("Error handling") requires it to
-  // SURFACE rather than silently leave the user on Home, and this code does NOT meet that
-  // requirement. The two `console.error` calls below run while the renderer owns the terminal,
-  // so `infrastructure/debug-log`'s pass-through gate is engaged: with tracing on the line
-  // reaches the trace file and nothing else; with tracing off it waits in the hold buffer and
-  // prints only once the user has already quit. Either way the user sees Home with no
-  // explanation. That is not a regression introduced by the gate — before it, the line tore a
-  // hole in the live frame, which was not a surface either. The missing piece is a designed
-  // in-app surface for a failed startup open, and there is none in `design/*.dc.html`; inventing
-  // one here is forbidden (CLAUDE.md, "Design is a source of truth"), so this is recorded as an
-  // open design gap rather than papered over. `project.retryOpen` already exists for the
-  // recovery-conflict path and would be the natural action such a surface offers.
+  // A FAILED STARTUP DISPATCH now has a real surface. The two `console.error` calls below still
+  // run while the renderer owns the terminal, so `infrastructure/debug-log`'s pass-through gate
+  // swallows them — which is why they are no longer the only handling. `abandonStartupOpen`
+  // clears the UI's pending-open flag, and `deriveScreen` drops back to Home: the screen that
+  // owns `HomeOpenFailurePanel`, the `project.close` recovery and the ⏎ retry. Without it the
+  // user would sit on an empty Workspace shell forever, since neither `finishOpen` nor
+  // `blockOpen` ever arrives on this path.
   //
   // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
   // handlers this function awaits nothing before. Dispatching first, as this used to, meant a
-  // Ctrl-C during the (up to ~30s) open sequence had no handler to catch it — the still-live
-  // renderer never got torn down and the project lease never got released. Moving the dispatch
-  // below costs nothing: `closeRef` is already assigned by the time this `await` starts, so
-  // `requestExit`/a signal firing mid-dispatch tears down the shell correctly either way.
-  if (shell.launch.hasContent) {
+  // Ctrl-C during the (up to ~30s) open sequence had no handler to catch it.
+  if (shell.launch.existing) {
     const dispatcher = createDispatcher({
       port: shell.port,
       revision: () => peekStateRevision(shell.port),
@@ -160,8 +155,10 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
         `termcraft: the startup project.open failed to dispatch: ${result.message}`,
         result,
       );
+      root.abandonStartupOpen();
     } else if (result.status === "rejected") {
       console.error(`termcraft: the startup project.open was rejected (${result.code})`);
+      root.abandonStartupOpen();
     }
   }
 
