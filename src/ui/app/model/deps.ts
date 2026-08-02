@@ -303,7 +303,11 @@ export function createUiDeps(
     startupOpenPending.set(false);
   }, "ui.app.abandonStartupOpen");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
-  const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
+  const screen = createScreenAtom({
+    project: () => mirror.project(),
+    terminal: () => terminal(),
+    startupOpenPending: () => startupOpenPending(),
+  });
   const actionContext = computed<ActionContext>(
     () => ({
       capabilities: mirror.capabilities(),

@@ -767,6 +767,25 @@ describe("createUiDeps startup-open tracking (workspace-first launch)", () => {
     deps.abandonStartupOpen();
     expect(deps.local.startupOpenPending()).toBe(false);
   });
+
+  test("the derived screen follows the flag: workspace while pending, home once abandoned", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: "/tmp/project",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.screen()).toBe("workspace");
+    deps.abandonStartupOpen();
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("a fresh directory derives home from the start", () => {
+    expect(createUiDeps(createFakeKernel(), { w: 120, h: 36 }).screen()).toBe("home");
+  });
 });
 
 describe("preview resize", () => {

@@ -4,12 +4,11 @@ import type { ProjectOpenFailure } from "ui/mirror";
 
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
- * chrome-map "SURFACE: Home"). Normally shown only before `.termcraft/` exists; an existing
- * project opens straight into Workspace (Gap D). CORRECTED: that is not the ONLY way Home is
- * reached with a project on disk — an open that ends in the project machine's `blocked` state
- * leaves `projectId` null, so `deriveScreen` holds Home over a folder that does have a project.
- * {@link HomeProps.openFailure} is what makes that case legible instead of silent. No
- * chat/preview split, no tab strip.
+ * chrome-map "SURFACE: Home"). NARROWED (workspace-first launch, 2026-08-02): Home is now
+ * reached in exactly two situations — a genuinely fresh directory, and a startup open that
+ * failed. An existing project mounts the Workspace immediately and fills there
+ * (`design/30-workspace-first-launch.dc.html`). {@link HomeProps.openFailure} is what makes the
+ * second case legible instead of silent. No chat/preview split, no tab strip.
  */
 
 /** Submit is refused exactly while the agent is unproven-and-unusable — see {@link AgentHealth}.

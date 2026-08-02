@@ -94,6 +94,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
       }),
     ).toBe("home");
 
@@ -118,6 +120,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
       }),
     ).toBe("read-only");
   });
@@ -157,6 +161,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
       }),
     ).toBe("workspace");
   });
@@ -198,6 +204,8 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
       }),
     ).toBe("home");
   });

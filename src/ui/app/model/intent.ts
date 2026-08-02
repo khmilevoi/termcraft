@@ -47,10 +47,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "home-submit": {
       const text = local.prompt();
       if (text.length === 0) return;
-      // Gap D/§2.4: whichever command matches what the shell actually found on disk. The
-      // exists-but-empty branch is rare (project creation always mints the first chat header),
-      // but when it happens `create` would grant trust implicitly over a project whose prior
-      // grant is the authority.
+      // Gap D/§2.4: whichever command matches what the shell actually found on disk. NARROWED
+      // (workspace-first launch, 2026-08-02): this branch used to also cover the
+      // existing-but-empty project, which reached Home through `hasContent`. `deriveScreen` now
+      // routes every existing project to the Workspace, so Home is reached with a project on
+      // disk in exactly ONE scenario — ⏎ after a startup open that failed — and that is the only
+      // caller left. Still required: `create` would grant trust implicitly over a project whose
+      // prior grant is the authority.
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
       // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the

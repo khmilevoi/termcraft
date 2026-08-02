@@ -1105,3 +1105,110 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     ]);
   });
 });
+
+describe("workspace-first launch (2026-08-02)", () => {
+  const existingEnv = {
+    root: "/tmp/existing",
+    workspaceIdentity: "local",
+    projectExists: true,
+  } as const;
+
+  // TASK 5 (test.todo): the Workspace's own opening chrome (the "OPENING" status-bar chip and
+  // the "opening project…" text) does not exist yet — `deriveScreen` already routes an existing
+  // project's pending startup open to "workspace" (Task 3), but nothing under `ui/workspace`
+  // renders the empty-project case any differently from a filled one yet. Un-todo once Task 5
+  // lands that chrome; the body below is the full, unweakened assertion set.
+  test.todo("an existing project mounts the Workspace shell, not Home, before anything opens", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("opening project…") && frame.includes("OPENING"),
+    );
+    expect(text).toContain("opening project…");
+    expect(text).toContain("OPENING");
+    // Home is not mounted at all on this path — the cursor-adjusted "escribe the TUI…" is the
+    // same substring the rest of this file uses to prove Home's placeholder is/isn't on screen
+    // (the literal leading "D" is covered by the cursor whenever Home IS live).
+    expect(text).not.toContain("escribe the TUI you want to design");
+  });
+
+  test("a fresh directory still lands on Home", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("escribe the TUI you want to design"),
+    );
+    expect(text).toContain("escribe the TUI you want to design");
+  });
+
+  test("a blockOpen drops the opening Workspace back to Home with its failure panel", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    // Task 5: once the Workspace's own opening chrome exists, assert
+    // `renderer.captureCharFrame()).toContain("OPENING")` here — `deriveScreen` already mounts
+    // "workspace" for this pending, project-less startup open (Task 3), but nothing renders the
+    // chip yet, so this one assertion is deferred rather than the whole test.
+    // expect(renderer.captureCharFrame()).toContain("OPENING");
+
+    await renderer.act(() =>
+      kernel.emit(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.blockOpen",
+          previousTag: "opening",
+          nextTag: "blocked",
+          metadata: {
+            reason: "manifest-read-failed",
+            failure: {
+              code: "PERSISTENCE_FAILED",
+              retryable: true,
+              safeMessage: "project.toml could not be read",
+              details: {},
+            },
+          },
+        }),
+      ),
+    );
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("project.toml could not be read"),
+    );
+    expect(text).toContain("escribe the TUI you want to design");
+    expect(text).toContain("project.toml could not be read");
+    expect(text).not.toContain("OPENING");
+  });
+
+  // TASK 5 (test.todo): see the first test's note — `finishOpen` filling in the Workspace is
+  // only observable once the empty-project "opening project…" chrome exists to disappear.
+  test.todo("finishOpen turns the opening Workspace into a filled one", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitForFrame((frame) => frame.includes("opening project…"));
+
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+
+    const text = await renderer.waitForFrame((frame) => frame.includes("Main"));
+    expect(text).not.toContain("opening project…");
+    expect(text).toContain("Main");
+  });
+});
