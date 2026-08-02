@@ -1099,7 +1099,7 @@ describe("Workspace preview clipping", () => {
     // at row 18 — a rounded corner, never the frame's `#` content, even though the frame (24
     // rows) is 8 rows taller than the region (16 rows) it is painted into.
     const bottomBorderRow = 18;
-    expect(lines[bottomBorderRow].length).toBe(100);
+    expect(lines[bottomBorderRow]!.length).toBe(100);
     expect(lines[bottomBorderRow]).toContain("╯");
     expect(lines[bottomBorderRow]).not.toContain("#");
   });
