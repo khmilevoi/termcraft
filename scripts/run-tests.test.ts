@@ -8,6 +8,9 @@ const PANIC =
   ` 1204 pass\n` +
   `panic(main thread): Segmentation fault at address 0x0\n` +
   `oh no: Bun has crashed. This indicates a bug in Bun, not your code.\n`;
+// Captured verbatim from `FORCE_COLOR=1 bun test scripts/run-tests.test.ts` on this checkout:
+// Bun wraps the summary line in ANSI escapes, so `^` no longer sits at the start of "6 pass".
+const COLORED_CLEAN = `\x1b[0m\x1b[32m 6 pass\x1b[0m\n\x1b[0m\x1b[2m 0 fail\x1b[0m\n`;
 
 describe("classifyBunTestRun", () => {
   test("a clean run with a summary and exit 0 is a pass", () => {
@@ -37,5 +40,11 @@ describe("classifyBunTestRun", () => {
     // Bun exits non-zero for a suite-level problem (an unhandled error between tests) that the
     // per-test counters do not show. Trusting the summary alone would launder it.
     expect(classifyBunTestRun({ exitCode: 1, output: CLEAN })).toBe("fail");
+  });
+
+  test("a colour-wrapped clean summary with exit 0 is still a pass", () => {
+    // FORCE_COLOR=1 (common in shell profiles and some CI) puts an escape code where SUMMARY_LINE
+    // expects the line to start, which must not read as an absent summary — i.e. a false crash.
+    expect(classifyBunTestRun({ exitCode: 0, output: COLORED_CLEAN })).toBe("pass");
   });
 });
