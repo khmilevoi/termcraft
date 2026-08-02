@@ -2,7 +2,7 @@ import type { ClosureV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type { GateError, GateResult, GateWarning, PageDescriptor } from "../types";
-import { makeGateResult } from "./gate-result";
+import { createGateResult } from "./gate-result";
 import {
   lintDeterminism,
   lintDroppedIds,
@@ -152,7 +152,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
       errors.push(...(await ports.smokeRender(descriptor, input.source)));
   }
 
-  return makeGateResult(errors, warnings, descriptor);
+  return createGateResult(errors, warnings, descriptor);
 }
 
 /**

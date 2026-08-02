@@ -12,7 +12,7 @@ export type {
   ManifestSlice,
   PageDescriptor,
 } from "./types";
-export { makeGateResult, isPassing } from "./model/gate-result";
+export { createGateResult, isPassing } from "./model/gate-result";
 export { scanImportAllowlist } from "./model/import-scan";
 export type { ImportScanError } from "./model/import-scan";
 export { scanModuleEdges, scanTreeImports } from "./model/tree-scan";

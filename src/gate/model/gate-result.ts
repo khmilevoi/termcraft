@@ -7,7 +7,7 @@ import type { GateError, GateResult, GateWarning, PageDescriptor } from "../type
  * the single place the pass/fail rule lives, so no stage can accidentally "pass" a
  * candidate that produced a fatal error.
  */
-export function makeGateResult(
+export function createGateResult(
   errors: readonly GateError[],
   warnings: readonly GateWarning[],
   descriptor: PageDescriptor | null,

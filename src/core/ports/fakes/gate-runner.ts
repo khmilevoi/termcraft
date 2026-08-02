@@ -130,8 +130,11 @@ export function createFakeGateRunner(): FakeGateRunner {
     // `queueRunTreeImportsResult` instead of relying on a synthesized default.
     //
     // TRAP FOR ANY CALLER OF THIS FAKE (task-13 review round 2, Minor M-d), NAMED LOUDLY: the
-    // REAL adapter (`gate/adapters/gate-runner.ts`) returns one closure per RESOLVING
-    // `input.pages` entry — this fake never does, for ANY `pages` you pass it, unless you
+    // REAL adapter (`gate/adapters/gate-runner.ts`) returns one closure per `input.pages` entry
+    // whose closure it can PROVE complete — corrected from round 2's "per RESOLVING entry",
+    // which became inaccurate the moment an entry could resolve and still be omitted (a code
+    // file with no source text, an edge form the walk does not follow: see the port's own
+    // CONTRACT) — this fake never returns one, for ANY `pages` you pass it, unless you
     // `queueRunTreeImportsResult(...)` first. A test built against this default sees
     // `closures: []` unconditionally, so `selectChangedPages(...)` against it always reports
     // "nothing changed for any page" — the EXACT silent-nothing-changed failure mode design §7

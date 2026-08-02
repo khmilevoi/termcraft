@@ -21,6 +21,15 @@ export interface GateError {
   readonly file?: string;
   readonly line?: number;
   readonly column?: number;
+  /**
+   * The page entries whose closure the whole-tree pass could not complete AT {@link
+   * GateError.file}. Set only by `gate/adapters/gate-runner.ts`'s closure resolution (design §7)
+   * — every other stage leaves it absent, because no other stage walks a closure. Mirrors
+   * `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages` field for field (both redraw the
+   * SAME shape per decision C1); read that one for why the attribution lives on the diagnostic
+   * rather than being duplicated into one diagnostic per page.
+   */
+  readonly blockedPages?: readonly PageSlug[];
 }
 
 /**

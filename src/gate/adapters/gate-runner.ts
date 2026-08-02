@@ -1,3 +1,5 @@
+import * as errore from "errore";
+
 import type {
   AssertConforms,
   GateClosureV1,
@@ -85,13 +87,14 @@ import type { GateError } from "../types";
  * results; `core` still never imports `gate` — only this adapter, behind the port, does the
  * resolving.
  *
- * CORRECTED (task-13 review round 2): round 1's own closure resolution had two gaps, both
- * fixed in `resolveClosuresFor`/`edgesOf` below — see their own doc comments for the full
- * rationale and the executed before/after: (Important 1) a code file the walk reached but had
- * no source text for silently truncated the closure with ZERO diagnostics anywhere; (Important
- * 2) every edge `resolveClosure` itself rejected was reported a SECOND time here, on top of the
- * flat scan's own independent report of the identical edge — measured as 4 near-identical
- * diagnostics for 1 real violation across 3 pages sharing one bad shared-module import.
+ * REBUILT (task-13 review round 3): rounds 1 and 2 traded one obligation against the other —
+ * round 1 reported one shared module's bad edge once per reaching page, round 2 removed that
+ * duplication by deleting a branch that was NOT always duplicated, losing the diagnostics for an
+ * unresolvable manifest entry and for a violation inside a file the flat scan could not
+ * tokenize. Both obligations now hold as ONE mechanism, {@link resolveTreeClosures} below: the
+ * closure walk produces keyed FACTS with the page they blocked, and a fact becomes at most one
+ * diagnostic carrying every blocked slug in `blockedPages`. Read that function's doc for the
+ * invariant, the case-by-case attributability argument, and the one computed suppression.
  */
 
 function createTypeCheckPort(
@@ -100,6 +103,356 @@ function createTypeCheckPort(
 ): ((source: string, fileName: string) => Promise<GateError[]>) | undefined {
   if (tscExePath === undefined || runtimeDts === undefined) return undefined;
   return createTypeChecker({ tscExePath, runtimeDts });
+}
+
+/**
+ * One reason a page's closure could NOT be proved complete. Deliberately a FACT, not a
+ * diagnostic: `key` identifies the underlying fact so two pages blocked by the same one
+ * collapse to a single entry, and `own` is `null` whenever the flat allowlist scan already
+ * raised a diagnostic for that fact, so nothing is reported twice. This split is the whole fix
+ * for task-13's two-round see-saw — see {@link resolveTreeClosures}.
+ */
+interface ClosureBlockerV1 {
+  /** The tree-relative file the fact is about — the `file` any diagnostic for it must name. */
+  readonly file: string;
+  /** Identity of the underlying FACT, so N pages blocked by it produce one diagnostic. */
+  readonly key: string;
+  /** The diagnostic this pass must raise itself, or `null` when the flat scan already did. */
+  readonly own: { readonly code: string; readonly message: string } | null;
+}
+
+/** What one page's closure walk observed, alongside the walk's own success or refusal. */
+interface ClosureWalkV1 {
+  /** Every relPath {@link resolveClosure} asked for edges — its visited set. */
+  readonly reached: Set<string>;
+  /** Reached CODE files `files` holds no text for at all. */
+  readonly sourceMissing: Set<string>;
+  /** Reached files whose own edge list could not be read; value is the engine's reason. */
+  readonly edgesUnreadable: Map<string, string>;
+}
+
+/**
+ * `scanModuleEdges` threw. Carried as a value, never rethrown: `runTreeImports` is synchronous
+ * and Task 14 calls it once per turn with no `try` of its own, so an escaping throw would crash
+ * the turn pipeline rather than reject a page — the same reasoning, and the same fail-closed
+ * outcome, as `gate/model/tree-scan.ts`'s own `TreeFileUnscannableError`.
+ *
+ * NO INPUT IS KNOWN TO REACH THIS. `scanTreeImports`' measured throw source is `./jsx`'s
+ * recursive-descent reader (`computeJsxTextTokenIndices`), which `scanModuleEdges` does not
+ * call at all; measured here under Bun 1.3.14, `scanModuleEdges` on `"<a>{".repeat(k)` returns
+ * normally with its real edge list at k = 32 000 (where `scanImportAllowlist` throws) and again
+ * at k = 200 000. What would falsify that and make this branch live: a throw source inside
+ * `tokenize` itself, or inside `readStaticImportSpecifier`'s own bounded loop. The guard stays
+ * because the engine, not this module, owns the stack.
+ */
+class ClosureEdgesUnreadableError extends errore.createTaggedError({
+  name: "ClosureEdgesUnreadableError",
+  message: 'the closure walk could not read the module edges of "$file" to the end',
+}) {}
+
+/**
+ * The flat-scan diagnostic codes that make a walked file's own edge list untrustworthy, so a
+ * closure through it cannot be called complete. Two different reasons, one conclusion:
+ *
+ * - `REEXPORT`/`DYNAMIC_IMPORT`/`REQUIRE_CALL` — `scanModuleEdges` deliberately does not treat
+ *   any of the three as a closure edge (see its own doc in `gate/model/import-scan.ts`), so the
+ *   file really does reach further than the walk followed. This is task-13 review round 3's
+ *   Important 2: the walk used to return that shorter list as if it were the whole closure.
+ * - `UNSCANNABLE_SOURCE` — the allowlist scan could not read the file to the end. This pass's
+ *   own reader got through the same text (it does strictly less work on the same token stream),
+ *   but "one of this module's two readers was defeated by these bytes" is not a basis for
+ *   claiming the edge list is complete.
+ *
+ * A file carrying any of them already HAS its own diagnostic from the flat scan, which is why
+ * every blocker built from this set is `own: null` — the page is attributed onto that existing
+ * diagnostic instead of getting a second one.
+ */
+const CLOSURE_UNVERIFIABLE_SCAN_CODES: ReadonlySet<string> = new Set([
+  "REEXPORT",
+  "DYNAMIC_IMPORT",
+  "REQUIRE_CALL",
+  "UNSCANNABLE_SOURCE",
+]);
+
+function createClosureWalk(): ClosureWalkV1 {
+  return { reached: new Set(), sourceMissing: new Set(), edgesUnreadable: new Map() };
+}
+
+/**
+ * One manifest entry's edge reader for {@link resolveClosure}: the SAME file text the flat
+ * allowlist scan reads, read back through `scanModuleEdges` (the raw-edge sibling of
+ * `scanImportAllowlist` — both share `readStaticImportSpecifier`, so the closure walk can never
+ * see a different import graph than the allowlist scan just checked).
+ *
+ * Three shapes answer `[]`, and only one of them is silent:
+ *
+ * - a relPath that is not code ({@link isCodeFile}) — no edges to walk and not a failure: an
+ *   asset can be a legal closure member (design §6 places no extension restriction on a
+ *   resolution TARGET) and simply has nothing to scan;
+ * - a CODE relPath whose text `files` does not hold — recorded in `walk.sourceMissing`, because
+ *   `[]` here is indistinguishable from "this file legitimately imports nothing" and would
+ *   truncate the closure exactly where the pass ran out of text;
+ * - a relPath whose edge read threw — recorded in `walk.edgesUnreadable`; see
+ *   {@link ClosureEdgesUnreadableError} for why this is a value and not a rethrow.
+ *
+ * A file the flat scan reported `UNSCANNABLE_SOURCE` for is still read here, deliberately. That
+ * is task-13 review round 3's Critical (b): its imports were never checked by the flat scan, so
+ * skipping it here would be the one place a real `FORBIDDEN_IMPORT` could vanish entirely.
+ */
+function readClosureEdges(
+  files: ReadonlyMap<string, string>,
+  relPath: string,
+  walk: ClosureWalkV1,
+): readonly string[] {
+  walk.reached.add(relPath);
+  if (!isCodeFile(relPath)) return [];
+  const source = files.get(relPath);
+  if (source === undefined) {
+    walk.sourceMissing.add(relPath);
+    return [];
+  }
+  const edges = errore.try({
+    try: () => scanModuleEdges(source),
+    catch: (cause) => new ClosureEdgesUnreadableError({ file: relPath, cause }),
+  });
+  if (edges instanceof Error) {
+    const cause = edges.cause;
+    walk.edgesUnreadable.set(
+      relPath,
+      cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+    );
+    return [];
+  }
+  return edges;
+}
+
+/**
+ * Walk one manifest entry's closure (design §7) and report every fact that stops this pass
+ * PROVING the result complete. `files` is `null` exactly when the walk itself refused, and a
+ * non-empty `blockers` is what excludes the slug from `closures` — never a partial file list.
+ *
+ * `has(entry)` is checked HERE rather than left to {@link resolveClosure}'s own identical
+ * refusal so the two failures stay distinguishable: an entry that names no file in the tree is
+ * not an edge at all, and the flat scan cannot report it under any code — it iterates `files`,
+ * never `pages` (task-13 review round 3, Critical (a)).
+ */
+function walkPageClosure(
+  page: PageEntryV1,
+  context: {
+    readonly files: ReadonlyMap<string, string>;
+    readonly has: (relPath: string) => boolean;
+    /** True when the flat scan read this exact file to the end, so it checked its imports. */
+    readonly scannedInFull: (relPath: string) => boolean;
+    /** Files the flat scan already flagged under {@link CLOSURE_UNVERIFIABLE_SCAN_CODES}. */
+    readonly unverifiable: ReadonlySet<string>;
+  },
+): { readonly files: readonly string[] | null; readonly blockers: readonly ClosureBlockerV1[] } {
+  if (!context.has(page.entry)) {
+    return {
+      files: null,
+      blockers: [
+        {
+          file: page.entry,
+          key: `entry-unresolved ${page.entry}`,
+          // Raised unconditionally: the flat scan iterates `files`, so it never says anything
+          // about an entry AS an entry, whatever else it may report about that same path.
+          own: {
+            code: "UNRESOLVED_IMPORT",
+            message: `the manifest entry "${page.entry}" names no file in the tree, so no closure can be walked from it`,
+          },
+        },
+      ],
+    };
+  }
+
+  const walk = createClosureWalk();
+  const resolved = resolveClosure({
+    entry: page.entry,
+    has: context.has,
+    edgesOf: (relPath) => readClosureEdges(context.files, relPath, walk),
+  });
+  const blockers: ClosureBlockerV1[] = [];
+
+  if (resolved instanceof Error) {
+    const from = String(resolved.from);
+    blockers.push({
+      file: from,
+      key: `edge-rejected ${from} ${String(resolved.specifier)}`,
+      // The ONE suppression in this pass, and it is computed rather than argued. When the flat
+      // scan read `from` to the end it ran `scanImportAllowlist` over that exact source with
+      // this exact `has`; that function resolves every static import through the SAME
+      // `resolveDesignSpecifier` and maps a rejection with the SAME code split, so the identical
+      // specifier is already reported, naming the same file. Round 2 asserted this
+      // unconditionally and was disproved by a file the flat scan could not tokenize at all
+      // (task-13 review round 3, Critical (b)) — hence the `scannedInFull` test, which is
+      // exactly the condition that was missing. What would falsify it: `scanModuleEdges` and
+      // `scanImportAllowlist` ceasing to share `readStaticImportSpecifier`, or the two ceasing
+      // to resolve through the same function.
+      own: context.scannedInFull(from)
+        ? null
+        : {
+            // The same code mapping `scanImportAllowlist` applies to the identical
+            // `SpecifierRejectedError`: "UNRESOLVED" is usually a typo or a missing file, every
+            // other code is a rule violation.
+            code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
+            message: `${resolved.message} — found by the closure walk because "${from}" was never scanned in full`,
+          },
+    });
+  }
+
+  for (const relPath of walk.sourceMissing) {
+    blockers.push({
+      file: relPath,
+      key: `source-missing ${relPath}`,
+      // Raised once per missing FILE, not once per page reaching it. The flat scan's own
+      // `UNSCANNED_IMPORT` is a different fact about a different file (the IMPORTER, not the
+      // missing module) and does not exist at all when the missing file is a page's own entry,
+      // which is the shape that silently truncated a closure to one file in round 1.
+      own: {
+        code: "CLOSURE_SOURCE_MISSING",
+        message: `"${relPath}" is named by the tree but this pass was given no source for it, so no page closure reaching it can be verified complete`,
+      },
+    });
+  }
+
+  for (const [relPath, reason] of walk.edgesUnreadable) {
+    blockers.push({
+      file: relPath,
+      key: `edges-unreadable ${relPath}`,
+      own: context.unverifiable.has(relPath)
+        ? null
+        : {
+            code: "UNSCANNABLE_SOURCE",
+            message: `the closure walk could not read the module edges of "${relPath}" to the end — ${reason}`,
+          },
+    });
+  }
+
+  // Every file the walk actually touched — the resolved closure when it completed, the partial
+  // visited set when it did not — checked against what the flat scan found in those same files.
+  for (const relPath of resolved instanceof Error ? walk.reached : resolved.files) {
+    if (!context.unverifiable.has(relPath)) continue;
+    blockers.push({
+      file: relPath,
+      key: `edge-list-unverifiable ${relPath}`,
+      own: null, // by construction: `unverifiable` is built FROM the flat scan's own diagnostics
+    });
+  }
+
+  return { files: resolved instanceof Error ? null : resolved.files, blockers };
+}
+
+function addSlug(index: Map<string, Set<PageSlug>>, key: string, slug: PageSlug): void {
+  const slugs = index.get(key);
+  if (slugs === undefined) {
+    index.set(key, new Set([slug]));
+    return;
+  }
+  slugs.add(slug);
+}
+
+function sortedSlugs(slugs: ReadonlySet<PageSlug>): readonly PageSlug[] {
+  return [...slugs].sort();
+}
+
+function filesReportedUnder(
+  scanErrors: readonly GateError[],
+  codes: (code: string) => boolean,
+): ReadonlySet<string> {
+  const reported = new Set<string>();
+  for (const error of scanErrors) {
+    if (error.file !== undefined && codes(error.code)) reported.add(error.file);
+  }
+  return reported;
+}
+
+/**
+ * Resolve every manifest entry's closure (design §7) over the SAME whole-tree inventory and the
+ * SAME file text the flat allowlist scan just ran on, and merge both halves' diagnostics into
+ * one honest list.
+ *
+ * THE JOINT INVARIANT THIS FUNCTION EXISTS TO HOLD (task-13 review round 3). Rounds 1 and 2
+ * each satisfied one half of it by breaking the other — round 1 reported a shared module's one
+ * bad edge once per reaching page, round 2 removed the duplication by deleting diagnostics that
+ * were not duplicates. Both halves hold here because they are one mechanism, not two patches:
+ *
+ *   For every `pages` entry, EITHER its slug is in `closures` with a file list this pass proved
+ *   complete, OR the slug is absent from `closures` AND at least one returned diagnostic names
+ *   it in `blockedPages` — with every diagnostic emitted once per underlying FACT, never once
+ *   per page that happens to reach it.
+ *
+ * The mechanism: a walk produces {@link ClosureBlockerV1} FACTS, not diagnostics. Facts are
+ * keyed, so N pages blocked by one fact collapse to one entry; each fact carries the page it
+ * blocked, so attribution is a set on a single diagnostic instead of a copy per page; and a
+ * fact whose diagnostic the flat scan already raised carries `own: null`, so the page is
+ * attributed onto that existing diagnostic rather than getting a second one. The one place a
+ * fact is suppressed is computed from what the flat scan actually managed to read
+ * (`scannedInFull`), never asserted — see {@link walkPageClosure}.
+ *
+ * WHY EVERY BLOCKED PAGE IS ATTRIBUTABLE, case by case, rather than by a coverage sweep. Each
+ * blocker's `file` either receives a diagnostic from this pass (`own !== null`) or is a file the
+ * flat scan diagnosed: `entry-unresolved` and `source-missing` always raise their own;
+ * `edge-rejected` raises its own unless `from` was scanned in full, in which case that same
+ * `from` carries the flat scan's report of the identical rejection; `edge-list-unverifiable` is
+ * built out of the flat scan's own diagnostics, so its file has one by construction; and
+ * `edges-unreadable` raises its own unless the same file is already in that set. So no blocked
+ * page can end up with an empty `blockedPages` anywhere in `errors`.
+ */
+export function resolveTreeClosures(input: {
+  readonly pages: readonly PageEntryV1[];
+  readonly files: ReadonlyMap<string, string>;
+  readonly treePaths: readonly string[];
+  readonly scanErrors: readonly GateError[];
+}): { readonly closures: readonly GateClosureV1[]; readonly errors: readonly GateError[] } {
+  const has = hasTreePath(input.treePaths);
+  const unscannable = filesReportedUnder(input.scanErrors, (code) => code === "UNSCANNABLE_SOURCE");
+  const unverifiable = filesReportedUnder(input.scanErrors, (code) =>
+    CLOSURE_UNVERIFIABLE_SCAN_CODES.has(code),
+  );
+  // The flat scan runs `scanImportAllowlist` over exactly the CODE keys of `files`, and reports
+  // `UNSCANNABLE_SOURCE` for each one it could not finish — so this is a derivation of what it
+  // actually checked, not a second guess at it.
+  const scannedInFull = (relPath: string) =>
+    isCodeFile(relPath) && input.files.has(relPath) && !unscannable.has(relPath);
+
+  const closures: GateClosureV1[] = [];
+  const blockedAt = new Map<string, Set<PageSlug>>();
+  const raised = new Map<
+    string,
+    { readonly file: string; readonly code: string; readonly message: string; slugs: Set<PageSlug> }
+  >();
+
+  for (const page of input.pages) {
+    const walked = walkPageClosure(page, { files: input.files, has, scannedInFull, unverifiable });
+    if (walked.blockers.length === 0 && walked.files !== null) {
+      closures.push({ slug: page.slug, files: walked.files });
+      continue;
+    }
+    for (const blocker of walked.blockers) {
+      addSlug(blockedAt, blocker.file, page.slug);
+      if (blocker.own === null) continue;
+      const already = raised.get(blocker.key);
+      if (already !== undefined) {
+        already.slugs.add(page.slug);
+        continue;
+      }
+      raised.set(blocker.key, { file: blocker.file, ...blocker.own, slugs: new Set([page.slug]) });
+    }
+  }
+
+  const attributed = input.scanErrors.map((error) => {
+    const slugs = error.file === undefined ? undefined : blockedAt.get(error.file);
+    return slugs === undefined ? error : { ...error, blockedPages: sortedSlugs(slugs) };
+  });
+  const walkErrors = [...raised.values()].map((entry) => ({
+    kind: "import" as const,
+    code: entry.code,
+    message: entry.message,
+    file: entry.file,
+    blockedPages: sortedSlugs(entry.slugs),
+  }));
+
+  return { closures, errors: [...attributed, ...walkErrors] };
 }
 
 export interface GateRunnerAdapterDeps {
@@ -158,111 +511,22 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   }
 
   /**
-   * One manifest entry's edge reader for {@link resolveClosure}: the SAME file text
-   * `runTreeImports` itself scans, read back through `scanModuleEdges` (the raw-edge sibling
-   * of `scanImportAllowlist` — both share `readStaticImportSpecifier`, so the closure walk
-   * can never see a different import graph than the allowlist scan just checked). A relPath
-   * that is not code ({@link isCodeFile}) answers `[]` — no edges to walk, not a resolution
-   * failure: an asset can be a legal closure member (design §6 places no extension restriction
-   * on a resolution TARGET) and simply has nothing to scan.
-   *
-   * A relPath that IS code but whose text `files` does not hold ALSO answers `[]` — there is
-   * no other honest answer `edgesOf` itself can give — but records `relPath` into `unscanned`
-   * first (task-13 review round 2, Important 1): the caller uses that set to refuse to report
-   * this walk's closure at all, rather than silently returning it truncated at exactly the
-   * point this scan ran out of text to read. See {@link resolveClosuresFor}'s own doc for the
-   * full rationale and why this is NOT the same gap `UNSCANNED_IMPORT` already covers.
-   */
-  function edgesOf(
-    files: ReadonlyMap<string, string>,
-    relPath: string,
-    unscanned: Set<string>,
-  ): readonly string[] {
-    if (!isCodeFile(relPath)) return [];
-    const source = files.get(relPath);
-    if (source === undefined) {
-      unscanned.add(relPath);
-      return [];
-    }
-    return scanModuleEdges(source);
-  }
-
-  /**
-   * Resolves every manifest entry's closure (design §7) over the SAME whole-tree inventory
-   * `treePaths` the flat allowlist scan below already resolves against, and the SAME `files`
-   * text it reads. Two distinct failure shapes, both excluding the slug from `closures` —
-   * never a fabricated partial file list — but only ONE of them adds its own diagnostic here:
-   *
-   * 1. `resolved instanceof Error` — an edge `resolveDesignSpecifier` itself rejects (illegal
-   *    shape, escapes the tree, or genuinely unresolvable). NO error is added here for this
-   *    case (task-13 review round 2, Important 2 — corrected from round 1, which double-
-   *    reported every such edge): `edgesOf` above only ever returns a real edge for a file
-   *    whose text is in `files`, and the flat scan below (`scanTreeImports`) scans every ONE
-   *    of those same files' own imports unconditionally — so any edge this walk could reject,
-   *    the flat scan has ALREADY rejected, same file, same specifier, same line/column.
-   *    Measured: three pages sharing one bad edge in one shared module used to produce 4
-   *    near-identical diagnostics for the ONE violation; this file's own test pins the fixed
-   *    count.
-   * 2. `unscanned.size > 0` — a code file this walk reached has NO text in `files` at all, so
-   *    `edgesOf` had nothing to scan and the walk stopped there with no signal that anything
-   *    was missing (task-13 review round 2, Important 1). This is NOT the same fact
-   *    `UNSCANNED_IMPORT` (the flat scan's own vocabulary) reports: `UNSCANNED_IMPORT` fires
-   *    only when some OTHER file the flat scan DID scan imports the missing one, and says
-   *    nothing about which page's closure that endangers; a missing file that is this page's
-   *    OWN entry, or reachable only through another file ALSO missing from `files`, produces
-   *    NOTHING from the flat scan at all — silent truncation with zero diagnostics anywhere,
-   *    which is the exact §7 bug this whole task exists to prevent. So this DOES add its own
-   *    error here, under its own code, naming the page whose closure cannot be trusted.
-   */
-  function resolveClosuresFor(input: {
-    readonly pages: readonly PageEntryV1[];
-    readonly files: ReadonlyMap<string, string>;
-    readonly treePaths: readonly string[];
-  }): { readonly closures: readonly GateClosureV1[]; readonly errors: readonly GateError[] } {
-    const has = hasTreePath(input.treePaths);
-    const closures: GateClosureV1[] = [];
-    const errors: GateError[] = [];
-    for (const page of input.pages) {
-      const unscanned = new Set<string>();
-      const resolved = resolveClosure({
-        entry: page.entry,
-        has,
-        edgesOf: (relPath) => edgesOf(input.files, relPath, unscanned),
-      });
-      if (resolved instanceof Error) continue; // see this function's own doc, case 1
-
-      if (unscanned.size > 0) {
-        for (const relPath of unscanned) {
-          errors.push({
-            kind: "import",
-            code: "CLOSURE_SOURCE_MISSING",
-            message: `page "${page.slug}": its closure reaches "${relPath}", whose source this pass was never given — the closure cannot be verified complete`,
-            file: relPath,
-          });
-        }
-        continue; // see this function's own doc, case 2
-      }
-
-      closures.push({ slug: page.slug, files: resolved.files });
-    }
-    return { closures, errors };
-  }
-
-  /**
    * The whole-tree import allowlist (design §8 step 4) plus every manifest entry's resolved
    * closure (task-13 review round 1, Critical C1 — see this file's header). `gate/model/
    * gate.ts`'s own `runTreeImports` is synchronous — it does no I/O, only token-scanning over
    * the text it is handed — so this only wraps it in a promise the same way every other method
-   * on this port is async, keeping `core` looking at one uniform shape.
+   * on this port is async, keeping `core` looking at one uniform shape. The flat scan runs
+   * FIRST and its findings are an INPUT to the closure pass ({@link resolveTreeClosures}), not
+   * merely concatenated afterwards: which files it managed to read, and which it found to carry
+   * an edge form the closure walk does not follow, is what decides both whether a closure may be
+   * called complete and whether a fact already has a diagnostic.
    */
   async function runTreeImportsPort(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
     readonly pages: readonly PageEntryV1[];
   }): Promise<RunTreeImportsResultV1> {
-    const scanErrors = runTreeImports(input);
-    const { closures, errors: closureErrors } = resolveClosuresFor(input);
-    return { errors: [...scanErrors, ...closureErrors], closures };
+    return resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
   }
 
   /**

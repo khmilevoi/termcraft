@@ -26,6 +26,23 @@ export interface GateErrorV1 {
   readonly file?: string;
   readonly line?: number;
   readonly column?: number;
+  /**
+   * The page entries whose closure {@link GateRunner.runTreeImports} could not complete AT
+   * {@link GateErrorV1.file} — the structural attribution that lets a consumer partitioning
+   * diagnostics per page find this one (task-13 review round 3, Minor: the slug used to survive
+   * only inside free-text `message`, so a consumer that dropped the unattributable lost both the
+   * page's closure AND its diagnostic — a silent fail-open).
+   *
+   * This is what makes ONE diagnostic per underlying fact compatible with per-page
+   * attributability: a forbidden import in a module three pages share is still reported once,
+   * naming the module, and carries all three slugs here instead of being copied per reaching
+   * page. Absent (never `[]`) when the fact blocked no page's closure — either no page reaches
+   * the file, or every page that does resolved completely.
+   *
+   * Populated ONLY by `runTreeImports`; every other method on this port leaves it absent, since
+   * no other method walks a closure.
+   */
+  readonly blockedPages?: readonly PageSlug[];
 }
 
 export type GateWarningKindV1 =
@@ -204,13 +221,21 @@ export interface GateRunner {
    * whole-tree scan this method already runs is what resolves every entry's transitive file
    * set, so producing `closures` here costs no second tree walk).
    *
-   * CONTRACT (task-13 review round 2, Important 1): a complete `closures` entry for a page
-   * requires `files` to hold text for EVERY code file that page's closure reaches, not merely
-   * the asset exemption two paragraphs up — an executable file (`.ts`/`.tsx`/`.js`/`.jsx`/
-   * `.mjs`/`.cjs`/`.mts`/`.cts`, or extensionless) named in `treePaths` but absent from `files`
-   * makes that page's closure UNVERIFIABLE, never silently smaller than it really is: the
-   * adapter reports it via `errors` and OMITS the slug from `closures` entirely rather than
-   * returning a truncated file list a caller could mistake for the whole thing.
+   * CONTRACT — the joint invariant (task-13 review round 3; rounds 1 and 2 each satisfied one
+   * half of it by breaking the other). For every entry in `pages`, EXACTLY ONE of these holds,
+   * and the adapter enforces both halves in one pass:
+   *
+   * 1. the slug appears in `closures` with a file list this pass PROVED complete — every code
+   *    file it reaches had source text in `files`, was read to the end by the flat allowlist
+   *    scan, and carries no edge form (`export … from`, `import(…)`, `require(…)`) that the
+   *    closure walk's own edge reader deliberately does not follow; or
+   * 2. the slug is absent from `closures` — never a truncated file list a caller could mistake
+   *    for the whole thing — and at least one entry in `errors` names it in
+   *    {@link GateErrorV1.blockedPages}.
+   *
+   * And every diagnostic is emitted ONCE PER UNDERLYING FACT, never once per page that happens
+   * to reach it: a bad import in a module three pages share is one `errors` entry naming the
+   * module, with all three slugs in `blockedPages`.
    *
    * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
    * declared on this port, implemented by the adapter, but NO production caller invokes it yet
