@@ -15,6 +15,7 @@
     "dev": "bun --watch run src/main.tsx",
     "demo": "bun run src/demo.tsx",
     "gen:runtime-dts": "bun run scripts/gen-runtime-dts.ts",
+    "test": "bun run scripts/run-tests.ts",
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
