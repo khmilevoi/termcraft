@@ -39,10 +39,23 @@ export const MAX_JSX_NESTING_DEPTH = 64;
  * converts into a fail-closed `UNSCANNABLE_SOURCE`. This throw takes that same path,
  * deterministically and ~4 orders of magnitude sooner.
  *
- * Every production entry into this reader is inside that guard — `scanTreeImports`
- * (`gate/model/tree-scan.ts`) for `scanImportAllowlist`, and `gate/adapters/gate-runner.ts`'s
- * own `errore.try` for `scanModuleEdges`. Both were checked when this landed; a new caller
- * that is not guarded is a fail-open and must be given one.
+ * Every production entry into this reader is inside a guard — THREE of them, all checked when
+ * this landed:
+ *
+ * - `scanTreeImports` (`gate/model/tree-scan.ts`)'s `errore.try` around `scanImportAllowlist`;
+ * - `gate/adapters/gate-runner.ts`'s own `errore.try` around `scanModuleEdges`;
+ * - `gate/model/gate.ts:189`'s `errore.try`, which wraps `checkPageContract` together with all
+ *   four page lints and `lintUnpointedElements` as one group — every one of those five reaches
+ *   this reader too, either directly (`lints.ts`'s `lintUnpointedElements` calls `scanJsx`
+ *   itself) or via `tokenize` -> `readJsxTextRanges` -> `scanJsx` (`lexer.ts`, `page-contract.ts`,
+ *   and the other four `lints.ts` functions).
+ *
+ * `gate/index.ts` also re-exports `scanImportAllowlist` and `checkPageContract` on `gate`'s own
+ * public surface, both throw-capable and neither wrapped there — latent today only because no
+ * caller outside `src/gate` invokes either (`core/ports/gate-runner.ts` narrows the port down to
+ * `checkManifestSlice`/`runGate`), but a future caller of either export directly is a fail-open
+ * and must be given a guard of its own. A new caller anywhere that is not inside one of the three
+ * guards above, or that reaches these re-exports directly, is the same fail-open.
  */
 export class JsxNestingTooDeepError extends errore.createTaggedError({
   name: "JsxNestingTooDeepError",

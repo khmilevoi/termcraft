@@ -510,12 +510,25 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       // input — but `runTreeImports` is SYNCHRONOUS with no `try` of its own, so an escaping
       // throw crashes the turn Task 14 is about to wire instead of rejecting a page.
       //
-      // `bigButShallow` NAMED THE OPEN RESIDUAL: at 8 000 levels — well short of the engine's own
-      // stack limit — the pre-ceiling reader returned cleanly with zero errors, after several
-      // seconds of blocked event loop, exactly the cost `MAX_JSX_NESTING_DEPTH` (`./jsx`, closing
-      // this task-12b residual) now bounds. All three shapes now assert `UNSCANNABLE_SOURCE`: the
-      // ceiling rejects `bigButShallow` deterministically, long before either the engine's stack
-      // or the clock would have.
+      // `deepButBelowTheEngineStack` NAMED THE OPEN RESIDUAL: at 8 000 LEVELS DEEP — well short
+      // of the engine's own stack limit — the pre-ceiling reader returned cleanly with zero
+      // errors, after several seconds of blocked event loop, exactly the cost
+      // `MAX_JSX_NESTING_DEPTH` (`./jsx`, closing this task-12b residual) now bounds. (Renamed
+      // from `bigButShallow`: "shallow" meant shallow relative to the engine's stack limit, not
+      // shallow in nesting depth — the old name read as "not very nested", which is backwards.)
+      // All three of THESE shapes now assert `UNSCANNABLE_SOURCE`: the ceiling rejects
+      // `deepButBelowTheEngineStack` deterministically, long before either the engine's stack or
+      // the clock would have.
+      //
+      // `wideButShallow` is the control THIS row's rejection would otherwise leave unchecked: a
+      // source that is large (8 000 repeats) and has plenty of ELEMENTS, but is only ever one
+      // level deep, because each `<a>x</a>` opens and closes before the next one starts. It must
+      // still scan clean. Without this row, nothing in the suite fails if `readElement`'s
+      // decrement (`./jsx.ts`) were lost and the counter accumulated across SIBLINGS instead of
+      // only along one DESCENT path — that would turn the depth cap into an element-count cap in
+      // disguise, over-rejecting ordinary wide pages while still passing every other row here
+      // (all of which are deep, not wide). The 54-file real-source test would only catch that
+      // regression by accident, on whichever real file happens to carry more than 64 elements.
       //
       // OUT OF PROCESS under an external kill: this exercises the real synchronous scan
       // end-to-end, and a regression that removed the ceiling could again cost seconds or let an
@@ -527,7 +540,8 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
         `const cases = {`,
         `  deepUnterminated: "<a>{".repeat(20000),`,
         `  deepWellFormed: "<a>".repeat(20000) + "x" + "</a>".repeat(20000),`,
-        `  bigButShallow: "<a>".repeat(8000) + "x" + "</a>".repeat(8000),`,
+        `  deepButBelowTheEngineStack: "<a>".repeat(8000) + "x" + "</a>".repeat(8000),`,
+        `  wideButShallow: "<a>x</a>".repeat(8000),`,
         `};`,
         `const out = {};`,
         `for (const [name, source] of Object.entries(cases)) {`,
@@ -549,7 +563,8 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(JSON.parse(stdout.trim())).toEqual({
         deepUnterminated: ["UNSCANNABLE_SOURCE"],
         deepWellFormed: ["UNSCANNABLE_SOURCE"],
-        bigButShallow: ["UNSCANNABLE_SOURCE"],
+        deepButBelowTheEngineStack: ["UNSCANNABLE_SOURCE"],
+        wideButShallow: [],
       });
     }, 90_000);
 
