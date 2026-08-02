@@ -98,6 +98,20 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;
       }
+      // fix round 1, Finding 2 (workspace-first launch, 2026-08-03): `projectId === null` inside
+      // a mounted Workspace means a pending startup open (`ui/mirror/model/screen.ts`), and the
+      // design's own comment for this state says "composer stays live but ⏎ is refused"
+      // (`design/termcraft-engine.js:231`) — the exact promise the status bar's `dis`-marked
+      // `⏎ send` key already draws (`Workspace.tsx`'s `OPENING_HINT_KEYS`). Without this guard
+      // the refusal happened by accident: Enter still dispatched `turn.start`, the Kernel
+      // rejected it (no project machine exists to accept a turn), and the rejection only ever
+      // reached `console.error` below — invisible while the renderer owns the terminal. Refusing
+      // HERE, before `local.composer` is ever touched, keeps the draft in place exactly like the
+      // read-only and running-turn guards beside it.
+      if (deps.mirror.project().projectId === null) {
+        trace("ui.composerSubmit.refused", { reason: "project is still opening" });
+        return;
+      }
       // §3.2/finding §2.5: keymap.ts's `composerActive` no longer excludes `turnRunning`, so
       // Enter keeps resolving to `composer-submit` for the whole duration of a turn — refusing
       // it HERE, before `local.composer` is ever touched, is what keeps the draft in place

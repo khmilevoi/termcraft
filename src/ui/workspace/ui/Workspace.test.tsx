@@ -1250,7 +1250,12 @@ describe("Workspace while the project is opening (design 30-workspace-first-laun
     const rows = handle.capture().rows;
 
     expect(findRun(rows, "⠹ generating")).toBeUndefined();
-    const line = findRun(rows, "opening project…");
+    // fix round 1, Finding 5: `findRun` over the whole frame would also match the status bar's
+    // own amber page slot (same text, same colour, at this non-narrow width) — scoping to
+    // everything above the status bar's own row (the same "status bar is the frame's bottom
+    // row" pattern used elsewhere in this file) makes this the preview headline specifically,
+    // not whichever amber "opening project…" run happens to come first.
+    const line = findRun(rows.slice(0, -1), "opening project…");
     expect(line && extractRgb(line.fg)).toBe(SHELL_PALETTE.amber);
   });
 
@@ -1276,9 +1281,9 @@ describe("Workspace while the project is opening (design 30-workspace-first-laun
     // The empty, focused composer draws its cursor OVER the placeholder's first cell
     // (`TextInput.tsx`: "Empty AND focused: the placeholder's first cell IS the cursor") — the
     // same established pattern this file's own `sk for changes…` check
-    // (`Workspace.test.tsx` action-hotkey suite, matching `Composer.test.tsx`'s "sk for
-    // changes…") already relies on, so the leading "p" of "project opening…" is never a text
-    // run; match from the second character on instead.
+    // (`Workspace.test.tsx:690-691`, the "Workspace chat scrollback" describe block, matching
+    // `Composer.test.tsx`'s "sk for changes…") already relies on, so the leading "p" of "project
+    // opening…" is never a text run; match from the second character on instead.
     expect(text).toContain("roject opening…");
     expect(text).toContain("send");
     const sendKey = findRun(rows, " ⏎ ");
@@ -1304,14 +1309,17 @@ describe("Workspace while the project is opening (design 30-workspace-first-laun
     const rows = handle.capture().rows;
     const text = allText(rows);
 
-    expect(text).toContain("opening…");
     // The preview region's own `OpeningState` headline is unconditionally "opening project…" —
     // design `wsOpening`'s `ctr` calls carry no `narrow` branch at all, only the STATUS BAR's
-    // own page-slot phrase shortens at the floor. Checking the whole flattened frame for the
-    // full phrase's absence would wrongly fail on that unrelated headline; scope the check to
-    // the status bar's own row instead (the same "status bar is the frame's bottom row" pattern
-    // the idle-key-row test above already uses).
+    // own page-slot phrase shortens at the floor. Checking the whole flattened frame would be
+    // vacuous both ways: the full phrase's ABSENCE would wrongly fail on that unrelated headline,
+    // and the shortened phrase's PRESENCE would wrongly pass off the composer's own "project
+    // opening…" placeholder (rendered as "roject opening…", which still contains "opening…").
+    // Scope both checks to the status bar's own row instead (the same "status bar is the frame's
+    // bottom row" pattern the idle-key-row test above already uses) — the only place either
+    // literal can genuinely be attributed to the page-slot's own narrow branch.
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
+    expect(statusRow).toContain("opening…");
     expect(statusRow).not.toContain("opening project…");
     expect(text).not.toContain("80×24");
   });

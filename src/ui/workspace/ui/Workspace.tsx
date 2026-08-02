@@ -778,7 +778,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
         page={
           // The page slot is FILLED, not dropped: there is no page slug yet, so it carries
           // Home's own phrase for the same state, verbatim (design `wsOpening`, and
-          // `Home.tsx:335` for the identical slot choice).
+          // `Home.tsx:337` for the identical slot choice).
           opening
             ? { text: narrow ? "opening…" : "opening project…", fg: "amber", bold: true }
             : activePageSlug !== null
