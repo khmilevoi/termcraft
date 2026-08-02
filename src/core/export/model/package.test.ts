@@ -21,7 +21,9 @@ const HOME_BYTES = new TextEncoder().encode(
 
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
-  sourcePath: "pages/home/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/home.tsx",
+  expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 0,
   minSize: { w: 80, h: 24 },
   theme: "default",

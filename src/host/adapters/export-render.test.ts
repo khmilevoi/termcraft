@@ -18,7 +18,9 @@ const specForTask: HostSessionSpec = {
   mode: "export",
   interactionMode: "static",
   pageSlug: DASH_SLUG,
-  sourcePath: "/scratch/dash.tsx",
+  treeRoot: "/scratch/design",
+  entryRelPath: "pages/dash.tsx",
+  expectedFiles: [{ relPath: "pages/dash.tsx", sha256: "a".repeat(64) }],
   sourceHash: "a".repeat(64),
   kitApiVersion: 1,
   size: { w: 80, h: 24 },
@@ -29,7 +31,9 @@ const specForTask: HostSessionSpec = {
 function taskFor(overrides: Partial<ExportRenderTaskV1> = {}): ExportRenderTaskV1 {
   return {
     pageSlug: DASH_SLUG,
-    sourcePath: specForTask.sourcePath,
+    treeRoot: specForTask.treeRoot,
+    entryRelPath: specForTask.entryRelPath,
+    expectedFiles: specForTask.expectedFiles,
     sourceHash: specForTask.sourceHash,
     kitApiVersion: specForTask.kitApiVersion,
     size: specForTask.size,

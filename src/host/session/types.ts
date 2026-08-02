@@ -1,3 +1,5 @@
+import type { DesignFileEntryV1 } from "entities/design-tree";
+
 import type {
   ControlEnvelope,
   FrameEnvelope,
@@ -27,15 +29,46 @@ export interface LoadedPage {
   readonly sourceHash: string;
 }
 
+/**
+ * What one `mount` has to name for the host to verify and link a page's WHOLE closure
+ * (design §6, §9.2). It replaced `sourcePath`/`expectedSourceHash` in task 15: one absolute
+ * file plus one hash cannot describe a page that spans several files, and a page whose shared
+ * module drifted must not mount.
+ *
+ * `expectedFiles` is the tree revision's own inventory — every file under `design/`, not just
+ * the closure. THAT IS DELIBERATE and it is the one place this implementation reads the plan
+ * more broadly than its own wording (which says `expectedClosure`):
+ *
+ * - it is what design §9.2 actually specifies ("the host verifies every file in the tree
+ *   against the revision's inventory hashes"), and what the revision-keyed incarnation of
+ *   plan 3 needs;
+ * - no producer can honestly supply a closure. `core` reaches the tree through
+ *   `DesignTreeReader`, which hands back `listTree()`/`readManifest()` and no import scanner;
+ *   deriving a closure there would mean running the Gate's whole-tree scan on every preview
+ *   mount — seconds of synchronous event-loop block per `red-debt.md`'s own measurements — and
+ *   fabricating one (`[entry]`) is the silent-truncation defect this branch has ruled against
+ *   repeatedly;
+ * - the staleness check the plan asked for survives unchanged in strength, because the host
+ *   derives the closure ITSELF and every member is hash-verified against this inventory: a
+ *   structural change to a closure requires a byte change in some member, and that is exactly
+ *   what a hash comparison catches.
+ *
+ * The host still reads only the closure, never the whole tree — see `loadPage`.
+ */
 export interface LoadPageArgs {
-  readonly sourcePath: string;
-  readonly expectedSourceHash: string;
+  /** The ABSOLUTE `…/design` directory this mount reads from. */
+  readonly treeRoot: string;
+  /** TREE-relative, exactly the string `design/pages.json` bound to the slug — never slug-derived. */
+  readonly entryRelPath: string;
+  /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
 }
 
 /** The `mount` request body (host-supervision §6.5). */
 export interface MountRequestBody {
-  readonly sourcePath: string;
-  readonly expectedSourceHash: string;
+  readonly treeRoot: string;
+  readonly entryRelPath: string;
+  readonly expectedFiles: readonly DesignFileEntryV1[];
   readonly mode: HostMode;
   readonly interactionMode: InteractionMode;
   readonly size: Size;
@@ -116,4 +149,4 @@ export interface HostSession {
 }
 
 // Re-export the imported types needed by consumers of this module.
-export type { ControlEnvelope, FrameEnvelope, FrameIdentity, HostHelloV1 };
+export type { ControlEnvelope, DesignFileEntryV1, FrameEnvelope, FrameIdentity, HostHelloV1 };

@@ -1094,22 +1094,27 @@ describe("project.open", () => {
 
       const runPageCalls = gateRunner.calls.filter((call) => call.method === "runPage");
       expect(runPageCalls).toHaveLength(2);
-      // The path is `<root>/.termcraft/design/<entry>`, where `<entry>` is what
-      // `design/pages.json` bound to the slug — NOT `.termcraft/pages/<slug>/page.tsx`, which
-      // this fixture's deliberately-unlike-the-slug entries make impossible to produce by
-      // derivation. `entryRelPath` travels alongside so the Gate knows the page's own
-      // tree-relative identity for specifier resolution.
+      // The tree root is `<root>/.termcraft/design` and the entry is what `design/pages.json`
+      // bound to the slug — NOT `.termcraft/pages/<slug>/page.tsx`, which this fixture's
+      // deliberately-unlike-the-slug entries make impossible to produce by derivation. Both
+      // travel, plus the inventory the smoke stage verifies the mounted closure against, so
+      // the Gate knows the page's own tree-relative identity for specifier resolution AND the
+      // bytes it is allowed to run (task 15).
       expect(runPageCalls[0]).toEqual({
         method: "runPage",
         slug: dashboard,
         entryRelPath: "screens/board/dashboard.tsx",
-        sourcePath: "/tmp/proj/.termcraft/design/screens/board/dashboard.tsx",
+        treeRoot: "/tmp/proj/.termcraft/design",
+        // 3 = both entries plus `pages.json`, the fake tree's whole inventory.
+        expectedFileCount: 3,
       });
       expect(runPageCalls[1]).toEqual({
         method: "runPage",
         slug: calendar,
         entryRelPath: "widgets/cal/index.tsx",
-        sourcePath: "/tmp/proj/.termcraft/design/widgets/cal/index.tsx",
+        treeRoot: "/tmp/proj/.termcraft/design",
+        // 3 = both entries plus `pages.json`, the fake tree's whole inventory.
+        expectedFileCount: 3,
       });
     });
   });

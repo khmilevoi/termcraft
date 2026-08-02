@@ -50,7 +50,9 @@ function spyMachine(inner: StateMachine<ExportState, ExportAction>): {
 
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
-  sourcePath: "pages/home/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/home.tsx",
+  expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 0,
   minSize: { w: 80, h: 24 },
   theme: "default",
@@ -64,7 +66,9 @@ const SNAPSHOT: ExportSnapshotV1 = { pages: [HOME], capturedAt: "2024-01-01T00:0
 function currentPageInput(overrides: Partial<ExportPageInputV1> = {}): ExportPageInputV1 {
   return {
     pageSlug: HOME.pageSlug,
-    sourcePath: HOME.sourcePath,
+    treeRoot: HOME.treeRoot,
+    entryRelPath: HOME.entryRelPath,
+    expectedFiles: HOME.expectedFiles,
     manifestIndex: HOME.manifestIndex,
     minSize: HOME.minSize,
     theme: HOME.theme,

@@ -19,6 +19,7 @@ import type { HostSessionSpec, InteractionMode, Size } from "../../types";
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
+import { buildMountBody } from "./mount-request";
 import { createStderrDrain, readInbound, writeFramed } from "./transport";
 import type { InboundMessage } from "./transport";
 // NOTE: session.ts ALREADY imports decodeControlEnvelope + decodeFrameEnvelope from
@@ -240,6 +241,8 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     // --- mount: send correlated mount request, await ready within 10s ---
     phase = "mounting";
     const mountRequestId = nextRequestId();
+    const mountBody = buildMountBody(spec, spec.mode === "export" || spec.mode === "smoke");
+    if (mountBody instanceof ProtocolError) return failWith(mountBody);
     const mount: ControlEnvelope = {
       protocolVersion: 1,
       kind: "mount",
@@ -247,16 +250,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       nonce: identity.nonce,
       messageId: nextMessageId(),
       requestId: mountRequestId,
-      body: {
-        sourcePath: spec.sourcePath,
-        expectedSourceHash: spec.sourceHash,
-        mode: spec.mode,
-        interactionMode: spec.interactionMode,
-        size: { w: spec.size.w, h: spec.size.h },
-        theme: spec.theme,
-        capabilities: { colorDepth: spec.capabilities.colorDepth },
-        deterministic: spec.mode === "export" || spec.mode === "smoke",
-      },
+      body: mountBody,
     };
     const mountBytes = encodeControlEnvelope(mount);
     if (mountBytes instanceof ProtocolError) return failWith(mountBytes);

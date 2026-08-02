@@ -1337,6 +1337,11 @@ async function runTurnStart(
   ): RunTurnValidationMaterialV1 => ({
     manifestText: candidate.manifestText,
     treePaths: candidate.treeFiles.map((file) => file.relPath),
+    // The same candidate file list with its hashes kept — what the Gate's smoke stage
+    // hash-verifies the mounted closure against (design §9.2). Built through
+    // `candidateTreeInventory` rather than open-coded so this and `buildFinalizeInput`'s
+    // changed-page diff cannot disagree about the inventory's shape.
+    treeInventory: candidateTreeInventory(candidate.treeFiles).files,
     files: new Map(
       candidate.treeFiles.map((file) => [
         file.relPath,

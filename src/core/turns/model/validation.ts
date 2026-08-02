@@ -18,6 +18,7 @@ import type {
   ManifestSliceV1,
 } from "core/ports";
 import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
+import type { DesignFileEntryV1 } from "entities/design-tree";
 import { trace } from "infrastructure/debug-log";
 
 /**
@@ -94,6 +95,19 @@ export interface RunTurnValidationInputV1 {
    * page slugs, which cannot answer whether a path exists.
    */
   readonly treePaths: readonly string[];
+  /**
+   * The SAME inventory as {@link treePaths}, carrying each file's `sha256` alongside its
+   * tree-relative path — the candidate's own `StagedFileV1` list, narrowed
+   * (`core/turns/model/candidate.ts`'s `candidateTreeInventory`).
+   *
+   * WHY BOTH SHAPES ARE HERE, and why that is not two sources of truth. `treePaths` answers
+   * entry resolution's only question ("does this `entry` name a real file"); this answers the
+   * smoke stage's ("are the bytes on disk still the bytes this candidate froze"). They are the
+   * same file set by construction — one builder produces both from one `candidate.treeFiles`
+   * list — and `runTurnValidation` never derives one from the other, so neither can silently
+   * become a filtered view of the other.
+   */
+  readonly treeInventory: readonly DesignFileEntryV1[];
   /**
    * Every tree file's source text, keyed by the SAME tree-relative path as `treePaths` —
    * complete, with no filter of this ring's own.
@@ -276,7 +290,12 @@ export async function runTurnValidation(
         // never the absolute path, which would leak a filesystem location into agent-facing
         // Gate messages.
         fileName: entry.entry,
-        sourcePath: `${input.designRoot}/${entry.entry}`,
+        // The smoke stage mounts this page's WHOLE closure off the staged candidate tree and
+        // hash-verifies every member against the candidate's own inventory (design §6, §9.2).
+        // Both come from the candidate `store` just froze — nothing here re-reads or re-hashes
+        // a disk this ring never staged.
+        treeRoot: input.designRoot,
+        expectedFiles: input.treeInventory,
         entryRelPath: entry.entry,
         // Only when this pass PROVED the closure complete. `runTreeImports`' CONTRACT makes
         // the two cases exclusive: a slug absent from `closures` always carries a fatal in

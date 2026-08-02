@@ -1,4 +1,5 @@
 import type { Sha256Hex } from "core/protocol";
+import type { DesignFileEntryV1 } from "entities/design-tree";
 import type { PageSlug, Size } from "entities/page";
 
 /**
@@ -12,7 +13,12 @@ import type { PageSlug, Size } from "entities/page";
  */
 export interface ExportPageInputV1 {
   readonly pageSlug: PageSlug;
-  readonly sourcePath: string;
+  /** The ABSOLUTE `…/design` directory this page renders from (task 15, design §9.2). */
+  readonly treeRoot: string;
+  /** TREE-relative — the `entry` `design/pages.json` bound to `pageSlug`. */
+  readonly entryRelPath: string;
+  /** The tree revision's `(relPath, sha256)` inventory the render's mount verifies against. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
   /** Project page order (manifest order) — the primary publish-order key (§11.4/§12.5). */
   readonly manifestIndex: number;
   readonly minSize: Size;

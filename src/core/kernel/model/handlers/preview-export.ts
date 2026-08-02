@@ -35,11 +35,11 @@ import {
   canonicalHash,
   isUuidv7,
 } from "core/protocol";
-import type { PageEntryV1 } from "entities/design-tree";
+import type { DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { designTreeFilePath } from "./page-descriptors";
+import { designTreeRoot, readTreeInventory } from "./page-descriptors";
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
 import { noOpOutcome, startedOutcome } from "./types";
 
@@ -130,24 +130,32 @@ import { noOpOutcome, startedOutcome } from "./types";
  * extraction rather than refused — see {@link extractAndCachePageMeta} for why the miss path
  * had to become recoverable. Nothing here invents a theme/size/version either way.
  *
- * `sourcePath` is not fabricated either: `designTreeFilePath` (`./page-descriptors`) is the real
- * CANONICAL page-storage convention the host child resolves with `Bun.file` — see that
- * function's own doc comment for the full citation and for the substitution bug this task
- * (MVP blocker fix bundle, Task 10) corrected here.
+ * The tree coordinates are not fabricated either: `designTreeRoot` (`./page-descriptors`) is
+ * the real CANONICAL tree-storage convention the host child reads with `Bun.file`, `entryRelPath`
+ * is whatever `design/pages.json` bound to the slug, and `expectedFiles` is
+ * `DesignTreeReader.listTree()`'s own output — see `designTreeFilePath`'s doc comment for the
+ * full citation and for the slug-derived-path bug this convention replaced.
  */
 export interface ResolvedPageSettingsV1 {
   readonly sourceHash: Sha256Hex;
-  readonly sourcePath: string;
+  /** The ABSOLUTE `…/design` directory this page is mounted from (task 15, design §9.2). */
+  readonly treeRoot: string;
+  /** TREE-relative — the `entry` `design/pages.json` bound to the slug, never slug-derived. */
+  readonly entryRelPath: string;
+  /** The canonical tree's `(relPath, sha256)` inventory the mount hash-verifies against. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
   readonly kitApiVersion: number;
   readonly minSize: Size;
   readonly theme: string;
 }
 
-// This file's absolute canonical path helper is `designTreeFilePath` (`./page-descriptors`),
-// imported rather than redeclared here. It REPLACED a local `canonicalPageSourcePath(root,
-// pageSlug)` in task 14: that helper derived `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG,
-// which the multi-file design tree retires — a page's file is whatever `design/pages.json`'s
-// `entry` names. One `.termcraft/design/` convention, one place.
+// This file's absolute tree-root helper is `designTreeRoot` (`./page-descriptors`), imported
+// rather than redeclared here. Its sibling `designTreeFilePath` REPLACED a local
+// `canonicalPageSourcePath(root, pageSlug)` in task 14: that helper derived
+// `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG, which the multi-file design tree retires —
+// a page's file is whatever `design/pages.json`'s `entry` names. Task 15 then made the ROOT the
+// unit a mount names, because a page is its whole closure. One `.termcraft/design/` convention,
+// one place.
 //
 // (Task-14 review round 1, Minor 1: deleting the old function left its JSDoc orphaned above
 // `pageMetaUnavailableFailure`, which it did not describe. Demoted to a file-level note here,
@@ -221,9 +229,14 @@ async function resolvePageSettings(
   pageSlug: PageSlug,
   /** An already-read `design/pages.json` page list, when the caller has one — a loop over every page reads the manifest ONCE rather than once per page. */
   pages?: readonly PageEntryV1[],
+  /** An already-read tree inventory, for the same reason `pages` is threaded through. */
+  treeInventory?: readonly DesignFileEntryV1[],
 ): Promise<FailureDtoV1 | ResolvedPageSettingsV1> {
   const source = await readPageEntrySource(deps.designReader, pageSlug, pages);
   if ("code" in source) return source;
+
+  const expectedFiles = treeInventory ?? (await readTreeInventory(deps.designReader));
+  if ("code" in expectedFiles) return expectedFiles;
 
   const key: PageMetaKeyV1 = {
     pageSlug,
@@ -241,7 +254,9 @@ async function resolvePageSettings(
 
   return {
     sourceHash: source.sourceHash,
-    sourcePath: designTreeFilePath(deps.projectStore.root, source.relPath),
+    treeRoot: designTreeRoot(deps.projectStore.root),
+    entryRelPath: source.relPath,
+    expectedFiles,
     kitApiVersion: meta.kitApiVersion,
     minSize: meta.minSize,
     theme: meta.theme,
@@ -330,7 +345,7 @@ function previewStateChangedEvent(
  * async, so it must run inside `launchOperation`'s `run`, per `HandlerContext`'s own doc).
  *
  * ASYNC half (`run`): resolve the page's current-source settings (best-effort,
- * `resolvePageSettings`, now resolving `sourcePath` through `designTreeFilePath` —
+ * `resolvePageSettings`, now resolving the tree coordinates through `designTreeRoot` —
  * Task 10's fix), derive size/theme/capabilities from `WorkspaceStateV1`, call
  * `HostSupervisorPort.preview` directly, and on success set the session + source-kind
  * (`context.setActivePreviewSession`, which also seeds `context.previewSessionCommands`'s
@@ -390,7 +405,9 @@ function selectCurrentSource(
       mode: "preview",
       interactionMode: workspace.state.renderMode,
       pageSlug: payload.pageSlug,
-      sourcePath: settings.sourcePath,
+      treeRoot: settings.treeRoot,
+      entryRelPath: settings.entryRelPath,
+      expectedFiles: settings.expectedFiles,
       sourceHash: settings.sourceHash,
       kitApiVersion: settings.kitApiVersion,
       size: sizeFromWorkspaceState(workspace.state),
@@ -1309,14 +1326,21 @@ async function resolveExportPageInputs(
   const entries = await readPageOrder(context.deps.designReader);
   if ("code" in entries) return entries;
 
+  // Read ONCE for the whole loop, for the same reason the page list above is: every page of
+  // one export renders against the same tree revision (design §9.2).
+  const treeInventory = await readTreeInventory(context.deps.designReader);
+  if ("code" in treeInventory) return treeInventory;
+
   const pages: ExportPageInputV1[] = [];
   for (const [manifestIndex, entry] of entries.entries()) {
     const pageSlug = entry.slug;
-    const settings = await resolvePageSettings(context.deps, pageSlug, entries);
+    const settings = await resolvePageSettings(context.deps, pageSlug, entries, treeInventory);
     if ("code" in settings) return settings;
     pages.push({
       pageSlug,
-      sourcePath: settings.sourcePath,
+      treeRoot: settings.treeRoot,
+      entryRelPath: settings.entryRelPath,
+      expectedFiles: settings.expectedFiles,
       manifestIndex,
       minSize: settings.minSize,
       theme: settings.theme,

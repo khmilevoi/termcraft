@@ -10,7 +10,7 @@ import type {
   RunTreeImportsResultV1,
 } from "core/ports";
 import { PAGES_MANIFEST_RELPATH, resolveClosure } from "entities/design-tree";
-import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
+import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
@@ -558,23 +558,30 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly source: string;
     readonly slug: PageSlug;
     readonly fileName?: string;
-    readonly sourcePath?: string;
+    readonly treeRoot?: string;
+    readonly expectedFiles?: readonly DesignFileEntryV1[];
     readonly entryRelPath?: string;
     readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
     // `entryRelPath` out-ranks `fileName` — see `gate/model/gate.ts`'s own `runGate` for the
     // full rationale (task-12 review round 1, Important 4). Mirrored here, not delegated to
-    // `runGate`'s own fallback, because this adapter ALSO uses `fileName` for
-    // `smokeSourcePath` below and both must agree on which value actually won.
+    // `runGate`'s own fallback, because this adapter ALSO uses `fileName` as the smoke stage's
+    // last-resort entry path below and both must agree on which value actually won.
     const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
-    // The smoke stage needs a path it can actually resolve on disk (see this file's header,
-    // "CLOSED (was FLAGGED)") — `sourcePath` is preferred when a caller staged a real
-    // candidate file; `fileName` stays the diagnostics-facing display name regardless.
-    const smokeSourcePath = input.sourcePath ?? fileName;
+    // The smoke stage mounts the page's whole closure off a real tree on disk (see this file's
+    // header, "CLOSED (was FLAGGED)", and `gate/model/smoke.ts`). A caller that supplies no
+    // tree gets an HONEST REFUSAL rather than a mount of a fabricated path: `treeRoot: ""` with
+    // an empty inventory makes `loadPage` refuse on its first check ("the entry is not listed
+    // in its expected design-tree inventory"), which is a truthful smoke error naming a missing
+    // input, not a page defect. `fileName` stays the diagnostics-facing display name regardless.
+    const smokeContext = {
+      treeRoot: input.treeRoot ?? "",
+      expectedFiles: input.expectedFiles ?? [],
+    };
     const ports: GatePorts = {
       ...(typeCheck !== undefined ? { typeCheck } : {}),
       ...(deps.checkManifest !== undefined ? { checkManifest: deps.checkManifest } : {}),
-      smokeRender: createSmokeRender(deps.smokeRenderer, smokeSourcePath),
+      smokeRender: createSmokeRender(deps.smokeRenderer, smokeContext, fileName),
     };
     return runGate(
       {

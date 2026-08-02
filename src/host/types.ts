@@ -1,4 +1,8 @@
+import type { DesignFileEntryV1 } from "entities/design-tree";
+
 import type { StyledRun } from "./protocol";
+
+export type { DesignFileEntryV1 };
 
 /** The four supervised host modes (host-supervision §3.1). */
 export type HostMode = "preview" | "historical" | "smoke" | "export";
@@ -21,12 +25,29 @@ export interface TerminalCapabilities {
   readonly colorDepth: number;
 }
 
-/** The specification every host session (all four modes) is created from (§3.1). */
+/**
+ * The specification every host session (all four modes) is created from (§3.1).
+ *
+ * `treeRoot`/`entryRelPath`/`expectedFiles` REPLACED a single `sourcePath` in task 15 (design
+ * §6, §9.2): a page spans its whole closure now, so the mount names the tree it reads from and
+ * the inventory it expects to find there rather than one file. `sourceHash` STAYS, and stays
+ * the ENTRY file's own hash: it is this session's identity (`HostSessionIdentity`, every
+ * `FrameEnvelope`, the supervisor's `sourceHashPrefix` diagnostics and the restart key), not a
+ * verification input. `loadPage` verifies bytes against `expectedFiles`; the supervisor checks
+ * that `sourceHash` agrees with the entry's row there before it mounts, so identity and
+ * verification can never describe different bytes.
+ */
 export interface HostSessionSpec {
   readonly mode: HostMode;
   readonly interactionMode: InteractionMode;
   readonly pageSlug: string;
-  readonly sourcePath: string;
+  /** The ABSOLUTE `…/design` directory this session mounts from. */
+  readonly treeRoot: string;
+  /** TREE-relative — the `entry` `design/pages.json` bound to `pageSlug`. */
+  readonly entryRelPath: string;
+  /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
+  /** The ENTRY file's own hash — this session's identity, see the interface header. */
   readonly sourceHash: string;
   readonly kitApiVersion: number;
   readonly size: Size;

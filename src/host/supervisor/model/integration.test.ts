@@ -16,7 +16,9 @@ const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
   supportedKitApiVersions: [CURRENT_KIT_API_VERSION],
   publicCapabilityIds: [],
 };
-const wrapper = `${import.meta.dir}/../../../../docs/spikes/04-supervisor-derisk/host-wrapper.ts`;
+const wrapperDir = `${import.meta.dir}/../../../../docs/spikes/04-supervisor-derisk`;
+const WRAPPER_RELPATH = "host-wrapper.ts";
+const wrapper = `${wrapperDir}/${WRAPPER_RELPATH}`;
 const sessions: HostSession[] = [];
 afterEach(async () => {
   for (const session of sessions.splice(0)) await session.stop();
@@ -35,7 +37,12 @@ describe("real-spawn handshake + graceful stop (integration)", () => {
       // proves the entire real path ran: Bun.spawn → framed client.hello → host.hello
       // received AND verified (negotiation) → mount sent → child read & hashed the
       // source. A real mountable fixture page that reaches "ready" is deferred to 2D-4.
-      sourcePath: wrapper,
+      treeRoot: wrapperDir,
+      entryRelPath: WRAPPER_RELPATH,
+      // The SAME deliberately-wrong hash the identity carries, so the supervisor's own
+      // identity-vs-inventory check (task 15, `buildMountBody`) agrees and the mismatch is
+      // discovered where this test means it to be: in the child, after it reads the bytes.
+      expectedFiles: [{ relPath: WRAPPER_RELPATH, sha256: "0".repeat(64) }],
       sourceHash: "0".repeat(64),
       kitApiVersion: CURRENT_KIT_API_VERSION,
       size: { w: 80, h: 24 },

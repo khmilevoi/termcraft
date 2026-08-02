@@ -1,4 +1,4 @@
-import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
+import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type {
@@ -23,7 +23,8 @@ export type GateRunnerCall =
   | {
       readonly method: "runPage";
       readonly slug: PageSlug;
-      readonly sourcePath?: string;
+      readonly treeRoot?: string;
+      readonly expectedFileCount?: number;
       readonly entryRelPath?: string;
     }
   | {
@@ -87,15 +88,22 @@ export function createFakeGateRunner(): FakeGateRunner {
     source: string;
     slug: PageSlug;
     fileName?: string;
-    /** Widened alongside the port's own additive field (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so `sourcePath` only reaches the call log below for test observability; it never affects the result returned. */
-    sourcePath?: string;
+    /** Widened alongside the port's own additive fields (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so the tree coordinates only reach the call log below for test observability; they never affect the result returned. */
+    treeRoot?: string;
+    expectedFiles?: readonly DesignFileEntryV1[];
     entryRelPath?: string;
     closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
     calls.push({
       method: "runPage",
       slug: input.slug,
-      ...(input.sourcePath === undefined ? {} : { sourcePath: input.sourcePath }),
+      ...(input.treeRoot === undefined ? {} : { treeRoot: input.treeRoot }),
+      // The COUNT, not the list: a caller asserting on this log wants "the tree travelled",
+      // not a copy of every hash, and a full inventory would make every such assertion a
+      // fixture-hash transcription exercise.
+      ...(input.expectedFiles === undefined
+        ? {}
+        : { expectedFileCount: input.expectedFiles.length }),
       ...(input.entryRelPath === undefined ? {} : { entryRelPath: input.entryRelPath }),
     });
     const queued = pageResults.shift();

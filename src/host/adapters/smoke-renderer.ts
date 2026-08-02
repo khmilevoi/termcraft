@@ -13,7 +13,8 @@ import type { HostSessionSpec, TerminalCapabilities } from "../types";
  * points host → gate's port (imported type-only from `gate`, its own public barrel), never
  * the reverse — `gate` never imports `host`.
  *
- * `SmokeRequest` carries only `sourcePath`/`sourceHash`/`size`/`kitApiVersion`, but
+ * `SmokeRequest` carries only the tree coordinates (`treeRoot`/`entryRelPath`/`expectedFiles`),
+ * `sourceHash`, `size` and `kitApiVersion`, but
  * `HostSessionSpec` also requires `pageSlug`/`theme`/`capabilities`. A smoke render only
  * mounts the candidate and seals one frame to prove it renders at all — pass/fail never
  * depends on the slug, theme, or capability values — so these three fields are filled with
@@ -33,7 +34,9 @@ function toSmokeSessionSpec(request: SmokeRequest): HostSessionSpec {
     mode: "smoke",
     interactionMode: "static",
     pageSlug: SMOKE_PAGE_SLUG,
-    sourcePath: request.sourcePath,
+    treeRoot: request.treeRoot,
+    entryRelPath: request.entryRelPath,
+    expectedFiles: request.expectedFiles,
     sourceHash: request.sourceHash,
     kitApiVersion: request.kitApiVersion,
     size: request.size,

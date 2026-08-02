@@ -9,7 +9,7 @@ import {
 } from "core/project";
 import type { FailureDtoV1, PageDescriptorV1 } from "core/protocol";
 import { DESIGN_DIRNAME } from "entities/design-tree";
-import type { PageEntryV1 } from "entities/design-tree";
+import type { DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 import type { HandlerContext } from "./types";
@@ -51,7 +51,34 @@ const PROJECT_STATE_DIRNAME = ".termcraft";
  * were lost, and one host child was spawned and thrown away per page on every open and turn.
  */
 export function designTreeFilePath(projectRoot: string, treeRelPath: string): string {
-  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/${DESIGN_DIRNAME}/${treeRelPath}`;
+  return `${designTreeRoot(projectRoot)}/${treeRelPath}`;
+}
+
+/**
+ * The canonical tree's own absolute root — `<projectRoot>/.termcraft/design`.
+ *
+ * The mount unit since task 15: `loadPage` reads a page's whole closure from a tree root plus
+ * tree-relative paths, so every producer of a `HostSessionSpecV1`/`ExportRenderTaskV1`/
+ * `runPage` call names the directory rather than one file. {@link designTreeFilePath} is
+ * expressed in terms of it so the two conventions cannot drift apart.
+ */
+export function designTreeRoot(projectRoot: string): string {
+  return `${projectRoot}/${PROJECT_STATE_DIRNAME}/${DESIGN_DIRNAME}`;
+}
+
+/**
+ * The canonical tree's `(relPath, sha256)` inventory, read through `DesignTreeReader.listTree()`
+ * — what a mount hash-verifies its closure against (design §9.2).
+ *
+ * `listTree()` already returns exactly these fields plus `size`; this narrows rather than
+ * recomputes, so nothing here re-hashes a file the store already hashed.
+ */
+export async function readTreeInventory(
+  designReader: HandlerContext["deps"]["designReader"],
+): Promise<FailureDtoV1 | readonly DesignFileEntryV1[]> {
+  const listed = await wrap(designReader.listTree());
+  if ("code" in listed) return listed;
+  return listed.map((file) => ({ relPath: file.relPath, sha256: file.sha256 }));
 }
 
 /**
@@ -65,6 +92,12 @@ export async function buildPageDescriptors(
   context: HandlerContext,
   pages: readonly PageEntryV1[],
 ): Promise<FailureDtoV1 | readonly PageDescriptorV1[]> {
+  // The tree inventory the Gate's smoke stage hash-verifies each page's closure against
+  // (design §9.2). Read ONCE for the whole loop, like the manifest list threaded in above.
+  const expectedFiles = await readTreeInventory(context.deps.designReader);
+  if ("code" in expectedFiles) return expectedFiles;
+  const treeRoot = designTreeRoot(context.deps.projectStore.root);
+
   const descriptors: PageDescriptorV1[] = [];
   for (const entry of pages) {
     // The already-read manifest list is threaded through, so this loop reads
@@ -76,7 +109,8 @@ export async function buildPageDescriptors(
       context.deps.gateRunner.runPage({
         source: new TextDecoder().decode(source.bytes),
         slug: entry.slug,
-        sourcePath: designTreeFilePath(context.deps.projectStore.root, source.relPath),
+        treeRoot,
+        expectedFiles,
         entryRelPath: source.relPath,
       }),
     );

@@ -109,6 +109,10 @@ async function validateTree(
       attempt: 1,
       manifestText: files.get("pages.json") ?? MANIFEST,
       treePaths: [...files.keys()],
+      treeInventory: [...files.keys()].map((relPath, index) => ({
+        relPath,
+        sha256: String(index).padStart(64, "0"),
+      })),
       files,
       designRoot: "/nonexistent-candidate/design",
     }),

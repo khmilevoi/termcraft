@@ -102,6 +102,13 @@ function baseInput(attempt: TurnAttempt, files = treeFiles()) {
     attempt,
     manifestText: '{"schemaVersion":1,"pages":[]}',
     treePaths: [...files.keys()],
+    // Same file set as `treePaths`, with the per-file hashes the smoke stage verifies the
+    // mounted closure against (task 15). Derived from the SAME map here so a fixture cannot
+    // describe two different trees; production builds both from one `candidate.treeFiles`.
+    treeInventory: [...files.keys()].map((relPath, index) => ({
+      relPath,
+      sha256: String(index).padStart(64, "0"),
+    })),
     files,
     designRoot: "/candidate/0192f6f0/design",
   };
@@ -259,14 +266,15 @@ describe("runTurnValidation — the whole-tree stages", () => {
 });
 
 describe("runTurnValidation — the per-entry stage", () => {
-  test("drives runPage from the MANIFEST's entry, not from the slug: source, fileName, entryRelPath and sourcePath all come from `entry`", async () => {
+  test("drives runPage from the MANIFEST's entry, not from the slug: source, fileName, entryRelPath and the tree coordinates all come from `entry`", async () => {
     await context.start(async () => {
       const machine = machineAtValidating();
       const runPageCalls: {
         slug: PageSlug;
         source: string;
         fileName?: string;
-        sourcePath?: string;
+        treeRoot?: string;
+        expectedFileCount?: number;
         entryRelPath?: string;
       }[] = [];
       const gateRunner: GateRunner = {
@@ -289,7 +297,10 @@ describe("runTurnValidation — the per-entry stage", () => {
             slug: input.slug,
             source: input.source,
             ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
-            ...(input.sourcePath === undefined ? {} : { sourcePath: input.sourcePath }),
+            ...(input.treeRoot === undefined ? {} : { treeRoot: input.treeRoot }),
+            ...(input.expectedFiles === undefined
+              ? {}
+              : { expectedFileCount: input.expectedFiles.length }),
             ...(input.entryRelPath === undefined ? {} : { entryRelPath: input.entryRelPath }),
           });
           return {
@@ -310,7 +321,10 @@ describe("runTurnValidation — the per-entry stage", () => {
           source: HOME_SOURCE,
           fileName: HOME_ENTRY,
           entryRelPath: HOME_ENTRY,
-          sourcePath: `/candidate/0192f6f0/design/${HOME_ENTRY}`,
+          // The tree the smoke stage mounts from, and the inventory it verifies against —
+          // the candidate's whole file set (4 files), not just this page's entry.
+          treeRoot: "/candidate/0192f6f0/design",
+          expectedFileCount: 4,
         },
       ]);
       // The SHORT, tree-relative name reaches the agent's diagnostic — never the absolute path.

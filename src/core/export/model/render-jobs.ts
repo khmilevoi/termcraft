@@ -68,7 +68,9 @@ export function buildExportRenderKey(
 function buildExportRenderTask(page: ExportPageSnapshotV1, size: Size): ExportRenderTaskV1 {
   return {
     pageSlug: page.pageSlug,
-    sourcePath: page.sourcePath,
+    treeRoot: page.treeRoot,
+    entryRelPath: page.entryRelPath,
+    expectedFiles: page.expectedFiles,
     sourceHash: page.sourceHash,
     kitApiVersion: page.kitApiVersion,
     size,

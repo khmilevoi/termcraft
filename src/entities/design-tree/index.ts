@@ -20,6 +20,8 @@ export {
 } from "./model/specifier";
 export type { ClosureV1 } from "./model/closure";
 export { computeClosureHash, computeTreeRevision, resolveClosure } from "./model/closure";
+export type { SourceSyntaxV1 } from "./model/code-file";
+export { extensionOf, isCodeFile, parsesJsx } from "./model/code-file";
 export {
   DuplicateInventoryPathError,
   createDesignTreeInventory,

@@ -614,9 +614,8 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     // CANONICAL storage is `<root>/.termcraft/design/<entry>` as of the design tree — the
     // entry comes from `design/pages.json`, never from the slug (this fixture's own entry is
     // `screens/<slug>/view.tsx`, which no slug-derivation in the old code could produce).
-    expect(specs[0]?.sourcePath).toBe(
-      `${deps.projectStore.root}/.termcraft/design/${defaultFakeEntry(HOME)}`,
-    );
+    expect(specs[0]?.treeRoot).toBe(`${deps.projectStore.root}/.termcraft/design`);
+    expect(specs[0]?.entryRelPath).toBe(defaultFakeEntry(HOME));
   });
 });
 
@@ -834,7 +833,9 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
       mode: "preview",
       interactionMode: "static",
       pageSlug: HOME,
-      sourcePath: "/test-root/.termcraft/pages/home/page.tsx",
+      treeRoot: "/test-root/.termcraft/design",
+      entryRelPath: defaultFakeEntry(HOME),
+      expectedFiles: [{ relPath: defaultFakeEntry(HOME), sha256: HOME_SOURCE_HASH }],
       sourceHash: HOME_SOURCE_HASH,
       kitApiVersion: 1,
       size: { w: 80, h: 24 },
@@ -907,7 +908,9 @@ describe("previewHandlers.retry — real routing, and Task 10's own documented `
       mode: "preview",
       interactionMode: "static",
       pageSlug: HOME,
-      sourcePath: "/test-root/.termcraft/pages/home/page.tsx",
+      treeRoot: "/test-root/.termcraft/design",
+      entryRelPath: defaultFakeEntry(HOME),
+      expectedFiles: [{ relPath: defaultFakeEntry(HOME), sha256: HOME_SOURCE_HASH }],
       sourceHash: HOME_SOURCE_HASH,
       kitApiVersion: 1,
       size: { w: 80, h: 24 },

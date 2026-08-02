@@ -48,7 +48,9 @@ const SIZES = [
 
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
-  sourcePath: "pages/home/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/home.tsx",
+  expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 0,
   minSize: { w: 80, h: 24 },
   theme: "default",
@@ -59,7 +61,9 @@ const HOME: ExportPageSnapshotV1 = {
 
 const ABOUT: ExportPageSnapshotV1 = {
   pageSlug: slug("about"),
-  sourcePath: "pages/about/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/about.tsx",
+  expectedFiles: [{ relPath: "pages/about.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 1,
   minSize: { w: 80, h: 24 },
   theme: "default",

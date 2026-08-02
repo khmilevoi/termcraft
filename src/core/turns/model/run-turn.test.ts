@@ -168,6 +168,7 @@ function baseRunTurnInput(): RunTurnInputV1 {
     buildValidationInput: () => ({
       manifestText: "[]",
       treePaths: ["screens/landing.tsx"],
+      treeInventory: [{ relPath: "screens/landing.tsx", sha256: "0".repeat(64) }],
       files: new Map([["screens/landing.tsx", "export default function Home() {}"]]),
       designRoot: "/fake-candidate/design",
     }),

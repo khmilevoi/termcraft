@@ -142,8 +142,9 @@ function mountEnvelope(
     messageId: "1",
     requestId: "1",
     body: {
-      sourcePath: "/unused/in/fake/loadPage.tsx",
-      expectedSourceHash: "a".repeat(64),
+      treeRoot: "/unused/in/fake/loadPage/design",
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: [{ relPath: "pages/home.tsx", sha256: "a".repeat(64) }],
       mode: "preview",
       interactionMode: "static",
       size: { w: 16, h: 3 },

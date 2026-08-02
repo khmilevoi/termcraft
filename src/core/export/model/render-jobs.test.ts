@@ -37,7 +37,9 @@ function manualClock(startMs: number): Clock {
 
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
-  sourcePath: "pages/home/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/home.tsx",
+  expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 0,
   minSize: { w: 80, h: 24 },
   theme: "default",
@@ -48,7 +50,9 @@ const HOME: ExportPageSnapshotV1 = {
 
 const ABOUT: ExportPageSnapshotV1 = {
   pageSlug: slug("about"),
-  sourcePath: "pages/about/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/about.tsx",
+  expectedFiles: [{ relPath: "pages/about.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 1,
   minSize: { w: 200, h: 50 }, // larger than both standard sizes -> single-size ladder
   theme: "dark",
@@ -281,7 +285,9 @@ describe("runExportRendering", () => {
           pages: [
             {
               pageSlug: HOME.pageSlug,
-              sourcePath: HOME.sourcePath,
+              treeRoot: HOME.treeRoot,
+              entryRelPath: HOME.entryRelPath,
+              expectedFiles: HOME.expectedFiles,
               manifestIndex: HOME.manifestIndex,
               minSize: HOME.minSize,
               theme: HOME.theme,

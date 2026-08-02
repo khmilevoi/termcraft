@@ -25,22 +25,24 @@ function fakeSmokeRenderer(result: SmokeResult): SmokeRenderer {
 
 /**
  * Mimics the REAL host `SmokeRenderer` (`host/adapters/smoke-renderer.ts` -> `host/session
- * /model/source-mount.ts`'s `loadPage`): resolves `request.sourcePath` on disk via `Bun.file`,
- * exactly as the real host child process does, instead of returning a scripted result. Used
- * to prove this adapter's `sourcePath` wiring for real — a fixed `{ok:true}` fake (like every
- * other test in this file) would never notice a bare, unresolvable `${slug}.tsx` default.
+ * /model/source-mount.ts`'s `loadPage`): resolves `<treeRoot>/<entryRelPath>` on disk via
+ * `Bun.file`, exactly as the real host child process does, instead of returning a scripted
+ * result. Used to prove this adapter's tree-coordinate wiring for real — a fixed `{ok:true}`
+ * fake (like every other test in this file) would never notice a bare, unresolvable
+ * `${slug}.tsx` default under an empty tree root.
  */
 function realDiskSmokeRenderer(): SmokeRenderer {
   return {
     render: async (request: SmokeRequest) => {
-      const bytes = await Bun.file(request.sourcePath)
+      const absolute = `${request.treeRoot}/${request.entryRelPath}`;
+      const bytes = await Bun.file(absolute)
         .bytes()
         .catch(() => null);
       if (bytes === null) {
         return {
           ok: false,
           code: "SMOKE_SOURCE_UNREADABLE",
-          message: `cannot read ${request.sourcePath}`,
+          message: `cannot read ${absolute}`,
         };
       }
       return { ok: true };
@@ -795,7 +797,7 @@ describe("createGateRunnerAdapter", () => {
     expect(result.errors.some((e) => e.code === "MANIFEST_ENTRY_UNRESOLVED")).toBe(true);
   });
 
-  test("runPage() threads sourcePath into the smoke stage so a REAL disk-resolving renderer finds the staged candidate file", async () => {
+  test("runPage() threads the tree coordinates into the smoke stage so a REAL disk-resolving renderer finds the staged candidate file", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-runner-smoke-"));
     const stagedPath = path.join(dir, "dash.tsx");
     fs.writeFileSync(stagedPath, cleanSource);
@@ -804,7 +806,9 @@ describe("createGateRunnerAdapter", () => {
       const result = await adapter.runPage({
         source: cleanSource,
         slug: SLUG,
-        sourcePath: stagedPath,
+        treeRoot: dir,
+        entryRelPath: "dash.tsx",
+        expectedFiles: [{ relPath: "dash.tsx", sha256: "0".repeat(64) }],
       });
       expect(result.ok).toBe(true);
       expect(result.errors).toEqual([]);
@@ -813,7 +817,7 @@ describe("createGateRunnerAdapter", () => {
     }
   });
 
-  test("runPage() without sourcePath falls back to a bare `${slug}.tsx`, which a REAL disk-resolving renderer cannot find", async () => {
+  test("runPage() without tree coordinates refuses honestly rather than mounting a fabricated path — a REAL disk-resolving renderer finds nothing", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: realDiskSmokeRenderer() });
     const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
     expect(result.ok).toBe(false);
@@ -835,7 +839,7 @@ describe("createGateRunnerAdapter", () => {
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
-  test("runPage() has entryRelPath out-rank fileName when both are supplied (task-12 review round 1, Important 4) — a separate copy of runGate's own precedence, mirrored here because this adapter also uses fileName for smokeSourcePath", async () => {
+  test("runPage() has entryRelPath out-rank fileName when both are supplied (task-12 review round 1, Important 4) — a separate copy of runGate's own precedence, mirrored here because this adapter also uses fileName as the smoke stage's entry path", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const result = await adapter.runPage({

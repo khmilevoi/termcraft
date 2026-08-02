@@ -1,4 +1,5 @@
 import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { DesignFileEntryV1 } from "entities/design-tree";
 import type { PageSlug, Size } from "entities/page";
 
 /**
@@ -22,10 +23,24 @@ export interface RuntimeDeclarationBundleV1 {
   readonly publicCapabilityIds: readonly string[];
 }
 
-/** One export task: a captured source at one requested size, ordered by manifest then (w,h) (§11.4). */
+/**
+ * One export task: a captured source at one requested size, ordered by manifest then (w,h)
+ * (§11.4).
+ *
+ * `treeRoot`/`entryRelPath`/`expectedFiles` REPLACED a single `sourcePath` in task 15 — an
+ * export render mounts the page's whole closure, exactly like a preview does, so the task names
+ * the tree and the inventory rather than one file. `sourceHash` stays the ENTRY file's hash: it
+ * is the render-cache key component (`core/export/model/render-jobs.ts`'s
+ * `buildExportRenderKey`) and the incarnation's identity, not a verification input.
+ */
 export interface ExportRenderTaskV1 {
   readonly pageSlug: PageSlug;
-  readonly sourcePath: string;
+  /** The ABSOLUTE `…/design` directory this render reads from. */
+  readonly treeRoot: string;
+  /** TREE-relative — the `entry` `design/pages.json` bound to `pageSlug`. */
+  readonly entryRelPath: string;
+  /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
   readonly sourceHash: Sha256Hex;
   readonly kitApiVersion: number;
   readonly size: Size;

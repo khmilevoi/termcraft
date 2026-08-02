@@ -1,4 +1,5 @@
 import type { FailureDtoV1, Sha256Hex } from "core/protocol";
+import type { DesignFileEntryV1 } from "entities/design-tree";
 import type { Size } from "entities/page";
 
 import type { InteractionModeV1, PreviewSession, TerminalCapabilitiesV1 } from "./preview-session";
@@ -27,11 +28,23 @@ import type { InteractionModeV1, PreviewSession, TerminalCapabilitiesV1 } from "
 
 export type HostModeV1 = "preview" | "historical" | "smoke" | "export";
 
+/**
+ * `treeRoot`/`entryRelPath`/`expectedFiles` REPLACED a single `sourcePath` in task 15 (design
+ * §6, §9.2): a preview mounts the page's whole closure, so the spec names the tree it reads and
+ * the inventory it expects to find there. `sourceHash` stays the ENTRY file's own hash — it is
+ * the session's identity (every `PreviewFrame` carries it, the supervisor keys restart on it),
+ * never a verification input; the host verifies bytes against `expectedFiles`.
+ */
 export interface HostSessionSpecV1 {
   readonly mode: HostModeV1;
   readonly interactionMode: InteractionModeV1;
   readonly pageSlug: string;
-  readonly sourcePath: string;
+  /** The ABSOLUTE `…/design` directory this session mounts from. */
+  readonly treeRoot: string;
+  /** TREE-relative — the `entry` `design/pages.json` bound to `pageSlug`. */
+  readonly entryRelPath: string;
+  /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
+  readonly expectedFiles: readonly DesignFileEntryV1[];
   readonly sourceHash: Sha256Hex;
   readonly kitApiVersion: number;
   readonly size: Size;

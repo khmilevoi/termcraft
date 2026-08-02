@@ -14,6 +14,7 @@ import type { OneShotDeps, OneShotResult } from "../types";
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
+import { buildMountBody } from "./mount-request";
 import { HANDSHAKE_TIMEOUT_MS, HANDSHAKE_TIMEOUT_REASON } from "./timeouts";
 import { createStderrDrain, readInbound, writeFramed } from "./transport";
 import type { InboundMessage } from "./transport";
@@ -138,6 +139,9 @@ export async function runOneShotSession(
 
   // --- mount: send the correlated mount, seal ready + one frame within 10 s ---
   const mountRequestId = "1";
+  // §11.4: smoke/export are always deterministic, and this driver serves only those two modes.
+  const mountBody = buildMountBody(spec, true);
+  if (mountBody instanceof ProtocolError) return fail(mountBody);
   const mount: ControlEnvelope = {
     protocolVersion: 1,
     kind: "mount",
@@ -145,16 +149,7 @@ export async function runOneShotSession(
     nonce: identity.nonce,
     messageId: "1",
     requestId: mountRequestId,
-    body: {
-      sourcePath: spec.sourcePath,
-      expectedSourceHash: spec.sourceHash,
-      mode: spec.mode,
-      interactionMode: spec.interactionMode,
-      size: { w: spec.size.w, h: spec.size.h },
-      theme: spec.theme,
-      capabilities: { colorDepth: spec.capabilities.colorDepth },
-      deterministic: true, // §11.4: smoke/export are always deterministic
-    },
+    body: mountBody,
   };
   const mountBytes = encodeControlEnvelope(mount);
   if (mountBytes instanceof ProtocolError) return fail(mountBytes);

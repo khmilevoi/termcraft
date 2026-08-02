@@ -1,5 +1,7 @@
 import { createElement } from "@opentui/react";
 
+import type { DesignFileEntryV1 } from "entities/design-tree";
+
 import {
   type ControlEnvelope,
   type FrameEnvelope,
@@ -15,6 +17,13 @@ import type { HostMode, InteractionMode } from "../../types";
 import type { HostSession, HostSessionDeps, MountRequestBody, ReadyBody } from "../types";
 
 type Phase = "awaiting-hello" | "awaiting-mount" | "ready" | "closed";
+
+/**
+ * A wire sanity bound on `mount.expectedFiles`' length — see `parseExpectedFiles`. Not the
+ * authoritative design-tree file budget (that is `store/safe-fs/model/limits.ts`'s, enforced at
+ * staging); this only stops a malformed supervisor making the host allocate without limit.
+ */
+const EXPECTED_FILES_MAX = 10_000;
 
 /**
  * The host-side protocol driver (host-supervision §6-§7). It consumes decoded
@@ -179,8 +188,9 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     if (request instanceof ProtocolError) return fail(request);
 
     const loaded = await deps.loadPage({
-      sourcePath: request.sourcePath,
-      expectedSourceHash: request.expectedSourceHash,
+      treeRoot: request.treeRoot,
+      entryRelPath: request.entryRelPath,
+      expectedFiles: request.expectedFiles,
     });
     if (loaded instanceof ProtocolError) return fail(loaded);
 
@@ -294,12 +304,14 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
 
   function parseMountRequest(body: ControlEnvelope["body"]): ProtocolError | MountRequestBody {
     const bad = (reason: string) => new ProtocolError({ code: "MALFORMED_PROTOCOL", reason });
-    const sourcePath = body.sourcePath;
-    if (typeof sourcePath !== "string" || sourcePath.length === 0 || sourcePath.length > 4096)
-      return bad("mount.sourcePath must be a bounded non-empty string");
-    const expectedSourceHash = body.expectedSourceHash;
-    if (typeof expectedSourceHash !== "string" || !/^[0-9a-f]{64}$/.test(expectedSourceHash))
-      return bad("mount.expectedSourceHash must be 64 lowercase hex");
+    const treeRoot = body.treeRoot;
+    if (typeof treeRoot !== "string" || treeRoot.length === 0 || treeRoot.length > 4096)
+      return bad("mount.treeRoot must be a bounded non-empty string");
+    const entryRelPath = body.entryRelPath;
+    if (typeof entryRelPath !== "string" || entryRelPath.length === 0 || entryRelPath.length > 4096)
+      return bad("mount.entryRelPath must be a bounded non-empty string");
+    const expectedFiles = parseExpectedFiles(body.expectedFiles);
+    if (expectedFiles instanceof ProtocolError) return expectedFiles;
     const mode = body.mode;
     if (mode !== "preview" && mode !== "historical" && mode !== "smoke" && mode !== "export")
       return bad("mount.mode must be a host mode");
@@ -320,8 +332,9 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     const deterministic = body.deterministic;
     if (typeof deterministic !== "boolean") return bad("mount.deterministic must be a boolean");
     return {
-      sourcePath,
-      expectedSourceHash,
+      treeRoot,
+      entryRelPath,
+      expectedFiles,
       mode,
       interactionMode,
       size,
@@ -329,6 +342,39 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       capabilities: { colorDepth },
       deterministic,
     };
+  }
+
+  /**
+   * Decode `mount.expectedFiles` — the tree revision's `(relPath, sha256)` inventory (design
+   * §9.2). Bounded like every other wire field: an unbounded array or an unbounded path would
+   * let a malformed supervisor make the host allocate without limit before `loadPage` ever
+   * looks at the tree. {@link EXPECTED_FILES_MAX} is the same order as `store`'s own tree file
+   * budget, restated here rather than imported because the module DAG forbids `host` importing
+   * `store`; it is a wire sanity bound, not the authoritative budget, which staging enforces.
+   *
+   * The array may be EMPTY only in the sense that the schema allows it — `loadPage` then
+   * refuses, because an entry that is not in its own inventory cannot be verified.
+   */
+  function parseExpectedFiles(
+    value: ControlEnvelope["body"][string] | undefined,
+  ): ProtocolError | readonly DesignFileEntryV1[] {
+    const bad = (reason: string) => new ProtocolError({ code: "MALFORMED_PROTOCOL", reason });
+    if (!Array.isArray(value)) return bad("mount.expectedFiles must be an array");
+    if (value.length > EXPECTED_FILES_MAX)
+      return bad(`mount.expectedFiles must hold at most ${EXPECTED_FILES_MAX} entries`);
+    const files: DesignFileEntryV1[] = [];
+    for (const raw of value) {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+        return bad("mount.expectedFiles entries must be objects");
+      const relPath = (raw as { relPath?: unknown }).relPath;
+      if (typeof relPath !== "string" || relPath.length === 0 || relPath.length > 4096)
+        return bad("mount.expectedFiles[].relPath must be a bounded non-empty string");
+      const sha256 = (raw as { sha256?: unknown }).sha256;
+      if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256))
+        return bad("mount.expectedFiles[].sha256 must be 64 lowercase hex");
+      files.push({ relPath, sha256 });
+    }
+    return files;
   }
 
   // The param is widened to `| undefined`: callers pass element-access expressions

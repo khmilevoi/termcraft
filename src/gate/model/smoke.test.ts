@@ -9,7 +9,12 @@ import { runGate } from "./gate";
 import { createSmokeRender } from "./smoke";
 
 const SLUG = "dash" as PageSlug;
-const SOURCE_PATH = "C:/staging/dash.tsx";
+const TREE_ROOT = "C:/staging/design";
+const ENTRY_RELPATH = "pages/dash.tsx";
+const TREE_CONTEXT = {
+  treeRoot: TREE_ROOT,
+  expectedFiles: [{ relPath: ENTRY_RELPATH, sha256: "a".repeat(64) }],
+};
 const DESCRIPTOR: PageDescriptor = {
   slug: SLUG,
   meta: { kitApiVersion: 1, title: "Dashboard", minSize: { w: 80, h: 24 }, theme: "dark-default" },
@@ -41,7 +46,7 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
 describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
   test("a clean render contributes no gate error", async () => {
     const { renderer } = fakeRenderer({ ok: true });
-    const port = createSmokeRender(renderer, SOURCE_PATH);
+    const port = createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH);
     const errors = await port(DESCRIPTOR, SOURCE);
     expect(errors).toEqual([]);
   });
@@ -52,7 +57,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
       code: "DESIGN_RENDER_FAILED",
       message: "render threw at <Panel>",
     });
-    const port = createSmokeRender(renderer, SOURCE_PATH);
+    const port = createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH);
     const errors = await port(DESCRIPTOR, SOURCE);
     expect(errors).toHaveLength(1);
     const [error] = errors as [GateError];
@@ -61,13 +66,15 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
     expect(error.message).toContain("Panel");
   });
 
-  test("the request the renderer receives carries the sourcePath, minSize, kitApiVersion and a 64-hex sourceHash", async () => {
+  test("the request the renderer receives carries the tree coordinates, minSize, kitApiVersion and a 64-hex sourceHash", async () => {
     const { renderer, lastRequest } = fakeRenderer({ ok: true });
-    const port = createSmokeRender(renderer, SOURCE_PATH);
+    const port = createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH);
     await port(DESCRIPTOR, SOURCE);
     const request = lastRequest();
     expect(request).not.toBeNull();
-    expect(request?.sourcePath).toBe(SOURCE_PATH);
+    expect(request?.treeRoot).toBe(TREE_ROOT);
+    expect(request?.entryRelPath).toBe(ENTRY_RELPATH);
+    expect(request?.expectedFiles).toEqual(TREE_CONTEXT.expectedFiles);
     expect(request?.size).toEqual({ w: 80, h: 24 });
     expect(request?.kitApiVersion).toBe(1);
     expect(request?.sourceHash).toMatch(/^[0-9a-f]{64}$/);
@@ -75,7 +82,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
 
   test("the gate-side hash matches the host's computeSourceHash over the same UTF-8 bytes (parity pin)", async () => {
     const { renderer, lastRequest } = fakeRenderer({ ok: true });
-    const port = createSmokeRender(renderer, SOURCE_PATH);
+    const port = createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH);
     await port(DESCRIPTOR, SOURCE);
     const gateHash = lastRequest()?.sourceHash;
     const hostHash = hostComputeSourceHash(new TextEncoder().encode(SOURCE));
@@ -86,7 +93,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
     const { renderer } = fakeRenderer({ ok: false, code: "MOUNT_FAILED", message: "mount failed" });
     const result = await runGate(
       { source: cleanSource, slug: SLUG },
-      { smokeRender: createSmokeRender(renderer, SOURCE_PATH) },
+      { smokeRender: createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH) },
     );
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.kind === "smoke" && e.code === "MOUNT_FAILED")).toBe(true);
@@ -96,7 +103,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
     const { renderer } = fakeRenderer({ ok: true });
     const result = await runGate(
       { source: cleanSource, slug: SLUG },
-      { smokeRender: createSmokeRender(renderer, SOURCE_PATH) },
+      { smokeRender: createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH) },
     );
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);

@@ -48,7 +48,9 @@ import type { LayoutNode } from "../types";
  */
 
 const repoRoot = path.resolve(import.meta.dir, "../../../..");
-const FIXTURE_PATH = path.join(repoRoot, "src/host/session/fixtures/probe-page.tsx");
+const FIXTURE_DIR = path.join(repoRoot, "src/host/session/fixtures");
+const FIXTURE_RELPATH = "probe-page.tsx";
+const FIXTURE_PATH = path.join(FIXTURE_DIR, FIXTURE_RELPATH);
 const MAIN_ENTRY = path.join(repoRoot, "src/main.tsx");
 
 // Generous outer ceilings around the session's OWN internal bounded deadlines (3s
@@ -71,7 +73,11 @@ async function buildSpec(): Promise<HostSessionSpec> {
     mode: "preview",
     interactionMode: "static",
     pageSlug: "determinism-probe",
-    sourcePath: FIXTURE_PATH,
+    // The fixture directory read as a design-tree root: the fixture's own name is its
+    // tree-relative entry, and the inventory holds exactly that one file (task 15).
+    treeRoot: FIXTURE_DIR,
+    entryRelPath: FIXTURE_RELPATH,
+    expectedFiles: [{ relPath: FIXTURE_RELPATH, sha256: computeSourceHash(bytes) }],
     sourceHash: computeSourceHash(bytes),
     kitApiVersion: 1,
     size: { w: 20, h: 5 },

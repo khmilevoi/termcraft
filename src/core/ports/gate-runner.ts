@@ -1,4 +1,4 @@
-import type { ClosureV1, PageEntryV1 } from "entities/design-tree";
+import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug } from "entities/page";
 
 /**
@@ -173,17 +173,23 @@ export interface GateRunner {
     readonly slug: PageSlug;
     readonly fileName?: string;
     /**
-     * The staged candidate's ABSOLUTE on-disk file path, needed only by the smoke stage
-     * (`gate/adapters/gate-runner.ts`'s `createSmokeRender(renderer, sourcePath)`) — the real
-     * host `SmokeRenderer` resolves this path via `Bun.file` in a fresh child process cwd, so
-     * a bare `${slug}.tsx` never resolves there. Deliberately separate from `fileName` (which
+     * The ABSOLUTE on-disk `…/design` directory of the tree this page lives in, plus that
+     * tree's `(relPath, sha256)` inventory — needed only by the smoke stage
+     * (`gate/model/smoke.ts`'s `createSmokeRender`), which mounts the page's WHOLE closure and
+     * hash-verifies every member before running any of it (design §6, §9.2).
+     *
+     * REPLACED a single `sourcePath` in task 15. The reason it cannot stay one path: a
+     * candidate page is its closure, so a smoke render of the entry alone proves nothing about
+     * the shared module that would actually throw. Deliberately separate from `fileName` (which
      * stays the SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics) —
-     * conflating the two would leak an absolute filesystem path into user-facing Gate error
-     * messages. Optional and additive: a caller that never staged a candidate to a real path
-     * (e.g. the canonical-page validation `project.ts`/`page-pin.ts` run) omits it and keeps
-     * today's `fileName`-or-bare-slug smoke default.
+     * conflating them would leak an absolute filesystem path into user-facing Gate messages.
+     *
+     * Optional and additive, together: a caller that has no readable tree on disk omits both
+     * and the smoke stage refuses honestly rather than mounting a fabricated path.
      */
-    readonly sourcePath?: string;
+    readonly treeRoot?: string;
+    /** See {@link treeRoot} — the two are supplied together or not at all. */
+    readonly expectedFiles?: readonly DesignFileEntryV1[];
     /**
      * The tree-relative path `design/pages.json` bound this entry to (design §4) — see
      * `gate/model/gate.ts`'s `GateInput.entryRelPath` for the full rationale (never derive it

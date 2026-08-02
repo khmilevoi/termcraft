@@ -38,7 +38,9 @@ function manualClock(startMs: number): Clock & { advance: (ms: number) => void }
 
 const HOME_INPUT: ExportPageInputV1 = {
   pageSlug: slug("home"),
-  sourcePath: "pages/home/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/home.tsx",
+  expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 0,
   minSize: { w: 80, h: 24 },
   theme: "default",
@@ -47,7 +49,9 @@ const HOME_INPUT: ExportPageInputV1 = {
 
 const ABOUT_INPUT: ExportPageInputV1 = {
   pageSlug: slug("about"),
-  sourcePath: "pages/about/page.tsx",
+  treeRoot: "/proj/.termcraft/design",
+  entryRelPath: "pages/about.tsx",
+  expectedFiles: [{ relPath: "pages/about.tsx", sha256: "0".repeat(64) }],
   manifestIndex: 1,
   minSize: { w: 80, h: 24 },
   theme: "default",

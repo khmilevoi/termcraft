@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
+import type { DesignFileEntryV1 } from "entities/design-tree";
 
 import { ProtocolError } from "../../protocol";
 import { registerRuntimeResolver } from "./resolver";
@@ -6,7 +10,7 @@ import {
   computeSourceHash,
   computeSourceHash as hashBytes,
   loadPage,
-  scanPageImports,
+  scanClosureImports,
 } from "./source-mount";
 
 describe("computeSourceHash", () => {
@@ -23,75 +27,200 @@ describe("computeSourceHash", () => {
   });
 });
 
-describe("scanPageImports", () => {
+/** A `has` over a fixed tree-relative path list — the inventory predicate `loadPage` builds. */
+const hasOf =
+  (...relPaths: string[]) =>
+  (relPath: string): boolean =>
+    relPaths.includes(relPath);
+
+describe("scanClosureImports", () => {
   test("accepts a page importing only @termcraft/runtime", () => {
     const src = `import { definePage, Panel } from "@termcraft/runtime"
 import type { PageMeta } from "@termcraft/runtime"
 export default function P() { return null }`;
-    expect(scanPageImports(src)).toBeUndefined();
+    expect(
+      scanClosureImports({
+        sources: new Map([["pages/home.tsx", src]]),
+        has: hasOf("pages/home.tsx"),
+      }),
+    ).toBeUndefined();
+  });
+
+  test("accepts a RELATIVE edge that resolves inside the tree — the rule the design tree added", () => {
+    const result = scanClosureImports({
+      sources: new Map([
+        [
+          "pages/home.tsx",
+          `import { theme } from "../lib/theme"\nexport default function P() { return null }`,
+        ],
+        ["lib/theme.ts", `export const theme = 1\n`],
+      ]),
+      has: hasOf("pages/home.tsx", "lib/theme.ts"),
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test("rejects a relative edge that resolves to nothing in the tree", () => {
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `import { x } from "./missing"`]]),
+      has: hasOf("pages/home.tsx"),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("rejects a relative edge that escapes the tree", () => {
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `import { x } from "../../outside"`]]),
+      has: hasOf("pages/home.tsx"),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).reason).toContain("design/");
   });
 
   test("rejects a bare react import", () => {
-    const src = `import { useState } from "react"`;
-    const result = scanPageImports(src);
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `import { useState } from "react"`]]),
+      has: hasOf("pages/home.tsx"),
+    });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
     expect((result as ProtocolError).reason).toContain("react");
   });
 
-  test("rejects a relative re-export", () => {
-    const src = `export { x } from "./sibling.ts"`;
-    expect(scanPageImports(src)).toBeInstanceOf(ProtocolError);
-  });
-
   test("rejects a dynamic import of a forbidden module", () => {
-    const src = `const m = () => import("@termcraft/kit")`;
-    const result = scanPageImports(src);
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `const m = () => import("@termcraft/kit")`]]),
+      has: hasOf("pages/home.tsx"),
+    });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).reason).toContain("@termcraft/kit");
   });
 
   test("rejects an @opentui side-effect import", () => {
-    const src = `import "@opentui/core"`;
-    expect(scanPageImports(src)).toBeInstanceOf(ProtocolError);
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `import "@opentui/core"`]]),
+      has: hasOf("pages/home.tsx"),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
   });
 
   test("returns a ProtocolError (never a throw) for unparseable source", () => {
     // Bun.Transpiler.scanImports throws a BuildMessage on syntactically broken
-    // TSX; scanPageImports must convert that throw into a typed ProtocolError.
-    const broken = `export default function P() { return <text>hi`;
-    const result = scanPageImports(broken);
+    // TSX; scanClosureImports must convert that throw into a typed ProtocolError.
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `export default function P() { return <text>hi`]]),
+      has: hasOf("pages/home.tsx"),
+    });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
   });
 
   test("rejects a dynamic import of the runtime — only a static import is allowed (§3.1)", () => {
-    const src = `const rt = () => import("@termcraft/runtime")`;
-    const result = scanPageImports(src);
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `const rt = () => import("@termcraft/runtime")`]]),
+      has: hasOf("pages/home.tsx"),
+    });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).reason).toContain("@termcraft/runtime");
   });
 
   test("rejects a require of the runtime — only a static import is allowed (§3.1)", () => {
-    const src = `const rt = require("@termcraft/runtime")`;
-    expect(scanPageImports(src)).toBeInstanceOf(ProtocolError);
+    const result = scanClosureImports({
+      sources: new Map([["pages/home.tsx", `const rt = require("@termcraft/runtime")`]]),
+      has: hasOf("pages/home.tsx"),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+  });
+
+  test("scans EVERY source, not only the entry — a shared module's violation is caught", () => {
+    const result = scanClosureImports({
+      sources: new Map([
+        [
+          "pages/home.tsx",
+          `import { theme } from "../lib/theme"\nexport default function P() { return null }`,
+        ],
+        ["lib/theme.ts", `import fs from "node:fs"\nexport const theme = 1\n`],
+      ]),
+      has: hasOf("pages/home.tsx", "lib/theme.ts"),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).reason).toContain("node:fs");
+    expect((result as ProtocolError).reason).toContain("lib/theme.ts");
+  });
+
+  test("a `.ts` file's type assertion is not read as JSX — the loader follows the extension", () => {
+    // `const x = <string>y;` is legal TypeScript in a `.ts` file and an unclosed JSX element in
+    // a `.tsx` one. A fixed `tsx` loader would report this legal file as unparseable, so the
+    // scan must pick its loader from `parsesJsx` (entities/design-tree's measured predicate).
+    const result = scanClosureImports({
+      sources: new Map([["lib/cast.ts", `const y: unknown = 1\nexport const x = <string>y\n`]]),
+      has: hasOf("lib/cast.ts"),
+    });
+    expect(result).toBeUndefined();
   });
 });
 
-const fixture = (name: string) => `${import.meta.dir}/../fixtures/${name}`;
+const HOME_IMPORTING_THEME = `import { definePage } from "@termcraft/runtime"
+import { theme } from "../lib/theme"
 
-async function hashOfFile(path: string): Promise<string> {
-  const bytes = await Bun.file(path).bytes();
-  return hashBytes(bytes);
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "Home",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function Home() {
+  return <text>{theme}</text>
+}
+`;
+
+const THEME = `export const theme = "one"\n`;
+const THEME_EDITED = `export const theme = "two"\n`;
+
+/**
+ * Write a design tree into its OWN fresh temporary directory and return its absolute root.
+ *
+ * ONE DIRECTORY PER TREE IS LOAD-BEARING, not tidiness: `loadPage` ends in `await import()`,
+ * and Bun's module cache is keyed by absolute path over a case-insensitive filesystem on
+ * Windows. Reusing a root across tests would serve an earlier test's module for a later test's
+ * bytes — the exact methodology trap task 12b's measurement hit twice.
+ */
+async function writeTree(files: Record<string, string>): Promise<string> {
+  const root = await mkdtemp(`${tmpdir()}/termcraft-tree-`);
+  for (const [relPath, text] of Object.entries(files)) {
+    await Bun.write(`${root}/${relPath}`, text);
+  }
+  return root;
+}
+
+/** The tree's `(relPath, sha256)` inventory, hashed off the bytes actually on disk. */
+async function inventoryOf(
+  root: string,
+  relPaths: readonly string[],
+): Promise<readonly DesignFileEntryV1[]> {
+  const files: DesignFileEntryV1[] = [];
+  for (const relPath of relPaths) {
+    files.push({ relPath, sha256: hashBytes(await Bun.file(`${root}/${relPath}`).bytes()) });
+  }
+  return files;
+}
+
+const fixturesRoot = `${import.meta.dir}/../fixtures`;
+
+/** The fixture directory read as a tree root — the fixture's own name is its entry relPath. */
+async function fixtureInventory(...names: string[]): Promise<readonly DesignFileEntryV1[]> {
+  return inventoryOf(fixturesRoot, names);
 }
 
 describe("loadPage", () => {
   test("loads a valid facade page and validates its meta", async () => {
     registerRuntimeResolver();
-    const path = fixture("probe-page.tsx");
     const loaded = await loadPage({
-      sourcePath: path,
-      expectedSourceHash: await hashOfFile(path),
+      treeRoot: fixturesRoot,
+      entryRelPath: "probe-page.tsx",
+      expectedFiles: await fixtureInventory("probe-page.tsx"),
     });
     expect(loaded).not.toBeInstanceOf(ProtocolError);
     if (loaded instanceof ProtocolError) throw loaded;
@@ -102,10 +231,10 @@ describe("loadPage", () => {
   });
 
   test("rejects a source-hash mismatch with SOURCE_HASH_MISMATCH", async () => {
-    const path = fixture("probe-page.tsx");
     const result = await loadPage({
-      sourcePath: path,
-      expectedSourceHash: "0".repeat(64),
+      treeRoot: fixturesRoot,
+      entryRelPath: "probe-page.tsx",
+      expectedFiles: [{ relPath: "probe-page.tsx", sha256: "0".repeat(64) }],
     });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("SOURCE_HASH_MISMATCH");
@@ -113,10 +242,10 @@ describe("loadPage", () => {
   });
 
   test("rejects a page importing a forbidden module before it runs", async () => {
-    const path = fixture("forbidden-react.tsx");
     const result = await loadPage({
-      sourcePath: path,
-      expectedSourceHash: await hashOfFile(path),
+      treeRoot: fixturesRoot,
+      entryRelPath: "forbidden-react.tsx",
+      expectedFiles: await fixtureInventory("forbidden-react.tsx"),
     });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).reason).toContain("react");
@@ -124,10 +253,12 @@ describe("loadPage", () => {
 
   test("rejects a missing source path", async () => {
     const result = await loadPage({
-      sourcePath: fixture("does-not-exist.tsx"),
-      expectedSourceHash: "0".repeat(64),
+      treeRoot: fixturesRoot,
+      entryRelPath: "does-not-exist.tsx",
+      expectedFiles: [{ relPath: "does-not-exist.tsx", sha256: "0".repeat(64) }],
     });
     expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("SOURCE_HASH_MISMATCH");
   });
 
   test("returns a typed ProtocolError (not a rejection) for a hash-matching but unparseable page", async () => {
@@ -135,12 +266,154 @@ describe("loadPage", () => {
     // syntactically broken still passes the hash + UTF-8 gates and reaches the
     // import scan, which throws. loadPage must surface a typed ProtocolError so
     // the state machine can emit its best-effort `error` envelope (§5/§12).
-    const path = fixture("broken-syntax.tsx");
     const result = await loadPage({
-      sourcePath: path,
-      expectedSourceHash: await hashOfFile(path),
+      treeRoot: fixturesRoot,
+      entryRelPath: "broken-syntax.tsx",
+      expectedFiles: await fixtureInventory("broken-syntax.tsx"),
     });
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("refuses an entry that is not listed in its own expected inventory", async () => {
+    const result = await loadPage({
+      treeRoot: fixturesRoot,
+      entryRelPath: "probe-page.tsx",
+      expectedFiles: [],
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+    expect((result as ProtocolError).reason).toContain("inventory");
+  });
+
+  test("loads a page whose closure spans several files", async () => {
+    registerRuntimeResolver();
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/home.tsx", "lib/theme.ts"]),
+    });
+    if (loaded instanceof ProtocolError) throw loaded;
+    expect(typeof loaded.component).toBe("function");
+    expect(loaded.meta.title).toBe("Home");
+  });
+
+  test("a SHARED module whose bytes drifted is a SOURCE_HASH_MISMATCH", async () => {
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    const expectedFiles = await inventoryOf(root, ["pages/home.tsx", "lib/theme.ts"]);
+    await Bun.write(`${root}/lib/theme.ts`, THEME_EDITED);
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles,
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("SOURCE_HASH_MISMATCH");
+    expect((result as ProtocolError).reason).toContain("lib/theme.ts");
+  });
+
+  test("a forbidden import inside a SHARED module is caught before any code runs", async () => {
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": 'import fs from "node:fs"\nexport const theme = 1\n',
+    });
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/home.tsx", "lib/theme.ts"]),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+    expect((result as ProtocolError).reason).toContain("node:fs");
+  });
+
+  test("a specifier escaping the tree is rejected even when the file exists on disk", async () => {
+    const root = await writeTree({
+      "pages/home.tsx":
+        'import x from "../../outside"\nexport default function P() { return null }\n',
+    });
+    await Bun.write(`${root}/../outside.ts`, "export default 1\n");
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/home.tsx"]),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("a closure member absent from the expected inventory is refused, not silently imported", async () => {
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    // The supervisor's expected set is STALE: it does not know about the shared module the
+    // entry reaches. Nothing may be imported off a set that does not describe the page.
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/home.tsx"]),
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("a non-code closure member is hash-verified but never tokenized", async () => {
+    registerRuntimeResolver();
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+      // Bun's loader does not execute a `.md`, so it carries no module edge — its bytes
+      // spelling `eval` or `import fs from "node:fs"` must not manufacture a fatal. It is not
+      // in the closure either, so it is only here to prove the inventory may hold one.
+      "NOTES.md": 'eval is a word, and so is import fs from "node:fs"\n',
+    });
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/home.tsx", "lib/theme.ts", "NOTES.md"]),
+    });
+    if (loaded instanceof ProtocolError) throw loaded;
+    expect(typeof loaded.component).toBe("function");
+  });
+
+  test("the returned sourceHash is the ENTRY's own hash, not the closure's", async () => {
+    registerRuntimeResolver();
+    const root = await writeTree({
+      "pages/home.tsx": HOME_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    const expectedFiles = await inventoryOf(root, ["pages/home.tsx", "lib/theme.ts"]);
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/home.tsx",
+      expectedFiles,
+    });
+    if (loaded instanceof ProtocolError) throw loaded;
+    const entryRow = expectedFiles.find((file) => file.relPath === "pages/home.tsx");
+    if (entryRow === undefined) throw new Error("the fixture inventory must list the entry");
+    expect(loaded.sourceHash).toBe(entryRow.sha256);
+    expect(loaded.sourceHash).not.toBe(
+      expectedFiles.find((file) => file.relPath === "lib/theme.ts")?.sha256,
+    );
+  });
+
+  test("a traversing entry path is refused before any read", async () => {
+    const root = await writeTree({ "pages/home.tsx": HOME_IMPORTING_THEME });
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "../outside.tsx",
+      expectedFiles: [{ relPath: "../outside.tsx", sha256: "0".repeat(64) }],
+    });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+    expect((result as ProtocolError).reason).toContain("traversing");
   });
 });

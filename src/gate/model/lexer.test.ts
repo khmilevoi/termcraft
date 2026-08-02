@@ -347,9 +347,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     expect(refused).toEqual([]);
     // The count is asserted exactly, so the doc comments citing it and this walk cannot drift
     // apart (task-14 review round 2, M4, where the doc said 886 and the walk saw 884). Task 14b
-    // adds `gate/model/scanner.ts` and `gate/model/lexer.oracle.test.ts`, so it is 886 again —
-    // update BOTH this number and the counts quoted in `lexer.ts` when the corpus grows.
-    expect(files.length).toBe(886);
+    // adds `gate/model/scanner.ts` and `gate/model/lexer.oracle.test.ts`, taking it to 886;
+    // task 15 adds `entities/design-tree/model/code-file.ts` and
+    // `host/supervisor/model/mount-request.ts`, taking it to 888 — update BOTH this number and
+    // the counts quoted in `lexer.ts` and `lexer.oracle.test.ts` when the corpus grows.
+    expect(files.length).toBe(888);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
