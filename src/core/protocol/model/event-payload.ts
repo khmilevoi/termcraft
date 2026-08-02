@@ -824,10 +824,13 @@ const turnGateErrorV1Schema = z.strictObject({
    * convention for a widened echo of an optional port field (`file`/`line`/`column` directly
    * above take the identical treatment for the identical reason).
    *
-   * This is a DIAGNOSTIC for the agent's retry prompt, never a verdict input: the turn's
-   * pass/fail decision stays whole-tree (`validation.ts`'s own header explains why attributing
-   * rejections per page would turn `gate/model/tree-scan.ts`'s `isTrustedTarget` gap into a
-   * fail-open).
+   * This is a DIAGNOSTIC, never a verdict input: the turn's pass/fail decision stays
+   * whole-tree (`validation.ts`'s own header explains why attributing rejections per page
+   * would turn `gate/model/tree-scan.ts`'s `isTrustedTarget` gap into a fail-open). It reaches
+   * the agent through `core/turns/model/prompt.ts`'s `formatBlockedPages`, which renders it as
+   * a `[blocks: …]` clause on the folded retry prompt — corrected in task-14 review round 1,
+   * Important 2: this comment previously claimed the retry prompt carried it while
+   * `formatGateError` listed fields by name and dropped it.
    */
   blockedPages: z.array(pageSlugSchema).readonly().nullable(),
 });

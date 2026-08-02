@@ -1,3 +1,5 @@
+import * as errore from "errore";
+
 import type { ClosureV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
@@ -12,6 +14,18 @@ import {
 } from "./lints";
 import { checkPageContract } from "./page-contract";
 import { scanTreeImports } from "./tree-scan";
+
+/**
+ * One page's own source could not be tokenized to the end (`lexer.ts`'s
+ * {@link SourceStreamTruncatedError}, or any other throw out of the lexer/contract/lint
+ * stack). Carried as a value so {@link runGate} turns it into an ordinary fatal for that page
+ * instead of letting it escape into the turn — the same shape and the same reasoning as
+ * `tree-scan.ts`'s `TreeFileUnscannableError` for the whole-tree scan.
+ */
+class PageSourceUnscannableError extends errore.createTaggedError({
+  name: "PageSourceUnscannableError",
+  message: 'the page source at "$file" could not be read to the end',
+}) {}
 
 /**
  * The gate's injected validation stages that need more than the page source
@@ -118,7 +132,55 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   // explicitly, several with an entry deliberately unrelated to their slug.
   const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
 
-  const contract = checkPageContract(input.source);
+  // THE LEXER IS AN UNCONTROLLED BOUNDARY HERE TOO (task-14 review round 1, C1). Every call
+  // below tokenizes, and `tokenize` now FAILS CLOSED on a source it cannot cover completely
+  // (`lexer.ts`'s `SourceStreamTruncatedError`) rather than silently returning a partial
+  // stream. Unprotected, that throw would escape `runGate` -> `runPage` -> the port -> the
+  // turn, turning a page that must be REJECTED into a crashed turn. Caught here so it becomes
+  // an ordinary fatal for this page.
+  //
+  // Caught BROADLY, not narrowed to that one error type — the identical reasoning
+  // `tree-scan.ts`'s `TreeFileUnscannableError` states for the whole-tree scan: narrowing puts
+  // this function in the business of deciding which internal failures are "expected", and a
+  // rethrow lands in exactly the caller that cannot handle it. Every throw becomes a loud
+  // rejected page naming itself instead.
+  //
+  // `UNSCANNABLE_SOURCE` is deliberately the SAME code the whole-tree scan uses for the same
+  // fact ("this file's source could not be read to the end"), on the `contract` kind because
+  // here it is the page's own source. One fact, one code.
+  const lexed = errore.try({
+    try: () => ({
+      contract: checkPageContract(input.source),
+      warnings: [
+        ...lintDeterminism(input.source),
+        ...lintSilencingAny(input.source),
+        ...lintDroppedIds(input.source, input.referencedIds),
+        ...lintUnpointedElements(input.source),
+        ...lintUnlistedNavigation(input.source, input.listedSlugs),
+      ],
+    }),
+    catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
+  });
+  if (lexed instanceof Error) {
+    const cause = lexed.cause;
+    const reason = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+    return createGateResult(
+      [
+        {
+          kind: "contract",
+          code: "UNSCANNABLE_SOURCE",
+          message: `${lexed.message} — ${reason}`,
+          file: fileName,
+          line: 1,
+          column: 1,
+        },
+      ],
+      [],
+      null,
+    );
+  }
+
+  const contract = lexed.contract;
   for (const e of contract.errors) {
     errors.push({
       kind: "contract",
@@ -129,11 +191,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
       column: e.column,
     });
   }
-  warnings.push(...lintDeterminism(input.source));
-  warnings.push(...lintSilencingAny(input.source));
-  warnings.push(...lintDroppedIds(input.source, input.referencedIds));
-  warnings.push(...lintUnpointedElements(input.source));
-  warnings.push(...lintUnlistedNavigation(input.source, input.listedSlugs));
+  warnings.push(...lexed.warnings);
 
   if (ports.typeCheck !== undefined) {
     errors.push(...(await ports.typeCheck(input.source, fileName)));

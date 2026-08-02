@@ -670,7 +670,7 @@ interface FinalizeSummaryV1 {
  * than reported with a fabricated hash — both are unreachable on this path (a passing
  * validation means every entry resolved in `treePaths`), and each drop logs.
  */
-function terminalChangedPages(
+export function terminalChangedPages(
   changedPageSlugs: readonly PageSlug[],
   entries: readonly PageEntryV1[],
   candidate: TurnCandidateV1,

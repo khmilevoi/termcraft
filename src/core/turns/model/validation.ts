@@ -63,8 +63,10 @@ import { trace } from "infrastructure/debug-log";
  * therefore keeps one flat verdict: ANY error from ANY stage — manifest slice, whole-tree
  * scan, or any page — rejects the turn. Nothing here filters by `GateErrorV1.file`, by
  * `blockedPages`, or by which page a diagnostic names. `blockedPages` is carried across the
- * DTO boundary for the AGENT's benefit (which pages a shared-module blocker actually blocked),
- * never consulted to decide the verdict.
+ * DTO boundary for the AGENT's benefit (which pages a shared-module blocker actually blocked)
+ * and RENDERED into the retry prompt by `prompt.ts`'s `formatBlockedPages`; it is never
+ * consulted to decide the verdict. (Task-14 review round 1, Important 2: it was carried but
+ * not rendered, so this sentence described an intent rather than a fact.)
  */
 
 export interface TurnValidationDeps {

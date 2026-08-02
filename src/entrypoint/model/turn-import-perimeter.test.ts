@@ -160,6 +160,69 @@ describe("the turn's import perimeter, through the real gate adapter", () => {
     },
   );
 
+  test("C1: a U+FFFD that truncates the scan fails the TURN — it can never read as a clean tree", async () => {
+    // THE CRITICAL (task-14 review round 1). `TextDecoder` produces U+FFFD for any invalid
+    // UTF-8 byte, and turn staging decodes every tree file through it unfiltered. At a token
+    // position it made the scanner return `NonTextFileMarkerTrivia` spanning to EOF, so
+    // everything after it left the token stream — measured through this very harness: zero
+    // violations reported for a shared module carrying a forbidden import, `eval`, `require`
+    // AND `new Function`, all four of which the same file without the U+FFFD reports. Bun
+    // executes such a module (verified by `await import()`). For a shared module the whole-tree
+    // scan is the only check there is, so it was a total bypass.
+    //
+    // Fails CLOSED now, and the assertion is on the CODE: a bare "the turn was rejected" would
+    // also pass if the page merely failed its contract for some unrelated reason.
+    await context.start(async () => {
+      // The U+FFFD must sit at a TOKEN position — in JSX text here, exactly as the executed
+      // exploit had it. Inside a string literal or a comment the scanner lexes straight past
+      // it and the violations below ARE reported; that case is the sibling assertion.
+      const exploit = `export const Glyph = () => <Text>�</Text>\nimport fs from "node:fs"\nexport const e = eval("1")\n`;
+      const errors = await validateTree(sharedModuleTree(exploit));
+      expect(errors.map((e) => e.code)).toContain("UNSCANNABLE_SOURCE");
+      expect(errors.find((e) => e.code === "UNSCANNABLE_SOURCE")?.file).toBe("lib/theme.ts");
+
+      // THE BEFORE/AFTER, in one test: the identical file with the marker replaced by an
+      // ordinary character reports every violation the truncated one hid. Without this, a
+      // guard that refused the tree for any reason at all would satisfy the assertion above.
+      const control = await validateTree(sharedModuleTree(exploit.replace("�", "x")));
+      expect(control.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
+      expect(control.map((e) => e.code)).toContain("EVAL_CALL");
+    });
+  });
+
+  test("a HEX COLOUR in JSX text no longer hides what follows it — the violation is still caught", async () => {
+    // The second truncation, found while proving C1's fix does not over-fire: `#` in JSX text
+    // spun the scanner at zero width and the old loop silently returned the partial stream.
+    // This project's whole palette is hex colours, so this shape is far likelier in a real
+    // design page than U+FFFD. It must be SCANNED, not refused — asserting the forbidden
+    // import is reported proves the stream reached past the `#`.
+    await context.start(async () => {
+      const errors = await validateTree(
+        new Map([
+          ["pages.json", MANIFEST],
+          ["pages/home.tsx", CLEAN_PAGE],
+          [
+            "lib/theme.ts",
+            `export const Swatch = () => <span>#7ad7ff</span>\nimport fs from "node:fs"\nexport const accent = fs\n`,
+          ],
+        ]),
+      );
+      expect(errors.map((e) => e.code)).toContain("FORBIDDEN_IMPORT");
+      expect(errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
+    });
+  });
+
+  test("a clean page rendering a hex colour still PASSES — the truncation fix did not become a refusal", async () => {
+    // The valid-input companion to the row above. Without it, "refuse anything containing `#`"
+    // would satisfy that test, and every design page showing a palette swatch would break.
+    await context.start(async () => {
+      const errors = await validateTree(
+        sharedModuleTree(`export const accent = "#7ad7ff"\nexport const label = "#1 pick"\n`),
+      );
+      expect(errors.map((e) => e.code)).toEqual(["TYPE_CHECK_UNAVAILABLE"]);
+    });
+  });
+
   test("the same forbidden import in a module NO page reaches at all is still fatal — the scan is whole-tree, not closure-scoped", async () => {
     await context.start(async () => {
       const errors = await validateTree(

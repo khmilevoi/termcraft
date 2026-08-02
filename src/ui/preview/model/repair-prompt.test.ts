@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test";
 
 import { buildRepairPrompt, relativePageSourcePath } from "./repair-prompt";
 
+/**
+ * PINS A KNOWN-WRONG VALUE, DELIBERATELY AND VISIBLY (task-14 review round 1, Important 3).
+ * `.termcraft/pages/` does not exist after the design-tree plan — canonical storage is
+ * `.termcraft/design/<entry>`. This assertion therefore documents the CURRENT, DEFECTIVE
+ * output rather than desired behaviour; it exists so a fix produces a visible, deliberate
+ * test change instead of a silent one. See `repair-prompt.ts`'s own doc for why the fix is
+ * blocked on a wire-DTO widening AND on `design/termcraft-engine.js:1153`, which still draws
+ * this same stale path. Registered in `red-debt.md`.
+ */
 describe("relativePageSourcePath", () => {
   test("is the canonical page layout, project-relative — never absolute", () => {
     expect(relativePageSourcePath("dashboard")).toBe(".termcraft/pages/dashboard/page.tsx");

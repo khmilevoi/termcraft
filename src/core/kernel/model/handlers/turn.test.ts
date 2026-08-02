@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { context, wrap } from "@reatom/core";
 
@@ -60,7 +60,7 @@ import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
-import { turnHandlers } from "./turn";
+import { terminalChangedPages, turnHandlers } from "./turn";
 import type {
   HandlerContext,
   PreviewSourceKindV1,
@@ -3314,6 +3314,88 @@ describe("turn.start — activeTurnId never outlives the phase that justified it
     for (const sample of observed) {
       if (sample.phase === "idle") expect(sample.id).toBeNull();
       else expect(sample.id).not.toBeNull();
+    }
+  });
+});
+
+/**
+ * `terminalChangedPages` directly (task-14 review round 1, Minor 5). It had exactly one test —
+ * the §10 smoke — so mutating it to `return []` reddened only that, and its warn-and-drop
+ * branch was uncovered entirely. It is also the function whose SEMANTIC SHIFT this task's own
+ * report raises (§9.5): `turn.completed`'s `sourceHash` now means "the page's ENTRY FILE's
+ * hash" while "changed" is a CLOSURE fact.
+ */
+describe("terminalChangedPages", () => {
+  const HOME = "home" as PageSlug;
+  const ABOUT = "about" as PageSlug;
+  const entry = (slug: PageSlug, path: string) => ({ slug, entry: path });
+  const candidateWith = (files: readonly { relPath: string; sha256: string }[]) =>
+    ({
+      root: "/fake-candidate/t",
+      totalBytes: 0,
+      manifestText: "{}",
+      treeFiles: files.map((f) => ({ ...f, size: 1 })),
+      fileChanges: [],
+    }) as unknown as Parameters<typeof terminalChangedPages>[2];
+
+  test("reports each changed page's ENTRY FILE hash, resolved through the manifest", () => {
+    const result = terminalChangedPages(
+      [HOME, ABOUT],
+      [entry(HOME, "screens/landing/main.tsx"), entry(ABOUT, "widgets/about.tsx")],
+      candidateWith([
+        { relPath: "screens/landing/main.tsx", sha256: "a".repeat(64) },
+        { relPath: "widgets/about.tsx", sha256: "b".repeat(64) },
+        { relPath: "lib/theme.ts", sha256: "c".repeat(64) },
+      ]),
+    );
+    // Entries are arbitrary tree paths, so this also proves the lookup goes through the
+    // manifest rather than deriving `pages/<slug>.tsx`.
+    expect(result).toEqual([
+      { pageSlug: HOME, sourceHash: "a".repeat(64) },
+      { pageSlug: ABOUT, sourceHash: "b".repeat(64) },
+    ]);
+  });
+
+  test("a page whose closure changed but whose ENTRY did not still reports its unchanged entry hash", () => {
+    // The semantic the report flags: a `lib/theme.ts` edit marks `home` changed while
+    // `home`'s own bytes never moved. The field says "this page's source hash", so reporting
+    // the unchanged one is correct — and is exactly why this field can no longer be used to
+    // decide WHETHER a page changed.
+    const result = terminalChangedPages(
+      [HOME],
+      [entry(HOME, "screens/landing/main.tsx")],
+      candidateWith([
+        { relPath: "screens/landing/main.tsx", sha256: "a".repeat(64) },
+        { relPath: "lib/theme.ts", sha256: "z".repeat(64) },
+      ]),
+    );
+    expect(result).toEqual([{ pageSlug: HOME, sourceHash: "a".repeat(64) }]);
+  });
+
+  test("THE WARN-AND-DROP PATH: a slug with no manifest entry, or an entry with no candidate file, is dropped and logged — never given a fabricated hash", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // (a) the slug is not in the manifest at all
+      expect(terminalChangedPages([HOME], [], candidateWith([]))).toEqual([]);
+      // (b) the manifest binds it, but the candidate holds no such file
+      expect(
+        terminalChangedPages([HOME], [entry(HOME, "screens/gone.tsx")], candidateWith([])),
+      ).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an empty changed-page list yields an empty report, without warning", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(terminalChangedPages([], [entry(HOME, "screens/a.tsx")], candidateWith([]))).toEqual(
+        [],
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
   });
 });

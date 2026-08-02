@@ -248,6 +248,63 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
     });
   });
 
+  test("pages.json existing as a DIRECTORY propagates the failure — it is not 'absent'", async () => {
+    // MEASURED conflation (task-14 review round 1, I4): `listTree()` names `pages.json/inner.txt`,
+    // so an exact-equality test says "absent" and a genuinely broken tree read as an empty
+    // project — with no trace at all.
+    await context.start(async () => {
+      const store = storeWith(new Map());
+      store.failNext("readManifest", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "EISDIR: design/pages.json",
+        details: {},
+      });
+      const order = await wrap(readPageOrder(store, ["pages.json/inner.txt", HOME_ENTRY]));
+      if (!("code" in order)) throw new Error("expected the failure to propagate");
+      expect(order.safeMessage).toBe("EISDIR: design/pages.json");
+    });
+  });
+
+  test("PROJECT-relative treePaths are refused, not silently read as an empty project", async () => {
+    // The second measured conflation: `readonly string[]` cannot distinguish the two path
+    // vocabularies, so a caller passing `design/pages.json` would miss the test and turn a
+    // broken manifest into "no pages". A caller bug must not present as an empty project.
+    await context.start(async () => {
+      const store = storeWith(new Map());
+      store.failNext("readManifest", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "pages.json is not valid JSON",
+        details: {},
+      });
+      const order = await wrap(readPageOrder(store, ["design/pages.json", "design/lib/theme.ts"]));
+      if (!("code" in order)) throw new Error("expected the failure to propagate");
+      expect(order.safeMessage).toBe("pages.json is not valid JSON");
+    });
+  });
+
+  test("a listTree() failure propagates the ORIGINAL manifest failure, never masks it with its own", async () => {
+    await context.start(async () => {
+      const store = storeWith(new Map());
+      store.failNext("readManifest", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "the manifest failure the caller must see",
+        details: {},
+      });
+      store.failNext("listTree", {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "the inventory failure that must NOT replace it",
+        details: {},
+      });
+      const order = await wrap(readPageOrder(store));
+      if (!("code" in order)) throw new Error("expected a failure");
+      expect(order.safeMessage).toBe("the manifest failure the caller must see");
+    });
+  });
+
   test("a caller-supplied treePaths answers the same question without a second listTree()", async () => {
     await context.start(async () => {
       const store = storeWith(new Map());

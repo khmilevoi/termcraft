@@ -59,22 +59,36 @@ function safeMessageOf(error: Error): string {
 }
 
 /**
- * `SourceChangedError.part` (`store/transaction/model/wrappers.ts`) is constructed with
- * `"manifest"` or `` `canonical:${slug}` `` (verified against every construction site in that
- * file) — a finer grain than `FailureDtoV1`'s closed `part: "page" | "manifest"` for this code
- * (`core/protocol/model/failure.ts`). This is a genuine signature mismatch, not a guess: the
- * `canonical:<slug>` case IS the "a canonical page drifted" case §11.2 calls `"page"`, so it
- * normalizes to `"page"` with the slug preserved as an extra bounded detail key.
+ * `SourceChangedError.part` (`store/transaction/model/wrappers.ts`) is a finer grain than
+ * `FailureDtoV1`'s closed `part: "page" | "manifest"` for this code
+ * (`core/protocol/model/failure.ts`), so it is narrowed here with the finer fact preserved as
+ * an extra bounded detail key.
+ *
+ * CORRECTED (assigned during task-14 review round 1; the drift landed in `ffd1429`, an
+ * ancestor of task 14's own base). This matched `` `canonical:${slug}` ``, which
+ * `wrappers.ts` STOPPED constructing when the design tree replaced canonical page files: the
+ * one live site (`wrappers.ts:590`) now builds `` `design:${treeRelPath}` ``. Verified by
+ * grep: `part: \`canonical:` has ZERO construction sites and `part: \`design:` has exactly
+ * one. So every CAS drift on a tree file took the fallback below — losing the detail entirely
+ * AND emitting a `console.warn` on an ORDINARY failure path, which this file's own header
+ * forbids ("a KNOWN store error must never reach it, or an ordinary, expected failure path
+ * would add new stderr noise to every test that exercises it").
+ *
+ * THE DETAIL KEY IS `relPath`, NOT `slug`. `design:<treeRelPath>` carries a TREE-RELATIVE
+ * PATH; `design/pages.json` binds slugs to paths and that mapping is not invertible here — a
+ * path is not a slug and must never be written into a field named one, which is precisely what
+ * a naive `startsWith("design:") -> slug` would have done. `EntrySourceDriftedError` below
+ * still reports a genuine `slug`, because it genuinely has one.
  */
 function normalizeSourceChangedPart(raw: string | number): {
   readonly part: "page" | "manifest";
-  readonly slug?: string;
+  readonly relPath?: string;
 } {
   const text = String(raw);
   if (text === "manifest") return { part: "manifest" };
-  if (text.startsWith("canonical:")) return { part: "page", slug: text.slice("canonical:".length) };
+  if (text.startsWith("design:")) return { part: "page", relPath: text.slice("design:".length) };
   console.warn(
-    `store/adapters: SourceChangedError.part "${text}" matched neither "manifest" nor "canonical:<slug>"; defaulting to "page"`,
+    `store/adapters: SourceChangedError.part "${text}" matched neither "manifest" nor "design:<treeRelPath>"; defaulting to "page"`,
   );
   return { part: "page" };
 }
@@ -181,9 +195,9 @@ export function toFailureDto(error: Error): FailureDtoV1 {
       retryable: false,
       safeMessage: safeMessageOf(error),
       details:
-        normalized.slug === undefined
+        normalized.relPath === undefined
           ? { part: normalized.part }
-          : { part: normalized.part, slug: normalized.slug },
+          : { part: normalized.part, relPath: normalized.relPath },
     };
   }
 
@@ -193,6 +207,9 @@ export function toFailureDto(error: Error): FailureDtoV1 {
       code: "APPLY_STALE",
       retryable: false,
       safeMessage: safeMessageOf(error),
+      // `slug`, not `relPath`: `StaleError.part`'s finer grain is `pins:<slug>`, which really
+      // is a page slug — unlike `SourceChangedError`'s `design:<treeRelPath>`. See
+      // {@link normalizeSourceChangedPart} for why the two keys must stay distinct.
       details:
         normalized.slug === undefined
           ? { part: normalized.part }
@@ -323,8 +340,10 @@ export function toFailureDto(error: Error): FailureDtoV1 {
    * observation and the write permit (`EntrySourceDriftedError`'s own doc comment,
    * `store/model/factory.ts`) — the identical CAS-conflict shape as `ManifestDriftedError`
    * just above, scoped to one page's own entry rather than the whole manifest, so it maps to
-   * the same `APPLY_SOURCE_CHANGED` code with `part: "page"` (mirroring
-   * `normalizeSourceChangedPart`'s own `canonical:<slug>` → `{part: "page", slug}` case).
+   * the same `APPLY_SOURCE_CHANGED` code with `part: "page"`. It reports `slug` (not
+   * `relPath`, as `normalizeSourceChangedPart`'s `design:<treeRelPath>` case does) because
+   * this error genuinely carries a page slug — see that function's own doc for why the two
+   * keys are deliberately different facts.
    */
   if (error instanceof EntrySourceDriftedError) {
     return {

@@ -17,11 +17,28 @@
 const PROJECT_STATE_DIRNAME = ".termcraft";
 
 /**
- * CANONICAL page storage, PROJECT-RELATIVE. The Kernel's own `canonicalPageSourcePath`
- * (`core/kernel/model/handlers/preview-export.ts`) returns the ABSOLUTE form, which the host
- * child needs and this message must not carry: an absolute path belongs neither in a §13
- * diagnostic nor in a line the user reads in their chat. Same layout, project-relative —
- * transcribed rather than imported, because `ui` may not reach into `core`'s handler internals.
+ * CANONICAL page storage, PROJECT-RELATIVE. An absolute path belongs neither in a §13
+ * diagnostic nor in a line the user reads in their chat, so this is the project-relative form.
+ *
+ * KNOWN DEFECT, NOT COSMETIC — registered in `red-debt.md` as "UI: the repair prompt names a
+ * path that cannot exist", raised by task-14 review round 1 (Important 3). AFTER the
+ * design-tree plan, `.termcraft/pages/` DOES NOT EXIST AT ALL: canonical storage is
+ * `.termcraft/design/<entry>`, where `<entry>` is whatever `design/pages.json` binds to the
+ * slug and is always inside `design/`. So the string below is wrong for EVERY project, on two
+ * user-visible surfaces — the composer text F6 writes ("Fix the render error in that file")
+ * and `HostCrashPanel.tsx:91` on screen — and `repair-prompt.test.ts`'s
+ * `relativePageSourcePath` case PINS the wrong value.
+ *
+ * NOT FIXED HERE, for two reasons that are about authority rather than effort:
+ *   1. The real path needs the page's `entry`, which `ui` does not have: `PageDescriptorV1`
+ *      (`core/protocol/model/event-payload.ts`) carries `pageSlug`/`sourceHash`/meta and no
+ *      entry, so honestly naming the file means widening a wire DTO and its producer — outside
+ *      task 14's Files list.
+ *   2. `design/termcraft-engine.js:1153` (`wsHostCrash`) still DRAWS `·
+ *      .termcraft/pages/main/page.tsx`. The design is this project's source of truth for what
+ *      this frame says, and it has not been updated for the design tree. CLAUDE.md's rule for
+ *      exactly this case is to flag the gap, not to guess a replacement — so the string stays
+ *      wrong-but-design-matching until the design covers the new layout.
  */
 export function relativePageSourcePath(pageSlug: string): string {
   return `${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;

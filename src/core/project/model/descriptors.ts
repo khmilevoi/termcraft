@@ -9,7 +9,7 @@ import type {
   PageDescriptorV1,
   Sha256Hex,
 } from "core/protocol";
-import { PAGES_MANIFEST_RELPATH } from "entities/design-tree";
+import { DESIGN_DIRNAME, PAGES_MANIFEST_RELPATH } from "entities/design-tree";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
@@ -84,6 +84,23 @@ function entryNotFound(pageSlug: PageSlug): FailureDtoV1 {
  * (`core/kernel`'s turn staging) answer that without a second `listTree()`; the extra walk is
  * paid only on the failure path otherwise. If the inventory ITSELF cannot be read, the
  * original manifest failure is returned unchanged — never masked by a second one.
+ *
+ * THE ALLOWANCE FAILS CLOSED, AND EVERY SWALLOW LOGS (task-14 review round 1, Important 4).
+ * This function is the sole authority on page order for nine calling modules, and turning a
+ * real failure into "the project is empty" here is invisible to every one of them. Two
+ * conflations were measured and are refused rather than documented:
+ *
+ *   - `pages.json` existing as a DIRECTORY. `listTree()` then names `pages.json/inner.txt` and
+ *     an exact-equality test says "absent", so a genuinely broken tree read as empty. A path
+ *     UNDER `pages.json/` now counts as present, so the manifest failure propagates.
+ *   - A caller passing the PROJECT-relative vocabulary (`design/pages.json`) instead of the
+ *     tree-relative one. Every entry would then miss the exact test and a broken manifest
+ *     would read as empty. `readonly string[]` cannot distinguish the two vocabularies in the
+ *     type, so it is detected at runtime and refused — a caller bug must not present as an
+ *     empty project.
+ *
+ * Every branch that discards a `FailureDtoV1` logs it first (errore rule 21: an error that is
+ * not propagated must still leave a trace). Before this round all three discarded silently.
  */
 export async function readPageOrder(
   designReader: DesignTreeReader,
@@ -92,12 +109,46 @@ export async function readPageOrder(
   const manifest = await wrap(designReader.readManifest());
   if (!("code" in manifest)) return manifest.pages;
 
-  if (treePaths !== undefined) {
-    return treePaths.includes(PAGES_MANIFEST_RELPATH) ? manifest : [];
+  const paths = treePaths ?? (await readTreePaths(designReader, manifest));
+  if ("code" in paths) return paths;
+
+  // The caller handed us project-relative paths. Refusing beats guessing: silently stripping a
+  // `design/` prefix would make this function accept two vocabularies, and the plan fixes
+  // exactly one for this argument.
+  const misvocabulary = paths.find((relPath) => relPath.startsWith(`${DESIGN_DIRNAME}/`));
+  if (misvocabulary !== undefined) {
+    console.warn(
+      `core/project/descriptors: readPageOrder was given PROJECT-relative treePaths (e.g. "${misvocabulary}"); it requires TREE-relative paths, so the manifest failure is propagated rather than read as an empty project`,
+    );
+    return manifest;
   }
+
+  const manifestPresent = paths.some(
+    (relPath) =>
+      relPath === PAGES_MANIFEST_RELPATH || relPath.startsWith(`${PAGES_MANIFEST_RELPATH}/`),
+  );
+  if (manifestPresent) return manifest;
+
+  // The one honest empty: the tree names no manifest, so there is nothing to have failed.
+  console.warn(
+    `core/project/descriptors: design/pages.json is absent from the tree — reading an empty page order (a project has no manifest until its first turn writes one). The underlying read reported: ${manifest.safeMessage}`,
+  );
+  return [];
+}
+
+/** {@link readPageOrder}'s own inventory read, used only when the caller supplied none. A failure here is logged and the ORIGINAL manifest failure is returned — never masked by this second one. */
+async function readTreePaths(
+  designReader: DesignTreeReader,
+  manifestFailure: FailureDtoV1,
+): Promise<FailureDtoV1 | readonly string[]> {
   const listed = await wrap(designReader.listTree());
-  if ("code" in listed) return manifest;
-  return listed.some((file) => file.relPath === PAGES_MANIFEST_RELPATH) ? manifest : [];
+  if ("code" in listed) {
+    console.warn(
+      `core/project/descriptors: could not list the design tree to tell an absent design/pages.json from an unreadable one (${listed.safeMessage}); propagating the original manifest failure`,
+    );
+    return manifestFailure;
+  }
+  return listed.map((file) => file.relPath);
 }
 
 /**

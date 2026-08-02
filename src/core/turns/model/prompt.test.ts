@@ -232,3 +232,46 @@ describe("appendPromptFold", () => {
     expect(result).toBe("please add a footer\n\n- [type/TS2322]: boom");
   });
 });
+
+describe("foldGateDiagnosticsIntoPrompt — blockedPages reaches the agent (task-14 review round 1, I2)", () => {
+  const blocked = (blockedPages: readonly string[] | null) =>
+    foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          errors: [
+            {
+              kind: "import",
+              code: "FORBIDDEN_IMPORT",
+              message: 'specifier "lodash" in lib/theme.ts is rejected',
+              file: "lib/theme.ts",
+              line: 1,
+              column: 1,
+              blockedPages: blockedPages as never,
+            },
+          ],
+        }),
+      }),
+    );
+
+  test("names the pages a shared-module blocker blocked — the one fact the agent cannot derive", () => {
+    // MEASURED BEFORE THE FIX: this exact input folded to
+    //   "- [import/FORBIDDEN_IMPORT] in lib/theme.ts line 1:1: specifier …"
+    // mentioning none of the blocked slugs, while two comments claimed the retry prompt
+    // carried them. The diagnostic names the MODULE; the agent has no import graph with which
+    // to work out which pages that module broke.
+    const result = blocked(["home", "calendar"]);
+    if (result instanceof Error) throw result;
+    expect(result).toContain("lib/theme.ts");
+    expect(result).toContain("blocks: home, calendar");
+  });
+
+  test("omits the clause entirely when the fact blocked no page — never an empty list", () => {
+    for (const empty of [null, []]) {
+      const result = blocked(empty);
+      if (result instanceof Error) throw result;
+      expect(result).not.toContain("blocks:");
+      // …and the diagnostic itself is still rendered, not swallowed with the clause.
+      expect(result).toContain("FORBIDDEN_IMPORT");
+    }
+  });
+});

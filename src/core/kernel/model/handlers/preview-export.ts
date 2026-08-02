@@ -143,17 +143,15 @@ export interface ResolvedPageSettingsV1 {
   readonly theme: string;
 }
 
-/**
- * CANONICAL tree-file storage, ABSOLUTE — the host child resolves this with
- * `Bun.file(sourcePath)` inside a fresh scratch directory (`host/session/model/
- * source-mount.ts`), so a relative path never resolves there.
- *
- * REPLACED `canonicalPageSourcePath(projectRoot, pageSlug)` (task 14): that helper derived
- * `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG, which the multi-file design tree retires.
- * `treeRelPath` now always arrives from `design/pages.json`'s own `entry`, via
- * `core/project`'s `readPageEntrySource`. Re-exported from `./page-descriptors` rather than
- * copied a second time — one `.termcraft/design/` convention, one place.
- */
+// This file's absolute canonical path helper is `designTreeFilePath` (`./page-descriptors`),
+// imported rather than redeclared here. It REPLACED a local `canonicalPageSourcePath(root,
+// pageSlug)` in task 14: that helper derived `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG,
+// which the multi-file design tree retires — a page's file is whatever `design/pages.json`'s
+// `entry` names. One `.termcraft/design/` convention, one place.
+//
+// (Task-14 review round 1, Minor 1: deleting the old function left its JSDoc orphaned above
+// `pageMetaUnavailableFailure`, which it did not describe. Demoted to a file-level note here,
+// since the symbol it documented no longer lives in this file.)
 
 /**
  * A page whose source is readable but whose static `meta` export does not parse — the ONLY

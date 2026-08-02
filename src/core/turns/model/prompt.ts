@@ -2,6 +2,7 @@ import * as errore from "errore";
 
 import type { TurnAttempt } from "core/machines";
 import type { EventPayloadByKindV1 } from "core/protocol";
+import type { PageSlug } from "entities/page";
 
 /**
  * Folding a rejected attempt's Gate diagnostics into the RETRY attempt's prompt
@@ -61,9 +62,28 @@ function formatPosition(line: number | null, column: number | null): string {
   return column === null ? ` line ${line}` : ` line ${line}:${column}`;
 }
 
+/**
+ * Which pages a whole-tree closure blocker actually blocked, rendered for the agent.
+ *
+ * ADDED (task-14 review round 1, Important 2). `blockedPages` was carried across the DTO and
+ * the wire schema so it could reach the agent's retry prompt — and then this renderer, which
+ * IS that prompt, listed fields by name and dropped it, so the stated purpose was never
+ * achieved and two comments claimed it was. Measured before the fix: the folded prompt for a
+ * `FORBIDDEN_IMPORT` in `lib/theme.ts` mentioned none of `home`/`about`/`calendar`.
+ *
+ * It is exactly the fact the agent cannot derive for itself: a diagnostic names the MODULE
+ * (`lib/theme.ts`), and the agent has no import graph with which to work out which pages that
+ * module broke. Absent (or empty) when the fact blocked no page's closure, in which case the
+ * clause is omitted rather than rendered as an empty list.
+ */
+function formatBlockedPages(blockedPages: readonly PageSlug[] | null): string {
+  if (blockedPages === null || blockedPages.length === 0) return "";
+  return ` [blocks: ${blockedPages.join(", ")}]`;
+}
+
 function formatGateError(error: TurnGateErrorDtoV1): string {
   const location = error.file === null ? "" : ` in ${error.file}`;
-  return `- [${error.kind}/${error.code}]${location}${formatPosition(error.line, error.column)}: ${error.message}`;
+  return `- [${error.kind}/${error.code}]${location}${formatPosition(error.line, error.column)}${formatBlockedPages(error.blockedPages)}: ${error.message}`;
 }
 
 function formatGateWarning(warning: TurnGateWarningDtoV1): string {
