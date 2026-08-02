@@ -7,12 +7,14 @@ and their recovery boundaries.
 ```mermaid
 flowchart TB
     subgraph tc[".termcraft/ — one folder, one project"]
-        proj["project.toml — project_id · name · created_at · target_stack · pages"]
+        proj["project.toml — format_version 2 · project_id · name · created_at · target_stack"]
         gi[".gitignore — generated hard exclusions"]
-        subgraph pg["pages/{stable-slug}/"]
-            source["page.tsx — canonical Current design + static meta"]
-            pins["comments.jsonl — append-only pin events"]
+        subgraph pg["design/ — the canonical authored tree"]
+            manifest["pages.json — ordered slug to entry bindings + requested active page"]
+            entries["{entry} — each page's own file, anywhere in the tree"]
+            shared["shared modules — anything no entry names"]
         end
+        pins["pins/{stable-slug}.jsonl — append-only pin events"]
         subgraph local["machine-local and hard-excluded"]
             chats["chats/{chat-uuid}.jsonl — hard-local dialog logs (amended 2026-07-26, MVP blocker fix bundle §2.5)"]
             ws["workspace.local.toml — active page/chat · preview · backend/model/effort"]
@@ -26,7 +28,8 @@ flowchart TB
             exptr["current.json — active generation + per-file SHA-256 manifest"]
             prompt["generations/{id}/design-prompt.md"]
             runtimeapi["generations/{id}/runtime-api.json"]
-            pages["generations/{id}/pages/*.tsx — canonical-source copies"]
+            design["generations/{id}/design/** — the whole authored tree, once"]
+            closures["generations/{id}/closures/{slug}.json — the files each page reaches"]
             snapshots["generations/{id}/snapshots/ — frames per page × size"]
             layout["generations/{id}/layout/ — resolved trees"]
         end
@@ -38,12 +41,20 @@ flowchart TB
 
 ## Walkthrough
 
-1. **Portable project state.** `project.toml` carries exactly `format_version`,
-   portable UUIDv7 `project_id`, `name`, UTC `created_at`, enum `target_stack`, and
-   the ordered duplicate-free page-slug array `pages`. It does not carry the active page, active
-   chat, preview state, selected backend/model/effort, or cached page metadata.
-   A page's static `meta` in `page.tsx` is the only source of title, minimum size,
+1. **Portable project state.** `project.toml` carries exactly `format_version` (now
+   `2`), portable UUIDv7 `project_id`, `name`, UTC `created_at`, and enum
+   `target_stack`. It no longer carries a page array: which pages exist, in what order,
+   and which file each one lives in is `design/pages.json`'s answer alone, because
+   keeping both would give page order two sources of truth and the manifest is the one
+   the agent edits. `project.toml` also does not carry the active page, active chat,
+   preview state, selected backend/model/effort, or cached page metadata. A page's
+   static `meta` in its own entry file is the only source of title, minimum size,
    theme, and integer `kitApiVersion`.
+   - *Failure:* a project still at `format_version = 1` is refused with a typed
+     "must be migrated" error rather than read leniently — no compatibility reader for
+     the version-1 layout exists anywhere in the system, deliberately. A real
+     version-1 project is preserved verbatim at `test-fixtures/format-v1-project/` as
+     the migration's future test subject.
 2. **Local workspace state.** `workspace.local.toml` carries active page/chat,
    backend/model/effort, preview size mode and custom dimensions, theme/color
    override, static/interactive mode, fullscreen flag, and scoped session
@@ -56,20 +67,31 @@ flowchart TB
    switch — what a tab click or the page-step keys ultimately issue — writes the
    page it switched to as the active one, best-effort, so the choice survives a
    restart (`flows/interactive-prototype.md` step 5a).
-3. **Pages.** Every page has one canonical
-   `pages/<slug>/page.tsx`. The slug is its immutable page and Git-history
-   identity; no page UUID or private version file exists. `page.tsx` imports only
-   `@termcraft/runtime`. Historical Git objects are read-only inputs and are
-   never migrated in place.
+3. **The design tree.** `design/` is the canonical authored tree, and it mirrors a
+   turn workspace one-to-one. `design/pages.json` is the manifest: an ordered array of
+   `{slug, entry}` bindings plus an optional requested active page. A page's file is
+   whatever its `entry` names — anywhere inside the tree, never derived from the slug —
+   and every other file in the tree is a shared module several pages may import. The
+   slug remains the page's immutable identity; no page UUID or private version file
+   exists. Two legal import edges exist anywhere in the tree: a static import of
+   `@termcraft/runtime`, and a relative specifier resolving to a real file inside
+   `design/`. A page's **closure** is the transitive set of tree files its entry
+   reaches, and it — not one file's hash — is what decides whether that page changed.
+   Historical Git objects are read-only inputs and are never migrated in place.
+   - *Failure:* an `entry` that names no real file in the tree, escapes it, or is
+     claimed by no manifest entry at all is refused before any page is validated. A
+     brand-new project is seeded with `pages.json` and an EMPTY `pages` array — never a
+     starter page, which would be a design nobody asked for.
 4. **Non-page identities.** Chat, turn, command, record, pin, action, and
    transaction identities use canonical lowercase UUIDv7. Chats are stored as
    `chats/<chatId>.jsonl`; display names and any friendly ordinal are derived and
    never used as identity.
 5. **Git scopes.** Git is optional. `/commit-page` selects only the active
-   page's canonical source. `/commit-infra` selects `project.toml`, generated
+   page's own entry file. `/commit-infra` selects `project.toml`, generated
    `.gitignore`, and future explicitly portable project-level files.
    `/commit-all` selects every eligible non-ignored portable or derived path
-   under `.termcraft/`, including pin logs, pages, and export artifacts.
+   under `.termcraft/`, including pin logs, the whole design tree, and export
+   artifacts.
    Chats are hard-excluded, not portable (amended 2026-07-26, MVP blocker fix
    bundle §2.5 — chat logs churn on every turn and can carry arbitrary user
    text). Local files, `transactions.local/`, `cache/`, `diagnostics/`, operations logs, lock
@@ -84,7 +106,10 @@ flowchart TB
    Restore system records carry UUIDv7 `restoreActionId`, page slug, and full
    source commit id. The containing chat file remains the persisted chat
    identity; no redundant `targetChatId` field is stored in the record.
-7. **Pin records.** `comments.jsonl` is an append-only event log. Creation and
+7. **Pin records.** `pins/<slug>.jsonl` is an append-only event log — one file per
+   page, keyed by slug, deliberately OUTSIDE the design tree: pins are termcraft's own
+   record about a page, not part of the authored design the agent edits and export
+   ships. Creation and
    later open/resolved transitions have distinct `recordId`s and identify the
    stable `pinId`; old lines are never rewritten. Restore and Git history never
    restore or mutate pin state.
@@ -162,7 +187,7 @@ flowchart TB
     blocks), and the headless `termcraft export` CLI drives the whole sequence
     with no renderer.
 17. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
-    independent format counter. `page.tsx` instead declares `kitApiVersion`.
+    independent format counter. A page's entry file instead declares `kitApiVersion`.
     Planning mints `migrationPlanId`; confirmation mints `migrationActionId`, and the
     migration journal domain persists both.
     Before any old bytes are rewritten, migration creates and verifies a backup
@@ -297,12 +322,25 @@ flowchart TB
   reservations that carry no writer today
 - `src/store/lease/model/lease.ts` — item 13: the Windows OS-lock acquisition,
   the bounded advisory metadata, and the never-force-broken lease contract
+- `src/entities/design-tree/model/manifest.ts` — item 3: `decodePagesManifest`/
+  `encodePagesManifest`, the `design/pages.json` schema and its canonical bytes
+- `src/entities/design-tree/model/specifier.ts` — item 3: `resolveDesignSpecifier`,
+  the two legal import edges and the narrow `.tsx`-then-`.ts` resolution
+- `src/entities/design-tree/model/closure.ts` — item 3: `resolveClosure`,
+  `computeClosureHash` and `computeTreeRevision`
+- `src/store/safe-fs/model/limits.ts` — item 3: the `design-source` namespace covering
+  `design/**` and the `pins/<slug>.jsonl` grammar
+- `src/store/model/factory.ts` — items 1 and 3: `createProject` writing the
+  format-2 `project.toml` and the seeded empty `design/pages.json` in ONE
+  project-creation transaction, and the `DesignTreeStore` reads over the tree
 - `src/store/trust/model/subject.ts` — item 14: the `TrustSubjectV1` canonical
   byte encoding and SHA-256 keying
 - `src/store/trust/model/trust-store.ts` — item 14: `buildSubject`/
   `isGranted`/`grant`, the machine-local ledger under `{userStateRoot}/trust/`
 - `src/store/sandbox/model/staging-store.ts` — item 15: `createTurnWorkspace`,
-  the create-new turn directory, canonical-page/manifest/runtime-doc staging,
+  the create-new turn directory, design-tree/runtime-doc staging (every tree file
+  copied at the SAME tree-relative path, which is what makes an import specifier
+  identical in the workspace and in `design/`),
   and `turn.json` persistence
 - `src/store/sandbox/model/project-key.ts` — item 15: `computeProjectKey`, the
   SHA-256 sandbox-parent-directory derivation

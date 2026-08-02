@@ -430,6 +430,25 @@ landing on a working system:
    resolver rules, and staging. The host and Gate still work per page; the closure is
    computed but only used for `changedPages`. At the end of this plan the agent can write
    shared code and it commits correctly.
+   **LANDED** — `c8c623c..9219b9e` on branch `design-tree`, plan
+   `docs/superpowers/plans/2026-07-28-design-tree-canonical-source.md`, tasks 1-17.
+   Three decisions this plan settled that the design above left implicit, recorded here so
+   plans 1b/2/3 inherit them rather than re-deciding:
+   1. **Two slugs may share one `entry`** (task 10). `pages.json` binds slug → entry, and
+      nothing requires that map to be injective; the manifest check enforces unique SLUGS
+      and resolvable entries, not unique entries. Two pages rendering one file is legal.
+   2. **Pin resolution filters on the caller's closure-derived `changedPageSlugs`, never on
+      file paths** (task 6). A pin belongs to a page, and which pages a turn changed is a
+      closure question the turn has already answered — re-deriving it from the paths a
+      transaction happened to write would disagree the moment a shared module moved.
+   3. **A new project seeds an EMPTY `pages` array, never a starter page** (task 16). §10's
+      "empty conventional structure" is taken literally: `design/pages.json` exists from
+      creation so an absent manifest is never ambiguous, and the first turn creates the
+      first page. A seeded page would be a design nobody asked for.
+   Two things this plan deliberately did NOT do, both by the design's own division above:
+   the host keys an incarnation on `(pageSlug, sourceHash)` while VERIFYING the whole
+   closure (revision-keying is plan 3), and the export package's shared-module prose in
+   `design-prompt.md` is plan 3's.
 1b. **Migration.** §12 — the `migrate-80` dialog, `findSteps` wired into the open sequence,
    the first `MIGRATION_CHAIN` entry over the existing verified-backup protocol, and the
    seeded refactor turn. Separable from plan 1 and worth its own plan: it is the only part

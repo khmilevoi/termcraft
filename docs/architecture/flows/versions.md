@@ -25,10 +25,11 @@ stateDiagram-v2
 
 1. **Product boundary.** The MVP has no numbered sources, version hotkeys,
    history popup, or rollback. Each page has one canonical
-   `.termcraft/pages/<slug>/page.tsx`. Git remains optional for generation,
+   `.termcraft/design/<entry>`, the file `design/pages.json` binds to the slug.
+   Git remains optional for generation,
    preview, pins, chats, migration, and export.
 2. **History discovery.** `GitHistory` walks the active page path from current
-   `HEAD` through first parents. Only commits whose trees changed `page.tsx`
+   `HEAD` through first parents. Only commits whose trees changed that page's entry
    appear. A merge is one mainline entry; other refs and directory-rename
    detection are excluded. Commands retain full object ids; UI bounds and escapes
    displayed hash, author, committer time, and subject. Shallow history is marked
@@ -77,7 +78,7 @@ stateDiagram-v2
    commit nor an overwrite backup; the user's confirmation remains the boundary
    for intentionally discarded unstaged page bytes.
 10. **Commit commands.** `/commit-page` selects only the active canonical
-    `page.tsx`. `/commit-infra` selects portable `project.toml`, generated
+    entry file. `/commit-infra` selects portable `project.toml`, generated
     `.gitignore`, and future explicitly portable project-level files.
     `/commit-all` selects every eligible non-ignored portable or derived path under
     `.termcraft/`, including pages, chats, pin logs, and export. Local workspace,

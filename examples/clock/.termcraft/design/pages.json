@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "pages": [
+    {
+      "slug": "dashboard",
+      "entry": "pages/dashboard.tsx"
+    },
+    {
+      "slug": "calendar",
+      "entry": "pages/calendar.tsx"
+    }
+  ]
+}

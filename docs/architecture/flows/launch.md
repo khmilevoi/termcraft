@@ -13,7 +13,7 @@ flowchart TD
     trustq -- "created here / already trusted" --> posttrust{"older format?"}
     trustq -- "prompt accepted" --> posttrust
     trustq -- "prompt declined" --> untrusted["project ready but untrusted/read-only: chat visible · execution disabled"]
-    posttrust -- "no" --> load["load canonical page.tsx sources"]
+    posttrust -- "no" --> load["load the canonical design tree"]
     posttrust -- "yes" --> offer["bulk migration offer"] --> migrate["verified external backup + MigrationTransaction"] --> load
     load --> sourceq{"sources pass Gate and host load?"}
     sourceq -- "yes" --> ws["Workspace"]
@@ -147,7 +147,8 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
    an interactive trust prompt as a round trip, so a never-granted subject opens
    `untrusted-read-only` and the designer's accept/decline is carried by a follow-up
    `project.setTrust`.
-4. After trust, termcraft loads each page's canonical `.termcraft/pages/<slug>/page.tsx`
+4. After trust, termcraft loads each page's canonical entry file under
+   `.termcraft/design/`, named by `design/pages.json`,
    by reading and hashing its bytes; it never silently substitutes another source.
    The composition root now assembles the real graph, so the Gate runs over every
    canonical source as part of the open sequence: each page becomes a `ready`

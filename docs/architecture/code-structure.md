@@ -34,7 +34,7 @@ flowchart LR
 
     subgraph inner["Inner — knows the domain, imports no adapter"]
         core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes"]
-        entities["entities/<br/>Page · Chat · Turn · Pin<br/>pure types · no ports"]
+        entities["entities/<br/>Page · Chat · Turn · Pin · DesignTree<br/>pure types · no ports"]
     end
 
     ui["ui/ · OpenTUI shell<br/>(phase 7 complete)"]
@@ -331,6 +331,15 @@ final group's own heading spells out which is which).
 - `src/entities/page/index.ts`, `src/entities/page/types.ts`,
   `src/entities/page/model/slug.ts` — a landed module in the `types.ts` + `model/` +
   `index.ts` shape, with no `ui/` because the module has none
+- `src/entities/design-tree/index.ts`, `src/entities/design-tree/types.ts`,
+  `src/entities/design-tree/model/` — the design tree's own vocabulary and the pure
+  decisions every ring keys off: the `design/pages.json` schema, the two legal import
+  edges and their narrow resolution, the closure walk and its Merkle hashes, and the
+  measured "does the runtime execute this file's text" / "does it parse JSX in it"
+  predicates. Those last two live HERE rather than in their first consumer precisely
+  because `gate` and `host` both need them and the DAG forbids one importing the other —
+  two independently derived answers to one question is how two enforcement points come
+  to disagree
 - `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
