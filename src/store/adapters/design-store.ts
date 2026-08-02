@@ -19,8 +19,16 @@ import { nowIso } from "./types";
 // now wires this instance into `KernelDeps.designReader`, and every former caller
 // (`core/kernel/model/handlers/{page-descriptors,page-pin,preview-export,selection-model,
 // turn}.ts`, `core/project/model/{page-mutations,open-sequence}.ts`, `core/export/model/
-// {snapshot,publish}.ts`) reads through `design/pages.json`'s own `entry` instead. Nothing in
-// `src/` computes a page's file path from its slug any more.
+// {snapshot,publish}.ts`) reads through `design/pages.json`'s own `entry` instead.
+//
+// NO SLUG-DERIVED path is used to READ or WRITE a design-tree file any more. Checked, not
+// claimed: `grep -rn 'pages/\${' src/ --include=*.ts --include=*.tsx | grep -v '\.test\.'`
+// returns exactly three sites, none of them a tree access, and each flagged in
+// `.superpowers/sdd/2026-07-28-design-tree-canonical-source/task-14-report.md` §9 —
+// `core/export/model/package.ts:84,186` name the EXPORT ARTIFACT's own internal layout
+// (Task 16's call whether that should mirror the tree), and
+// `ui/preview/model/repair-prompt.ts:27` builds a DISPLAY string for a repair prompt, which
+// now names a path that need not exist. Re-run that grep before restating this.
 //
 // RESOLVED SIGNATURE MISMATCH (plan Task 1, `renameTitle`, "flag, don't guess"): the port
 // takes `(pageSlug, title)`, but `TransactionEngine.renamePageTitle` targets an explicit
