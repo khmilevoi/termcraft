@@ -375,12 +375,16 @@ export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
  * comes free with Gap E's listing (`ChatStore.list()`, `store/model/chat-listing.ts`).
  *
  * A read failure resolves `"unknown"`, never `"no-content"` (fix round 1, Finding 1) — logged
- * either way (errore rule 21). `"unknown"` is folded into a dispatch-anyway decision by
- * {@link resolveShellLaunch}, not into a silent Home: the Kernel's own open sequence
- * (`core/kernel/model/handlers/project.ts`'s `runProjectReadySequence`) re-reads the same two
- * facts and is the one place a genuine failure can reach the event stream a real client
- * observes — this composition-root probe's own `console.warn` fires during shell composition,
- * before `createUiRoot` has even taken the terminal, so it is not user-visible on its own.
+ * either way (errore rule 21). `"unknown"` folds into `hasContent: true` in
+ * {@link resolveShellLaunch}, matching `"has-content"` rather than asserting the opposite,
+ * unconfirmed fact. Since workspace-first launch (2026-08-02) the startup dispatch reads
+ * `existing` alone (`ShellLaunchV1`'s own doc comment), so this choice no longer decides whether
+ * anything is dispatched — it only keeps `hasContent`'s own reported value honest. The Kernel's
+ * own open sequence (`core/kernel/model/handlers/project.ts`'s `runProjectReadySequence`)
+ * re-reads the same two facts regardless, and is the one place a genuine failure can reach the
+ * event stream a real client observes — this composition-root probe's own `console.warn` fires
+ * during shell composition, before `createUiRoot` has even taken the terminal, so it is not
+ * user-visible on its own.
  *
  * Exported — narrowed to `Pick<OpenProject, "manifest" | "chats">` — so `create-shell.test.ts`
  * can drive both failure branches directly against a narrow fake: a TRANSIENT failure on either
@@ -413,12 +417,15 @@ export async function probeProjectContent(
 /**
  * Turns `existing` (whether `store.openProject` itself succeeded) and the content probe into
  * the shell's own launch discriminator (fix round 1, Finding 1). `"unknown"` folds into
- * `hasContent: true`, exactly like `"has-content"` — dispatching `project.open` anyway is the
- * only honest response to "the disk could not confirm there is nothing here"; defaulting to
- * Home would assert the opposite fact the failed read never established. The `existing` gate is
- * unchanged: a freshly created project (`existing: false`) never reaches this with anything but
- * `"no-content"` (`interactiveShell` skips the probe entirely for it), so it always resolves
- * `hasContent: false` regardless of what `probe` would say.
+ * `hasContent: true`, exactly like `"has-content"` rather than `"no-content"` — the honest
+ * response to "the disk could not confirm there is nothing here" is to report that there might
+ * be something, never to assert the opposite, unconfirmed fact. `hasContent` no longer decides
+ * anything downstream (workspace-first launch, 2026-08-02: `run-app.ts`'s startup dispatch and
+ * `deriveScreen` both read `existing` instead — see `ShellLaunchV1`'s own doc comment), but its
+ * own reported value must still be honest. The `existing` gate is unchanged: a freshly created
+ * project (`existing: false`) never reaches this with anything but `"no-content"`
+ * (`interactiveShell` skips the probe entirely for it), so it always resolves `hasContent: false`
+ * regardless of what `probe` would say.
  *
  * A pure function of its two inputs — exported and unit-tested directly (fix round 1) rather
  * than only indirectly through a disk-backed `createShell` fixture, since forcing the `"unknown"`

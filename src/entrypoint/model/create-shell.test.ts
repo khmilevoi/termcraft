@@ -87,9 +87,10 @@ function testDeps(): ShellDeps {
 
 /**
  * A real on-disk project whose manifest lists one page and whose `chats/` directory does not
- * exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose
- * (fix-bundle spec §2.4/§2.5): `chats/` is git-ignored, so a project checked out from Git carries
- * pages but zero chats. Built by creating a real project through the Store (so `.termcraft/`'s
+ * exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment names as its ORIGINAL
+ * purpose, before the routing predicate moved to `existing` (fix-bundle spec §2.4/§2.5): `chats/`
+ * is git-ignored, so a project checked out from Git carries pages but zero chats. Built by
+ * creating a real project through the Store (so `.termcraft/`'s
  * manifest/lease/durability plumbing is genuine, not hand-rolled), then editing the on-disk
  * manifest to add a page and removing the two paths a clone never carries: `chats/` and
  * `workspace.local.toml` (both hard-local/git-ignored, `store/toml/model/gitignore.ts`) — this is
@@ -156,7 +157,7 @@ async function existingProjectWithChatOnly(): Promise<string> {
 /**
  * A real on-disk EXISTING project with zero pages AND zero chats (fix round 1) — "created
  * yesterday, nothing generated yet", the reviewer's own words for the common relaunch this
- * predicate's chats branch had no coverage for. Distinct from a genuinely fresh directory
+ * probe's chats branch had no coverage for. Distinct from a genuinely fresh directory
  * (`existing: false`): this project already has a `.termcraft/`, `store.openProject` succeeds on
  * it, and the ONLY reason `hasContent` comes back `false` is that both real reads confirm there
  * is nothing yet — `chats/` is removed after creation to delete the one thing `createProject`
@@ -420,7 +421,7 @@ describe("createShell", () => {
     await shell.close();
   });
 
-  // --- fix round 1: the predicate's chats-list branch, on real disk (previously untested) -----
+  // --- fix round 1: the probe's chats-list branch, on real disk (previously untested) ---------
 
   test("an existing project with no pages but its first chat still present reaches the Workspace", async () => {
     const root = await existingProjectWithChatOnly();
@@ -430,7 +431,7 @@ describe("createShell", () => {
     await shell.close();
   });
 
-  test("an existing project with no pages and no chats — created yesterday, nothing generated yet — stays on Home", async () => {
+  test("an existing project with no pages and no chats — created yesterday, nothing generated yet — still opens into the Workspace", async () => {
     const root = await existingProjectWithNothing();
     const shell = await createShell("interactive", envFor(root), testDeps());
     if (shell instanceof Error) throw shell;
@@ -444,8 +445,11 @@ describe("createShell", () => {
  * `false` ("no content"), which the Global Constraints forbid ("Never fabricate a fact ... a
  * port that cannot answer honestly refuses (logged) rather than substituting a placeholder").
  * `probeProjectContent` now returns a third outcome, `"unknown"`, and `resolveShellLaunch` folds
- * it into `hasContent: true` — the Kernel's own open sequence gets the chance to report the real
- * failure through the event stream instead of a silent Home. Both failure branches need a
+ * it into `hasContent: true` — the honest report given an unconfirmed disk, never the opposite,
+ * fabricated one. Since workspace-first launch (2026-08-02) the startup dispatch reads `existing`
+ * alone, so this no longer decides whether the Kernel's own open sequence gets the chance to
+ * report a real failure through the event stream — that runs regardless, for every `existing`
+ * project. Both failure branches need a
  * TRANSIENT read failure after a successful `store.openProject`, which the real `Store` has no
  * seam to inject (see `probeProjectContent`'s own doc comment) — driven here directly against
  * `fakeContentSource` instead.

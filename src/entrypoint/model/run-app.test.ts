@@ -297,7 +297,7 @@ describe("runApp", () => {
     });
   });
 
-  describe("the Gap D startup dispatch (an existing project with content opens straight into the Workspace)", () => {
+  describe("the Gap D startup dispatch (an existing project opens straight into the Workspace)", () => {
     test("dispatches project.open at startup for a project that holds content", async () => {
       const calls: string[] = [];
       const kernel = createFakeKernel();

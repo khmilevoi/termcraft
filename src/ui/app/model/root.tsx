@@ -158,15 +158,30 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
   }
 
   // Hoisted out of the JSX below so the returned handle can close over it — `abandonStartupOpen`
-  // has to reach the SAME `UiDeps` the mounted tree is reading.
-  const deps = createUiDeps(
-    options.port,
-    { w: renderer.width, h: renderer.height },
-    options.env,
-    options.agentHealthProbe,
-    options.requestExit,
-    options.agentSelection,
+  // has to reach the SAME `UiDeps` the mounted tree is reading. Still wrapped in `errore.try`,
+  // same as `mounted` below: a synchronous throw here must still destroy the renderer and lift
+  // the console gate before returning, matching every other release path in this function (fix
+  // round 1 — the hoist must not let this one bypass that invariant). Unreachable today
+  // (`createUiDeps` only builds Reatom atoms/actions/computeds and never throws in practice), but
+  // the defensive branch keeps the release paths uniform rather than special-casing this one.
+  const deps = errore.try(() =>
+    createUiDeps(
+      options.port,
+      { w: renderer.width, h: renderer.height },
+      options.env,
+      options.agentHealthProbe,
+      options.requestExit,
+      options.agentSelection,
+    ),
   );
+  if (deps instanceof Error) {
+    try {
+      renderer.destroy();
+    } finally {
+      resumeConsolePassthrough();
+    }
+    return new UiRootError({ operation: "mount app", cause: deps.cause ?? deps });
+  }
 
   const mounted = errore.try(() => root.render(<App deps={deps} />));
   if (mounted instanceof Error) {

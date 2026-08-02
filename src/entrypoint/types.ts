@@ -34,15 +34,16 @@ export interface AppShell {
  * nothing downstream can re-derive them.
  *
  * `hasContent` reports whether the project holds anything to view or edit — at least
- * one page, or at least one chat. Its real purpose is the CLONE (pages present, zero chats, since
- * `chats/` is git-ignored as of fix-bundle §2.5), which is exactly the case that most needs the
- * Workspace; `createProject` always mints the first chat header, so "exists but is empty" is
- * practically unreachable — this field is `false` essentially only for a genuinely fresh
- * directory. `true` also for an EXISTING project whose content could not actually be confirmed
- * (a manifest or chat-listing read failed, fix round 1 Finding 1,
- * `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing here" just because the
- * disk could not answer; the Kernel's own open sequence still gets the chance to surface the real
- * failure.
+ * one page, or at least one chat. Its purpose WAS the CLONE case (pages present, zero chats, since
+ * `chats/` is git-ignored as of fix-bundle §2.5) reaching the Workspace — that was exactly the
+ * case that most needed it, before the predicate moved to `existing` (see below). `createProject`
+ * always mints the first chat header, so "exists but is empty" is practically unreachable — this
+ * field is `false` essentially only for a genuinely fresh directory. `true` also for an EXISTING
+ * project whose content could not actually be confirmed (a manifest or chat-listing read failed,
+ * fix round 1 Finding 1, `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing
+ * here" just because the disk could not answer, though workspace-first launch (2026-08-02) made
+ * that choice moot: an `existing` project's startup dispatch runs regardless of what the probe
+ * found.
  *
  * NO LONGER THE ROUTING PREDICATE (workspace-first launch, 2026-08-02): `existing` is. Both
  * `run-app.ts`'s startup dispatch and `deriveScreen` read `existing`, because routing on one
