@@ -13,7 +13,7 @@ import type { PageSlug } from "entities/page";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
 // change), so importing the barrel back from here would be a self-referencing cycle.
-import { runGate, runTreeImports } from "../model/gate";
+import { hasTreePath, runGate, runTreeImports } from "../model/gate";
 import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
@@ -79,9 +79,19 @@ import type { GateError } from "../types";
  * design-tree`'s `resolveClosure` walking `edgesOf` (`../model/tree-scan`'s `scanModuleEdges`,
  * the SAME edge reader `scanImportAllowlist` itself uses, so the closure walk and the
  * allowlist scan can never disagree about what a file imports) over the SAME `has`
- * (`treePaths`) the flat allowlist scan already resolves against. One whole-tree pass now
- * produces both results; `core` still never imports `gate` — only this adapter, behind the
- * port, does the resolving.
+ * (`../model/gate`'s `hasTreePath`, shared with the flat allowlist scan below so the two
+ * halves of one whole-tree scan cannot build two independently-derived notions of "the tree
+ * has this path" — task-13 review round 2, Minor M-e). One whole-tree pass now produces both
+ * results; `core` still never imports `gate` — only this adapter, behind the port, does the
+ * resolving.
+ *
+ * CORRECTED (task-13 review round 2): round 1's own closure resolution had two gaps, both
+ * fixed in `resolveClosuresFor`/`edgesOf` below — see their own doc comments for the full
+ * rationale and the executed before/after: (Important 1) a code file the walk reached but had
+ * no source text for silently truncated the closure with ZERO diagnostics anywhere; (Important
+ * 2) every edge `resolveClosure` itself rejected was reported a SECOND time here, on top of the
+ * flat scan's own independent report of the identical edge — measured as 4 near-identical
+ * diagnostics for 1 real violation across 3 pages sharing one bad shared-module import.
  */
 
 function createTypeCheckPort(
@@ -152,55 +162,87 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
    * `runTreeImports` itself scans, read back through `scanModuleEdges` (the raw-edge sibling
    * of `scanImportAllowlist` — both share `readStaticImportSpecifier`, so the closure walk
    * can never see a different import graph than the allowlist scan just checked). A relPath
-   * that is not code ({@link isCodeFile}) or whose text `files` does not hold answers `[]` —
-   * no edges to walk, not a resolution failure: an asset can be a legal closure member (design
-   * §6 places no extension restriction on a resolution TARGET) and simply has nothing to scan.
+   * that is not code ({@link isCodeFile}) answers `[]` — no edges to walk, not a resolution
+   * failure: an asset can be a legal closure member (design §6 places no extension restriction
+   * on a resolution TARGET) and simply has nothing to scan.
+   *
+   * A relPath that IS code but whose text `files` does not hold ALSO answers `[]` — there is
+   * no other honest answer `edgesOf` itself can give — but records `relPath` into `unscanned`
+   * first (task-13 review round 2, Important 1): the caller uses that set to refuse to report
+   * this walk's closure at all, rather than silently returning it truncated at exactly the
+   * point this scan ran out of text to read. See {@link resolveClosuresFor}'s own doc for the
+   * full rationale and why this is NOT the same gap `UNSCANNED_IMPORT` already covers.
    */
-  function edgesOf(files: ReadonlyMap<string, string>, relPath: string): readonly string[] {
+  function edgesOf(
+    files: ReadonlyMap<string, string>,
+    relPath: string,
+    unscanned: Set<string>,
+  ): readonly string[] {
     if (!isCodeFile(relPath)) return [];
     const source = files.get(relPath);
-    if (source === undefined) return [];
+    if (source === undefined) {
+      unscanned.add(relPath);
+      return [];
+    }
     return scanModuleEdges(source);
   }
 
   /**
    * Resolves every manifest entry's closure (design §7) over the SAME whole-tree inventory
-   * `treePaths` the flat allowlist scan below already resolves against. A closure that cannot
-   * be resolved (an edge anywhere in it is illegal or missing — {@link resolveClosure}'s own
-   * doc: "an illegal edge ANYWHERE in the closure is fatal here rather than merely skipped")
-   * reports a `GateErrorV1` naming the page and is simply ABSENT from `closures` — never a
-   * fabricated partial file list. This does not fail open: the SAME edge is independently
-   * caught by the flat per-file scan below too (`scanTreeImports` scans every code file
-   * unconditionally, reachable or not), so a candidate whose closure fails to resolve already
-   * carries a fatal error and never reaches a caller that would consult its (absent) closure.
+   * `treePaths` the flat allowlist scan below already resolves against, and the SAME `files`
+   * text it reads. Two distinct failure shapes, both excluding the slug from `closures` —
+   * never a fabricated partial file list — but only ONE of them adds its own diagnostic here:
+   *
+   * 1. `resolved instanceof Error` — an edge `resolveDesignSpecifier` itself rejects (illegal
+   *    shape, escapes the tree, or genuinely unresolvable). NO error is added here for this
+   *    case (task-13 review round 2, Important 2 — corrected from round 1, which double-
+   *    reported every such edge): `edgesOf` above only ever returns a real edge for a file
+   *    whose text is in `files`, and the flat scan below (`scanTreeImports`) scans every ONE
+   *    of those same files' own imports unconditionally — so any edge this walk could reject,
+   *    the flat scan has ALREADY rejected, same file, same specifier, same line/column.
+   *    Measured: three pages sharing one bad edge in one shared module used to produce 4
+   *    near-identical diagnostics for the ONE violation; this file's own test pins the fixed
+   *    count.
+   * 2. `unscanned.size > 0` — a code file this walk reached has NO text in `files` at all, so
+   *    `edgesOf` had nothing to scan and the walk stopped there with no signal that anything
+   *    was missing (task-13 review round 2, Important 1). This is NOT the same fact
+   *    `UNSCANNED_IMPORT` (the flat scan's own vocabulary) reports: `UNSCANNED_IMPORT` fires
+   *    only when some OTHER file the flat scan DID scan imports the missing one, and says
+   *    nothing about which page's closure that endangers; a missing file that is this page's
+   *    OWN entry, or reachable only through another file ALSO missing from `files`, produces
+   *    NOTHING from the flat scan at all — silent truncation with zero diagnostics anywhere,
+   *    which is the exact §7 bug this whole task exists to prevent. So this DOES add its own
+   *    error here, under its own code, naming the page whose closure cannot be trusted.
    */
   function resolveClosuresFor(input: {
     readonly pages: readonly PageEntryV1[];
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
   }): { readonly closures: readonly GateClosureV1[]; readonly errors: readonly GateError[] } {
-    const present = new Set(input.treePaths);
-    const has = (relPath: string) => present.has(relPath);
+    const has = hasTreePath(input.treePaths);
     const closures: GateClosureV1[] = [];
     const errors: GateError[] = [];
     for (const page of input.pages) {
+      const unscanned = new Set<string>();
       const resolved = resolveClosure({
         entry: page.entry,
         has,
-        edgesOf: (relPath) => edgesOf(input.files, relPath),
+        edgesOf: (relPath) => edgesOf(input.files, relPath, unscanned),
       });
-      if (resolved instanceof Error) {
-        // Same code mapping `scanImportAllowlist` uses for the identical `SpecifierRejectedError`
-        // (`gate/model/import-scan.ts`): "UNRESOLVED" is usually a typo or a missing file, every
-        // other code is a rule violation.
-        errors.push({
-          kind: "import",
-          code: resolved.code === "UNRESOLVED" ? "UNRESOLVED_IMPORT" : "FORBIDDEN_IMPORT",
-          message: `page "${page.slug}": ${resolved.message}`,
-          file: String(resolved.from),
-        });
-        continue;
+      if (resolved instanceof Error) continue; // see this function's own doc, case 1
+
+      if (unscanned.size > 0) {
+        for (const relPath of unscanned) {
+          errors.push({
+            kind: "import",
+            code: "CLOSURE_SOURCE_MISSING",
+            message: `page "${page.slug}": its closure reaches "${relPath}", whose source this pass was never given — the closure cannot be verified complete`,
+            file: relPath,
+          });
+        }
+        continue; // see this function's own doc, case 2
       }
+
       closures.push({ slug: page.slug, files: resolved.files });
     }
     return { closures, errors };

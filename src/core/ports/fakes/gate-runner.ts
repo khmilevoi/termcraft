@@ -128,6 +128,18 @@ export function createFakeGateRunner(): FakeGateRunner {
     // scanner to derive edges from (that scanner lives in `gate`, which `core/ports` may not
     // import) — a test that wants specific closures scripts them via
     // `queueRunTreeImportsResult` instead of relying on a synthesized default.
+    //
+    // TRAP FOR ANY CALLER OF THIS FAKE (task-13 review round 2, Minor M-d), NAMED LOUDLY: the
+    // REAL adapter (`gate/adapters/gate-runner.ts`) returns one closure per RESOLVING
+    // `input.pages` entry — this fake never does, for ANY `pages` you pass it, unless you
+    // `queueRunTreeImportsResult(...)` first. A test built against this default sees
+    // `closures: []` unconditionally, so `selectChangedPages(...)` against it always reports
+    // "nothing changed for any page" — the EXACT silent-nothing-changed failure mode design §7
+    // and this whole task exist to prevent, now reproduced by a fixture default instead of
+    // production code. Anyone wiring `core/turns`/`core/kernel` against this fake (Task 14) and
+    // asserting on `changedPageSlugs`/pin resolution MUST queue a real closure list — the
+    // silent honest-empty default here will otherwise look identical to "no page changed" in
+    // every test that forgets to.
     return { errors: [], closures: [] };
   }
 

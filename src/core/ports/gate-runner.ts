@@ -204,6 +204,14 @@ export interface GateRunner {
    * whole-tree scan this method already runs is what resolves every entry's transitive file
    * set, so producing `closures` here costs no second tree walk).
    *
+   * CONTRACT (task-13 review round 2, Important 1): a complete `closures` entry for a page
+   * requires `files` to hold text for EVERY code file that page's closure reaches, not merely
+   * the asset exemption two paragraphs up — an executable file (`.ts`/`.tsx`/`.js`/`.jsx`/
+   * `.mjs`/`.cjs`/`.mts`/`.cts`, or extensionless) named in `treePaths` but absent from `files`
+   * makes that page's closure UNVERIFIABLE, never silently smaller than it really is: the
+   * adapter reports it via `errors` and OMITS the slug from `closures` entirely rather than
+   * returning a truncated file list a caller could mistake for the whole thing.
+   *
    * SECURITY-CRITICAL FLAG, MUST-WIRE (task-12 review round 1 — registered in red-debt.md):
    * declared on this port, implemented by the adapter, but NO production caller invokes it yet
    * — `core/turns/model/validation.ts` calls only `runManifestSlice`/`runPage`. Task 14 (the

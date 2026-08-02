@@ -168,7 +168,7 @@ describe("createGateRunnerAdapter", () => {
       expect(bySlug.get("b" as PageSlug)).toEqual(["lib/theme.ts", "pages/b.tsx"]);
     });
 
-    test("an unresolvable edge inside the closure is reported and the slug's closure is absent, not partial", async () => {
+    test("an unresolvable edge inside the closure is reported ONCE (by the flat scan, not doubled by the closure walk) and the slug's closure is absent, not partial", async () => {
       const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
       const files = new Map([
         ["pages/a.tsx", `import { x } from "../lib/missing"\n${cleanSource}`],
@@ -182,7 +182,108 @@ describe("createGateRunnerAdapter", () => {
       });
 
       expect(result.closures).toEqual([]);
-      expect(result.errors.some((e) => e.kind === "import")).toBe(true);
+      // Exactly one — the flat scan's own report of the same edge. Task-13 review round 1
+      // pushed a SECOND, closure-walk-owned error here too; round 2, Important 2 removed it as
+      // pure duplication (this file's own `describe` below pins the multi-page shape that
+      // measured the duplication directly).
+      expect(result.errors.filter((e) => e.kind === "import")).toHaveLength(1);
+    });
+  });
+
+  describe("runTreeImports() closure-completeness diagnostics (task-13 review round 2, Important 1)", () => {
+    test("BEFORE/AFTER PROOF: an entry whose own source is missing from `files` used to silently truncate to a single-file closure with ZERO diagnostics — now excluded from `closures` with an explicit error", async () => {
+      // The exact probe the review executed against `eeaf80f`: `treePaths` names the entry,
+      // but `files` never got its text (a caller bug, or a caching gap) — `lib/theme.ts`/
+      // `lib/tokens.ts` ARE present, `pages/a.tsx` itself is NOT. Under `eeaf80f` this returned
+      // `{errors: [], closures: [{slug:"a", files:["pages/a.tsx"]}]}` — a page reported as
+      // "unchanged" forever the moment `lib/theme.ts` edits, since its own closure never even
+      // reached that far. Verified by hand: reverting this file's `edgesOf`/`resolveClosuresFor`
+      // to the `eeaf80f` shape reproduces exactly that JSON against this same fixture.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["lib/theme.ts", `import { y } from "./tokens"\nexport const x = 1`],
+        ["lib/tokens.ts", `export const y = 2`],
+        // Deliberately ABSENT: "pages/a.tsx" — its own text is never given to this pass.
+      ]);
+      const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
+      });
+
+      expect(result.closures).toEqual([]);
+      expect(result.errors).toEqual([
+        {
+          kind: "import",
+          code: "CLOSURE_SOURCE_MISSING",
+          message: expect.stringContaining("pages/a.tsx"),
+          file: "pages/a.tsx",
+        },
+      ]);
+    });
+
+    test("a file reachable from a scanned file but missing its own text ALSO excludes the closure, alongside whatever the flat scan separately reports for that edge", async () => {
+      // The "milder" shape the review also executed: `pages/a.tsx` (scanned) imports
+      // `lib/theme.ts` (scanned), which imports `lib/tokens.ts` — present in the tree, but its
+      // text is missing. The flat scan independently reports `UNSCANNED_IMPORT` for THAT edge
+      // (attributed to `lib/theme.ts`); this is a DIFFERENT fact (page `a`'s closure integrity)
+      // reported under a DIFFERENT code, not a duplicate of it.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/a.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["lib/theme.ts", `import { y } from "./tokens"\nexport const x = 1`],
+        // Deliberately ABSENT: "lib/tokens.ts" — reachable, but never given text.
+      ]);
+      const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
+      });
+
+      expect(result.closures).toEqual([]);
+      const closureError = result.errors.find((e) => e.code === "CLOSURE_SOURCE_MISSING");
+      expect(closureError?.file).toBe("lib/tokens.ts");
+      expect(result.errors.some((e) => e.code === "UNSCANNED_IMPORT")).toBe(true);
+    });
+  });
+
+  describe("runTreeImports() no longer duplicates a shared-module violation per reaching page (task-13 review round 2, Important 2)", () => {
+    test("BEFORE/AFTER PROOF: three pages sharing one forbidden import in one shared module used to report it 4 times (1 flat-scan + 3 closure-walk copies) — now reports it exactly once", async () => {
+      // The exact probe the review executed against `eeaf80f`: pages a/b/c each import
+      // `lib/theme.ts`, which imports the forbidden `node:fs`. `eeaf80f` returned 4
+      // near-identical `FORBIDDEN_IMPORT` entries, all naming `lib/theme.ts`, three of them
+      // prefixed `page "x": ` — verified by hand, reverting this file's `resolveClosuresFor` to
+      // the `eeaf80f` shape reproduces exactly 4 against this same fixture.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const themeSource = `import fs from "node:fs"\nexport const x = 1`;
+      const files = new Map([
+        ["pages/a.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["pages/b.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["pages/c.tsx", `import { x } from "../lib/theme"\n${cleanSource}`],
+        ["lib/theme.ts", themeSource],
+      ]);
+      const treePaths = ["pages/a.tsx", "pages/b.tsx", "pages/c.tsx", "lib/theme.ts"];
+
+      const result = await adapter.runTreeImports({
+        files,
+        treePaths,
+        pages: [
+          { slug: "a" as PageSlug, entry: "pages/a.tsx" },
+          { slug: "b" as PageSlug, entry: "pages/b.tsx" },
+          { slug: "c" as PageSlug, entry: "pages/c.tsx" },
+        ],
+      });
+
+      const forbidden = result.errors.filter((e) => e.code === "FORBIDDEN_IMPORT");
+      expect(forbidden).toHaveLength(1);
+      expect(forbidden[0]?.file).toBe("lib/theme.ts");
+      // None of the three pages get a fabricated closure — the shared module's own violation
+      // makes every one of them fatally unresolvable.
+      expect(result.closures).toEqual([]);
     });
   });
 

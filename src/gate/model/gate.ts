@@ -156,6 +156,18 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
 }
 
 /**
+ * A membership predicate over the tree's full inventory (design §6's `has`) — shared by
+ * {@link runTreeImports} below and `gate/adapters/gate-runner.ts`'s closure resolution
+ * (task-13 review round 2, Minor M-e), so the two halves of one whole-tree scan can never
+ * build two independently derived `Set`s that quietly drift apart on what "the tree has this
+ * path" means.
+ */
+export function hasTreePath(treePaths: readonly string[]): (relPath: string) => boolean {
+  const present = new Set(treePaths);
+  return (relPath) => present.has(relPath);
+}
+
+/**
  * The whole-tree import allowlist (design §8 step 4), run ONCE per turn before any per-page
  * stage. It lives here rather than inside `runGate` because a shared module belongs to no
  * single page: scanning it per page would report the same violation N times and would miss
@@ -183,8 +195,7 @@ export function runTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;
   readonly treePaths: readonly string[];
 }): GateError[] {
-  const present = new Set(input.treePaths);
-  return scanTreeImports({ files: input.files, has: (relPath) => present.has(relPath) }).map(
+  return scanTreeImports({ files: input.files, has: hasTreePath(input.treePaths) }).map(
     (error) => ({
       kind: "import" as const,
       code: error.code,

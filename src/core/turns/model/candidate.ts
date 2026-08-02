@@ -217,11 +217,16 @@ export function diffTreeInventory(
  * DEDUPLICATED BY CONSTRUCTION (task-13 review round 1, Minor M2): `input.closures` is a raw
  * list this function does not control the shape of, and nothing upstream guarantees one slug
  * names at most one closure — a duplicate slug entry would otherwise be filtered and mapped
- * twice, emitting the SAME slug twice into the result. That would double the resolved-pin
- * append `finalize.ts`'s `resolveSentPinAppends` builds for it (never a correctness bug there,
- * `resolveSentPinAppends` itself is keyed by pin, not by page — but still a needless, confusing
- * duplicate for any caller that assumes a slug set). Returned through a `Set`, so the result is
- * duplicate-free regardless of what `input.closures` contains.
+ * twice, emitting the SAME slug twice into the result array. CORRECTED (task-13 review round
+ * 2, Minor M-b): this does NOT double anything downstream — `core/pins/model/
+ * turn-resolution.ts`'s `resolveSentPinAppends` runs its own `changedPages` input through a
+ * `Set` before filtering `sentPins` against it (verified: feeding it `["a","a"]` produces the
+ * SAME single append a plain `["a"]` would), so a duplicate slug here was never a correctness
+ * bug there. The real, narrower reason to dedupe here: `readonly PageSlug[]` reads as a SET to
+ * any caller that has not read `resolveSentPinAppends`' own defensive dedupe — one that counts
+ * `changedPageSlugs.length` as "how many pages changed", or iterates it for a per-page side
+ * effect, would silently double-count or double-act on this exact page. Returned through a
+ * `Set`, so the result is duplicate-free regardless of what `input.closures` contains.
  */
 export function selectChangedPages(input: {
   readonly closures: readonly { readonly slug: PageSlug; readonly files: readonly string[] }[];

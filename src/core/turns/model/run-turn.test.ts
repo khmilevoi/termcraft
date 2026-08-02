@@ -112,8 +112,13 @@ function baseAdmission(): AdmissionInputV1 {
     candidatePins: [],
     workspace: {
       // `pages.json` is a real staged tree file now (plan Task 7) — `freezeTurnCandidate`
-      // reads it back via `StagingService.readCandidateFile` to populate `manifestText`, so
-      // every fixture that reaches a real freeze needs one staged, or that read 404s.
+      // reads it back via `StagingService.readCandidateFile` to populate `manifestText`.
+      // CORRECTED (task-13 review round 2, Minor M-a): staging one here is no longer
+      // required to avoid a failure — an UNLISTED manifest is now an honest empty
+      // `manifestText` (`candidate.ts`'s own "AN ABSENT design/pages.json IS AN HONEST
+      // ABSENCE" header), never a 404. It stays staged anyway so these fixtures exercise the
+      // ordinary "manifest present" path `staging.calls` below asserts a `readCandidateFile`
+      // call for, matching a real turn.
       treeFiles: [
         { relPath: "pages.json", sourcePath: "/fake/pages.json" },
         { relPath: "screens/landing.tsx", sourcePath: "/fake/landing.tsx" },
