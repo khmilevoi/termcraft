@@ -8,6 +8,7 @@ import { deriveTabs, neighbourTabSlug, tabWidth, tabsOverflow } from "./tabs";
 const ready = (slug: string, title: string): PageDescriptorV1 => ({
   status: "ready",
   pageSlug: slug,
+  entry: `pages/${slug}.tsx`,
   sourceHash: TEST_SHA,
   title,
   minSize: { w: 80, h: 24 },
@@ -18,6 +19,7 @@ const ready = (slug: string, title: string): PageDescriptorV1 => ({
 const invalid = (slug: string): PageDescriptorV1 => ({
   status: "invalid",
   pageSlug: slug,
+  entry: `pages/${slug}.tsx`,
   sourceHash: TEST_SHA,
   error: { code: "GATE", safeMessage: "bad" },
 });

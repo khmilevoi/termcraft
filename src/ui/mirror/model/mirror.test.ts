@@ -506,6 +506,7 @@ describe("mirror.apply — pages", () => {
           {
             status: "ready",
             pageSlug: "main",
+            entry: "pages/main.tsx",
             sourceHash: TEST_SHA,
             title: "Main",
             minSize: { w: 80, h: 24 },

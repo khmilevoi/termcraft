@@ -5,7 +5,7 @@ import { trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
-import { buildRepairPrompt, isDesignRenderFailure } from "ui/preview";
+import { buildRepairPrompt, isDesignRenderFailure, pageEntryOf } from "ui/preview";
 import { deriveTabs, neighbourTabSlug, nextFocus, resolveEsc, selectPage } from "ui/workspace";
 
 import type { UiDeps, UiLocalState } from "./deps";
@@ -458,6 +458,9 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     }
     const text = buildRepairPrompt({
       pageSlug: preview.pageSlug,
+      // The page's real file, off the descriptor list — never derived from the slug, which is
+      // what made this message name a path that could not exist (task 16).
+      entryRelPath: pageEntryOf(deps.mirror.pageDescriptors(), preview.pageSlug),
       safeMessage: preview.finalFailure.safeMessage,
       attempts: preview.attempts,
     });

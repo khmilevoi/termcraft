@@ -26,6 +26,7 @@ function ready(pageSlug: PageSlug, sourceHash: Sha256Hex, title = "Title"): Page
   return {
     status: "ready",
     pageSlug,
+    entry: `pages/${pageSlug}.tsx`,
     sourceHash,
     title,
     minSize: { w: 80, h: 24 },
@@ -38,6 +39,7 @@ function invalid(pageSlug: PageSlug, sourceHash: Sha256Hex): PageDescriptorV1 {
   return {
     status: "invalid",
     pageSlug,
+    entry: `pages/${pageSlug}.tsx`,
     sourceHash,
     error: { code: "SYNTAX", safeMessage: "bad module" },
   };

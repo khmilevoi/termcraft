@@ -21,7 +21,7 @@ import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
-import type { ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
+import type { ExportPageSnapshotV1, ExportSnapshotV1, ExportTreeFileV1 } from "../types";
 import { buildExportRenderKey, runExportRendering } from "./render-jobs";
 import { captureExportSnapshot } from "./snapshot";
 
@@ -61,7 +61,20 @@ const ABOUT: ExportPageSnapshotV1 = {
   bytes: new Uint8Array([2]),
 };
 
-const SNAPSHOT: ExportSnapshotV1 = { pages: [HOME, ABOUT], capturedAt: "2024-01-01T00:00:00.000Z" };
+/**
+ * The canonical tree these snapshots were captured from. Small and fixed: nothing in this
+ * file asserts on the tree itself, but a snapshot without one would describe a design whose
+ * pages import files that do not exist.
+ */
+const TREE: readonly ExportTreeFileV1[] = [
+  { relPath: "pages.json", bytes: new TextEncoder().encode('{"schemaVersion":1,"pages":[]}') },
+];
+
+const SNAPSHOT: ExportSnapshotV1 = {
+  pages: [HOME, ABOUT],
+  tree: TREE,
+  capturedAt: "2024-01-01T00:00:00.000Z",
+};
 const RENDERER_VERSION = "1";
 
 describe("buildExportRenderKey", () => {
@@ -128,7 +141,7 @@ describe("runExportRendering", () => {
 
     const results = await runExportRendering(
       { renderPort, renderCache, rendererVersion: RENDERER_VERSION },
-      { pages: [ABOUT], capturedAt: SNAPSHOT.capturedAt },
+      { pages: [ABOUT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
     );
 
     expect(results).toHaveLength(1);
@@ -146,7 +159,7 @@ describe("runExportRendering", () => {
 
     await runExportRendering(
       { renderPort, renderCache, rendererVersion: RENDERER_VERSION },
-      { pages: [ABOUT], capturedAt: SNAPSHOT.capturedAt },
+      { pages: [ABOUT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
     );
 
     expect(renderPort.calls).toHaveLength(1);
@@ -168,7 +181,7 @@ describe("runExportRendering", () => {
 
     const results = await runExportRendering(
       { renderPort, renderCache, rendererVersion: RENDERER_VERSION },
-      { pages: [HOME, ABOUT], capturedAt: SNAPSHOT.capturedAt },
+      { pages: [HOME, ABOUT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
     );
 
     expect(results[0]?.outcome).toEqual(FAILURE); // HOME's first (80x24) task, dispatched first
@@ -195,6 +208,7 @@ describe("runExportRendering", () => {
     };
     const twoPageSnapshot: ExportSnapshotV1 = {
       pages: [pageA, pageB],
+      tree: TREE,
       capturedAt: SNAPSHOT.capturedAt,
     };
 

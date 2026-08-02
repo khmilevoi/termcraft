@@ -85,6 +85,7 @@ describe("pageDescriptorV1Schema", () => {
     const ready = {
       status: "ready",
       pageSlug: "dashboard",
+      entry: "pages/dashboard.tsx",
       sourceHash: SHA,
       title: "Dashboard",
       minSize: { w: 80, h: 24 },
@@ -98,6 +99,7 @@ describe("pageDescriptorV1Schema", () => {
     const invalid = {
       status: "invalid",
       pageSlug: "dashboard",
+      entry: "pages/dashboard.tsx",
       sourceHash: SHA,
       error: { code: "GATE_FAILED", safeMessage: "page contract violated" },
     };
@@ -113,6 +115,7 @@ describe("pageDescriptorV1Schema", () => {
     const mixed = {
       status: "invalid",
       pageSlug: "dashboard",
+      entry: "pages/dashboard.tsx",
       sourceHash: SHA,
       error: { code: "X", safeMessage: "y" },
       title: "Dashboard",

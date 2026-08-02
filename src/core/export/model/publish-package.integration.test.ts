@@ -93,6 +93,10 @@ describe("WP-5 closeout acceptance: export -> real disk", () => {
   test("every page's layout/<slug>.json on disk parses to a size-keyed object with a non-empty tree at every rendered size", async () => {
     const snapshot: ExportSnapshotV1 = {
       pages: [HOME, ABOUT],
+      tree: [
+        { relPath: "pages/home.tsx", bytes: HOME.bytes },
+        { relPath: "pages/about.tsx", bytes: ABOUT.bytes },
+      ],
       capturedAt: "2026-07-24T00:00:00.000Z",
     };
     const renders = [...rendersFor(HOME), ...rendersFor(ABOUT)];
@@ -106,6 +110,10 @@ describe("WP-5 closeout acceptance: export -> real disk", () => {
         supportedKitApiVersions: [1],
         publicCapabilityIds: [],
       },
+      closures: [
+        { pageSlug: HOME.pageSlug, entry: HOME.entryRelPath, files: [HOME.entryRelPath] },
+        { pageSlug: ABOUT.pageSlug, entry: ABOUT.entryRelPath, files: [ABOUT.entryRelPath] },
+      ],
     });
     if (assembled.kind !== "assembled") throw new Error("fixture bug: expected assembled");
 

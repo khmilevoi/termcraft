@@ -23,6 +23,8 @@ async function mount(opts?: {
   retryAvailable?: boolean;
   hostMessage?: string;
   attempts?: number;
+  /** `null` exercises the honest "no entry in design/pages.json" line (task 16). */
+  entryRelPath?: string | null;
   w?: number;
   h?: number;
 }) {
@@ -36,6 +38,7 @@ async function mount(opts?: {
       width={width}
       height={height}
       pageSlug="dashboard"
+      entryRelPath={opts?.entryRelPath ?? "screens/board/overview.tsx"}
       hostMessage={opts?.hostMessage ?? MESSAGE}
       attempts={opts?.attempts ?? 4}
       retryAvailable={opts?.retryAvailable ?? true}
@@ -60,7 +63,7 @@ describe("HostCrashPanel (design wsHostCrash)", () => {
     const slug = findRun(frame, "dashboard");
     expect(slug).toBeDefined();
     expect(slug && extractRgb(slug.fg)).toBe<string>(SHELL_PALETTE.amberHi);
-    expect(findRun(frame, ".termcraft/pages/dashboard/page.tsx")).toBeDefined();
+    expect(findRun(frame, ".termcraft/design/screens/board/overview.tsx")).toBeDefined();
   });
 
   test("reports the restart tally", async () => {

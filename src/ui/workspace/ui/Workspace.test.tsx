@@ -63,6 +63,7 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
   const ready = (slug: string, title: string): PageDescriptorV1 => ({
     status: "ready",
     pageSlug: slug,
+    entry: `pages/${slug}.tsx`,
     sourceHash: TEST_SHA,
     title,
     minSize: { w: 80, h: 24 },
@@ -168,6 +169,7 @@ describe("Workspace fullscreen preview sizing (F2, design paneShell noChat:true)
   const ready = (slug: string, title: string): PageDescriptorV1 => ({
     status: "ready",
     pageSlug: slug,
+    entry: `pages/${slug}.tsx`,
     sourceHash: TEST_SHA,
     title,
     minSize: { w: 80, h: 24 },
@@ -1003,6 +1005,7 @@ describe("Workspace preview clipping", () => {
   const readyDescriptor = (slug: string, title: string): PageDescriptorV1 => ({
     status: "ready",
     pageSlug: slug,
+    entry: `pages/${slug}.tsx`,
     sourceHash: TEST_SHA,
     title,
     minSize: { w: 60, h: 26 },

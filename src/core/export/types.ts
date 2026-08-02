@@ -32,13 +32,36 @@ export interface ExportPageSnapshotV1 extends ExportPageInputV1 {
   readonly bytes: Uint8Array;
 }
 
+/** One canonical design-tree file captured verbatim: its TREE-relative path and its exact bytes. */
+export interface ExportTreeFileV1 {
+  readonly relPath: string;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * One page's transitive file set as the export package records it (design §7, §11) — the
+ * closure `GateRunner.runTreeImports` resolved over the very bytes this snapshot captured.
+ * Paths are TREE-relative here; `package.ts` is what prefixes them with `design/` on the way
+ * into the package, so a reader of the package never has to know this convention exists.
+ */
+export interface ExportClosureV1 {
+  readonly pageSlug: PageSlug;
+  readonly entry: string;
+  readonly files: readonly string[];
+}
+
 /**
  * The ONE immutable value §12.5 requires: "the exact ordered page list, source
  * bytes/hashes, and resolved settings" captured together while one short `ProjectWritePermit`
  * is held, released immediately after (`model/snapshot.ts`).
+ *
+ * `tree` is the WHOLE canonical `design/` tree, captured in the same window (design §11: an
+ * export ships `design/**`). It is not derivable from `pages` — a shared module no page's
+ * entry names is still part of what the design is, and it is exactly what the entries import.
  */
 export interface ExportSnapshotV1 {
   readonly pages: readonly ExportPageSnapshotV1[];
+  readonly tree: readonly ExportTreeFileV1[];
   /** RFC 3339 UTC — when this snapshot was captured (injected clock, never `Date.now()`). */
   readonly capturedAt: string;
 }

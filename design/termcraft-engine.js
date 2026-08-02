@@ -392,7 +392,7 @@ export class Engine {
         {hash:'a1b2c3d',author:'dröscher',when:'2h ago',subject:'widen the process table'},
         {hash:'9f4e0b2',author:'dröscher',when:'5h ago',subject:'add cpu / mem gauges'},
         {hash:'3c7d1a8',author:'kessler',when:'yesterday',subject:'initial system-monitor layout'} ],
-      caption:'first-parent history of .termcraft/pages/main/page.tsx',
+      caption:'first-parent history of .termcraft/design/pages/main.tsx',
       footer:[['↑↓','move'],['⏎','preview'],['R','Restore…'],['esc','close']] });
     this.statusBar(b,h-1,[{t:' main · Current design · uncommitted ',fg:P.amberHi,bold:true},{t:' '+w+'×'+h+' ',fg:P.dim},{t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true}],[['esc','close']]);
     return this.render(b);
@@ -1150,7 +1150,7 @@ export class Engine {
     const lx=bx+3; let y=by+2;
     this.text(b,lx,y,'✗ design threw while rendering — no preview',{fg:P.red,bold:true,bg:P.bg}); y+=2;
     this.text(b,lx,y,'main',{fg:P.amberHi,bold:true,bg:P.bg});
-    this.text(b,lx+5,y,'· .termcraft/pages/main/page.tsx',{fg:P.fg,bg:P.bg}); y+=2;
+    this.text(b,lx+5,y,'· .termcraft/design/pages/main.tsx',{fg:P.fg,bg:P.bg}); y+=2;
     this.text(b,lx,y,'host message',{fg:P.dim,bg:P.bg}); y++;
     eLines.forEach(l=>{ this.put(b,lx,y,'│',{fg:P.red,bg:P.bg}); this.text(b,lx+2,y,l,{fg:P.fg,bg:P.bg}); y++; });
     y++;
@@ -1276,7 +1276,7 @@ export class Engine {
     this.box(b,lx,y,pw-6,3,{fg:P.amber,bg:P.bg});
     const msg='design(main): update System monitor'; this.text(b,lx+2,y+1,msg,{fg:P.fg,bg:P.bg}); this.put(b,lx+2+msg.length,y+1,'█',{fg:P.amber,blink:true,bg:P.bg}); y+=4;
     this.text(b,lx,y,'scope',{fg:P.dim,bg:P.bg}); this.text(b,lx+8,y,'current page',{fg:P.amberHi,bg:P.bg,bold:true}); y++;
-    this.text(b,lx,y,'M .termcraft/pages/main/page.tsx',{fg:P.green,bg:P.bg}); y+=2;
+    this.text(b,lx,y,'M .termcraft/design/pages/main.tsx',{fg:P.green,bg:P.bg}); y+=2;
     this.text(b,lx,y,'⏎ commit',{fg:P.amber,bold:true,bg:P.bg}); this.text(b,lx+9,y,'· esc cancel · empty msg disables',{fg:P.faint,bg:P.bg});
     this.insetBox(b,px+pw+2,py+1,26,7,'stale plan',[
       {t:'⚠ HEAD moved since',fg:P.amberHi},
@@ -1315,7 +1315,7 @@ export class Engine {
     this.fillRect(b,px,py,pw,ph,{ch:' ',bg:P.bg});
     this.box(b,px,py,pw,ph,{title:'restore · main',fg:P.amber,titleFg:P.amberHi,bg:P.bg});
     const lx=px+3; let y=py+2;
-    this.text(b,lx,y,'restore .termcraft/pages/main/page.tsx',{fg:P.fg,bg:P.bg}); y++;
+    this.text(b,lx,y,'restore .termcraft/design/pages/main.tsx',{fg:P.fg,bg:P.bg}); y++;
     this.text(b,lx,y,'from a1b2c3d3e9f0c14b7',{fg:P.amberHi,bg:P.bg,bold:true}); this.text(b,lx+21,y,'(a1b2c3d)',{fg:P.dim,bg:P.bg}); y++;
     this.text(b,lx,y,'dröscher · 2h ago · "widen the process table"',{fg:P.dim,bg:P.bg}); y+=2;
     for(let k=1;k<pw-1;k++) this.put(b,px+k,y,' ',{bg:P.redDim});

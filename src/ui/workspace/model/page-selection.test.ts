@@ -10,6 +10,7 @@ import { selectPage } from "./page-selection";
 const ready = (slug: string, title: string): PageDescriptorV1 => ({
   status: "ready",
   pageSlug: slug,
+  entry: `pages/${slug}.tsx`,
   sourceHash: TEST_SHA,
   title,
   minSize: { w: 80, h: 24 },

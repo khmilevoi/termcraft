@@ -1,7 +1,7 @@
 import { MouseButton, type MouseEvent } from "@opentui/core";
 import { reatomComponent, useWrap } from "@reatom/react";
 
-import type { PinDtoV1 } from "core/protocol";
+import type { PageDescriptorV1, PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
 import {
@@ -28,6 +28,7 @@ import {
   frameLocalPoint,
   hostFailureCodeOf,
   isDesignRenderFailure,
+  pageEntryOf,
   requestGeometry,
 } from "ui/preview";
 import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
@@ -261,6 +262,12 @@ function renderTabs(
 function renderPreviewRegion(
   preview: PreviewMirror,
   uiFrame: UiPreviewFrame | null,
+  /**
+   * The Kernel's page list — read here ONLY to name the crashed page's real file
+   * (`pageEntryOf`). A slug cannot name a file since the design tree, so the panel is handed
+   * the descriptor list rather than deriving a path (task 16).
+   */
+  descriptors: readonly PageDescriptorV1[],
   hasPages: boolean,
   region: CellSize,
   interaction: Readonly<{
@@ -295,6 +302,7 @@ function renderPreviewRegion(
           width={region.w}
           height={region.h}
           pageSlug={preview.pageSlug}
+          entryRelPath={pageEntryOf(descriptors, preview.pageSlug)}
           hostMessage={preview.finalFailure.safeMessage}
           attempts={preview.attempts}
           retryAvailable={preview.retryAvailable}
@@ -724,15 +732,22 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           />
           {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
           <box id="ws-preview-gap" height={1} />
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {
-            pins,
-            pendingPin,
-            selectionRect,
-            hover,
-            onRendered: acknowledgeRenderedFrame,
-            onMouseMove: onPreviewMouseMove,
-            onMouseDown: onPreviewMouseDown,
-          })}
+          {renderPreviewRegion(
+            preview,
+            uiFrame,
+            descriptors,
+            descriptors.length > 0,
+            previewRegion,
+            {
+              pins,
+              pendingPin,
+              selectionRect,
+              hover,
+              onRendered: acknowledgeRenderedFrame,
+              onMouseMove: onPreviewMouseMove,
+              onMouseDown: onPreviewMouseDown,
+            },
+          )}
         </box>
       </box>
       <StatusBar

@@ -23,6 +23,7 @@ function readyDescriptor(pageSlug: string): PageDescriptorV1 {
   return {
     status: "ready",
     pageSlug,
+    entry: `pages/${pageSlug}.tsx`,
     sourceHash: "0".repeat(64),
     title: "Home",
     minSize: { w: 80, h: 24 },

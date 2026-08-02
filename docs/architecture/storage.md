@@ -307,8 +307,9 @@ flowchart TB
 - `src/store/sandbox/model/project-key.ts` — item 15: `computeProjectKey`, the
   SHA-256 sandbox-parent-directory derivation
 - `src/core/export/model/package.ts` — item 16: `assembleExportPackage`, the
-  in-memory export file list — `design-prompt.md`, `runtime-api.json`, per-page
-  `pages/<slug>/page.tsx` copies, `snapshots/<slug>/<w>x<h>.txt`, and the real,
+  in-memory export file list — `design-prompt.md`, `runtime-api.json`, the WHOLE
+  canonical tree once under `design/<treeRelPath>`, one `closures/<slug>.json` per
+  page listing what that page reaches, `snapshots/<slug>/<w>x<h>.txt`, and the real,
   non-empty, size-keyed `layout/<slug>.json` per page; the one remaining
   divergence is that a `LayoutNode` carries no `text` field yet, pending the
   runtime element catalog

@@ -6,7 +6,13 @@
  */
 
 // --- Shared vocabulary -------------------------------------------------------------------
-export type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "./types";
+export type {
+  ExportClosureV1,
+  ExportPageInputV1,
+  ExportPageSnapshotV1,
+  ExportSnapshotV1,
+  ExportTreeFileV1,
+} from "./types";
 
 // --- Size ladder --------------------------------------------------------------------------
 export type { SizeLadderEntryV1, SizeLadderPageInputV1 } from "./model/size-ladder";

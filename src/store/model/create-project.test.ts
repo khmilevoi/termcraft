@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { decodePagesManifest } from "entities/design-tree";
 import { uuidv7 } from "infrastructure/uuid";
 import { encodeChatHeaderLine, sha256Hex } from "store/jsonl";
 import {
@@ -52,7 +53,7 @@ function testDeps(userStateRoot: string): StoreDeps {
 }
 
 describe("createProject — new-project creation (storage-identity §14.2)", () => {
-  test("mints projectId, the format-1 layout, the gitignore, the workspace file, the first chat header, and the implicit trust grant", async () => {
+  test("mints projectId, the format-2 layout, the gitignore, the workspace file, the seeded design tree, the first chat header, and the implicit trust grant", async () => {
     const userStateRoot = freshScratch("tc-create-userstate-");
     const projectRoot = freshScratch("tc-create-project-");
     const deps = testDeps(userStateRoot);
@@ -101,6 +102,34 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       const decodedWorkspace = decodeWorkspaceLocalState(workspaceOnDisk);
       if (decodedWorkspace instanceof Error)
         throw new Error(`fixture bug: workspace state undecodable: ${decodedWorkspace.message}`);
+
+      // ---- the seeded design tree (multi-file design tree §3, §10; task 16) ----
+      // `project.toml` carries no page order at format_version 2 — `design/pages.json` is the
+      // sole page-identity authority, and it must EXIST from creation, because a project whose
+      // manifest is absent cannot be read as "no pages yet" without guessing.
+      const manifestSource = fs.readFileSync(
+        path.join(projectRoot, ".termcraft", PROJECT_MANIFEST_FILENAME),
+        "utf8",
+      );
+      expect(manifestSource).toContain("format_version = 2");
+      expect(manifestSource).not.toContain("pages");
+
+      const pagesJson = fs.readFileSync(
+        path.join(projectRoot, ".termcraft", "design", "pages.json"),
+        "utf8",
+      );
+      const seededTree = decodePagesManifest(pagesJson);
+      if (seededTree instanceof Error)
+        throw new Error(`fixture bug: seeded pages.json undecodable: ${seededTree.message}`);
+      expect(seededTree.schemaVersion).toBe(1);
+      // NO STARTER PAGE, deliberately (design §10): a page the user never asked for would be a
+      // fabricated design, and the first turn is what creates one.
+      expect(seededTree.pages).toEqual([]);
+      expect(seededTree.requestedActivePage).toBeNull();
+      // And the seed is the ONLY thing in the tree — no invented `lib/`, no example component.
+      expect(fs.readdirSync(path.join(projectRoot, ".termcraft", "design"))).toEqual([
+        "pages.json",
+      ]);
 
       // ---- the first chat header ----
       const chatFiles = fs.readdirSync(path.join(projectRoot, ".termcraft", "chats"));

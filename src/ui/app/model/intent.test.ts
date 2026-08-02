@@ -203,6 +203,7 @@ describe("applyIntent — page tabs (design extension, 2026-07-27)", () => {
           {
             status: "ready",
             pageSlug: "main",
+            entry: "pages/main.tsx",
             sourceHash: TEST_SHA,
             title: "Main",
             minSize: { w: 80, h: 24 },
@@ -212,6 +213,7 @@ describe("applyIntent — page tabs (design extension, 2026-07-27)", () => {
           {
             status: "ready",
             pageSlug: "settings",
+            entry: "pages/settings.tsx",
             sourceHash: TEST_SHA,
             title: "Settings",
             minSize: { w: 80, h: 24 },
@@ -347,6 +349,29 @@ describe("applyIntent — F6 compose-repair", () => {
   test("fills an empty composer with the repair message and moves focus there", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // The descriptor list is what names the page's file (task 16) — seeded here so this test
+    // exercises the real path rather than the honest "no entry" fallback, which the sibling
+    // test below covers on its own.
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [
+          {
+            status: "ready",
+            pageSlug: "main",
+            entry: "pages/main.tsx",
+            sourceHash: TEST_SHA,
+            title: "Main",
+            minSize: { w: 80, h: 24 },
+            theme: "dark-default",
+            kitApiVersion: 1,
+          },
+        ],
+      }),
+    );
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.focus.set("preview");
 
@@ -354,10 +379,26 @@ describe("applyIntent — F6 compose-repair", () => {
 
     expect(deps.local.composer()).toContain('The preview cannot render the "main" page.');
     expect(deps.local.composer()).toContain(CRASH);
-    expect(deps.local.composer()).toContain(".termcraft/pages/main/page.tsx");
+    // The page's REAL file, resolved from its descriptor `entry` — not a slug-derived path.
+    expect(deps.local.composer()).toContain(".termcraft/design/pages/main.tsx");
     expect(deps.local.focus()).toBe("composer");
     // Nothing is sent — the design says so on the frame ("nothing is sent — you press ⏎").
     expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("says the entry is unknown when the descriptor list does not name the page", () => {
+    // The mirror carries a crashed preview but no descriptors — the page is not in
+    // `design/pages.json`, so there is no file to point at. The message says so instead of
+    // printing a slug-derived path that cannot exist (task 16).
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    deps.local.focus.set("preview");
+
+    applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
+
+    expect(deps.local.composer()).toContain("has no entry in design/pages.json");
+    expect(deps.local.composer()).not.toContain(".termcraft/design/");
   });
 
   test("appends below a blank line rather than overwriting an existing draft", () => {

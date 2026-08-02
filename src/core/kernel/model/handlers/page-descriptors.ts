@@ -120,6 +120,7 @@ export async function buildPageDescriptors(
       descriptors.push({
         status: "ready",
         pageSlug: entry.slug,
+        entry: source.relPath,
         sourceHash: source.sourceHash,
         title: meta.title,
         minSize: meta.minSize,
@@ -133,6 +134,7 @@ export async function buildPageDescriptors(
     descriptors.push({
       status: "invalid",
       pageSlug: entry.slug,
+      entry: source.relPath,
       sourceHash: source.sourceHash,
       error:
         firstError !== undefined

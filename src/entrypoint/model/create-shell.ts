@@ -643,6 +643,7 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
         {
           status: "ready",
           pageSlug: DEMO_PAGE_SLUG,
+          entry: `pages/${DEMO_PAGE_SLUG}.tsx`,
           sourceHash: TEST_SHA,
           title: "Main",
           minSize: { w: 80, h: 24 },

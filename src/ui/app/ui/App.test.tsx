@@ -35,6 +35,7 @@ beforeEach(() => resetEventSeq());
 const readyPage = (): EventPayloadByKindV1["kernel.snapshot"]["pageDescriptors"][number] => ({
   status: "ready",
   pageSlug: "main",
+  entry: "pages/main.tsx",
   sourceHash: TEST_SHA,
   title: "Main",
   minSize: { w: 80, h: 24 },

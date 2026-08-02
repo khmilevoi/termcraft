@@ -7,7 +7,12 @@ import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
-import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
+import type {
+  ExportPageInputV1,
+  ExportPageSnapshotV1,
+  ExportSnapshotV1,
+  ExportTreeFileV1,
+} from "../types";
 
 /**
  * `kernel.export.begin` / `beginRendering` — `idle -> preparing -> rendering`
@@ -112,6 +117,17 @@ export async function captureExportSnapshot(
     pages.push({ ...page, sourceHash: source.sourceHash, bytes: source.bytes });
   }
 
+  // Design §11: an export ships `design/**`, not one file per page. Captured INSIDE the same
+  // permit window as the pages above, for the reason the window exists at all — a shared
+  // module read after the permit was released could belong to a different revision than the
+  // entry that imports it, and the package would then describe a design that never existed.
+  const tree = await wrap(readWholeTree(deps.designReader));
+  if ("code" in tree) {
+    deps.projectWrite.release(permit);
+    deps.machine.apply("kernel.export.fail");
+    return { kind: "failed", failure: tree };
+  }
+
   deps.projectWrite.release(permit);
 
   const beganRendering = deps.machine.apply("kernel.export.beginRendering");
@@ -124,6 +140,35 @@ export async function captureExportSnapshot(
 
   return {
     kind: "captured",
-    snapshot: { pages, capturedAt: deps.clock.now().toISOString() },
+    snapshot: { pages, tree, capturedAt: deps.clock.now().toISOString() },
   };
+}
+
+/**
+ * Every canonical tree file's bytes, TREE-relative, in `listTree()`'s own order.
+ *
+ * A read failure anywhere is a wholesale refusal, never a package missing a file: a design
+ * that ships without the module its pages import is worse than no package at all, and the
+ * caller (`runExportStart`) already has one honest "this export could not be prepared" path.
+ */
+async function readWholeTree(
+  designReader: DesignTreeReader,
+): Promise<FailureDtoV1 | readonly ExportTreeFileV1[]> {
+  const listed = await wrap(designReader.listTree());
+  if ("code" in listed) return listed;
+
+  const files: ExportTreeFileV1[] = [];
+  for (const file of listed) {
+    const read = await wrap(designReader.readTreeFile(file.relPath));
+    if ("code" in read) {
+      return {
+        code: "PERSISTENCE_FAILED",
+        retryable: read.retryable,
+        safeMessage: `failed to read design tree file "${file.relPath}": ${read.safeMessage}`,
+        details: { relPath: file.relPath },
+      };
+    }
+    files.push({ relPath: file.relPath, bytes: read.bytes });
+  }
+  return files;
 }

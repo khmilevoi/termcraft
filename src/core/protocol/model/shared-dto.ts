@@ -99,11 +99,19 @@ const safeErrorSchema = z.strictObject({
  * A page descriptor (§9). Discriminated on `status`, so an `invalid` descriptor cannot
  * carry `ready`-only meta and vice versa — a mixed shape means the producer lost track of
  * whether the page actually parsed.
+ *
+ * `entry` is on BOTH variants (task 16): it is the TREE-relative path `design/pages.json`
+ * binds to this slug, and it is page IDENTITY, not page metadata — a slug alone cannot name
+ * the file a page lives in since the multi-file design tree, and it is exactly what a client
+ * needs to tell the user which file to edit. An `invalid` page has one too: a page whose
+ * contract failed to parse still has a file, and that is precisely the page whose path the
+ * user is about to be sent to.
  */
 export type PageDescriptorV1 =
   | {
       readonly status: "ready";
       readonly pageSlug: string;
+      readonly entry: string;
       readonly sourceHash: Sha256Hex;
       readonly title: string;
       readonly minSize: { readonly w: number; readonly h: number };
@@ -113,6 +121,7 @@ export type PageDescriptorV1 =
   | {
       readonly status: "invalid";
       readonly pageSlug: string;
+      readonly entry: string;
       readonly sourceHash: Sha256Hex;
       readonly error: { readonly code: string; readonly safeMessage: string };
     };
@@ -120,6 +129,7 @@ export type PageDescriptorV1 =
 const readyPageDescriptorSchema = z.strictObject({
   status: z.literal("ready"),
   pageSlug: pageSlugSchema,
+  entry: z.string().min(1),
   sourceHash: sha256HexSchema,
   title: z.string(),
   minSize: z.strictObject({
@@ -133,6 +143,7 @@ const readyPageDescriptorSchema = z.strictObject({
 const invalidPageDescriptorSchema = z.strictObject({
   status: z.literal("invalid"),
   pageSlug: pageSlugSchema,
+  entry: z.string().min(1),
   sourceHash: sha256HexSchema,
   error: safeErrorSchema,
 });

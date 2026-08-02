@@ -10,6 +10,12 @@ export interface HostCrashPanelProps {
   readonly width: number;
   readonly height: number;
   readonly pageSlug: string;
+  /**
+   * The page's TREE-relative entry — `design/pages.json`'s binding, never slug-derived
+   * (task 16). `null` when the descriptor list does not name this page, which the panel says
+   * out loud rather than drawing a path that cannot exist.
+   */
+  readonly entryRelPath: string | null;
   /** The host's own bounded message, rendered verbatim and wrapped — never truncated. */
   readonly hostMessage: string;
   readonly attempts: number;
@@ -88,7 +94,9 @@ export function HostCrashPanel(props: HostCrashPanelProps) {
             {props.pageSlug}
           </text>
           <text id={`${props.id}-path`} fg={SHELL_PALETTE.fg}>
-            {` · ${relativePageSourcePath(props.pageSlug)}`}
+            {props.entryRelPath === null
+              ? " · no entry in design/pages.json"
+              : ` · ${relativePageSourcePath(props.entryRelPath)}`}
           </text>
         </box>
         <text id={`${props.id}-spacer-2`}> </text>

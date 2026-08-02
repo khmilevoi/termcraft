@@ -7,6 +7,7 @@ import type { ChatHeader, ChatSystemErrorRecord } from "entities/chat";
 import {
   DESIGN_DIRNAME,
   PAGES_MANIFEST_RELPATH,
+  PAGES_MANIFEST_SCHEMA_VERSION,
   decodePagesManifest,
   encodePagesManifest,
 } from "entities/design-tree";
@@ -1794,6 +1795,23 @@ async function createProject(
   const workspaceBytes = new TextEncoder().encode(
     encodeWorkspaceLocalState({ ...defaultWorkspaceLocalState(), activeChatId: chatId }),
   );
+  // THE SEEDED DESIGN TREE (multi-file design tree §3, §10): `design/pages.json` with an
+  // EMPTY `pages` array and nothing else. A brand-new project has no page and gets no starter
+  // page — §10 seeds "`design/pages.json` and an empty conventional structure", and inventing
+  // a first page would put a design the user never asked for in front of them and a file the
+  // agent then has to work around. The first turn creates one; until then `pages: []` is the
+  // honest state, and it is what makes `openProject` readable at all (`readManifestFromDisk`
+  // needs the file to exist, and an absent one is what `probeProjectContent` reads as
+  // "no content yet"). `lib/`, `components/` and the rest of §3's conventional directories are
+  // NOT created: an empty directory is not representable in a transaction operation, carries no
+  // information, and the agent creates one the moment it writes into it.
+  const pagesManifestBytes = new TextEncoder().encode(
+    encodePagesManifest({
+      schemaVersion: PAGES_MANIFEST_SCHEMA_VERSION,
+      pages: [],
+      requestedActivePage: null,
+    }),
+  );
   const chatHeader: ChatHeader = { kind: "chat", formatVersion: 1, projectId, chatId, createdAt };
   const chatHeaderLine = encodeChatHeaderLine(chatHeader);
   if (chatHeaderLine instanceof Error) {
@@ -1805,9 +1823,16 @@ async function createProject(
   const gitignoreOp = buildReplaceOperation(deps, 1, PROJECT_GITIGNORE_FILENAME, gitignoreBytes);
   const workspaceOp = buildReplaceOperation(deps, 2, WORKSPACE_STATE_FILENAME, workspaceBytes);
   const chatOp = buildReplaceOperation(deps, 3, chatJsonlPath(chatId), chatHeaderLine);
+  const pagesOp = buildReplaceOperation(
+    deps,
+    4,
+    designFilePath(PAGES_MANIFEST_RELPATH),
+    pagesManifestBytes,
+  );
 
-  // ONE project-mutation transaction mints projectId + the format-1 layout + the generated
-  // .gitignore + the workspace file + the first chat header (storage-identity §14.2).
+  // ONE project-mutation transaction mints projectId + the format-2 layout + the generated
+  // .gitignore + the workspace file + the first chat header + the seeded design tree
+  // (storage-identity §14.2; multi-file design tree §3, §10).
   const result = await engine.runProjectMutation({
     transactionId: deps.uuidv7(),
     actionId: deps.uuidv7(),
@@ -1817,12 +1842,14 @@ async function createProject(
       gitignoreOp.operation,
       workspaceOp.operation,
       chatOp.operation,
+      pagesOp.operation,
     ],
     payloads: new Map([
       manifestOp.payload,
       gitignoreOp.payload,
       workspaceOp.payload,
       chatOp.payload,
+      pagesOp.payload,
     ]),
     createdAt,
   });

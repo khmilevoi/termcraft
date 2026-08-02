@@ -2,6 +2,7 @@ import { wrap } from "@reatom/core";
 
 import {
   type CaptureExportSnapshotDeps,
+  type ExportClosureV1,
   type ExportPageInputV1,
   type ExportRenderJobDeps,
   type ExportSnapshotV1,
@@ -1351,6 +1352,74 @@ async function resolveExportPageInputs(
 }
 
 /**
+ * Every page's closure over the bytes the snapshot captured (design §7, §11) — what
+ * `closures/<slug>.json` records in the export package.
+ *
+ * WHY THE GATE PORT, AND WHY HERE. Resolving a closure means walking the import graph, which
+ * needs a scanner `core` does not have and may not import; `GateRunner.runTreeImports` is the
+ * one port that answers it, and it answers over TEXT, so the snapshot's own bytes are decoded
+ * here rather than re-read from disk — the package then describes exactly the revision it
+ * ships. It runs AFTER the write permit is released (`captureExportSnapshot` releases it
+ * before returning), so a whole-tree scan never holds the project's write lock. A one-off scan
+ * is proportionate at this point: an export already spawns a host child per page and per
+ * ladder size.
+ *
+ * A REFUSAL IS NOT FATAL TO THE EXPORT, and that is deliberate. The renders have already
+ * succeeded, so the package's snapshots and layout trees are real; losing the closure listing
+ * costs an implementer a convenience, not correctness, and failing the whole export for it
+ * would throw away work the user waited for. Every drop is logged (errore rule 21) and
+ * `design-prompt.md` says out loud which pages have no closure, so nothing is silently absent.
+ * `runTreeImports` reporting errors means some file could not be scanned — those pages are
+ * simply absent from `closures`, never given a truncated stand-in.
+ */
+async function resolveExportClosures(
+  context: HandlerContext,
+  snapshot: ExportSnapshotV1,
+): Promise<readonly ExportClosureV1[]> {
+  const entries = await wrap(readPageOrder(context.deps.designReader));
+  if ("code" in entries) {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start could not read the page order for its closure listing: ${entries.safeMessage}`,
+    );
+    return [];
+  }
+
+  const decoder = new TextDecoder();
+  const files = new Map(
+    snapshot.tree.map((file) => [file.relPath, decoder.decode(file.bytes)] as const),
+  );
+  const result = await wrap(
+    context.deps.gateRunner.runTreeImports({
+      files,
+      treePaths: snapshot.tree.map((file) => file.relPath),
+      pages: entries,
+    }),
+  );
+  if (result.errors.length > 0) {
+    console.warn(
+      `core/kernel/handlers/preview-export: export.start's closure resolution reported ${result.errors.length} diagnostic(s); pages it could not resolve ship without a closure listing`,
+    );
+  }
+
+  const entryBySlug = new Map(entries.map((entry) => [entry.slug, entry.entry] as const));
+  const closures: ExportClosureV1[] = [];
+  for (const closure of result.closures) {
+    const entry = entryBySlug.get(closure.slug);
+    if (entry === undefined) {
+      // Unreachable while `runTreeImports` walks the very `pages` list above — a closure for a
+      // slug that list does not name would be the port contradicting its own input. Dropped
+      // rather than given a guessed entry, and logged so it is never silently absent.
+      console.warn(
+        `core/kernel/handlers/preview-export: export.start dropped a closure for the unlisted slug "${closure.slug}"`,
+      );
+      continue;
+    }
+    closures.push({ pageSlug: closure.slug, entry, files: closure.files });
+  }
+  return closures;
+}
+
+/**
  * Builds a schema-valid `export.failed` for a failure that happens BEFORE the export machine
  * ever leaves `"idle"` — see `runExportStart`'s own header, "NOT COVERED BY THAT INVARIANT",
  * for exactly which two branches reach here. `EXPORT_PHASES_V1` (`core/protocol/model/
@@ -1546,10 +1615,13 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     correlation,
   });
 
+  const closures = await wrap(resolveExportClosures(context, snapshot));
+
   const assembled = assembleExportPackage({
     snapshot,
     renders,
     runtimeDeclaration: context.deps.exportRender.runtimeDeclaration,
+    closures,
   });
 
   if (assembled.kind === "failed") {

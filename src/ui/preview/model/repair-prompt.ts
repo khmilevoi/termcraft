@@ -13,6 +13,8 @@
  * `ctx.spy is not a function` case; this message's whole job is to state the failure.
  */
 
+import { DESIGN_DIRNAME } from "entities/design-tree";
+
 /** The directory canonical project state lives in, under the project root (storage-identity §4). */
 const PROJECT_STATE_DIRNAME = ".termcraft";
 
@@ -20,32 +22,50 @@ const PROJECT_STATE_DIRNAME = ".termcraft";
  * CANONICAL page storage, PROJECT-RELATIVE. An absolute path belongs neither in a §13
  * diagnostic nor in a line the user reads in their chat, so this is the project-relative form.
  *
- * KNOWN DEFECT, NOT COSMETIC — registered in `red-debt.md` as "UI: the repair prompt names a
- * path that cannot exist", raised by task-14 review round 1 (Important 3). AFTER the
- * design-tree plan, `.termcraft/pages/` DOES NOT EXIST AT ALL: canonical storage is
- * `.termcraft/design/<entry>`, where `<entry>` is whatever `design/pages.json` binds to the
- * slug and is always inside `design/`. So the string below is wrong for EVERY project, on two
- * user-visible surfaces — the composer text F6 writes ("Fix the render error in that file")
- * and `HostCrashPanel.tsx:91` on screen — and `repair-prompt.test.ts`'s
- * `relativePageSourcePath` case PINS the wrong value.
+ * FIXED IN TASK 16 — it was registered in `red-debt.md` as "UI: the repair prompt names a path
+ * that cannot exist" (task-14 review round 1, Important 3). It used to derive
+ * `.termcraft/pages/<slug>/page.tsx` FROM THE SLUG, a directory the design tree retires
+ * outright: canonical storage is `.termcraft/design/<entry>`, where `entry` is whatever
+ * `design/pages.json` binds to the slug. The string was wrong for EVERY project on two
+ * user-visible surfaces — the composer text F6 writes and `HostCrashPanel.tsx` on screen.
  *
- * NOT FIXED HERE, for two reasons that are about authority rather than effort:
- *   1. The real path needs the page's `entry`, which `ui` does not have: `PageDescriptorV1`
- *      (`core/protocol/model/event-payload.ts`) carries `pageSlug`/`sourceHash`/meta and no
- *      entry, so honestly naming the file means widening a wire DTO and its producer — outside
- *      task 14's Files list.
- *   2. `design/termcraft-engine.js:1153` (`wsHostCrash`) still DRAWS `·
- *      .termcraft/pages/main/page.tsx`. The design is this project's source of truth for what
- *      this frame says, and it has not been updated for the design tree. CLAUDE.md's rule for
- *      exactly this case is to flag the gap, not to guess a replacement — so the string stays
- *      wrong-but-design-matching until the design covers the new layout.
+ * Both halves of what blocked the fix are closed rather than worked around:
+ *   1. `ui` now HAS the entry. `PageDescriptorV1` (`core/protocol/model/shared-dto.ts`) carries
+ *      it on both variants, because a slug alone cannot name a page's file any more — see that
+ *      type's own comment.
+ *   2. The design was updated FIRST, then the code followed it, which is the order CLAUDE.md's
+ *      "design is a source of truth" rule requires: `design/termcraft-engine.js`'s `wsHostCrash`,
+ *      git-history caption, diff and restore frames all drew `.termcraft/pages/main/page.tsx`
+ *      and now draw `.termcraft/design/pages/main.tsx`. That is a transposition of the same
+ *      element onto the storage layout the design spec's own §3 defines — not an invented value.
  */
-export function relativePageSourcePath(pageSlug: string): string {
-  return `${PROJECT_STATE_DIRNAME}/pages/${pageSlug}/page.tsx`;
+export function relativePageSourcePath(entryRelPath: string): string {
+  return `${PROJECT_STATE_DIRNAME}/${DESIGN_DIRNAME}/${entryRelPath}`;
+}
+
+/**
+ * The page's entry as read off the descriptor list, or `null` when the list does not name it.
+ *
+ * `null` IS A REAL ANSWER, not a defensive shrug: a page absent from `design/pages.json` has no
+ * entry to name, and every surface below says "unknown" rather than printing a slug-derived
+ * guess. Guessing is exactly the defect this function's callers were fixed for — a path that
+ * cannot exist reads as a path that does, and the user edits nothing.
+ */
+export function pageEntryOf(
+  descriptors: readonly { readonly pageSlug: string; readonly entry: string }[],
+  pageSlug: string,
+): string | null {
+  return descriptors.find((descriptor) => descriptor.pageSlug === pageSlug)?.entry ?? null;
 }
 
 export interface RepairPromptInput {
   readonly pageSlug: string;
+  /**
+   * The page's TREE-relative entry, straight off its `PageDescriptorV1` ({@link pageEntryOf}).
+   * Never derived from the slug: which file a page lives in is `design/pages.json`'s answer
+   * alone. `null` when the descriptor list does not name this page — see {@link pageEntryOf}.
+   */
+  readonly entryRelPath: string | null;
   /** The host's own bounded error text, as the Kernel published it. Quoted verbatim. */
   readonly safeMessage: string;
   /**
@@ -64,11 +84,17 @@ export function buildRepairPrompt(input: RepairPromptInput): string {
     "This is a runtime error from the preview host, not a Gate rejection — the page",
     "passed every static check and then threw while rendering.",
     "",
-    `  file:     ${relativePageSourcePath(input.pageSlug)}`,
+    `  file:     ${
+      input.entryRelPath === null
+        ? `unknown — "${input.pageSlug}" has no entry in design/pages.json`
+        : relativePageSourcePath(input.entryRelPath)
+    }`,
     `  error:    ${input.safeMessage}`,
     `  attempts: ${input.attempts} host ${incarnations} failed before the preview circuit opened`,
     "",
-    "Fix the render error in that file. Keep the page's behaviour and layout as they",
-    "are — this is a repair, not a redesign.",
+    input.entryRelPath === null
+      ? "Find this page's entry in design/pages.json and fix the render error there."
+      : "Fix the render error in that file.",
+    "Keep the page's behaviour and layout as they are — this is a repair, not a redesign.",
   ].join("\n");
 }

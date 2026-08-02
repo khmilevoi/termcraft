@@ -22,12 +22,49 @@ describe("agent/prompt static prose", () => {
     expect(DESIGN_CODE_RULES).toContain("animation guarded by the export flag");
   });
 
-  test("PAGE_FILE_LAYOUT names pages/<slug>.tsx, pages.json, and all three runtime docs", () => {
-    expect(PAGE_FILE_LAYOUT).toContain("pages/<slug>.tsx");
+  test("PAGE_FILE_LAYOUT names pages.json, the entry binding, and all three runtime docs", () => {
     expect(PAGE_FILE_LAYOUT).toContain("pages.json");
+    expect(PAGE_FILE_LAYOUT).toContain('"entry"');
     expect(PAGE_FILE_LAYOUT).toContain("RUNTIME.md");
     expect(PAGE_FILE_LAYOUT).toContain("runtime.d.ts");
     expect(PAGE_FILE_LAYOUT).toContain("REATOM.md");
+  });
+
+  /**
+   * THE BINDING IS THE WHOLE POINT (multi-file design tree §4, task 16). A slug-derived path
+   * is exactly what this design retires, so the prompt must state that `pages.json`'s `entry`
+   * decides where a page lives — an agent that assumes `pages/<slug>.tsx` is mandatory will
+   * write a file no manifest names and see it treated as a shared module.
+   */
+  test("PAGE_FILE_LAYOUT states that the manifest's entry decides a page's file, not its slug", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("can live anywhere in the tree");
+    expect(PAGE_FILE_LAYOUT).toContain("A file this manifest does not name is a shared module");
+  });
+
+  test("PAGE_FILE_LAYOUT invites shared modules rather than treating them as a workaround", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("shared modules");
+    expect(PAGE_FILE_LAYOUT).toContain("lib/");
+    expect(PAGE_FILE_LAYOUT).toContain("relative specifier");
+  });
+
+  test("DESIGN_CODE_RULES names BOTH legal import edges and the exact resolution rules", () => {
+    expect(DESIGN_CODE_RULES).toContain("STATIC import of the bare specifier");
+    expect(DESIGN_CODE_RULES).toContain("RELATIVE specifier");
+    expect(DESIGN_CODE_RULES).toContain('"<spec>.tsx"');
+    expect(DESIGN_CODE_RULES).toContain('"<spec>.ts"');
+    expect(DESIGN_CODE_RULES).toContain("no directory-index resolution");
+  });
+
+  /**
+   * REQUIRED BY design §13's fourth trade-off, through §9.5: shared module state is genuinely
+   * shared within a revision and resets across one, and the design says that must be STATED so
+   * it is not discovered as a bug. The plan's own words: "do not paraphrase it away." Pinned
+   * here on both halves, because a prompt that mentions only one of them teaches the wrong
+   * mental model just as effectively as silence.
+   */
+  test("DESIGN_CODE_RULES states the shared-module state rule, both halves", () => {
+    expect(DESIGN_CODE_RULES).toContain("SHARED ACROSS PAGES within one design revision");
+    expect(DESIGN_CODE_RULES).toContain("RESETS when the design changes");
   });
 
   /**

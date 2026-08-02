@@ -9,6 +9,7 @@ import {
   defaultFakeEntry,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
+import { PAGES_MANIFEST_RELPATH } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -117,11 +118,40 @@ describe("captureExportSnapshot", () => {
     // `design/pages.json` read exactly ONCE for the whole permit-held capture, then one
     // `readTreeFile` per page's own entry. Not once per page: two reads inside one snapshot
     // could in principle disagree, and this window is supposed to be one coherent read.
+    // Then the WHOLE tree (task 16, design §11): one `listTree` and one `readTreeFile` per
+    // tree file — the fake's tree here is `pages.json` plus both entries.
     expect(designReader.calls.map((c) => c.method)).toEqual([
       "readManifest",
       "readTreeFile",
       "readTreeFile",
+      "listTree",
+      "readTreeFile",
+      "readTreeFile",
+      "readTreeFile",
     ]);
+  });
+
+  test("captures the WHOLE canonical tree, not one file per page (design §11)", async () => {
+    const { call } = context.start(() => {
+      const { machine, projectWrite, designReader, clock } = setup();
+      const call = captureExportSnapshot(
+        { machine, projectWrite, designReader, clock },
+        { pages: [HOME_INPUT, ABOUT_INPUT] },
+      );
+      return { call };
+    });
+
+    const result = await call;
+    if (result.kind !== "captured") throw new Error(`expected captured, got ${result.kind}`);
+    // `pages.json` is in the tree and is no page's entry — the proof that this is the tree's
+    // own inventory rather than a per-page derivation.
+    expect([...result.snapshot.tree].map((file) => file.relPath).sort()).toEqual(
+      [
+        PAGES_MANIFEST_RELPATH,
+        defaultFakeEntry(slug("about")),
+        defaultFakeEntry(slug("home")),
+      ].sort(),
+    );
   });
 
   test("acquires the permit before reading any page and releases it before returning", async () => {
@@ -155,12 +185,14 @@ describe("captureExportSnapshot", () => {
 
     await call;
 
-    expect(order).toEqual([
-      "acquire",
-      `readTreeFile:${defaultFakeEntry(slug("home"))}`,
-      `readTreeFile:${defaultFakeEntry(slug("about"))}`,
-      "release",
-    ]);
+    // Every read — the two page entries AND the whole-tree capture — happens INSIDE the one
+    // permit window. A tree file read after `release` could belong to a different revision
+    // than the entry that imports it (task 16).
+    expect(order[0]).toBe("acquire");
+    expect(order[order.length - 1]).toBe("release");
+    expect(order).toContain(`readTreeFile:${defaultFakeEntry(slug("home"))}`);
+    expect(order).toContain(`readTreeFile:${defaultFakeEntry(slug("about"))}`);
+    expect(order).toContain(`readTreeFile:${PAGES_MANIFEST_RELPATH}`);
   });
 
   test("rejects with OPERATION_BUSY and touches no port when the export machine is not idle", async () => {

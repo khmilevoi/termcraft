@@ -4,15 +4,28 @@ import type { RuntimeDeclarationBundleV1 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 
-import type { ExportSnapshotV1 } from "../types";
+import type { ExportClosureV1, ExportSnapshotV1 } from "../types";
 import type { ExportRenderJobResultV1 } from "./render-jobs";
 
 /**
  * Export package assembly (kernel-command-contract §7.5/§12.5; storage-identity §5.2;
- * runtime-api-compatibility §12): `design-prompt.md`, `pages/<slug>/page.tsx`,
+ * runtime-api-compatibility §12; multi-file design tree §11): `design-prompt.md`,
+ * `design/<treeRelPath>` for EVERY canonical tree file, `closures/<slug>.json`,
  * `snapshots/<slug>/<w>x<h>.txt`, `layout/<slug>.json`, and `runtime-api.json` — assembled
  * as an IN-MEMORY file list. This module never touches disk (`core` has no disk access);
  * `ExportPublishTransaction` writing these bytes durably is a later slice's job.
+ *
+ * `pages/<slug>/page.tsx` IS GONE (design §11, task 16). A page is its closure now, so one
+ * file per page could not describe it: the shared module the page imports would be missing,
+ * and the copy's path would be a slug-derived fiction the canonical tree has retired. The
+ * whole tree ships ONCE under `design/`, and `closures/<slug>.json` says which of those files
+ * each page actually reaches — `{ "pageSlug": ..., "entry": "design/<entry>", "files":
+ * ["design/..."] }`, with every path prefixed the same way, so a reader of the package never
+ * has to know the tree-relative convention exists.
+ *
+ * `design-prompt.md`'s own shared-module section (design §11) is PLAN 3's — the prompt names
+ * each page's entry and closure file today and deliberately does not yet explain module-level
+ * state across pages, rather than half-writing that explanation here.
  *
  * `layout/<slug>.json` (WP-5 Task B1, D-Q1) is a SIZE-KEYED JSON object — one key per
  * rendered ladder size (`sizeLabel()` below, the same `WxH` label the snapshot files use),
@@ -50,6 +63,17 @@ export interface AssembleExportPackageInputV1 {
   readonly snapshot: ExportSnapshotV1;
   readonly renders: readonly ExportRenderJobResultV1[];
   readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
+  /**
+   * One closure per page, resolved over the SAME bytes {@link ExportSnapshotV1.tree} holds.
+   * The caller supplies them because resolving a closure means walking the import graph, which
+   * is `gate`'s job and a ring `core` may not import — `runExportStart` asks the `GateRunner`
+   * port once, after the permit is released, and hands the answer here.
+   *
+   * A page with no entry here gets NO `closures/<slug>.json` rather than a fabricated one
+   * naming only its entry: a truncated closure would tell an implementer the page needs
+   * nothing else, which is the same silent lie a truncated closure has cost this branch twice.
+   */
+  readonly closures: readonly ExportClosureV1[];
 }
 
 export type AssembleExportPackageResultV1 =
@@ -81,7 +105,13 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
     lines.push("");
     lines.push(`- theme: ${page.theme}`);
     lines.push(`- kitApiVersion: ${page.kitApiVersion}`);
-    lines.push(`- source: pages/${page.pageSlug}/page.tsx`);
+    lines.push(`- entry: design/${page.entryRelPath}`);
+    const closure = input.closures.find((entry) => entry.pageSlug === page.pageSlug);
+    lines.push(
+      closure === undefined
+        ? "- closure: unavailable — this page's import graph could not be resolved"
+        : `- closure: closures/${page.pageSlug}.json (${closure.files.length} file(s))`,
+    );
     lines.push(
       `- layout: layout/${page.pageSlug}.json (per-size resolved layout trees; ` +
         `ids/boxes populated, text awaits the runtime catalog — D-Q6)`,
@@ -167,6 +197,23 @@ function buildLayoutFile(
   return textFile(relPath, `{${entries.join(",")}}`);
 }
 
+/**
+ * One page's `closures/<slug>.json`, with every tree-relative path prefixed `design/` so it
+ * addresses the package's own layout rather than the canonical tree's. `files` keeps the
+ * closure's own order, which `resolveClosure` already sorted.
+ */
+function buildClosureJson(closure: ExportClosureV1): string {
+  return JSON.stringify(
+    {
+      pageSlug: closure.pageSlug,
+      entry: `design/${closure.entry}`,
+      files: closure.files.map((relPath) => `design/${relPath}`),
+    },
+    null,
+    2,
+  );
+}
+
 /** Assembles the export package's in-memory file list, or refuses wholesale on the first failed render (or the first unparseable layout tree — see the header). */
 export function assembleExportPackage(
   input: AssembleExportPackageInputV1,
@@ -182,9 +229,16 @@ export function assembleExportPackage(
   files.push(textFile("design-prompt.md", buildDesignPrompt(input)));
   files.push(textFile("runtime-api.json", JSON.stringify(input.runtimeDeclaration, null, 2)));
 
-  for (const page of input.snapshot.pages) {
-    files.push({ relPath: `pages/${page.pageSlug}/page.tsx`, bytes: page.bytes });
+  // The whole canonical tree, once, under `design/` — never one slug-derived copy per page.
+  for (const file of input.snapshot.tree) {
+    files.push({ relPath: `design/${file.relPath}`, bytes: file.bytes });
+  }
 
+  for (const closure of input.closures) {
+    files.push(textFile(`closures/${closure.pageSlug}.json`, buildClosureJson(closure)));
+  }
+
+  for (const page of input.snapshot.pages) {
     const pageRenders = input.renders.filter((render) => render.pageSlug === page.pageSlug);
     const layoutFile = buildLayoutFile(page.pageSlug, pageRenders);
     if ("code" in layoutFile) return { kind: "failed", failure: layoutFile };

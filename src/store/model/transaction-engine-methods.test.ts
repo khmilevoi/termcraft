@@ -1029,6 +1029,16 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
   test("listTree enumerates every design-tree file with its hash, sorted by relPath — [] when design/ does not exist yet", async () => {
     const opened = await freshOpenProject();
     try {
+      // A FRESHLY CREATED project is no longer tree-less: task 16 seeds `design/pages.json`
+      // with an empty `pages` array as part of the creation transaction (design §3, §10). So
+      // the "absent design/" case is reached by REMOVING the seeded tree, not by taking a new
+      // project as-is — the honest-empty contract still has to hold for a project whose
+      // `design/` was deleted outside the product.
+      const seeded = await opened.pages.listTree();
+      if (seeded instanceof Error) throw new Error(`fixture bug: ${seeded.message}`);
+      expect(seeded.map((file) => file.relPath)).toEqual(["pages.json"]);
+
+      fs.rmSync(designPath(opened, ""), { recursive: true, force: true });
       const empty = await opened.pages.listTree();
       if (empty instanceof Error) throw new Error(`fixture bug: ${empty.message}`);
       expect(empty).toEqual([]); // an absent `design/` is an honest empty tree, not a failure

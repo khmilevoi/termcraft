@@ -23,7 +23,7 @@ export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
 export { hostFailureCodeOf, isDesignRenderFailure } from "./model/failure-class";
 export { hostFailurePhrase } from "./model/host-failure-phrase";
 export type { RepairPromptInput } from "./model/repair-prompt";
-export { buildRepairPrompt, relativePageSourcePath } from "./model/repair-prompt";
+export { buildRepairPrompt, pageEntryOf, relativePageSourcePath } from "./model/repair-prompt";
 
 export type { FrameViewProps } from "./ui/FrameView";
 export { FrameView } from "./ui/FrameView";

@@ -16,7 +16,12 @@ import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
-import type { ExportPageInputV1, ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
+import type {
+  ExportPageInputV1,
+  ExportPageSnapshotV1,
+  ExportSnapshotV1,
+  ExportTreeFileV1,
+} from "../types";
 import type { ExportPackageFileV1 } from "./package";
 import { type PublishExportInputV1, publishExport } from "./publish";
 
@@ -61,7 +66,20 @@ const HOME: ExportPageSnapshotV1 = {
   bytes: new Uint8Array([1]),
 };
 
-const SNAPSHOT: ExportSnapshotV1 = { pages: [HOME], capturedAt: "2024-01-01T00:00:00.000Z" };
+/**
+ * The canonical tree these snapshots were captured from. Small and fixed: nothing in this
+ * file asserts on the tree itself, but a snapshot without one would describe a design whose
+ * pages import files that do not exist.
+ */
+const TREE: readonly ExportTreeFileV1[] = [
+  { relPath: "pages.json", bytes: new TextEncoder().encode('{"schemaVersion":1,"pages":[]}') },
+];
+
+const SNAPSHOT: ExportSnapshotV1 = {
+  pages: [HOME],
+  tree: TREE,
+  capturedAt: "2024-01-01T00:00:00.000Z",
+};
 
 function currentPageInput(overrides: Partial<ExportPageInputV1> = {}): ExportPageInputV1 {
   return {

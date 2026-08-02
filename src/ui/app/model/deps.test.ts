@@ -334,6 +334,7 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
         {
           status: "ready",
           pageSlug: activePageSlug,
+          entry: `pages/${activePageSlug}.tsx`,
           sourceHash,
           title: activePageSlug,
           minSize: { w: 80, h: 24 },
