@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#0a0908;}
+  *{box-sizing:border-box;}
+  @keyframes tcblink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+  a{color:#e6a23c;text-decoration:none;}
+  a:hover{color:#f6c163;text-decoration:underline;}
+  ::selection{background:#392c11;color:#f6c163;}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0a0908;background-image:radial-gradient(circle at 1px 1px,#17140f 1px,transparent 0);background-size:26px 26px;color:#d7d0c2;font-family:'JetBrains Mono',ui-monospace,monospace;padding:56px 60px 100px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;border-bottom:1px solid #211d16;padding-bottom:18px;margin-bottom:40px;">
+    <a href="./Termcraft%20UI.dc.html" style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:18px;letter-spacing:.02em;">❯ termcraft</span>
+      <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
+    </a>
+    <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
+      <a href="./28-chat-scroll.dc.html" style="color:#8f877a;">‹ Chat scroll & history paging</a>
+      <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
+      <a href="./30-workspace-first-launch.dc.html" style="color:#8f877a;">Workspace-first launch ›</a>
+    </div>
+  </div>
+
+  <div style="margin:0 0 22px;">
+    <div style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">29 · Input editing</span>
+      <span style="color:#5b544a;font-size:12px;">ws-editor-wrap-120 · ws-editor-midword-120 · ws-editor-newline-120 · ws-editor-ceiling-120 · ws-editor-selectall-120 · ws-editor-turn-120 · ws-slash-editor-120 · home-grown-120 · pin-overflow-64 · ws-floor-80</span>
+    </div>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:78ch;line-height:1.5;">All four text inputs — the Workspace composer, the Home prompt, the pin field, and the slash-menu filter (the composer's own buffer) — move onto a real edit buffer: a cursor anywhere in the text, word jumps, word-wise delete both directions, undo/redo, select-all, and for the composer and Home prompt, word wrap with a growth ceiling and internal scroll. None of that had anywhere to render before this: every caret in this system was drawn one column past the end of the text, and the composer was a fixed four-row block. This page collects all four inputs' new states in one place rather than editing §01/§03/§08/§23 in place, because the load-bearing change — a character actually sitting under the cursor — is one primitive shared by all four, and every frame below leans on it; splitting that across four files would either repeat the explanation four times or hide the seam. §01/§03/§08/§23 are unchanged and still correct: every single-row frame they show renders exactly as before, because that is the frozen path (below), and this page is the second path.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:78ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">One terminal, one cursor.</strong> Exactly one of the four inputs paints a cursor at a time; the spec's focus table decides which. The two rows that differ visually and are drawn here: a turn running with an <em>empty</em> draft stays focused with no cursor painted (§03's <code style="color:#e6a23c;">wsGenLong</code> already draws this), a turn running with a <em>non-empty</em> draft is focused with the cursor painted (§03's <code style="color:#e6a23c;">wsGenTyping</code> already draws this, extended past one row below). Everything else — overlays, preview focus, read-only, Home's blocked health state — blurs the input and paints nothing, unchanged.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:12px 0 0;max-width:78ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">No affordance for a chord that isn't universal.</strong> <code style="color:#e6a23c;">Shift+Enter</code>, <code style="color:#e6a23c;">Ctrl+Backspace</code> and <code style="color:#e6a23c;">Ctrl+Shift+Z</code> need the enhanced keyboard protocol and are silently absent in a legacy terminal with no way to detect which is running — so none of them is drawn as a hint anywhere on this page. Newline is also <code style="color:#e6a23c;">Ctrl+J</code> / <code style="color:#e6a23c;">Alt+Enter</code>, word-delete-back is also <code style="color:#e6a23c;">Ctrl+W</code>, redo is also <code style="color:#e6a23c;">Ctrl+Y</code> — universal fallbacks, but still not drawn as key-row hints below, on the same logic §03 already applies to a bare <code style="color:#e6a23c;">esc</code>: it says what a gesture does, never teaches a chord in the chrome. The one new hint that does appear is <code style="color:#e6a23c;">^A select all</code> (§29.5) — a plain Ctrl+letter chord in the same family as <code style="color:#e6a23c;">^W</code>/<code style="color:#e6a23c;">^Y</code>/<code style="color:#e6a23c;">^J</code>, none of which need the enhanced protocol. Otherwise the status bar says nothing new: mode chips and the F2/F3/F4 keys are the same ones §02/§03 already draw.</p>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The cursor, and the frozen single row</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">Every existing frame in §01–§28 is the single-row case, and it is frozen exactly as drawn: one input row, the caret past the end of the text. What's new is a second path, reached only when the cursor sits before the end of the text or the buffer holds more than one visual row. <a href="#ws-editor-midword-120">ws-editor-midword-120</a> is the smallest possible instance of the new path at the old geometry: still one row, still <code style="color:#e6a23c;">frameH-4</code>, but the cursor has moved left into <code style="color:#e6a23c;">"network throughput panel"</code> and the <code style="color:#e6a23c;">g</code> of "throughput" now sits under it in reverse video — amber fill, background-coloured glyph, still blinking. That reverse cell is a drawn approximation of the terminal's own hardware block cursor: the app can only set style, blink and colour, and the terminal paints the real thing, so the divergence is carried as a code comment, not hidden.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-editor-midword-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · cursor mid-word · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-midword-120</span>
+      </div>
+      {{ midword }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Growth: wrap vs. an explicit newline</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">The composer is 1 seam row + an optional attach row + <code style="color:#e6a23c;">editorRows</code> — frozen at <code style="color:#e6a23c;">editorRows === 1</code>, exactly today's numbers. <a href="#ws-editor-wrap-120">ws-editor-wrap-120</a> grows it to three by word wrap alone typing one long sentence with no newline anywhere; the seam rule and its <code style="color:#e6a23c;">codex · gpt5.5 · high</code> / <code style="color:#e6a23c;">ctx</code> chips move up with it, unchanged in every other respect. <code style="color:#e6a23c;">❯</code> marks row 1 only — repeating it on every wrapped row would read as several prompts instead of one growing message — so continuation rows start flush under the same text column with nothing in the marker column.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;"><a href="#ws-editor-newline-120">ws-editor-newline-120</a> is the F6 repair fill (§12's <code style="color:#e6a23c;">wsHostCrash</code>) rendered honestly for the first time: <code style="color:#e6a23c;">draft + "\n\n" + error</code> produces a real blank row between the kept draft and the pasted error. That blank row is the whole answer to whether a wrap reads differently from a newline — it does, but not by decoration: wrap alone can never produce an empty visual row (a wrapped line always holds at least the one word that didn't fit above it), so a blank row is unambiguous proof of a real <code style="color:#e6a23c;">\n</code>, no marker required. The buffer is split on literal newlines first and each resulting paragraph is word-wrapped after, so this is exact, not inferred.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-editor-wrap-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · grown by wrap · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-wrap-120</span>
+      </div>
+      {{ wrap }}
+    </div>
+    <div id="ws-editor-newline-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · F6 blank line · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-newline-120</span>
+      </div>
+      {{ newline }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The ceiling, and scrolling inside it</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;"><code style="color:#e6a23c;">editorRows = clamp(visualLines, 1, clamp(floor(frameH/4), 1, 6))</code> — 6 rows at 120×36, 5 at 80×24, a proportion rather than a constant so the smallest supported terminal isn't squeezed to nothing. Past the ceiling the view scrolls and follows the cursor, and unlike §28's message stream — where a count of hidden rows above genuinely doesn't exist — the whole draft is already in memory here, so an exact integer is available at <em>both</em> edges at once. <a href="#ws-editor-ceiling-120">ws-editor-ceiling-120</a> shows the cursor mid-buffer with rows hidden on both sides: <code style="color:#e6a23c;">▴2</code> / <code style="color:#e6a23c;">▾4</code>, one corner glyph on the first and last visible row, exact counts, never a row of their own. That is deliberately not §28's <code style="color:#e6a23c;">▲ N earlier messages</code> — that row names a destination worth paging to; this glyph names a window that only ever follows the cursor automatically, and costs zero rows because a grown composer's row budget is the expensive thing here (see the 80×24 floor, below). The two vocabularies share a project but not a meaning, and now they don't share a shape either.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-editor-ceiling-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · ceiling · scrolled both edges · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-ceiling-120</span>
+      </div>
+      {{ ceiling }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Selection, and a turn running with a live draft</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;"><a href="#ws-editor-selectall-120">ws-editor-selectall-120</a> — select-all across a three-row draft. The wash covers every row in range up to each row's real text end, never the empty tail past it, and the cursor still draws on top so it stays visible inside the selection rather than vanishing into it. <a href="#ws-editor-turn-120">ws-editor-turn-120</a> extends §03's own rule — turn running, draft non-empty ⇒ focused, cursor painted, exactly as <code style="color:#e6a23c;">wsGenTyping</code> already draws it — past a single row for the first time.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-editor-selectall-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · select all · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-selectall-120</span>
+      </div>
+      {{ selectall }}
+    </div>
+    <div id="ws-editor-turn-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · multi-row draft · turn running · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-editor-turn-120</span>
+      </div>
+      {{ turnRunning }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The slash filter, now editable in the middle</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">The slash filter is the composer's own buffer, so it inherits everything above: <a href="#ws-slash-editor-120">ws-slash-editor-120</a> opens the menu above a composer already grown to two rows, cursor mid-word inside <code style="color:#e6a23c;">reasoning</code> on the wrapped line — <code style="color:#e6a23c;">←/→</code> and <code style="color:#e6a23c;">^←/→</code> now reach into the middle of a filter for the first time. <a href="#ws-slash-closed-64">ws-slash-closed-64</a> is the new edge case the spec calls out: delete the leading <code style="color:#e6a23c;">/</code> and the menu closes, but the remaining characters are not discarded — they stay in the composer as ordinary literal text, because closing the menu is a matcher decision, not an edit.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-slash-editor-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · slash menu over grown composer · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-slash-editor-120</span>
+      </div>
+      {{ slashEditor }}
+    </div>
+    <div id="ws-slash-closed-64" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">leading / deleted — menu closed</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:1px 5px;">ws-slash-closed-64</span>
+      </div>
+      {{ slashClosed }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Home grown, and the pin field overflowing</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;"><a href="#home-grown-120">home-grown-120</a> — the describe box grows downward from a fixed top, so the logo and tagline above it never move; <code style="color:#e6a23c;">⏎ create</code>, the agent/model/effort selectors and the slash menu all shift down with it, because the menu's anchor (<code style="color:#e6a23c;">iy + boxH</code>) was already dynamic and simply follows. <a href="#pin-overflow-64">pin-overflow-64</a> is the opposite case: the pin field never wraps or grows — one line, always — so it is the only input where text scrolls out of view sideways. The window follows the cursor exactly like the composer's vertical scroll, and a single <code style="color:#e6a23c;">‹</code> marks the hidden head; typing at the end never clips the tail, so <code style="color:#e6a23c;">›</code> only appears once the cursor moves back into the middle of overflowed text.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="home-grown-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · home grown · menu below · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">home-grown-120</span>
+      </div>
+      {{ homeGrown }}
+    </div>
+    <div id="pin-overflow-64" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">pin field · text longer than the box</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:1px 5px;">pin-overflow-64</span>
+      </div>
+      {{ pinOverflow }}
+    </div>
+  </div>
+
+  <div style="margin:34px 0 14px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The 80×24 floor</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:78ch;line-height:1.5;">At the narrowest supported terminal a maxed 5-row composer takes 7 of the panel's 22 content rows; the live agent block sits on its own 3-row minimum; scrollback is squeezed to zero — no room for even one summary row above the live block. Nothing marks that the conversation continues the way §28's <code style="color:#e6a23c;">▲ N earlier</code> row would, because there is no row left to spend on it. What still tells the reader is what already existed for exactly this shortage: the header line (<code style="color:#e6a23c;">● codex</code>) never disappears, and §28's proportional scrollbar — a column, not a row — still tracks against the full history at zero row cost. <a href="#ws-floor-80">ws-floor-80</a> draws this floor plainly rather than inventing a new affordance to say what an existing, cheaper one already says.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-floor-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · 80×24 floor · scrollback at zero</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-floor-80</span>
+      </div>
+      {{ floor80 }}
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { ready: false };
+  async componentDidMount(){
+    const mod = await import('./termcraft-engine.js');
+    this.engine = new mod.Engine();
+    this.engine.measure(() => this.forceUpdate());
+    this.setState({ ready: true });
+  }
+  renderVals(){
+    if (!this.state.ready) return {};
+    const e = this.engine;
+    return {
+      midword: e.wsEditorMidword(120,36),
+      wrap: e.wsEditorWrap(120,36),
+      newline: e.wsEditorNewline(120,36),
+      ceiling: e.wsEditorCeiling(120,36),
+      selectall: e.wsEditorSelectAll(120,36),
+      turnRunning: e.wsEditorTurnRunning(120,36),
+      slashEditor: e.wsSlashEditor(120,36),
+      slashClosed: e.wsSlashClosed(56,8),
+      homeGrown: e.wsHomeGrown(120,36),
+      pinOverflow: e.wsPinOverflow(64,8),
+      floor80: e.wsFloor80(80,24)
+    };
+  }
+}
+
+</script>
+</body>
+</html>
