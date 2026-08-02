@@ -1,3 +1,4 @@
+import * as errore from "errore";
 import {
   LanguageVariant,
   createScanner,
@@ -7,6 +8,46 @@ import type { Scanner } from "typescript/unstable/ast";
 
 import { SK, scanCodeToken } from "./scanner";
 import type { BraceContext, SyntaxKind, Tok } from "./scanner";
+
+/**
+ * The deepest JSX element nesting this reader will descend into before refusing the whole
+ * source. Chosen an order of magnitude above real code and PINNED THERE BY A TEST that scans
+ * every `src/ui/**\/*.tsx` in this repository — the deepest genuine JSX available, and the same
+ * shape a design page has. Raising it is a cost decision; lowering it below the measurement is
+ * a correctness one, and the test is what says which you are doing.
+ *
+ * WHY IT EXISTS. The reader is recursive descent with retries; the element memo bounds how
+ * often one element is DERIVED, not the recursion. Measured through `scanTreeImports` on
+ * `"<a>{".repeat(k)`: 16 000 chars 1 541 ms, 24 000 chars 3 774 ms, ~28 800 chars up to ~9 s
+ * before the JS stack exhausts — and WHETHER it exhausts is stochastic, so the overflow is not
+ * a bound anyone can rely on. `gate/model/gate.ts`'s `runTreeImports` is synchronous and runs
+ * once per turn; 512 files at that cost is ~77 minutes of blocked event loop from ~14.8 MB,
+ * comfortably inside the store's own 512-file / 64 MiB budget (task-14 report §9 item 1).
+ */
+export const MAX_JSX_NESTING_DEPTH = 64;
+
+/**
+ * The source nests JSX deeper than {@link MAX_JSX_NESTING_DEPTH}. THROWN, not returned, and
+ * that is deliberate in a codebase whose rule is errors-as-values.
+ *
+ * The reader's every function returns `boolean` — "this was an element" / "it was not" — and a
+ * `false` return means "no JSX here", which for a source that really does contain JSX is a
+ * PARTIAL SCAN: the exact failure mode {@link readElement}'s own doc says this module must
+ * never have, because a partial scan silently drops import diagnostics. Threading an error
+ * value out through every recursive return would work, but the abort channel it would build is
+ * the one this module ALREADY has: the stack exhaustion that `tree-scan.ts`'s `errore.try`
+ * converts into a fail-closed `UNSCANNABLE_SOURCE`. This throw takes that same path,
+ * deterministically and ~4 orders of magnitude sooner.
+ *
+ * Every production entry into this reader is inside that guard — `scanTreeImports`
+ * (`gate/model/tree-scan.ts`) for `scanImportAllowlist`, and `gate/adapters/gate-runner.ts`'s
+ * own `errore.try` for `scanModuleEdges`. Both were checked when this landed; a new caller
+ * that is not guarded is a fail-open and must be given one.
+ */
+export class JsxNestingTooDeepError extends errore.createTaggedError({
+  name: "JsxNestingTooDeepError",
+  message: "JSX nesting exceeds the $limit-level ceiling at source offset $pos",
+}) {}
 
 /**
  * Read a (possibly hyphenated) name starting at `start`: `id`, but also
@@ -108,6 +149,10 @@ interface Collector {
   readonly elements: JsxElement[];
   readonly textRanges: JsxTextRange[];
   readonly reads: Map<number, ElementRead>;
+  /** Current recursion depth, incremented around each {@link readElementUncached} and checked
+   * against {@link MAX_JSX_NESTING_DEPTH}. A MEMO HIT DOES NOT COUNT: replaying a recorded read
+   * consumes no stack, so charging it depth would refuse a source the reader can handle. */
+  depth: number;
 }
 
 /** An open tag `readElement` has finished reading, on its way to
@@ -425,9 +470,16 @@ function readElement(scanner: Scanner, collector: Collector): boolean {
     scanner.resetTokenState(cached.end);
     return cached.ok;
   }
+  collector.depth += 1;
+  if (collector.depth > MAX_JSX_NESTING_DEPTH)
+    throw new JsxNestingTooDeepError({ limit: MAX_JSX_NESTING_DEPTH, pos: start });
   const elemStart = collector.elements.length;
   const textStart = collector.textRanges.length;
   const ok = readElementUncached(scanner, collector);
+  // No `finally`: `readElementUncached` returns a boolean on every path it controls, and the
+  // one path it does not — this ceiling throwing from a deeper frame — abandons the whole scan,
+  // so there is no read left to keep the counter honest for.
+  collector.depth -= 1;
   collector.reads.set(start, {
     ok,
     end: scanner.getTokenEnd(),
@@ -708,7 +760,7 @@ function closesTag(scanner: Scanner, tagName: string): boolean {
 export function scanJsx(source: string): JsxScan {
   const scanner = createScanner(true, LanguageVariant.JSX);
   scanner.setText(source);
-  const collector: Collector = { elements: [], textRanges: [], reads: new Map() };
+  const collector: Collector = { elements: [], textRanges: [], reads: new Map(), depth: 0 };
   const braces: BraceContext[] = [];
 
   let previous: SyntaxKind = SK.EndOfFile;

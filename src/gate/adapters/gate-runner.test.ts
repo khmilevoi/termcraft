@@ -361,9 +361,15 @@ describe("createGateRunnerAdapter", () => {
      * resolves specifiers, not token offsets, so its own diagnostics have no line/column to give
      * and that absence is pinned here rather than papered over with an invented `1:1`.
      *
-     * `UNSCANNABLE_SOURCE`'s message ends in Bun's OWN `RangeError` text, reproduced verbatim
-     * rather than normalized. If a Bun upgrade rewords it this row fails loudly and one string is
-     * updated — which is the correct outcome, since that text reaches the agent's retry prompt.
+     * `UNSCANNABLE_SOURCE`'s message ends in the reader's own thrown error text, reproduced
+     * verbatim rather than normalized. It used to be Bun's own `RangeError: Maximum call stack
+     * size exceeded` — the engine's stack exhausting on this fixture's 32 000-element unterminated
+     * body — until the design-tree phase-1 closeout's nesting ceiling (`gate/model/jsx.ts`,
+     * `MAX_JSX_NESTING_DEPTH`) started refusing any source this deep, deterministically, long
+     * before the engine ever would; that ceiling's own `JsxNestingTooDeepError` is what this
+     * fixture now surfaces instead. If either wording changes this row fails loudly and one
+     * string is updated — which is the correct outcome, since that text reaches the agent's retry
+     * prompt.
      */
     const renderErrors = (errors: readonly GateErrorV1[]): readonly string[] =>
       errors
@@ -494,8 +500,10 @@ describe("createGateRunnerAdapter", () => {
         // flat scan reported `UNSCANNABLE_SOURCE` for, which is round 3's Critical (b) — but
         // `scanModuleEdges` now reads the source through the SAME parse the flat scan uses
         // (`tokenize` -> `readJsxTextRanges` -> `scanJsx`), so this 32 000-element unterminated
-        // body overflows the engine's stack in BOTH readers instead of only the first. The
-        // second reader's separate `FORBIDDEN_IMPORT` line is therefore gone.
+        // body trips the same refusal in BOTH readers instead of only the first — originally the
+        // engine's own stack exhausting, now `scanJsx`'s `MAX_JSX_NESTING_DEPTH` ceiling firing
+        // deterministically long before the stack ever would. The second reader's separate
+        // `FORBIDDEN_IMPORT` line is therefore gone either way.
         //
         // That is a loss of DIAGNOSTIC DETAIL, not of enforcement, and the row asserts as much:
         // the fatal is still raised, still attributed to `pages/a.tsx`, and still blocks page
@@ -507,7 +515,7 @@ describe("createGateRunnerAdapter", () => {
         treePaths: ["pages/a.tsx"],
         pages: [entry("a", "pages/a.tsx")],
         errors: [
-          'import/UNSCANNABLE_SOURCE @ pages/a.tsx:1:1 blocked=[a] :: the import scan could not read "pages/a.tsx" to the end — RangeError: Maximum call stack size exceeded.',
+          'import/UNSCANNABLE_SOURCE @ pages/a.tsx:1:1 blocked=[a] :: the import scan could not read "pages/a.tsx" to the end — JsxNestingTooDeepError: JSX nesting exceeds the 64-level ceiling at source offset 285',
         ],
         closures: [],
       },

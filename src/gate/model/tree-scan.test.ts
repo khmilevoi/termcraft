@@ -510,10 +510,17 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       // input — but `runTreeImports` is SYNCHRONOUS with no `try` of its own, so an escaping
       // throw crashes the turn Task 14 is about to wire instead of rejecting a page.
       //
-      // OUT OF PROCESS under an external kill: the 24 000-char row alone costs seconds, and a
-      // regression that restores the throw must fail this test rather than take the suite with
-      // it. Both shapes are checked, and the well-formed 60 000-char row is the "still returns
-      // normally" half — a fix that simply rejected everything large would fail on it.
+      // `bigButShallow` NAMED THE OPEN RESIDUAL: at 8 000 levels — well short of the engine's own
+      // stack limit — the pre-ceiling reader returned cleanly with zero errors, after several
+      // seconds of blocked event loop, exactly the cost `MAX_JSX_NESTING_DEPTH` (`./jsx`, closing
+      // this task-12b residual) now bounds. All three shapes now assert `UNSCANNABLE_SOURCE`: the
+      // ceiling rejects `bigButShallow` deterministically, long before either the engine's stack
+      // or the clock would have.
+      //
+      // OUT OF PROCESS under an external kill: this exercises the real synchronous scan
+      // end-to-end, and a regression that removed the ceiling could again cost seconds or let an
+      // uncaught engine error escape — either of which this subprocess isolates from the rest of
+      // the suite instead of taking it down too.
       const modulePath = `${import.meta.dir.replaceAll("\\", "/")}/tree-scan.ts`;
       const script = [
         `const { scanTreeImports } = await import(${JSON.stringify(modulePath)});`,
@@ -542,7 +549,7 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
       expect(JSON.parse(stdout.trim())).toEqual({
         deepUnterminated: ["UNSCANNABLE_SOURCE"],
         deepWellFormed: ["UNSCANNABLE_SOURCE"],
-        bigButShallow: [],
+        bigButShallow: ["UNSCANNABLE_SOURCE"],
       });
     }, 90_000);
 
@@ -1008,4 +1015,11 @@ describe("the closure cannot shrink under a wrong `syntax` — the union makes i
       expect([rel, [...walk]]).toEqual([rel, flatSpecs]);
     }
   });
+});
+
+test("a file past the nesting ceiling is UNSCANNABLE_SOURCE, fail-closed, not a silent pass", () => {
+  const files = new Map([["pages/runaway.tsx", "<a>{".repeat(8000)]]);
+  const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+  expect(errors.map((error) => error.code)).toEqual(["UNSCANNABLE_SOURCE"]);
+  expect(errors[0]?.file).toBe("pages/runaway.tsx");
 });

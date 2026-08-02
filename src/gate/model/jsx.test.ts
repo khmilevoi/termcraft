@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { readHyphenatedName, readJsxTextRanges, scanJsx } from "./jsx";
+import {
+  JsxNestingTooDeepError,
+  MAX_JSX_NESTING_DEPTH,
+  readHyphenatedName,
+  readJsxTextRanges,
+  scanJsx,
+} from "./jsx";
 import { tokenize } from "./lexer";
 import type { SourceStreamTruncatedError } from "./lexer";
 
@@ -480,4 +486,71 @@ describe("readElement's memo (task-12b — the superlinear re-lex `scanJsx`'s do
       textRanges: [{ pos: 6, end: 7 }],
     });
   });
+});
+
+describe("nesting ceiling", () => {
+  test("ordinary nesting well under the ceiling still scans", () => {
+    const depth = 24;
+    const source = `${"<box>".repeat(depth)}x${"</box>".repeat(depth)}`;
+    expect(scanJsx(source).elements.length).toBeGreaterThan(0);
+  });
+
+  test("nesting past the ceiling THROWS rather than returning a partial scan", () => {
+    const depth = MAX_JSX_NESTING_DEPTH + 1;
+    const source = `${"<box>".repeat(depth)}x${"</box>".repeat(depth)}`;
+    expect(() => scanJsx(source)).toThrow(JsxNestingTooDeepError);
+  });
+
+  test("the runaway shape that cost seconds now fails in milliseconds", () => {
+    // `"<a>{".repeat(k)` is the measured worst case (task-12b: 24 000 chars -> 3 774 ms).
+    const source = "<a>{".repeat(8000);
+    const started = Bun.nanoseconds();
+    expect(() => scanJsx(source)).toThrow(JsxNestingTooDeepError);
+    const elapsedMs = (Bun.nanoseconds() - started) / 1_000_000;
+    expect(elapsedMs).toBeLessThan(250);
+  });
+
+  test("the error names the limit, so an agent can act on the diagnostic", () => {
+    const source = "<a>{".repeat(8000);
+    const thrown = (() => {
+      try {
+        scanJsx(source);
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(thrown).toBeInstanceOf(JsxNestingTooDeepError);
+    expect(String(thrown)).toContain(String(MAX_JSX_NESTING_DEPTH));
+  });
+
+  test("the ceiling sits ABOVE every real source in this repository", async () => {
+    // The permanent form of "we measured it once". `src/ui/**/*.tsx` is the deepest real JSX
+    // available here and is exactly the shape a design page has; if the ceiling ever drops
+    // below real code, this fails instead of a page mysteriously refusing to scan.
+    //
+    // A generous timeout, not a change of what is asserted: on a cold OS file cache, reading
+    // ~50 small files one at a time measured up to ~3.5s on this machine (vs ~0.1s warm), well
+    // under bun test's own 5000ms default only some of the time — the scan itself is
+    // sub-millisecond per file. The timeout absorbs disk-cache variance; it does not loosen the
+    // assertion that every one of them scans.
+    const listed = Bun.spawnSync(["git", "ls-files", "src/ui/*.tsx", "src/ui/**/*.tsx"], {
+      stdout: "pipe",
+    });
+    const paths = listed.stdout
+      .toString()
+      .split("\n")
+      .filter((line) => line.endsWith(".tsx"));
+    expect(paths.length).toBeGreaterThan(10);
+    for (const path of paths) {
+      const source = await Bun.file(path).text();
+      expect([
+        path,
+        (() => {
+          scanJsx(source);
+          return "scanned";
+        })(),
+      ]).toEqual([path, "scanned"]);
+    }
+  }, 20_000);
 });
