@@ -34,13 +34,13 @@ export type {
   TurnAttemptStartResultV1,
 } from "./model/attempt";
 
-export { freezeTurnCandidate } from "./model/candidate";
+export { diffTreeInventory, freezeTurnCandidate, selectChangedPages } from "./model/candidate";
 export type {
+  DesignFileChangeKindV1,
+  DesignFileChangeV1,
   FreezeTurnCandidateDeps,
   FreezeTurnCandidateInputV1,
   FreezeTurnCandidateResultV1,
-  PageInventoryChangeKindV1,
-  PageInventoryChangeV1,
   TurnCandidateV1,
 } from "./model/candidate";
 

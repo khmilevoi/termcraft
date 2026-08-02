@@ -7,7 +7,6 @@ import type {
   StagedTurnReadSetV1,
   TurnReadSetV1,
 } from "core/ports";
-import type { PageSlug } from "entities/page";
 
 /**
  * The 1:1 translation from the staging-time read set to the finalize-time one
@@ -46,18 +45,23 @@ function toFileImage(snapshot: ReadSetFileSnapshotV1 | null): FileImageV1 {
   return { state: "file", sha256: snapshot.sha256, size: snapshot.size };
 }
 
-/** Builds a map from keyed entries, refusing to silently collapse a duplicate key. */
-function toMap<Entry, Value>(
+/**
+ * Builds a map from keyed entries, refusing to silently collapse a duplicate key. Generic
+ * over the key type: `designFiles` keys by TREE-relative `relPath` (a plain `string`, design
+ * §7), `pins` still keys by `PageSlug` — one function, two call sites below, each inferring
+ * its own key type from `keyOf`'s return type.
+ */
+function toMap<Entry, Key, Value>(
   entries: readonly Entry[],
   label: string,
-  keyOf: (entry: Entry) => PageSlug,
+  keyOf: (entry: Entry) => Key,
   valueOf: (entry: Entry) => Value,
-): ReadSetTranslationError | ReadonlyMap<PageSlug, Value> {
-  const map = new Map<PageSlug, Value>();
+): ReadSetTranslationError | ReadonlyMap<Key, Value> {
+  const map = new Map<Key, Value>();
   for (const entry of entries) {
     const key = keyOf(entry);
     if (map.has(key)) {
-      return new ReadSetTranslationError({ reason: `${label} lists page "${key}" more than once` });
+      return new ReadSetTranslationError({ reason: `${label} lists "${key}" more than once` });
     }
     map.set(key, valueOf(entry));
   }
@@ -68,13 +72,13 @@ function toMap<Entry, Value>(
 export function toFinalizeReadSet(
   staged: StagedTurnReadSetV1,
 ): ReadSetTranslationError | TurnReadSetV1 {
-  const canonicalPages = toMap(
-    staged.canonicalPages,
-    "canonicalPages",
-    (entry) => entry.pageSlug,
+  const designFiles = toMap(
+    staged.designFiles,
+    "designFiles",
+    (entry) => entry.relPath,
     (entry): FileImageV1 => toFileImage(entry.snapshot),
   );
-  if (canonicalPages instanceof Error) return canonicalPages;
+  if (designFiles instanceof Error) return designFiles;
 
   const pins = toMap(
     staged.pins,
@@ -86,7 +90,7 @@ export function toFinalizeReadSet(
 
   return {
     manifest: toFileImage(staged.manifest),
-    canonicalPages,
+    designFiles,
     // Copied field by field rather than passed through by reference: the staged set came
     // from a port and nothing guarantees the caller stopped holding it.
     chat: { length: staged.chat.length, prefixSha256: staged.chat.prefixSha256 },

@@ -3,7 +3,7 @@ import { wrap } from "@reatom/core";
 import type { StateMachine, TurnAction, TurnState } from "core/machines";
 import { type SentPinV1, resolveSentPinAppends } from "core/pins/model/turn-resolution";
 import type {
-  ChangedPageOpV1,
+  ChangedDesignFileOpV1,
   StagedTurnReadSetV1,
   StagingService,
   TurnCommitV1,
@@ -89,9 +89,10 @@ export interface FinalizeTurnDeps {
 export interface FinalizeTurnInputV1 {
   readonly turnId: string;
   readonly targetChatId: string;
-  /** Gate-validated diff; empty means no canonical page changed (§7.4 item 5). */
-  readonly changedPages: readonly ChangedPageOpV1[];
-  readonly validatedPageSlugs: readonly PageSlug[];
+  /** Gate-validated diff over tree-relative paths; empty means no design file changed (§7.4 item 5). */
+  readonly changedFiles: readonly ChangedDesignFileOpV1[];
+  /** The slugs whose CLOSURE changed this turn (design §7) — the pin-resolution filter; see `core/ports`' `TurnFinalizeInputV1.changedPageSlugs` for the full rationale. Derived by the caller from the closure diff (`selectChangedPages`), never from a file path. */
+  readonly changedPageSlugs: readonly PageSlug[];
   readonly requestedActivePage?: PageSlug | null;
   readonly agentRecord: ChatAgentRecord;
   /** The turn's admission-time captured pin set (§12.2 item 1) — turn-resolution.ts's only pin source. */
@@ -203,7 +204,7 @@ export async function finalizeTurn(
   const resolvedPins = resolveSentPinAppends({
     turnId: input.turnId,
     sentPins: input.sentPins,
-    changedPages: input.changedPages.map((op) => op.pageSlug),
+    changedPages: input.changedPageSlugs,
     createdAt: input.createdAt,
   });
 
@@ -211,8 +212,8 @@ export async function finalizeTurn(
     deps.turnTransactions.finalize({
       turnId: input.turnId,
       targetChatId: input.targetChatId,
-      changedPages: input.changedPages,
-      validatedPageSlugs: input.validatedPageSlugs,
+      changedFiles: input.changedFiles,
+      changedPageSlugs: input.changedPageSlugs,
       requestedActivePage: input.requestedActivePage,
       agentRecord: input.agentRecord,
       resolvedPins,

@@ -70,7 +70,11 @@ const FAILURE: FailureDtoV1 = {
 function baseReadSet(): Omit<StagedTurnReadSetV1, "chat"> {
   return {
     manifest: { sha256: "a".repeat(64), size: 10 },
-    canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } }],
+    // `relPath` deliberately unrelated to any page slug — `designFiles` is keyed by
+    // TREE-relative path, not page identity.
+    designFiles: [
+      { relPath: "screens/landing.tsx", snapshot: { sha256: "b".repeat(64), size: 20 } },
+    ],
     pins: [{ pageSlug: PAGE_HOME, base: { length: 5, prefixSha256: "d".repeat(64) } }],
   };
 }
@@ -107,8 +111,7 @@ function baseInput(overrides: Partial<AdmissionInputV1> = {}): AdmissionInputV1 
     text: "hello",
     candidatePins: [],
     workspace: {
-      pages: [{ pageSlug: PAGE_HOME, sourcePath: "/fake/home.tsx" }],
-      manifestSlice: new TextEncoder().encode("[]"),
+      treeFiles: [{ relPath: "screens/landing.tsx", sourcePath: "/fake/landing.tsx" }],
       runtimeDocs: [],
       readSet: baseReadSet(),
     },
@@ -180,11 +183,11 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       const stagingCall = h.staging.calls[0];
       if (stagingCall?.method !== "createTurnWorkspace")
         throw new Error("expected createTurnWorkspace");
-      // TD §7.2 step 4: "copy EVERY listed canonical page.tsx, the manifest slice, RUNTIME.md,
-      // and runtime type declarations" — asserting only the method name would let admission
-      // stage an entirely empty workspace and launch the agent against no design sources.
-      expect(stagingCall.input.pages).toEqual(input.workspace.pages);
-      expect(stagingCall.input.manifestSlice).toEqual(input.workspace.manifestSlice);
+      // Every staged design-tree file (`design/pages.json` included — it is a real staged
+      // file now, not a synthesized slice), RUNTIME.md, and runtime type declarations —
+      // asserting only the method name would let admission stage an entirely empty
+      // workspace and launch the agent against no design sources.
+      expect(stagingCall.input.treeFiles).toEqual(input.workspace.treeFiles);
       expect(stagingCall.input.runtimeDocs).toEqual(input.workspace.runtimeDocs);
 
       // The CAS basis carried forward is a faithful translation of the staged read set —
@@ -333,15 +336,15 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
     });
   });
 
-  test("complete-read-set-hashes precondition: a duplicate page slug blocks phase 'read-set' AFTER both admit and workspace succeeded; machine stays admitting", async () => {
+  test("complete-read-set-hashes precondition: a duplicate design file path blocks phase 'read-set' AFTER both admit and workspace succeeded; machine stays admitting", async () => {
     await context.start(async () => {
       const h = harness();
       h.machine.apply("beginAdmission");
       const duplicatedReadSet: Omit<StagedTurnReadSetV1, "chat"> = {
         ...baseReadSet(),
-        canonicalPages: [
-          { pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } },
-          { pageSlug: PAGE_HOME, snapshot: { sha256: "e".repeat(64), size: 30 } },
+        designFiles: [
+          { relPath: "screens/landing.tsx", snapshot: { sha256: "b".repeat(64), size: 20 } },
+          { relPath: "screens/landing.tsx", snapshot: { sha256: "e".repeat(64), size: 30 } },
         ],
       };
       const input = baseInput({

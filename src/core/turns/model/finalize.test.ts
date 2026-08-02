@@ -75,7 +75,10 @@ function agentRecord(overrides: Partial<ChatAgentRecord> = {}): ChatAgentRecord 
 function stagedReadSet(overrides: Partial<StagedTurnReadSetV1> = {}): StagedTurnReadSetV1 {
   return {
     manifest: { sha256: "a".repeat(64), size: 120 },
-    canonicalPages: [{ pageSlug: slug("home"), snapshot: { sha256: "b".repeat(64), size: 400 } }],
+    // `relPath` deliberately unrelated to any page slug below — `designFiles` is keyed by
+    // TREE-relative path, not page identity, so a `pages/<slug>.tsx`-shaped fixture would
+    // prove nothing about this translation.
+    designFiles: [{ relPath: "lib/theme.ts", snapshot: { sha256: "b".repeat(64), size: 400 } }],
     chat: { length: 2048, prefixSha256: "c".repeat(64) },
     pins: [{ pageSlug: slug("home"), base: { length: 64, prefixSha256: "a".repeat(64) } }],
     ...overrides,
@@ -89,8 +92,14 @@ function baseInput(overrides: Partial<FinalizeTurnInputV1> = {}): FinalizeTurnIn
   return {
     turnId: TURN_ID,
     targetChatId: CHAT_ID,
-    changedPages: [{ pageSlug: slug("home"), change: "replace" }],
-    validatedPageSlugs: [slug("home")],
+    changedFiles: [
+      {
+        relPath: "lib/theme.ts",
+        change: "replace",
+        newBytes: new TextEncoder().encode("theme v2"),
+      },
+    ],
+    changedPageSlugs: [slug("home")],
     agentRecord: agentRecord(),
     sentPins: [] as readonly SentPinV1[],
     stagedReadSet: stagedReadSet(),
@@ -155,7 +164,7 @@ describe("finalizeTurn", () => {
     expect(finalizeCall.input.readSet.chat).toEqual({ length: 2048, prefixSha256: "c".repeat(64) });
   });
 
-  test("the CAS basis carries only manifest/canonicalPages/chat/pins — never local tab/preview/selection snapshot context", async () => {
+  test("the CAS basis carries only manifest/designFiles/chat/pins — never local tab/preview/selection snapshot context", async () => {
     // §11.2 negative, verbatim: "Send-time local tab/preview/selection changes are
     // snapshot context and do not stale apply." toFinalizeReadSet's shape has no channel
     // for such fields; this pins the ACTUAL object this module sends to the port to
@@ -171,8 +180,8 @@ describe("finalizeTurn", () => {
     const finalizeCall = turnTransactions.calls.find((c) => c.method === "finalize");
     if (finalizeCall?.method !== "finalize") throw new Error("expected a finalize call");
     expect(Object.keys(finalizeCall.input.readSet).sort()).toEqual([
-      "canonicalPages",
       "chat",
+      "designFiles",
       "manifest",
       "pins",
     ]);
@@ -274,16 +283,13 @@ describe("finalizeTurn", () => {
     expect(readPhase()).toBe("finalizing");
   });
 
-  test("resolvedPins sent to the transaction are sentPins narrowed to changedPages — never invented for a page with no sent pin", async () => {
+  test("resolvedPins sent to the transaction are sentPins narrowed to changedPageSlugs — never invented for a page with no sent pin", async () => {
     // A pin created AFTER turn capture was never added to sentPins, so it structurally
     // cannot appear here — "pins created after turn capture ... remain open" (§12.2 item 8).
     const { call, turnTransactions } = context.start(() => {
       const { machine, turnTransactions, staging, deadlines } = setup();
       const input = baseInput({
-        changedPages: [
-          { pageSlug: slug("home"), change: "replace" },
-          { pageSlug: slug("about"), change: "replace" },
-        ],
+        changedPageSlugs: [slug("home"), slug("about")],
         sentPins: [{ pinId: "pin-a", pageSlug: slug("home") }],
       });
       const call = finalizeTurn({ machine, turnTransactions, staging, deadlines }, input);
@@ -299,11 +305,12 @@ describe("finalizeTurn", () => {
     expect(finalizeCall.input.resolvedPins[0]?.event.pinId).toBe("pin-a");
   });
 
-  test("an empty changedPages diff resolves no pins at all", async () => {
+  test("an empty changedPageSlugs diff resolves no pins at all", async () => {
     const { call, turnTransactions } = context.start(() => {
       const { machine, turnTransactions, staging, deadlines } = setup();
       const input = baseInput({
-        changedPages: [],
+        changedFiles: [],
+        changedPageSlugs: [],
         agentRecord: agentRecord({ changedPages: [] }),
         sentPins: [{ pinId: "pin-a", pageSlug: slug("home") }],
       });

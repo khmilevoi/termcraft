@@ -188,8 +188,7 @@ export async function runAdmission(
   const workspaceInput: CreateTurnWorkspaceInputV1 = {
     turnId,
     targetChatId: input.targetChatId,
-    pages: input.workspace.pages,
-    manifestSlice: input.workspace.manifestSlice,
+    treeFiles: input.workspace.treeFiles,
     runtimeDocs: input.workspace.runtimeDocs,
     readSet: { ...input.workspace.readSet, chat: chatAppendBase },
   };

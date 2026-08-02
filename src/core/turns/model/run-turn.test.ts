@@ -83,7 +83,9 @@ function scriptedDeadlines(sequence: readonly TurnDeadlineCheckV1[]): TurnDeadli
 function baseReadSet(): Omit<StagedTurnReadSetV1, "chat"> {
   return {
     manifest: { sha256: "a".repeat(64), size: 10 },
-    canonicalPages: [{ pageSlug: PAGE_HOME, snapshot: { sha256: "b".repeat(64), size: 20 } }],
+    designFiles: [
+      { relPath: "screens/landing.tsx", snapshot: { sha256: "b".repeat(64), size: 20 } },
+    ],
     pins: [],
   };
 }
@@ -109,8 +111,13 @@ function baseAdmission(): AdmissionInputV1 {
     text: "please add a page",
     candidatePins: [],
     workspace: {
-      pages: [{ pageSlug: PAGE_HOME, sourcePath: "/fake/home.tsx" }],
-      manifestSlice: new TextEncoder().encode("[]"),
+      // `pages.json` is a real staged tree file now (plan Task 7) — `freezeTurnCandidate`
+      // reads it back via `StagingService.readCandidateFile` to populate `manifestText`, so
+      // every fixture that reaches a real freeze needs one staged, or that read 404s.
+      treeFiles: [
+        { relPath: "pages.json", sourcePath: "/fake/pages.json" },
+        { relPath: "screens/landing.tsx", sourcePath: "/fake/landing.tsx" },
+      ],
       runtimeDocs: [],
       readSet: baseReadSet(),
     },
@@ -154,8 +161,14 @@ function baseRunTurnInput(): RunTurnInputV1 {
       pages: [{ pageSlug: PAGE_HOME, source: "export default function Home() {}" }],
     }),
     buildFinalizeInput: ({ turnId, attempt }) => ({
-      changedPages: [{ pageSlug: PAGE_HOME, change: "replace" }],
-      validatedPageSlugs: [PAGE_HOME],
+      changedFiles: [
+        {
+          relPath: "screens/landing.tsx",
+          change: "replace",
+          newBytes: new TextEncoder().encode("v2"),
+        },
+      ],
+      changedPageSlugs: [PAGE_HOME],
       agentRecord: {
         kind: "agent",
         recordId: "0192f6f0-0000-7000-8000-00000000cccc",
@@ -296,9 +309,12 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       // `finalizeTurn` retires its own frozen candidate unconditionally on a committed exit
       // (`finalize.ts`'s own "CANDIDATE RETIREMENT" header) — the sequence below is not
       // driven by `run-turn.ts`'s own `terminalize()` helper at all on this happy path.
+      // `readCandidateFile` is `freezeTurnCandidate`'s own manifest-text read (`candidate.ts`'s
+      // header, "manifestText IS the one deliberate exception").
       expect(h.staging.calls.map((c) => c.method)).toEqual([
         "createTurnWorkspace",
         "snapshotToCandidate",
+        "readCandidateFile",
         "retireCandidate",
       ]);
       const retireCall = h.staging.calls.find((c) => c.method === "retireCandidate");
@@ -1030,10 +1046,12 @@ describe("runTurn — candidate retirement is wired through the COMPOSED driver,
       expect(result.result.kind).toBe("recorded");
 
       // Only attempt 1 ever froze a candidate — attempt 2 was cancelled before its own freeze
-      // ran, so there is exactly one `snapshotToCandidate` call for the whole turn.
+      // ran, so there is exactly one `snapshotToCandidate`/`readCandidateFile` pair for the
+      // whole turn.
       expect(h.staging.calls.map((c) => c.method)).toEqual([
         "createTurnWorkspace",
         "snapshotToCandidate",
+        "readCandidateFile",
         "retireCandidate",
       ]);
       const retireCalls = h.staging.calls.filter((c) => c.method === "retireCandidate");

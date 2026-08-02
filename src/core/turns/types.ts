@@ -1,7 +1,7 @@
 import type {
   StagedTurnReadSetV1,
-  StagingPageSourceV1,
   StagingRuntimeDocV1,
+  StagingTreeFileV1,
   TurnCommitV1,
   TurnReadSetV1,
   TurnWorkspaceV1,
@@ -46,8 +46,7 @@ export interface AdmissionCandidatePinV1 {
  * re-reads it itself, at the only honest moment, via its own `chatReader` dependency.
  */
 export interface AdmissionWorkspaceMaterialV1 {
-  readonly pages: readonly StagingPageSourceV1[];
-  readonly manifestSlice: Uint8Array;
+  readonly treeFiles: readonly StagingTreeFileV1[];
   readonly runtimeDocs: readonly StagingRuntimeDocV1[];
   readonly readSet: Omit<StagedTurnReadSetV1, "chat">;
 }
