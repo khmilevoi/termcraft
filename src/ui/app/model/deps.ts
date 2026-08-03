@@ -42,7 +42,10 @@ import {
   createPreviewInteractionState,
   handleGeometryResult,
 } from "ui/preview";
+import type { EditorBridge, TextEditorHandle } from "ui/text-input";
 import { type FocusTarget, type OverlayKind, previewRegionSize } from "ui/workspace";
+
+import { createEditorBridge, mirrorPrimaryInput } from "./primary-input";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
@@ -70,6 +73,17 @@ export interface UiLocalState {
   readonly chatSelection: Atom<number>;
   /** Draft text for the new-pin popup (phase 7 local state; pin issuance lands in Task 3). */
   readonly pinDraft: Atom<string>;
+  /**
+   * The mounted composer / Home-prompt / pin editors, or `null` when none is mounted.
+   *
+   * The mirror atoms above are the downstream projection of these buffers; these are how an
+   * EXTERNAL write (the post-accept clear, the F6 repair fill, `slash-open`'s `"/"`) reaches the
+   * buffer that is actually on screen. Every use goes through `primary-input.ts`, which records a
+   * `ui.editor.missing` trace rather than returning silently when nothing is mounted (§9.1).
+   */
+  readonly composerEditor: Atom<TextEditorHandle | null>;
+  readonly promptEditor: Atom<TextEditorHandle | null>;
+  readonly pinEditor: Atom<TextEditorHandle | null>;
   /**
    * The page picked from the tab strip, or `null` while the Kernel's own active slug is the whole
    * truth. Written by `selectPage` (`ui/workspace/model/page-selection.ts`) and retired by EITHER
@@ -124,6 +138,18 @@ export interface UiEnv {
   readonly projectExists: boolean;
 }
 
+/**
+ * The bridges each mounted editor wires itself to — one per text surface. Built once by
+ * {@link createUiDeps} so both halves keep a single identity for the whole deps lifetime, which
+ * is what `TextEditor`'s ref sink depends on (a ref whose identity changes is detached and
+ * re-attached on every render, re-seeding the buffer mid-edit).
+ */
+export interface UiEditors {
+  readonly composer: EditorBridge;
+  readonly prompt: EditorBridge;
+  readonly pin: EditorBridge;
+}
+
 export interface UiDeps {
   readonly port: KernelPort;
   readonly env: UiEnv;
@@ -156,6 +182,8 @@ export interface UiDeps {
   readonly runtime: Atom<undefined>;
   readonly interaction: PreviewInteractionState;
   readonly local: UiLocalState;
+  /** See {@link UiEditors}. Passed straight to the `TextEditor` each surface renders. */
+  readonly editors: UiEditors;
   /**
    * The page the Workspace is showing: {@link UiLocalState.pageOverride} when the user picked a
    * tab, else the Kernel's own `activePageSlug`. The single slug every consumer reads — see
@@ -741,6 +769,11 @@ export function createUiDeps(
   // otherwise consume it — and an edit to whichever input is primary would not re-derive.
   void slashSelection();
 
+  const composerEditor = atom<TextEditorHandle | null>(null, "ui.local.composerEditor");
+  const promptEditor = atom<TextEditorHandle | null>(null, "ui.local.promptEditor");
+  const pinEditor = atom<TextEditorHandle | null>(null, "ui.local.pinEditor");
+  const pinDraft = atom("", "ui.local.pinDraft");
+
   const local: UiLocalState = {
     prompt,
     composer,
@@ -749,11 +782,37 @@ export function createUiDeps(
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
     slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),
-    pinDraft: atom("", "ui.local.pinDraft"),
+    pinDraft,
+    composerEditor,
+    promptEditor,
+    pinEditor,
     pageOverride,
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
+  };
+
+  // Declared BEFORE `deps` and closing over it: both halves run later — on mount and on every
+  // buffer change — long after the assignment below, so the reference is always resolved. The
+  // same shape `applyEnvelope` above already uses to reach `deps` from a subscriber.
+  const editors: UiEditors = {
+    composer: createEditorBridge({
+      handleAtom: composerEditor,
+      readSeed: () => composer(),
+      mirror: (text) => mirrorPrimaryInput(deps, text),
+    }),
+    prompt: createEditorBridge({
+      handleAtom: promptEditor,
+      readSeed: () => prompt(),
+      mirror: (text) => mirrorPrimaryInput(deps, text),
+    }),
+    pin: createEditorBridge({
+      handleAtom: pinEditor,
+      readSeed: () => pinDraft(),
+      // The pin draft has no slash menu and no screen selection of its own, so its projection is
+      // the plain mirror write.
+      mirror: (text) => pinDraft.set(text),
+    }),
   };
 
   const refreshHomeHealth = action(async () => {
@@ -793,6 +852,7 @@ export function createUiDeps(
     runtime,
     interaction,
     local,
+    editors,
     activePageSlug,
     refreshHomeHealth,
     requestExit,
