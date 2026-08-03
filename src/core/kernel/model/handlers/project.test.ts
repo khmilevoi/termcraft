@@ -1687,7 +1687,7 @@ describe("Gap D — an existing project opens into the Workspace", () => {
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
         // Zero chats: no chat has ever been made active — exactly the clone shape
-        // `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose (pages
+        // `ShellLaunchV1.hasContent`'s own doc comment names as its ORIGINAL purpose (pages
         // present, zero chats, since `chats/` is git-ignored as of fix-bundle §2.5).
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
