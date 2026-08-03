@@ -13,6 +13,35 @@ them in sync, but if they drift, this tracked copy is the one to trust.
 Everything below this notice is the ledger itself, reproduced verbatim from the workspace copy as
 it stood at the end of design-tree-phase-1-closeout (commit range `1cc6431..d57c2a3`).
 
+## READ THIS BEFORE THE LEDGER: it is a HISTORICAL record, not a description of HEAD
+
+Everything below the horizontal rule was written DURING plan 1's red window and during this
+closeout, and much of it is phrased in the present tense about a state that no longer exists. It is
+kept unedited because a debt ledger's value is its record of how things actually were — but nothing
+below may be read as a live claim about HEAD without checking it first. The final whole-plan review
+(recorded in the closeout's `progress.md`) found six such stale claims; these are the ones most
+likely to mislead:
+
+- **"Every currently-failing test…", "82 tsc errors, 73 test failures"** (the section head below,
+  and the Task 6/7/9 owner lists) — describes plan 1's red window. **At HEAD the suite is 4376 pass
+  / 2 skip / 0 fail across 364 files and `bun x tsc --noEmit` prints nothing.** The red window is
+  closed; this plan's own acceptance bar was real green throughout.
+- **"the Gate is currently not enforcing its own security perimeter"** — the loudest sentence in
+  this file, and **false at HEAD**. `runTreeImports` has production callers; see
+  `core/kernel/model/handlers/preview-export.ts:1396` and `core/turns/model/validation.ts`. It was
+  true when written, between the scan moving out of `runGate` and Task 13/14 wiring the new caller.
+- **The "temporary scaffolding that MUST be deleted" row** — `core/ports/fakes/legacy-page-store.ts`
+  no longer exists and `DesignTreeStoreNotWiredError` has zero matches in `src/`. (One stale prose
+  reference to that deleted file survives at `store/types.ts:223`; it is a comment, not code.)
+- **The `NO_TREE_CONTEXT` / "FLAGGED FOR TASK 12" row** — zero matches in `src/`;
+  `entities/design-tree/model/manifest.ts:69-74` already drops numeric segments.
+
+**State at HEAD (`258a32e`, branch `design-tree`):** plan 1 and the phase-1 closeout are both
+landed, 11 of 11 tasks. The rows this closeout genuinely closed are marked as such further down,
+each saying whether it closed by a FIX, by a MEASURED NARROWING, or by a DECISION. The rows still
+open are the ones marked NEEDS AN OWNER — of which the aliased-`require` route is the only one that
+is a live, measured security gap.
+
 ---
 
 # Red-window debt ledger
@@ -353,8 +382,18 @@ NOT FIXED BY TASK 14, and the blocker is authority rather than effort:
 NEEDS A CONTROLLER DECISION: update the design frame first (then the code follows it), or
 assign both to Task 16/17 as one unit. Whoever takes it must also unpin `repair-prompt.test.ts`.
 
-NOT ADDRESSED by design-tree-phase-1-closeout — out of scope for every task in that plan's Files
-lists. Still open, still needing the controller decision above.
+**CLOSED — and it was already closed BEFORE design-tree-phase-1-closeout began.** Corrected after
+the final whole-plan review: the closeout itself appended "Still open, still needing the controller
+decision above" to this row (commit `258a32e`, confirmed by `git log -S`), which was simply wrong —
+nobody re-checked the row's own subject before writing that line.
+
+What actually happened: plan 1's Task 16 fixed it, and fixed it in the order this row demanded
+rather than around it. `src/ui/preview/model/repair-prompt.ts:20-42` now carries
+`relativePageSourcePath(entryRelPath)` returning `.termcraft/design/<entry>`, and its doc block
+records that the DESIGN was updated first and the code followed —
+`design/termcraft-engine.js`'s `wsHostCrash`, git-history caption, diff and restore frames all drew
+`.termcraft/pages/main/page.tsx` and now draw `.termcraft/design/pages/main.tsx`. The controller
+decision this row asked for was therefore made and executed; no decision is outstanding.
 
 ### The §5.8 dynamic-code ban is only partly enforceable by a token scan — CLOSED for eval/Function by Task 10, raised by task 14b
 
@@ -658,8 +697,18 @@ for each is in `.superpowers/sdd/2026-08-02-design-tree-phase-1-closeout/progres
   ZERO. The asymptotic change is real (O(members×depth) -> O(distinct components)) and matters at
   hundreds of members, but "the preview mount path, the one the user waits for on every page switch"
   overstates it against a mount that also pays N file reads, N transpiles and an `import()`.
-- **"The last production `make*` factory" is FALSE** (Task 9, commits `a111c09`/`bea93e1`) — 14
-  remain in production sources: 11 in `store/model/factory.ts` (`makeLeaseStore`,
+- **"The last production `make*` factory" is FALSE** (Task 9, commits `a111c09`/`bea93e1`).
+  **CORRECTED after the final whole-plan review — this row's first version was itself wrong twice,
+  which is worth stating plainly since the row exists to correct a false claim.** It said 14; it is
+  **15**, the list below missing `makeHandle` (`core/ports/fakes/chat-store.ts:151`). And its own
+  proposed narrowing — "only 'the last EXPORTED production `make*`' is true" — is ALSO false:
+  `makeDesignTreeStore` was never exported (`git show a111c09^:src/store/model/factory.ts` line 892
+  is a bare `function`, no `export`), and there are **no exported production `make*` functions in
+  this repository at all**. The accurate statement is simply that 15 production `make*` declarations
+  survive against the repo's `create*` rule, and that Task 9 renamed the one the brief happened to
+  name. Separately, `makeScratchDir` survives as an option key on the exported `createBunSpawn`
+  (`spawn.ts:179`) — a field name, not a factory, listed here only so the next sweep does not
+  double-count it. The 15: 11 in `store/model/factory.ts` (`makeLeaseStore`,
   `makeTransactionEngine`, `makeManifestStore`, `makeWorkspaceStateStore`, `makePinStore`,
   `makeChatIndexCache`, `makeChatStore`, `makeProjectionStore`, `makeTrustStore`,
   `makeStagingStore`, `makeBackupStore`) and 3 in `store/transaction/model/write-mutex.ts`. Only
@@ -668,9 +717,14 @@ for each is in `.superpowers/sdd/2026-08-02-design-tree-phase-1-closeout/progres
   `pins: makePinStore(...)` / `pages: createDesignTreeStore(...)` / `trust: makeTrustStore(...)` —
   one `create*` among `make*` neighbours. Bounded follow-up: rename the remaining 14 (deliberately
   NOT done inside Task 9, which would have buried its real change).
-- **`DesignTreeTooDeepError`'s branch has no test** (`store/model/design-tree-store.ts:152`,
-  surfaced by Task 9's move, PRE-EXISTING not a regression) — the class appears only in its own
-  declaration and in `store/adapters/failure.ts`'s mapping.
+- **`DesignTreeTooDeepError`'s branch has no test** (surfaced by Task 9's move, PRE-EXISTING not a
+  regression). Substance verified at HEAD: zero matches in any `*.test.ts` across `src/`.
+  **Coordinates corrected after the final whole-plan review** — the row first said `:152` and "appears
+  only in its own declaration and `failure.ts`", and both were wrong. The declaration is
+  `store/model/design-tree-store.ts:34`, the throw is `:144` (`:152` went stale one commit after the
+  row was written), and the class is also referenced at `store/types.ts:57,259,631`,
+  `store/index.ts:94` and `store/adapters/failure.ts:6,277`. The untested thing is the depth-refusal
+  BRANCH, not the class's reachability.
 - **`computeSourceHash` is exported from both `entities/design-tree` and `host/session`** (Task 7,
   cosmetic) — identical semantics (`Bun.CryptoHasher` over the same window-respecting bytes), no
   collision today; the repo already handles the overlap by aliasing at the import site
@@ -683,3 +737,30 @@ symlink-refusal tests"; none existed — before Task 8, `src/host` had no symlin
 coverage at all. Its three new tests are the first, and a mutation-testing review confirmed one of
 them (the ordering pin between `verified.add(walked)` and `isSymbolicLink()`) is load-bearing, not
 decorative: the mutation passed all 363 `src/host` tests until fix round 1 closed that gap.
+
+## Added by the final whole-plan review (2026-08-03) — open, low severity
+
+- **Depth off-by-one: the tree walk emits what the limits will later refuse, PRE-EXISTING and not
+  this branch's doing.** `store/model/design-tree-store.ts:136-144` walks directories to depth 8 and
+  therefore emits files with 9 path components, while `ROOT_LIMITS.workspace.maxDepth = 8`
+  (`store/safe-fs/model/limits.ts:83`) and `NAMESPACE_LIMITS["design-source"].maxDepth = 8` (`:58`)
+  reject them only at candidate freeze (`store/safe-fs/model/candidate.ts:257-262`); staging does not
+  check depth at all (`store/sandbox/model/staging-store.ts:256-282`). Fail-late rather than
+  fail-early, and unreachable today. Owner: whichever task next touches the walk or the freeze.
+
+- **Task attribution across this closeout's 23 commits is inconsistent — decode it before trusting a
+  "(task N)" marker in code.** Three conventions are in use. Task 5 signed its OWN work "(task 16)",
+  because plan 1's Task 16 had merely FLAGGED the items it closed (`core/ports/gate-runner.ts:116,189,200`,
+  `gate/adapters/gate-runner.ts:77,572`, `core/kernel/model/handlers/turn.ts`); Task 3 wrote a bare
+  "(task 3)" that collides with plan 1's own Task 3; Task 7 wrote the unambiguous
+  "design-tree-phase-1-closeout task 7" (`gate/model/lexer.test.ts:352`). The last form is the one to
+  use from now on. No code change — history is written — but a reader resolving a marker to the wrong
+  plan will misread why a line exists.
+
+- **`gate/model/lexer.oracle.test.ts:556` carries the corpus count "893" in a test NAME while
+  asserting nothing about it**, so it rots silently on the next added source file, unlike its
+  neighbour `lexer.test.ts:359` which actually asserts. Relatedly, `lexer.test.ts:357` instructs the
+  reader to update "the counts quoted in `lexer.ts`" — `lexer.ts` contains no such number. The count
+  was bumped three times in this plan alone (Tasks 7, 9, 10: 888 → 890 → 891 → 893), so the
+  instruction is exercised often enough to be worth correcting. Left as a follow-up rather than fixed
+  here, because this pass was markdown-only by construction.
