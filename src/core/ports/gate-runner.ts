@@ -80,13 +80,28 @@ export type GateWarningKindV1 =
   | "unlisted-navigation"
   // `any` written to make a type error go away — the escape hatch that turns a diagnostic the
   // gate DID catch into a crash it cannot. See `gate/model/lints.ts`'s `lintSilencingAny`.
-  | "silencing-any";
+  | "silencing-any"
+  // Design §8 step 2 — an import cycle: ESM permits one, but it is a common source of
+  // `undefined`-at-module-init in this shape of code. Set only by {@link GateRunner.runTree},
+  // one warning per cycle (see `gate/adapters/gate-runner.ts`'s `findImportCycles`).
+  | "import-cycle"
+  // Design §8 step 3 — a code file no page's PROVEN closure reaches. Set only by
+  // {@link GateRunner.runTree}; never auto-deletes the file, since deleting a half-finished
+  // refactor is worse than carrying it.
+  | "dead-module";
 
+/**
+ * One non-fatal gate warning. `file` mirrors `gate/types.ts`'s own `GateWarning.file` field for
+ * field (both redraw the SAME shape per decision C1) — set for `import-cycle`/`dead-module`
+ * (both are ABOUT a file, so an unnamed one would be unactionable), absent for every other kind,
+ * none of which is produced against a single tree-relative path.
+ */
 export interface GateWarningV1 {
   readonly kind: GateWarningKindV1;
   readonly message: string;
   readonly line?: number;
   readonly column?: number;
+  readonly file?: string;
 }
 
 /** The page metadata + identity the Gate parses from a passing candidate's static `meta` (runtime-api §4). */
@@ -181,9 +196,15 @@ export interface GateClosureV1 {
 export interface RunTreeResultV1 {
   readonly errors: readonly GateErrorV1[];
   /**
-   * The pass's non-fatal findings. EMPTY until the `import-cycle`/`dead-module` graph analyses
-   * land — the field exists now so both callers already thread it, rather than gaining a new
-   * result member later and having one caller silently keep dropping it.
+   * The pass's non-fatal findings (design §8 steps 2 and 3, design-tree phase 2 Task 4):
+   * `import-cycle` for every cycle among the edges the closure walk resolved, `dead-module` for
+   * every code file no page's PROVEN closure reaches. Both are derived from data
+   * `gate/adapters/gate-runner.ts`'s `resolveTreeClosures` already built resolving `closures`
+   * above — no second file read, no second edge reader. `dead-module` is suppressed for the
+   * WHOLE tree, not per file, the
+   * moment any entry's closure could not be resolved (a warning built on a graph this pass never
+   * finished reading is worse than none); an unscannable file's edges are unknown, so it can
+   * never appear as an `import-cycle` member.
    */
   readonly warnings: readonly GateWarningV1[];
   readonly closures: readonly GateClosureV1[];

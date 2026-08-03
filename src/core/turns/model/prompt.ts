@@ -20,12 +20,20 @@ import type { PageSlug } from "entities/page";
  * into a LATER attempt's prompt) is refused rather than silently rendered — a stale fold
  * would tell the agent to fix a problem in the wrong attempt's context.
  *
- * DETERMINISM WARNINGS ONLY: of Gate's six warning kinds, exactly two are about
+ * DETERMINISM WARNINGS: of Gate's ORIGINAL six warning kinds, exactly two are about
  * non-determinism (`unguarded-timer`, `unguarded-randomness` — code that would break
  * Export/replay by depending on wall-clock time or unseeded randomness). The other four
  * (`dropped-id`, `unpointed-element`, `unlisted-navigation`, `silencing-any`) are UI-contract/
  * type-suppression warnings with no bearing on a Gate REJECTION retry, so they are
- * deliberately excluded from the fold.
+ * deliberately excluded from the fold entirely — not rendered under any header.
+ *
+ * GRAPH WARNINGS (design-tree phase 2 Task 4): `import-cycle`/`dead-module` are NEITHER
+ * determinism warnings NOR one of the four excluded above — `DETERMINISM_WARNING_KINDS` stays
+ * exactly the two kinds it always named, unchanged by this addition, per this file's own
+ * name for that set. But unlike the excluded four, a cycle or an unreached module IS worth the
+ * agent's attention on a retry, and neither is derivable from the source the agent already has
+ * (an import graph is exactly what the agent lacks) — so both render under their own header,
+ * WITH `file`, which is what makes either diagnostic locatable at all.
  */
 
 export type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
@@ -53,8 +61,18 @@ const DETERMINISM_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
   "unguarded-randomness",
 ]);
 
+/** Design-tree phase 2 Task 4's two whole-tree graph warnings — see this file's header. */
+const GRAPH_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
+  "import-cycle",
+  "dead-module",
+]);
+
 function isDeterminismWarning(warning: TurnGateWarningDtoV1): boolean {
   return DETERMINISM_WARNING_KINDS.has(warning.kind);
+}
+
+function isGraphWarning(warning: TurnGateWarningDtoV1): boolean {
+  return GRAPH_WARNING_KINDS.has(warning.kind);
 }
 
 function formatPosition(line: number | null, column: number | null): string {
@@ -92,14 +110,23 @@ function formatGateError(error: TurnGateErrorDtoV1): string {
   return `- [${error.kind}/${error.code}]${location}${formatPosition(error.line, error.column)}${formatBlockedPages(error.blockedPages)}: ${error.message}`;
 }
 
+/**
+ * `file` renders the same way {@link formatGateError}'s `location` does — an unnamed warning
+ * (every kind but `import-cycle`/`dead-module`) omits the clause entirely rather than printing
+ * an empty `in `.
+ */
 function formatGateWarning(warning: TurnGateWarningDtoV1): string {
-  return `- [${warning.kind}]${formatPosition(warning.line, warning.column)}: ${warning.message}`;
+  const location = warning.file === null ? "" : ` in ${warning.file}`;
+  return `- [${warning.kind}]${location}${formatPosition(warning.line, warning.column)}: ${warning.message}`;
 }
 
 const GATE_ERRORS_HEADER =
   "Gate rejected the previous attempt with the following errors. Fix every one before anything else:";
 const DETERMINISM_WARNINGS_HEADER =
   "Gate also flagged non-deterministic code (breaks Export/replay). Remove the wall-clock/randomness dependency:";
+/** Design-tree phase 2 Task 4 — see this file's header for why these two render separately from the determinism section above rather than folding into it or being dropped like the other four. */
+const GRAPH_WARNINGS_HEADER =
+  "Gate also flagged the following import-graph issues. A cycle is legal but risky; an unreached module is never auto-deleted, but check whether it should still exist:";
 
 /**
  * Renders `input.diagnostics` into prompt text for `input.nextAttempt`, or refuses with
@@ -130,6 +157,11 @@ export function foldGateDiagnosticsIntoPrompt(
     sections.push(
       [DETERMINISM_WARNINGS_HEADER, ...determinismWarnings.map(formatGateWarning)].join("\n"),
     );
+  }
+
+  const graphWarnings = input.diagnostics.warnings.filter(isGraphWarning);
+  if (graphWarnings.length > 0) {
+    sections.push([GRAPH_WARNINGS_HEADER, ...graphWarnings.map(formatGateWarning)].join("\n"));
   }
 
   return sections.join("\n\n");

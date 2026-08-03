@@ -499,7 +499,13 @@ describe("turnGateRejectedPayloadV1Schema", () => {
         },
       ],
       warnings: [
-        { kind: "unguarded-timer", message: "setTimeout without guard", line: null, column: null },
+        {
+          kind: "unguarded-timer",
+          message: "setTimeout without guard",
+          line: null,
+          column: null,
+          file: null,
+        },
       ],
     },
   };
@@ -577,15 +583,21 @@ describe("turnGateRejectedPayloadV1Schema", () => {
     }
   });
 
-  test("accepts every one of Gate's five fixed warning kinds (gate/types.ts GateWarningKind)", () => {
+  test("accepts every one of Gate's eight fixed warning kinds (gate/types.ts GateWarningKind)", () => {
+    // Widened by design-tree phase 2 Task 4 from a list of five that (pre-existing gap, fixed in
+    // passing here) already omitted `silencing-any` — now the full six original kinds plus the
+    // two new whole-tree graph kinds.
     const warningKinds = [
       "dropped-id",
       "unpointed-element",
       "unguarded-timer",
       "unguarded-randomness",
       "unlisted-navigation",
+      "silencing-any",
+      "import-cycle",
+      "dead-module",
     ];
-    expect(warningKinds.length).toBe(5);
+    expect(warningKinds.length).toBe(8);
     for (const kind of warningKinds) {
       const bad = {
         ...valid,
@@ -596,6 +608,42 @@ describe("turnGateRejectedPayloadV1Schema", () => {
       };
       expect(turnGateRejectedPayloadV1Schema.safeParse(bad).success).toBe(true);
     }
+  });
+
+  test("a NON-null `file` on a warning round-trips the strict schema, and a NULL one still does (design-tree phase 2 Task 4)", () => {
+    const namedFile = {
+      ...valid,
+      diagnostics: {
+        ...valid.diagnostics,
+        warnings: [
+          {
+            kind: "import-cycle",
+            message: "an import cycle: lib/a.ts -> lib/b.ts -> lib/a.ts",
+            line: null,
+            column: null,
+            file: "lib/a.ts",
+          },
+        ],
+      },
+    };
+    const parsed = turnGateRejectedPayloadV1Schema.safeParse(namedFile);
+    if (!parsed.success) throw new Error("expected the named-file warning to parse");
+    expect(parsed.data.diagnostics.warnings[0]?.file).toBe("lib/a.ts");
+
+    const noFile = {
+      ...valid,
+      diagnostics: { ...valid.diagnostics, warnings: [valid.diagnostics.warnings[0]!] },
+    };
+    expect(turnGateRejectedPayloadV1Schema.safeParse(noFile).success).toBe(true);
+  });
+
+  test("requires an explicit null `file` on a warning, never an omitted one", () => {
+    const { file: _dropped, ...warningWithoutFile } = valid.diagnostics.warnings[0]!;
+    const bad = {
+      ...valid,
+      diagnostics: { ...valid.diagnostics, warnings: [warningWithoutFile] },
+    };
+    expect(turnGateRejectedPayloadV1Schema.safeParse(bad).success).toBe(false);
   });
 });
 

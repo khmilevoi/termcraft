@@ -9,7 +9,11 @@ import type {
   PageMetaExtractionV1,
   RunTreeResultV1,
 } from "core/ports";
-import { PAGES_MANIFEST_RELPATH, resolveClosure } from "entities/design-tree";
+import {
+  PAGES_MANIFEST_RELPATH,
+  resolveClosure,
+  resolveDesignSpecifier,
+} from "entities/design-tree";
 import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
@@ -29,7 +33,7 @@ import { createSmokeRender } from "../model/smoke";
 import { isCodeFile, parsesJsx, scanModuleEdges } from "../model/tree-scan";
 import { createTreeTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
-import type { GateError, GateErrorKind } from "../types";
+import type { GateError, GateErrorKind, GateWarning } from "../types";
 
 /**
  * `createGateRunnerAdapter`: the production `GateRunner` over `gate`'s real `runGate`/
@@ -257,11 +261,26 @@ function createClosureWalk(): ClosureWalkV1 {
  * A file the flat scan reported `UNSCANNABLE_SOURCE` for is still read here, deliberately. That
  * is task-13 review round 3's Critical (b): its imports were never checked by the flat scan, so
  * skipping it here would be the one place a real `FORBIDDEN_IMPORT` could vanish entirely.
+ *
+ * CAPTURES `edgeMap` (design-tree phase 2 Task 4), a byproduct of the SAME raw specifiers this
+ * function was already computing, not a second read. `import-cycle`/`dead-module` need the
+ * WHOLE tree's resolved import graph, and until now nothing retained it: `resolveClosure`
+ * resolves each specifier internally (via the identical `resolveDesignSpecifier`) but returns
+ * only the final file set or an error, never the edges it walked. Resolving the SAME specifier
+ * strings a second time here costs no I/O and no re-tokenizing — `resolveDesignSpecifier` is a
+ * pure string computation over `has`, not a file read — so this is the same edge READER's
+ * output, reused, never a second one. Only `"file"`-kind resolutions are kept: a `"runtime"`
+ * edge (`@termcraft/runtime`) leaves the tree and cannot participate in a tree-internal cycle,
+ * and a REJECTED specifier names no real file to point an edge at. Skipped when `relPath`
+ * already has an entry — multiple pages can walk the same shared module, and its edges do not
+ * change between them.
  */
 function readClosureEdges(
   files: ReadonlyMap<string, string>,
   relPath: string,
   walk: ClosureWalkV1,
+  has: (relPath: string) => boolean,
+  edgeMap: Map<string, ReadonlySet<string>>,
 ): readonly string[] {
   walk.reached.add(relPath);
   if (!isCodeFile(relPath)) return [];
@@ -289,7 +308,18 @@ function readClosureEdges(
           ? `${cause.name}: ${cause.message}`
           : String(cause),
     );
+    // No entry recorded in `edgeMap` for `relPath` — its edges are UNKNOWN, not empty, which is
+    // exactly what keeps it out of `findImportCycles`: a node absent from the map can never be
+    // reached as a member because nothing ever puts an edge INTO the traversal FROM it.
     return [];
+  }
+  if (!edgeMap.has(relPath)) {
+    const targets = new Set<string>();
+    for (const specifier of edges) {
+      const resolved = resolveDesignSpecifier({ from: relPath, specifier, has });
+      if (!(resolved instanceof Error) && resolved.kind === "file") targets.add(resolved.relPath);
+    }
+    edgeMap.set(relPath, targets);
   }
   return edges;
 }
@@ -347,6 +377,8 @@ function walkPageClosure(
     readonly unverifiable: ReadonlySet<string>;
     /** True when `pages` lists this slug more than once — see {@link duplicateSlugBlocker}. */
     readonly isDuplicateSlug: (slug: PageSlug) => boolean;
+    /** Shared across every page's walk in this call — see {@link readClosureEdges}'s doc. */
+    readonly edgeMap: Map<string, ReadonlySet<string>>;
   },
 ): { readonly files: readonly string[] | null; readonly blockers: readonly ClosureBlockerV1[] } {
   const blockers: ClosureBlockerV1[] = [];
@@ -375,7 +407,8 @@ function walkPageClosure(
   const resolved = resolveClosure({
     entry: page.entry,
     has: context.has,
-    edgesOf: (relPath) => readClosureEdges(context.files, relPath, walk),
+    edgesOf: (relPath) =>
+      readClosureEdges(context.files, relPath, walk, context.has, context.edgeMap),
   });
 
   if (resolved instanceof Error) {
@@ -505,13 +538,26 @@ function filesReportedUnder(
  * built out of the flat scan's own diagnostics, so its file has one by construction; and
  * `edges-unreadable` raises its own unless the same file is already in that set. So no blocked
  * page can end up with an empty `blockedPages` anywhere in `errors`.
+ *
+ * ALSO RETURNS, since design-tree phase 2 Task 4, the two pieces of data `findImportCycles`/
+ * `findDeadModules` need and this pass ALREADY built while walking every page's closure:
+ * `edges` (every successfully-read file's resolved same-tree targets, {@link readClosureEdges}'s
+ * own doc) and `anyClosureBlocked` (true the moment one page's walk above did NOT reach the
+ * `closures.push` branch — i.e. at least one entry's closure could not be proved complete).
+ * Neither costs a second file read or a second edge reader; both are read straight off state
+ * this loop maintains for its own, pre-existing purpose.
  */
 export function resolveTreeClosures(input: {
   readonly pages: readonly PageEntryV1[];
   readonly files: ReadonlyMap<string, string>;
   readonly treePaths: readonly string[];
   readonly scanErrors: readonly GateError[];
-}): { readonly closures: readonly GateClosureV1[]; readonly errors: readonly GateError[] } {
+}): {
+  readonly closures: readonly GateClosureV1[];
+  readonly errors: readonly GateError[];
+  readonly edges: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly anyClosureBlocked: boolean;
+} {
   const has = hasTreePath(input.treePaths);
   const unscannable = filesReportedUnder(input.scanErrors, (code) => code === "UNSCANNABLE_SOURCE");
   const unverifiable = filesReportedUnder(input.scanErrors, (code) =>
@@ -541,6 +587,10 @@ export function resolveTreeClosures(input: {
       slugs: Set<PageSlug>;
     }
   >();
+  // Shared across every page's walk below, and returned — see this function's own doc and
+  // {@link readClosureEdges}'s.
+  const edgeMap = new Map<string, ReadonlySet<string>>();
+  let anyClosureBlocked = false;
 
   for (const page of input.pages) {
     const walked = walkPageClosure(page, {
@@ -549,11 +599,13 @@ export function resolveTreeClosures(input: {
       scannedInFull,
       unverifiable,
       isDuplicateSlug,
+      edgeMap,
     });
     if (walked.blockers.length === 0 && walked.files !== null) {
       closures.push({ slug: page.slug, files: walked.files });
       continue;
     }
+    anyClosureBlocked = true;
     for (const blocker of walked.blockers) {
       addSlug(blockedAt, blocker.file, page.slug);
       if (blocker.own === null) continue;
@@ -578,7 +630,148 @@ export function resolveTreeClosures(input: {
     blockedPages: sortedSlugs(entry.slugs),
   }));
 
-  return { closures, errors: [...attributed, ...walkErrors] };
+  return { closures, errors: [...attributed, ...walkErrors], edges: edgeMap, anyClosureBlocked };
+}
+
+/**
+ * design §8 step 3: a code file `input.files` holds text for that no page's PROVEN closure
+ * reaches — derived ENTIRELY from {@link resolveTreeClosures}'s own `closures` (the union of
+ * every resolved closure's `files`), never a second walk of the import graph.
+ *
+ * SUPPRESSED FOR THE WHOLE TREE, not filtered per file, the moment `anyClosureBlocked` is true
+ * (one of the two fail-quiet honesty rules design-tree phase 2 Task 4 asks for). A page whose
+ * closure could not be proved complete contributes NOTHING to `closures`, so every module past
+ * wherever its walk stopped reads as "unreached" for a reason that has nothing to do with
+ * whether a page actually uses it — a `dead-module` warning built on that partial a picture
+ * would assert "nothing reaches this file" about a graph this pass never finished reading, which
+ * is worse than reporting no warning at all. Hence the early return below covers every file, not
+ * only the ones downstream of whichever entry got blocked.
+ *
+ * Scoped to `input.files`' keys, not `input.treePaths`' — the same scope
+ * {@link resolveTreeClosures} itself reads text from; a tree-relative path present only in
+ * `treePaths` (no text given) is outside what this pass can even classify as code with any
+ * confidence beyond its extension, and design-tree phase 2 Task 4's own brief pins its one
+ * dead-module test fixture as "present in `files`".
+ */
+function findDeadModules(input: {
+  readonly files: ReadonlyMap<string, string>;
+  readonly closures: readonly GateClosureV1[];
+  readonly anyClosureBlocked: boolean;
+}): readonly GateWarning[] {
+  if (input.anyClosureBlocked) return [];
+
+  const reachable = new Set<string>();
+  for (const closure of input.closures) for (const file of closure.files) reachable.add(file);
+
+  const deadRelPaths = [...input.files.keys()]
+    .filter((relPath) => isCodeFile(relPath) && !reachable.has(relPath))
+    .sort();
+
+  return deadRelPaths.map((relPath) => ({
+    kind: "dead-module" as const,
+    file: relPath,
+    message: `"${relPath}" is not reached by any page's resolved closure`,
+  }));
+}
+
+/** One frame of {@link findImportCycles}'s explicit-stack DFS — a plain array push, never a call. */
+interface ClosureDfsFrameV1 {
+  readonly node: string;
+  readonly outEdges: readonly string[];
+  index: number;
+}
+
+const DFS_NOT_VISITED = 0;
+const DFS_ON_STACK = 1;
+const DFS_DONE = 2;
+type DfsMarkV1 = typeof DFS_NOT_VISITED | typeof DFS_ON_STACK | typeof DFS_DONE;
+
+/**
+ * design §8 step 2: every import cycle among the edges {@link resolveTreeClosures} already
+ * resolved while walking every page's closure — reused as-is, never a second reading of any
+ * file.
+ *
+ * AN EXPLICIT-STACK, ITERATIVE DFS, DELIBERATELY, mirroring {@link resolveClosure}'s own
+ * explicit-queue BFS shape rather than the natural recursive statement of "follow this edge,
+ * then follow its edges": plan 1's Task 3 exists because a RECURSIVE reader blocked the event
+ * loop for seconds and needed a fail-closed depth ceiling to recover from it. This pass must not
+ * reintroduce that hazard, so every "descend into this edge" below is a push onto `stack`, and
+ * every "return from this call" is a pop — no function ever calls itself.
+ *
+ * ONE WARNING PER CYCLE — not per member, not per edge. The classic white/gray/black DFS cycle
+ * check gives this by construction: a cycle is discovered exactly once per BACK EDGE (an edge to
+ * a node still `DFS_ON_STACK`, i.e. still an ancestor on the current path), and `found` dedupes
+ * by the sorted member list, so even a graph tangled enough to reach the same cycle's back edge
+ * twice (not exercised by this task's own pinned scenarios, but structurally possible) still
+ * yields one warning. `file` is the LEXICOGRAPHICALLY SMALLEST member — a stable anchor
+ * independent of which node the DFS happened to start from or which back edge closed the loop —
+ * while the MESSAGE lists members in the order the walk actually visited them. These are
+ * DELIBERATELY not the same order: `file`/the dedup key answer "which cycle is this, robustly";
+ * the message answers "what does the loop actually look like".
+ *
+ * `edges` NEVER carries an entry for a file whose own edges could not be verified read to the
+ * end — {@link readClosureEdges} returns before recording anything for such a file, whether the
+ * scan threw or the source was missing entirely. So an unscannable file's edges are UNKNOWN, and
+ * it can never appear as a cycle member: nothing ever pushes an edge FROM it for this DFS to
+ * walk, by construction, not by a check written in this function.
+ */
+function findImportCycles(edges: ReadonlyMap<string, ReadonlySet<string>>): readonly GateWarning[] {
+  const state = new Map<string, DfsMarkV1>();
+  const found = new Map<string, readonly string[]>();
+
+  for (const start of edges.keys()) {
+    if ((state.get(start) ?? DFS_NOT_VISITED) === DFS_DONE) continue;
+
+    const stack: ClosureDfsFrameV1[] = [
+      { node: start, outEdges: [...(edges.get(start) ?? [])], index: 0 },
+    ];
+    state.set(start, DFS_ON_STACK);
+
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (top === undefined) break; // unreachable: `stack.length > 0` just above
+
+      if (top.index >= top.outEdges.length) {
+        state.set(top.node, DFS_DONE);
+        stack.pop();
+        continue;
+      }
+
+      const next = top.outEdges[top.index];
+      top.index += 1;
+      if (next === undefined) continue; // unreachable: `index < outEdges.length` just above
+
+      const nextMark = state.get(next) ?? DFS_NOT_VISITED;
+      if (nextMark === DFS_DONE) continue;
+      if (nextMark === DFS_NOT_VISITED) {
+        state.set(next, DFS_ON_STACK);
+        stack.push({ node: next, outEdges: [...(edges.get(next) ?? [])], index: 0 });
+        continue;
+      }
+
+      // `nextMark === DFS_ON_STACK`: a back edge to a node still on THIS path — everything from
+      // that node's position to the current top is one cycle, in the order the walk visited it.
+      const cycleStart = stack.findIndex((frame) => frame.node === next);
+      if (cycleStart === -1) continue; // unreachable: `next` is ON_STACK, so it is IN `stack`
+      const members = stack.slice(cycleStart).map((frame) => frame.node);
+      const key = JSON.stringify([...members].sort());
+      if (!found.has(key)) found.set(key, members);
+    }
+  }
+
+  const warnings: GateWarning[] = [];
+  for (const members of found.values()) {
+    const [firstMember] = members;
+    if (firstMember === undefined) continue; // unreachable: every recorded cycle has >=1 member
+    const smallest = [...members].sort()[0];
+    if (smallest === undefined) continue; // unreachable: the same non-empty array, sorted
+    warnings.push({
+      kind: "import-cycle" as const,
+      file: smallest,
+      message: `an import cycle: ${members.join(" -> ")} -> ${firstMember}`,
+    });
+  }
+  return warnings;
 }
 
 export interface GateRunnerAdapterDeps {
@@ -651,6 +844,10 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
    *    through {@link createClosureIndex} over step 2's OWN closures — the pass never walks the
    *    import graph a second time to answer "which pages reach this file".
    *
+   * `warnings` (design-tree phase 2 Task 4, design §8 steps 2/3) is {@link findImportCycles} and
+   * {@link findDeadModules} over step 2's OWN `closures`/`edges` — the SAME data, not a fourth
+   * stage reading the tree again.
+   *
    * WHY THE TYPE CHECK RUNS UNCONDITIONALLY rather than only when the earlier stages are clean,
    * unlike `runGate`'s manifest/smoke stages. Those two MOUNT and EXECUTE the candidate, so
    * running them on a page that failed its contract would be unsafe. The type check only reads
@@ -664,9 +861,19 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly pages: readonly PageEntryV1[];
   }): Promise<RunTreeResultV1> {
     const resolved = resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
-    // `warnings` is empty by construction until the graph analyses (import cycles, modules no
-    // page reaches) land — an honest empty, not a placeholder for something computed and dropped.
-    if (treeTypeCheck === undefined) return { ...resolved, warnings: [] };
+    // Both derived from `resolved`'s own `edges`/`closures`/`anyClosureBlocked` — see each
+    // function's doc for why neither re-reads a file or re-derives the import graph.
+    const warnings: GateWarning[] = [
+      ...findImportCycles(resolved.edges),
+      ...findDeadModules({
+        files: input.files,
+        closures: resolved.closures,
+        anyClosureBlocked: resolved.anyClosureBlocked,
+      }),
+    ];
+    if (treeTypeCheck === undefined) {
+      return { errors: resolved.errors, warnings, closures: resolved.closures };
+    }
 
     const blockedBy = createClosureIndex(resolved.closures);
     const typeErrors = (await treeTypeCheck({ files: input.files })).map((error) => {
@@ -675,7 +882,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     });
     return {
       errors: [...resolved.errors, ...typeErrors],
-      warnings: [],
+      warnings,
       closures: resolved.closures,
     };
   }

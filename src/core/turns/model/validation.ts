@@ -215,6 +215,10 @@ function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnin
     message: warning.message,
     line: warning.line ?? null,
     column: warning.column ?? null,
+    // `?? null` follows this file's own `undefined -> null` convention (see `toGateErrorDto`
+    // just above) — set for `import-cycle`/`dead-module` (design-tree phase 2 Task 4), absent
+    // for every other warning kind.
+    file: warning.file ?? null,
   };
 }
 

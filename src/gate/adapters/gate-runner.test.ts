@@ -823,6 +823,172 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
+  describe("runTree() import-cycle and dead-module warnings (design-tree phase 2 Task 4)", () => {
+    const page = (slug: string, entryPath: string): PageEntryV1 => ({
+      slug: slug as PageSlug,
+      entry: entryPath,
+    });
+    const NO_IMPORTS = `export const meta = 1`;
+
+    test("a two-file import cycle is a WARNING, and the turn still passes", async () => {
+      // `pages/home.tsx` reaches `lib/two.ts` directly and `lib/one.ts` transitively; `lib/two.ts`
+      // and `lib/one.ts` import each other. Named so the cycle's DISCOVERY order (two, then one —
+      // the order the walk actually visits them, starting from the entry) differs from the
+      // sorted identity order (one, then two) — pinning that the message uses cycle order while
+      // `file`/the dedup key use sorted order are two DIFFERENT things, not the same rule stated
+      // twice.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", `import { x } from "../lib/two"\n${NO_IMPORTS}`],
+        ["lib/two.ts", `import { y } from "./one"\nexport const x = 1`],
+        ["lib/one.ts", `import { x } from "./two"\nexport const y = 2`],
+      ]);
+      const treePaths = ["pages/home.tsx", "lib/two.ts", "lib/one.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(result.errors).toEqual([]);
+      // The closure still resolves — design §8 step 2: a cycle is a warning, never a fatal.
+      expect(result.closures).toHaveLength(1);
+      const cycleWarnings = result.warnings.filter((w) => w.kind === "import-cycle");
+      expect(cycleWarnings).toHaveLength(1);
+      const [cycle] = cycleWarnings;
+      // Identity: sorted member list, `file` the lexicographically smallest member.
+      expect(cycle?.file).toBe("lib/one.ts");
+      // The message names every member in CYCLE order (two, then one), NOT sorted order (one,
+      // then two) — the exact distinction this task's brief calls out.
+      expect(cycle?.message).toBe("an import cycle: lib/two.ts -> lib/one.ts -> lib/two.ts");
+    });
+
+    test("a self-import is a cycle too", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", `import { x } from "../lib/self"\n${NO_IMPORTS}`],
+        ["lib/self.ts", `import { x } from "./self"\nexport const x = 1`],
+      ]);
+      const treePaths = ["pages/home.tsx", "lib/self.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(result.errors).toEqual([]);
+      const cycleWarnings = result.warnings.filter((w) => w.kind === "import-cycle");
+      expect(cycleWarnings).toHaveLength(1);
+      expect(cycleWarnings[0]?.file).toBe("lib/self.ts");
+      expect(cycleWarnings[0]?.message).toBe("an import cycle: lib/self.ts -> lib/self.ts");
+    });
+
+    test("a module no entry reaches is a `dead-module` warning, once", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", NO_IMPORTS],
+        ["lib/orphan.ts", NO_IMPORTS],
+      ]);
+      const treePaths = ["pages/home.tsx", "lib/orphan.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(result.errors).toEqual([]);
+      const deadWarnings = result.warnings.filter((w) => w.kind === "dead-module");
+      expect(deadWarnings).toHaveLength(1);
+      expect(deadWarnings[0]?.file).toBe("lib/orphan.ts");
+    });
+
+    test("a file reached by ANY entry is never dead", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", NO_IMPORTS],
+        ["pages/about.tsx", `import { x } from "../lib/shared"\n${NO_IMPORTS}`],
+        ["lib/shared.ts", `export const x = 1`],
+      ]);
+      const treePaths = ["pages/home.tsx", "pages/about.tsx", "lib/shared.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx"), page("about", "pages/about.tsx")],
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+    });
+
+    test("a non-code tree file is never dead-module", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", NO_IMPORTS],
+        ["assets/logo.svg", "<svg></svg>"],
+      ]);
+      const treePaths = ["pages/home.tsx", "assets/logo.svg"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(result.errors).toEqual([]);
+      // `isCodeFile` is false for `.svg` — there is no module here to be dead.
+      expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+    });
+
+    test("dead-module is suppressed for the WHOLE tree when any entry's closure could not be resolved", async () => {
+      // `pages/broken.tsx` imports a module absent from the tree, so its own closure is blocked
+      // — and `lib/orphan.ts`, genuinely unreached by anyone, must NOT be reported dead: the
+      // reachability picture is incomplete, so a `dead-module` warning built on it would be
+      // reporting on a graph this pass never finished reading.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/broken.tsx", `import { x } from "../lib/missing"\n${NO_IMPORTS}`],
+        ["lib/orphan.ts", NO_IMPORTS],
+      ]);
+      const treePaths = ["pages/broken.tsx", "lib/orphan.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("broken", "pages/broken.tsx")],
+      });
+
+      expect(result.closures).toEqual([]);
+      expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+    });
+
+    test("an unscannable file's edges are unknown, so it is never reported as a cycle member", async () => {
+      // The measured shape that defeats the flat scan's JSX reader (mirrors the closure-invariant
+      // harness's own `UNSCANNABLE` row above): `lib/tangled.ts` cannot be read to the end by
+      // EITHER reader, so its own edges (including any that might close a cycle back through it)
+      // are unknown, not empty — it must never surface as an `import-cycle` member.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const UNSCANNABLE = `import { x } from "../lib/two"\n${"<a>{".repeat(32000)}`;
+      const files = new Map([
+        ["pages/home.tsx", `import { x } from "../lib/tangled"\n${NO_IMPORTS}`],
+        ["lib/tangled.ts", UNSCANNABLE],
+        ["lib/two.ts", `export const x = 1`],
+      ]);
+      const treePaths = ["pages/home.tsx", "lib/tangled.ts", "lib/two.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(result.warnings.filter((w) => w.kind === "import-cycle")).toEqual([]);
+    });
+  });
+
   test("runPage() surfaces a failed smoke render as a smoke-kind error", async () => {
     const adapter = createGateRunnerAdapter({
       smokeRenderer: fakeSmokeRenderer({
@@ -1055,7 +1221,10 @@ describe("runTree() — the type check inside the whole-tree pass (design §8 st
       expect(typeErrors[0]?.blockedPages).toEqual(["about", "home"] as PageSlug[]);
       // Not a fatal for the tree's structure: closures still resolved for both pages.
       expect(result.closures).toHaveLength(2);
-      // Task 4 fills these; Task 3 only threads the field.
+      // Correctly still empty post-Task-4, not merely unfilled: this fixture has no cycle (a
+      // one-way `home`/`about` -> `theme` fan-in) and no dead module (`lib/theme.ts` is reached
+      // by both pages) — see the dedicated "import-cycle and dead-module warnings" describe
+      // block above for the cases where `runTree()` actually populates this field.
       expect(result.warnings).toEqual([]);
     },
     TYPE_CHECK_TIMEOUT_MS,

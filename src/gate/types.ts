@@ -43,7 +43,11 @@ export interface GateError {
  * The category of a NON-FATAL gate warning (master §6.3). Warnings never reject a
  * candidate — the gate reminds, not rejects: an id an iteration dropped, a raw
  * element with no pointable id, an unguarded timer/randomness that breaks
- * determinism, or navigation to a page not in the manifest.
+ * determinism, navigation to a page not in the manifest, an import cycle (design §8
+ * step 2 — ESM permits one, but it is a common source of `undefined`-at-module-init
+ * in this shape of code), or a module no page's closure reaches (design §8 step 3 —
+ * never auto-deleted, since deleting a half-finished refactor is worse than carrying
+ * it).
  */
 export type GateWarningKind =
   | "dropped-id"
@@ -51,14 +55,22 @@ export type GateWarningKind =
   | "unguarded-timer"
   | "unguarded-randomness"
   | "unlisted-navigation"
-  | "silencing-any";
+  | "silencing-any"
+  | "import-cycle"
+  | "dead-module";
 
-/** One non-fatal gate warning. */
+/**
+ * One non-fatal gate warning. `file` is set by `gate/adapters/gate-runner.ts`'s whole-tree
+ * pass for the two graph warnings above — both are ABOUT a file, so a warning that could not
+ * name it would be unactionable — and left absent by every other warning-producing stage
+ * (the per-page lints), none of which holds a single tree-relative path to report against.
+ */
 export interface GateWarning {
   readonly kind: GateWarningKind;
   readonly message: string;
   readonly line?: number;
   readonly column?: number;
+  readonly file?: string;
 }
 
 /**

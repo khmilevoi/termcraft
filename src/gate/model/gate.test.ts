@@ -212,10 +212,14 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: "home" as PageSlug,
       entryRelPath: "screens/home/index.tsx",
     });
-    // `GateWarning` carries no `file` field at all (only `GateError` does), so a plain `.file`
-    // read over the concatenated list does not type-check — narrow with `"file" in error`
-    // rather than dropping warnings from the loop, which keeps the brief's intent (no
-    // diagnostic of either kind may still carry the slug-derived guess) type-safe.
+    // `GateWarning.file` is now optional too (design-tree phase 2 Task 4), set ONLY by
+    // `gate/adapters/gate-runner.ts`'s whole-tree pass (`import-cycle`/`dead-module`) — `runGate`
+    // itself is the PER-PAGE pipeline and never produces either kind, so every warning this call
+    // can return still carries no `file` at all. `"file" in error` is therefore a RUNTIME check
+    // ("does this diagnostic name a file"), not a type-narrowing one anymore — both union members
+    // type-check `.file` directly now — but it is kept so the assertion below only ever runs
+    // against a diagnostic that actually carries the field, which keeps the brief's intent (no
+    // diagnostic of either kind may still carry the slug-derived guess) honestly stated either way.
     for (const error of [...result.errors, ...result.warnings])
       if ("file" in error) expect(error.file).not.toContain("home.tsx");
   });

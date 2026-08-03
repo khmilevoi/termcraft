@@ -441,7 +441,13 @@ describe("runTurnValidation — the verdict", () => {
       if (result.kind !== "retry") throw new Error(`expected retry, got ${JSON.stringify(result)}`);
       expect(result.diagnostics.errors).toEqual(FAILING_PAGE_ERRORS_DTO);
       expect(result.diagnostics.warnings).toEqual([
-        { kind: "unguarded-timer", message: "setTimeout without a guard", line: 12, column: 3 },
+        {
+          kind: "unguarded-timer",
+          message: "setTimeout without a guard",
+          line: 12,
+          column: 3,
+          file: null,
+        },
       ]);
     });
   });

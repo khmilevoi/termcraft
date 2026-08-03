@@ -798,6 +798,11 @@ const GATE_WARNING_KINDS_V1 = [
   // `any` written to make a type error go away — see `gate/model/lints.ts`'s
   // `lintSilencingAny` for the turn that made this its own warning kind.
   "silencing-any",
+  // Design-tree phase 2 Task 4 (design §8 steps 2/3), produced only by `GateRunner.runTree`'s
+  // whole-tree pass, never by a per-page stage: an import cycle among the closure walk's own
+  // edges, and a code file no page's proven closure reaches.
+  "import-cycle",
+  "dead-module",
 ] as const;
 
 const turnGateErrorV1Schema = z.strictObject({
@@ -849,6 +854,15 @@ const turnGateWarningV1Schema = z.strictObject({
   message: z.string(),
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
+  /**
+   * The file `import-cycle`/`dead-module` are ABOUT (`gate/types.ts`'s `GateWarning.file`,
+   * `core/ports/gate-runner.ts`'s `GateWarningV1.file`) — `null` for every other warning kind,
+   * none of which is produced against a single tree-relative path. `.nullable()`, never
+   * `.optional()`, matching this file's own binding rule: a widened echo of an optional port
+   * field stays present-or-explicitly-absent on the wire, never merely omitted (see
+   * `turnGateErrorV1Schema`'s identical `file` field just above).
+   */
+  file: z.string().min(1).nullable(),
 });
 
 /** "bounded closed Gate diagnostics" (§9 row for `turn.gateRejected`, KCC:801). */

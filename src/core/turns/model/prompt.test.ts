@@ -141,12 +141,14 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               message: "setTimeout without a seeded clock",
               line: 5,
               column: null,
+              file: null,
             },
             {
               kind: "unguarded-randomness",
               message: "Math.random without a seed",
               line: null,
               column: null,
+              file: null,
             },
           ],
         }),
@@ -173,13 +175,26 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
             },
           ],
           warnings: [
-            { kind: "dropped-id", message: "element lost its stable id", line: null, column: null },
-            { kind: "unpointed-element", message: "no pointer target", line: null, column: null },
+            {
+              kind: "dropped-id",
+              message: "element lost its stable id",
+              line: null,
+              column: null,
+              file: null,
+            },
+            {
+              kind: "unpointed-element",
+              message: "no pointer target",
+              line: null,
+              column: null,
+              file: null,
+            },
             {
               kind: "unlisted-navigation",
               message: "navigation target not declared",
               line: null,
               column: null,
+              file: null,
             },
           ],
         }),
@@ -189,6 +204,39 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     expect(result).not.toContain("element lost its stable id");
     expect(result).not.toContain("no pointer target");
     expect(result).not.toContain("navigation target not declared");
+  });
+
+  test("import-cycle and dead-module warnings ARE folded in, WITH their file, under their own section (design-tree phase 2 Task 4)", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "import-cycle",
+              message: "an import cycle: lib/two.ts -> lib/one.ts -> lib/two.ts",
+              line: null,
+              column: null,
+              file: "lib/one.ts",
+            },
+            {
+              kind: "dead-module",
+              message: '"lib/orphan.ts" is not reached by any page\'s resolved closure',
+              line: null,
+              column: null,
+              file: "lib/orphan.ts",
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("an import cycle: lib/two.ts -> lib/one.ts -> lib/two.ts");
+    expect(result).toContain("in lib/one.ts");
+    expect(result).toContain('"lib/orphan.ts" is not reached');
+    expect(result).toContain("in lib/orphan.ts");
+    // Not bucketed under the determinism header — DETERMINISM_WARNING_KINDS stays exactly its
+    // original two kinds (`unguarded-timer`, `unguarded-randomness`).
+    expect(result).not.toContain("non-deterministic code");
   });
 
   test("no errors and no determinism warnings folds to an empty string", () => {
@@ -211,7 +259,9 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               blockedPages: null,
             },
           ],
-          warnings: [{ kind: "dropped-id", message: "irrelevant", line: null, column: null }],
+          warnings: [
+            { kind: "dropped-id", message: "irrelevant", line: null, column: null, file: null },
+          ],
         }),
       }),
     );
