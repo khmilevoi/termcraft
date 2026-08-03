@@ -598,6 +598,43 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
     expect(deps.activePageSlug()).toBe("main");
     unsubscribe();
   });
+
+  /**
+   * REGRESSION (2026-08-03, seen live in `termcraft-debug/run-2026-08-03T13-55-59-835Z-
+   * 41436.jsonl`): a project's own auto-issued preview request at open time is dispatched
+   * WHILE the project is still untrusted (spec §2.2's trust prompt gates it), gets rejected
+   * `PROJECT_UNTRUSTED`, and clears its memo so a "later descriptor change" can retry it. But
+   * `project.setTrust` changes neither `activePageSlug` nor the page's descriptor — the active
+   * page is exactly what it was the instant before — so `activePageRequest` never recomputes
+   * and nothing ever retries. The preview stayed blank until the user happened to pick a
+   * DIFFERENT page, the only other producer of `preview.selectPage`.
+   */
+  test("re-requests the active page's preview once trust flips from untrusted to trusted", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.setDispatchResult(refusal("PROJECT_UNTRUSTED"));
+    kernel.emit(activePageWithHash("dashboard", "a".repeat(64)));
+    await tick();
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "dashboard" }]);
+
+    kernel.setDispatchResult(acceptedResult());
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+        metadata: { workspaceIdentity: "local", trust: "trusted" },
+      }),
+    );
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "dashboard" }, { pageSlug: "dashboard" }]);
+    unsubscribe();
+  });
 });
 
 describe("createUiDeps refreshAgentHealth", () => {

@@ -723,6 +723,25 @@ export function createUiDeps(
       // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
       // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
       let lastKernelPageSlug: string | null = null;
+      // RETRY A PREVIEW REQUEST THE GUARD REFUSED WHILE UNTRUSTED (defect fix, 2026-08-03).
+      //
+      // `requestPreviewForActivePage`'s own `rejected` branch above forgets its memo SPECIFICALLY
+      // so "a later descriptor change" can retry once trust is granted — but `project.setTrust`
+      // changes neither `activePageSlug` nor the active page's descriptor, so `activePageRequest`
+      // recomputes to the SAME output and its subscriber below never re-fires. The auto-issued
+      // request at project-open time — sent while the project was still untrusted — was rejected
+      // `PROJECT_UNTRUSTED` and then simply never retried: the preview stayed blank until the user
+      // happened to pick a DIFFERENT page, the only other producer of `preview.selectPage`. Seen
+      // live in `termcraft-debug/run-2026-08-03T13-55-59-835Z-41436.jsonl`.
+      //
+      // NO "did trust just flip" tracking is needed (reatom-audit RTM-S06 — an edge-detecting flag
+      // here would be exactly the ad hoc `canLoad` gate the rule flags): `requestPreviewForActive
+      // Page`'s own `pageKey === lastRequestedPageKey` memo already makes a call for the page that
+      // is already live, or already in flight, a no-op. So this asks UNCONDITIONALLY whenever the
+      // project is trusted — on the one write that actually matters (the grant) it is a real retry,
+      // and on every other trusted write (where `activePageRequest` is unchanged) it collapses into
+      // that same memo and costs nothing.
+      //
       // `startupOpenPending`'s success-path clearer used to be a third branch on THIS subscriber,
       // guarded on `project.projectId !== null`. It is now a `withComputed` on the atom itself
       // (see its declaration above and `UiLocalState.startupOpenPending`'s doc comment): the same
@@ -738,6 +757,10 @@ export function createUiDeps(
         // for the panel lingering after a successful recovery, which has already been closed.
         if (project.openFailure !== null && project.projectId === null) {
           recoverFromBlockedOpen(project.openFailure);
+        }
+        if (project.trust === "trusted") {
+          const request = activePageRequest();
+          if (request !== null) requestPreviewForActivePage(request.slug, request.sourceHash);
         }
       });
       // Driven by the EFFECTIVE slug, not by `mirror.project` directly, so a tab click reaches
