@@ -1,4 +1,4 @@
-import { type Atom, wrap } from "@reatom/core";
+import { wrap } from "@reatom/core";
 
 import type { CommandResultV1 } from "core/protocol";
 import { trace } from "infrastructure/debug-log";
@@ -10,6 +10,12 @@ import { deriveTabs, neighbourTabSlug, nextFocus, resolveEsc, selectPage } from 
 
 import type { UiDeps, UiLocalState } from "./deps";
 import type { KeyIntent } from "./keymap";
+import {
+  deletePrimaryInputChar,
+  primaryInputAtom,
+  setPinInput,
+  setPrimaryInput,
+} from "./primary-input";
 
 /**
  * Applies one resolved {@link KeyIntent} — the effectful half of the keyboard layer. It
@@ -31,42 +37,54 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
   const { local, dispatcher } = deps;
 
   switch (intent.kind) {
-    case "home-input":
-      local.prompt.set(local.prompt() + intent.ch);
-      return;
     case "home-backspace":
-      local.prompt.set(local.prompt().slice(0, -1));
+      // Only reachable while `agentHealth.kind === "blocked"`, where the editor is blurred and
+      // receives no keys of its own (keymap.ts's fix-round-3 escape route). It mutates the buffer
+      // through the handle; the buffer's own content-change listener projects the result into the
+      // mirror, exactly as a typed key would — so there is no paired atom write here.
+      deletePrimaryInputChar(deps);
       return;
     case "home-recheck":
       // No Kernel command reports agent health, and Home precedes any project/kernel.snapshot
       // (App.tsx's comment at HOME_HEALTH's former definition states this) — re-run the
       // injected probe instead (M15). Fire-and-forget, like every other dispatch here: the
-      // result lands in local.homeHealth, which Home re-reads reactively.
-      void deps.refreshHomeHealth();
+      // result lands in local.agentHealth, which Home re-reads reactively.
+      void deps.refreshAgentHealth();
       return;
     case "home-submit": {
       const text = local.prompt();
       if (text.length === 0) return;
-      // Gap D/§2.4: whichever command matches what the shell actually found on disk. The
-      // exists-but-empty branch is rare (project creation always mints the first chat header),
-      // but when it happens `create` would grant trust implicitly over a project whose prior
-      // grant is the authority.
+      // Gap D/§2.4: whichever command matches what the shell actually found on disk — `create`
+      // grants trust implicitly, so it must never run against a project a prior grant already
+      // covers.
+      //
+      // This branch used to be written for the exists-but-empty project landing on Home (rare:
+      // project creation always mints the first chat header) — that case no longer reaches Home
+      // at all (spec 2026-08-02): `deriveScreen` now mounts the Workspace directly off
+      // `UiEnv.projectExists` (the SAME `existing` fact `ShellLaunchV1` carries), and the
+      // composition root's own startup `project.open` (`run-app.ts`) opens it there. What still
+      // reaches this branch is the RETRY, and the three ways to land here differ in WHERE the
+      // reason on screen comes from, never in whether there is one (see
+      // `docs/architecture/flows/launch.md` for the full account): when that startup dispatch was
+      // LATER BLOCKED — the Kernel admitted it and only then failed (`kernel.project.blockOpen`)
+      // — `deriveScreen` drops back to Home and `HomeOpenFailurePanel` renders the Kernel's own
+      // `safeMessage`. When it instead FAILED TO REACH the Kernel or WAS REJECTED outright,
+      // `root.abandonStartupOpen(failure)` (`run-app.ts`) is what drops `deriveScreen` back to
+      // Home, and `ProjectMirror.openFailure` stays `null` for both of those — correctly, since
+      // no `blockOpen` ever happened — but the failure those branches build lands in
+      // `UiLocalState.startupOpenFailure`, which `App.tsx` composes into the SAME `openFailure`
+      // prop, so the panel fires for them too (branch review finding 2, 2026-08-03). Either way
+      // `deps.env.projectExists` stays true, so the user's own Enter here must still dispatch
+      // `project.open`, never `project.create`.
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
-      // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the
-      // identical reason. Home can stay mounted for up to ~30s after the composition root's own
-      // startup `project.open` (`run-app.ts`, Gap D) is admitted, because `deriveScreen` only
-      // leaves Home once `finishOpen`'s metadata reaches the mirror — typing during that window
-      // and hitting Enter fires a SECOND `project.open`, rejected `CAPABILITY_UNAVAILABLE` (the
-      // project machine is already `"opening"`, not `"closed"`). Clearing only on `accepted`
-      // means a rejection never discards what the user typed, and the ALREADY-accepted text
-      // (the startup dispatch's own first, successful attempt has no text of its own to clear —
-      // this only ever fires for `home-submit`'s OWN dispatch) does not linger to be resent.
+      // dispatch — the identical treatment Task 11 gave `composer-submit` — so a rejected retry
+      // never discards what the user typed while trying again.
       if (deps.env.projectExists) {
         dispatchHomeSubmit(
           dispatcher.dispatch("project.open", { root: deps.env.root, text }),
           "project.open",
-          local,
+          deps,
         );
         return;
       }
@@ -77,20 +95,20 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           text,
         }),
         "project.create",
-        local,
+        deps,
       );
       return;
     }
-    case "composer-input":
-      local.composer.set(local.composer() + intent.ch);
-      return;
-    case "composer-backspace":
-      local.composer.set(local.composer().slice(0, -1));
-      return;
     case "composer-submit": {
       // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
       // that dies here is indistinguishable on screen from one that was never pressed. Name
       // which guard swallowed it.
+      //
+      // INVARIANT (trust-prompt-on-open fix, 2026-08-03): "read-only" here specifically means
+      // untrusted AND the trust prompt has already been answered — an untrusted project still on
+      // the `"trust-prompt"` screen never reaches this guard (nor `pin-input`/`pin-backspace`/
+      // `pin-save`'s identical checks below), because `keymap.ts`'s `resolveKey` only ever
+      // resolves `trust-accept`/`trust-decline`/`none` while `screen === "trust-prompt"`.
       if (deps.screen() === "read-only") {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;
@@ -131,7 +149,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
             return;
           }
           trace("ui.dispatch.result", { kind: "turn.start", result });
-          if (result.status === "accepted") local.composer.set("");
+          if (result.status === "accepted") setPrimaryInput(deps, "");
         }),
       );
       return;
@@ -153,38 +171,8 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // either real screen today (`/model`+`/exit` always cover Home; every row covers Workspace),
       // but the check stays screen-generic rather than assuming that forever.
       if (filterSlashRows("/", deps.actionContext()).length === 0) return;
-      primaryInput(deps).set("/");
+      setPrimaryInput(deps, "/");
       local.overlay.set("slash-menu");
-      return;
-    }
-    case "slash-input": {
-      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const input = primaryInput(deps);
-      input.set(input() + intent.ch);
-      // TYPING PAST EVERY MATCH LEAVES SLASH MODE (defect fix, 2026-07-26).
-      //
-      // Nothing used to close the menu on a forward-typed miss — only `slash-backspace` at
-      // length 0 did — so `/commit-x` left the overlay open with an empty row set. The renderers
-      // correctly draw nothing for that (design's own rule: `slashMenu()` returns early when
-      // `!rows.length`, `design/termcraft-engine.js:966`), which made the dead end INVISIBLE:
-      // Enter still routed to `slash-submit`, found no row, and returned silently, so the user
-      // pressed Enter on their typed text and absolutely nothing happened, with no cue at all.
-      //
-      // §3.10's rule is the same in both directions — "when nothing applies the menu simply does
-      // not open" — so a prefix that matches nothing is just text. Dropping the overlay restores
-      // exactly that: the characters stay in the input, and Enter submits them the ordinary way.
-      if (filterSlashRows(input(), deps.actionContext()).length === 0) local.overlay.set(null);
-      return;
-    }
-    case "slash-backspace": {
-      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const input = primaryInput(deps);
-      const next = input().slice(0, -1);
-      input.set(next);
-      if (next.length === 0) {
-        local.overlay.set(null);
-        return;
-      }
       return;
     }
     case "slash-move":
@@ -199,7 +187,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (row === undefined || row.state.availability !== "available") return;
       const entry = resolveSlashAction(row.command);
       if (entry === null) return;
-      primaryInput(deps).set("");
+      setPrimaryInput(deps, "");
       local.overlay.set(null);
       executeAction(entry, deps);
       return;
@@ -224,14 +212,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.overlay.set(null);
       return;
     }
-    case "pin-input":
-      if (deps.screen() === "read-only") return;
-      local.pinDraft.set(local.pinDraft() + intent.ch);
-      return;
-    case "pin-backspace":
-      if (deps.screen() === "read-only") return;
-      local.pinDraft.set(local.pinDraft().slice(0, -1));
-      return;
     case "pin-save": {
       if (deps.screen() === "read-only") return;
       const pendingPin = deps.interaction.pendingPin();
@@ -244,32 +224,41 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         "pin.create",
       );
       deps.interaction.pendingPin.set(null);
-      local.pinDraft.set("");
+      setPinInput(deps, "");
       local.overlay.set(null);
       return;
     }
     case "trust-accept":
-      dispatchAndReport(
+      // Marks the prompt answered ONLY once the Kernel actually accepted `project.setTrust`
+      // (fix round 2, Finding 2 — the identical treatment `dispatchHomeSubmit` and
+      // `composer-submit` above already give their own local state): a rejection (e.g. a
+      // `STALE_REVISION` race during the ready sequence) must not move the screen to
+      // `"read-only"` irreversibly when trust was never actually granted — `trustPromptDismissed`
+      // only ever goes `false -> true` for the rest of this run.
+      dispatchTrustSetTrust(
         dispatcher.dispatch("project.setTrust", {
           trust: "trusted",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
         "project.setTrust:trusted",
+        local,
       );
       return;
     case "trust-decline":
-      dispatchAndReport(
+      // Same shape as `trust-accept` immediately above — see its comment.
+      dispatchTrustSetTrust(
         dispatcher.dispatch("project.setTrust", {
           trust: "untrusted-read-only",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
         "project.setTrust:untrusted-read-only",
+        local,
       );
       return;
     case "overlay-dismiss":
       if (local.overlay() === "pin-input") {
         deps.interaction.pendingPin.set(null);
-        local.pinDraft.set("");
+        setPinInput(deps, "");
       }
       local.overlay.set(null);
       return;
@@ -325,6 +314,35 @@ function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: stri
 function dispatchHomeSubmit(
   promise: Promise<CommandResultV1 | Error>,
   kind: "project.create" | "project.open",
+  deps: UiDeps,
+): void {
+  void promise.then(
+    wrap((result) => {
+      if (result instanceof Error) {
+        console.error("UI command dispatch failed:", result);
+        trace("ui.dispatch.result", { kind, result });
+        return;
+      }
+      trace("ui.dispatch.result", { kind, result });
+      if (result.status === "accepted") setPrimaryInput(deps, "");
+    }),
+  );
+}
+
+/**
+ * `trust-accept`/`trust-decline`'s own dispatch continuation (fix round 2, Finding 2) — the same
+ * shape {@link dispatchHomeSubmit} already uses: marks {@link UiLocalState.trustPromptDismissed}
+ * ONLY once the Kernel actually accepted `project.setTrust`, never on a rejection or a dispatch
+ * that never reached the Kernel. Before this fix the flag was set synchronously with the dispatch
+ * call, so a Kernel refusal (e.g. `STALE_REVISION` during the ready sequence) still moved the
+ * screen to `"read-only"` irreversibly, even though trust was never actually granted or
+ * declined — and since the flag only ever goes `false -> true` for the rest of the run, the user
+ * could never be re-asked this session. `wrap` (RTM-A04) around the continuation — it touches
+ * `local.trustPromptDismissed`, a Reatom atom, after the dispatch's own `.then()` boundary.
+ */
+function dispatchTrustSetTrust(
+  promise: Promise<CommandResultV1 | Error>,
+  kind: string,
   local: UiLocalState,
 ): void {
   void promise.then(
@@ -335,22 +353,13 @@ function dispatchHomeSubmit(
         return;
       }
       trace("ui.dispatch.result", { kind, result });
-      if (result.status === "accepted") local.prompt.set("");
+      if (result.status === "accepted") local.trustPromptDismissed.set(true);
     }),
   );
 }
 
-/**
- * The primary text input for the current screen (§3.10 calls them both "primary input"): the
- * Home prompt or the Workspace composer. Selects between two ALREADY-EXISTING atoms — never
- * creates one — so calling this repeatedly within one intent handler is free.
- */
-function primaryInput(deps: UiDeps): Atom<string> {
-  return deps.screen() === "home" ? deps.local.prompt : deps.local.composer;
-}
-
 function slashRows(deps: UiDeps) {
-  return filterSlashRows(primaryInput(deps)(), deps.actionContext());
+  return filterSlashRows(primaryInputAtom(deps)(), deps.actionContext());
 }
 
 function slashMenuActive(deps: UiDeps): boolean {
@@ -475,10 +484,11 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
       attempts: preview.attempts,
     });
     // NEVER overwrite a draft: this codebase already carries two defect fixes built on that
-    // principle (`home-submit` and `composer-submit` both clear their input only once the Kernel
-    // accepted). An empty composer is filled; a non-empty one keeps every character.
+    // principle. An empty composer is filled; a non-empty one keeps every character. This has
+    // been writing `\n\n` since 2026-07-27 with nothing able to render it — the existing proof
+    // that multi-line composer content is normal (§7.4).
     const draft = deps.local.composer();
-    deps.local.composer.set(draft.length === 0 ? text : `${draft}\n\n${text}`);
+    setPrimaryInput(deps, draft.length === 0 ? text : `${draft}\n\n${text}`);
     deps.local.focus.set("composer");
     return;
   }

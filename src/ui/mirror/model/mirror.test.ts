@@ -109,6 +109,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("home");
 
@@ -125,16 +128,21 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
 
     expect(m.project().projectId).toBe(projectId);
     expect(m.project().trust).toBe("untrusted-read-only");
-    // The transition genuinely left "home" (to "read-only", since trust is not yet granted)
-    // — the exact condition the bug report named as "can never become true for a live
-    // subscriber".
+    // The transition genuinely left "home" (to "trust-prompt", not silently "read-only" —
+    // spec 2026-08-03's trust-prompt-on-open fix: a never-before-trusted project must show
+    // the trust popup before landing read-only, and `trustPromptDismissed` starts `false`
+    // every session) — the exact condition the bug report named as "can never become true
+    // for a live subscriber".
     expect(
       deriveScreen({
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
-    ).toBe("read-only");
+    ).toBe("trust-prompt");
   });
 
   test("kernel.project.setTrust moves the screen the rest of the way to workspace", () => {
@@ -172,6 +180,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("workspace");
   });
@@ -213,6 +224,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("home");
   });

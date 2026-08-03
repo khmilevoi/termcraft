@@ -1,9 +1,11 @@
 import type { Atom, Computed } from "@reatom/core";
 
+import type { AgentHealth } from "ui/agent-health";
 import type { ChatOlderPageState } from "ui/chat";
 import type { Dispatcher, UiPreviewFrame } from "ui/kernel";
 import type { Mirror, ScreenKind } from "ui/mirror";
 import type { PreviewInteractionState } from "ui/preview";
+import type { EditorBridge, TextEditorHandle } from "ui/text-input";
 
 import type { FocusTarget, OverlayKind } from "./model/focus";
 
@@ -58,6 +60,19 @@ export interface WorkspaceLocalState {
   readonly chatViewport: Atom<ChatViewport | null>;
   /** The older-page load latch — see `ui/chat`'s {@link ChatOlderPageState}. */
   readonly olderPage: Atom<ChatOlderPageState>;
+  /** The mounted composer editor, or `null`. See `ui/app/model/primary-input.ts`. */
+  readonly composerEditor: Atom<TextEditorHandle | null>;
+  /**
+   * The agent-health reading (spec 2026-08-02). Home used to be this atom's only consumer; the
+   * Workspace now renders it in the status bar's `hint` slot, because routing an existing project
+   * straight here would otherwise leave a dead agent CLI with no on-screen signal at all.
+   *
+   * KNOWN, DELIBERATE (design 30 §"The long-lived badge"): the probe runs once at startup and is
+   * never refreshed. Signing in to the agent CLI in another terminal leaves this badge red until
+   * termcraft restarts. A `/recheck` action (~30 lines, reusing `refreshAgentHealth`) was
+   * considered and declined; the design only ever mandated `r` on HOME's error state.
+   */
+  readonly agentHealth: Atom<AgentHealth>;
 }
 
 export interface WorkspaceDeps {
@@ -69,6 +84,12 @@ export interface WorkspaceDeps {
   readonly runtimeError: Atom<Error | null>;
   readonly interaction: PreviewInteractionState;
   readonly local: WorkspaceLocalState;
+  /**
+   * The composer editor's wiring. Declared here, structurally, for the same reason the rest of
+   * this interface is: `ui/workspace` never imports `ui/app`, and the App's `UiDeps` satisfies
+   * this shape.
+   */
+  readonly editors: { readonly composer: EditorBridge };
   /**
    * The page the Workspace is actually showing: the tab-strip override when the user has picked
    * one, else the Kernel's own `activePageSlug`. Every consumer — tab strip, status bar, pin

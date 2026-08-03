@@ -51,18 +51,6 @@ export const LIGHT_SHELL_PALETTE: ShellPalette = {
 };
 
 /**
- * The blinking insertion-point glyph (design `put(...,'█',{blink:true})` — Home's `home()`,
- * `design/termcraft-engine.js:145-146`; the composer's `drawChat()`/`wsGenTyping()`, `:256`/
- * `:270-274`; the pin popup's `wsPinInput()`, `:642`). Shared by every insertion-point input
- * (`ui/text-input`'s `TextInput`) and `PinInputPopup`'s own end-of-value cursor — one glyph
- * instead of three private copies (finding §2.6).
- */
-export const CURSOR_GLYPH = "█";
-
-/** The shared blink attribute mask for {@link CURSOR_GLYPH} above. */
-export const BLINK_CURSOR = shellAttrs({ blink: true });
-
-/**
  * Builds the OpenTUI `<text attributes>` bitmask from a shell text style. Mirrors
  * `runtime/ui/text.tsx`'s bold/dim handling and extends it with the blink/italic/
  * underline/inverse the design chrome and flows use (blinking cursor, selection inverse).

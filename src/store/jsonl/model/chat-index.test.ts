@@ -518,7 +518,9 @@ describe("total record count", () => {
   test("a header-only chat reports zero", async () => {
     const pages = makePageStore();
     const state = unwrap(await buildFor(chatHeaderBytes(), pages));
-    const loaded = unwrap(await loadChatIndexTail(state, { pages }, makeSource(chatHeaderBytes())));
+    const loaded = unwrap(
+      await loadChatIndexTail(state, { pages }, makeSource(chatHeaderBytes())),
+    );
     expect(loaded.totalRecordCount).toBe(0);
   });
 });

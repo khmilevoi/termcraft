@@ -5,7 +5,7 @@ import { context } from "@reatom/core";
 import type { PreviewFrameV1 } from "core/ports";
 import type { CommandResultV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import {
   TEST_NONCE,
@@ -13,13 +13,32 @@ import {
   createFakeKernel,
   createFakePreviewSession,
   event,
+  snapshot,
 } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
+import { applyIntent } from "./intent";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** Longer than the frame loop's own `FRAME_POLL_MS`, so a poll-and-retry cycle can complete. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
+
+/**
+ * `handlers/project.ts`'s own `blockOpen` shape: the action, plus the `{reason, failure}` it
+ * publishes as this transition's `metadata`. Shared by the "blocked-open recovery" describe
+ * block below and the `startupOpenPending` describe block, so both build the identical envelope.
+ */
+const blockOpen = (reason: string, safeMessage: string) =>
+  event("kernel.stateChanged", {
+    modelId: "kernel.project.state",
+    action: "kernel.project.blockOpen",
+    previousTag: "opening",
+    nextTag: "blocked",
+    metadata: {
+      reason,
+      failure: { code: "PERSISTENCE_FAILED", retryable: true, safeMessage, details: {} },
+    },
+  });
 
 function frame(sessionId: string): PreviewFrameV1 {
   return {
@@ -239,7 +258,7 @@ describe("createUiDeps Home health probe (M15)", () => {
 
     // A real probe reporting a missing agent surfaces without a manual `r` re-check.
     expect(calls).toBeGreaterThanOrEqual(1);
-    expect(deps.local.homeHealth()).toEqual({
+    expect(deps.local.agentHealth()).toEqual({
       kind: "missing",
       agent: "claude",
       detail: "claude CLI not found",
@@ -254,7 +273,7 @@ describe("createUiDeps Home health probe (M15)", () => {
 
     await tick();
 
-    expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "ready", agent: "claude" });
   });
 
   // REGRESSION GUARD for fix round 1, Finding 1 (CRITICAL): the DEFAULT probe (no
@@ -271,11 +290,11 @@ describe("createUiDeps Home health probe (M15)", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 }); // no agentHealthProbe: the production demo-mode / empty-catalog path
 
     // The synchronous pre-probe seed — honest `checking`, never `ready` (finding §2.7 itself).
-    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "checking", agent: "claude" });
 
     await tick();
 
-    const settled = deps.local.homeHealth();
+    const settled = deps.local.agentHealth();
     expect(settled.kind).not.toBe("ready");
     expect(settled.kind).toBe("advisory");
     // Still usable — advisory permits submit — just never on a fabricated "verified" claim.
@@ -579,18 +598,55 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
     expect(deps.activePageSlug()).toBe("main");
     unsubscribe();
   });
+
+  /**
+   * REGRESSION (2026-08-03, seen live in `termcraft-debug/run-2026-08-03T13-55-59-835Z-
+   * 41436.jsonl`): a project's own auto-issued preview request at open time is dispatched
+   * WHILE the project is still untrusted (spec §2.2's trust prompt gates it), gets rejected
+   * `PROJECT_UNTRUSTED`, and clears its memo so a "later descriptor change" can retry it. But
+   * `project.setTrust` changes neither `activePageSlug` nor the page's descriptor — the active
+   * page is exactly what it was the instant before — so `activePageRequest` never recomputes
+   * and nothing ever retries. The preview stayed blank until the user happened to pick a
+   * DIFFERENT page, the only other producer of `preview.selectPage`.
+   */
+  test("re-requests the active page's preview once trust flips from untrusted to trusted", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.setDispatchResult(refusal("PROJECT_UNTRUSTED"));
+    kernel.emit(activePageWithHash("dashboard", "a".repeat(64)));
+    await tick();
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "dashboard" }]);
+
+    kernel.setDispatchResult(acceptedResult());
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+        metadata: { workspaceIdentity: "local", trust: "trusted" },
+      }),
+    );
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "dashboard" }, { pageSlug: "dashboard" }]);
+    unsubscribe();
+  });
 });
 
-describe("createUiDeps refreshHomeHealth", () => {
+describe("createUiDeps refreshAgentHealth", () => {
   test("re-enters `checking` while the probe runs, so a manual `r` re-check is visible", async () => {
     // A hand-driven probe: each call hands back a promise this test settles when it chooses,
     // so the mid-probe state is observable rather than raced against.
-    const pending: ((value: HomeAgentHealth) => void)[] = [];
+    const pending: ((value: AgentHealth) => void)[] = [];
     const probe = () =>
-      new Promise<HomeAgentHealth>((resolve) => {
+      new Promise<AgentHealth>((resolve) => {
         pending.push(resolve);
       });
-    const settle = (value: HomeAgentHealth) => {
+    const settle = (value: AgentHealth) => {
       const resolve = pending.shift();
       if (resolve === undefined) throw new Error("fixture bug: no probe in flight to settle");
       resolve(value);
@@ -602,36 +658,20 @@ describe("createUiDeps refreshHomeHealth", () => {
     // when they fix the cause and press `r`.
     settle({ kind: "blocked", agent: "claude", panel: "login", detail: "not signed in" });
     await tick();
-    expect(deps.local.homeHealth().kind).toBe("blocked");
+    expect(deps.local.agentHealth().kind).toBe("blocked");
 
     // The re-check itself. Without this fix the stale `blocked` verdict stayed on screen for the
     // probe's entire run (up to 20s), with nothing to say a re-check was happening at all.
-    void deps.refreshHomeHealth();
-    expect(deps.local.homeHealth()).toEqual({ kind: "checking", agent: "claude" });
+    void deps.refreshAgentHealth();
+    expect(deps.local.agentHealth()).toEqual({ kind: "checking", agent: "claude" });
 
     settle({ kind: "ready", agent: "claude" });
     await tick();
-    expect(deps.local.homeHealth().kind).toBe("ready");
+    expect(deps.local.agentHealth().kind).toBe("ready");
   });
 });
 
 describe("createUiDeps blocked-open recovery", () => {
-  /**
-   * `handlers/project.ts`'s own `blockOpen` shape: the action, plus the `{reason, failure}` it
-   * publishes as this transition's `metadata`.
-   */
-  const blockOpen = (reason: string, safeMessage: string) =>
-    event("kernel.stateChanged", {
-      modelId: "kernel.project.state",
-      action: "kernel.project.blockOpen",
-      previousTag: "opening",
-      nextTag: "blocked",
-      metadata: {
-        reason,
-        failure: { code: "PERSISTENCE_FAILED", retryable: true, safeMessage, details: {} },
-      },
-    });
-
   const closes = (kernel: ReturnType<typeof createFakeKernel>): number =>
     kernel.dispatched.filter(
       (raw) =>
@@ -698,6 +738,335 @@ describe("createUiDeps blocked-open recovery", () => {
 
     expect(closes(kernel)).toBe(2);
     unsubscribe();
+  });
+});
+
+describe("startupOpenPending / startupOpenFailure (spec 2026-08-02 — workspace-first launch)", () => {
+  /**
+   * The shape `run-app.ts`'s `result instanceof Error` branch builds — a `ProjectOpenFailure` by
+   * shape only, never a Kernel-produced one (no `blockOpen` exists for a dispatch that never
+   * reached the Kernel), which is exactly what the tests below pin.
+   */
+  const ABANDON_FAILURE = {
+    reason: "startup-open-dispatch-failed",
+    safeMessage: "the port was already closed",
+  } as const;
+
+  test("an existing project mounts the Workspace before any Kernel event arrives", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.local.startupOpenPending()).toBe(true);
+    expect(deps.screen()).toBe("workspace");
+  });
+
+  test("a fresh directory still lands on Home", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(deps.local.startupOpenPending()).toBe(false);
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("abandonStartupOpen drops the empty shell back to Home and says why", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.screen()).toBe("workspace");
+    deps.abandonStartupOpen(ABANDON_FAILURE);
+    expect(deps.local.startupOpenPending()).toBe(false);
+    expect(deps.screen()).toBe("home");
+    // Branch review finding 2 (2026-08-03): dropping back to Home is only half the transition —
+    // the reason has to survive it, or the user reads a bare Home. `App.tsx` composes this atom
+    // into Home's `openFailure` prop, so this IS what the panel renders for this path.
+    expect(deps.local.startupOpenFailure()).toEqual(ABANDON_FAILURE);
+  });
+
+  test("an abandoned startup open never fabricates the Kernel's own openFailure", () => {
+    // The invariant the fix must not trade away: `ProjectMirror.openFailure` is Kernel truth,
+    // written ONLY by a real `kernel.project.blockOpen` fold (`ui/mirror/model/mirror.ts`). A
+    // dispatch that was never admitted cannot have been blocked, so the UI-local reading has to
+    // stay a SEPARATE atom rather than being written into the mirror. This test is what would
+    // fail if a later "simplification" merged the two.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen(ABANDON_FAILURE);
+    expect(deps.mirror.project().openFailure).toBeNull();
+    expect(deps.local.startupOpenFailure()).toEqual(ABANDON_FAILURE);
+  });
+
+  test("a real blockOpen still wins the panel slot over an abandoned startup open", () => {
+    // The `??` compose in `App.tsx` reads Kernel truth first. The two readings are mutually
+    // exclusive by construction for ONE open attempt, so this ordering is only ever exercised by
+    // a sequence like this one (an abandoned startup open, then a later admitted-and-blocked
+    // retry) — and there the Kernel's own account must be the one on screen.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen(ABANDON_FAILURE);
+    deps.mirror.apply(blockOpen("manifest-read-failed", "project.toml could not be read"));
+    expect(deps.mirror.project().openFailure ?? deps.local.startupOpenFailure()).toEqual({
+      reason: "manifest-read-failed",
+      safeMessage: "project.toml could not be read",
+    });
+  });
+
+  test("a blocked open returns to Home even while the startup open is still pending", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    // Apply the mirror's own blockOpen fold directly — see the existing "blocked-open recovery"
+    // describe block above for the shared envelope helper.
+    deps.mirror.apply(blockOpen("manifest-read-failed", "project.toml could not be read"));
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("a successful finishOpen clears startupOpenPending — the flag stops describing a project that is already open", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    // The success path is a `withComputed` on the atom itself (branch review finding 3,
+    // 2026-08-03), so the clear no longer depends on `runtime` being connected at all — but the
+    // KERNEL EVENT still does: nothing folds `kernel.stateChanged` into the mirror unless the
+    // subscription this connect hook owns is live, same requirement as the "blocked-open
+    // recovery" describe block above.
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    expect(deps.local.startupOpenPending()).toBe(true);
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+    await tick();
+
+    expect(deps.local.startupOpenPending()).toBe(false);
+    unsubscribe();
+  });
+
+  test("any route to a non-null projectId clears the flag, not just the runtime subscription", () => {
+    // Regression coverage for branch review finding 3 (2026-08-03). The clear used to be a
+    // guarded branch inside the `mirror.project` subscriber in `createUiDeps`'s `runtime` connect
+    // hook, so it ran ONLY for a project write observed through that one wiring; it is now a
+    // `withComputed` keyed on `mirror.project().projectId` itself. Folding the SAME `finishOpen`
+    // straight into the mirror — no `runtime.subscribe`, no connect hook, the one route that
+    // deliberately bypasses the old clearer — is what tells the two implementations apart: the
+    // old one leaves this `true`.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.local.startupOpenPending()).toBe(true);
+
+    deps.mirror.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+
+    expect(deps.local.startupOpenPending()).toBe(false);
+  });
+
+  test("a later close with no openFailure lands on Home, not an empty Workspace shell", async () => {
+    // Regression coverage for the escalated Item 1 fix: before it, `startupOpenPending` had
+    // exactly one clearer (`abandonStartupOpen`, only reachable from the startup dispatch's own
+    // two failure branches), so a SUCCESSFUL open left it `true` forever. Any later legitimate
+    // close that is not the blocked-open recovery above — which always leaves `openFailure`
+    // non-null — leaves `projectId` null with `openFailure` still null, and `deriveScreen`
+    // (`projectId === null && startupOpenPending && !openFailed`) would mount an empty Workspace
+    // shell with no exit. `finishClose` is used here only as a concrete, mirror-fold-accurate way
+    // to reach that same (`projectId: null`, `openFailure: null`) pair — the fix does not depend
+    // on `finishClose` specifically, only on projectId legitimately returning to null.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+    await tick();
+    expect(deps.screen()).toBe("workspace");
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+        metadata: { projectId: null },
+      }),
+    );
+    await tick();
+
+    expect(deps.mirror.project().projectId).toBeNull();
+    expect(deps.mirror.project().openFailure).toBeNull();
+    expect(deps.screen()).toBe("home");
+    unsubscribe();
+  });
+});
+
+describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 — trust prompt on open)", () => {
+  test("defaults to false, so a never-before-trusted project shows the prompt first", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.local.trustPromptDismissed()).toBe(false);
+    expect(deps.screen()).toBe("trust-prompt");
+  });
+
+  test("flipping it true resolves the screen the rest of the way to read-only", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    deps.local.trustPromptDismissed.set(true);
+    expect(deps.screen()).toBe("read-only");
+  });
+
+  test("trust-accept resolves the screen trust-prompt -> workspace end to end", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-accept" }, deps);
+    // `trustPromptDismissed` is now set only once the dispatch RESOLVES accepted (fix round 2,
+    // Finding 2 — the same treatment `dispatchHomeSubmit` already gives `local.prompt`), so this
+    // await is required before the mirror fold below and the final assertion.
+    await tick();
+    // `applyIntent`'s dispatch only reaches the FakeKernel's recorded `dispatched` list — unlike
+    // a real Kernel it never folds anything back on its own — so the mirror's own trust grant is
+    // simulated the same way `mirror.test.ts`'s "kernel.project.setTrust moves the screen the
+    // rest of the way to workspace" test does, by applying the SAME fold the real Kernel would
+    // eventually publish.
+    deps.mirror.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+        metadata: { workspaceIdentity: "workspace-id", trust: "trusted" },
+      }),
+    );
+    expect(deps.local.trustPromptDismissed()).toBe(true);
+    expect(deps.screen()).toBe("workspace");
+  });
+
+  test("trust-decline resolves the screen trust-prompt -> read-only end to end", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-decline" }, deps);
+    // Unlike accept, decline needs no Kernel round trip to observe on screen: the mirror's own
+    // `trust` was already "untrusted-read-only" (that is WHY the prompt was showing), so
+    // `trustPromptDismissed` flipping true is the only thing the screen atom needed — but that
+    // flip itself now only happens once the dispatch RESOLVES accepted (fix round 2, Finding 2),
+    // hence this await.
+    await tick();
+    expect(deps.local.trustPromptDismissed()).toBe(true);
+    expect(deps.screen()).toBe("read-only");
   });
 });
 

@@ -7,6 +7,7 @@ import { reatomComponent, useWrap } from "@reatom/react";
 import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
+import { agentBlockedNote, agentHealthBadge } from "ui/agent-health";
 import {
   AgentStatusBlock,
   ChatRecord,
@@ -35,11 +36,13 @@ import {
 import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
 import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
-import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
+import type { StatusBarHintKey, StatusBarModeChip, StatusBarSegment } from "ui/status-bar";
+import { editorRowCount } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { agentStatusMaxRows } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
+import type { OverlayKind } from "../model/focus";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -75,6 +78,46 @@ const BOLD = shellAttrs({ bold: true });
  * whether the host halted or whose fault it was.
  */
 type PreviewHalt = null | { readonly retryAvailable: boolean; readonly designAtFault: boolean };
+
+/**
+ * The five status-bar/composer facts the "filling" (opening) state overrides, bundled so a
+ * future change to the opening presentation touches one function body instead of five scattered
+ * `filling ? … : …` branches (review finding 4, 2026-08-03). Deliberately excludes
+ * `renderPreviewRegion`'s own `filling` branch (a full JSX subtree, not a small value) and the
+ * mode-chip/hint-key TABLES for the non-filling states — `modeChip`/`hintKeys` below still branch
+ * on turn/fullscreen/readOnly/previewHalt independently, since `filling` and those facts are
+ * mutually exclusive by construction (`readOnly` needs a non-null projectId, `filling` needs a
+ * null one) and never need to be checked together.
+ */
+function workspaceOpeningChrome(w: number): {
+  readonly modeChip: StatusBarModeChip;
+  readonly hintKeys: readonly StatusBarHintKey[];
+  readonly composerPlaceholder: string;
+  readonly page: StatusBarSegment;
+  /** Whether the status bar's `size` segment stays hidden while opening (`w < 100`). */
+  readonly hidesSize: boolean;
+} {
+  return {
+    // ` OPENING `, not ` STATIC ` (design 30): STATIC asserts a finished, unchanging design,
+    // which is exactly the claim this state cannot make.
+    modeChip: { text: "OPENING", fg: "bg", bg: "amber" },
+    // design/termcraft-engine.js:247 — `[['⏎','send','dis']]`, nothing else. F2/F3/F4 are
+    // DROPPED rather than drawn inert: none of the three has anything to act on yet (no
+    // preview, no page to tweak or interact with), and Home's own `checking` state shows the
+    // same restraint.
+    hintKeys: [["⏎", "send", "dis"]],
+    // design/termcraft-engine.js:239 (`chatSeq`'s own `placeholder`).
+    composerPlaceholder: "project opening…",
+    // Home's own phrase, verbatim, in the slot that is free because there is no page slug yet
+    // (design 30 §"Mid-open"). `opening…` below 100 columns, matching the engine's own
+    // `narrow` branch (`:243`).
+    page: { text: w >= 100 ? "opening project…" : "opening…", fg: "amber", bold: true },
+    // The engine drops the size segment below 100 columns in this state (`:244`). The idle
+    // bar has never implemented that narrow branch — a pre-existing divergence, out of scope
+    // here — but this state is new code and follows the design it was drawn for.
+    hidesSize: w < 100,
+  };
+}
 
 /** The status-bar mode chip for the current turn/fullscreen state (design mode-chip literals). */
 function modeChip(
@@ -189,6 +232,9 @@ function terminalRecordLines(
  */
 const AGENT_BLOCK_CHROME_ROWS = 1;
 
+/** The `❯ ` caret run `Composer` draws before the editor — two cells, matching `drawChat` `:651`. */
+const COMPOSER_CARET_COLUMNS = 2;
+
 /**
  * Renders the ordered tab strip (design `drawTabs`, `design/18-tab-management.dc.html`):
  * ▸ active amber-bold, dim inactive, faint ghost. When the summed tab widths exceed `width`
@@ -281,7 +327,35 @@ function renderPreviewRegion(
     onMouseMove: (event: MouseEvent) => void;
     onMouseDown: (event: MouseEvent) => void;
   }>,
+  filling: boolean,
+  agentBlocked: ReturnType<typeof agentBlockedNote>,
+  readOnly: boolean,
 ) {
+  if (filling) {
+    // design/termcraft-engine.js:237-238. Distinct from §20's `No pages yet` (a finished project
+    // that genuinely has none) and §14's `⠹ generating first page…` (a running, cancellable
+    // turn). Neither is true here, so this is a plain amber line with no glyph in front of it —
+    // NOTHING SPINS. Drawing a spinner over a state with no cancel and nothing measurable would
+    // borrow a promise this state cannot keep.
+    return (
+      <box
+        id="ws-preview-opening"
+        flexGrow={1}
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+      >
+        <text id="ws-preview-opening-headline" fg={SHELL_PALETTE.amber} attributes={BOLD}>
+          opening project…
+        </text>
+        {/* The engine leaves one blank row between the two lines (`dh/2-1` and `dh/2+1`). */}
+        <text id="ws-preview-opening-spacer"> </text>
+        <text id="ws-preview-opening-detail" fg={SHELL_PALETTE.faint}>
+          reading .termcraft — preview arrives when it&apos;s ready
+        </text>
+      </box>
+    );
+  }
   if (preview.phase === "failed") {
     return (
       <ErrorPanel
@@ -307,6 +381,7 @@ function renderPreviewRegion(
           hostMessage={preview.finalFailure.safeMessage}
           attempts={preview.attempts}
           retryAvailable={preview.retryAvailable}
+          agentBlocked={agentBlocked}
         />
       );
     }
@@ -360,6 +435,33 @@ function renderPreviewRegion(
       </box>
     );
   }
+  if (readOnly) {
+    // A never-before-trusted project that declined the trust prompt (spec §3.1) keeps preview
+    // execution disabled for the rest of this run (`ui/app/model/deps.ts`'s
+    // `createScreenAtom`/`ScreenInput.trustPromptDismissed`) — this replaces the generic
+    // "preparing preview…" fallback below, which never resolves for a project the Kernel will
+    // never render. DIVERGENCE (no `design/*.dc.html` mock covers this exact copy, matching the
+    // precedent `TrustPrompt.tsx` already set for undesigned trust-related states): colors and
+    // layout are reused from the already-approved `filling` branch above — amber headline, one
+    // blank spacer row, faint detail line, no spinner, since nothing here is pending.
+    return (
+      <box
+        id="ws-preview-read-only"
+        flexGrow={1}
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+      >
+        <text id="ws-preview-read-only-headline" fg={SHELL_PALETTE.amber} attributes={BOLD}>
+          preview disabled
+        </text>
+        <text id="ws-preview-read-only-spacer"> </text>
+        <text id="ws-preview-read-only-detail" fg={SHELL_PALETTE.faint}>
+          project is read-only — relaunch to be asked again
+        </text>
+      </box>
+    );
+  }
   return (
     <box id="ws-preview-ready" flexGrow={1} alignItems="center" justifyContent="center">
       <text id="ws-preview-ready-text" fg={SHELL_PALETTE.faint}>
@@ -380,11 +482,25 @@ function renderPreviewRegion(
  * GAP decision on frame junctions). Live frame streaming fills `previewFrame` from the App's
  * `PreviewSession` consumer.
  */
-export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolean }>((props) => {
+export const Workspace = reatomComponent<{
+  deps: WorkspaceDeps;
+  readOnly: boolean;
+  /**
+   * Which surface owns the keys, ALREADY precedence-resolved by the App's own
+   * `resolveActiveOverlay` — the same call `renderOverlay` and the key-context builder make. Read
+   * here rather than re-derived from `local.overlay()` so the composer's focus, the popup that is
+   * drawn, and the keys `resolveKey` routes can never disagree about who owns the keyboard.
+   */
+  activeOverlay: OverlayKind | null;
+}>((props) => {
   const { mirror, terminal, previewFrame, local, interaction, dispatcher } = props.deps;
   const size = terminal();
   const turn = mirror.turn();
   const preview = mirror.preview();
+  // The Workspace mounted before its project opened (spec 2026-08-02, design
+  // `design/30-workspace-first-launch.dc.html`). NOT a new screen: `deriveScreen` returns
+  // "workspace" for it, so filling in is a re-render rather than a remount.
+  const filling = mirror.project().projectId === null;
   const descriptors = mirror.pageDescriptors();
   // The page the Workspace is showing — the tab-strip pick when there is one, else the Kernel's
   // own active slug (`../model/page-selection.ts`). Read ONCE here so the tab strip, the pin
@@ -394,7 +510,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
-  const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
+  const slashOpen = !props.readOnly && props.activeOverlay === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
         capabilities: mirror.capabilities(),
@@ -424,6 +540,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
 
   const w = size.w;
   const h = size.h;
+  // The bundled opening-state overrides (see `workspaceOpeningChrome`'s own doc comment).
+  // Computed unconditionally, right after `w` becomes available — it's cheap and pure, and
+  // every call site below just picks it with its own `filling ? opening.X : …` ternary.
+  const opening = workspaceOpeningChrome(w);
   const chatW = chatColumnWidth(w);
   // Every preview measurement comes from ONE module (`../model/preview-geometry.ts`) so the
   // rectangle the host is asked to render into, the box it is painted into, and the origin
@@ -458,6 +578,25 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           designAtFault: isDesignRenderFailure(preview.finalFailure),
         }
       : null;
+  // The `hint` slot holds ONE badge. Precedence, highest first (design 30 §"The badge
+  // vocabulary"): read-only → turn running → preview halt → agent health → none. `turn running`
+  // must outrank health by rule — a live turn demonstrates the agent is alive, so a stale
+  // `✗ not signed in` under it would contradict what is happening on screen in the same second.
+  // Health sits last among the real tiers: it is a permanent, ambient fact, not an urgent one.
+  //
+  // DIVERGENCE (narrow-bar layout, pre-existing): the engine's
+  // `workspace()` drops its whole left cluster — hint included — below 100 columns (`:274`). This
+  // component has never implemented that narrow branch, which is why its `⚠ turn running` hint
+  // also survives at 80 columns; health follows the slot's existing behaviour in the short form
+  // the design itself defines (`agentBadge`'s `opt.short`, and `wsOpen80` which keeps the badge at
+  // 80), rather than introducing a narrow rule for one badge alone.
+  //
+  // INHERITED DIVERGENCE (already documented at `Home.tsx:56`): `StatusBarHintBadge` is plain
+  // text and cannot host a live component, so the `⠹` this renders is static, not animated.
+  const healthBadge = agentHealthBadge(local.agentHealth(), { short: w < 100 });
+  // Only the crash panel takes it: `HostUnavailablePanel` names no repair key at all (the host
+  // never got as far as the page), so there is no F6 promise there to correct.
+  const agentBlocked = agentBlockedNote(local.agentHealth());
   const composerAttach = deriveComposerAttach({
     readOnly: props.readOnly,
     selection,
@@ -477,8 +616,15 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // comment (`../model/agent-block-budget.ts`).
   const agentBlockMaxRows = agentStatusMaxRows({ frameH, chromeRows: AGENT_BLOCK_CHROME_ROWS });
   // `ws-chat`'s own inner content width: the panel's width less its left/right border. This is
-  // what every `<text>` inside `ws-chat-stream` actually wraps against.
+  // what every `<text>` inside `ws-chat-stream` wraps against, and — less the caret run — what
+  // the composer's editor wraps against too.
   const chatContentWidth = Math.max(1, chatW - 2);
+  const composerEditorWidth = Math.max(1, chatContentWidth - COMPOSER_CARET_COLUMNS);
+  const composerEditorRows = editorRowCount({
+    text: composerValue,
+    width: composerEditorWidth,
+    frameH,
+  });
   const terminalLines = turn.phase === "terminal" ? terminalRecordLines(turn) : [];
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
@@ -699,11 +845,21 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   }, "ui.Workspace.onPreviewMouseDown");
   const composerPlaceholder = props.readOnly
     ? "read-only — Send disabled"
-    : turn.phase === "running"
-      ? "generating… esc to cancel"
-      : composerFocused
-        ? "Ask for changes…"
-        : "tab → focus composer";
+    : filling
+      ? opening.composerPlaceholder
+      : turn.phase === "running"
+        ? "generating… esc to cancel"
+        : composerFocused
+          ? "Ask for changes…"
+          : "tab → focus composer";
+  // §7.5's focus table. The composer keeps the keys while the slash menu is open — the filter IS
+  // this buffer — and loses them to any modal overlay, to a preview-focused Tab, and on a
+  // read-only screen. Exactly one editor is focused at any moment, which is a requirement rather
+  // than a coincidence: the terminal has one hardware cursor.
+  const composerEditorFocused =
+    !props.readOnly &&
+    composerFocused &&
+    (props.activeOverlay === null || props.activeOverlay === "slash-menu");
 
   return (
     <box
@@ -907,8 +1063,11 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 (turn.phase === "running" && composerValue.length === 0)
               }
               placeholder={composerPlaceholder}
-              value={composerValue}
               attach={composerAttach}
+              focused={composerEditorFocused}
+              rows={composerEditorRows}
+              width={composerEditorWidth}
+              bridge={props.deps.editors.composer}
             />
             {
               // design/termcraft-engine.js:966 (`slashMenu(){ const rows=…; if(!rows.length)
@@ -951,23 +1110,43 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           />
           {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
           <box id="ws-preview-gap" height={1} />
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, previewRegion, {
-            pins,
-            pendingPin,
-            selectionRect,
-            hover,
-            onRendered: acknowledgeRenderedFrame,
-            onMouseMove: onPreviewMouseMove,
-            onMouseDown: onPreviewMouseDown,
-          })}
+          {renderPreviewRegion(
+            preview,
+            uiFrame,
+            descriptors.length > 0,
+            previewRegion,
+            {
+              pins,
+              pendingPin,
+              selectionRect,
+              hover,
+              onRendered: acknowledgeRenderedFrame,
+              onMouseMove: onPreviewMouseMove,
+              onMouseDown: onPreviewMouseDown,
+            },
+            filling,
+            agentBlocked,
+            props.readOnly,
+          )}
         </box>
       </box>
       <StatusBar
         id="ws-status"
         width={w}
-        mode={modeChip(turn, fullscreen, props.readOnly, previewHalt)}
-        page={activePageSlug !== null ? { text: activePageSlug, fg: "dim" } : null}
-        size={{ w, h, min: minSize }}
+        mode={filling ? opening.modeChip : modeChip(turn, fullscreen, props.readOnly, previewHalt)}
+        // Known divergence: the engine's wide `wsOpening` bar also carries a leading
+        // ` codex · gpt5.5 · high ` combo chip (`:242`). `StatusBarProps` has no combo slot at
+        // all — `StatusBar.tsx`'s own comment records that every workspace screen after §07
+        // passes `combo:false` — so this bar drops it exactly as every other Workspace bar
+        // already does. Not a new divergence; inherited.
+        page={
+          filling
+            ? opening.page
+            : activePageSlug !== null
+              ? { text: activePageSlug, fg: "dim" }
+              : null
+        }
+        size={filling && opening.hidesSize ? null : { w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
@@ -987,9 +1166,9 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                     fg: "red",
                     bg: "redDim",
                   }
-                : null
+                : healthBadge
         }
-        hintKeys={hintKeys(turn, fullscreen, previewHalt)}
+        hintKeys={filling ? opening.hintKeys : hintKeys(turn, fullscreen, previewHalt)}
       />
     </box>
   );

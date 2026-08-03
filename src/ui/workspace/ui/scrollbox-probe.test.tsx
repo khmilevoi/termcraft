@@ -1,11 +1,17 @@
+import { createRequire } from "node:module";
+
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { useState } from "react";
 
 import type { StyledRun } from "host/protocol";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
+
+/** Same `@types/react`-free workaround as `Workspace.tsx`'s own `useRef` import — see that
+ *  file's doc comment for why a plain `import { useState } from "react"` is a TS7016 error. */
+type UseState = <T>(initial: T) => readonly [T, (value: T) => void];
+const { useState } = createRequire(import.meta.url)("react") as { readonly useState: UseState };
 
 /**
  * The `<scrollbox>` contract this feature stands on (chat-scroll spec §9). Nothing in `src/`
