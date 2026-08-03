@@ -618,11 +618,13 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
    * Important 2 — the prior wording claimed this method already "re-labels its errors the way
    * `runGate` itself does", which was false: it only checked `contract instanceof Error` for
    * the RETURNED `SourceStreamTruncatedError` and let the THROWN case escape uncaught, leaving
-   * `core/kernel`'s errors-as-values discipline entirely since neither caller wraps this call).
+   * `core/kernel`'s errors-as-values discipline entirely — this method's one non-test caller,
+   * `core/kernel/model/handlers/preview-export.ts`'s `extractAndCachePageMeta` (:213, reached
+   * through :256), does not wrap this call either).
    * So this wraps the call in the SAME `errore.try` shape `runGate` uses around the identical
-   * call (`gate/model/gate.ts:164-176`) and re-labels its errors the way `runGate` itself does
-   * (`kind: "contract"`, `file` set to the display name), rather than mapping them a second,
-   * divergent way.
+   * call (`gate/model/gate.ts`'s `errore.try` around `checkPageContract`) and re-labels its
+   * errors the way `runGate` itself does (`kind: "contract"`, `file` set to the display name),
+   * rather than mapping them a second, divergent way.
    */
   async function extractPageMeta(input: {
     readonly source: string;

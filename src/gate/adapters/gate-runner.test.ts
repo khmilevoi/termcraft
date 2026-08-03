@@ -113,8 +113,9 @@ describe("createGateRunnerAdapter", () => {
     // converted to an ordinary `{ meta: null, errors: […] }` result instead, the same way
     // `runGate` converts the identical throw (`gate/model/gate.ts`'s own `errore.try`, "an
     // escaping throw would crash the turn instead of rejecting one page" — the identical stakes
-    // apply here since neither of this method's callers wraps the call in a try/catch of its
-    // own).
+    // apply here since this method's one non-test caller, `core/kernel/model/handlers/
+    // preview-export.ts`'s `extractAndCachePageMeta`, does not wrap the call in a try/catch of
+    // its own either).
     const source = `${DEEP_JSX_NESTING}\nexport const meta = definePage({ kitApiVersion: 1, title: "plain", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const extraction = await adapter.extractPageMeta({
@@ -923,7 +924,7 @@ describe("createGateRunnerAdapter", () => {
     // `treeRoot`/`expectedFiles` are required inputs now (task 16), so a caller can no longer
     // omit them to reach this path. Fix round 1 (Important 4): the empty-string `treeRoot` this
     // test used to pin is a shape no production caller can construct, and neither field is
-    // load-bearing here anyway — measured, `realDiskSmokeRenderer` (this file's own :34-51) only
+    // load-bearing here anyway — measured, this file's own `realDiskSmokeRenderer` above only
     // does `Bun.file(`${treeRoot}/${entryRelPath}`)` and never reads `expectedFiles` at all (the
     // inventory check lives in the real host's `loadPage`, which this fake bypasses). A
     // REALISTIC absolute root that simply has nothing staged under it reproduces the identical

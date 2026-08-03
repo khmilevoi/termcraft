@@ -20,7 +20,10 @@ import { parsesJsx, scanTreeImports } from "./tree-scan";
  * {@link SourceStreamTruncatedError}, or any other throw out of the lexer/contract/lint
  * stack). Carried as a value so {@link runGate} turns it into an ordinary fatal for that page
  * instead of letting it escape into the turn — the same shape and the same reasoning as
- * `tree-scan.ts`'s `TreeFileUnscannableError` for the whole-tree scan.
+ * `tree-scan.ts`'s `TreeFileUnscannableError` for the whole-tree scan. EXPORTED (task 16 fix
+ * round 1) so `gate/adapters/gate-runner.ts`'s `extractPageMeta` constructs the identical class
+ * for the identical failure over its own `checkPageContract` call, rather than a second,
+ * divergent one.
  */
 export class PageSourceUnscannableError extends errore.createTaggedError({
   name: "PageSourceUnscannableError",
