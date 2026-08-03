@@ -28,6 +28,17 @@ output matching it — diff your output against it.
   - 120x40 -> snapshots/calendar/120x40.txt
   - 160x40 -> snapshots/calendar/160x40.txt
 
+### world-clock
+
+- theme: dark-default
+- kitApiVersion: 1
+- source: pages/world-clock/page.tsx
+- layout: layout/world-clock.json (per-size resolved layout trees; ids/boxes populated, text awaits the runtime catalog — D-Q6)
+- rendered sizes:
+  - 74x28 -> snapshots/world-clock/74x28.txt
+  - 120x40 -> snapshots/world-clock/120x40.txt
+  - 160x40 -> snapshots/world-clock/160x40.txt
+
 ## Runtime
 
 - module: @termcraft/runtime
