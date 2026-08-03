@@ -15,6 +15,13 @@ import type { FocusTarget, OverlayKind } from "ui/workspace";
 export interface KeyLike {
   readonly name: string;
   readonly ctrl: boolean;
+  /**
+   * Read so a MODIFIED Enter is never claimed as a submit: `Shift+Enter` and `Alt+Enter` are the
+   * editor's newline chords (§4.4), and claiming them here would make the composer un-breakable
+   * on every terminal.
+   */
+  readonly shift: boolean;
+  readonly meta: boolean;
   readonly sequence: string;
 }
 
@@ -115,23 +122,23 @@ export function resolveActiveOverlay(
 }
 
 export type KeyIntent =
-  | { readonly kind: "home-input"; readonly ch: string }
-  | { readonly kind: "home-backspace" }
+  | {
+      /**
+       * The ONE surviving editing intent (§6.1/§6.4). While `homeHealth.kind === "blocked"` the
+       * Home prompt is blurred and receives no keys, so backspace cannot reach the editor — and
+       * backspace is the only thing that can empty a prompt whose `q` quit is gated on emptiness.
+       */
+      readonly kind: "home-backspace";
+    }
   | { readonly kind: "home-submit" }
   | { readonly kind: "home-recheck" }
-  | { readonly kind: "composer-input"; readonly ch: string }
-  | { readonly kind: "composer-backspace" }
   | { readonly kind: "composer-submit" }
   | { readonly kind: "action-execute"; readonly actionId: string }
   | { readonly kind: "slash-open" }
-  | { readonly kind: "slash-input"; readonly ch: string }
-  | { readonly kind: "slash-backspace" }
   | { readonly kind: "slash-move"; readonly delta: -1 | 1 }
   | { readonly kind: "slash-submit" }
   | { readonly kind: "chat-move"; readonly delta: -1 | 1 }
   | { readonly kind: "chat-switch" }
-  | { readonly kind: "pin-input"; readonly ch: string }
-  | { readonly kind: "pin-backspace" }
   | { readonly kind: "pin-save" }
   | { readonly kind: "trust-accept" }
   | { readonly kind: "trust-decline" }
@@ -142,16 +149,39 @@ export type KeyIntent =
   | { readonly kind: "exit" }
   | { readonly kind: "none" };
 
-/** A single printable character (no modifier, not a control byte). */
-function printableChar(key: KeyLike): string | null {
-  if (key.ctrl) return null;
-  if (key.sequence.length !== 1) return null;
-  const code = key.sequence.charCodeAt(0);
-  if (code < 0x20 || code === 0x7f) return null;
-  return key.sequence;
+/** Every name a terminal reports for the Enter key, main row or numpad. */
+const RETURN_NAMES: ReadonlySet<string> = new Set(["return", "enter", "kpenter"]);
+
+/**
+ * An UNMODIFIED Enter — the only one the App claims.
+ *
+ * `Shift+Enter`, `Alt+Enter` and `Ctrl+J` are the editor's three newline routes (§4.4), so they
+ * must fall through. `Ctrl+J` needs no check here at all: it parses as `linefeed`, a different
+ * name entirely.
+ */
+function isSubmitKey(key: KeyLike): boolean {
+  return RETURN_NAMES.has(key.name) && !key.shift && !key.meta && !key.ctrl;
 }
 
-const RETURN_NAMES: ReadonlySet<string> = new Set(["return", "enter"]);
+/**
+ * THE CLAIM RULE (§6.4), and the reason there is no second list of "keys the App owns" — a second
+ * list would drift from the first.
+ *
+ * > The App calls `preventDefault()` if and only if `resolveKey` returned an intent other than
+ * > `none`.
+ *
+ * This holds because seven of the eight editing intent kinds have left {@link KeyIntent}. What
+ * remains in the union is, by definition, what the App governs: `Esc`, `Tab`, the F-keys, the
+ * registry hotkeys, an unmodified `Enter`, `/` on an empty primary input, and the arrows while
+ * the slash menu is open. Everything else resolves to `none` and reaches the focused editor.
+ *
+ * A welcome consequence: with the menu open, `↑`/`↓` drive the row selection while `←`/`→`,
+ * `Ctrl+←`/`Ctrl+→` and `Ctrl+W` reach the editor, so the filter is editable with the same full
+ * set as ordinary text — which it was not before.
+ */
+export function isClaimedKey(intent: KeyIntent): boolean {
+  return intent.kind !== "none";
+}
 
 function hotkeyName(key: KeyLike): string {
   if (key.ctrl) return `ctrl+${key.name.toLowerCase()}`;
@@ -161,7 +191,7 @@ function hotkeyName(key: KeyLike): string {
 /** Resolves one key event into a UI intent, given the current screen/focus/overlay context. */
 export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   if (context.screen === "trust-prompt") {
-    if (RETURN_NAMES.has(key.name)) return { kind: "trust-accept" };
+    if (isSubmitKey(key)) return { kind: "trust-accept" };
     if (key.name === "escape") return { kind: "trust-decline" };
     return { kind: "none" };
   }
@@ -171,7 +201,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   // (App.tsx), so this branch and every stored-overlay branch below are mutually exclusive by
   // construction — not by two independently ordered checks.
   if (context.overlay === "export") {
-    if (key.name === "escape" || RETURN_NAMES.has(key.name)) return { kind: "export-dismiss" };
+    if (key.name === "escape" || isSubmitKey(key)) return { kind: "export-dismiss" };
     return { kind: "none" };
   }
 
@@ -182,18 +212,17 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (context.overlay === "slash-menu") {
     if (key.name === "escape") return { kind: "overlay-dismiss" };
-    if (RETURN_NAMES.has(key.name)) return { kind: "slash-submit" };
-    if (key.name === "up") return { kind: "slash-move", delta: -1 };
-    if (key.name === "down") return { kind: "slash-move", delta: 1 };
-    if (key.name === "backspace") return { kind: "slash-backspace" };
-    const ch = printableChar(key);
-    if (ch !== null) return { kind: "slash-input", ch };
+    if (isSubmitKey(key)) return { kind: "slash-submit" };
+    if (key.name === "up" && !key.ctrl) return { kind: "slash-move", delta: -1 };
+    if (key.name === "down" && !key.ctrl) return { kind: "slash-move", delta: 1 };
+    // Everything else — printables, Backspace, ←/→, Ctrl+←/→, Ctrl+W — reaches the editor, which
+    // IS the filter's buffer. The closing rule moved to `mirrorPrimaryInput` (§7.3).
     return { kind: "none" };
   }
 
   if (context.overlay === "chat-list") {
     if (key.name === "escape") return { kind: "overlay-dismiss" };
-    if (RETURN_NAMES.has(key.name)) return { kind: "chat-switch" };
+    if (isSubmitKey(key)) return { kind: "chat-switch" };
     if (key.name === "up") return { kind: "chat-move", delta: -1 };
     if (key.name === "down") return { kind: "chat-move", delta: 1 };
     return { kind: "none" };
@@ -201,11 +230,10 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (context.overlay === "pin-input") {
     if (key.name === "escape") return { kind: "overlay-dismiss" };
+    // On a read-only screen the pin editor is never focused, so nothing reaches it either way —
+    // this keeps the refusal explicit at the key layer as well.
     if (context.screen === "read-only") return { kind: "none" };
-    if (RETURN_NAMES.has(key.name)) return { kind: "pin-save" };
-    if (key.name === "backspace") return { kind: "pin-backspace" };
-    const ch = printableChar(key);
-    if (ch !== null) return { kind: "pin-input", ch };
+    if (isSubmitKey(key)) return { kind: "pin-save" };
     return { kind: "none" };
   }
 
@@ -249,13 +277,9 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     if (context.homeHealth.kind === "blocked") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q" && context.homePrompt.length === 0) return { kind: "exit" };
-      // CORRECTED (fix round 3): `backspace` is the escape route the `q` guard above needs —
-      // without it, a prompt non-empty at the moment `checking` resolved to `blocked` could
-      // never be cleared (no printable input, `r` re-check does not touch it, and if the
-      // underlying cause persists across re-checks, never resolves on its own either), leaving
-      // `q` permanently inert and the user stuck. Backspace is the one edit that can only ever
-      // shrink the prompt toward empty, never re-introduce the printable-input-vs-`r`/`q`
-      // collision Finding 6 fixed — so it is safe to keep live here alone.
+      // The escape route the `q` guard needs (fix round 3). The prompt is blurred here, so this
+      // intent is the ONLY thing that can shrink it toward empty — see `TextEditorHandle
+      // .deleteCharBackward`'s own doc comment for the other half of the arrangement.
       if (key.name === "backspace") return { kind: "home-backspace" };
       return { kind: "none" };
     }
@@ -263,11 +287,10 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // three (`:145-146`, `:173`) — so Enter is the only thing ever refused here (finding §2.7),
     // gated purely by `homeSubmitAllowed`. No bare `r`/`q` binding for any of them: both would
     // steal a character from live typing, the exact bug just fixed for `blocked` above.
-    if (RETURN_NAMES.has(key.name)) {
+    if (isSubmitKey(key)) {
       if (context.projectOpening) return { kind: "none" };
       return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
-    if (key.name === "backspace") return { kind: "home-backspace" };
     // §3.10: `/` as the first character of an empty primary input opens the slash menu — the Home
     // prompt is a primary input, exactly like the Workspace composer (`composerActive`'s own `/`
     // check below). The overlay branch above is checked BEFORE the screen branches, so an
@@ -276,8 +299,6 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // §3.10's "the menu is only reachable when the prompt is live" (Task 15's health gate) falls
     // out of that ordering for free, not from a second check on `context.homeHealth` here.
     if (key.sequence === "/" && context.homePrompt.length === 0) return { kind: "slash-open" };
-    const ch = printableChar(key);
-    if (ch !== null) return { kind: "home-input", ch };
     return { kind: "none" };
   }
 
@@ -303,10 +324,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (composerActive) {
     if (key.sequence === "/" && context.composerValue.length === 0) return { kind: "slash-open" };
-    if (RETURN_NAMES.has(key.name)) return { kind: "composer-submit" };
-    if (key.name === "backspace") return { kind: "composer-backspace" };
-    const ch = printableChar(key);
-    if (ch !== null) return { kind: "composer-input", ch };
+    if (isSubmitKey(key)) return { kind: "composer-submit" };
   }
 
   return { kind: "none" };

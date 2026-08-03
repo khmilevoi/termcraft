@@ -100,7 +100,11 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     //     a CSI sequence (`\x1b[1;5C`), and this one delivered a bare `\x1b[C`. `ctrl+b`/`ctrl+n`
     //     are C0 control bytes (0x02 / 0x0E) — one byte, no encoding to get wrong;
     //   - neither can be typed into the composer: `printableChar` rejects every code below 0x20;
-    //   - the arrows stay as aliases, so the chord still works wherever it IS encoded;
+    //   - the ctrl+arrow aliases were DROPPED when the composer became a real editor
+    //     (2026-08-03): `ctrl+left`/`ctrl+right` are OpenTUI's own `word-backward`/`word-forward`
+    //     bindings, and `resolveHotkey` runs ahead of every input branch, so keeping them would
+    //     have made Ctrl+Left switch pages from inside a text field. Neither alias was ever drawn
+    //     — both entries carry `hint: false` — so nothing on screen named them;
     //   - `ctrl+e` (export) and `ctrl+p` (preview) already establish the ctrl+letter vocabulary.
     // NOT hinted in the status bar: `Workspace.tsx`'s `hintKeys` renders the design's own key
     // rows verbatim, and adding a key the design never drew there would diverge from every
@@ -110,7 +114,6 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: {
       id: "page.prev",
       key: "ctrl+b",
-      aliases: ["ctrl+left"],
       label: "prev page",
       capability: null,
       hint: false,
@@ -122,7 +125,6 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: {
       id: "page.next",
       key: "ctrl+n",
-      aliases: ["ctrl+right"],
       label: "next page",
       capability: null,
       hint: false,

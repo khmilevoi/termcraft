@@ -37,9 +37,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
   const { local, dispatcher } = deps;
 
   switch (intent.kind) {
-    case "home-input":
-      setPrimaryInput(deps, local.prompt() + intent.ch);
-      return;
     case "home-backspace":
       // Only reachable while `homeHealth.kind === "blocked"`, where the editor is blurred and
       // receives no keys of its own (keymap.ts's fix-round-3 escape route). It mutates the buffer
@@ -91,12 +88,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       );
       return;
     }
-    case "composer-input":
-      setPrimaryInput(deps, local.composer() + intent.ch);
-      return;
-    case "composer-backspace":
-      setPrimaryInput(deps, local.composer().slice(0, -1));
-      return;
     case "composer-submit": {
       // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
       // that dies here is indistinguishable on screen from one that was never pressed. Name
@@ -167,35 +158,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.overlay.set("slash-menu");
       return;
     }
-    case "slash-input": {
-      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      setPrimaryInput(deps, primaryInputAtom(deps)() + intent.ch);
-      // TYPING PAST EVERY MATCH LEAVES SLASH MODE (defect fix, 2026-07-26).
-      //
-      // Nothing used to close the menu on a forward-typed miss — only `slash-backspace` at
-      // length 0 did — so `/commit-x` left the overlay open with an empty row set. The renderers
-      // correctly draw nothing for that (design's own rule: `slashMenu()` returns early when
-      // `!rows.length`, `design/termcraft-engine.js:966`), which made the dead end INVISIBLE:
-      // Enter still routed to `slash-submit`, found no row, and returned silently, so the user
-      // pressed Enter on their typed text and absolutely nothing happened, with no cue at all.
-      //
-      // §3.10's rule is the same in both directions — "when nothing applies the menu simply does
-      // not open" — so a prefix that matches nothing is just text. Dropping the overlay restores
-      // exactly that: the characters stay in the input, and Enter submits them the ordinary way.
-      if (filterSlashRows(primaryInputAtom(deps)(), deps.actionContext()).length === 0)
-        local.overlay.set(null);
-      return;
-    }
-    case "slash-backspace": {
-      if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const next = primaryInputAtom(deps)().slice(0, -1);
-      setPrimaryInput(deps, next);
-      if (next.length === 0) {
-        local.overlay.set(null);
-        return;
-      }
-      return;
-    }
     case "slash-move":
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
       local.slashSelection.set(
@@ -233,14 +195,6 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.overlay.set(null);
       return;
     }
-    case "pin-input":
-      if (deps.screen() === "read-only") return;
-      setPinInput(deps, local.pinDraft() + intent.ch);
-      return;
-    case "pin-backspace":
-      if (deps.screen() === "read-only") return;
-      setPinInput(deps, local.pinDraft().slice(0, -1));
-      return;
     case "pin-save": {
       if (deps.screen() === "read-only") return;
       const pendingPin = deps.interaction.pendingPin();

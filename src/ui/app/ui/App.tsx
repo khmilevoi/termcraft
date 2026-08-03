@@ -22,7 +22,7 @@ import { Workspace } from "ui/workspace";
 
 import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
-import { resolveActiveOverlay, resolveKey } from "../model/keymap";
+import { isClaimedKey, resolveActiveOverlay, resolveKey } from "../model/keymap";
 
 /**
  * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design `home()`,
@@ -223,6 +223,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         trust: deps.mirror.project().trust,
       },
     });
+    // THE CLAIM (§4.6, §6.4). Global listeners run before renderable handlers, and
+    // `Renderable.focus()`'s own keypress handler skips `handleKeyPress` when
+    // `key.defaultPrevented` — so this is a COMPLETE gate, and the single point where the App and
+    // the focused editor divide the keyboard. Derived from the resolved intent rather than a
+    // second key list, which would drift.
+    if (isClaimedKey(intent)) key.preventDefault();
     applyIntent(intent, deps);
   }, "ui.App.onKey");
   useKeyboard(onKey);

@@ -15,14 +15,6 @@ function dispatchedKinds(kernel: { dispatched: readonly unknown[] }): string[] {
 }
 
 describe("applyIntent — text inputs", () => {
-  test("home-input / backspace edit the prompt atom", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "home-input", ch: "h" }, deps);
-    applyIntent({ kind: "home-input", ch: "i" }, deps);
-    expect(deps.local.prompt()).toBe("hi");
-  });
-
   test("home-submit dispatches project.create carrying the prompt as text", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
@@ -484,7 +476,7 @@ describe("applyIntent — F6 compose-repair", () => {
 });
 
 describe("applyIntent — slash menu", () => {
-  test("opening and typing filters rows and selects the first enabled row", () => {
+  test("opening selects the first enabled row", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(
@@ -511,46 +503,6 @@ describe("applyIntent — slash menu", () => {
     expect(deps.local.composer()).toBe("/");
     expect(deps.local.overlay()).toBe("slash-menu");
     expect(deps.local.slashSelection()).toBe(1); // skips disabled /new onto /chats
-
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-    expect(deps.local.composer()).toBe("/e");
-    expect(deps.local.slashSelection()).toBe(0);
-  });
-
-  test("typing past every match leaves slash mode instead of stranding an invisible, inert menu", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
-
-    applyIntent({ kind: "slash-open" }, deps);
-    expect(deps.local.overlay()).toBe("slash-menu");
-
-    // `/z` matches no command. The menu correctly draws nothing for an empty row set, which is
-    // exactly what made the old behaviour invisible: the overlay stayed open, Enter kept routing
-    // to `slash-submit`, and it returned silently with no row to run.
-    applyIntent({ kind: "slash-input", ch: "z" }, deps);
-
-    expect(deps.local.overlay()).toBeNull();
-    // The character is kept — leaving slash mode must not eat what the user typed.
-    expect(deps.local.composer()).toBe("/z");
-
-    // And from here the keymap resolves keys against a null overlay, so typing continues as
-    // ordinary composer input rather than as more slash input.
-    applyIntent({ kind: "composer-input", ch: "z" }, deps);
-    expect(deps.local.composer()).toBe("/zz");
-    expect(deps.local.overlay()).toBeNull();
-  });
-
-  test("a prefix that still matches keeps the menu open", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
-
-    applyIntent({ kind: "slash-open" }, deps);
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-
-    expect(deps.local.overlay()).toBe("slash-menu");
-    expect(deps.local.composer()).toBe("/e");
   });
 
   test("arrows wrap across enabled rows and never land on inert rows", () => {
@@ -654,20 +606,6 @@ describe("applyIntent — slash menu on Home (§3.10, phase-8 Task 17)", () => {
     expect(deps.local.overlay()).toBe("slash-menu");
     // /model (unavailable — v1.0) is skipped; selection lands on /exit, the working row.
     expect(deps.local.slashSelection()).toBe(1);
-  });
-
-  test("slash-input and slash-backspace edit the Home prompt while the menu stays open", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "slash-open" }, deps);
-
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-    expect(deps.local.prompt()).toBe("/e");
-    expect(deps.local.composer()).toBe("");
-
-    applyIntent({ kind: "slash-backspace" }, deps);
-    expect(deps.local.prompt()).toBe("/");
-    expect(deps.local.overlay()).toBe("slash-menu");
   });
 
   test("slash-submit on /exit clears the Home prompt and requests shutdown, dispatching nothing", () => {
