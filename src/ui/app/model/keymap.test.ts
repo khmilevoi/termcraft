@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 
 import type { KeyContext, KeyLike } from "./keymap";
 import { isClaimedKey, resolveActiveOverlay, resolveKey } from "./keymap";
@@ -13,16 +13,17 @@ const key = (over: Partial<KeyLike>): KeyLike => ({
   sequence: "",
   ...over,
 });
-const READY_HEALTH: HomeAgentHealth = { kind: "ready", agent: "claude" };
+const READY_HEALTH: AgentHealth = { kind: "ready", agent: "claude" };
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
   screen: "workspace",
   focus: "composer",
   overlay: null,
   composerValue: "",
-  homeHealth: READY_HEALTH,
+  agentHealth: READY_HEALTH,
   homePrompt: "",
   turnRunning: false,
   projectOpening: false,
+  projectOpen: true,
   ...over,
 });
 
@@ -102,15 +103,26 @@ describe("resolveKey — Home", () => {
     expect(
       resolveKey(
         key({ name: "r", sequence: "r" }),
-        ctx({ screen: "home", homeHealth: { kind: "missing", agent: "claude", detail: "x" } }),
+        ctx({ screen: "home", agentHealth: { kind: "missing", agent: "claude", detail: "x" } }),
       ),
     ).toEqual({ kind: "home-recheck" });
+  });
+
+  // `home-input` is gone (§6.1/§6.4): a live `r` now falls through to `none`, letting the mounted
+  // editor type it, rather than resolving to an intent.
+  test("r falls through to the editor on the idle Home prompt when the agent is ready", () => {
+    expect(
+      resolveKey(
+        key({ name: "r", sequence: "r" }),
+        ctx({ screen: "home", agentHealth: READY_HEALTH }),
+      ),
+    ).toEqual({ kind: "none" });
   });
 
   test("on the missing-agent error panel, only r and q are live — no submit/backspace/input affordance exists there", () => {
     const missingAgent = ctx({
       screen: "home",
-      homeHealth: { kind: "missing", agent: "claude", detail: "x" },
+      agentHealth: { kind: "missing", agent: "claude", detail: "x" },
     });
     expect(resolveKey(key({ name: "return" }), missingAgent)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "backspace" }), missingAgent)).toEqual({ kind: "none" });
@@ -127,7 +139,7 @@ describe("resolveKey — Home", () => {
   test("q quits on the agent-missing panel, where no prompt is focused", () => {
     const intent = resolveKey(
       key({ name: "q", sequence: "q" }),
-      ctx({ screen: "home", homeHealth: { kind: "missing", agent: "claude", detail: "x" } }),
+      ctx({ screen: "home", agentHealth: { kind: "missing", agent: "claude", detail: "x" } }),
     );
     expect(intent).toEqual({ kind: "exit" });
   });
@@ -135,7 +147,7 @@ describe("resolveKey — Home", () => {
   test("q still types on the idle Home prompt", () => {
     const intent = resolveKey(
       key({ name: "q", sequence: "q" }),
-      ctx({ screen: "home", homeHealth: READY_HEALTH }),
+      ctx({ screen: "home", agentHealth: READY_HEALTH }),
     );
     expect(intent.kind).not.toBe("exit");
   });
@@ -144,7 +156,7 @@ describe("resolveKey — Home", () => {
   // `homeSubmitAllowed`, not through a `missing`-only branch.
   describe("Enter gating across the five health outcomes", () => {
     test("checking refuses Enter — the probe hasn't resolved yet", () => {
-      const checking = ctx({ screen: "home", homeHealth: { kind: "checking", agent: "claude" } });
+      const checking = ctx({ screen: "home", agentHealth: { kind: "checking", agent: "claude" } });
       expect(resolveKey(key({ name: "return" }), checking)).toEqual({ kind: "none" });
     });
 
@@ -159,7 +171,7 @@ describe("resolveKey — Home", () => {
       // route case is its own test below (fix round 2 Minor finding, corrected fix round 3).
       const blocked = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        agentHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
       });
       expect(resolveKey(key({ name: "return" }), blocked)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "x", sequence: "x" }), blocked)).toEqual({ kind: "none" });
@@ -177,7 +189,7 @@ describe("resolveKey — Home", () => {
     test("blocked's q does NOT exit while the prompt still holds unsaved text", () => {
       const blockedWithPrompt = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        agentHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
         homePrompt: "a system monitor for my q",
       });
       expect(resolveKey(key({ name: "q", sequence: "q" }), blockedWithPrompt)).toEqual({
@@ -200,33 +212,33 @@ describe("resolveKey — Home", () => {
     // context that step's own prior keystrokes would have produced in the real, stateful app
     // (`intent.ts`'s `home-backspace` handler pops one character off `local.prompt` per call).
     test("blocked has a finite escape: backspace shrinks the prompt, then q exits", () => {
-      const blockedHealth: HomeAgentHealth = {
+      const blockedHealth: AgentHealth = {
         kind: "blocked",
         agent: "claude",
         panel: "login",
         detail: "x",
       };
       // Step 1: two characters typed before the transition — q is inert, but backspace works.
-      const twoChars = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "ab" });
+      const twoChars = ctx({ screen: "home", agentHealth: blockedHealth, homePrompt: "ab" });
       expect(resolveKey(key({ name: "q", sequence: "q" }), twoChars)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "backspace" }), twoChars)).toEqual({ kind: "home-backspace" });
 
       // Step 2: one character left (as `intent.ts`'s `home-backspace` would leave it after the
       // first backspace above) — still inert to q, backspace still works.
-      const oneChar = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "a" });
+      const oneChar = ctx({ screen: "home", agentHealth: blockedHealth, homePrompt: "a" });
       expect(resolveKey(key({ name: "q", sequence: "q" }), oneChar)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "backspace" }), oneChar)).toEqual({ kind: "home-backspace" });
 
       // Step 3: prompt now empty (after the second backspace) — q reaches the exit this whole
       // sequence exists to prove reachable.
-      const empty = ctx({ screen: "home", homeHealth: blockedHealth, homePrompt: "" });
+      const empty = ctx({ screen: "home", agentHealth: blockedHealth, homePrompt: "" });
       expect(resolveKey(key({ name: "q", sequence: "q" }), empty)).toEqual({ kind: "exit" });
     });
 
     test("blocked/latched has the same key set as blocked/login: r, q (guarded), and backspace", () => {
       const latched = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", panel: "latched", detail: "x" },
+        agentHealth: { kind: "blocked", agent: "claude", panel: "latched", detail: "x" },
         homePrompt: "x",
       });
       expect(resolveKey(key({ name: "x", sequence: "x" }), latched)).toEqual({ kind: "none" });
@@ -243,10 +255,10 @@ describe("resolveKey — Home", () => {
     // disabled, bind those literally. `home-input` is gone (§6.1/§6.4): a live `r`/`q` now falls
     // through to `none`, letting the mounted editor type it, rather than resolving to an intent.
     test("r/q fall through to the editor on checking/advisory/ready — only blocked/missing bind them", () => {
-      const checking = ctx({ screen: "home", homeHealth: { kind: "checking", agent: "claude" } });
+      const checking = ctx({ screen: "home", agentHealth: { kind: "checking", agent: "claude" } });
       const advisory = ctx({
         screen: "home",
-        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+        agentHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
       });
       expect(resolveKey(key({ name: "r", sequence: "r" }), checking)).toEqual({ kind: "none" });
       expect(resolveKey(key({ name: "r", sequence: "r" }), advisory)).toEqual({ kind: "none" });
@@ -256,13 +268,13 @@ describe("resolveKey — Home", () => {
     test("advisory allows Enter — a timeout/degraded reading proves nothing that blocks submit", () => {
       const advisory = ctx({
         screen: "home",
-        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+        agentHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
       });
       expect(resolveKey(key({ name: "return" }), advisory)).toEqual({ kind: "home-submit" });
     });
 
     test("ready allows Enter", () => {
-      const ready = ctx({ screen: "home", homeHealth: READY_HEALTH });
+      const ready = ctx({ screen: "home", agentHealth: READY_HEALTH });
       expect(resolveKey(key({ name: "return" }), ready)).toEqual({ kind: "home-submit" });
     });
   });
@@ -289,13 +301,13 @@ describe("resolveKey — Home", () => {
     test("is inert on missing/blocked — those prompts are not live", () => {
       const missing = ctx({
         screen: "home",
-        homeHealth: { kind: "missing", agent: "claude", detail: "x" },
+        agentHealth: { kind: "missing", agent: "claude", detail: "x" },
       });
       expect(resolveKey(key({ sequence: "/", name: "/" }), missing)).toEqual({ kind: "none" });
 
       const blocked = ctx({
         screen: "home",
-        homeHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
+        agentHealth: { kind: "blocked", agent: "claude", panel: "login", detail: "x" },
         homePrompt: "",
       });
       expect(resolveKey(key({ sequence: "/", name: "/" }), blocked)).toEqual({ kind: "none" });
@@ -304,7 +316,7 @@ describe("resolveKey — Home", () => {
     test("opens on checking and advisory too — every outcome but missing/blocked keeps a live prompt", () => {
       const checking = ctx({
         screen: "home",
-        homeHealth: { kind: "checking", agent: "claude" },
+        agentHealth: { kind: "checking", agent: "claude" },
         homePrompt: "",
       });
       expect(resolveKey(key({ sequence: "/", name: "/" }), checking)).toEqual({
@@ -312,7 +324,7 @@ describe("resolveKey — Home", () => {
       });
       const advisory = ctx({
         screen: "home",
-        homeHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
+        agentHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
         homePrompt: "",
       });
       expect(resolveKey(key({ sequence: "/", name: "/" }), advisory)).toEqual({
@@ -398,6 +410,41 @@ describe("resolveKey — Workspace composer", () => {
       kind: "slash-open",
     });
     expect(resolveKey(key({ name: "return" }), running)).toEqual({ kind: "composer-submit" });
+  });
+});
+
+describe("the Workspace's opening state (spec 2026-08-02)", () => {
+  test("Enter is refused while the project is still opening", () => {
+    expect(
+      resolveKey(
+        key({ name: "return" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("typing is not — only sending is refused", () => {
+    expect(
+      resolveKey(
+        key({ name: "a", sequence: "a" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "none" });
+    expect(
+      resolveKey(
+        key({ name: "backspace" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("an open project sends as before", () => {
+    expect(
+      resolveKey(
+        key({ name: "return" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: true }),
+      ),
+    ).toEqual({ kind: "composer-submit" });
   });
 });
 
@@ -626,7 +673,7 @@ describe("dead-binding guard — the two editor defaults the App shadows (§4.7)
 
 describe("Home while the agent is blocked — the one surviving editing intent", () => {
   test("backspace still resolves to home-backspace, the only way to empty a non-empty prompt", () => {
-    const blocked: HomeAgentHealth = {
+    const blocked: AgentHealth = {
       kind: "blocked",
       agent: "claude",
       panel: "login",
@@ -635,20 +682,20 @@ describe("Home while the agent is blocked — the one surviving editing intent",
     expect(
       resolveKey(
         key({ name: "backspace" }),
-        ctx({ screen: "home", homeHealth: blocked, homePrompt: "typed" }),
+        ctx({ screen: "home", agentHealth: blocked, homePrompt: "typed" }),
       ),
     ).toEqual({ kind: "home-backspace" });
   });
 
   test("a printable is still inert there — the editor is blurred and the intent is gone", () => {
-    const blocked: HomeAgentHealth = {
+    const blocked: AgentHealth = {
       kind: "blocked",
       agent: "claude",
       panel: "login",
       detail: "not signed in",
     };
     expect(
-      resolveKey(key({ name: "d", sequence: "d" }), ctx({ screen: "home", homeHealth: blocked })),
+      resolveKey(key({ name: "d", sequence: "d" }), ctx({ screen: "home", agentHealth: blocked })),
     ).toEqual({ kind: "none" });
   });
 });

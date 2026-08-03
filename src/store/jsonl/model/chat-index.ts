@@ -592,6 +592,11 @@ function toPrevCursor(
   return { generation: state.generation, beforeOffset: oldest.offsetStart };
 }
 
+/** Every record the index holds — see `LoadResult.totalRecordCount` for why the directory is enough. */
+function totalRecordCount(state: ChatIndexState): number {
+  return state.pages.reduce((sum, page) => sum + page.entryCount, 0);
+}
+
 /** Open a chat: the newest `limit` records (default 100, max 200) within `byteBudget` (default/max 8 MiB) (§7.3). */
 export async function loadChatIndexTail(
   state: ChatIndexState,
@@ -612,7 +617,11 @@ export async function loadChatIndexTail(
   const records = await materializeRecords(state.chatId, source, picked.entries);
   if (records instanceof Error) return records;
 
-  return { records, prevCursor: toPrevCursor(state, picked) };
+  return {
+    records,
+    prevCursor: toPrevCursor(state, picked),
+    totalRecordCount: totalRecordCount(state),
+  };
 }
 
 /** Scroll further back from a `loadTail`/`loadBefore` cursor (§7.3). A stale-generation cursor is refused. */
@@ -639,5 +648,9 @@ export async function loadChatIndexBefore(
   const records = await materializeRecords(state.chatId, source, picked.entries);
   if (records instanceof Error) return records;
 
-  return { records, prevCursor: toPrevCursor(state, picked) };
+  return {
+    records,
+    prevCursor: toPrevCursor(state, picked),
+    totalRecordCount: totalRecordCount(state),
+  };
 }

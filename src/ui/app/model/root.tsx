@@ -7,8 +7,10 @@ import {
   resumeConsolePassthrough,
   suspendConsolePassthrough,
 } from "infrastructure/debug-log";
-import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
+import type { HomeAgentSelection } from "ui/home";
 import type { KernelPort } from "ui/kernel";
+import type { ProjectOpenFailure } from "ui/mirror";
 
 import { App } from "../ui/App";
 import type { UiEnv } from "./deps";
@@ -42,7 +44,7 @@ export interface UiRootOptions {
    * existing `createUiRoot` call keeps compiling — `createUiDeps`'s own fourth parameter
    * already defaults to today's pre-probe placeholder reading when this is omitted.
    */
-  readonly agentHealthProbe?: () => Promise<HomeAgentHealth>;
+  readonly agentHealthProbe?: () => Promise<AgentHealth>;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10), forwarded verbatim into
    * `createUiDeps`'s fifth parameter — see `deps.ts`'s `UiDeps.requestExit` for the full
@@ -64,6 +66,17 @@ export interface UiRootOptions {
 export interface UiRootHandle {
   /** Idempotently tear down the React tree before releasing the terminal renderer. */
   dispose(): void;
+  /**
+   * "The startup `project.open` will never land, and this is why" (spec 2026-08-02).
+   * `entrypoint/model/run-app.ts` calls this on both failure branches of its own startup dispatch;
+   * without it the Workspace shell that `deriveScreen` mounted on `UiEnv.projectExists` never
+   * resolves to anything. The `failure` it carries is what the resulting Home actually SHOWS —
+   * `UiDeps.abandonStartupOpen` stores it in `UiLocalState.startupOpenFailure`, which `App.tsx`
+   * composes into Home's `openFailure` prop (branch review finding 2, 2026-08-03). It is a
+   * `ProjectOpenFailure` by SHAPE only: this path never reaches the Kernel's own `blockOpen`, so
+   * nothing here is ever folded into `ProjectMirror.openFailure`.
+   */
+  abandonStartupOpen(failure: ProjectOpenFailure): void;
 }
 
 export class UiRootError extends errore.createTaggedError({
@@ -148,20 +161,17 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
 
-  const mounted = errore.try(() =>
-    root.render(
-      <App
-        deps={createUiDeps(
-          options.port,
-          { w: renderer.width, h: renderer.height },
-          options.env,
-          options.agentHealthProbe,
-          options.requestExit,
-          options.agentSelection,
-        )}
-      />,
-    ),
+  // Hoisted out of the JSX below so the returned handle can reach it — `runApp` needs
+  // `abandonStartupOpen` after this function has already returned.
+  const deps = createUiDeps(
+    options.port,
+    { w: renderer.width, h: renderer.height },
+    options.env,
+    options.agentHealthProbe,
+    options.requestExit,
+    options.agentSelection,
   );
+  const mounted = errore.try(() => root.render(<App deps={deps} />));
   if (mounted instanceof Error) {
     try {
       renderer.destroy();
@@ -185,6 +195,9 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
         // trace file. In `finally` so a throwing `unmount`/`destroy` cannot skip it.
         resumeConsolePassthrough();
       }
+    },
+    abandonStartupOpen(failure: ProjectOpenFailure): void {
+      deps.abandonStartupOpen(failure);
     },
   };
 }

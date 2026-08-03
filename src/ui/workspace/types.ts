@@ -1,5 +1,6 @@
 import type { Atom, Computed } from "@reatom/core";
 
+import type { AgentHealth } from "ui/agent-health";
 import type { Dispatcher, UiPreviewFrame } from "ui/kernel";
 import type { Mirror, ScreenKind } from "ui/mirror";
 import type { PreviewInteractionState } from "ui/preview";
@@ -29,6 +30,17 @@ export interface WorkspaceLocalState {
   readonly pageOverride: Atom<string | null>;
   /** The mounted composer editor, or `null`. See `ui/app/model/primary-input.ts`. */
   readonly composerEditor: Atom<TextEditorHandle | null>;
+  /**
+   * The agent-health reading (spec 2026-08-02). Home used to be this atom's only consumer; the
+   * Workspace now renders it in the status bar's `hint` slot, because routing an existing project
+   * straight here would otherwise leave a dead agent CLI with no on-screen signal at all.
+   *
+   * KNOWN, DELIBERATE (design 30 §"The long-lived badge"): the probe runs once at startup and is
+   * never refreshed. Signing in to the agent CLI in another terminal leaves this badge red until
+   * termcraft restarts. A `/recheck` action (~30 lines, reusing `refreshAgentHealth`) was
+   * considered and declined; the design only ever mandated `r` on HOME's error state.
+   */
+  readonly agentHealth: Atom<AgentHealth>;
 }
 
 export interface WorkspaceDeps {

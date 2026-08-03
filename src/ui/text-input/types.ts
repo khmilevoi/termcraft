@@ -30,7 +30,7 @@ export interface TextEditorHandle {
   /**
    * Delete the character left of the cursor.
    *
-   * This exists to preserve an already-documented escape route. While `homeHealth.kind` is
+   * This exists to preserve an already-documented escape route. While `agentHealth.kind` is
    * `"blocked"` the Home prompt is non-typeable, `q` quits only while the prompt is EMPTY, and
    * backspace is the only thing that can empty it — `ui/app/model/keymap.ts` records the full
    * reasoning as a fix-round-3 correction. In `blocked` the editor is blurred and receives no

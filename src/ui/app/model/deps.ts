@@ -20,7 +20,8 @@ import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
-import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
+import type { HomeAgentSelection } from "ui/home";
 import {
   type AnyEventEnvelope,
   type Dispatcher,
@@ -101,15 +102,15 @@ export interface UiLocalState {
    */
   readonly exportDismissed: Atom<UUIDv7 | null>;
   /**
-   * The Home agent-health reading (M15) — Home's `health` prop reads this instead of a
+   * The agent-health reading (M15) — Home's `health` prop reads this instead of a
    * hardcoded literal. There is no Kernel command that reports agent health (Home is shown
    * *before* any project opens, so there is no `kernel.snapshot` to read either), so this atom's
-   * lifecycle is: seeded with {@link DEFAULT_HOME_HEALTH} as a synchronous pre-probe placeholder
+   * lifecycle is: seeded with {@link DEFAULT_AGENT_HEALTH} as a synchronous pre-probe placeholder
    * (Home's very first paint cannot await a Promise), then `createUiDeps` fires
-   * {@link UiDeps.refreshHomeHealth} once at startup to replace it with the injected probe's
+   * {@link UiDeps.refreshAgentHealth} once at startup to replace it with the injected probe's
    * real reading, and again on every `home-recheck` — the SAME probe path, not a duplicated one.
    */
-  readonly homeHealth: Atom<HomeAgentHealth>;
+  readonly agentHealth: Atom<AgentHealth>;
   /**
    * The agent/model/effort triple Home's combo renders (finding §2.7). Seeded SYNCHRONOUSLY by the
    * composition root, because it is a synchronous fact: it must not wait behind the CLI health
@@ -117,6 +118,60 @@ export interface UiLocalState {
    * the honest empty combo for it, never an invented identity.
    */
   readonly agentSelection: Atom<HomeAgentSelection | null>;
+  /**
+   * Whether the composition root's own startup `project.open` is still expected to land (spec
+   * 2026-08-02). Seeded from `UiEnv.projectExists` — the SAME `existing` fact `ShellLaunchV1`
+   * carries — so `deriveScreen` can mount the Workspace on the first synchronous frame, before
+   * any Kernel event exists to read. It only ever goes `true -> false`, never back, and the two
+   * ways that happens are not the same kind of thing:
+   *
+   * - THE SUCCESS PATH is a `withComputed` derivation on the atom itself (branch review finding 3,
+   *   2026-08-03), not a hand-wired clearer: it recomputes to `false` whenever
+   *   `mirror.project().projectId` is non-null — the open actually landed, so the flag must stop
+   *   claiming one is still pending. Keyed on that mirror field DIRECTLY rather than on one
+   *   chosen subscription, so every route to a non-null `projectId` clears it by construction
+   *   (RTM-S02: writable state derived from another atom belongs to the atom, not to a sync
+   *   effect). Without it the flag would sit `true` for the rest of the process after a
+   *   SUCCESSFUL open, and `deriveScreen` would mount an empty Workspace shell with no exit the
+   *   next time `projectId` legitimately returned to `null` with no `openFailure`.
+   * - THE FAILURE PATH is the manual override {@link UiDeps.abandonStartupOpen} writes, for the
+   *   two branches where the startup dispatch itself will never land (it failed to reach the
+   *   Kernel, or the Kernel rejected it). No derivation could ever see those end — no `projectId`
+   *   will arrive for them at all. `withComputed` narrows nothing here: it overrides only ON
+   *   RECOMPUTE, so a direct `.set` still passes straight through, which is what lets one atom
+   *   carry both paths.
+   */
+  readonly startupOpenPending: Atom<boolean>;
+  /**
+   * Why that startup `project.open` never landed, when it did not — written by
+   * {@link UiDeps.abandonStartupOpen} alongside clearing {@link UiLocalState.startupOpenPending},
+   * and `null` for every launch where nothing failed before admission.
+   *
+   * A SEPARATE reading from `ProjectMirror.openFailure`, deliberately reusing its
+   * {@link ProjectOpenFailure} shape but NEVER written into it. That mirror field is Kernel truth:
+   * `ui/mirror/model/mirror.ts` folds it only from a real `kernel.project.blockOpen`, reading the
+   * reason and `safeMessage` out of that event's own metadata rather than synthesizing them. The
+   * two branches this atom covers never reach the Kernel's `blocked` state at all — a dispatch
+   * that failed to reach the Kernel, or one it rejected outright, was never admitted, so it
+   * cannot have been blocked later — and writing them into the mirror would make the UI fabricate
+   * a Kernel fact it was never told.
+   *
+   * `App.tsx` composes the two into Home's single `openFailure` prop instead, so
+   * `HomeOpenFailurePanel` explains this path too (branch review finding 2, 2026-08-03) rather
+   * than leaving the user on a bare, unexplained Home. The compose is lossless because the two
+   * are mutually exclusive by construction: one open attempt either never reached the Kernel
+   * (this atom) or was admitted and then blocked (the mirror), never both.
+   */
+  readonly startupOpenFailure: Atom<ProjectOpenFailure | null>;
+  /**
+   * Whether the auto-shown trust prompt (spec §3.1) has been answered this
+   * session — set by `trust-accept`/`trust-decline` (`ui/app/model/intent.ts`).
+   * Starts `false` on every process launch, and only ever goes `false -> true`:
+   * the only way to see the prompt again is relaunching termcraft, which
+   * re-resolves trust from a fresh `project.open` and rebuilds this atom fresh
+   * (confirmed with the user — no in-session re-ask affordance).
+   */
+  readonly trustPromptDismissed: Atom<boolean>;
 }
 
 /**
@@ -192,12 +247,30 @@ export interface UiDeps {
    */
   readonly activePageSlug: Computed<string | null>;
   /**
-   * Re-runs the agent-health probe and updates {@link UiLocalState.homeHealth} (M15's
+   * Re-runs the agent-health probe and updates {@link UiLocalState.agentHealth} (M15's
    * `home-recheck` intent calls this). Named and `withAsync`-extended per RTM-A02/A03; a fresh
    * probe result always replaces the previous one, matching a manual user-triggered re-check
    * rather than a cached/derived read.
    */
-  readonly refreshHomeHealth: () => Promise<void>;
+  readonly refreshAgentHealth: () => Promise<void>;
+  /**
+   * "The startup open will never arrive, and this is why" — called by
+   * `entrypoint/model/run-app.ts` on both failure branches of its startup `project.open` dispatch,
+   * carrying the {@link ProjectOpenFailure} that branch built from what it actually knows (the
+   * dispatch error's message, or the Kernel's own rejection code). It performs the whole
+   * transition: {@link UiLocalState.startupOpenPending} goes `false`, so `deriveScreen` stops
+   * holding the opening Workspace shell, AND {@link UiLocalState.startupOpenFailure} takes the
+   * cause, which `App.tsx` composes into Home's `openFailure` prop so `HomeOpenFailurePanel`
+   * names the failure on screen. Without it, a dispatch that fails or is rejected leaves
+   * `projectId` and `openFailure` BOTH null forever, and the user sits on an empty Workspace
+   * shell with nothing to explain it.
+   *
+   * A named Reatom action rather than a bare setter because `runApp` calls it from a promise
+   * continuation, outside any Reatom frame (RTM-A04). It is NOT an identity setter (RTM-S01): it
+   * names a real transition and writes two atoms, which is exactly the grouped transition
+   * RTM-S04 says belongs in a model action rather than at the call site.
+   */
+  readonly abandonStartupOpen: (failure: ProjectOpenFailure) => void;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10): `applyIntent`'s `exit` intent (the `q`
    * keys on the agent-missing/too-small-terminal screens) and the `/exit` slash command both
@@ -216,8 +289,8 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 }) {}
 
 /**
- * The Home agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
- * probe once at startup (see `refreshHomeHealth()` below), but Home's very first render happens
+ * The agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
+ * probe once at startup (see `refreshAgentHealth()` below), but Home's very first render happens
  * synchronously, before that probe's Promise can resolve — a component render cannot await one.
  * This value only ever shows for that first frame. The real CLI-checking probe IS wired by
  * default now (phase-8 Task 9 / WP-5, `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`
@@ -237,17 +310,17 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 // mock's Codex sample; it is still overwritten by the injected probe's real reading the moment
 // it resolves (M22).
 //
-// `HomeAgentHealth` has had no `model`/`effort`/`version` fields since phase-8 Task 13 split
+// `AgentHealth` has had no `model`/`effort`/`version` fields since phase-8 Task 13 split
 // them out (finding §2.7): Home's combo reads the SEPARATE, synchronous `local.agentSelection`
 // atom below, seeded directly by the composition root at construction rather than riding this
 // health probe's promise.
-const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
+const DEFAULT_AGENT_HEALTH: AgentHealth = {
   kind: "checking",
   agent: "claude",
 };
 
 /**
- * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_HOME_HEALTH}
+ * The DEFAULT test/demo probe's resolution — deliberately NOT {@link DEFAULT_AGENT_HEALTH}
  * (finding §2.7, phase-8 Task 15), and CORRECTED to never be `ready` (fix round 1, Finding 1 —
  * CRITICAL). This constant is the value {@link createUiDeps}'s own default `agentHealthProbe`
  * parameter resolves to whenever NO probe is injected — and that default is REACHABLE IN
@@ -265,7 +338,7 @@ const DEFAULT_HOME_HEALTH: HomeAgentHealth = {
  * specific claim is reserved for an actual passing `AgentBackend.healthCheck()` reading
  * (`entrypoint/model/agent-health.ts`'s `homeHealthFromAgentInfo`, `case "ready"`).
  */
-const DEFAULT_PROBE_RESOLUTION: HomeAgentHealth = {
+const DEFAULT_PROBE_RESOLUTION: AgentHealth = {
   kind: "advisory",
   agent: "claude",
   panel: "shutdown",
@@ -281,9 +354,8 @@ export function createUiDeps(
   // checks the agent CLI on PATH; tests inject a fake. The default resolves to an honest
   // `advisory` reading — NEVER `ready` (fix round 1, Finding 1) — see
   // {@link DEFAULT_PROBE_RESOLUTION}'s own doc comment for why it must differ from both `ready`
-  // and {@link DEFAULT_HOME_HEALTH}.
-  agentHealthProbe: () => Promise<HomeAgentHealth> = () =>
-    Promise.resolve(DEFAULT_PROBE_RESOLUTION),
+  // and {@link DEFAULT_AGENT_HEALTH}.
+  agentHealthProbe: () => Promise<AgentHealth> = () => Promise.resolve(DEFAULT_PROBE_RESOLUTION),
   // The named Task 11 / WP-10 injection point: the phase-8 composition root binds this to
   // `RunningApp.close()`. Defaults to a no-op so every existing test/demo construction of
   // `UiDeps` keeps compiling without knowing about shutdown at all.
@@ -298,7 +370,33 @@ export function createUiDeps(
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
-  const screen = createScreenAtom({ project: () => mirror.project(), terminal: () => terminal() });
+  // The success path of `UiLocalState.startupOpenPending` (see its doc comment for the whole
+  // lifecycle) — a derivation, not a hand-wired clearer. A non-null `projectId` IS "the startup
+  // open landed", so the flag reads that fact off the mirror directly; the previous shape hung the
+  // same clear off ONE `mirror.project` subscription inside the `runtime` connect hook below,
+  // which left any future route to a non-null `projectId` that did not pass through that
+  // subscription able to strand the flag `true` (branch review finding 3, 2026-08-03). Every other
+  // recompute returns the stored `state` untouched, so the failure path's own `.set(false)` in
+  // `abandonStartupOpen` survives — `withComputed` overrides on recompute, it does not remove
+  // `.set` (RTM-S02, and upstream `core.md`'s `currentTab` example has the identical `?? state`
+  // shape).
+  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending").extend(
+    withComputed((state) => (mirror.project().projectId !== null ? false : state)),
+  );
+  // The UI-local half of the "why did the open never land" reading — NOT `ProjectMirror
+  // .openFailure`, which is Kernel truth and stays untouched by this path. `UiLocalState
+  // .startupOpenFailure`'s doc comment carries the full reasoning.
+  const startupOpenFailure = atom<ProjectOpenFailure | null>(null, "ui.local.startupOpenFailure");
+  // The auto-shown trust prompt's own answered flag (spec §3.1, 2026-08-03 trust-prompt-on-open
+  // fix) — see `UiLocalState.trustPromptDismissed`'s doc comment for the full lifecycle. Declared
+  // here, above `screen`, because `createScreenAtom` reads it on every recompute.
+  const trustPromptDismissed = atom(false, "ui.local.trustPromptDismissed");
+  const screen = createScreenAtom({
+    project: () => mirror.project(),
+    terminal: () => terminal(),
+    startupOpenPending: () => startupOpenPending(),
+    trustPromptDismissed: () => trustPromptDismissed(),
+  });
   const actionContext = computed<ActionContext>(
     () => ({
       capabilities: mirror.capabilities(),
@@ -653,6 +751,30 @@ export function createUiDeps(
       // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
       // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
       let lastKernelPageSlug: string | null = null;
+      // RETRY A PREVIEW REQUEST THE GUARD REFUSED WHILE UNTRUSTED (defect fix, 2026-08-03).
+      //
+      // `requestPreviewForActivePage`'s own `rejected` branch above forgets its memo SPECIFICALLY
+      // so "a later descriptor change" can retry once trust is granted — but `project.setTrust`
+      // changes neither `activePageSlug` nor the active page's descriptor, so `activePageRequest`
+      // recomputes to the SAME output and its subscriber below never re-fires. The auto-issued
+      // request at project-open time — sent while the project was still untrusted — was rejected
+      // `PROJECT_UNTRUSTED` and then simply never retried: the preview stayed blank until the user
+      // happened to pick a DIFFERENT page, the only other producer of `preview.selectPage`. Seen
+      // live in `termcraft-debug/run-2026-08-03T13-55-59-835Z-41436.jsonl`.
+      //
+      // NO "did trust just flip" tracking is needed (reatom-audit RTM-S06 — an edge-detecting flag
+      // here would be exactly the ad hoc `canLoad` gate the rule flags): `requestPreviewForActive
+      // Page`'s own `pageKey === lastRequestedPageKey` memo already makes a call for the page that
+      // is already live, or already in flight, a no-op. So this asks UNCONDITIONALLY whenever the
+      // project is trusted — on the one write that actually matters (the grant) it is a real retry,
+      // and on every other trusted write (where `activePageRequest` is unchanged) it collapses into
+      // that same memo and costs nothing.
+      //
+      // `startupOpenPending`'s success-path clearer used to be a third branch on THIS subscriber,
+      // guarded on `project.projectId !== null`. It is now a `withComputed` on the atom itself
+      // (see its declaration above and `UiLocalState.startupOpenPending`'s doc comment): the same
+      // `mirror.project().projectId` fact, read where the flag lives instead of where one
+      // subscription happened to notice it.
       const unsubscribeProject = mirror.project.subscribe((project) => {
         if (project.activePageSlug !== lastKernelPageSlug) {
           lastKernelPageSlug = project.activePageSlug;
@@ -663,6 +785,10 @@ export function createUiDeps(
         // for the panel lingering after a successful recovery, which has already been closed.
         if (project.openFailure !== null && project.projectId === null) {
           recoverFromBlockedOpen(project.openFailure);
+        }
+        if (project.trust === "trusted") {
+          const request = activePageRequest();
+          if (request !== null) requestPreviewForActivePage(request.slug, request.sourceHash);
         }
       });
       // Driven by the EFFECTIVE slug, not by `mirror.project` directly, so a tab click reaches
@@ -788,8 +914,11 @@ export function createUiDeps(
     pinEditor,
     pageOverride,
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
-    homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
+    agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
+    startupOpenPending,
+    startupOpenFailure,
+    trustPromptDismissed,
   };
 
   // Declared BEFORE `deps` and closing over it: both halves run later — on mount and on every
@@ -815,9 +944,9 @@ export function createUiDeps(
     }),
   };
 
-  const refreshHomeHealth = action(async () => {
+  const refreshAgentHealth = action(async () => {
     // SHOW THAT THE PROBE IS RUNNING (defect fix, 2026-07-26). Startup already looked right,
-    // because `homeHealth` is SEEDED `checking` — but a manual `r` re-check only ever wrote the
+    // because `agentHealth` is SEEDED `checking` — but a manual `r` re-check only ever wrote the
     // RESULT, so the previous verdict (`✗ claude not signed in`, say) sat unchanged on screen
     // for the probe's whole run, up to the 20s timeout. A user who fixed the cause and pressed
     // `r` had no way to tell whether anything was happening. Re-entering `checking` first reuses
@@ -826,18 +955,29 @@ export function createUiDeps(
     //
     // The agent name is carried over from the reading being replaced: it is the same agent being
     // re-probed, and every member of the union carries it, so nothing is invented here.
-    local.homeHealth.set({ kind: "checking", agent: local.homeHealth().agent });
+    local.agentHealth.set({ kind: "checking", agent: local.agentHealth().agent });
     const result = await wrap(agentHealthProbe());
-    local.homeHealth.set(result);
-  }, "ui.app.refreshHomeHealth").extend(withAsync());
+    local.agentHealth.set(result);
+  }, "ui.app.refreshAgentHealth").extend(withAsync());
+
+  // Both writes belong to the SAME transition and must land together: clearing the pending flag
+  // alone is what used to drop the user on a bare Home with nothing to read (branch review
+  // finding 2, 2026-08-03). The `.set(false)` still works through `startupOpenPending`'s
+  // `withComputed` — that derivation only overrides on recompute, and no recompute is possible
+  // for this path anyway, since `projectId` will never turn non-null for an open that was never
+  // admitted.
+  const abandonStartupOpen = action((failure: ProjectOpenFailure) => {
+    startupOpenPending.set(false);
+    startupOpenFailure.set(failure);
+  }, "ui.app.abandonStartupOpen");
 
   // M15 lifecycle fix: fire the SAME probe path `home-recheck` uses once here, at startup,
-  // instead of only seeding `homeHealth` from the placeholder above. A real phase-8 probe
+  // instead of only seeding `agentHealth` from the placeholder above. A real phase-8 probe
   // reporting a missing agent now surfaces as soon as it resolves — not only after a manual
   // `r` re-check. Fire-and-forget like every other dispatch in this module (`void slashSelection`
-  // above primes a computed the same way): the result lands in `local.homeHealth`, which Home
+  // above primes a computed the same way): the result lands in `local.agentHealth`, which Home
   // re-reads reactively.
-  void refreshHomeHealth();
+  void refreshAgentHealth();
 
   const deps: UiDeps = {
     port,
@@ -854,7 +994,8 @@ export function createUiDeps(
     local,
     editors,
     activePageSlug,
-    refreshHomeHealth,
+    refreshAgentHealth,
+    abandonStartupOpen,
     requestExit,
   };
   return deps;

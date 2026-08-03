@@ -1,5 +1,5 @@
 import { resolveHotkey } from "ui/actions";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import type { ScreenKind } from "ui/mirror";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
@@ -51,7 +51,7 @@ export interface KeyContext {
    * `advisory`) keeps the idle prompt genuinely live with no extra key —
    * {@link homeSubmitAllowed} alone decides whether Enter submits.
    */
-  readonly homeHealth: HomeAgentHealth;
+  readonly agentHealth: AgentHealth;
   /**
    * Home's own prompt text (M15). Only read on `screen === "home"`, for two purposes now:
    * guarding `blocked`'s literal `q`-quits key (fix round 2, Minor finding; escape route
@@ -104,6 +104,16 @@ export interface KeyContext {
    * for diagnosing a key resolution captured during a running turn.
    */
   readonly turnRunning: boolean;
+  /**
+   * Whether a project is actually open (`ProjectMirror.projectId !== null`). FALSE in the
+   * Workspace's opening state (spec 2026-08-02), where the composer is deliberately live and
+   * typeable but ⏎ is refused — the Kernel would reject a `turn.start` before the project is
+   * ready anyway, and refusing here is what lets the key row draw `⏎ send` in its `dis` state so
+   * the refusal is visible BEFORE the key is pressed. The same shape `projectOpening` already
+   * gives Home's own Enter; a separate field because that one reads
+   * `ProjectMirror.opening`, which is still false between UI mount and command admission.
+   */
+  readonly projectOpen: boolean;
 }
 
 /**
@@ -124,7 +134,7 @@ export function resolveActiveOverlay(
 export type KeyIntent =
   | {
       /**
-       * The ONE surviving editing intent (§6.1/§6.4). While `homeHealth.kind === "blocked"` the
+       * The ONE surviving editing intent (§6.1/§6.4). While `agentHealth.kind === "blocked"` the
        * Home prompt is blurred and receives no keys, so backspace cannot reach the editor — and
        * backspace is the only thing that can empty a prompt whose `q` quit is gated on emptiness.
        */
@@ -260,7 +270,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // own status bar names is inert there (design `homeErr()` `:727` — CORRECTED fix round 1,
     // Finding 2, was miscited `:583`, a chat-colour branch inside `chatSeq()` unrelated to Home —
     // `this.statusBar(b,h-1,[...],[['r','re-check'],['q','quit']]);`).
-    if (context.homeHealth.kind === "missing") {
+    if (context.agentHealth.kind === "missing") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q") return { kind: "exit" };
       return { kind: "none" };
@@ -274,7 +284,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // with), matching design's own `homeHealth()` hint row (`:194`, which reads literal `q` for
     // BOTH branches) — GUARDED, see `KeyContext.homePrompt`'s own doc comment: `q` exits only
     // once nothing typed is left to lose.
-    if (context.homeHealth.kind === "blocked") {
+    if (context.agentHealth.kind === "blocked") {
       if (key.sequence === "r") return { kind: "home-recheck" };
       if (key.sequence === "q" && context.homePrompt.length === 0) return { kind: "exit" };
       // The escape route the `q` guard needs (fix round 3). The prompt is blurred here, so this
@@ -289,7 +299,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // steal a character from live typing, the exact bug just fixed for `blocked` above.
     if (isSubmitKey(key)) {
       if (context.projectOpening) return { kind: "none" };
-      return homeSubmitAllowed(context.homeHealth) ? { kind: "home-submit" } : { kind: "none" };
+      return homeSubmitAllowed(context.agentHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
     // §3.10: `/` as the first character of an empty primary input opens the slash menu — the Home
     // prompt is a primary input, exactly like the Workspace composer (`composerActive`'s own `/`
@@ -297,7 +307,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // already-open menu is served by the same code and needs nothing further here. Only reachable
     // from this point in the function at all when `missing`/`blocked` already returned above —
     // §3.10's "the menu is only reachable when the prompt is live" (Task 15's health gate) falls
-    // out of that ordering for free, not from a second check on `context.homeHealth` here.
+    // out of that ordering for free, not from a second check on `context.agentHealth` here.
     if (key.sequence === "/" && context.homePrompt.length === 0) return { kind: "slash-open" };
     return { kind: "none" };
   }
@@ -324,7 +334,10 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (composerActive) {
     if (key.sequence === "/" && context.composerValue.length === 0) return { kind: "slash-open" };
-    if (isSubmitKey(key)) return { kind: "composer-submit" };
+    // Refused, not merely rejected downstream — see `KeyContext.projectOpen`.
+    if (isSubmitKey(key)) {
+      return context.projectOpen ? { kind: "composer-submit" } : { kind: "none" };
+    }
   }
 
   return { kind: "none" };

@@ -6,6 +6,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
+import type { AgentHealth } from "ui/agent-health";
 import { createUiDeps } from "ui/app";
 import {
   TEST_SHA,
@@ -32,6 +33,13 @@ const allText = (rows: StyledRun[][]) =>
     .join("");
 const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((run) => run.text.includes(needle));
+// The status bar is always the renderer's last row. Scoped reads of the `hint` slot use this
+// rather than `allText`, whose whole-page join can also match text a PANEL legitimately renders
+// elsewhere on screen (task 11: the halt panel's own dead-agent line quotes the health badge's
+// wording verbatim, so `allText` alone can no longer tell "the hint slot shows it" apart from
+// "something on screen shows it").
+const statusBarText = (rows: StyledRun[][]) =>
+  (rows[rows.length - 1] ?? []).map((run) => run.text).join("");
 
 describe("Workspace read-only presentation", () => {
   test("disables composer affordances and uses only approved read-only vocabulary/colors", async () => {
@@ -60,6 +68,42 @@ describe("Workspace read-only presentation", () => {
     // of read-only state and proved nothing.
     const attach = findRun(rows, "read-only — Send disabled");
     expect(attach && extractRgb(attach.fg)).toBe(SHELL_PALETTE.red);
+  });
+});
+
+describe("Workspace read-only preview messaging (spec 2026-08-03 — trust prompt on open)", () => {
+  test("a read-only project with pages and no live frame shows the disabled-preview message, never 'preparing preview…'", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+        pageDescriptors: [
+          {
+            status: "ready",
+            pageSlug: "main",
+            sourceHash: TEST_SHA,
+            title: "Main",
+            minSize: { w: 80, h: 24 },
+            theme: "dark-default",
+            kitApiVersion: 1,
+          },
+        ],
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("preview disabled");
+    expect(text).toContain("project is read-only — relaunch to be asked again");
+    expect(text).not.toContain("preparing preview…");
+    const headline = findRun(rows, "preview disabled");
+    expect(headline && extractRgb(headline.fg)).toBe(SHELL_PALETTE.amber);
   });
 });
 
@@ -553,6 +597,9 @@ describe("Workspace composer editor sizing (Task 8)", () => {
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // A non-null projectId — this describes the ordinary idle Workspace's key row, not the
+    // opening state task-8 (design 30) added; an unset projectId now means "still opening".
+    deps.mirror.apply(snapshot({ projectId: uuidv7() }));
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
@@ -583,6 +630,9 @@ describe("Workspace action-derived hotkey hints", () => {
    */
   test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // A non-null projectId — this describes the ordinary idle Workspace's key row, not the
+    // opening state task-8 (design 30) added; an unset projectId now means "still opening".
+    deps.mirror.apply(snapshot({ projectId: uuidv7() }));
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
@@ -896,31 +946,35 @@ describe("Workspace live-turn connection line (design termcraft-engine.js:568 he
   });
 });
 
-describe("Workspace halted preview (design wsHostCrash)", () => {
-  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+// Hoisted to module scope (not local to the describe block below) so the agent-health precedence
+// tests further down — which need this exact circuit-open fixture for their "halted preview
+// outranks health" case — can reuse it rather than duplicating it (task-10 brief: "Reuse the
+// file's existing fixtures for the circuit-open preview state").
+const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
 
-  const circuitOpened = (opts?: { hostFailureCode?: string; retryAvailable?: boolean }) =>
-    event("preview.circuitOpened", {
-      previewSessionId: uuidv7(),
-      pageSlug: "main",
-      sourceHash: TEST_SHA,
-      attempts: 4,
-      finalFailure: {
-        code: "HOST_CIRCUIT_OPEN",
-        retryable: true,
-        safeMessage: CRASH,
-        details: {
-          pageSlug: "main",
-          attempts: 4,
-          ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
-        },
+const circuitOpened = (opts?: { hostFailureCode?: string; retryAvailable?: boolean }) =>
+  event("preview.circuitOpened", {
+    previewSessionId: uuidv7(),
+    pageSlug: "main",
+    sourceHash: TEST_SHA,
+    attempts: 4,
+    finalFailure: {
+      code: "HOST_CIRCUIT_OPEN",
+      retryable: true,
+      safeMessage: CRASH,
+      details: {
+        pageSlug: "main",
+        attempts: 4,
+        ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
       },
-      retryCapability:
-        opts?.retryAvailable === false
-          ? { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] }
-          : { available: true },
-    });
+    },
+    retryCapability:
+      opts?.retryAvailable === false
+        ? { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] }
+        : { available: true },
+  });
 
+describe("Workspace halted preview (design wsHostCrash)", () => {
   async function renderWith(applyCircuit: ReturnType<typeof circuitOpened>) {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(
@@ -1240,5 +1294,296 @@ describe("Workspace preview pane header", () => {
     const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
     expect(ruleRun).toBeDefined();
     expect(ruleRun && extractRgb(ruleRun.fg)).toBe(SHELL_PALETTE.amber);
+  });
+});
+
+describe("Workspace while the project is opening (design 30, wsOpening)", () => {
+  const openingDeps = () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // projectId stays null: this is the shell deriveScreen mounts before finishOpen lands.
+    return deps;
+  };
+
+  test("the preview region names the open, not an empty project", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("opening project…");
+    expect(text).toContain("reading .termcraft — preview arrives when it's ready");
+    // §20's claim is a different fact and must not be made here.
+    expect(text).not.toContain("No pages yet");
+    // A spinner is turn vocabulary (§14) — this state has no cancel and nothing measurable.
+    expect(text).not.toContain("⠹ generating");
+  });
+
+  test("the bar reads OPENING with the page slot filled and only a disabled send key", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("OPENING");
+    expect(text).not.toContain("STATIC");
+    expect(text).toContain("send");
+    expect(text).not.toContain("tweaks");
+    expect(text).not.toContain("act");
+  });
+
+  test("at the 80-column floor the page slot and the size segment shrink", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 80, h: 24 });
+    const handle = await createHeadlessRenderer({ w: 80, h: 24 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    // The preview headline renders `opening project…` at every width
+    // (`design/termcraft-engine.js:237` has no `narrow` branch, and design 30 §"80×24 — the
+    // floor" narrows only the bar), so a whole-screen `not.toContain` could never hold — isolate
+    // the status bar's own row (the frame's bottom row, the same isolation the idle-key-row test
+    // above uses via `rows.at(-1)`).
+    const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
+    expect(statusRow).toContain("opening…");
+    expect(statusRow).not.toContain("opening project…");
+    expect(text).not.toContain("80×24");
+  });
+
+  test("the composer stays live with its own placeholder", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    // The needle drops the placeholder's first character on purpose: the design paints the
+    // block caret over that column (`design/termcraft-engine.js`'s
+    // `put(b,chatX+3,composerTop+2,'█')`), so the row reads `❯ █roject opening…`.
+    expect(allText(handle.capture().rows)).toContain("roject opening…");
+  });
+
+  test("a finished open re-renders into the ordinary Workspace", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("STATIC");
+    expect(text).not.toContain("opening project…");
+  });
+});
+
+// Task 10 (design 30 §"The long-lived badge", §"The badge vocabulary"): the agent-health probe's
+// verdict, projected into the status bar's `hint` slot as the LAST tier — below read-only, a
+// running turn, and a halted preview. `checking` is rendered too, not just the error states: the
+// check running beside a shell that appeared instantly is the whole point of wiring this in.
+describe("Workspace agent-health badge (design 30 · the long-lived badge)", () => {
+  const readyPage = (): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: "main",
+    sourceHash: TEST_SHA,
+    title: "Main",
+    minSize: { w: 80, h: 24 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  // `createUiDeps` fires its own startup probe fire-and-forget (`ui/app/model/deps.ts`'s
+  // `refreshAgentHealth`, called unconditionally at the end of the function): left on the
+  // default probe, `local.agentHealth` would settle asynchronously on `DEFAULT_PROBE_RESOLUTION`
+  // (an `advisory/shutdown` reading) sometime after this helper returns, racing the `.set()` below
+  // and clobbering it before `handle.render()` ever captures a frame. Injecting the SAME reading
+  // as the probe's own resolution makes the two writes converge on `health` regardless of which
+  // one lands last.
+  const withHealth = (health: AgentHealth, size = { w: 120, h: 36 }) => {
+    const deps = createUiDeps(createFakeKernel(), size, undefined, () => Promise.resolve(health));
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        trust: "trusted",
+        pageDescriptors: [readyPage()],
+      }),
+    );
+    deps.local.agentHealth.set(health);
+    return deps;
+  };
+
+  const BLOCKED_LOGIN: AgentHealth = {
+    kind: "blocked",
+    agent: "claude",
+    panel: "login",
+    detail: "x",
+  };
+
+  test("ready draws nothing, matching Home", async () => {
+    // `not.toContain("✗")` over the whole page would also pass with the badge entirely
+    // unwired, or with a wiring bug that leaks some OTHER badge shape (`⠹ checking …`,
+    // `⚠ health unconfirmed`) that just doesn't happen to contain that one glyph (branch
+    // review finding 2, 2026-08-02 fix wave). Assert the hint slot's own element instead:
+    // `StatusBar.tsx` only renders `${id}-hint` when `props.hint` is non-null, so its absence
+    // from the mounted tree IS "the badge computed to null for this reading", not a
+    // coincidence of which glyph a leaked badge happens to use.
+    const deps = withHealth({ kind: "ready", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    expect(handle.rectOf("ws-status-hint")).toBeNull();
+  });
+
+  test("checking is rendered too — the check running beside the shell is the point", async () => {
+    const deps = withHealth({ kind: "checking", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("⠹ checking claude");
+  });
+
+  test("a blocked reading rides the hint slot over an otherwise working project", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("✗ claude not signed in");
+    // A bad reading rides the hint slot over a project that is otherwise working normally
+    // (design 30 §"The long-lived badge") — the mode chip still reads STATIC, not some
+    // health-derived state.
+    expect(text).toContain("STATIC");
+  });
+
+  test("a running turn outranks health — a live turn proves the agent is alive", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("⚠ turn running — send disabled");
+    expect(text).not.toContain("✗ claude not signed in");
+  });
+
+  test("a halted preview outranks health — the more urgent, more specific fact", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // Scoped to the hint slot itself (task 11 adds a legitimate second place the badge's own
+    // wording appears on screen — the crash panel's own dead-agent line — so a whole-page check
+    // can no longer stand in for "the hint slot excludes it").
+    const hint = statusBarText(rows);
+    expect(hint).toContain("render crashed");
+    expect(hint).not.toContain("✗ claude not signed in");
+  });
+
+  // Task 11 (design 30 §"The collision — halted preview, dead agent"): both conditions can be
+  // true at once. The hint slot keeps the halt's own badge (proven above); what this test proves
+  // is the OTHER change — the crash panel's F6 row must stop promising a repair turn the dead
+  // agent cannot run.
+  test("the halted preview keeps the hint slot and gains the dead-agent line", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // The hint slot: unchanged, still the halt's own badge, not health's.
+    const hint = statusBarText(rows);
+    expect(hint).toContain("render crashed");
+    expect(hint).not.toContain("✗ claude not signed in");
+    // The crash panel: the dead-agent line the halt block would otherwise omit. The block's fixed
+    // content width wraps this real message across two lines (`HostCrashPanel.tsx`'s own
+    // DIVERGENCE 3) — both wrapped halves must survive as their own runs.
+    expect(findRun(rows, "✗ claude not signed in — F6 fills the composer, but")).toBeDefined();
+    expect(findRun(rows, "nothing runs yet")).toBeDefined();
+    // ...and the F6 row's own detail line no longer makes a promise the agent cannot keep.
+    expect(findRun(rows, "nothing is sent — you press ⏎")).toBeUndefined();
+  });
+
+  test("read-only outranks everything", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve(BLOCKED_LOGIN),
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        trust: "untrusted-read-only",
+      }),
+    );
+    deps.local.agentHealth.set(BLOCKED_LOGIN);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("Send · Tweaks · pins disabled");
+    expect(text).not.toContain("✗ claude not signed in");
+  });
+
+  test("the badge drops the agent name at 80 columns", async () => {
+    const deps = withHealth(BLOCKED_LOGIN, { w: 80, h: 24 });
+    const handle = await createHeadlessRenderer({ w: 80, h: 24 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("✗ not signed in");
+    expect(text).not.toContain("✗ claude not signed in");
+  });
+
+  test("the composer is not gated on health", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // `TextEditor`'s own caret (`${id}-caret` run) is drawn with the literal text "❯ " — only its
+    // colour keys off `disabled` (`Composer.tsx`'s `caretFg={props.disabled === true ? faint :
+    // amber}`). That colour is the one thing that actually differs between a gated and an ungated
+    // composer, so it is the fact this test needs to check — design 30 §"The long-lived badge":
+    // "the composer is not gated on it." Idle plus focused (this test's own state) is exactly the
+    // one combination where the `ws-chat` panel's own left border is ALSO amber
+    // (`composerFocused ? amber : line`, above), so the row-capture coalesces the border cell and
+    // the caret into one run, `"│❯ "` — `endsWith`, not an exact match, and not `findRun`'s
+    // `.includes` either: the chat panel's own focused title starts with "❯ chat ", which would
+    // match a bare `.includes("❯")` first.
+    const caret = rows.flat().find((run) => run.text.endsWith("❯ "));
+    expect(caret && extractRgb(caret.fg)).toBe(SHELL_PALETTE.amber);
+  });
+
+  // Cross-task gap found by the previous task's reviewer, not in the brief's own test list: the
+  // engine's `wsOpening` puts the health badge in the OPENING bar too
+  // (`design/termcraft-engine.js:240,245` — `agentBadge(... || 'checking')`). Task 8 left `hint`
+  // null while filling because wiring `ui/agent-health` was out of its scope; none of the higher
+  // hint tiers can be true while `projectId` is still null, so `healthBadge` must reach this bar
+  // automatically once it becomes the chain's last tier.
+  test("the badge reaches the opening bar too (engine wsOpening :240,:245)", async () => {
+    const CHECKING: AgentHealth = { kind: "checking", agent: "claude" };
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve(CHECKING),
+    );
+    // projectId stays null — the Workspace mounted before finishOpen landed.
+    deps.local.agentHealth.set(CHECKING);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("⠹ checking claude");
   });
 });
