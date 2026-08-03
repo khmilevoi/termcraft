@@ -124,6 +124,45 @@ describe("scanImportAllowlist (§3.1 authoritative module-edge allowlist)", () =
     expect(errors[0]?.code).toBe("REQUIRE_CALL");
   });
 
+  // red-debt.md:521 — `const r = require; r("node:vm")` bypasses `Bun.Transpiler.scanImports`
+  // (it pattern-matches only the literal `require(...)` call) and cannot be closed by
+  // realm-level capability denial (`require` is injected per-module, not a `globalThis`
+  // property). The fix mirrors the `eval` guard directly above: flag the bare REFERENCE, not
+  // only the call, since reading the binding at all is enough to alias and later invoke it.
+  test("a bare `require` reference is fatal even with no call parenthesis", () => {
+    for (const source of [
+      "const r = require\n",
+      "const r = (0, require)\n",
+      "export const load = () => require\n",
+      "const { x } = { x: require }\n",
+    ]) {
+      const errors = scanned(scanImportAllowlist(source, NONE));
+      expect(errors.map((e) => e.code)).toContain("REQUIRE_CALL");
+    }
+  });
+
+  test("a `require` PROPERTY on another object is not the injected binding", () => {
+    expect(scanned(scanImportAllowlist("const x = deps.require\n", NONE))).toEqual([]);
+    expect(scanned(scanImportAllowlist("const x = deps?.require\n", NONE))).toEqual([]);
+  });
+
+  test("the literal call form keeps its specifier-naming message", () => {
+    const [error] = scanned(scanImportAllowlist('require("node:fs")\n', NONE));
+    expect(error?.specifier).toBe("node:fs");
+  });
+
+  // THE ACCEPTED OVER-APPROXIMATION, pinned so it is a decision and not a surprise — the same
+  // trade `eval` already takes (see the module doc comment's "NO PROSE SUPPRESSION" section).
+  // `require` is a far more common English word than `eval`, so this is a louder cost, taken
+  // knowingly rather than routed around with a JSX-text exemption (three rounds of task 14b
+  // proved that kind of suppression rule unsound).
+  test("display copy containing the word `require` is REFUSED, like `eval`", () => {
+    const errors = scanned(
+      scanImportAllowlist('const x = <Text id="t">settings require a restart</Text>\n', NONE),
+    );
+    expect(errors.map((e) => e.code)).toContain("REQUIRE_CALL");
+  });
+
   test("a local export is NOT a module edge (no false positive)", () => {
     expect(
       scanned(scanImportAllowlist(`export const label = "danger"\nexport default 1\n`, NONE)),

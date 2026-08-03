@@ -518,7 +518,7 @@ live `threadId`. Denied entry points are now SIX: `eval`, `Function`, the three 
 intrinsics, and `Worker`. Do not list `Worker` as an open route — it is closed, unlike `require`
 immediately below.
 
-### `require` reaches arbitrary Node built-ins from a page's module scope, invisible to the import scanner and NOT closable by realm-level capability denial — NEEDS AN OWNER, raised by Task 10
+### `require` reaches arbitrary Node built-ins from a page's module scope, invisible to the import scanner and NOT closable by realm-level capability denial — OWNED BY design-tree-phase-2 Task 1 — NARROWED at the Gate, host residual still open, raised by Task 10
 
 Task 10 (design-tree-phase-1-closeout) set out to close the `eval`/`Function` gap above and was
 told explicitly to keep probing for OTHER routes that turn a string into running code, rather than
@@ -574,6 +574,20 @@ code-execution payload attached, not merely another eval/Function spelling.
    objects one at a time.
 
 NEEDS AN OWNER. Still open at the end of design-tree-phase-1-closeout.
+
+**NARROWED — design-tree-phase-2 Task 1.** Direction 1 above is now done at the Gate:
+`gate/model/import-scan.ts`'s `RequireKeyword` branch flags a bare `require` REFERENCE, not only
+the literal call, mirroring the `eval` guard's existing precedent — `const r = require; r("node:vm")`
+is now fatal, proven both at the unit (`import-scan.test.ts`) and through the real turn
+(`turn-import-perimeter.test.ts`'s "a bare `require` reference" row, placed in a shared module no
+page names directly). WHAT DOES NOT HOLD: the host's own rescan, `scanClosureImports`, is still
+built on `Bun.Transpiler.scanImports`, which pattern-matches only the literal `require(...)` call
+syntax — an aliased reference stays invisible to it, so the host side remains the residual this fix
+does not touch. Direction 2 (a real isolated context with no `require` binding at all) remains
+unowned. THE COST: `require` is a far more common English word than `eval`, so display copy
+containing it — `<Text id="t">These settings require a restart</Text>` — is now a Gate rejection
+too, the same accepted over-approximation `eval` already takes, taken knowingly rather than
+exempted (see `import-scan.ts`'s "NO PROSE SUPPRESSION" section).
 
 ### `runPage` accepted the tree coordinates OPTIONALLY, falling back to a fabricated empty tree — raised by task 15, CLOSED by MEASURED FIX in design-tree-phase-1-closeout Task 5
 

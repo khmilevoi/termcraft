@@ -360,6 +360,33 @@ function reflectGetLiteralKey(toks: Tok[], from: number): string | null {
  * right place: `./lexer`'s `tokenize` lexes in WINDOWS bounded by the JSX reader's text runs, so
  * a page's prose can never swallow the code after it. That is a boundary guarantee, it costs no
  * detection, and it does not depend on the classification being right.
+ *
+ * `REQUIRE_CALL`'S OWN BAN WAS WIDENED THE SAME WAY (design-tree-phase-2 Task 1, red-debt.md's
+ * `require` row, `:521-576`). It used to fire only on the literal call shape — `RequireKeyword`
+ * immediately followed by `(` — and `const r = require; r("node:vm")` passed it: MEASURED live,
+ * `node:vm`'s `runInNewContext` executing a page-authored payload while this scan reported
+ * nothing (`turn-import-perimeter.test.ts`'s "a bare `require` reference" row proves it at the
+ * real turn boundary, not only at this unit). Neither of the perimeter's other two layers can
+ * see it either: `Bun.Transpiler.scanImports` — what this scan's own former precedent and the
+ * host's `scanClosureImports` are both built on — pattern-matches only the literal `require(...)`
+ * syntax, so it stays blind to an aliased reference and is the residual that remains open; and
+ * `denyDynamicCodeCapability()` structurally cannot reach `require` at all, because Bun injects
+ * it per-module rather than as a `globalThis` property, so there is no realm object to replace. A
+ * token-level ban at THIS layer is therefore the only enforcement point that can see the shape,
+ * and it now flags a bare `require` reference exactly the way it flags a bare `eval` reference
+ * above — same code, `REQUIRE_CALL`, kept for the call form's specifier-naming message; the
+ * reference form names no specifier and says so instead.
+ *
+ * THIS NARROWS THE GAP, IT DOES NOT CLOSE IT. It closes the path this scan actually sits on — the
+ * Gate's whole-tree scan, wired to every turn (`turn-import-perimeter.test.ts`) — but the host's
+ * own `scanClosureImports` rescan still cannot see an aliased reference, and red-debt.md's second
+ * direction (running page code in a real isolated context that never receives a `require` binding
+ * at all) remains unowned. THE COST is the same trade `eval` already takes, only louder: `require`
+ * is a far more common English word, so `<Text id="t">These settings require a restart</Text>` is
+ * now REFUSED too. That is deliberate, not an oversight — no JSX-text exemption is carved out for
+ * it, because three rounds of task 14b already proved that kind of suppression rule unsound (see
+ * "NO PROSE SUPPRESSION" above); `import-scan.test.ts` pins this direction the same way it pins
+ * `eval`'s.
  */
 export function scanImportAllowlist(
   source: string,
@@ -509,18 +536,38 @@ export function scanImportAllowlist(
         continue;
       }
 
-      if (t.kind === SK.RequireKeyword && next?.kind === SK.OpenParenToken) {
-        const spec = firstStringFrom(toks, i + 2);
-        if (spec !== null) {
-          const where = at(t.pos);
-          push({
-            code: "REQUIRE_CALL",
-            specifier: spec.value,
-            message: `require("${spec.value}") is not allowed — a page uses no CommonJS load`,
-            line: where.line,
-            column: where.column,
-          });
-        }
+      // `require` (design §5.8; red-debt.md:521, design-tree-phase-2 Task 1) — a bare REFERENCE
+      // is flagged, not just a call, mirroring the `eval` guard below verbatim: `const r =
+      // require` reaches the exact same CommonJS-load capability the moment the reference
+      // exists, because the caller can alias it and invoke it later (`r("node:vm")`) with no
+      // literal `require(` anywhere in the source. This is the fix for the gap `Bun.Transpiler
+      // .scanImports` cannot see either — that AST scan (both this file's own precedent and the
+      // host's `scanClosureImports`) pattern-matches only the literal call syntax, so an aliased
+      // reference passed both enforcement points silently (measured, red-debt.md:521-576). A
+      // `.require(...)`/`?.require(...)` property access on some OTHER object is not the
+      // injected binding — only a bare `require` not immediately preceded by `.`/`?.` counts
+      // (`isGlobalReceiver` still catches `globalThis.require`, the indirect spelling of the
+      // same ambient binding). Like `eval`, this also flags a page whose display copy contains
+      // the word — `<Text id="t">These settings require a restart</Text>` — the SAME accepted
+      // over-approximation, deliberately not routed around with a JSX-text exemption (see the
+      // module doc comment's "NO PROSE SUPPRESSION" section); `require` is a far more common
+      // English word than `eval`, so the cost is louder here, taken knowingly all the same.
+      if (
+        t.kind === SK.RequireKeyword &&
+        (!isMemberAccess(toks[i - 1]) || isGlobalReceiver(toks[i - 2]))
+      ) {
+        const spec = next?.kind === SK.OpenParenToken ? firstStringFrom(toks, i + 2) : null;
+        const where = at(t.pos);
+        push({
+          code: "REQUIRE_CALL",
+          specifier: spec?.value ?? "",
+          message:
+            spec !== null
+              ? `require("${spec.value}") is not allowed — a page uses no CommonJS load`
+              : "`require` is not allowed — reading the binding at all is enough to alias and later call it",
+          line: where.line,
+          column: where.column,
+        });
         continue;
       }
 

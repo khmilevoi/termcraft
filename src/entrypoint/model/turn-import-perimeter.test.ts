@@ -156,6 +156,11 @@ describe("the turn's import perimeter, through the real gate adapter", () => {
       "FORBIDDEN_IMPORT",
     ],
     ["require()", `const fs = require("fs")\nexport const accent = fs\n`, "REQUIRE_CALL"],
+    [
+      "a bare `require` reference, aliased and called indirectly (red-debt.md:521)",
+      `const r = require\nconst vm = r("node:vm")\nexport const accent = 1\n`,
+      "REQUIRE_CALL",
+    ],
     ["a dynamic import()", `export const accent = import("lodash")\n`, "DYNAMIC_IMPORT"],
     ["eval", `export const accent = eval("1+1")\n`, "EVAL_CALL"],
     ["new Function", `export const accent = new Function("return 1")\n`, "FUNCTION_CALL"],
