@@ -330,9 +330,13 @@ flowchart TB
   `computeClosureHash` and `computeTreeRevision`
 - `src/store/safe-fs/model/limits.ts` — item 3: the `design-source` namespace covering
   `design/**` and the `pins/<slug>.jsonl` grammar
-- `src/store/model/factory.ts` — items 1 and 3: `createProject` writing the
+- `src/store/model/factory.ts` — item 1: `createProject` writing the
   format-2 `project.toml` and the seeded empty `design/pages.json` in ONE
-  project-creation transaction, and the `DesignTreeStore` reads over the tree
+  project-creation transaction
+- `src/store/model/design-tree-store.ts` — item 3: the `DesignTreeStore` reads
+  over the tree (`createDesignTreeStore`, `readManifestFromDisk`,
+  `buildPagesManifestOperation` — split out of `src/store/model/factory.ts`,
+  design-tree phase-1 closeout Task 9)
 - `src/store/trust/model/subject.ts` — item 14: the `TrustSubjectV1` canonical
   byte encoding and SHA-256 keying
 - `src/store/trust/model/trust-store.ts` — item 14: `buildSubject`/

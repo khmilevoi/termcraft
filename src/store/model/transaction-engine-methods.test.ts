@@ -1066,7 +1066,7 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
   }, 20_000);
 
   // Important review finding, round 2: `listSlugs()`'s ENOENT-only exception (an ABSENT
-  // `design/pages.json` resolves `[]`, `store/model/factory.ts`) is the entire contract this
+  // `design/pages.json` resolves `[]`, `store/model/design-tree-store.ts`) is the entire contract this
   // task's ambiguity resolution rests on. Without a test proving a PRESENT-but-invalid file
   // still refuses, a future refactor to a blanket `catch -> []` would pass the whole suite
   // and silently paper over real corruption. Both pinned with REAL bytes on disk, not a

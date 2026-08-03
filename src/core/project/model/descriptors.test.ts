@@ -222,7 +222,7 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
 
   test("a tree that does NOT name pages.json reads as an empty page order, not a failure", async () => {
     // The allowance the retired `PageReader.listSlugs()` carried ("`[]` for a project with no
-    // `design/pages.json` yet ... never an error", `store/model/factory.ts`), preserved at the
+    // `design/pages.json` yet ... never an error", `store/model/design-tree-store.ts`), preserved at the
     // one seam that lost it when task 14 retired that method's last caller. Without it,
     // `project.open` on a freshly created project blocks forever and the app never reaches
     // `ready` — measured: `src/entrypoint/model/smoke.test.ts` timed out on

@@ -269,8 +269,8 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   }
 
   /**
-   * `DesignTreeStore.listTree()` (`store/model/factory.ts`, design-tree canonical source
-   * plan Task 9): `design/` nests deeper than the `design-source` namespace's own depth
+   * `DesignTreeStore.listTree()` (`store/model/design-tree-store.ts`, design-tree canonical
+   * source plan Task 9): `design/` nests deeper than the `design-source` namespace's own depth
    * ceiling. A refusal, not a corruption — but the closed v1 union has no dedicated
    * "tree too deep" code, so it folds to the same generic durable-fault bucket.
    */

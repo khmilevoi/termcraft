@@ -124,6 +124,7 @@ import type {
   AbsPath,
   AdvanceSessionCheckpointInput,
   AppendPinEventInput,
+  BuiltPageOperation,
   ChatHandle,
   ChatListEntry,
   ChatStore,
@@ -343,19 +344,6 @@ function payloadMapOf(payload?: readonly [string, Uint8Array]): Map<string, Uint
 }
 
 // ---- design-tree page mutations (design §3, §4, §7) -----------------------------------
-//
-// `store/transaction/model/wrappers.ts`'s own `BuiltOperation`/`indexOperations`/
-// `collectPayloads` are not exported (they are that file's private assembly detail), so the
-// identical small shape is declared locally here rather than widening that module's public
-// surface for three call sites. `store/model/design-tree-store.ts`'s `buildPagesManifestOperation`
-// (design-tree phase-1 closeout, Task 9) declares its own identically-shaped private copy
-// rather than importing this one — importing it would cycle back to this file, which also
-// imports `design-tree-store.ts`'s three functions (`import/no-cycle`).
-
-interface BuiltPageOperation {
-  readonly operation: TransactionOperation;
-  readonly payload?: readonly [string, Uint8Array];
-}
 
 function indexPageOperations(
   built: readonly BuiltPageOperation[],

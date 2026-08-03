@@ -489,7 +489,7 @@ describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", ()
 
   // The real, common case (review round 2): every project `createProject` mints has no
   // `design/` at all, so `slugs: []` here stands in for BOTH "an authored, empty manifest"
-  // and "no manifest file yet" — `listSlugs()` (`store/model/factory.ts`) already collapses
+  // and "no manifest file yet" — `listSlugs()` (`store/model/design-tree-store.ts`) already collapses
   // that ENOENT case to `[]` for exactly this reason, so this fixture-level test cannot (and
   // need not) distinguish them; `existingProjectWithNothing()` below exercises the real,
   // on-disk absent-file path end to end.

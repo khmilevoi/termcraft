@@ -73,7 +73,7 @@ function entryNotFound(pageSlug: PageSlug): FailureDtoV1 {
  * decided STRUCTURALLY, never by matching on a failure's prose. A freshly created project has
  * no `design/pages.json` until its first turn writes one, and the retired `listSlugs()` had a
  * documented allowance for exactly that ("`[]` for a project with no `design/pages.json` yet
- * ... never an error", `store/model/factory.ts`). `DesignTreeReader.readManifest()`
+ * ... never an error", `store/model/design-tree-store.ts`). `DesignTreeReader.readManifest()`
  * deliberately makes no such allowance — what a tree-less project looks like on disk is
  * Task 16's own question (red-debt.md) — so the allowance lives HERE instead, at the one seam
  * that lost it when task 14 retired `listSlugs`' last caller.

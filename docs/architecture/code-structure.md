@@ -662,7 +662,13 @@ vendor tier's own pre-split run-loop file.
   `safe-fs`/`lease`/`trust`/`toml`/`jsonl`/`transaction`/`sandbox`/`migration`/
   `projections` into the `Store` port, including the `ManifestStore`/
   `WorkspaceStateStore`/`ChatStore`/`PinStore`/`DesignTreeStore` facades the store port
-  contract declares
+  contract declares — `DesignTreeStore` itself is implemented in
+  `src/store/model/design-tree-store.ts` (below) and composed in here
+- `src/store/model/design-tree-store.ts` — the `design/pages.json` manifest's whole
+  on-disk lifecycle: the read, the CAS replace operation, and the `DesignTreeStore`
+  those two compose into (`createDesignTreeStore`/`readManifestFromDisk`/
+  `buildPagesManifestOperation`); split out of `factory.ts` (design-tree phase-1
+  closeout, Task 9) as its own unit rather than left inline in the composition root
 - `src/store/toml/model/gitignore.ts` — the only Git-adjacent code that exists
   today, and explicitly not the `GitHistory`/`GitCommitter` adapter: its own comment
   calls the generated `.gitignore` a "courtesy mirror," not the live commit-scope

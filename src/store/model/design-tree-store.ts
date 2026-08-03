@@ -3,10 +3,14 @@
  * operation that rewrites it, and the `DesignTreeStore` those two compose into.
  *
  * Split out of `factory.ts` (design-tree phase-1 closeout, Task 9): that file had reached ~1900
- * lines and these three functions are called from nothing in it but the single composition
- * site. They are one unit — the manifest's whole on-disk lifecycle — and holding them together
- * is what keeps the CAS in `buildPagesManifestOperation` and the read in `readManifestFromDisk`
- * agreeing about what a manifest image is.
+ * lines. `factory.ts` still calls back into this file in five places — the composition site
+ * plus `readManifestFromDisk` (from `assertManifestNotDrifted`, `assertEntrySourceNotDrifted`)
+ * and `buildPagesManifestOperation` (from `reorderPages`, `removePage`) — so the two files stay
+ * genuinely coupled; this was never an extraction of something uncoupled. It moved because the
+ * three functions are one unit — the manifest's whole on-disk lifecycle — and holding them
+ * together in their own file is what keeps the CAS in `buildPagesManifestOperation` and the
+ * read in `readManifestFromDisk` agreeing about what a manifest image is, independent of how
+ * many call sites in `factory.ts` reach back in.
  */
 
 import * as errore from "errore";
@@ -22,9 +26,9 @@ import { sha256Hex } from "store/jsonl";
 import { FsAccessError, MAX_PATH_COMPONENTS, NAMESPACE_LIMITS, isNotFound } from "store/safe-fs";
 import type { SafeFsError, SafeProjectFs } from "store/safe-fs";
 import { designFilePath, observeFileImage } from "store/transaction";
-import type { TransactionOperation, TransactionWrapperDeps } from "store/transaction";
+import type { TransactionWrapperDeps } from "store/transaction";
 
-import type { DesignTreeStore, Sha256Hex } from "../types";
+import type { BuiltPageOperation, DesignTreeStore, Sha256Hex } from "../types";
 
 /** `design/` nests deeper than its namespace's own ceiling — refused rather than walked forever (design §3.1's depth-8 budget, `store/safe-fs`'s `NAMESPACE_LIMITS["design-source"]`). */
 export class DesignTreeTooDeepError extends errore.createTaggedError({
@@ -37,18 +41,6 @@ export class PageEntryNotFoundError extends errore.createTaggedError({
   name: "PageEntryNotFoundError",
   message: "design/pages.json has no entry for page slug $pageSlug",
 }) {}
-
-// `factory.ts`'s own `BuiltPageOperation` (`store/transaction/model/wrappers.ts`'s
-// `BuiltOperation` shape, declared locally there too rather than widened as public surface)
-// is NOT imported here: importing it would cycle back to `factory.ts`, which also imports
-// this file's three functions (`import/no-cycle`). This copy is structurally identical —
-// same `TransactionOperation` from the same module — so TypeScript accepts values built here
-// wherever `factory.ts`'s own `BuiltPageOperation[]` arrays (`reorderPages`/`removePage`)
-// expect one.
-interface BuiltPageOperation {
-  readonly operation: TransactionOperation;
-  readonly payload?: readonly [string, Uint8Array];
-}
 
 /** The `design/pages.json` replace operation for a new manifest — the single writer of page order (`reorderPages`/`removePage`). */
 function buildPagesManifestOperation(

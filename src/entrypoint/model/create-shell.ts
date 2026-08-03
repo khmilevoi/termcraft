@@ -383,7 +383,7 @@ export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
  * an absent `design/pages.json` is an honest ABSENCE, not a read FAILURE — the earlier
  * `readManifest()`-based version routed every real project's every launch through the
  * `"unknown"` failure branch below, which the controller's "route a read failure as unknown"
- * ruling was never meant to cover. `listSlugs()` (`store/model/factory.ts`) already makes
+ * ruling was never meant to cover. `listSlugs()` (`store/model/design-tree-store.ts`) already makes
  * exactly this distinction: `[]` for a missing `design/pages.json` (matching its own
  * pre-existing "[] for none" contract), propagated for a genuinely corrupt one. This probe
  * inherits that distinction for free rather than re-deciding it.

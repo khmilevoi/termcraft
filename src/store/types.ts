@@ -45,6 +45,7 @@ import type {
   StaleError,
   TransactionBoundary,
   TransactionIoPendingError,
+  TransactionOperation,
   TransactionRecoveryConflictError,
   TurnAdmissionInput,
   TurnFinalizeInput,
@@ -62,9 +63,11 @@ import type { JsonlOpenError } from "./model/factory";
 // `store/safe-fs`) exports its own real port type, re-exported here under the plan's name
 // rather than re-declared — a second, parallel declaration would drift from the type the
 // implementation actually satisfies. `ManifestStore`, `WorkspaceStateStore`, `ChatStore`,
-// `ChatHandle`, `PinStore`, `DesignTreeStore`, `ProjectionStore`, and `TransactionEngine` have no
-// landed submodule of their own (T19 is the first task that needs one flat interface spanning
-// several submodules), so they are declared fresh here and implemented in `./model/factory.ts`.
+// `ChatHandle`, `PinStore`, `ProjectionStore`, and `TransactionEngine` have no landed submodule
+// of their own (T19 is the first task that needs one flat interface spanning several
+// submodules), so they are declared fresh here and implemented in `./model/factory.ts`.
+// `DesignTreeStore` is declared fresh here too, but implemented in `./model/design-tree-store.ts`
+// (design-tree phase-1 closeout, Task 9 split it out of `./model/factory.ts`).
 //
 // DOCUMENTED DIVERGENCES from the plan's draft (CLAUDE.md: adapt where feasible, otherwise
 // document — these five could not be adapted without editing an already-landed submodule
@@ -258,6 +261,21 @@ export interface DesignTreeStore {
   >;
   /** The decoded `design/pages.json` — the sole page-order and page-identity authority. */
   readManifest(): Promise<SafeFsError | PagesManifestInvalidError | PagesManifestV1>;
+}
+
+/**
+ * One transaction operation plus its optional payload, as `store/model/factory.ts`'s
+ * `indexPageOperations`/`collectPagePayloads` (`renamePageTitle`/`reorderPages`/`removePage`)
+ * and `store/model/design-tree-store.ts`'s `buildPagesManifestOperation` all build and consume
+ * it — the identical shape `store/transaction/model/wrappers.ts`'s own private
+ * `BuiltOperation` has, declared here instead of there so both `store/model/` files can share
+ * ONE declaration by type-only import rather than each declaring its own copy (design-tree
+ * phase-1 closeout, Task 9 fix round 1: two copies drifted silently on an optional-field
+ * addition, which `tsc` cannot catch across structurally-compatible interfaces).
+ */
+export interface BuiltPageOperation {
+  readonly operation: TransactionOperation;
+  readonly payload?: readonly [string, Uint8Array];
 }
 
 // ---- transaction engine (turn-durability §4) ---------------------------------------

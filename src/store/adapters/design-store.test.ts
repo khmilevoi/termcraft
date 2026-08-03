@@ -311,7 +311,7 @@ describe("createDesignStoreAdapter — contract test (fake vs. real)", () => {
 // behavior actually matches the real adapter — every existing test exercised ONE side or the
 // other, never both against the identical seeded scenario. These run the SAME manifest/tree
 // through both and assert matching outcomes, now that a real `DesignTreeStore`
-// (`store/model/factory.ts`, Task 9) exists to compare the fake against.
+// (`store/model/design-tree-store.ts`, Task 9) exists to compare the fake against.
 describe("createFakeDesignStore — fake-vs-real contract", () => {
   test("readManifest()/readTreeFile()/listTree() agree between the fake and the real adapter for the same seeded tree", async () => {
     const manifest: PagesManifestV1 = {
