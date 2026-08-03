@@ -53,7 +53,8 @@ import type {
 } from "store/transaction";
 import type { TrustStore } from "store/trust";
 
-import type { DesignTreeTooDeepError, JsonlOpenError } from "./model/factory";
+import type { DesignTreeTooDeepError } from "./model/design-tree-store";
+import type { JsonlOpenError } from "./model/factory";
 
 // This is the STORE PORT CONTRACT (plan "Store port shapes"): the shapes `core/ports/`
 // lifts verbatim in phase 6. Every already-landed submodule (`store/lease`, `store/trust`,
@@ -226,7 +227,7 @@ export interface DesignTreeStore {
    * A page's current bytes, resolved through the manifest's `entry` for `pageSlug`. `Error`
    * rather than the narrower `SafeFsError`: a manifest read can also fail as
    * `PagesManifestInvalidError`, and a slug absent from the manifest is its own
-   * `PageEntryNotFoundError` (`store/model/factory.ts`).
+   * `PageEntryNotFoundError` (`store/model/design-tree-store.ts`).
    */
   readSource(
     pageSlug: PageSlug,
@@ -302,8 +303,8 @@ export type TransactionError =
 // every other project mutation uses — `core` sees only these named methods and their
 // plain-data inputs. `renamePageTitle`/`reorderPages`/`removePage` build their own
 // `design/pages.json` replace/delete operations the same way (Task 9's
-// `buildPagesManifestOperation`, `store/model/factory.ts`) — a page's file is whatever the
-// manifest's `entry` says, never computed from its slug (design §3, §7).
+// `buildPagesManifestOperation`, `store/model/design-tree-store.ts`) — a page's file is
+// whatever the manifest's `entry` says, never computed from its slug (design §3, §7).
 
 export interface CreateChatInput {
   readonly transactionId: string;
@@ -605,9 +606,8 @@ export type {
   JsonlOpenError,
   ProjectLayoutError,
   ProjectAlreadyExistsError,
-  DesignTreeTooDeepError,
   EntrySourceDriftedError,
   ManifestDriftedError,
-  PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
 } from "./model/factory";
+export type { DesignTreeTooDeepError, PageEntryNotFoundError } from "./model/design-tree-store";

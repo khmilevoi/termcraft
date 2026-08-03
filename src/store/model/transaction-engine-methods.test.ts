@@ -12,10 +12,10 @@ import { uuidv7 } from "infrastructure/uuid";
 import { computeSessionPrefixHash, sha256Hex } from "store/jsonl";
 
 import type { OpenProject, StoreDeps } from "../types";
+import { PageEntryNotFoundError } from "./design-tree-store";
 import {
   EntrySourceDriftedError,
   ManifestDriftedError,
-  PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
   createStore,
   nodeStoreDeps,

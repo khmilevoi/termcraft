@@ -7,7 +7,7 @@ import { createRenderErrorSink, withRenderErrorCapture } from "./error-capture";
 import type { RenderErrorSink } from "./error-capture";
 import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry";
 import { styledRowsFromSpanLines } from "./span-rows";
-import { makeHeadlessStreams } from "./streams";
+import { createHeadlessStreams } from "./streams";
 
 /**
  * Create a headless OpenTUI renderer on the public API with fake TTY streams and
@@ -16,7 +16,7 @@ import { makeHeadlessStreams } from "./streams";
  * process, the `process.exit` that Spike D requires — never call it here).
  */
 export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> {
-  const { stdin, stdout } = makeHeadlessStreams(size);
+  const { stdin, stdout } = createHeadlessStreams(size);
   const renderer: CliRenderer = await createCliRenderer({
     stdin: stdin as never,
     stdout: stdout as never,

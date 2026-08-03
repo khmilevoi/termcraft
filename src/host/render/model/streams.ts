@@ -8,7 +8,7 @@ import type { Size } from "../../types";
  * config.width` — the stream value OUTRANKS the config (Spike B trap). `isTTY`
  * and `setRawMode` are load-bearing: `setupTerminal()` calls both.
  */
-export function makeHeadlessStreams(size: Size) {
+export function createHeadlessStreams(size: Size) {
   const stdout = Object.assign(
     new Writable({ write: (_chunk, _encoding, callback) => callback() }),
     {

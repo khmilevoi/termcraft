@@ -83,9 +83,7 @@ export type {
 // Tagged error classes are values (usable with `instanceof`) as well as types, so they are
 // re-exported here rather than under `export type` above.
 export {
-  DesignTreeTooDeepError,
   JsonlOpenError,
-  PageEntryNotFoundError,
   ProjectAlreadyExistsError,
   ProjectLayoutError,
   ReorderPagesInvalidOrderError,
@@ -93,6 +91,7 @@ export {
   nodeStoreDeps,
   toTxOutcome,
 } from "./model/factory";
+export { DesignTreeTooDeepError, PageEntryNotFoundError } from "./model/design-tree-store";
 
 // ---- candidate assembly + session-checkpoint facade (phase-6 blocker B3 exposure) ------
 //

@@ -3,12 +3,11 @@ import { PagesManifestInvalidError } from "entities/design-tree";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
 import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease";
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
+import { DesignTreeTooDeepError, PageEntryNotFoundError } from "store/model/design-tree-store";
 import {
-  DesignTreeTooDeepError,
   EntrySourceDriftedError,
   JsonlOpenError,
   ManifestDriftedError,
-  PageEntryNotFoundError,
   ReorderPagesInvalidOrderError,
 } from "store/model/factory";
 import {

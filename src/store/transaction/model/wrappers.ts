@@ -235,9 +235,10 @@ function fileImageForBefore(base: AppendBase): FileImage {
  * re-implementing the identical `readFile`/`isNotFound` dance — currently
  * `store/adapters/export-publish.ts`'s pre-publish re-observe (§10 step 3), and — as of the
  * design-tree canonical source plan's Task 9 — `store/model/factory.ts`'s own
- * `renamePageTitle`/`reorderPages`/`removePage`/`buildPagesManifestOperation`, which observe
- * a design-tree file's or `design/pages.json`'s current image the same way every other
- * wrapper in this file does.
+ * `renamePageTitle`/`reorderPages`/`removePage` and `store/model/design-tree-store.ts`'s
+ * `buildPagesManifestOperation` (split out of `factory.ts` in the design-tree phase-1
+ * closeout), which observe a design-tree file's or `design/pages.json`'s current image the
+ * same way every other wrapper in this file does.
  */
 export function observeFileImage(fs: TransactionFsDeps, relPath: string): SafeFsError | FileImage {
   const bytes = fs.safeFs.readFile(relPath);

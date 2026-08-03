@@ -12,7 +12,7 @@ import { nowIso } from "./types";
 // `OpenProject.pages`/`OpenProject.transactions` (plan Task 1).
 //
 // `readTreeFile`/`listTree`/`readManifest` now delegate to the real `DesignTreeStore`
-// (`store/model/factory.ts`'s `makeDesignTreeStore`, Task 9) instead of the placeholder
+// (`store/model/design-tree-store.ts`'s `createDesignTreeStore`, Task 9) instead of the placeholder
 // `designTreeNotWiredFailure` refusal Task 7 left here. `readSource`/`listSlugs` — the retired
 // `PageReader` pair this adapter kept alive for still-untouched callers — are DELETED as of
 // task 14, together with their `LegacyPageSourceV1` shape: `entrypoint/model/create-shell.ts`

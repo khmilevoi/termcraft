@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { makeHeadlessStreams } from "./streams";
+import { createHeadlessStreams } from "./streams";
 
-describe("makeHeadlessStreams", () => {
+describe("createHeadlessStreams", () => {
   test("stdout reports the requested size and swallows writes", async () => {
-    const { stdout } = makeHeadlessStreams({ w: 100, h: 40 });
+    const { stdout } = createHeadlessStreams({ w: 100, h: 40 });
     expect(stdout.isTTY).toBe(true);
     expect(stdout.columns).toBe(100);
     expect(stdout.rows).toBe(40);
@@ -18,7 +18,7 @@ describe("makeHeadlessStreams", () => {
   });
 
   test("stdin is a TTY with setRawMode", () => {
-    const { stdin } = makeHeadlessStreams({ w: 10, h: 5 });
+    const { stdin } = createHeadlessStreams({ w: 10, h: 5 });
     expect(stdin.isTTY).toBe(true);
     expect(typeof stdin.setRawMode).toBe("function");
     expect(stdin.setRawMode(true)).toBe(stdin);
