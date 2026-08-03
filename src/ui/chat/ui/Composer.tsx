@@ -39,7 +39,7 @@ const BOLD = shellAttrs({ bold: true });
  * it shows the faint ❯ generating… esc to cancel placeholder with no caret. Holding a draft it
  * looks alive, because it is: amber ❯, text in full foreground, blinking caret." This component
  * needed NO change to reproduce either state: `value`/`disabled` (both already props) already
- * select exactly this pairing — an empty value falls to `TextInput`'s faint placeholder branch
+ * select exactly this pairing — an empty value falls to `TextEditor`'s faint placeholder branch
  * regardless of `disabled`, and the caret/cursor already key off `disabled` alone. The caller
  * (`Workspace.tsx`) is what changed: `disabled` is no longer forced by `turn.phase === "running"`
  * on its own, only by a running turn WITH an empty draft — see its own comment at the call site.

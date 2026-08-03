@@ -53,7 +53,11 @@ describe("Workspace read-only presentation", () => {
     expect(text).toContain("READ-ONLY");
     expect(text).toContain("Send · Tweaks · pins disabled");
     expect(text).toContain("read-only — Send disabled");
-    expect(text).not.toContain("█");
+    // WAS also `expect(text).not.toContain("█")`. Task 8's `Composer` renders `ui/text-input`'s
+    // `TextEditor`, whose cursor is the TERMINAL's own native hardware cursor, never a painted
+    // glyph (`ui/text-input`'s own `TextEditor.test.tsx`) — unassertable through
+    // `handle.capture()`'s styled rows either way, so the assertion passed vacuously regardless
+    // of read-only state and proved nothing.
     const attach = findRun(rows, "read-only — Send disabled");
     expect(attach && extractRgb(attach.fg)).toBe(SHELL_PALETTE.red);
   });
@@ -443,7 +447,11 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
     const rows = handle.capture().rows;
     const text = allText(rows);
     expect(text).toContain("generating… esc to cancel");
-    expect(text).not.toContain("█");
+    // WAS also `expect(text).not.toContain("█")`. Task 8's `Composer` renders `ui/text-input`'s
+    // `TextEditor`, whose cursor is the TERMINAL's own native hardware cursor, never a painted
+    // glyph (`ui/text-input`'s own `TextEditor.test.tsx`) — unassertable through
+    // `handle.capture()`'s styled rows either way, so the assertion passed vacuously regardless
+    // of whether the running-turn-with-empty-draft state actually hides the cursor.
     expect(text).toContain("⚠ turn running — send disabled");
   });
 
@@ -692,10 +700,13 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
     await handle.render();
     const rows = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
 
-    // The composer's own placeholder still owns its row — nothing painted over it. The needle
-    // drops the placeholder's first character on purpose: the design paints the block caret
-    // over that column (`design/termcraft-engine.js`'s `put(b,chatX+3,composerTop+2,'█')`), so
-    // the row reads `❯ █sk for changes…`.
+    // The composer's own placeholder still owns its row — nothing painted over it. Task 8's
+    // `Composer` renders `ui/text-input`'s `TextEditor`, which draws the placeholder as ONE
+    // uninterrupted run and overlays the terminal's own native cursor on top of it — nothing
+    // splits the text (`ui/text-input`'s own `TextEditor.test.tsx`). The needle is still a
+    // dropped-first-character substring, not because the placeholder is split, but simply so
+    // this assertion is robust to either rendering: it matches the full, un-split
+    // "Ask for changes…" run just as well as it would have matched the old split-run text.
     const composerRow = rows.findIndex((row) => row.includes("sk for changes…"));
     expect(composerRow).toBeGreaterThanOrEqual(0);
 
