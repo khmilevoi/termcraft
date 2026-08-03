@@ -3,10 +3,4 @@
  * colour/attribute values, taken verbatim from the design system (`pal`/`lightPal`).
  */
 export type { ShellPalette, ShellTextStyle, ShellToken } from "./types";
-export {
-  BLINK_CURSOR,
-  CURSOR_GLYPH,
-  LIGHT_SHELL_PALETTE,
-  SHELL_PALETTE,
-  shellAttrs,
-} from "./model/palette";
+export { LIGHT_SHELL_PALETTE, SHELL_PALETTE, shellAttrs } from "./model/palette";
