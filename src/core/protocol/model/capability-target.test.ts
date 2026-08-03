@@ -43,6 +43,10 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     valid: { chatId: uuidv7() },
     breaks: [{ chatId: "not-a-uuid" }],
   },
+  "chat.load-older": {
+    valid: { chatId: uuidv7() },
+    breaks: [{ chatId: "not-a-uuid" }, { chatId: uuidv7(), extra: 1 }],
+  },
   "model.select": {
     valid: { backend: "anthropic", model: "claude", effort: "medium" },
     breaks: [

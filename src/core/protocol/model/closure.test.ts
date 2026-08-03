@@ -27,6 +27,7 @@ const COMMAND_KINDS_PER_SPEC: string[] = [
   "turn.cancel",
   "chat.create",
   "chat.switch",
+  "chat.load-older",
   "model.select",
   "page.renameTitle",
   "page.removePlan",
@@ -118,8 +119,8 @@ describe("CommandKindV1 closure", () => {
   });
 
   test("has exactly the count the spec fixes, and the constant agrees with the array", () => {
-    expect(COMMAND_KINDS_PER_SPEC.length).toBe(43);
-    expect(COMMAND_KIND_COUNT).toBe(43);
+    expect(COMMAND_KINDS_PER_SPEC.length).toBe(44);
+    expect(COMMAND_KIND_COUNT).toBe(44);
     expect(COMMAND_KINDS_V1.length).toBe(COMMAND_KIND_COUNT);
   });
 

@@ -1,6 +1,11 @@
 import { wrap } from "@reatom/core";
 
-import { buildChatRecordsPayload, resolveChatDisplayName } from "core/chats";
+import {
+  buildChatRecordsOlderPayload,
+  buildChatRecordsPayload,
+  chatRecordsOlderFailurePayload,
+  resolveChatDisplayName,
+} from "core/chats";
 import type { ChatSummaryV1 } from "core/chats";
 import type { PublishableEventV1 } from "core/mailbox";
 import type { EventPayloadByKindV1 } from "core/protocol";
@@ -111,6 +116,7 @@ import { startedOutcome } from "./types";
 
 type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
 type ChatRecordsPayloadV1 = EventPayloadByKindV1["chat.records"];
+type ChatRecordsOlderPayloadV1 = EventPayloadByKindV1["chat.records.older"];
 
 function chatChangedEvent(payload: ChatChangedPayloadV1): PublishableEventV1<"chat.changed"> {
   return { kind: "chat.changed", payload };
@@ -118,6 +124,12 @@ function chatChangedEvent(payload: ChatChangedPayloadV1): PublishableEventV1<"ch
 
 function chatRecordsEvent(payload: ChatRecordsPayloadV1): PublishableEventV1<"chat.records"> {
   return { kind: "chat.records", payload };
+}
+
+function chatRecordsOlderEvent(
+  payload: ChatRecordsOlderPayloadV1,
+): PublishableEventV1<"chat.records.older"> {
+  return { kind: "chat.records.older", payload };
 }
 
 /** {@link loadActiveChatTail}'s successful result — the switched-to chat's refreshed summary plus its `chat.records` event, built together since both are derived from the SAME loaded tail. */
@@ -288,8 +300,48 @@ const handleChatSwitch: CommandHandler<"chat.switch"> = (payload, context) => {
   return startedOutcome([]);
 };
 
-/** The `chat` family's `FamilyHandlerMap` — `chat.create` and `chat.switch`, the only two `chat.*` `CommandKindV1` members (neither is Tier-C deferred). */
+/**
+ * `chat.load-older` (chat-scroll spec §6.4): open the chat, `loadBefore(cursor)`, publish the
+ * page. Sits beside `loadActiveChatTail` because it is the same two port calls with the other
+ * loader.
+ *
+ * UNLIKE `chat.switch`'s tail load, a failure here is NOT silent. That one is a best-effort
+ * side read of an operation that already succeeded; this one IS the operation, and the UI is
+ * sitting on a loading latch waiting for it. So both failure paths publish
+ * `chat.records.older` with a non-null `failure` — which retires that latch by the same path
+ * a success does — and log it as well (errore rule 21).
+ *
+ * The Kernel holds no paging state (spec §6.4): the accumulated window lives in the mirror,
+ * and this handler is stateless between calls. Every port call is `await wrap(...)`
+ * (RTM-A04), matching the rest of this file.
+ */
+const handleChatLoadOlder: CommandHandler<"chat.load-older"> = (payload, context) => {
+  context.launchOperation("kernel.chat.loadOlder", async () => {
+    const handle = await wrap(context.deps.chatReader.open(payload.chatId));
+    if ("code" in handle) {
+      console.warn(
+        `core/kernel: chat.load-older could not open chatId ${payload.chatId}: ${handle.safeMessage}`,
+      );
+      return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, handle))];
+    }
+
+    const loadResult = await wrap(handle.loadBefore(payload.cursor));
+    if ("code" in loadResult) {
+      console.warn(
+        `core/kernel: chat.load-older could not load the page before ${payload.cursor.beforeOffset} for chatId ${payload.chatId}: ${loadResult.safeMessage}`,
+      );
+      return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, loadResult))];
+    }
+
+    return [chatRecordsOlderEvent(buildChatRecordsOlderPayload(payload.chatId, loadResult))];
+  });
+
+  return startedOutcome([]);
+};
+
+/** The `chat` family's `FamilyHandlerMap` — `chat.create`, `chat.switch`, and `chat.load-older`, the only three `chat.*` `CommandKindV1` members (none is Tier-C deferred). */
 export const chatHandlers: FamilyHandlerMap<"chat"> = {
   "chat.create": handleChatCreate,
   "chat.switch": handleChatSwitch,
+  "chat.load-older": handleChatLoadOlder,
 };

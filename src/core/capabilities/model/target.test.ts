@@ -16,7 +16,7 @@ import {
  * a page-order permutation." §13.2 restates it as a contract-test requirement.
  *
  * The single test below ("no forbidden field or sentinel survives extraction...") is THE
- * point of this file: for every one of the 43 `CommandKindV1` members it builds a
+ * point of this file: for every one of the 44 `CommandKindV1` members it builds a
  * schema-valid payload where every field §10.1 forbids from the target carries a unique,
  * grep-able sentinel value (or, for enum/boolean fields a sentinel value cannot represent,
  * a forbidden KEY that must not appear on the target object), extracts the target, and
@@ -191,6 +191,18 @@ function buildCases(): readonly Case[] {
       expectedTarget: { chatId },
       forbiddenSentinels: [],
       forbiddenKeys: [],
+    });
+  }
+  {
+    const chatId = uuidv7();
+    const generation = numberSentinel();
+    const beforeOffset = numberSentinel();
+    cases.push({
+      kind: "chat.load-older",
+      payload: { chatId, cursor: { generation, beforeOffset } },
+      expectedTarget: { chatId },
+      forbiddenSentinels: [String(generation), String(beforeOffset)],
+      forbiddenKeys: ["cursor"],
     });
   }
 
@@ -502,10 +514,10 @@ function buildCases(): readonly Case[] {
 const cases = buildCases();
 
 describe("capabilityTargetExtractors — §10.1 exhaustive security property", () => {
-  test("the case table covers all 43 command kinds, each exactly once", () => {
+  test("the case table covers all 44 command kinds, each exactly once", () => {
     const kinds = cases.map((c) => c.kind).sort();
     expect(kinds).toEqual([...COMMAND_KINDS_V1].sort());
-    expect(new Set(kinds).size).toBe(43);
+    expect(new Set(kinds).size).toBe(44);
   });
 
   test("test self-check: every forbidden sentinel really is present in its own payload", () => {
@@ -620,7 +632,7 @@ describe("§10.1 ordering rule: validate CommandPayloadByKindV1 before extractin
 });
 
 describe("capabilityTargetExtractors map", () => {
-  test("is total over exactly the 43 command kinds — no missing or extra key", () => {
+  test("is total over exactly the 44 command kinds — no missing or extra key", () => {
     const keys = Object.keys(capabilityTargetExtractors).sort();
     expect(keys).toEqual([...COMMAND_KINDS_V1].sort());
   });

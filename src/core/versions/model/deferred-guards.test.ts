@@ -19,7 +19,7 @@ import {
  *
  * This file's own task brief pins the exact Tier-C family list: "The deferred families
  * (restore.*, commit.*, history.open, preview.forwardInput, preview.setTweak) reject with
- * CAPABILITY_UNAVAILABLE." That expands to exactly 10 of the 43 `CommandKindV1` members;
+ * CAPABILITY_UNAVAILABLE." That expands to exactly 10 of the 44 `CommandKindV1` members;
  * the list below is transcribed BY HAND from that sentence, independently of
  * `deferred-guards.ts`'s own `DEFERRED_CAPABILITY_KINDS` constant, so a wrong or drifted
  * implementation list shows up as a failing assertion here rather than being self-confirmed.
@@ -55,10 +55,10 @@ describe("isDeferredCapabilityKind", () => {
     }
   });
 
-  test("is false for every one of the other 33 kinds", () => {
+  test("is false for every one of the other 34 kinds", () => {
     const deferredSet = new Set(EXPECTED_DEFERRED_KINDS);
     const nonDeferred = COMMAND_KINDS_V1.filter((kind) => !deferredSet.has(kind));
-    expect(nonDeferred.length).toBe(33);
+    expect(nonDeferred.length).toBe(34);
     for (const kind of nonDeferred) {
       expect(isDeferredCapabilityKind(kind), `${kind} should not be deferred`).toBe(false);
     }

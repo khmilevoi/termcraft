@@ -45,6 +45,7 @@ export interface CapabilityTargetByKindV1 {
   "turn.cancel": { readonly turnId: string };
   "chat.create": null;
   "chat.switch": { readonly chatId: string };
+  "chat.load-older": { readonly chatId: string };
   "model.select": { readonly backend: string; readonly model: string; readonly effort: string };
   "page.renameTitle": { readonly pageSlug: string };
   "page.removePlan": { readonly pageSlug: string };
@@ -116,6 +117,9 @@ export const capabilityTargetByKindV1Schema = {
   }),
   "chat.create": z.null(),
   "chat.switch": z.strictObject({
+    chatId: uuidv7Schema,
+  }),
+  "chat.load-older": z.strictObject({
     chatId: uuidv7Schema,
   }),
   "model.select": z.strictObject({

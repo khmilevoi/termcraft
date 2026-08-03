@@ -4,7 +4,11 @@ import { pageSlugSchema } from "entities/page";
 
 import { type CommandKindV1 } from "./command-kind";
 import { uuidv7Schema } from "./ids";
-import { frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto";
+import {
+  chatPageCursorDtoV1Schema,
+  frameTokenV1Schema,
+  geometryTokenV1Schema,
+} from "./shared-dto";
 
 /**
  * The closed v1 command-payload registry (kernel-command-contract §8.2): one Zod schema
@@ -125,6 +129,17 @@ const chatCreatePayloadSchema = z.strictObject({});
 /** `chat.switch`: "`chatId`" (§8.2, fixed name). */
 const chatSwitchPayloadSchema = z.strictObject({
   chatId: uuidv7Schema,
+});
+
+/**
+ * `chat.load-older`: the chat, plus the cursor the client last received on `chat.records` or
+ * `chat.records.older` (chat-scroll spec §6.1). The client returns the cursor it was given
+ * and never constructs one — which is why this is the DTO from `shared-dto.ts` and not a
+ * pair of loose numbers validated here.
+ */
+const chatLoadOlderPayloadSchema = z.strictObject({
+  chatId: uuidv7Schema,
+  cursor: chatPageCursorDtoV1Schema,
 });
 
 /**
@@ -483,6 +498,7 @@ export const commandPayloadSchemas = {
   "turn.cancel": turnCancelPayloadSchema,
   "chat.create": chatCreatePayloadSchema,
   "chat.switch": chatSwitchPayloadSchema,
+  "chat.load-older": chatLoadOlderPayloadSchema,
   "model.select": modelSelectPayloadSchema,
   "page.renameTitle": pageRenameTitlePayloadSchema,
   "page.removePlan": pageRemovePlanPayloadSchema,

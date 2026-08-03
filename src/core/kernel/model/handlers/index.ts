@@ -109,6 +109,7 @@ type MigrationPostMvpKind = Exclude<
   | DeferredHandlerKind
   | "chat.create"
   | "chat.switch"
+  | "chat.load-older"
   | "selection.set"
   | "selection.clear"
   | "model.select"
@@ -164,8 +165,8 @@ const migrationPostMvpHandlers: CommandHandlerMap<MigrationPostMvpKind> = {
 };
 
 /**
- * The complete, 43-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the six landed
- * families' maps (29: `chatHandlers` 2, `selectionHandlers` 2, `modelHandlers` 1,
+ * The complete, 44-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the six landed
+ * families' maps (30: `chatHandlers` 3, `selectionHandlers` 2, `modelHandlers` 1,
  * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1, `turnHandlers` 2,
  * `pageHandlers` 5, `pinHandlers` 2) + `migrationPostMvpHandlers` (4, deliberately
  * post-MVP: `migration.*` — see this file's own header for why, not merely "not yet
