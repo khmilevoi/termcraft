@@ -5,6 +5,8 @@ import * as errore from "errore";
 import { API } from "typescript/unstable/sync";
 import type { Diagnostic } from "typescript/unstable/sync";
 
+import { isCodeFile } from "entities/design-tree";
+
 import type { GateError } from "../types";
 import { lineColOf } from "./lexer";
 
@@ -46,11 +48,16 @@ function norm(p: string): string {
 }
 
 /**
- * The synthesized tsconfig (Spike C). `lib: ["esnext"]` is PINNED and load-bearing:
- * the default for `target: esnext` is `lib.esnext.full.d.ts`, which pulls in `dom` +
- * four other libs neither embedded nor wanted in a TUI (where `document` must not
- * exist). `strict` + `noEmit` + `moduleResolution: bundler` + `jsx: react-jsx`
- * mirror the runtime; `types: []` + `skipLibCheck: true` keep the check hermetic.
+ * The synthesized compiler options (Spike C), shared BYTE-IDENTICAL between the
+ * per-file program ({@link synthesizeTsconfig}) and the whole-tree program
+ * ({@link synthesizeTreeTsconfig}) — the two configs differ ONLY in their `files`
+ * array, so this lives in one place rather than being copied twice and drifting.
+ *
+ * `lib: ["esnext"]` is PINNED and load-bearing: the default for `target: esnext` is
+ * `lib.esnext.full.d.ts`, which pulls in `dom` + four other libs neither embedded nor
+ * wanted in a TUI (where `document` must not exist). `strict` + `noEmit` +
+ * `moduleResolution: bundler` + `jsx: react-jsx` mirror the runtime; `types: []` +
+ * `skipLibCheck: true` keep the check hermetic.
  *
  * `jsxImportSource: "@termcraft/runtime"` (phase-8 WP-2) is the one field the hermetic
  * check cannot go without. `jsx: "react-jsx"` alone implies the factory module `react`,
@@ -62,21 +69,36 @@ function norm(p: string): string {
  * exactly the wiring `src/runtime/model/jsx.ts`'s own NOTE names as the phase-8 job.
  * This affects the TYPE CHECK only; the transform that renders a saved page is Bun's.
  */
+const SYNTHESIZED_COMPILER_OPTIONS = {
+  strict: true,
+  jsx: "react-jsx",
+  jsxImportSource: "@termcraft/runtime",
+  noEmit: true,
+  target: "esnext",
+  module: "esnext",
+  moduleResolution: "bundler",
+  lib: ["esnext"],
+  types: [],
+  skipLibCheck: true,
+};
+
+/** The synthesized tsconfig for the per-file program: one candidate file plus the runtime `.d.ts`. */
 function synthesizeTsconfig(candidatePath: string, runtimeDtsPath: string): string {
   return JSON.stringify({
-    compilerOptions: {
-      strict: true,
-      jsx: "react-jsx",
-      jsxImportSource: "@termcraft/runtime",
-      noEmit: true,
-      target: "esnext",
-      module: "esnext",
-      moduleResolution: "bundler",
-      lib: ["esnext"],
-      types: [],
-      skipLibCheck: true,
-    },
+    compilerOptions: SYNTHESIZED_COMPILER_OPTIONS,
     files: [candidatePath, runtimeDtsPath],
+  });
+}
+
+/**
+ * The synthesized tsconfig for the whole-tree program (Task 2, design §8 step 5): every
+ * code file's synthetic absolute path plus the runtime `.d.ts`, so ONE `tsc` program sees
+ * the entire module graph at once instead of N programs each blind to the others.
+ */
+function synthesizeTreeTsconfig(filePaths: readonly string[]): string {
+  return JSON.stringify({
+    compilerOptions: SYNTHESIZED_COMPILER_OPTIONS,
+    files: filePaths,
   });
 }
 
@@ -140,6 +162,52 @@ function mapDiagnostics(
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(toGateError(d, ctx));
+  }
+  return out;
+}
+
+/**
+ * Map one diagnostic to a `GateError` for the WHOLE-TREE program (Task 2 difference #5):
+ * unlike the per-file `toGateError`, there is no single candidate — `d.fileName` is looked
+ * up against the tree's own `Map<absPath, {relPath, source}>` to find which file (if any)
+ * the diagnostic belongs to. A diagnostic whose `fileName` names no tree file, or whose
+ * `pos` is negative (a file-level/global diagnostic carries no position), keeps today's
+ * shape: no `file`, no location — exactly the `inCandidate`-false branch of `toGateError`.
+ */
+function toGateErrorTree(
+  d: Diagnostic,
+  codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
+): GateError {
+  const entry = d.fileName !== undefined ? codeFiles.get(norm(d.fileName)) : undefined;
+  if (entry === undefined || d.pos < 0)
+    return { kind: "type", code: `TS${d.code}`, message: d.text };
+  const loc = lineColOf(entry.source, d.pos);
+  return {
+    kind: "type",
+    code: `TS${d.code}`,
+    message: d.text,
+    file: entry.relPath,
+    line: loc.line,
+    column: loc.column,
+  };
+}
+
+/**
+ * Dedupe on `(code, fileName, pos)` (same rule as {@link mapDiagnostics} — the union
+ * double-reports) and map each surviving diagnostic to a `type`-kind `GateError`, resolved
+ * against whichever tree file (if any) it belongs to.
+ */
+function mapTreeDiagnostics(
+  diags: readonly Diagnostic[],
+  codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
+): GateError[] {
+  const seen = new Set<string>();
+  const out: GateError[] = [];
+  for (const d of diags) {
+    const key = `${d.code}|${d.fileName ?? ""}|${d.pos}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(toGateErrorTree(d, codeFiles));
   }
   return out;
 }
@@ -259,6 +327,222 @@ export function createTypeChecker(
 ): (source: string, fileName: string) => Promise<GateError[]> {
   return async (source, fileName) => {
     const result = runTypeCheck(config, source, fileName);
+    if (result instanceof Error)
+      return [
+        { kind: "type", code: "TYPE_CHECK_UNAVAILABLE", message: unavailableMessage(result) },
+      ];
+    return result;
+  };
+}
+
+/** One directory's immediate children (Task 2 difference #3) — basenames only, mirroring the compiler's own `FileSystemEntries` shape (`node_modules/typescript/dist/api/fs.d.ts:1-4`). */
+interface DirEntries {
+  readonly files: Set<string>;
+  readonly directories: Set<string>;
+}
+
+/**
+ * Build the synthetic directory tree implied by every absolute path the whole-tree VFS
+ * serves (Task 2 difference #3): a `Map` from each directory's own absolute path to its
+ * immediate children, keyed exactly as `directoryExists`/`getAccessibleEntries` are asked
+ * about it below. `cwd` (the synthetic root) always exists, even for an empty tree.
+ */
+function buildSyntheticTree(cwd: string, absPaths: readonly string[]): Map<string, DirEntries> {
+  const tree = new Map<string, DirEntries>();
+  const ensureDir = (dir: string): DirEntries => {
+    const existing = tree.get(dir);
+    if (existing !== undefined) return existing;
+    const created: DirEntries = { files: new Set(), directories: new Set() };
+    tree.set(dir, created);
+    return created;
+  };
+  ensureDir(cwd);
+  for (const absPath of absPaths) {
+    const segments = absPath.slice(cwd.length + 1).split("/");
+    const fileName = segments.at(-1) ?? "";
+    let currentDir = cwd;
+    for (const segment of segments.slice(0, -1)) {
+      ensureDir(currentDir).directories.add(segment);
+      currentDir = `${currentDir}/${segment}`;
+      ensureDir(currentDir);
+    }
+    if (fileName !== "") ensureDir(currentDir).files.add(fileName);
+  }
+  return tree;
+}
+
+/**
+ * The whole-tree virtual FS (Task 2 difference #3): FIVE hooks, not the per-file program's
+ * three. `readFile`/`fileExists`/`realpath` serve the tsconfig, the runtime `.d.ts`, and
+ * every code file exactly as the per-file program does for its one candidate; `undefined`
+ * for anything else still means "read the real disk" (difference #4), which is how the libs
+ * next to the exe are found.
+ *
+ * `directoryExists`/`getAccessibleEntries` are the two hooks the per-file program never
+ * needed, because a program with one file has no sibling to resolve. MEASURED against the
+ * real `tsc.exe` while writing this task: serving a sibling module's TEXT via `readFile` +
+ * `fileExists` + `realpath` alone is NOT enough — module resolution short-circuits on the
+ * DIRECTORY probe (`directoryExists` returning `undefined`, i.e. "no such directory") before
+ * it ever calls `fileExists` on a candidate file inside it, so a real shared-module import
+ * failed with `TS2307` even though the target file's content was being served correctly.
+ * Adding these two — both members of the compiler API's own `FileSystem` interface
+ * (`node_modules/typescript/dist/api/fs.d.ts:5-21`) — is what makes resolution work: a
+ * directory exists iff it is the synthetic root or a prefix implied by some tree path
+ * (`pages/`, `lib/`), and its accessible entries are exactly its immediate children in the
+ * synthetic tree. Do not remove these as "redundant" with `readFile`/`fileExists` — they are
+ * not; they answer a different, earlier question the resolver asks first.
+ */
+function createTreeVirtualFs(params: {
+  readonly tsconfigPath: string;
+  readonly tsconfig: string;
+  readonly runtimeDtsPath: string;
+  readonly runtimeDts: string;
+  readonly codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>;
+  readonly tree: ReadonlyMap<string, DirEntries>;
+}): {
+  readFile(name: string): string | null | undefined;
+  fileExists(name: string): boolean | undefined;
+  realpath(p: string): string | undefined;
+  directoryExists(dir: string): boolean | undefined;
+  getAccessibleEntries(dir: string): { files: string[]; directories: string[] } | undefined;
+} {
+  const { tsconfigPath, tsconfig, runtimeDtsPath, runtimeDts, codeFiles, tree } = params;
+  return {
+    readFile(name) {
+      const n = norm(name);
+      if (n === tsconfigPath) return tsconfig;
+      if (n === runtimeDtsPath) return runtimeDts;
+      return codeFiles.get(n)?.source;
+    },
+    fileExists(name) {
+      const n = norm(name);
+      if (n === tsconfigPath || n === runtimeDtsPath || codeFiles.has(n)) return true;
+      return undefined;
+    },
+    realpath(p) {
+      const n = norm(p);
+      if (n === tsconfigPath || n === runtimeDtsPath || codeFiles.has(n)) return n;
+      return undefined;
+    },
+    directoryExists(dir) {
+      return tree.has(norm(dir)) ? true : undefined;
+    },
+    getAccessibleEntries(dir) {
+      const entries = tree.get(norm(dir));
+      if (entries === undefined) return undefined;
+      return { files: [...entries.files], directories: [...entries.directories] };
+    },
+  };
+}
+
+/**
+ * Run one hermetic type check over EVERY code file in the tree at once (Task 2, design §8
+ * step 5). Mirrors {@link runTypeCheck}'s subprocess-boundary handling exactly (difference
+ * #6): the API construction + `updateSnapshot` + diagnostic retrieval span is wrapped, any
+ * failure becomes ONE `TypeCheckUnavailableError` for the WHOLE tree — never an empty list,
+ * never silently attributed to a single page — and `api.close()` always runs, with a close
+ * failure logged rather than turning a successful check into a crash.
+ */
+function runTreeTypeCheck(
+  config: TypeCheckerConfig,
+  files: ReadonlyMap<string, string>,
+): GateError[] | TypeCheckUnavailableError {
+  const cwd = norm(os.tmpdir());
+  const tsconfigPath = `${cwd}/${TSCONFIG_NAME}`;
+  const runtimeDtsPath = `${cwd}/${RUNTIME_DTS_NAME}`;
+
+  // Difference #1: only CODE files are fed to the compiler and served over the VFS — the
+  // SAME `isCodeFile` predicate the whole-tree scan and the closure walk key on, never a
+  // second reading of "is this code". A non-code file is skipped entirely: not in the
+  // synthesized tsconfig's `files`, not served by `readFile`/`fileExists`/`realpath`, and
+  // not part of the synthetic directory tree either.
+  const codeFiles = new Map<string, { relPath: string; source: string }>();
+  for (const [relPath, source] of files) {
+    if (!isCodeFile(relPath)) continue;
+    codeFiles.set(norm(path.join(cwd, relPath)), { relPath, source });
+  }
+
+  // Difference #2: the synthesized tsconfig's `files` array is every code file's synthetic
+  // absolute path plus the runtime declaration — compiler options are byte-identical to the
+  // per-file program's via the shared `SYNTHESIZED_COMPILER_OPTIONS`.
+  const tsconfig = synthesizeTreeTsconfig([...codeFiles.keys(), runtimeDtsPath]);
+  const tree = buildSyntheticTree(cwd, [tsconfigPath, runtimeDtsPath, ...codeFiles.keys()]);
+  const virtualFs = createTreeVirtualFs({
+    tsconfigPath,
+    tsconfig,
+    runtimeDtsPath,
+    runtimeDts: config.runtimeDts,
+    codeFiles,
+    tree,
+  });
+
+  // Same raw try/catch boundary as `runTypeCheck` — NOT `errore.try`: the Bun/Go bridge can
+  // throw non-Error values, which `errore.try` re-throws rather than wrapping.
+  try {
+    const api = new API({ cwd, tsserverPath: config.tscExePath, fs: virtualFs });
+    try {
+      const snapshot = api.updateSnapshot({ openProjects: [tsconfigPath] });
+      const project = snapshot.getProject(tsconfigPath) ?? snapshot.getProjects()[0];
+      if (project === undefined)
+        return new TypeCheckUnavailableError({
+          cause: new Error("no project loaded from the synthesized tree tsconfig"),
+        });
+      return mapTreeDiagnostics(collectDiagnostics(project.program), codeFiles);
+    } finally {
+      try {
+        api.close();
+      } catch (closeCause) {
+        console.warn(
+          "type-check (tree): api.close() failed:",
+          closeCause instanceof Error ? closeCause.message : String(closeCause),
+        );
+      }
+    }
+  } catch (cause) {
+    return new TypeCheckUnavailableError({ cause });
+  }
+}
+
+/**
+ * Build the gate's WHOLE-TREE `typeCheck` primitive (Task 2, design §8 step 5): ONE `tsc`
+ * program over every code file in the tree at once, replacing the per-file
+ * {@link createTypeChecker} — which cannot see a sibling module at all, so a page importing
+ * shared code always failed with a spurious `TS2307`. `files` is the SAME tree-relative
+ * path → source text map the whole-tree scan already receives. Every returned error carries
+ * `file` set to the tree-relative path it belongs to, with `line`/`column` derived from
+ * THAT file's own source; a diagnostic the compiler attributes to no known tree file (a
+ * global/config diagnostic) keeps today's shape — no `file`, no location. A crashed or
+ * unavailable compiler yields a single fatal `TYPE_CHECK_UNAVAILABLE` error for the WHOLE
+ * tree — NEVER an empty list, and never silently attributed to one page.
+ *
+ * Not wired to any port or caller yet — `createTypeChecker` stays in place, still used by
+ * production code, until Task 3 deletes its last caller and deletes it along with the
+ * per-file-only regression test in `type-check.test.ts`.
+ *
+ * MEASURED (Step 5, 2026-08-03, Bun 1.3.14, this machine): a synthesized fixture of N files
+ * (1 shared module + N-1 pages importing it, mirroring the two tests above) run through N
+ * sequential `createTypeChecker` calls (the per-file program, one per file, including the
+ * shared module itself) vs. ONE `createTreeTypeChecker` call (this function) over all N at
+ * once, wall-clock, real `tsc.exe`. Two independent runs, both directionally identical:
+ *
+ * | N (files) | N × per-file `createTypeChecker` | 1 × `createTreeTypeChecker` |
+ * | --------- | --------------------------------- | ---------------------------- |
+ * |         3 |                   208ms / 164ms   |            63ms / 66ms       |
+ * |        10 |                   499ms / 568ms   |            54ms / 70ms       |
+ * |        30 |                  1681ms / 2674ms  |            72ms / 121ms      |
+ *
+ * The whole-tree program was FASTER than the N-program alternative at every measured N, by a
+ * growing margin as N rises (it pays the subprocess-spin-up cost once instead of N times) —
+ * consistent with the pre-task spike's own number (289ms for 3 files in one program vs
+ * 2216ms for 2 per-file calls). The probe script that produced this table lives at
+ * `.superpowers/sdd/2026-08-03-design-tree-phase-2-closure-graph/measure-task2.ts` — a
+ * scratch tool, not part of this task's deliverable, not committed.
+ */
+export function createTreeTypeChecker(
+  config: TypeCheckerConfig,
+): (input: { readonly files: ReadonlyMap<string, string> }) => Promise<GateError[]> {
+  return async ({ files }) => {
+    const result = runTreeTypeCheck(config, files);
     if (result instanceof Error)
       return [
         { kind: "type", code: "TYPE_CHECK_UNAVAILABLE", message: unavailableMessage(result) },

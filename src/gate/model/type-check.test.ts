@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 
-import { createTypeChecker } from "./type-check";
+import { createTreeTypeChecker, createTypeChecker } from "./type-check";
 
 // Integration test against the REAL Go compiler. The libs are co-located with the exe
 // in the platform package, so no extraction is needed — point straight at it. Skips
@@ -131,6 +131,9 @@ export default n
 // being reshaped by phase-8 WP-1 and this check must not depend on which name it lands under.
 const realChecker = createTypeChecker({ tscExePath: TSC_EXE, runtimeDts: RUNTIME_DTS });
 
+// Task 2: the whole-tree replacement primitive, same real compiler + real declaration.
+const treeChecker = createTreeTypeChecker({ tscExePath: TSC_EXE, runtimeDts: RUNTIME_DTS });
+
 /** A page in the shape §5.8 asks agents for: `definePage` meta, a Reatom atom, JSX from the catalog. */
 const FIXTURE_PAGE = `import { definePage, reatomComponent, Panel, Text, Gauge, atom } from "@termcraft/runtime"
 
@@ -175,6 +178,64 @@ describe("the generated @termcraft/runtime declaration, through the real type ch
       expect(errors.every((e) => e.kind === "type")).toBe(true);
       expect(errors.some((e) => e.code === "TS2322")).toBe(true);
       expect(errors.some((e) => e.file === "fixture.tsx")).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  const SHARED = `export const TITLE = "Shared"
+export const WIDTH: number = 80
+`;
+  const CONSUMER = `import { definePage, reatomComponent, Panel, Text } from "@termcraft/runtime"
+import { TITLE, WIDTH } from "../lib/theme"
+
+export const meta = definePage({
+  kitApiVersion: 1, title: "Home", minSize: { w: WIDTH, h: 24 }, theme: "dark-default",
+})
+
+export default reatomComponent(() => (
+  <Panel id="root" title={TITLE}><Text id="label" color="accent">hi</Text></Panel>
+), "Home")
+`;
+
+  withTsc(
+    "a page importing a shared module type-checks clean in ONE whole-tree program",
+    async () => {
+      const errors = await treeChecker({
+        files: new Map([
+          ["lib/theme.ts", SHARED],
+          ["pages/home.tsx", CONSUMER],
+        ]),
+      });
+      expect(errors).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a type error in a SHARED module is reported against the file that contains it",
+    async () => {
+      const broken = CONSUMER.replace("{TITLE}", "{TITLE.toFixed(2)}");
+      expect(broken).not.toBe(CONSUMER);
+      const errors = await treeChecker({
+        files: new Map([
+          ["lib/theme.ts", SHARED],
+          ["pages/home.tsx", broken],
+        ]),
+      });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.every((e) => e.kind === "type")).toBe(true);
+      expect(errors.some((e) => e.file === "pages/home.tsx")).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  // The regression this whole task exists to prevent coming back.
+  // DELETE WITH createTypeChecker (Task 3)
+  withTsc(
+    "the per-file program this replaces could not see the sibling at all",
+    async () => {
+      const errors = await realChecker(CONSUMER, "pages/home.tsx");
+      expect(errors.some((e) => e.code === "TS2307")).toBe(true);
     },
     TIMEOUT_MS,
   );
