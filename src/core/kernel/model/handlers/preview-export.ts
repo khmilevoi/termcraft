@@ -26,7 +26,12 @@ import {
   type WorkspaceStateV1,
 } from "core/ports";
 import type { PreviewCommandOutcomeV1 } from "core/preview";
-import { readPageEntrySource, readPageOrder } from "core/project";
+import {
+  type CanonicalTreeIndexV1,
+  readCanonicalTreeIndex,
+  readPageEntrySource,
+  readPageOrder,
+} from "core/project";
 import {
   type CapabilityStateV1,
   type CommandPayloadByKindV1,
@@ -36,11 +41,11 @@ import {
   canonicalHash,
   isUuidv7,
 } from "core/protocol";
-import type { DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
+import type { DesignFileEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug, Size } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { designTreeRoot, readTreeInventory } from "./page-descriptors";
+import { designTreeRoot } from "./page-descriptors";
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
 import { noOpOutcome, startedOutcome } from "./types";
 
@@ -229,19 +234,30 @@ async function extractAndCachePageMeta(
   return extraction.meta;
 }
 
+/**
+ * ONE TREE READ PER RESOLVE, AND ONE PER LOOP (design-tree phase 2 Task 5). `treeIndex` replaced
+ * the pair of optional `pages`/`treeInventory` parameters this function used to take, for the
+ * same reason they existed and one more: `readCanonicalTreeIndex` produces the manifest's page
+ * list, the sorted inventory, the tree's `treeRevision` and each page's `closureHash` from a
+ * SINGLE read, so a caller looping over every page (`resolveExportPageInputs`) threads one index
+ * through instead of two independently-read halves that could describe different trees.
+ *
+ * It is a "caller may precompute", never a fallback masking a required decision: a caller with no
+ * index builds the identical one right here, and there is no second read path with different
+ * semantics. The one cost this makes explicit is that a single-page resolve
+ * (`selectCurrentSource`) now runs the whole-tree pass — the same trade Task 5 takes everywhere:
+ * that path already spawns a host child, which dominates a token scan and one `tsc` program.
+ */
 async function resolvePageSettings(
   deps: HandlerContext["deps"],
   pageSlug: PageSlug,
-  /** An already-read `design/pages.json` page list, when the caller has one — a loop over every page reads the manifest ONCE rather than once per page. */
-  pages?: readonly PageEntryV1[],
-  /** An already-read tree inventory, for the same reason `pages` is threaded through. */
-  treeInventory?: readonly DesignFileEntryV1[],
+  treeIndex?: CanonicalTreeIndexV1,
 ): Promise<FailureDtoV1 | ResolvedPageSettingsV1> {
-  const source = await readPageEntrySource(deps.designReader, pageSlug, pages);
-  if ("code" in source) return source;
+  const index = treeIndex ?? (await wrap(readCanonicalTreeIndex(deps)));
+  if ("code" in index) return index;
 
-  const expectedFiles = treeInventory ?? (await readTreeInventory(deps.designReader));
-  if ("code" in expectedFiles) return expectedFiles;
+  const source = await readPageEntrySource(deps.designReader, pageSlug, index.pages);
+  if ("code" in source) return source;
 
   const key: PageMetaKeyV1 = {
     pageSlug,
@@ -261,7 +277,7 @@ async function resolvePageSettings(
     sourceHash: source.sourceHash,
     treeRoot: designTreeRoot(deps.projectStore.root),
     entryRelPath: source.relPath,
-    expectedFiles,
+    expectedFiles: index.inventory.files,
     kitApiVersion: meta.kitApiVersion,
     minSize: meta.minSize,
     theme: meta.theme,
@@ -1328,18 +1344,15 @@ function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
 async function resolveExportPageInputs(
   context: HandlerContext,
 ): Promise<FailureDtoV1 | readonly ExportPageInputV1[]> {
-  const entries = await readPageOrder(context.deps.designReader);
-  if ("code" in entries) return entries;
-
-  // Read ONCE for the whole loop, for the same reason the page list above is: every page of
-  // one export renders against the same tree revision (design §9.2).
-  const treeInventory = await readTreeInventory(context.deps.designReader);
-  if ("code" in treeInventory) return treeInventory;
+  // Read ONCE for the whole loop — page order, inventory and the whole-tree pass together:
+  // every page of one export renders against the same tree revision (design §9.2).
+  const index = await wrap(readCanonicalTreeIndex(context.deps));
+  if ("code" in index) return index;
 
   const pages: ExportPageInputV1[] = [];
-  for (const [manifestIndex, entry] of entries.entries()) {
+  for (const [manifestIndex, entry] of index.pages.entries()) {
     const pageSlug = entry.slug;
-    const settings = await resolvePageSettings(context.deps, pageSlug, entries, treeInventory);
+    const settings = await resolvePageSettings(context.deps, pageSlug, index);
     if ("code" in settings) return settings;
     pages.push({
       pageSlug,

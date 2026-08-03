@@ -39,6 +39,10 @@ export {
   readPageOrder,
 } from "./model/descriptors";
 
+// --- Design §7's one canonical tree read (inventory + revision + per-page closure hash) ----
+export type { CanonicalTreeIndexV1 } from "./model/tree-index";
+export { readCanonicalTreeIndex } from "./model/tree-index";
+
 // --- KCC §8.2 page mutations -----------------------------------------------------------------
 export type {
   ConfirmPageRemoveDeps,
