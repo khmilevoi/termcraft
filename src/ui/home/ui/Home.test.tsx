@@ -142,11 +142,11 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
   });
 
   // Design `home()`, `design/termcraft-engine.js:145-146` overlaps a blinking cursor onto the
-  // placeholder's first cell via `text(...)` then `put(...)` at the SAME column — `TextInput`
-  // (the outgoing component) emulated that by splitting the placeholder into two runs. `TextEditor`
-  // (Task 9) reproduces the overlap BY CONSTRUCTION instead: the cursor is the terminal's own
-  // native hardware cursor, physically occupying the placeholder's first cell, never a painted
-  // glyph — see `TextEditor.test.tsx`'s own documentation of this. `host/render`'s
+  // placeholder's first cell via `text(...)` then `put(...)` at the SAME column — the prior,
+  // now-deleted single-line input emulated that by splitting the placeholder into two runs.
+  // `TextEditor` (Task 9) reproduces the overlap BY CONSTRUCTION instead: the cursor is the
+  // terminal's own native hardware cursor, physically occupying the placeholder's first cell,
+  // never a painted glyph — see `TextEditor.test.tsx`'s own documentation of this. `host/render`'s
   // `capture()`/styled-run buffer has no cursor overlay to observe (confirmed by inspecting
   // `renderer.ts`: it reads `getSpanLines()` only), so the placeholder renders as ONE
   // uninterrupted run and there is no `█` glyph to assert on any more.
@@ -363,7 +363,8 @@ describe("Home screen — blocked/login outcome (design homeHealth('login'), :16
     expect(border && extractRgb(border.fg)).toBe<string>(SHELL_PALETTE.border);
     const title = findRun(frame, "describe");
     expect(title && extractRgb(title.fg)).toBe<string>(SHELL_PALETTE.dim);
-    // `TextEditor`'s caret run carries no `attributes` (unlike `TextInput`'s bold caret), so while
+    // `TextEditor`'s caret run carries no `attributes` (unlike the prior single-line input's bold
+    // caret), so while
     // `blocked` — where `caretFg` and `placeholderFg` are BOTH `faint` — host/render's own
     // adjacent-same-style-run merge (the same mechanism `hintKeyState`'s own comment above
     // documents for the status bar) coalesces the caret and the placeholder into ONE run,

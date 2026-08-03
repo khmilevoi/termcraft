@@ -804,10 +804,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(text).toContain("read-only — Send disabled");
   });
 
-  // RE-ENABLED IN TASK 11: this walk types into the Home prompt, the Workspace composer, and the
-  // pin popup — it needs every editor Tasks 8-10 mount (composer in Task 8, Home prompt in
-  // Task 9, pin popup in Task 10), so it stays skipped until Task 11 verifies it end to end.
-  test.skip("walks the complete phase-7 command and event flow through the rendered App", async () => {
+  test("walks the complete phase-7 command and event flow through the rendered App", async () => {
     const kernel = createFakeKernel();
     const preview = createFakePreviewSession();
     kernel.setPreview(preview.handle);

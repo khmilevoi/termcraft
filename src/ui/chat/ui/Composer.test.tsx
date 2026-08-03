@@ -136,11 +136,12 @@ describe("Composer component (design chatSeq composer block)", () => {
     expect(value && extractRgb(value.fg)).toBe<string>(SHELL_PALETTE.fg);
   });
 
-  // WAS "...cursor overlapping its first cell" (finding §2.6, phase-8 Task 18), pinning
-  // `TextInput`'s manual `text`-then-`put`-at-the-same-column overlap: the placeholder's first
-  // character rendered as a SEPARATE cursor run, the rest as a second run. `TextEditor` draws the
-  // placeholder as ONE uninterrupted run and overlays the terminal's own native cursor on top of
-  // it (`ui/text-input`'s own `TextEditor.test.tsx`, "draws the caret run and the placeholder
+  // WAS "...cursor overlapping its first cell" (finding §2.6, phase-8 Task 18), pinning the
+  // prior single-line editor's manual `text`-then-`put`-at-the-same-column overlap: the
+  // placeholder's first character rendered as a SEPARATE cursor run, the rest as a second run.
+  // `TextEditor`, its 2026-08-03 replacement, draws the placeholder as ONE uninterrupted run and
+  // overlays the terminal's own native cursor on top of it (`ui/text-input`'s own
+  // `TextEditor.test.tsx`, "draws the caret run and the placeholder
   // while empty" — the captured text is the whole, un-split placeholder) — nothing here to split,
   // and the cursor itself is unassertable through `handle.capture()` for the reason the previous
   // test's comment gives.

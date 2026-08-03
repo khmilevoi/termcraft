@@ -70,9 +70,18 @@ describe("PinInputPopup component (design wsPinInput)", () => {
     // `handlePaste`/the `value` setter apply to typed or pasted input — so the embedded `\n`
     // survives in the buffer. What proves single-line-ness here instead is the render: the
     // component pins the editor row's height to 1 whenever `multiline={false}` (see
-    // `TextEditor`'s `height={props.multiline ? props.rows : 1}`), so the second line is clipped,
-    // never painted — "first" shows, "second" never does.
-    expect(findRun(frame, "first")).toBeDefined();
-    expect(findRun(frame, "second")).toBeUndefined();
+    // `TextEditor`'s `height={props.multiline ? props.rows : 1}`), so only ONE of the two logical
+    // lines is ever visible — never both joined onto one row.
+    //
+    // MEASURED (Task 11's `setText`-moves-cursor-to-the-end fix, `TextEditor.tsx`'s
+    // `createHandle`): `setText` now also sets `cursorOffset` to the seed's own length, landing the
+    // cursor on "second" — and the single visible row follows the cursor the same way any text
+    // input's viewport does, so "second" is what actually renders and "first" is what's clipped.
+    // This scenario (an embedded newline in an externally-seeded value) has no production path —
+    // `setPinInput`'s only two call sites both pass `""` — so which line wins is not a behaviour
+    // this popup's real users can ever observe either way; what this test still pins is that
+    // exactly one line renders, never both.
+    expect(findRun(frame, "second")).toBeDefined();
+    expect(findRun(frame, "first")).toBeUndefined();
   });
 });

@@ -31,7 +31,17 @@ const REF_SINKS = new WeakMap<EditorBridge, Sink>();
 
 function createHandle(renderable: EditorRenderable): TextEditorHandle {
   return {
-    setText: (text) => renderable.setText(text),
+    // G11 (measured against the installed @opentui/core@0.4.5): `EditBufferRenderable.setText`
+    // replaces the content but leaves the cursor wherever the native buffer already had it —
+    // offset 0 on a freshly-mounted or freshly-cleared editor — rather than moving it to the end
+    // of the new text. `TextEditorHandle.setText`'s own contract (`types.ts`) already promised
+    // "cursor to the end"; this line is what actually keeps that promise, so typing right after an
+    // external write (`slash-open`'s `"/"`, the F6 repair fill) continues from the END of what was
+    // just inserted instead of inserting before it.
+    setText: (text) => {
+      renderable.setText(text);
+      renderable.cursorOffset = text.length;
+    },
     clear: () => renderable.clear(),
     deleteCharBackward: () => {
       renderable.deleteCharBackward();
@@ -71,8 +81,9 @@ function sinkFor(bridge: EditorBridge): Sink {
  * The one editable text surface in the shell: the Workspace composer, the Home prompt, the
  * pin-input popup, and — because the slash filter IS the composer/prompt buffer — the slash menu.
  *
- * REPLACES `TextInput`, and carries its design citations forward. The placeholder-overlap rule
- * that component emulated came from `put`-over-`text` at the same column in
+ * REPLACES the prior single-line input component (deleted 2026-08-03), and carries its design
+ * citations forward. The placeholder-overlap rule that component emulated came from
+ * `put`-over-`text` at the same column in
  * `design/termcraft-engine.js` — Home's `home()` `:145-146`
  * (`this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint});
  * this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true});`) and the composer's own placeholder branch,

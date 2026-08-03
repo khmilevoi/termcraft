@@ -28,11 +28,12 @@ export function pinListRowCount(pins: readonly PinListRow[]): number {
  * How many rows `Composer` actually renders: the seam row, an optional attach line, and however
  * many rows the editor takes.
  *
- * WAS the constant `2 | 3` (spec §6.3): `TextInput` always rendered exactly one row, because the
- * design draws the input on exactly one — `drawChat` `:256`, `workspace` `:594`. The editor now
- * grows to `editorMaxRows(frameH)` (`ui/text-input`'s own approved divergence, spec §3), and its
- * height is subtracted from the chat's budget in the SAME frame the text changes, which is why
- * the count is passed in rather than asked of the renderable one frame later.
+ * WAS the constant `2 | 3` (spec §6.3): the prior single-line input always rendered exactly one
+ * row, because the design draws the input on exactly one — `drawChat` `:256`, `workspace` `:594`.
+ * The editor (`ui/text-input`'s `TextEditor`, 2026-08-03) now grows to `editorMaxRows(frameH)`
+ * (its own approved divergence, spec §3), and its height is subtracted from the chat's budget in
+ * the SAME frame the text changes, which is why the count is passed in rather than asked of the
+ * renderable one frame later.
  *
  * At `editorRows === 1` this is exactly today's 2 and 3.
  */
