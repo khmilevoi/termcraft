@@ -231,6 +231,13 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         meta: key.meta,
         option: key.option,
         eventType: key.eventType,
+        // Which parser produced this key: "kitty" only when the terminal actually answered the
+        // extended-protocol request `createCliRenderer` makes by default (§4.3). This is the ONLY
+        // honest signal — `renderer.useKittyKeyboard` reports what we REQUESTED, not what the
+        // terminal implements — and it is deliberately after-the-fact: adequate for diagnosis,
+        // inadequate for driving UI, which is why the fallback chords (§4.4) are always bound
+        // rather than gated on detection.
+        source: key.source,
       },
       context,
       intent,
