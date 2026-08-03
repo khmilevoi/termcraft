@@ -331,3 +331,45 @@ the removal lands.
   `src/store/jsonl/model/chat-index.ts` — the total count.
 - `design-prompts/claude-design-prompt-10.md` — the brief (untracked directory).
 - `docs/architecture/` — updated where this changes documented structure.
+
+## 11. Design iteration 10 answers
+
+Recorded so the implementation reads one place, not the design tree, for its literals.
+Each answer cites the `design/` file and line that now carries it.
+
+1. **Older-messages indicator** — `▲ N earlier messages` keeps its exact wording and its role,
+   but stops being a summary: it becomes the first row of the loaded content, a reachable
+   target (scroll or mouse-down triggers the next page load). Drawn only while `N` (records not
+   yet loaded) is nonzero — once every record is on the client but the buffer is still taller
+   than the viewport, the row is not drawn at all, `design/28-chat-scroll.dc.html:43`,
+   `design/termcraft-engine.js:1502` (`top.mode==='more'`).
+2. **Newer-messages indicator** — none, by design. It reuses the pinned attach-row above the
+   composer that §08 already draws pin-attach text into, literal text
+   `▼ scrolled up · ^D follow latest`. Not a floating badge, never claims a count,
+   `design/28-chat-scroll.dc.html:45`, `design/termcraft-engine.js:1525`
+   (`o.following===false` branch).
+3. **Scrollbar** — drawn: a 1-column scrollbar at the sequence's right edge. Track glyph `│`
+   (`P.line`), thumb built from `█`/half-cell `▀`/`▄` colored `P.amberDim`, no end arrows,
+   `design/28-chat-scroll.dc.html:44`, `design/termcraft-engine.js:1478-1484` (`scrollbar()`),
+   called at `:1519`.
+4. **Older-page loading state, and its failure state** — loading: the indicator row becomes
+   `⠹ loading earlier messages…`, no count while in flight,
+   `design/termcraft-engine.js:1504`. Failure: `✗ <short technical message>` (the same
+   no-absolute-paths bound every failure surface here respects) plus a second line
+   `PgUp retries` — no separate retry key, the same gesture that requested the page retries it,
+   `design/28-chat-scroll.dc.html:46-47`, `design/termcraft-engine.js:1505-1506`.
+5. **Start-of-chat marker** — `╌╌╌ start of chat ╌╌╌`, centered, faint (`P.faint`), no arrow: a
+   dead end, not a target — nothing loads from reaching it, `design/28-chat-scroll.dc.html:47`,
+   `design/termcraft-engine.js:1507`.
+6. **Indicator behavior while a turn is running** — scrolling away and a running turn are
+   independent: the live block still tails and folds exactly as §03 defines, unchanged, off the
+   bottom of a viewport scrolled elsewhere. The same pinned-row banner slot is reused, just
+   `P.amberHi` (insistent) with the wording `▼ turn running below · ^D follow latest` in place
+   of the away-banner's `▼ scrolled up · ^D follow latest` — it can say a turn is running below,
+   never how much it grew, `design/28-chat-scroll.dc.html:48`,
+   `design/termcraft-engine.js:1602`.
+7. **Status-bar key row** — the scroll keys DO appear: every one of the seven frames' own
+   `wsStatus(...)` call lists `PgUp/PgDn` (labeled `'scroll'`, or `'scroll · retry'` in the
+   failure state, `PgDn`-only at the start-of-chat state, since there is nothing above to page
+   to), `design/28-chat-scroll.dc.html:46`, e.g. `design/termcraft-engine.js:1541,1557,1566,
+   1576,1588,1605,1617`.
