@@ -15,7 +15,13 @@ import type { PageSlug } from "entities/page";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
 // change), so importing the barrel back from here would be a self-referencing cycle.
-import { hasTreePath, runGate, runTreeImports } from "../model/gate";
+import {
+  PageSourceUnscannableError,
+  hasTreePath,
+  runGate,
+  runTreeImports,
+  unscannableMessage,
+} from "../model/gate";
 import type { GatePorts } from "../model/gate";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
@@ -606,10 +612,17 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
 
   /**
    * The page-contract stage alone (see the port's own doc for why this is deliberately not
-   * `runPage`). `checkPageContract` is pure and synchronous — no compiler, no smoke child,
-   * no `GatePorts` at all — so this only wraps it and re-labels its errors the way `runGate`
-   * itself does (`gate/model/gate.ts`: `kind: "contract"`, `file` set to the display name),
-   * rather than mapping them a second, divergent way.
+   * `runPage`). `checkPageContract` is pure and synchronous — no compiler, no smoke child, no
+   * `GatePorts` at all — but it can still THROW past its own return type: deep JSX nesting
+   * raises `./jsx`'s `JsxNestingTooDeepError` past `MAX_JSX_NESTING_DEPTH` (fix round 1,
+   * Important 2 — the prior wording claimed this method already "re-labels its errors the way
+   * `runGate` itself does", which was false: it only checked `contract instanceof Error` for
+   * the RETURNED `SourceStreamTruncatedError` and let the THROWN case escape uncaught, leaving
+   * `core/kernel`'s errors-as-values discipline entirely since neither caller wraps this call).
+   * So this wraps the call in the SAME `errore.try` shape `runGate` uses around the identical
+   * call (`gate/model/gate.ts:164-176`) and re-labels its errors the way `runGate` itself does
+   * (`kind: "contract"`, `file` set to the display name), rather than mapping them a second,
+   * divergent way.
    */
   async function extractPageMeta(input: {
     readonly source: string;
@@ -620,19 +633,24 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     // The entry's own extension decides the reading. It used to be assumed JSX off a
     // slug-built `${slug}.tsx`, which is wrong for the legal `pages/a.ts` entry shape
     // `entryPathSchema` permits — the residual this method's own doc registered.
-    const contract = checkPageContract(input.source, parsesJsx(input.entryRelPath));
+    const contract = errore.try({
+      try: () => checkPageContract(input.source, parsesJsx(input.entryRelPath)),
+      catch: (cause) => new PageSourceUnscannableError({ file: fileName, cause }),
+    });
     if (contract instanceof Error) {
-      // A source whose token stream does not cover it has no readable `meta` — reporting
-      // `meta: null` with the real reason beats reporting "this page declares no settings",
-      // which would be a false diagnosis (this method's own doc: a page that fails one stage
-      // still has a perfectly readable `meta`, and the converse must be just as honest).
+      // A source whose token stream does not cover it (returned `SourceStreamTruncatedError`),
+      // or whose read threw past the engine's own limits (caught above, wrapped the same way
+      // `runGate` wraps it), has no readable `meta` — reporting `meta: null` with the real
+      // reason beats reporting "this page declares no settings", which would be a false
+      // diagnosis (this method's own doc: a page that fails one stage still has a perfectly
+      // readable `meta`, and the converse must be just as honest).
       return {
         meta: null,
         errors: [
           {
             kind: "contract" as const,
             code: "UNSCANNABLE_SOURCE",
-            message: `${fileName}: ${contract.message}`,
+            message: `${fileName}: ${unscannableMessage(contract)}`,
             file: fileName,
             line: 1,
             column: 1,

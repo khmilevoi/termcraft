@@ -18,6 +18,18 @@ export const meta = definePage({ kitApiVersion: 1, title: "Dashboard", minSize: 
 export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel>)
 `;
 
+/**
+ * Fix round 1 (Important 1): the ONE source shape whose `"jsx"`/`"no-jsx"` readings actually
+ * diverge, measured. `readJsxTextRanges` (`gate/model/jsx.ts`) only runs for `"jsx"` — as
+ * `"no-jsx"` these are ordinary `<`/`a`/`>`/`{` tokens and the source reads clean. As `"jsx"`,
+ * 200 unclosed `<a>{` opens recurse past `MAX_JSX_NESTING_DEPTH` (64) and the reader throws
+ * `JsxNestingTooDeepError`. A source with no JSX and no `.ts`-only syntax (e.g. the brief's own
+ * title-only fixture) reads identically under both, so it cannot discriminate `parsesJsx
+ * (entryRelPath)` from the deleted hardcoded `"jsx"` — reverting `extractPageMeta` to always
+ * read `"jsx"` would still pass a test built on one. This one cannot: see the two tests below.
+ */
+const DEEP_JSX_NESTING = "<a>{".repeat(200);
+
 /** A trivial, offline-runnable fake SmokeRenderer — a fixed scripted result, no host process. */
 function fakeSmokeRenderer(result: SmokeResult): SmokeRenderer {
   return { render: async (_request: SmokeRequest) => result };
@@ -74,20 +86,58 @@ describe("createGateRunnerAdapter", () => {
   });
 
   test("extractPageMeta reads a .ts entry as TypeScript, not as assumed JSX", async () => {
-    // The brief's own fixture (title-only meta, non-reatomComponent default) can never produce
-    // a non-null `meta` at all — `page-contract.ts`'s `validateMetaShape` requires
-    // `kitApiVersion`/`theme`/`minSize` alongside `title` before it returns anything but `null`,
-    // independent of which syntax reads the source. Completed to a full, valid `meta` (mirroring
-    // every other fixture's `cleanSource` shape in this file) so the assertion actually exercises
-    // what the test's name promises: a `.ts` entry's meta extracts via `parsesJsx(entryRelPath)`
-    // instead of the deleted hardcoded `"jsx"` assumption.
+    // Fix round 1 (Important 1): the brief's own fixture (title-only meta, non-reatomComponent
+    // default) can never produce a non-null `meta` at all — `page-contract.ts`'s
+    // `validateMetaShape` requires `kitApiVersion`/`theme`/`minSize` alongside `title` before it
+    // returns anything but `null` — but completing it to a valid `meta` (this file's first fix
+    // round) still did not discriminate: that fixture has no JSX and no `.ts`-only syntax, so
+    // both readings agree and the test passed identically under the deleted hardcoded `"jsx"`.
+    // `DEEP_JSX_NESTING` (this file's header) is the measured discriminator — read as `"jsx"` it
+    // throws past the nesting ceiling; read as `"no-jsx"` (what a `.ts` entry gets) it is inert
+    // punctuation and the meta parses clean. See the companion test below for the `.tsx` half.
+    const source = `${DEEP_JSX_NESTING}\nexport const meta = definePage({ kitApiVersion: 1, title: "plain", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const extraction = await adapter.extractPageMeta({
-      source: `export const meta = definePage({ kitApiVersion: 1, title: "plain", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`,
+      source,
       slug: "plain" as PageSlug,
       entryRelPath: "lib/plain.ts",
     });
     expect(extraction.meta?.title).toBe("plain");
+  });
+
+  test("extractPageMeta turns a deep-JSX-nesting throw into an UNSCANNABLE_SOURCE result, not an escaped exception", async () => {
+    // The `.tsx` half of the test above's discriminator: the SAME source, read as `"jsx"` this
+    // time because the entry is `.tsx`, throws `JsxNestingTooDeepError` out of
+    // `checkPageContract` (past `MAX_JSX_NESTING_DEPTH`). Fix round 1 (Important 2):
+    // `extractPageMeta` used to let that throw escape uncaught — this pins that it is now
+    // converted to an ordinary `{ meta: null, errors: […] }` result instead, the same way
+    // `runGate` converts the identical throw (`gate/model/gate.ts`'s own `errore.try`, "an
+    // escaping throw would crash the turn instead of rejecting one page" — the identical stakes
+    // apply here since neither of this method's callers wraps the call in a try/catch of its
+    // own).
+    const source = `${DEEP_JSX_NESTING}\nexport const meta = definePage({ kitApiVersion: 1, title: "plain", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`;
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const extraction = await adapter.extractPageMeta({
+      source,
+      slug: "plain" as PageSlug,
+      entryRelPath: "lib/plain.tsx",
+    });
+    expect(extraction.meta).toBeNull();
+    expect(extraction.errors[0]?.code).toBe("UNSCANNABLE_SOURCE");
+  });
+
+  test("extractPageMeta puts the entry's real tree-relative path in a contract error's `file`", async () => {
+    // Fix round 1 (Minor 7): the contract error's `file` is now `input.entryRelPath`, not the
+    // deleted `${input.slug}.tsx` guess — an observable output change this suite otherwise never
+    // pinned. `SLUG` ("dash") is deliberately unrelated to the entry below.
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const extraction = await adapter.extractPageMeta({
+      source: brokenContract,
+      slug: SLUG,
+      entryRelPath: "screens/overview/index.tsx",
+    });
+    expect(extraction.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
   test("runPage() deliberately does not scan imports — the whole-tree scan owns that, and the TURN is what makes it fatal (task 14 wired it; this pins the split, not a gap)", async () => {
@@ -869,16 +919,20 @@ describe("createGateRunnerAdapter", () => {
     }
   });
 
-  test("runPage() with empty tree coordinates refuses honestly rather than mounting a fabricated path — a REAL disk-resolving renderer finds nothing", async () => {
-    // `treeRoot`/`expectedFiles` are required inputs now (task 16) — a caller can no longer
-    // OMIT them, so this test reproduces the honest-refusal path by supplying them explicitly
-    // empty instead, exercising the same "nothing resolves" outcome the adapter's own deleted
-    // `?? ""`/`?? []` fallback used to produce for an omitting caller.
+  test("runPage() surfaces an unresolvable <treeRoot>/<entryRelPath> as a smoke error rather than a page defect", async () => {
+    // `treeRoot`/`expectedFiles` are required inputs now (task 16), so a caller can no longer
+    // omit them to reach this path. Fix round 1 (Important 4): the empty-string `treeRoot` this
+    // test used to pin is a shape no production caller can construct, and neither field is
+    // load-bearing here anyway — measured, `realDiskSmokeRenderer` (this file's own :34-51) only
+    // does `Bun.file(`${treeRoot}/${entryRelPath}`)` and never reads `expectedFiles` at all (the
+    // inventory check lives in the real host's `loadPage`, which this fake bypasses). A
+    // REALISTIC absolute root that simply has nothing staged under it reproduces the identical
+    // "nothing resolves" outcome without pinning an unreachable input shape.
     const adapter = createGateRunnerAdapter({ smokeRenderer: realDiskSmokeRenderer() });
     const result = await adapter.runPage({
       source: cleanSource,
       slug: SLUG,
-      treeRoot: "",
+      treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
     });
@@ -888,7 +942,7 @@ describe("createGateRunnerAdapter", () => {
     ).toBe(true);
   });
 
-  test("runPage() prefers entryRelPath over the slug-derived default for a contract error's `file`, even when entry is unrelated to slug", async () => {
+  test("runPage() puts the entry's real tree-relative path in a contract error's `file`, even when the entry is unrelated to the slug", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const result = await adapter.runPage({

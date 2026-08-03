@@ -22,27 +22,38 @@ import { parsesJsx, scanTreeImports } from "./tree-scan";
  * instead of letting it escape into the turn — the same shape and the same reasoning as
  * `tree-scan.ts`'s `TreeFileUnscannableError` for the whole-tree scan.
  */
-class PageSourceUnscannableError extends errore.createTaggedError({
+export class PageSourceUnscannableError extends errore.createTaggedError({
   name: "PageSourceUnscannableError",
   message: 'the page source at "$file" could not be read to the end',
 }) {}
 
 /**
+ * The readable text for an UNSCANNABLE_SOURCE diagnostic: `error`'s own message, with its
+ * `cause`'s name/message appended when present so the diagnostic names the real reason (a JSX
+ * nesting ceiling, a scanner overflow) rather than only the wrapper's generic text. EXPORTED
+ * (task 16 fix round 1, Important 2) so `gate/adapters/gate-runner.ts`'s `extractPageMeta` can
+ * report the identical failure over the identical `checkPageContract` call the same way, rather
+ * than re-deriving this unwrap a second time.
+ */
+export function unscannableMessage(error: Error): string {
+  const cause = error.cause;
+  return cause instanceof Error
+    ? `${error.message} — ${cause.name}: ${cause.message}`
+    : error.message;
+}
+
+/**
  * The one fatal {@link runGate} returns for a page whose source could not be read to the end,
  * whichever of the two mechanisms reported it — a returned `SourceStreamTruncatedError` or a
- * caught engine throw. `cause` is unwrapped when present so the diagnostic names the real
- * reason (a stack overflow's own message, say) rather than only the wrapper's.
+ * caught engine throw.
  */
 function unscannablePage(fileName: string, error: Error): GateResult {
-  const cause = error.cause;
-  const message =
-    cause instanceof Error ? `${error.message} — ${cause.name}: ${cause.message}` : error.message;
   return createGateResult(
     [
       {
         kind: "contract",
         code: "UNSCANNABLE_SOURCE",
-        message: `${fileName}: ${message}`,
+        message: `${fileName}: ${unscannableMessage(error)}`,
         file: fileName,
         line: 1,
         column: 1,

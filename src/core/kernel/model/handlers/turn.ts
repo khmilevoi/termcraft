@@ -1352,7 +1352,7 @@ async function runTurnStart(
     // smoke finding, fixlane-K1-turn-spine.json): the real host `SmokeRenderer` resolves a
     // page's source via `Bun.file` inside a fresh scratch-directory child process, so a
     // tree-relative path never resolves there. `runTurnValidation` joins each entry onto it
-    // for `runPage.sourcePath` and passes the SHORT tree-relative name as `fileName`, so a
+    // for `runPage.treeRoot` and passes the SHORT tree-relative name as `entryRelPath`, so a
     // Gate rejection reports `pages/home.tsx`, never the absolute path.
     designRoot: `${candidate.root}/${DESIGN_DIRNAME}`,
   });

@@ -113,7 +113,12 @@ export interface ManifestSliceResultV1 {
  * unchanged source (new/renamed `PageMeta` field, changed default, changed parse semantics).
  * Bumping it invalidates every cached entry by construction — no eviction pass is needed.
  */
-export const PAGE_META_EXTRACTOR_VERSION = 1;
+// BUMPED 1 -> 2 (task 16 fix round 1): `extractPageMeta` now reads a `.ts` entry as TypeScript
+// instead of assuming JSX (`parsesJsx(entryRelPath)` replaced a hardcoded `"jsx"`), which changes
+// what a `.ts`-entry page's meta extraction returns for unchanged source. A `.tsx` entry's
+// reading is unaffected, but the version is per-extractor, not per-entry-shape, so every cached
+// entry is invalidated by construction rather than auditing which ones actually changed.
+export const PAGE_META_EXTRACTOR_VERSION = 2;
 
 /**
  * The outcome of {@link GateRunner.extractPageMeta}: the page's static `meta` when the page
