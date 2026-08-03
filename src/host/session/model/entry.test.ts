@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { FrameDecoder, type WireFrame } from "infrastructure/framing";
 
@@ -10,6 +10,64 @@ import {
   encodeClientHello,
 } from "../../protocol";
 import { parseHostArgs, runHostStdio } from "./entry";
+
+/**
+ * `runHostStdio` now calls `denyDynamicCodeCapability()` on every boot (task 10) — real and
+ * correct for the production `_host --stdio` child, which is a dedicated one-shot process. But
+ * `describe("runHostStdio ...")` below calls it IN-PROCESS, and `bun test` does NOT run one
+ * file per process (measured, task-10-report.md: two files invoked together share one
+ * `process.pid`) — so without restoring here, the first test below would leave Function/eval
+ * denied for every OTHER file this invocation happens to run afterward. Restored exactly the
+ * way `capability-denial.test.ts` does, for the same reason.
+ */
+const originalFunctionConstructor = Function.prototype.constructor;
+const originalGlobalFunction = (globalThis as Record<string, unknown>).Function;
+const originalGlobalEval = globalThis.eval;
+const asyncFunctionPrototype = Object.getPrototypeOf(async () => {}) as { constructor: unknown };
+const originalAsyncFunctionConstructor = asyncFunctionPrototype.constructor;
+const generatorFunctionPrototype = Object.getPrototypeOf(function* () {}) as {
+  constructor: unknown;
+};
+const originalGeneratorFunctionConstructor = generatorFunctionPrototype.constructor;
+const asyncGeneratorFunctionPrototype = Object.getPrototypeOf(async function* () {}) as {
+  constructor: unknown;
+};
+const originalAsyncGeneratorFunctionConstructor = asyncGeneratorFunctionPrototype.constructor;
+
+function restoreRealm(): void {
+  Object.defineProperty(Function.prototype, "constructor", {
+    configurable: true,
+    writable: true,
+    value: originalFunctionConstructor,
+  });
+  Object.defineProperty(globalThis, "Function", {
+    configurable: true,
+    writable: true,
+    value: originalGlobalFunction,
+  });
+  Object.defineProperty(globalThis, "eval", {
+    configurable: true,
+    writable: true,
+    value: originalGlobalEval,
+  });
+  Object.defineProperty(asyncFunctionPrototype, "constructor", {
+    configurable: true,
+    writable: true,
+    value: originalAsyncFunctionConstructor,
+  });
+  Object.defineProperty(generatorFunctionPrototype, "constructor", {
+    configurable: true,
+    writable: true,
+    value: originalGeneratorFunctionConstructor,
+  });
+  Object.defineProperty(asyncGeneratorFunctionPrototype, "constructor", {
+    configurable: true,
+    writable: true,
+    value: originalAsyncGeneratorFunctionConstructor,
+  });
+}
+
+afterEach(restoreRealm);
 
 describe("parseHostArgs", () => {
   test("accepts a compiled-binary _host --stdio argv", () => {
@@ -84,6 +142,15 @@ describe("runHostStdio (in-memory transport)", () => {
         },
       },
     });
+
+    // `runHostStdio` denies dynamic code the instant its own `host-hello` goes out (task 10)
+    // — correct for production, where decoding that SAME `host-hello` happens in a totally
+    // separate supervisor process that never installed the denial. This in-memory-transport
+    // test plays BOTH roles in one process, so restore BEFORE decoding below: otherwise
+    // `decodeHostHello`'s zod schema would be attempting ITS OWN first-ever JIT compile
+    // (task-10-report.md) against an already-denied `Function`, an artifact of the test
+    // harness sharing a realm across both sides of the wire, not a real production path.
+    restoreRealm();
 
     // Decode the host's framed output.
     const decoder = new FrameDecoder();

@@ -467,5 +467,36 @@ function validateMeta(value: unknown): ProtocolError | ValidatedPageMeta {
   return result.data;
 }
 
+/**
+ * Force `pageMetaSchema`'s Zod v4 fast-path validator to compile NOW, while `Function` is
+ * still available in this realm. Call this BEFORE `host/session/model/capability-denial.ts`'s
+ * `denyDynamicCodeCapability()`, never after.
+ *
+ * WHY THIS EXISTS (task 10, measured not assumed — see task-10-report.md for the stack).
+ * `$ZodObjectJIT` (Zod v4's `core/schemas.js`) builds each object schema's compiled validator
+ * with `new Function` the FIRST time that SPECIFIC schema instance is parsed in this process —
+ * a per-schema, lazily-built, then-permanently-cached closure, entirely separate from the
+ * schema's `Function`-availability PROBE (`util.js`'s `allowsEval`, itself a SEPARATE
+ * process-wide memo that resolves once, gracefully, whichever schema touches it first). Denying
+ * `Function` before THIS schema's own first `.safeParse()` call throws straight out of
+ * `validateMeta`, uncaught — `loadPage` calls `import()` (running the page's own module code)
+ * BEFORE `validateMeta`, so simply denying earlier would leave the page's module scope free to
+ * run; denying later, without this warm-up, crashes every legitimate mount's OWN meta check.
+ * `pageSizeSchema` (`minSize`'s type) is a SEPARATE, NESTED `z.object(...)` with its OWN
+ * independent fastpass state — MEASURED, not assumed: warming with `{}` alone (no `minSize`)
+ * left `pageSizeSchema`'s own compile untriggered, because the generated OUTER validator only
+ * reaches the NESTED schema's own parse when the field is actually present, and a real page's
+ * meta always carries one. The dummy value below is therefore STRUCTURALLY COMPLETE, not just
+ * object-shaped, so both schemas compile here.
+ */
+export function warmPageMetaValidator(): void {
+  pageMetaSchema.safeParse({
+    kitApiVersion: 1,
+    title: "warm-up",
+    theme: "warm-up",
+    minSize: { w: 1, h: 1 },
+  });
+}
+
 /** Re-exported so `LoadPageArgs` consumers do not redeclare the tree's own file-entry shape. */
 export type { DesignFileEntryV1 };

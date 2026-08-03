@@ -10,9 +10,10 @@ import {
 } from "../../protocol";
 import { createHeadlessRenderer } from "../../render";
 import type { ExitRequest, HostSessionDeps, OutboundMessage } from "../types";
+import { denyDynamicCodeCapability } from "./capability-denial";
 import { createHostSession } from "./host-state-machine";
 import { registerRuntimeResolver } from "./resolver";
-import { loadPage } from "./source-mount";
+import { loadPage, warmPageMetaValidator } from "./source-mount";
 
 const HEARTBEAT_INTERVAL_MS = 1000;
 
@@ -71,7 +72,29 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
   const session = createHostSession({
     runtimeDeclaration: io.deps.runtimeDeclaration,
     limits: io.deps.limits,
-    loadPage,
+    loadPage: (args) => {
+      // MUST fire exactly HERE — as the first statements of the ONE function that turns a
+      // mount request into `import()`ing a page's actual source, which is the first point
+      // UNTRUSTED page code executes at all, including code placed at module scope (task-10
+      // Step 6). Everything before this call is either boot (module graph linking) or WIRE
+      // PROTOCOL the host's own trusted code decodes — and neither turned out to be free of
+      // the capability being denied: MEASURED, not assumed (task-10-report.md, real spawned
+      // `_host --stdio` processes, not the loadPage-only Step 1 probe, which had its own
+      // measured blind spot — see the report). Zod v4's `$ZodObjectJIT` builds each object
+      // schema's fast-path validator with `new Function` the FIRST time that SPECIFIC schema
+      // is parsed in THIS process — a per-schema, lazily-built, then-cached closure, distinct
+      // from the shared `Function`-availability probe. `clientHelloSchema` (the handshake) and
+      // `controlEnvelopeSchema` (the OUTER shape of every inbound mount/resize/query envelope,
+      // including the very mount request that reaches this closure) both hit that path on
+      // their own first use and are ALREADY warmed by real traffic by the time `loadPage` is
+      // ever called (hello, then this envelope). `pageMetaSchema` — the PAGE's own meta,
+      // `source-mount.ts` — hits the SAME path but is NOT warmed by anything before this point
+      // (`loadPage` reaches it only AFTER `import()`, i.e., after the page's own code already
+      // ran), so it is warmed EXPLICITLY, one line below, before denial installs.
+      warmPageMetaValidator();
+      denyDynamicCodeCapability();
+      return loadPage(args);
+    },
     createRenderer: async (size) => {
       const renderer = await (io.deps.createRenderer ?? createHeadlessRenderer)(size);
       liveRenderer = renderer;

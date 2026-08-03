@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import type { DesignFileEntryV1 } from "entities/design-tree";
 
 import { ProtocolError } from "../../protocol";
+import { DynamicCodeDeniedError, denyDynamicCodeCapability } from "./capability-denial";
 import { registerRuntimeResolver } from "./resolver";
 import {
   computeSourceHash,
@@ -12,6 +13,7 @@ import {
   computeSourceHash as hashBytes,
   loadPage,
   scanClosureImports,
+  warmPageMetaValidator,
 } from "./source-mount";
 
 describe("computeSourceHash", () => {
@@ -488,5 +490,114 @@ describe("createTreePathVerifier", () => {
     });
     expect(await verifyB("/t", "lib/deep/a.ts")).toBeUndefined();
     expect(seenB).toEqual(["/t/lib", "/t/lib/deep", "/t/lib/deep/a.ts"]);
+  });
+});
+
+/**
+ * Task 10, Step 6: the end-to-end proof. Writes a tree whose page runs a dynamic-code attack
+ * IN MODULE SCOPE — the same place a page's own top-level code runs, `import()`ed by the REAL
+ * `loadPage`, not a fake — with `denyDynamicCodeCapability()` installed the same way
+ * `entry.ts` installs it. The assertion that matters is the MARKER, not the throw: a test that
+ * only checks `result instanceof ProtocolError` would still pass if the payload ran and then
+ * something else, unrelated, happened to fail. Asserting the marker never moved is what proves
+ * the payload's own body never executed.
+ *
+ * Mutates the realm (that is the mechanism under test) — restored in `afterEach`, exactly like
+ * `capability-denial.test.ts` and `entry.test.ts`, for the same measured reason: `bun test` does
+ * NOT run one file per process (task-10-report.md), so an unrestored mutation here would leak
+ * into every OTHER file this invocation happens to run afterward.
+ */
+describe("loadPage end-to-end: a page cannot reach dynamic code once denyDynamicCodeCapability is wired (task 10)", () => {
+  const originalFunctionConstructor = Function.prototype.constructor;
+  const originalGlobalFunction = (globalThis as Record<string, unknown>).Function;
+  const originalGlobalEval = globalThis.eval;
+  const asyncFunctionPrototype = Object.getPrototypeOf(async () => {}) as { constructor: unknown };
+  const originalAsyncFunctionConstructor = asyncFunctionPrototype.constructor;
+  const generatorFunctionPrototype = Object.getPrototypeOf(function* () {}) as {
+    constructor: unknown;
+  };
+  const originalGeneratorFunctionConstructor = generatorFunctionPrototype.constructor;
+  const asyncGeneratorFunctionPrototype = Object.getPrototypeOf(async function* () {}) as {
+    constructor: unknown;
+  };
+  const originalAsyncGeneratorFunctionConstructor = asyncGeneratorFunctionPrototype.constructor;
+
+  afterEach(() => {
+    Object.defineProperty(Function.prototype, "constructor", {
+      configurable: true,
+      writable: true,
+      value: originalFunctionConstructor,
+    });
+    Object.defineProperty(globalThis, "Function", {
+      configurable: true,
+      writable: true,
+      value: originalGlobalFunction,
+    });
+    Object.defineProperty(globalThis, "eval", {
+      configurable: true,
+      writable: true,
+      value: originalGlobalEval,
+    });
+    Object.defineProperty(asyncFunctionPrototype, "constructor", {
+      configurable: true,
+      writable: true,
+      value: originalAsyncFunctionConstructor,
+    });
+    Object.defineProperty(generatorFunctionPrototype, "constructor", {
+      configurable: true,
+      writable: true,
+      value: originalGeneratorFunctionConstructor,
+    });
+    Object.defineProperty(asyncGeneratorFunctionPrototype, "constructor", {
+      configurable: true,
+      writable: true,
+      value: originalAsyncGeneratorFunctionConstructor,
+    });
+    delete (globalThis as Record<string, unknown>).__TASK10_ATTACK_MARKER__;
+  });
+
+  test("a page running the AsyncFunction route in module scope never moves the marker, and loadPage's failure names DynamicCodeDeniedError", async () => {
+    // AsyncFunction — one of the three intrinsics the operator measured live, distinct from
+    // the brief's own row 4 ([].constructor.constructor) — reached via `(async () => {}).constructor`,
+    // which `Function.prototype.constructor` alone does not close (capability-denial.ts).
+    const ATTACK_PAGE = `import { definePage } from "@termcraft/runtime"
+
+const AsyncFn = (async () => {}).constructor as unknown as (code: string) => () => Promise<unknown>
+const payload = AsyncFn("globalThis.__TASK10_ATTACK_MARKER__ = 'PAYLOAD_EXECUTED'; return 42")
+await payload()
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "Attack page",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function P() { return null }
+`;
+    const root = await writeTree({ "pages/attack.tsx": ATTACK_PAGE });
+    registerRuntimeResolver();
+
+    // Exactly the sequence `entry.ts`'s `loadPage` wrapper installs, in the same order, for
+    // the same measured reason (task-10-report.md): warm the page-meta validator's Zod
+    // fastpass BEFORE denying — `validateMeta` needs `Function` on ITS OWN first use too, and
+    // it only runs AFTER `import()` — then deny before `loadPage` ever imports page code.
+    warmPageMetaValidator();
+    denyDynamicCodeCapability();
+
+    const result = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/attack.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/attack.tsx"]),
+    });
+
+    // THE MARKER: proves the payload's own body never ran — the stronger claim than "something
+    // threw somewhere".
+    expect((globalThis as Record<string, unknown>).__TASK10_ATTACK_MARKER__).toBeUndefined();
+
+    expect(result).toBeInstanceOf(ProtocolError);
+    if (!(result instanceof ProtocolError)) throw result;
+    expect(result.cause).toBeInstanceOf(DynamicCodeDeniedError);
+    expect((result.cause as DynamicCodeDeniedError).entryPoint).toBe("AsyncFunction");
   });
 });
