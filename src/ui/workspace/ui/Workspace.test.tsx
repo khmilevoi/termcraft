@@ -6,7 +6,9 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
+import type { UiDeps } from "ui/app";
 import { createUiDeps } from "ui/app";
+import type { ChatRecord as ChatRecordDto } from "ui/mirror";
 import {
   TEST_SHA,
   TEST_TS,
@@ -32,6 +34,49 @@ const allText = (rows: StyledRun[][]) =>
     .join("");
 const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((run) => run.text.includes(needle));
+
+const CHAT = uuidv7();
+
+/**
+ * A `chat.records` user-record DTO fixture — the same field set `ChatScrollback.test.tsx`'s own
+ * `userRecord` factory uses, copied locally rather than imported across module test files.
+ */
+function chatUserRecord(recordId: string, text: string): ChatRecordDto {
+  return {
+    kind: "user",
+    recordId,
+    turnId: uuidv7(),
+    text,
+    selection: null,
+    pins: [],
+    ts: TEST_TS,
+  };
+}
+
+/** Puts a trusted, open project with `loaded` of `total` records on screen. */
+function seedHistory(
+  deps: UiDeps,
+  input: {
+    loaded: number;
+    total: number;
+    cursor: { generation: number; beforeOffset: number } | null;
+  },
+): void {
+  deps.mirror.apply(
+    snapshot({ projectId: uuidv7(), activePageSlug: null, activeChatId: CHAT, trust: "trusted" }),
+  );
+  deps.mirror.apply(
+    event("chat.changed", { activeChatId: CHAT, added: [], updated: [], removedChatIds: [] }),
+  );
+  deps.mirror.apply(
+    event("chat.records", {
+      chatId: CHAT,
+      records: Array.from({ length: input.loaded }, (_, i) => chatUserRecord(`r${i}`, `message ${i}`)),
+      prevCursor: input.cursor,
+      totalRecordCount: input.total,
+    }),
+  );
+}
 
 describe("Workspace read-only presentation", () => {
   test("disables composer affordances and uses only approved read-only vocabulary/colors", async () => {
@@ -654,6 +699,13 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
           warnings: [],
           ts: TEST_TS,
         })),
+        // CHANGED (chat-scroll spec §5.1/§5.2, this task): the row budget that used to enforce
+        // this overdraw guard is gone — `Workspace.tsx` no longer summarises whatever the
+        // block's OWN overflow arithmetic predicted. The `<scrollbox>` now clips instead, and
+        // this stays `atStart: true` (`prevCursor: null`, `totalRecordCount` equal to
+        // `records.length`) so the ONLY thing under test here is the clip, not the "▲ N earlier
+        // messages" indicator — that row's own content is covered by "the indicator row carries
+        // the unloaded count" (`describe("chat stream viewport …")`, below).
         prevCursor: null,
         totalRecordCount: 40,
       }),
@@ -671,13 +723,10 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
     const composerRow = rows.findIndex((row) => row.includes("sk for changes…"));
     expect(composerRow).toBeGreaterThanOrEqual(0);
 
-    // Every chat body row sits ABOVE the composer; none leaked past it into the border.
+    // Every chat body row sits ABOVE the composer; none leaked past it into the border — the
+    // `<scrollbox>`'s own clip, not a row-budget prediction.
     const lastBodyRow = rows.findLastIndex((row) => row.includes("словомного"));
     expect(lastBodyRow).toBeLessThan(composerRow);
-
-    // And the history that did not fit is summarised the way the design does it, rather than
-    // silently vanishing.
-    expect(rows.some((row) => row.includes("earlier messages"))).toBe(true);
   });
 });
 
@@ -1201,5 +1250,45 @@ describe("Workspace preview pane header", () => {
     const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
     expect(ruleRun).toBeDefined();
     expect(ruleRun && extractRgb(ruleRun.fg)).toBe(SHELL_PALETTE.amber);
+  });
+});
+
+describe("chat stream viewport (chat-scroll spec §5.1)", () => {
+  test("a history longer than the panel is clipped to the viewport, not overdrawn", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    seedHistory(deps, { loaded: 80, total: 300, cursor: { generation: 1, beforeOffset: 400 } });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    // Sticky bottom: the newest record is on screen, the oldest loaded one is not.
+    expect(text).toContain("message 79");
+    expect(text).not.toContain("message 0 ");
+    // The composer survived — the defect the old row budget existed to prevent. The needle
+    // drops the placeholder's first character on purpose (same reasoning as the "never
+    // overdraws" test above): the focused composer paints its blinking cursor over it, so the
+    // row reads `❯ █sk for changes…`, not `❯ Ask for changes…`.
+    expect(text).toContain("sk for changes…");
+  });
+
+  // A SEPARATE, SMALLER window than the clipping test above (chat-scroll spec §5.4): the
+  // indicator is rendered as the FIRST row of the scroll content, and `stickyStart="bottom"`
+  // scrolls a window taller than the viewport away from it — proven by the clipping test above,
+  // where "message 0" (the loaded window's own first record, well below the indicator) is
+  // already off screen. Asserting the indicator's own text needs a window that fits inside the
+  // viewport WITHOUT scrolling, so this loads far fewer records than are on disk (still a
+  // sizeable, realistic gap — 220 unloaded) while keeping every loaded row on screen at once.
+  test("the indicator row carries the unloaded count", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    seedHistory(deps, { loaded: 10, total: 230, cursor: { generation: 1, beforeOffset: 400 } });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    // 230 on disk, 10 in the window — the row counts what is NOT loaded (spec §5.4), never
+    // what is scrolled off screen.
+    expect(allText(handle.capture().rows)).toContain("220");
   });
 });

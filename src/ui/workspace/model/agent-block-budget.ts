@@ -1,5 +1,3 @@
-import type { PinListRow } from "ui/chat";
-
 /**
  * Design's own hard cap on the ephemeral status block's FOLDABLE timeline, excluding the pinned
  * spinner row (review round 1, Finding 1 — the previous `maxRows` had no upper bound at all):
@@ -18,79 +16,25 @@ export const MAX_TIMELINE_ROWS = 11;
  *  consumes exactly 2 rows (top + bottom) of `frameH`, regardless of content. */
 const CHAT_PANEL_BORDER_ROWS = 2;
 
-/** How many rows `PinList` actually renders for `pins` — nothing when there are none (`PinList`'s
- *  own `pins.length === 0` early return), else one header row plus one row per pin. */
-export function pinListRowCount(pins: readonly PinListRow[]): number {
-  return pins.length === 0 ? 0 : 1 + pins.length;
-}
-
-/** How many rows `Composer` actually renders: the seam row, an optional attach line, and the
- *  single-row `TextInput` (`Composer.tsx`; `TextInput.tsx` always renders exactly one row). */
-export function composerRowCount(hasAttach: boolean): number {
-  return hasAttach ? 3 : 2;
-}
-
 /**
- * The row budget passed to `foldTurnTimeline` as `maxRows` (review round 1, Finding 1 — the
- * previous `Math.max(3, frameH - AGENT_BLOCK_CHROME_ROWS)` both had no upper bound and measured
- * from `frameH` alone, ignoring `ws-chat`'s own border and every sibling `AgentStatusBlock`
- * actually shares `ws-chat-stream` with).
+ * The row budget passed to `foldTurnTimeline` as `maxRows` (chat-scroll spec §5.3).
  *
- * `frameH` is `ws-chat`'s own OUTER height; everything this function subtracts is a row that
- * physically cannot also hold a timeline row: the panel's own border, the `● agent` presence
- * line (when shown), the persisted scrollback above the ephemeral block, the pin list below it,
- * the composer beneath the whole stream, and `AgentStatusBlock`'s own always-drawn chrome
- * (presence/connection/spinner lines — `chromeRows`, the caller's `AGENT_BLOCK_CHROME_ROWS`).
- * Clamped to `[3, MAX_TIMELINE_ROWS]` — 3 is the pre-existing floor (the design's own smallest
- * per-frame cap, `short`'s `liveCap:3`), `MAX_TIMELINE_ROWS` is the design's own ceiling.
+ * It used to subtract every sibling that shares `ws-chat-stream` — the panel border, the
+ * `● agent` line, the persisted scrollback, the pin list, the composer — because nothing else
+ * bounded the stream, and a long reply would paint straight over the composer. The
+ * `<scrollbox>` now does that job by clipping (chat-scroll spec §5.2/§5.3), so this subtracts
+ * only what physically cannot hold a timeline row inside the block's own frame: the panel
+ * border and `AgentStatusBlock`'s own always-drawn chrome.
+ *
+ * `MAX_TIMELINE_ROWS` STAYS. The 12-row cap is design semantics, not crowding:
+ * `design/03-workspace-generating.dc.html` states "The block is capped at 12 rows and folds
+ * from the top. The spinner row is pinned." — so the fold must not vary with terminal size.
+ * The `3` floor is the design's own smallest per-frame cap (`short`'s `liveCap:3`).
  */
 export function agentStatusMaxRows(input: {
   readonly frameH: number;
   readonly chromeRows: number;
-  readonly hasAgentLine: boolean;
-  readonly pinListRows: number;
-  readonly composerRows: number;
 }): number {
-  const available =
-    input.frameH -
-    CHAT_PANEL_BORDER_ROWS -
-    (input.hasAgentLine ? 1 : 0) -
-    input.pinListRows -
-    input.composerRows -
-    input.chromeRows;
+  const available = input.frameH - CHAT_PANEL_BORDER_ROWS - input.chromeRows;
   return Math.max(3, Math.min(MAX_TIMELINE_ROWS, available));
-}
-
-/**
- * The rows left for the persisted scrollback once every pinned sibling has taken its share.
- *
- * The scrollback is the ONE part of `ws-chat-stream` that yields, and this is the inversion the
- * overflow fix turns on. `agentStatusMaxRows` above used to subtract the scrollback's own
- * measured height, letting an ever-growing history squeeze the live block — while nothing
- * bounded the history itself, so the stream simply grew past the panel and overdrew the composer
- * and the bottom border. The design fixes the other three: the composer is pinned at
- * `frameH - composerH`, the live block is capped at 12 rows, and the history is what gets
- * summarised away behind `▲ N earlier messages` (`design/termcraft-engine.js:569`). So the live
- * block is budgeted first and the scrollback takes what remains — never the reverse.
- *
- * `liveBlockRows` is whatever the ephemeral region actually claims this frame: the running
- * turn's `AgentStatusBlock` (its chrome plus {@link agentStatusMaxRows}), the finished turn's
- * collapsed record, or 0 when neither is on screen.
- */
-export function scrollbackMaxRows(input: {
-  readonly frameH: number;
-  readonly hasAgentLine: boolean;
-  readonly liveBlockRows: number;
-  readonly pinListRows: number;
-  readonly composerRows: number;
-}): number {
-  return Math.max(
-    0,
-    input.frameH -
-      CHAT_PANEL_BORDER_ROWS -
-      (input.hasAgentLine ? 1 : 0) -
-      input.liveBlockRows -
-      input.pinListRows -
-      input.composerRows,
-  );
 }

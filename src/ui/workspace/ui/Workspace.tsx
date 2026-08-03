@@ -1,4 +1,6 @@
-import { MouseButton, type MouseEvent } from "@opentui/core";
+import { createRequire } from "node:module";
+
+import { MouseButton, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import type { PinDtoV1 } from "core/protocol";
@@ -12,7 +14,6 @@ import {
   PinList,
   SystemNotice,
   foldTurnTimeline,
-  markdownLineRows,
 } from "ui/chat";
 import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
@@ -36,12 +37,7 @@ import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
-import {
-  agentStatusMaxRows,
-  composerRowCount,
-  pinListRowCount,
-  scrollbackMaxRows,
-} from "../model/agent-block-budget";
+import { agentStatusMaxRows } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
@@ -57,6 +53,18 @@ import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
 import type { WorkspaceDeps } from "../types";
 import { PreviewPaneRule } from "./PreviewPaneRule";
+
+/**
+ * `useRef`, reached the way `ui/testing/model/react-renderer.ts` and
+ * `host/render/model/error-capture.ts` already reach React values: this project installs no
+ * `@types/react`, and `@opentui/react` re-exports exactly one React value (`createElement`,
+ * `node_modules/@opentui/react/src/index.d.ts:8`) — so a plain `import { useRef } from "react"`
+ * is a TS7016 implicit-any error. `createRequire` plus an explicit, minimal type for the one
+ * value pulled out (matching `react-renderer.ts`'s own `ReactAct` shape) keeps `viewportRef`
+ * below fully typed without adding a real dependency on `@types/react`.
+ */
+type UseRef = <T>(initialValue: T) => { current: T };
+const { useRef } = createRequire(import.meta.url)("react") as { readonly useRef: UseRef };
 
 const BOLD = shellAttrs({ bold: true });
 
@@ -436,7 +444,8 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
   const pins = activePageSlug === null ? [] : (mirror.pinsByPage().get(activePageSlug) ?? []);
   const pinRows = derivePinListRows(pins);
-  const records = mirror.history().records;
+  const history = mirror.history();
+  const records = history.records;
   const selection = mirror.selection();
   const previewNotice = mirror.previewNotice();
   // The one preview state the status bar, the composer attach line and the preview panel all
@@ -460,37 +469,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   });
   // Review round 1, Finding 1: the row budget `foldTurnTimeline` gets as `maxRows` must both cap
   // at the design's own 11-row ceiling AND measure real remaining space inside `ws-chat-stream`
-  // — not bare `frameH`, which ignores `ws-chat`'s own border and every sibling this block shares
-  // the panel with. See `agentStatusMaxRows`'s own doc comment (`../model/agent-block-budget.ts`).
-  const pinRowCount = pinListRowCount(pinRows);
-  const composerRows = composerRowCount(composerAttach !== null);
-  const agentBlockMaxRows = agentStatusMaxRows({
-    frameH,
-    chromeRows: AGENT_BLOCK_CHROME_ROWS,
-    hasAgentLine: agentLabel !== "",
-    pinListRows: pinRowCount,
-    composerRows,
-  });
+  // — not bare `frameH`, which ignores `ws-chat`'s own border. The `<scrollbox>` mounted below
+  // (chat-scroll spec §5.2/§5.3) now clips every OTHER sibling this block used to budget around
+  // (the persisted scrollback, the pin list, the composer), so this only measures what physically
+  // cannot hold a timeline row inside the block's own frame — see `agentStatusMaxRows`'s own doc
+  // comment (`../model/agent-block-budget.ts`).
+  const agentBlockMaxRows = agentStatusMaxRows({ frameH, chromeRows: AGENT_BLOCK_CHROME_ROWS });
   // `ws-chat`'s own inner content width: the panel's width less its left/right border. This is
-  // what every `<text>` inside `ws-chat-stream` actually wraps against, so it is what the row
-  // budget must measure with.
+  // what every `<text>` inside `ws-chat-stream` actually wraps against.
   const chatContentWidth = Math.max(1, chatW - 2);
   const terminalLines = turn.phase === "terminal" ? terminalRecordLines(turn) : [];
-  // What the ephemeral region claims this frame — the running turn's block, the finished turn's
-  // collapsed record, or nothing. The scrollback below takes whatever is left over.
-  const liveBlockRows =
-    turn.phase === "running"
-      ? AGENT_BLOCK_CHROME_ROWS + agentBlockMaxRows
-      : turn.phase === "terminal"
-        ? 1 + markdownLineRows(terminalLines, chatContentWidth)
-        : 0;
-  const scrollbackRows = scrollbackMaxRows({
-    frameH,
-    hasAgentLine: agentLabel !== "",
-    liveBlockRows,
-    pinListRows: pinRowCount,
-    composerRows,
-  });
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
   const pendingPin = interaction.pendingPin();
@@ -498,6 +486,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     (rendered: UiPreviewFrame) => acknowledgeFrame(props.deps, rendered),
     "ui.Workspace.acknowledgeRenderedFrame",
   );
+  // The live chat scroll surface, published for the keyboard layer (`ChatViewport`,
+  // `../types.ts`) — see that interface's own doc comment for why an imperative ref, not a
+  // Reatom-derived value, is what bridges the renderable to `applyIntent`. STUB for this task
+  // (WP-10 Task 11): only the ref is stored here. Filling `local.chatViewport` with a real
+  // adapter over `box` and wiring the paging trigger are Task 12's job, not this one's — see
+  // this task's own dispatch for why that boundary is deliberate, not an oversight.
+  const viewportRef = useRef<ScrollBoxRenderable | null>(null);
+  const publishChatViewport = useWrap((box: ScrollBoxRenderable | null) => {
+    viewportRef.current = box;
+  }, "ui.Workspace.publishChatViewport");
   const requestAtMouse = (purpose: "hover" | "select" | "pin", event: MouseEvent) => {
     const current = previewFrame();
     if (current === null) return;
@@ -595,57 +593,110 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 </text>
               )}
               {/*
-               * The persisted chat scrollback (design §3.2: "the block collapses into the
-               * persisted agent record… above" — spec:149-160). Fed by the mirror's `records`
-               * slice (WP-10 Task 7, the active chat's tail) and painted ABOVE the ephemeral
-               * block below — never mixed with it, matching `design/03-workspace-generating.
-               * dc.html`'s `chatSeq`/`drawChat` layering (persisted seq entries, then the live
-               * `⠹ generating design…` block).
+               * THE SCROLL VIEWPORT (chat-scroll spec §5.1). It owns everything between the
+               * `● agent` presence line and the pin list: the persisted scrollback, the
+               * preview notice, and whichever ephemeral block is on screen. Pinned OUTSIDE
+               * it, deliberately: the `● agent` line (panel header, not a message), `PinList`
+               * (attached composer context, not a message), the composer, the panel border.
+               *
+               * Follow-the-tail and its disengagement on manual scroll are the renderable's
+               * OWN behavior (`stickyScroll` + `stickyStart`); this project implements
+               * neither. `publishChatViewport` below is a STUB for this task (WP-10 Task 11)
+               * — it only stores the ref; the adapter that fills `local.chatViewport` and the
+               * paging trigger are Task 12's job.
                */}
-              <ChatScrollback
-                id="ws-scrollback"
-                records={records}
-                agentLabel={agentLabel}
-                width={chatContentWidth}
-                maxRows={scrollbackRows}
-              />
-              {/* Below the persisted tail, above the live turn block — chronologically the crash
-                  follows the turn that produced the design, which is exactly where the design
-                  draws it (`wsHostCrash`'s own `chatSeq`). */}
-              {previewNotice !== null && (
-                <SystemNotice
-                  id="ws-preview-notice"
-                  headline={previewNotice.headline}
-                  detail={previewNotice.detail}
-                />
-              )}
-              {turn.phase === "running" && (
-                <AgentStatusBlock
-                  id="ws-agent"
-                  startedAt={turn.startedAt}
-                  gateRetries={turn.gateRetries.map((retry) => ({
-                    retryNumber: retry.retryNumber,
-                  }))}
-                  {...foldTurnTimeline({
-                    entries: turn.timeline,
-                    // design `chatSeq`: text is drawn at `tx+2` inside `iw = chatW-3`, and
-                    // `thinkRow` wraps at `iw-2` — so the thread's own wrap width is `chatW-5`.
-                    width: Math.max(8, chatW - 5),
-                    maxRows: agentBlockMaxRows,
-                    // The design's `full`/`long` cap; `short`/`first` use 3/4 per frame.
-                    liveCap: 5,
-                  })}
-                />
-              )}
-              {turn.phase === "terminal" && (
-                <ChatRecord
-                  id="ws-record"
-                  role="agent"
+              <scrollbox
+                id="ws-chat-scroll"
+                ref={publishChatViewport}
+                flexGrow={1}
+                // `flexBasis={0}` is load-bearing, not decoration (verified with a standalone
+                // Yoga repro during this task): `<scrollbox>` is a composite renderable whose
+                // OWN internal tree includes an always-present horizontal scrollbar row, so its
+                // "auto" flex-basis (the default that `flexGrow` alone leaves in place) is a
+                // small NON-zero intrinsic size rather than 0. Left at "auto", that intrinsic
+                // size gets added on top of this item's grown share, quietly stealing exactly
+                // one row from `PinList` below it. `flex-basis: 0` (the standard `flex: 1 1 0`
+                // idiom) removes the intrinsic-content contribution entirely, so `flexGrow`
+                // purely distributes `ws-chat-stream`'s free space instead.
+                flexBasis={0}
+                scrollY
+                scrollX={false}
+                stickyScroll
+                stickyStart="bottom"
+                // DIVERGENCE (design vs. `@opentui/core`'s `SliderRenderable`, chat-scroll spec
+                // §11 answer 3): the design's `scrollbar()` (`design/termcraft-engine.js:1478-
+                // 1484`) draws a `│` line character for the track in `P.line`, but the widget's
+                // track ("non-thumb") cells are always a blank, color-filled space — there is no
+                // per-glyph override in `ScrollBarOptions`/`SliderOptions`
+                // (`node_modules/@opentui/core/renderables/ScrollBar.d.ts`,`Slider.d.ts`). A
+                // solid dim rail (`backgroundColor: SHELL_PALETTE.line`) is the closest faithful
+                // mapping for the track. The thumb needs no such compromise: the widget's own
+                // default thumb glyphs are already exactly `█`/`▀`/`▄`, matching the design's
+                // thumb characters, so only its colour (`SHELL_PALETTE.amberDim`) is set.
+                scrollbarOptions={{
+                  showArrows: false,
+                  trackOptions: {
+                    foregroundColor: SHELL_PALETTE.amberDim,
+                    backgroundColor: SHELL_PALETTE.line,
+                  },
+                }}
+              >
+                {/*
+                 * The persisted chat scrollback (design §3.2: "the block collapses into the
+                 * persisted agent record… above" — spec:149-160). Fed by the mirror's `records`
+                 * slice (WP-10 Task 7, the active chat's tail) and painted ABOVE the ephemeral
+                 * block below — never mixed with it, matching `design/03-workspace-generating.
+                 * dc.html`'s `chatSeq`/`drawChat` layering (persisted seq entries, then the live
+                 * `⠹ generating design…` block). The row budget it used to enforce is gone
+                 * (WP-10 Task 10) — this `<scrollbox>` clips instead (chat-scroll spec §5.2).
+                 */}
+                <ChatScrollback
+                  id="ws-scrollback"
+                  records={records}
                   agentLabel={agentLabel}
-                  dim
-                  lines={terminalLines}
+                  width={chatContentWidth}
+                  unloadedCount={Math.max(0, history.totalRecordCount - records.length)}
+                  atStart={history.prevCursor === null}
+                  olderPage={local.olderPage()}
                 />
-              )}
+                {/* Below the persisted tail, above the live turn block — chronologically the crash
+                    follows the turn that produced the design, which is exactly where the design
+                    draws it (`wsHostCrash`'s own `chatSeq`). */}
+                {previewNotice !== null && (
+                  <SystemNotice
+                    id="ws-preview-notice"
+                    headline={previewNotice.headline}
+                    detail={previewNotice.detail}
+                  />
+                )}
+                {turn.phase === "running" && (
+                  <AgentStatusBlock
+                    id="ws-agent"
+                    startedAt={turn.startedAt}
+                    gateRetries={turn.gateRetries.map((retry) => ({
+                      retryNumber: retry.retryNumber,
+                    }))}
+                    {...foldTurnTimeline({
+                      entries: turn.timeline,
+                      // design `chatSeq`: text is drawn at `tx+2` inside `iw = chatW-3`, and
+                      // `thinkRow` wraps at `iw-2` — so the thread's own wrap width is `chatW-5`.
+                      width: Math.max(8, chatW - 5),
+                      maxRows: agentBlockMaxRows,
+                      // The design's `full`/`long` cap; `short`/`first` use 3/4 per frame.
+                      liveCap: 5,
+                    })}
+                  />
+                )}
+                {turn.phase === "terminal" && (
+                  <ChatRecord
+                    id="ws-record"
+                    role="agent"
+                    agentLabel={agentLabel}
+                    dim
+                    lines={terminalLines}
+                  />
+                )}
+              </scrollbox>
               {/*
                * DIVERGENCE (M12 data-source gap): the mirror carries `PinDtoV1` but no
                * per-pin anchor-resolution signal — anchor resolution is a host-render
