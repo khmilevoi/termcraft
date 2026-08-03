@@ -171,7 +171,6 @@ export interface GateRunner {
   runPage(input: {
     readonly source: string;
     readonly slug: PageSlug;
-    readonly fileName?: string;
     /**
      * The ABSOLUTE on-disk `…/design` directory of the tree this page lives in, plus that
      * tree's `(relPath, sha256)` inventory — needed only by the smoke stage
@@ -180,30 +179,29 @@ export interface GateRunner {
      *
      * REPLACED a single `sourcePath` in task 15. The reason it cannot stay one path: a
      * candidate page is its closure, so a smoke render of the entry alone proves nothing about
-     * the shared module that would actually throw. Deliberately separate from `fileName` (which
-     * stays the SHORT display name `runGate` echoes into `GateErrorV1.file` for diagnostics) —
-     * conflating them would leak an absolute filesystem path into user-facing Gate messages.
+     * the shared module that would actually throw.
      *
-     * Optional and additive, together: a caller that has no readable tree on disk omits both
-     * and the smoke stage refuses honestly rather than mounting a fabricated path.
+     * REQUIRED (task 16): every production caller supplies it, so a refusal on a missing tree
+     * root is now impossible to construct.
      */
-    readonly treeRoot?: string;
-    /** See {@link treeRoot} — the two are supplied together or not at all. */
-    readonly expectedFiles?: readonly DesignFileEntryV1[];
+    readonly treeRoot: string;
+    /** See {@link treeRoot} — the two are supplied together. */
+    readonly expectedFiles: readonly DesignFileEntryV1[];
     /**
      * The tree-relative path `design/pages.json` bound this entry to (design §4) — see
      * `gate/model/gate.ts`'s `GateInput.entryRelPath` for the full rationale (never derive it
-     * from `slug`) and its own doc comment for the re-measured, itemized cost of making this
-     * required (19 new tsc errors, spanning 2 production files this task does not own). OPTIONAL
-     * here for that same measured reason: `core/turns`/`core/kernel` do not yet have a
-     * `DesignTreeReader` to source it from (FLAGGED for whichever task wires one — 13 or 14,
-     * both consume this port).
+     * from `slug`).
+     *
+     * REQUIRED (task 16): every production caller supplies it, so a refusal on a missing entry
+     * is now impossible to construct.
      */
-    readonly entryRelPath?: string;
+    readonly entryRelPath: string;
     /**
      * The entry's resolved closure (design §7), threaded through for the smoke stage and
      * future stages (design §8 steps 5 and 8 — see `runTreeImports`'s own doc for why neither
-     * is implemented by this plan). Optional for the same reason as `entryRelPath` above.
+     * is implemented by this plan). Optional: `page-descriptors.ts` has no closure to give, and
+     * deriving one per descriptor publish would mean running the synchronous whole-tree scan
+     * whose cost Task 3 exists to bound — controller ruling #15's trade, unchanged.
      */
     readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1>;
@@ -297,5 +295,12 @@ export interface GateRunner {
   extractPageMeta(input: {
     readonly source: string;
     readonly slug: PageSlug;
+    /**
+     * The tree-relative path `design/pages.json` bound this entry to (design §4) — decides
+     * whether the source is read as JSX or plain TypeScript (see `gate/adapters/gate-runner.ts`'s
+     * `extractPageMeta` for the residual this closes: a `pages/a.ts` entry is legal under
+     * `entryPathSchema` and used to be read here as JSX regardless).
+     */
+    readonly entryRelPath: string;
   }): Promise<PageMetaExtractionV1>;
 }

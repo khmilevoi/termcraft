@@ -36,21 +36,16 @@ import type { GateError, GateErrorKind } from "../types";
  * `checkManifestSlice`.
  *
  * FLAGGED, NOT FIXED HERE (core-owned port-shape limitation, out of WP-2's scope):
- * `GateRunner.runPage`'s input (`core/ports/gate-runner.ts:76-80`) carries only
- * `{ source, slug, fileName? }` — it does NOT expose `GateInput.referencedIds`/
+ * `GateRunner.runPage`'s input (`core/ports/gate-runner.ts`) carries no `referencedIds`/
  * `listedSlugs` (`gate/model/gate.ts:44-47`), so the `dropped-id`/`unlisted-navigation`
  * warning lints stay dormant whenever a page is validated through this port. Note it here,
  * do not invent the fields.
  *
- * CLOSED (was FLAGGED): `runPage`'s input now carries a dedicated `sourcePath` (`core/ports
- * /gate-runner.ts`, additive optional field) for the smoke stage's `SmokeRequest.sourcePath`
- * (`gate/model/smoke.ts`'s `createSmokeRender(renderer, sourcePath)`), separate from
- * `fileName` (the SHORT display name `runGate` echoes into `GateErrorV1.file`). When a caller
- * supplies it — the real host `SmokeRenderer` resolves it via `Bun.file` in a fresh child
- * process cwd, so a bare `${slug}.tsx` never resolves there — it is used for the smoke
- * request; otherwise this adapter falls back to `fileName` (or its own `${slug}.tsx` default,
- * the SAME default `runGate` itself applies internally), preserving every existing caller's
- * behavior unchanged.
+ * CLOSED (was FLAGGED): `runPage`'s input carries `treeRoot`/`expectedFiles` for the smoke
+ * stage's `SmokeRequest` (`gate/model/smoke.ts`'s `createSmokeRender`), and `entryRelPath` —
+ * the SHORT display name `runGate` echoes into `GateErrorV1.file` — for the smoke request's
+ * own entry path. The real host `SmokeRenderer` resolves `<treeRoot>/<entryRelPath>` via
+ * `Bun.file` in a fresh child process cwd.
  *
  * CLOSED (phase-8 Task 7): `typeCheck` is wired whenever BOTH `tscExePath` and `runtimeDts` are
  * supplied, and the composition root now always supplies both. `entrypoint/model/
@@ -70,11 +65,14 @@ import type { GateError, GateErrorKind } from "../types";
  * manifest.ts`'s real `checkManifestSlice` (Task 10) already required `treePaths`, and this
  * bridge simply forwards the port's input to it unchanged.
  *
- * CLOSED (task 12): `runPage`'s input carries optional `entryRelPath`/`closure`, forwarded
- * straight into `gate/model/gate.ts`'s `GateInput` — see that module's own doc for why both
- * stay optional rather than the port sketch's required shape (measured cost: `core/turns`/
- * `core/kernel` have no design-tree closure to supply yet, and are production code, not a
- * fixture this task can mechanically patch).
+ * CLOSED (task 12): `runPage`'s input carries `entryRelPath`/`closure`, forwarded straight
+ * into `gate/model/gate.ts`'s `GateInput`.
+ *
+ * REQUIRED (task 16): `treeRoot`/`expectedFiles`/`entryRelPath` are no longer optional —
+ * every production caller (`core/kernel/model/handlers/page-descriptors.ts`,
+ * `core/turns/model/validation.ts`) supplies all three, so a refusal on a missing one is now
+ * impossible to construct. `closure` stays optional: see `gate/model/gate.ts`'s own
+ * `GateInput.closure` doc for why.
  *
  * CLOSED (task-13 review round 1, Critical C1): `runTreeImports`'s result now carries
  * `closures` alongside `errors` — one per `input.pages` entry, resolved by `entities/
@@ -557,26 +555,19 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   async function runPage(input: {
     readonly source: string;
     readonly slug: PageSlug;
-    readonly fileName?: string;
-    readonly treeRoot?: string;
-    readonly expectedFiles?: readonly DesignFileEntryV1[];
-    readonly entryRelPath?: string;
+    readonly treeRoot: string;
+    readonly expectedFiles: readonly DesignFileEntryV1[];
+    readonly entryRelPath: string;
     readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
-    // `entryRelPath` out-ranks `fileName` — see `gate/model/gate.ts`'s own `runGate` for the
-    // full rationale (task-12 review round 1, Important 4). Mirrored here, not delegated to
-    // `runGate`'s own fallback, because this adapter ALSO uses `fileName` as the smoke stage's
-    // last-resort entry path below and both must agree on which value actually won.
-    const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
+    const fileName = input.entryRelPath;
     // The smoke stage mounts the page's whole closure off a real tree on disk (see this file's
-    // header, "CLOSED (was FLAGGED)", and `gate/model/smoke.ts`). A caller that supplies no
-    // tree gets an HONEST REFUSAL rather than a mount of a fabricated path: `treeRoot: ""` with
-    // an empty inventory makes `loadPage` refuse on its first check ("the entry is not listed
-    // in its expected design-tree inventory"), which is a truthful smoke error naming a missing
-    // input, not a page defect. `fileName` stays the diagnostics-facing display name regardless.
+    // header, "CLOSED (was FLAGGED)", and `gate/model/smoke.ts`). `treeRoot`/`expectedFiles` are
+    // required on this port now (task 16), so no caller can reach this adapter with no tree to
+    // mount.
     const smokeContext = {
-      treeRoot: input.treeRoot ?? "",
-      expectedFiles: input.expectedFiles ?? [],
+      treeRoot: input.treeRoot,
+      expectedFiles: input.expectedFiles,
     };
     const ports: GatePorts = {
       ...(typeCheck !== undefined ? { typeCheck } : {}),
@@ -587,8 +578,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
       {
         source: input.source,
         slug: input.slug,
-        fileName,
-        ...(input.entryRelPath !== undefined ? { entryRelPath: input.entryRelPath } : {}),
+        entryRelPath: input.entryRelPath,
         ...(input.closure !== undefined ? { closure: input.closure } : {}),
       },
       ports,
@@ -624,20 +614,13 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   async function extractPageMeta(input: {
     readonly source: string;
     readonly slug: PageSlug;
+    readonly entryRelPath: string;
   }): Promise<PageMetaExtractionV1> {
-    const fileName = `${input.slug}.tsx`;
-    // ASSUMED JSX, and said plainly rather than dressed up as a derivation (task 14b fix round 3,
-    // Minor 2). Round 2 wrote `parsesJsx(fileName)` here, which reads like the real predicate but
-    // is constantly `"jsx"` because `fileName` is a `.tsx` name this method just built — a dead
-    // argument that looks like coverage.
-    //
-    // THE RESIDUAL, stated because it is real: this port takes only a SLUG, so it cannot see the
-    // manifest's entry, and `entryPathSchema` (`entities/design-tree`'s `manifest.ts`) does not
-    // constrain the extension — a `pages/a.ts` entry is legal and would be read here as JSX,
-    // which draws children-text boundaries a `.ts` file does not have. It costs nothing today
-    // (this method only reads `meta`, and `import-scan.ts` unions both readings anyway), and the
-    // fix is to widen `PageMetaExtraction` to carry the entry path. That belongs with the port.
-    const contract = checkPageContract(input.source, "jsx");
+    const fileName = input.entryRelPath;
+    // The entry's own extension decides the reading. It used to be assumed JSX off a
+    // slug-built `${slug}.tsx`, which is wrong for the legal `pages/a.ts` entry shape
+    // `entryPathSchema` permits — the residual this method's own doc registered.
+    const contract = checkPageContract(input.source, parsesJsx(input.entryRelPath));
     if (contract instanceof Error) {
       // A source whose token stream does not cover it has no readable `meta` — reporting
       // `meta: null` with the real reason beats reporting "this page declares no settings",

@@ -15,7 +15,13 @@ function slug(value: string): PageSlug {
 describe("createFakeGateRunner", () => {
   test("runPage() defaults to a clean pass with a synthesized descriptor", async () => {
     const runner = createFakeGateRunner();
-    const result = await runner.runPage({ source: "export const meta = {}", slug: slug("home") });
+    const result = await runner.runPage({
+      source: "export const meta = {}",
+      slug: slug("home"),
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/home.tsx",
+    });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.descriptor?.slug).toBe(slug("home"));
@@ -70,16 +76,34 @@ describe("createFakeGateRunner", () => {
       descriptor: null,
     };
     runner.queueRunPageResult(scripted);
-    const first = await runner.runPage({ source: "bad", slug: slug("home") });
+    const first = await runner.runPage({
+      source: "bad",
+      slug: slug("home"),
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/home.tsx",
+    });
     expect(first).toEqual(scripted);
-    const second = await runner.runPage({ source: "ok", slug: slug("home") });
+    const second = await runner.runPage({
+      source: "ok",
+      slug: slug("home"),
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/home.tsx",
+    });
     expect(second.ok).toBe(true);
   });
 
   test("records calls with their inputs in order", async () => {
     const runner = createFakeGateRunner();
     await runner.runManifestSlice({ manifestText: "{}", treePaths: ["pages/home.tsx"] });
-    await runner.runPage({ source: "x", slug: slug("home") });
+    await runner.runPage({
+      source: "x",
+      slug: slug("home"),
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/home.tsx",
+    });
     expect(runner.calls.map((c) => c.method)).toEqual(["runManifestSlice", "runPage"]);
   });
 });

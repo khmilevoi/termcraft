@@ -53,7 +53,13 @@ function realDiskSmokeRenderer(): SmokeRenderer {
 describe("createGateRunnerAdapter", () => {
   test("runPage() passes a clean candidate with a clean smoke render, carrying the descriptor", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
+    const result = await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.descriptor).toEqual({
@@ -65,6 +71,23 @@ describe("createGateRunnerAdapter", () => {
         theme: "dark-default",
       },
     });
+  });
+
+  test("extractPageMeta reads a .ts entry as TypeScript, not as assumed JSX", async () => {
+    // The brief's own fixture (title-only meta, non-reatomComponent default) can never produce
+    // a non-null `meta` at all — `page-contract.ts`'s `validateMetaShape` requires
+    // `kitApiVersion`/`theme`/`minSize` alongside `title` before it returns anything but `null`,
+    // independent of which syntax reads the source. Completed to a full, valid `meta` (mirroring
+    // every other fixture's `cleanSource` shape in this file) so the assertion actually exercises
+    // what the test's name promises: a `.ts` entry's meta extracts via `parsesJsx(entryRelPath)`
+    // instead of the deleted hardcoded `"jsx"` assumption.
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const extraction = await adapter.extractPageMeta({
+      source: `export const meta = definePage({ kitApiVersion: 1, title: "plain", minSize: { w: 80, h: 24 }, theme: "dark-default" })\nexport default reatomComponent(() => null)\n`,
+      slug: "plain" as PageSlug,
+      entryRelPath: "lib/plain.ts",
+    });
+    expect(extraction.meta?.title).toBe("plain");
   });
 
   test("runPage() deliberately does not scan imports — the whole-tree scan owns that, and the TURN is what makes it fatal (task 14 wired it; this pins the split, not a gap)", async () => {
@@ -100,6 +123,9 @@ describe("createGateRunnerAdapter", () => {
     const result = await adapter.runPage({
       source: `import { x } from "lodash"\n${cleanSource}`,
       slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
     });
     expect(result.errors.some((e) => e.kind === "import")).toBe(false);
     expect(smokeRan).toBe(true);
@@ -753,7 +779,13 @@ describe("createGateRunnerAdapter", () => {
         message: "boom",
       }),
     });
-    const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
+    const result = await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    });
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.kind === "smoke" && e.code === "DESIGN_RENDER_FAILED")).toBe(
       true,
@@ -762,7 +794,13 @@ describe("createGateRunnerAdapter", () => {
 
   test("runPage() without compilerAssets/runtimeDts skips the type-check stage (an honest omission, not a fabricated pass)", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
+    const result = await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    });
     expect(result.errors.some((e) => e.kind === "type")).toBe(false);
   });
 
@@ -775,7 +813,13 @@ describe("createGateRunnerAdapter", () => {
         return [];
       },
     });
-    await adapter.runPage({ source: cleanSource, slug: SLUG });
+    await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    });
     expect(checkManifestCalled).toBe(true);
   });
 
@@ -825,9 +869,19 @@ describe("createGateRunnerAdapter", () => {
     }
   });
 
-  test("runPage() without tree coordinates refuses honestly rather than mounting a fabricated path — a REAL disk-resolving renderer finds nothing", async () => {
+  test("runPage() with empty tree coordinates refuses honestly rather than mounting a fabricated path — a REAL disk-resolving renderer finds nothing", async () => {
+    // `treeRoot`/`expectedFiles` are required inputs now (task 16) — a caller can no longer
+    // OMIT them, so this test reproduces the honest-refusal path by supplying them explicitly
+    // empty instead, exercising the same "nothing resolves" outcome the adapter's own deleted
+    // `?? ""`/`?? []` fallback used to produce for an omitting caller.
     const adapter = createGateRunnerAdapter({ smokeRenderer: realDiskSmokeRenderer() });
-    const result = await adapter.runPage({ source: cleanSource, slug: SLUG });
+    const result = await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    });
     expect(result.ok).toBe(false);
     expect(
       result.errors.some((e) => e.kind === "smoke" && e.code === "SMOKE_SOURCE_UNREADABLE"),
@@ -840,6 +894,8 @@ describe("createGateRunnerAdapter", () => {
     const result = await adapter.runPage({
       source: brokenContract,
       slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
       entryRelPath: "screens/overview/index.tsx",
       closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
     });
@@ -847,24 +903,20 @@ describe("createGateRunnerAdapter", () => {
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
-  test("runPage() has entryRelPath out-rank fileName when both are supplied (task-12 review round 1, Important 4) — a separate copy of runGate's own precedence, mirrored here because this adapter also uses fileName as the smoke stage's entry path", async () => {
-    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
-    const result = await adapter.runPage({
-      source: brokenContract,
-      slug: SLUG,
-      fileName: "stale/slug-guess.tsx",
-      entryRelPath: "screens/overview/index.tsx",
-      closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
-  });
+  // The `entryRelPath`-out-ranks-`fileName` precedence test that used to live here (task-12
+  // review round 1, Important 4) is deleted, not patched: task 16 deleted `fileName` from this
+  // port entirely, so there is no precedence left to pin.
 
   test("contract: an all-clear candidate matches the fake oracle's own default GateRunResultV1 shape", async () => {
     const fake = createFakeGateRunner();
     const real = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const input = { source: cleanSource, slug: SLUG };
+    const input = {
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+    };
     const fakeResult = await fake.runPage(input);
     const realResult = await real.runPage(input);
     expect(realResult.ok).toBe(fakeResult.ok);

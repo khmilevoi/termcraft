@@ -23,9 +23,9 @@ export type GateRunnerCall =
   | {
       readonly method: "runPage";
       readonly slug: PageSlug;
-      readonly treeRoot?: string;
-      readonly expectedFileCount?: number;
-      readonly entryRelPath?: string;
+      readonly treeRoot: string;
+      readonly expectedFileCount: number;
+      readonly entryRelPath: string;
     }
   | {
       readonly method: "runTreeImports";
@@ -33,7 +33,7 @@ export type GateRunnerCall =
       readonly treePathCount: number;
       readonly pageCount: number;
     }
-  | { readonly method: "extractPageMeta"; readonly slug: PageSlug };
+  | { readonly method: "extractPageMeta"; readonly slug: PageSlug; readonly entryRelPath: string };
 
 export interface FakeGateRunner extends GateRunner {
   readonly calls: readonly GateRunnerCall[];
@@ -87,24 +87,23 @@ export function createFakeGateRunner(): FakeGateRunner {
   async function runPage(input: {
     source: string;
     slug: PageSlug;
-    fileName?: string;
-    /** Widened alongside the port's own additive fields (`core/ports/gate-runner.ts`) — this in-memory fake never touches disk, so the tree coordinates only reach the call log below for test observability; they never affect the result returned. */
-    treeRoot?: string;
-    expectedFiles?: readonly DesignFileEntryV1[];
-    entryRelPath?: string;
+    /** Required alongside the port's own required fields (`core/ports/gate-runner.ts`) — this
+     *  in-memory fake never touches disk, so the tree coordinates only reach the call log below
+     *  for test observability; they never affect the result returned. */
+    treeRoot: string;
+    expectedFiles: readonly DesignFileEntryV1[];
+    entryRelPath: string;
     closure?: ClosureV1;
   }): Promise<GateRunResultV1> {
     calls.push({
       method: "runPage",
       slug: input.slug,
-      ...(input.treeRoot === undefined ? {} : { treeRoot: input.treeRoot }),
+      treeRoot: input.treeRoot,
       // The COUNT, not the list: a caller asserting on this log wants "the tree travelled",
       // not a copy of every hash, and a full inventory would make every such assertion a
       // fixture-hash transcription exercise.
-      ...(input.expectedFiles === undefined
-        ? {}
-        : { expectedFileCount: input.expectedFiles.length }),
-      ...(input.entryRelPath === undefined ? {} : { entryRelPath: input.entryRelPath }),
+      expectedFileCount: input.expectedFiles.length,
+      entryRelPath: input.entryRelPath,
     });
     const queued = pageResults.shift();
     if (queued !== undefined) return queued;
@@ -157,8 +156,9 @@ export function createFakeGateRunner(): FakeGateRunner {
   async function extractPageMeta(input: {
     source: string;
     slug: PageSlug;
+    entryRelPath: string;
   }): Promise<PageMetaExtractionV1> {
-    calls.push({ method: "extractPageMeta", slug: input.slug });
+    calls.push({ method: "extractPageMeta", slug: input.slug, entryRelPath: input.entryRelPath });
     const queued = extractionResults.shift();
     if (queued !== undefined) return queued;
     return {

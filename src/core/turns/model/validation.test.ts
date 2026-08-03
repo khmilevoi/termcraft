@@ -266,16 +266,15 @@ describe("runTurnValidation — the whole-tree stages", () => {
 });
 
 describe("runTurnValidation — the per-entry stage", () => {
-  test("drives runPage from the MANIFEST's entry, not from the slug: source, fileName, entryRelPath and the tree coordinates all come from `entry`", async () => {
+  test("drives runPage from the MANIFEST's entry, not from the slug: source, entryRelPath and the tree coordinates all come from `entry`", async () => {
     await context.start(async () => {
       const machine = machineAtValidating();
       const runPageCalls: {
         slug: PageSlug;
         source: string;
-        fileName?: string;
-        treeRoot?: string;
-        expectedFileCount?: number;
-        entryRelPath?: string;
+        treeRoot: string;
+        expectedFileCount: number;
+        entryRelPath: string;
       }[] = [];
       const gateRunner: GateRunner = {
         async runManifestSlice() {
@@ -296,16 +295,15 @@ describe("runTurnValidation — the per-entry stage", () => {
           runPageCalls.push({
             slug: input.slug,
             source: input.source,
-            ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
-            ...(input.treeRoot === undefined ? {} : { treeRoot: input.treeRoot }),
-            ...(input.expectedFiles === undefined
-              ? {}
-              : { expectedFileCount: input.expectedFiles.length }),
-            ...(input.entryRelPath === undefined ? {} : { entryRelPath: input.entryRelPath }),
+            treeRoot: input.treeRoot,
+            expectedFileCount: input.expectedFiles.length,
+            entryRelPath: input.entryRelPath,
           });
           return {
             ok: false,
-            errors: [{ kind: "type", code: "TS2322", message: "type error", file: input.fileName }],
+            errors: [
+              { kind: "type", code: "TS2322", message: "type error", file: input.entryRelPath },
+            ],
             warnings: [],
             descriptor: null,
           };
@@ -319,7 +317,6 @@ describe("runTurnValidation — the per-entry stage", () => {
         {
           slug: PAGE_HOME,
           source: HOME_SOURCE,
-          fileName: HOME_ENTRY,
           entryRelPath: HOME_ENTRY,
           // The tree the smoke stage mounts from, and the inventory it verifies against —
           // the candidate's whole file set (4 files), not just this page's entry.

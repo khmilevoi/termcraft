@@ -1800,7 +1800,7 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.machines.turn.phase()).toBe("idle");
   });
 
-  test("buildValidationInput threads the ABSOLUTE staged candidate TREE ROOT and its inventory to the Gate's per-page runPage() call, and keeps `fileName` at the SHORT display name (the real smoke stage mounts the page's whole closure off a real directory — a bare `${slug}.tsx` fails in the host's fresh scratch cwd, `gate/adapters/gate-runner.ts`'s own test; Finding #6 — `fileName` no longer doubles as the absolute-path carrier)", async () => {
+  test("buildValidationInput threads the ABSOLUTE staged candidate TREE ROOT and its inventory to the Gate's per-page runPage() call, and keeps `entryRelPath` at the SHORT display name (the real smoke stage mounts the page's whole closure off a real directory — a bare `${slug}.tsx` fails in the host's fresh scratch cwd, `gate/adapters/gate-runner.ts`'s own test; Finding #6 — `entryRelPath` no longer doubles as the absolute-path carrier)", async () => {
     const HOME = "home" as PageSlug;
     const chatStore = createFakeChatStore();
     const chatHeader = await chatStore.create();
@@ -1809,9 +1809,9 @@ describe('turnHandlers["turn.start"]', () => {
     const capturedRunPageInputs: {
       readonly source: string;
       readonly slug: PageSlug;
-      readonly fileName?: string;
-      readonly treeRoot?: string;
-      readonly expectedFiles?: readonly { readonly relPath: string; readonly sha256: string }[];
+      readonly treeRoot: string;
+      readonly expectedFiles: readonly { readonly relPath: string; readonly sha256: string }[];
+      readonly entryRelPath: string;
     }[] = [];
     const gateRunner: GateRunner = {
       // The slice IS what decides which pages `runPage` runs for (task 14), so this double
@@ -1919,8 +1919,8 @@ describe('turnHandlers["turn.start"]', () => {
     // The real bug (`fixlane-K1-turn-spine.json`'s smoke-sourcePath finding): the Gate's
     // per-page `runPage()` call must resolve to the staged candidate's real file on disk, not
     // a bare `${slug}.tsx` the real host's fresh scratch child process cwd can never find.
-    // Finding #6 fix: that absolute location now travels in `treeRoot`, never in `fileName` —
-    // `fileName` stays the short display name Gate echoes into a diagnostic's `file` field.
+    // Finding #6 fix: that absolute location now travels in `treeRoot`, never in `entryRelPath`
+    // — `entryRelPath` stays the short display name Gate echoes into a diagnostic's `file` field.
     // The VALIDATION call is the first one. A second `runPage` follows it for the same page:
     // the post-commit `page.descriptorsChanged` (defect fix, 2026-07-26) rebuilds descriptors
     // from the committed sources, and a descriptor is only obtainable by running the Gate over
@@ -1930,11 +1930,11 @@ describe('turnHandlers["turn.start"]', () => {
     expect(call.slug).toBe(HOME);
     // The SHORT name is the manifest's own tree-relative `entry` — not `design/`-prefixed,
     // not slug-derived. The absolute path is that same entry under the candidate's `design/`.
-    expect(call.fileName).toBe(defaultFakeEntry(HOME));
+    expect(call.entryRelPath).toBe(defaultFakeEntry(HOME));
     // The tree the smoke stage mounts from, plus the candidate's own inventory: the entry is
     // in it, hashed, so the mount can verify the bytes it is about to run (task 15).
     expect(call.treeRoot).toBe(`/fake-candidate/${turnId}/design`);
-    expect(call.expectedFiles?.map((file) => file.relPath)).toContain(defaultFakeEntry(HOME));
+    expect(call.expectedFiles.map((file) => file.relPath)).toContain(defaultFakeEntry(HOME));
   });
 
   test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged location travels separately in `runPage`'s own `treeRoot` (Finding #6)", async () => {
@@ -1944,7 +1944,7 @@ describe('turnHandlers["turn.start"]', () => {
     if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
 
     let pageCallCount = 0;
-    const capturedEntryPaths: (string | undefined)[] = [];
+    const capturedEntryPaths: string[] = [];
     const gateRunner: GateRunner = {
       // See the sibling double above: the slice is what drives `runPage` now.
       runManifestSlice: async () => ({
@@ -1962,11 +1962,11 @@ describe('turnHandlers["turn.start"]', () => {
       runTreeImports: async () => ({ errors: [], closures: [] }),
       runPage: async (input) => {
         pageCallCount += 1;
-        capturedEntryPaths.push(
-          input.treeRoot === undefined ? undefined : `${input.treeRoot}/${input.entryRelPath}`,
-        );
-        // Attempt 1 fails, echoing `input.fileName` into the error's `file` — exactly what the
-        // real `runGate` does (`core/ports/gate-runner.ts`'s own doc). Attempt 2 passes, the
+        // `treeRoot`/`entryRelPath` are required inputs now (task 16) — every production
+        // caller supplies both, so this is never `undefined` in practice.
+        capturedEntryPaths.push(`${input.treeRoot}/${input.entryRelPath}`);
+        // Attempt 1 fails, echoing `input.entryRelPath` into the error's `file` — exactly what
+        // the real `runGate` does (`core/ports/gate-runner.ts`'s own doc). Attempt 2 passes, the
         // same "reject once, then default pass" shape the genuine-retry test above uses.
         if (pageCallCount === 1) {
           return {
@@ -1976,7 +1976,7 @@ describe('turnHandlers["turn.start"]', () => {
                 kind: "contract",
                 code: "PAGE_CONTRACT_VIOLATION",
                 message: "bad contract",
-                file: input.fileName,
+                file: input.entryRelPath,
               },
             ],
             warnings: [],

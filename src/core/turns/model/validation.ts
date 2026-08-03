@@ -285,17 +285,16 @@ export async function runTurnValidation(
       deps.gateRunner.runPage({
         source,
         slug: entry.slug,
-        // The SHORT display name `runGate` echoes into `GateErrorV1.file`, in the same
-        // tree-relative vocabulary every other diagnostic and `pages.json` itself speak —
-        // never the absolute path, which would leak a filesystem location into agent-facing
-        // Gate messages.
-        fileName: entry.entry,
         // The smoke stage mounts this page's WHOLE closure off the staged candidate tree and
         // hash-verifies every member against the candidate's own inventory (design §6, §9.2).
         // Both come from the candidate `store` just froze — nothing here re-reads or re-hashes
         // a disk this ring never staged.
         treeRoot: input.designRoot,
         expectedFiles: input.treeInventory,
+        // The SHORT display name `runGate` echoes into `GateErrorV1.file`, in the same
+        // tree-relative vocabulary every other diagnostic and `pages.json` itself speak —
+        // never the absolute path, which would leak a filesystem location into agent-facing
+        // Gate messages.
         entryRelPath: entry.entry,
         // Only when this pass PROVED the closure complete. `runTreeImports`' CONTRACT makes
         // the two cases exclusive: a slug absent from `closures` always carries a fatal in

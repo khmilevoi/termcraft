@@ -710,7 +710,13 @@ describe("createShell + the composed Gate's type-check stage (phase-8 WP-2)", ()
     const tscExePath = resolveCompilerPath();
     if (tscExePath instanceof Error) throw tscExePath;
     const gateRunner = buildGateRunner(tscExePath, createFakeSmokeRenderer());
-    return gateRunner.runPage({ source: fixture.source, slug: fixture.slug });
+    return gateRunner.runPage({
+      source: fixture.source,
+      slug: fixture.slug,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/home.tsx",
+    });
   }
 
   const HOME_SLUG = "home" as PageSlug;

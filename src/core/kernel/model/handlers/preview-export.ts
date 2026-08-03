@@ -206,10 +206,14 @@ async function extractAndCachePageMeta(
   pageSlug: PageSlug,
   key: PageMetaKeyV1,
   sourceBytes: Uint8Array,
+  /** The `design/pages.json` entry bound to `pageSlug` — the caller already read the source
+   *  through it (`readPageEntrySource`'s own `relPath`), so this is forwarded, never re-derived. */
+  entryRelPath: string,
 ): Promise<FailureDtoV1 | PageMeta> {
   const extraction = await deps.gateRunner.extractPageMeta({
     source: new TextDecoder().decode(sourceBytes),
     slug: pageSlug,
+    entryRelPath,
   });
   if (extraction.meta === null) {
     const reason = extraction.errors[0]?.message ?? "the page contract did not parse";
@@ -249,7 +253,7 @@ async function resolvePageSettings(
 
   const meta =
     cached === null
-      ? await extractAndCachePageMeta(deps, pageSlug, key, source.bytes)
+      ? await extractAndCachePageMeta(deps, pageSlug, key, source.bytes, source.relPath)
       : cached.meta;
   if ("code" in meta) return meta;
 

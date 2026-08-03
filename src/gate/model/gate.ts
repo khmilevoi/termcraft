@@ -74,7 +74,7 @@ export interface GatePorts {
 }
 
 /**
- * One candidate page to validate: its source, its slug, and its scratch file name.
+ * One candidate page to validate: its source, its slug, and its manifest entry path.
  * `referencedIds` and `listedSlugs` feed the `dropped-id` and `unlisted-navigation`
  * warning lints (§6.3 step 3); both are optional and, absent, skip their lint so
  * the gate stays runnable standalone (e.g. in a fixture with no kernel/manifest).
@@ -86,42 +86,26 @@ export interface GateInput {
    * The tree-relative path `design/pages.json` bound this entry to (design §4) — the
    * addressing `runTreeImports`'s own whole-tree scan already speaks. Which file a page
    * lives in is `pages.json`'s `entry` value; NEVER derive it from `slug` — that guess
-   * (`pages/<slug>.tsx`) is exactly the anti-pattern this plan exists to remove, so every
-   * caller this task owns supplies it explicitly (see `fileName`'s fallback below for the
-   * one caller that, today, still cannot).
+   * (`pages/<slug>.tsx`) was exactly the anti-pattern this plan exists to remove.
    *
-   * OPTIONAL, not required as the port sketch shows it. RE-MEASURED for real (task-12 review
-   * round 1 — the prior wording claimed this mirrored task 11's own `context` measurement,
-   * which was an over-claim: that measurement was for a different signature, `import-scan.ts`'s
-   * `scanImportAllowlist`, not this field. Making `entryRelPath`/`closure` required here and on
-   * `core/ports/gate-runner.ts`'s `GateRunner.runPage`, then running `bun x tsc --noEmit`,
-   * produces exactly **19 new errors**: 2 in PRODUCTION, non-test files this task does not own
-   * (`core/turns/model/validation.ts`, `core/kernel/model/handlers/page-descriptors.ts` — both
-   * call `runPage` with no entry data to give, since neither has been wired to a
-   * `DesignTreeReader`/closure yet), 1 inside this task's own adapter
-   * (`gate/adapters/gate-runner.ts`, which forwards its own still-optional `entryRelPath` into
-   * what would become a required `GateInput` field), and 16 across four test files
-   * (`gate/adapters/gate-runner.test.ts`, `core/ports/fakes/gate-runner.test.ts`,
-   * `entrypoint/model/create-shell.test.ts`, `gate/model/smoke.test.ts`) whose fixtures predate
-   * this task. That is a real, current cost, not a guess — reverted after measuring; the fields
-   * stay optional.
-   * FLAGGED FOR WHICHEVER TASK WIRES A REAL DESIGN-TREE CLOSURE THROUGH `core/turns`/`core/
-   * kernel` (13 or 14, per this plan's own dependency graph — both consume Task 12): make
-   * this field required, delete `fileName`'s slug-derived fallback below, and update those
-   * callers to supply the real value.
+   * REQUIRED (task 16): every production caller now supplies it
+   * (`core/turns/model/validation.ts`, `core/kernel/model/handlers/page-descriptors.ts`), so a
+   * refusal on a missing one is now impossible to construct.
    */
-  readonly entryRelPath?: string;
+  readonly entryRelPath: string;
   /**
    * The entry's resolved closure (design §7) — so the smoke stage and future stages (design
    * §8 steps 5 and 8: one whole-tree `tsc` program, and smoke scoped to only the pages whose
    * `closureHash` changed) have it once they land. NEITHER is implemented by this plan (see
    * `runTreeImports`'s own doc comment below) — `closure` is threaded through today so the
-   * pipeline's shape is already correct, not because any stage here reads it yet. Optional
-   * for the same reason as `entryRelPath` above: no current caller outside this task's Files
-   * list has one to give.
+   * pipeline's shape is already correct, not because any stage here reads it yet.
+   *
+   * STAYS OPTIONAL, deliberately, unlike `entryRelPath` above (task 16): `page-descriptors.ts`
+   * has no closure to give, and deriving one per descriptor publish would mean running the
+   * synchronous whole-tree scan whose cost Task 3 exists to bound — controller ruling #15's
+   * trade, unchanged.
    */
   readonly closure?: ClosureV1;
-  readonly fileName?: string;
   /** Ids the caller's current selection or open pins reference (`dropped-id`). */
   readonly referencedIds?: readonly string[];
   /** The staged manifest slice's page list (`unlisted-navigation`). */
@@ -142,21 +126,9 @@ export interface GateInput {
 export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<GateResult> {
   const errors: GateError[] = [];
   const warnings: GateWarning[] = [];
-  // `entryRelPath` OUT-RANKS `fileName` when both are present (task-12 review round 1,
-  // Important 4 — corrected from an earlier, backwards precedence). `entryRelPath` is the
-  // AUTHORITATIVE addressing (`pages.json`'s own `entry` value, design §4); `fileName` is a
-  // caller-supplied display-name OVERRIDE that predates `entryRelPath` and, in every real
-  // caller today (`core/kernel/model/handlers/turn.ts`'s `workspacePageRelPath(pageSlug)`), IS
-  // still slug-derived. Had `fileName` won, the moment a future caller started passing a real
-  // `entryRelPath` ALONGSIDE its existing `fileName` (the natural, incremental way to adopt
-  // it), the authoritative value would have lost silently to the slug guess it exists to
-  // replace, with nothing visibly broken. FLAGGED FOR WHICHEVER TASK MAKES `entryRelPath`
-  // REQUIRED (see `GateInput.entryRelPath`'s own doc): once every caller supplies it, delete
-  // the `fileName`/`${input.slug}.tsx` fallback arms below entirely — they exist only to bridge
-  // `core/turns`/`core/kernel`, which do not supply `entryRelPath` yet. No caller this task
-  // owns ever relies on either fallback arm — every fixture below supplies `entryRelPath`
-  // explicitly, several with an entry deliberately unrelated to their slug.
-  const fileName = input.entryRelPath ?? input.fileName ?? `${input.slug}.tsx`;
+  // The display name is `pages.json`'s own `entry` value (design §4) — never derived from
+  // `slug`.
+  const fileName = input.entryRelPath;
 
   // A SOURCE THIS PAGE'S SCANS COULD NOT READ TO THE END IS A FATAL FOR THE PAGE, never a
   // silent pass and never an escaped throw (task-14 review round 1, C1). `UNSCANNABLE_SOURCE`

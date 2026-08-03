@@ -67,23 +67,10 @@ describe("runGate (§6.3 pipeline)", () => {
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
 
-  test("entryRelPath out-ranks fileName when both are supplied (task-12 review round 1, Important 4)", async () => {
-    // A caller mid-migration to `entryRelPath` (the natural, incremental path: keep the
-    // pre-existing `fileName` around while starting to also pass the authoritative
-    // `entryRelPath`) must have `entryRelPath` win. Before the fix, `fileName` won — the
-    // authoritative value would have lost silently to a stale/slug-derived display name with
-    // nothing visibly broken. Deliberately different values so a regression to the old
-    // precedence flips this assertion, not merely leaves it vacuously true.
-    const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
-    const result = await runGate({
-      source: src,
-      slug: SLUG,
-      fileName: "stale/slug-guess.tsx",
-      entryRelPath: "screens/overview/index.tsx",
-      closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
-    });
-    expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
-  });
+  // The `entryRelPath`-out-ranks-`fileName` precedence test that used to live here (task-12
+  // review round 1, Important 4) is deleted, not patched: task 16 deleted `GateInput.fileName`
+  // entirely, so there is no precedence left to pin — see `runGate`'s own comment for the
+  // one field that remains.
 
   test("a determinism warning never fails a candidate", async () => {
     const src = cleanSource.replace("hi", "${Math.random()}");
@@ -221,6 +208,25 @@ describe("runGate (§6.3 pipeline)", () => {
     );
     expect(result.ok).toBe(false);
   });
+
+  // Moved inside this `describe` (task 5 audit) — the brief's own snippet placed it bare at
+  // file top level, which every other `runGate` test here does not; nothing about the test
+  // depends on top-level scope, so it is grouped with its siblings rather than left as the
+  // one stray case a prior task's review already flagged this exact pattern for (task 3,
+  // progress.md).
+  test("the display name is the manifest entry, with no slug-derived fallback left", async () => {
+    const result = await runGate({
+      source: `export const meta = definePage({ title: "t" })\nexport default () => null\n`,
+      slug: "home" as PageSlug,
+      entryRelPath: "screens/home/index.tsx",
+    });
+    // `GateWarning` carries no `file` field at all (only `GateError` does), so a plain `.file`
+    // read over the concatenated list does not type-check — narrow with `"file" in error`
+    // rather than dropping warnings from the loop, which keeps the brief's intent (no
+    // diagnostic of either kind may still carry the slug-derived guess) type-safe.
+    for (const error of [...result.errors, ...result.warnings])
+      if ("file" in error) expect(error.file).not.toContain("home.tsx");
+  });
 });
 
 describe("runTreeImports (design §8 step 4 — the whole-tree scan, run once per turn)", () => {
@@ -328,7 +334,11 @@ describe("runGate — a page whose own source cannot be read to the end", () => 
   });
 
   test("rejects the page with UNSCANNABLE_SOURCE instead of reporting a missing contract", async () => {
-    const result = await runGate({ source: TRUNCATED, slug: "home" as PageSlug });
+    const result = await runGate({
+      source: TRUNCATED,
+      slug: "home" as PageSlug,
+      entryRelPath: "pages/home.tsx",
+    });
     expect(result.ok).toBe(false);
     // The CODE matters: a truncated stream also has no `meta` in it, so a naive implementation
     // reports "this page declares no meta" — a false diagnosis that sends the agent to fix a
@@ -341,13 +351,21 @@ describe("runGate — a page whose own source cannot be read to the end", () => 
     // The valid-input companion, one character apart from the fixture above. Without it, a
     // guard that refused every page carrying a JSX attribute would satisfy the assertion above.
     const sameShape = `export const G = () => <Text a="x">hi</Text>\nexport const meta = definePage({ title: "t", minSize: { w: 80, h: 24 }, theme: "dark-default", kitApiVersion: 1 })\n`;
-    const kept = await runGate({ source: sameShape, slug: "home" as PageSlug });
+    const kept = await runGate({
+      source: sameShape,
+      slug: "home" as PageSlug,
+      entryRelPath: "pages/home.tsx",
+    });
     expect(kept.errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
   });
 
   test("a page carrying U+FFFD in a STRING is unaffected — no over-fire", async () => {
     const clean = `export const meta = definePage({ title: "\uFFFD", minSize: { w: 80, h: 24 }, theme: "dark-default", kitApiVersion: 1 })\n`;
-    const result = await runGate({ source: clean, slug: "home" as PageSlug });
+    const result = await runGate({
+      source: clean,
+      slug: "home" as PageSlug,
+      entryRelPath: "pages/home.tsx",
+    });
     expect(result.errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
   });
 });
