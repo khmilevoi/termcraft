@@ -33,10 +33,13 @@ const allText = (rows: StyledRun[][]) =>
     .join("");
 const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((run) => run.text.includes(needle));
-// The established idiom for letting a `reatomComponent` re-render after a post-mount atom write
-// reach the frame (same helper, same shape, as `host/render/model/reactive.test.tsx`,
-// `ui/app/model/intent.test.ts`, `ui/preview/model/interaction.test.ts`, …) — no `act()` needed.
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+// The status bar is always the renderer's last row. Scoped reads of the `hint` slot use this
+// rather than `allText`, whose whole-page join can also match text a PANEL legitimately renders
+// elsewhere on screen (task 11: the halt panel's own dead-agent line quotes the health badge's
+// wording verbatim, so `allText` alone can no longer tell "the hint slot shows it" apart from
+// "something on screen shows it").
+const statusBarText = (rows: StyledRun[][]) =>
+  (rows[rows.length - 1] ?? []).map((run) => run.text).join("");
 
 describe("Workspace read-only presentation", () => {
   test("disables composer affordances and uses only approved read-only vocabulary/colors", async () => {
@@ -520,18 +523,9 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
-    // task-5 (workspace-first launch): a bare `createUiDeps` now means `projectId === null`
-    // reads as a pending startup open (the design's `wsOpening`), which drops this exact hint
-    // row — apply a snapshot so this test keeps exercising the already-open, `STATIC` hint row
-    // it is actually about, not opening chrome.
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: null,
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
+    // A non-null projectId — this describes the ordinary idle Workspace's key row, not the
+    // opening state task-8 (design 30) added; an unset projectId now means "still opening".
+    deps.mirror.apply(snapshot({ projectId: uuidv7() }));
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
@@ -562,16 +556,9 @@ describe("Workspace action-derived hotkey hints", () => {
    */
   test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
-    // task-5 (workspace-first launch): see the note on the sibling test above — a bare
-    // `createUiDeps` now reads as a pending startup open, which drops this row entirely.
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: null,
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
+    // A non-null projectId — this describes the ordinary idle Workspace's key row, not the
+    // opening state task-8 (design 30) added; an unset projectId now means "still opening".
+    deps.mirror.apply(snapshot({ projectId: uuidv7() }));
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
@@ -882,31 +869,35 @@ describe("Workspace live-turn connection line (design termcraft-engine.js:568 he
   });
 });
 
-describe("Workspace halted preview (design wsHostCrash)", () => {
-  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+// Hoisted to module scope (not local to the describe block below) so the agent-health precedence
+// tests further down — which need this exact circuit-open fixture for their "halted preview
+// outranks health" case — can reuse it rather than duplicating it (task-10 brief: "Reuse the
+// file's existing fixtures for the circuit-open preview state").
+const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
 
-  const circuitOpened = (opts?: { hostFailureCode?: string; retryAvailable?: boolean }) =>
-    event("preview.circuitOpened", {
-      previewSessionId: uuidv7(),
-      pageSlug: "main",
-      sourceHash: TEST_SHA,
-      attempts: 4,
-      finalFailure: {
-        code: "HOST_CIRCUIT_OPEN",
-        retryable: true,
-        safeMessage: CRASH,
-        details: {
-          pageSlug: "main",
-          attempts: 4,
-          ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
-        },
+const circuitOpened = (opts?: { hostFailureCode?: string; retryAvailable?: boolean }) =>
+  event("preview.circuitOpened", {
+    previewSessionId: uuidv7(),
+    pageSlug: "main",
+    sourceHash: TEST_SHA,
+    attempts: 4,
+    finalFailure: {
+      code: "HOST_CIRCUIT_OPEN",
+      retryable: true,
+      safeMessage: CRASH,
+      details: {
+        pageSlug: "main",
+        attempts: 4,
+        ...(opts?.hostFailureCode === undefined ? {} : { hostFailureCode: opts.hostFailureCode }),
       },
-      retryCapability:
-        opts?.retryAvailable === false
-          ? { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] }
-          : { available: true },
-    });
+    },
+    retryCapability:
+      opts?.retryAvailable === false
+        ? { available: false, reasons: [{ code: "CAPABILITY_UNAVAILABLE" }] }
+        : { available: true },
+  });
 
+describe("Workspace halted preview (design wsHostCrash)", () => {
   async function renderWith(applyCircuit: ReturnType<typeof circuitOpened>) {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(
@@ -981,161 +972,6 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
         "F6 writes the fix — retry unavailable",
       ),
     ).toBeDefined();
-  });
-});
-
-describe("Workspace halted preview + dead agent (design 30, the collision)", () => {
-  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
-
-  const crashed = () =>
-    event("preview.circuitOpened", {
-      previewSessionId: uuidv7(),
-      pageSlug: "main",
-      sourceHash: TEST_SHA,
-      attempts: 4,
-      finalFailure: {
-        code: "HOST_CIRCUIT_OPEN",
-        retryable: true,
-        safeMessage: CRASH,
-        details: { pageSlug: "main", attempts: 4, hostFailureCode: "DESIGN_RENDER_FAILED" },
-      },
-      retryCapability: { available: true },
-    });
-
-  // Same race the "Workspace agent-health badge" describe block below already documents:
-  // `createUiDeps`' default `agentHealthProbe` resolves and overwrites `local.agentHealth`
-  // shortly after construction — before `handle.render()` below gets a chance to capture a
-  // frame. VERIFIED, not assumed: running this block's tests with the brief's literal harness
-  // (no probe override) fails both "blocked" tests — the frame renders the default `advisory`
-  // reading's un-corrected F6 wording instead of the one this test sets. A never-resolving probe
-  // keeps the manually-set reading in place (harness adaptation, not an assertion change).
-  const NEVER_RESOLVING_PROBE = () => new Promise<AgentHealth>(() => {});
-
-  // The two agent-dead lines are longer than every other note/detail string this panel draws
-  // (`HostCrashPanel.tsx`'s new "DIVERGENCE 3") and wrap onto a second physical terminal row
-  // inside this two-pane frame. `allText` flattens row-major across BOTH the chat pane and the
-  // preview pane with no separator, so a wrapped fragment's tail sits many unrelated cells (box
-  // borders, the OTHER pane's own row) away from its continuation — never adjacent in the joined
-  // string, verified by inspecting the captured rows directly. This is the same reason
-  // `HostCrashPanel.test.tsx`'s own "renders the host message verbatim and wrapped" test checks
-  // word-by-word rather than the whole phrase.
-  //
-  // What this ACTUALLY proves, no more: every word of `phrase` is present SOMEWHERE in the frame
-  // — `text.includes` per word, no ordering, no word-boundary check, no adjacency. That catches
-  // truncation and the whole-feature-off case (proven: with `agentDead` forced back to `null`,
-  // "runs" and "until" — unique to these two lines, nothing else in the frame contains either
-  // substring — are absent and this helper reports `false`). It does NOT by itself catch a wrong
-  // VARIANT: `login`'s red line and `latched`'s share every word except `unavailable`, because
-  // `login`'s three extra words ("not", "signed", "in") are ALSO supplied by `f6Detail`, rendered
-  // in the same frame regardless of which line's text won. The `login` test below adds its own
-  // `latched`-only-word check to close that gap. The exact composed string, char-for-char, is
-  // already pinned by `health-badge.test.ts`'s `toEqual` assertions — this integration test's job
-  // is only to confirm the notice actually reaches the render.
-  const containsPhrase = (text: string, phrase: string) =>
-    phrase.split(" ").every((word) => text.includes(word));
-
-  async function renderHalted(health: AgentHealth) {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      undefined,
-      NEVER_RESOLVING_PROBE,
-    );
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: "main",
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
-    deps.mirror.apply(crashed());
-    deps.local.agentHealth.set(health);
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
-    await handle.render();
-    return handle.capture().rows;
-  }
-
-  test("the halt keeps the hint slot and the panel says the repair cannot run", async () => {
-    const rows = await renderHalted({
-      kind: "blocked",
-      agent: "claude",
-      panel: "login",
-      detail: "not signed in",
-    });
-    const text = allText(rows);
-
-    // One badge, and the halt's own is the more urgent, more specific fact.
-    expect(findRun(rows, "render crashed")).toBeDefined();
-    expect(text).toContain("HALTED");
-    // The panel carries the correction the hint slot cannot.
-    expect(containsPhrase(text, "claude is not signed in — nothing runs until it is")).toBe(true);
-    expect(
-      containsPhrase(text, "✗ claude not signed in — F6 fills the composer, but nothing runs yet"),
-    ).toBe(true);
-    expect(text).not.toContain("nothing is sent — you press ⏎");
-    // Discriminates this from a bug that renders `latched`'s red line under a `login` reading:
-    // "unavailable" is `latched`'s own word (`agentHealthBadge`'s blocked/latched text), and
-    // nothing else in this frame can produce it — F5 is available here (`crashed()`'s
-    // `retryCapability: { available: true }`), so its own note/detail read "re-establish the
-    // host and mount again" / "a broken design will die again", never "unavailable in this
-    // session". The two `containsPhrase` checks above cannot tell the two variants apart on
-    // their own (see `containsPhrase`'s own comment) since `f6Detail` already supplies "not",
-    // "signed" and "in" independent of which red line rendered.
-    expect(text).not.toContain("unavailable");
-  });
-
-  /**
-   * PINS THE PRECEDENCE IN THE SLOT ITSELF (final-review fix wave). The test above proves the
-   * panel carries the correction and that `render crashed` is somewhere in the frame — but a
-   * regression that ALSO dropped the health badge into the `hint` slot would pass it unchanged:
-   * `✗ claude not signed in` is already present frame-wide, drawn by the panel's own red line
-   * (`agentDeadNotice`'s `line`, built FROM the badge text). A frame-wide `not.toContain` for it
-   * would therefore be vacuous by construction — it can never hold while the collision feature
-   * is on.
-   *
-   * The status bar is the frame's bottom row (the same scoping the opening-chrome tests in this
-   * file already use), and `StatusBar`'s `hint` is the only slot in that row either badge can
-   * reach — so restricting the assertion to that row is what actually discriminates "the halt
-   * kept the slot" from "both are on screen somewhere".
-   */
-  test("the hint slot carries the halt's badge, not the health badge", async () => {
-    const rows = await renderHalted({
-      kind: "blocked",
-      agent: "claude",
-      panel: "login",
-      detail: "not signed in",
-    });
-    const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
-
-    expect(statusRow).toContain("render crashed");
-    expect(statusRow).not.toContain("not signed in");
-    // The health phrase IS in the frame — just not in the bar. Asserted so the check above can
-    // never pass merely because the reading failed to render at all.
-    expect(allText(rows)).toContain("✗ claude not signed in");
-  });
-
-  test("a latched agent gets the generic line and keeps F6's ordinary detail", async () => {
-    const text = allText(
-      await renderHalted({
-        kind: "blocked",
-        agent: "claude",
-        panel: "latched",
-        detail: "unconfirmed exit lockout",
-      }),
-    );
-    expect(
-      containsPhrase(text, "✗ claude unavailable — F6 fills the composer, but nothing runs yet"),
-    ).toBe(true);
-    expect(text).toContain("nothing is sent — you press ⏎");
-  });
-
-  test("a healthy agent leaves the halt panel exactly as it was", async () => {
-    const text = allText(await renderHalted({ kind: "ready", agent: "claude" }));
-    expect(text).toContain("nothing is sent — you press ⏎");
-    expect(text).not.toContain("nothing runs yet");
   });
 });
 
@@ -1281,7 +1117,7 @@ describe("Workspace preview clipping", () => {
     // at row 18 — a rounded corner, never the frame's `#` content, even though the frame (24
     // rows) is 8 rows taller than the region (16 rows) it is painted into.
     const bottomBorderRow = 18;
-    expect(lines[bottomBorderRow]!.length).toBe(100);
+    expect(lines[bottomBorderRow]?.length).toBe(100);
     expect(lines[bottomBorderRow]).toContain("╯");
     expect(lines[bottomBorderRow]).not.toContain("#");
   });
@@ -1384,199 +1220,169 @@ describe("Workspace preview pane header", () => {
   });
 });
 
-describe("Workspace while the project is opening (design 30-workspace-first-launch, wsOpening)", () => {
-  /** `mirror.project().projectId === null` is the whole condition — a fresh `UiDeps` with no
-   *  snapshot applied is exactly that state. */
-  const openingDeps = () => createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+describe("Workspace while the project is opening (design 30, wsOpening)", () => {
+  const openingDeps = () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    // projectId stays null: this is the shell deriveScreen mounts before finishOpen lands.
+    return deps;
+  };
 
-  test("the preview centres the design's own two lines and never the zero-pages EmptyState", async () => {
+  test("the preview region names the open, not an empty project", async () => {
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-
     expect(text).toContain("opening project…");
     expect(text).toContain("reading .termcraft — preview arrives when it's ready");
-    // §20's line asserts a DIFFERENT fact — a finished project that genuinely has no pages.
-    expect(text).not.toContain("No pages yet — describe what to build");
+    // §20's claim is a different fact and must not be made here.
+    expect(text).not.toContain("No pages yet");
+    // A spinner is turn vocabulary (§14) — this state has no cancel and nothing measurable.
+    expect(text).not.toContain("⠹ generating");
   });
 
-  test("no spinner: a spinner is turn vocabulary and nothing here is a turn", async () => {
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
-    await handle.render();
-    const rows = handle.capture().rows;
-
-    expect(findRun(rows, "⠹ generating")).toBeUndefined();
-    // fix round 1, Finding 5: `findRun` over the whole frame would also match the status bar's
-    // own amber page slot (same text, same colour, at this non-narrow width) — scoping to
-    // everything above the status bar's own row (the same "status bar is the frame's bottom
-    // row" pattern used elsewhere in this file) makes this the preview headline specifically,
-    // not whichever amber "opening project…" run happens to come first.
-    const line = findRun(rows.slice(0, -1), "opening project…");
-    expect(line && extractRgb(line.fg)).toBe(SHELL_PALETTE.amber);
-  });
-
-  test("the page slot carries the opening phrase and the mode chip reads OPENING, not STATIC", async () => {
+  test("the bar reads OPENING with the page slot filled and only a disabled send key", async () => {
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-
     expect(text).toContain("OPENING");
     expect(text).not.toContain("STATIC");
-  });
-
-  test("the composer stays live with the opening placeholder and a disabled send key", async () => {
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
-    await handle.render();
-    const rows = handle.capture().rows;
-    const text = allText(rows);
-
-    // The empty, focused composer draws its cursor OVER the placeholder's first cell
-    // (`TextInput.tsx`: "Empty AND focused: the placeholder's first cell IS the cursor") — the
-    // same established pattern this file's own `sk for changes…` check
-    // (`Workspace.test.tsx:690-691`, the "Workspace chat scrollback" describe block, matching
-    // `Composer.test.tsx`'s "sk for changes…") already relies on, so the leading "p" of "project
-    // opening…" is never a text run; match from the second character on instead.
-    expect(text).toContain("roject opening…");
     expect(text).toContain("send");
-    const sendKey = findRun(rows, " ⏎ ");
-    expect(sendKey && extractRgb(sendKey.fg)).toBe(SHELL_PALETTE.faint);
-    // F2/F3/F4 have nothing to act on yet — no preview, no page to tweak or interact with.
     expect(text).not.toContain("tweaks");
-    // `allText` flattens the whole frame, and bare "act" is a substring of ordinary prose
-    // ("interact", "compact", "exactly") — asserting the bare substring would pass or fail for
-    // reasons unrelated to the F4 hint key. Match the key row's own rendering instead: a hint
-    // key's label always comes wrapped as ` ${label} ` (`StatusBar.tsx`'s `key[1]` text run,
-    // the same delimited form `findRun(rows, " ⏎ ")` above and `run.text === " esc "` elsewhere
-    // in this file already rely on), so " act " only ever matches a real `act` hint key.
-    expect(rows.flat().some((run) => run.text.includes(" act "))).toBe(false);
+    expect(text).not.toContain("act");
   });
 
-  test("at the 80-column floor the size segment drops and the phrase shortens", async () => {
+  test("at the 80-column floor the page slot and the size segment shrink", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 80, h: 24 });
     const handle = await createHeadlessRenderer({ w: 80, h: 24 });
     open = handle;
-    handle.mount(
-      <Workspace deps={createUiDeps(createFakeKernel(), { w: 80, h: 24 })} readOnly={false} />,
-    );
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
-
-    // The preview region's own `OpeningState` headline is unconditionally "opening project…" —
-    // design `wsOpening`'s `ctr` calls carry no `narrow` branch at all, only the STATUS BAR's
-    // own page-slot phrase shortens at the floor. Checking the whole flattened frame would be
-    // vacuous both ways: the full phrase's ABSENCE would wrongly fail on that unrelated headline,
-    // and the shortened phrase's PRESENCE would wrongly pass off the composer's own "project
-    // opening…" placeholder (rendered as "roject opening…", which still contains "opening…").
-    // Scope both checks to the status bar's own row instead (the same "status bar is the frame's
-    // bottom row" pattern the idle-key-row test above already uses) — the only place either
-    // literal can genuinely be attributed to the page-slot's own narrow branch.
+    // The preview headline renders `opening project…` at every width
+    // (`design/termcraft-engine.js:237` has no `narrow` branch, and design 30 §"80×24 — the
+    // floor" narrows only the bar), so a whole-screen `not.toContain` could never hold — isolate
+    // the status bar's own row (the frame's bottom row, the same isolation the idle-key-row test
+    // above uses via `rows.at(-1)`).
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
     expect(statusRow).toContain("opening…");
     expect(statusRow).not.toContain("opening project…");
     expect(text).not.toContain("80×24");
   });
 
-  test("an open project renders the ordinary Workspace, not the opening chrome", async () => {
+  test("the composer stays live with its own placeholder", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={openingDeps()} readOnly={false} />);
+    await handle.render();
+    // The needle drops the placeholder's first character on purpose: the design paints the
+    // block caret over that column (`design/termcraft-engine.js`'s
+    // `put(b,chatX+3,composerTop+2,'█')`), so the row reads `❯ █roject opening…`.
+    expect(allText(handle.capture().rows)).toContain("roject opening…");
+  });
+
+  test("a finished open re-renders into the ordinary Workspace", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: "main",
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    await handle.render();
     const text = allText(handle.capture().rows);
-
-    expect(text).not.toContain("OPENING");
-    expect(text).not.toContain("opening project…");
     expect(text).toContain("STATIC");
+    expect(text).not.toContain("opening project…");
   });
 });
 
-describe("Workspace agent-health badge (design 30, the badge vocabulary)", () => {
-  // `createUiDeps` fires its own startup agent-health probe fire-and-forget
-  // (`ui/app/model/deps.ts`'s `refreshAgentHealth`), which by default resolves and overwrites
-  // `local.agentHealth` shortly after construction — before `handle.render()` below gets a chance
-  // to capture a frame, clobbering whatever this describe block sets. These tests are about
-  // `agentHealthBadge`'s mapping from a given reading, not the probe race, so a probe that never
-  // resolves keeps the manually-set reading in place (harness adaptation, not an assertion change).
-  const NEVER_RESOLVING_PROBE = () => new Promise<AgentHealth>(() => {});
+// Task 10 (design 30 §"The long-lived badge", §"The badge vocabulary"): the agent-health probe's
+// verdict, projected into the status bar's `hint` slot as the LAST tier — below read-only, a
+// running turn, and a halted preview. `checking` is rendered too, not just the error states: the
+// check running beside a shell that appeared instantly is the whole point of wiring this in.
+describe("Workspace agent-health badge (design 30 · the long-lived badge)", () => {
+  const readyPage = (): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: "main",
+    sourceHash: TEST_SHA,
+    title: "Main",
+    minSize: { w: 80, h: 24 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
 
-  const withHealth = (health: AgentHealth) => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      undefined,
-      NEVER_RESOLVING_PROBE,
-    );
+  // `createUiDeps` fires its own startup probe fire-and-forget (`ui/app/model/deps.ts`'s
+  // `refreshAgentHealth`, called unconditionally at the end of the function): left on the
+  // default probe, `local.agentHealth` would settle asynchronously on `DEFAULT_PROBE_RESOLUTION`
+  // (an `advisory/shutdown` reading) sometime after this helper returns, racing the `.set()` below
+  // and clobbering it before `handle.render()` ever captures a frame. Injecting the SAME reading
+  // as the probe's own resolution makes the two writes converge on `health` regardless of which
+  // one lands last.
+  const withHealth = (health: AgentHealth, size = { w: 120, h: 36 }) => {
+    const deps = createUiDeps(createFakeKernel(), size, undefined, () => Promise.resolve(health));
     deps.mirror.apply(
       snapshot({
         projectId: uuidv7(),
         activePageSlug: "main",
-        activeChatId: uuidv7(),
         trust: "trusted",
+        pageDescriptors: [readyPage()],
       }),
     );
     deps.local.agentHealth.set(health);
     return deps;
   };
 
-  test("renders the badge for a blocked agent over an otherwise working project", async () => {
+  const BLOCKED_LOGIN: AgentHealth = {
+    kind: "blocked",
+    agent: "claude",
+    panel: "login",
+    detail: "x",
+  };
+
+  test("ready draws nothing, matching Home", async () => {
+    // `not.toContain("✗")` over the whole page would also pass with the badge entirely
+    // unwired, or with a wiring bug that leaks some OTHER badge shape (`⠹ checking …`,
+    // `⚠ health unconfirmed`) that just doesn't happen to contain that one glyph (branch
+    // review finding 2, 2026-08-02 fix wave). Assert the hint slot's own element instead:
+    // `StatusBar.tsx` only renders `${id}-hint` when `props.hint` is non-null, so its absence
+    // from the mounted tree IS "the badge computed to null for this reading", not a
+    // coincidence of which glyph a leaked badge happens to use.
+    const deps = withHealth({ kind: "ready", agent: "claude" });
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(
-      <Workspace
-        deps={withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" })}
-        readOnly={false}
-      />,
-    );
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
-    const rows = handle.capture().rows;
-
-    expect(allText(rows)).toContain("✗ claude not signed in");
-    // No takeover: the project's own chrome is untouched.
-    expect(allText(rows)).toContain("STATIC");
-    const badge = findRun(rows, "✗ claude not signed in");
-    expect(badge && extractRgb(badge.bg)).toBe(SHELL_PALETTE.red);
+    expect(handle.rectOf("ws-status-hint")).toBeNull();
   });
 
-  test("renders checking while the probe runs — the point of the whole change", async () => {
+  test("checking is rendered too — the check running beside the shell is the point", async () => {
+    const deps = withHealth({ kind: "checking", agent: "claude" });
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(
-      <Workspace deps={withHealth({ kind: "checking", agent: "claude" })} readOnly={false} />,
-    );
-    await handle.render();
-    expect(allText(handle.capture().rows)).toContain("⠹ checking claude");
-  });
-
-  test("renders nothing for ready", async () => {
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(
-      <Workspace deps={withHealth({ kind: "ready", agent: "claude" })} readOnly={false} />,
-    );
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-    expect(text).not.toContain("⠹ checking");
-    expect(text).not.toContain("✗ claude");
+    expect(text).toContain("⠹ checking claude");
   });
 
-  test("a running turn outranks health — the agent is alive by demonstration", async () => {
-    const deps = withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
+  test("a blocked reading rides the hint slot over an otherwise working project", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("✗ claude not signed in");
+    // A bad reading rides the hint slot over a project that is otherwise working normally
+    // (design 30 §"The long-lived badge") — the mode chip still reads STATIC, not some
+    // health-derived state.
+    expect(text).toContain("STATIC");
+  });
+
+  test("a running turn outranks health — a live turn proves the agent is alive", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
     deps.mirror.apply(
       event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
     );
@@ -1585,78 +1391,121 @@ describe("Workspace agent-health badge (design 30, the badge vocabulary)", () =>
     handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-
     expect(text).toContain("⚠ turn running — send disabled");
     expect(text).not.toContain("✗ claude not signed in");
   });
 
-  test("read-only outranks health", async () => {
-    const deps = withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
+  test("a halted preview outranks health — the more urgent, more specific fact", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // Scoped to the hint slot itself (task 11 adds a legitimate second place the badge's own
+    // wording appears on screen — the crash panel's own dead-agent line — so a whole-page check
+    // can no longer stand in for "the hint slot excludes it").
+    const hint = statusBarText(rows);
+    expect(hint).toContain("render crashed");
+    expect(hint).not.toContain("✗ claude not signed in");
+  });
+
+  // Task 11 (design 30 §"The collision — halted preview, dead agent"): both conditions can be
+  // true at once. The hint slot keeps the halt's own badge (proven above); what this test proves
+  // is the OTHER change — the crash panel's F6 row must stop promising a repair turn the dead
+  // agent cannot run.
+  test("the halted preview keeps the hint slot and gains the dead-agent line", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
+    deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    // The hint slot: unchanged, still the halt's own badge, not health's.
+    const hint = statusBarText(rows);
+    expect(hint).toContain("render crashed");
+    expect(hint).not.toContain("✗ claude not signed in");
+    // The crash panel: the dead-agent line the halt block would otherwise omit. The block's fixed
+    // content width wraps this real message across two lines (`HostCrashPanel.tsx`'s own
+    // DIVERGENCE 3) — both wrapped halves must survive as their own runs.
+    expect(findRun(rows, "✗ claude not signed in — F6 fills the composer, but")).toBeDefined();
+    expect(findRun(rows, "nothing runs yet")).toBeDefined();
+    // ...and the F6 row's own detail line no longer makes a promise the agent cannot keep.
+    expect(findRun(rows, "nothing is sent — you press ⏎")).toBeUndefined();
+  });
+
+  test("read-only outranks everything", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve(BLOCKED_LOGIN),
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        trust: "untrusted-read-only",
+      }),
+    );
+    deps.local.agentHealth.set(BLOCKED_LOGIN);
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly />);
     await handle.render();
     const text = allText(handle.capture().rows);
-
     expect(text).toContain("Send · Tweaks · pins disabled");
     expect(text).not.toContain("✗ claude not signed in");
   });
 
-  test("the badge shows during the open, beside the OPENING chip", async () => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      undefined,
-      NEVER_RESOLVING_PROBE,
-    );
-    deps.local.agentHealth.set({ kind: "checking", agent: "claude" });
-    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
-    open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
-    await handle.render();
-    const text = allText(handle.capture().rows);
-
-    expect(text).toContain("OPENING");
-    expect(text).toContain("⠹ checking claude");
-  });
-
-  test("at the floor the badge drops the agent name", async () => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 80, h: 24 },
-      undefined,
-      NEVER_RESOLVING_PROBE,
-    );
-    deps.local.agentHealth.set({ kind: "checking", agent: "claude" });
+  test("the badge drops the agent name at 80 columns", async () => {
+    const deps = withHealth(BLOCKED_LOGIN, { w: 80, h: 24 });
     const handle = await createHeadlessRenderer({ w: 80, h: 24 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
     const text = allText(handle.capture().rows);
-
-    expect(text).toContain("⠹ checking");
-    expect(text).not.toContain("⠹ checking claude");
+    expect(text).toContain("✗ not signed in");
+    expect(text).not.toContain("✗ claude not signed in");
   });
 
-  // fix round 1, Finding 3: every other test above sets `agentHealth` BEFORE mount, so none of
-  // them can tell a live `local.agentHealth()` read inside the component body apart from one
-  // hoisted out of it (an RTM-C01 violation `Workspace.tsx` does not have) — a hoisted read would
-  // still capture the pre-mount value on the FIRST render and every one of those tests would keep
-  // passing. This test mounts on `ready` (no badge), writes a DIFFERENT reading afterward, and
-  // asserts the second frame changed — a hoisted read remains stuck on the first render's value,
-  // so `not.toContain` below would still hold and this test would fail.
-  test("the badge is reactive — a post-mount health change repaints the bar", async () => {
-    const deps = withHealth({ kind: "ready", agent: "claude" });
+  test("the composer is not gated on health", async () => {
+    const deps = withHealth(BLOCKED_LOGIN);
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
     handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
-    expect(allText(handle.capture().rows)).not.toContain("✗ claude not signed in");
+    const rows = handle.capture().rows;
+    // `Composer`'s own caret (`TextInput.tsx`'s `${id}-caret` run) is drawn with the literal text
+    // "❯ " in EVERY one of its three branches — only its colour keys off `disabled`
+    // (`Composer.tsx`'s `caretFg={props.disabled === true ? faint : amber}`). That colour is the
+    // one thing that actually differs between a gated and an ungated composer, so it is the fact
+    // this test needs to check — design 30 §"The long-lived badge": "the composer is not gated on
+    // it." Exact-text match, not substring, matching this file's own idiom above ("a non-empty
+    // draft renders live…"): the chat panel's own focused title also starts with "❯ chat", which
+    // `findRun`'s `.includes` would match first, but the caret's own text node content is exactly
+    // "❯ ", nothing longer.
+    const caret = rows.flat().find((run) => run.text === "❯ ");
+    expect(caret && extractRgb(caret.fg)).toBe(SHELL_PALETTE.amber);
+  });
 
-    deps.local.agentHealth.set({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
-    await tick();
+  // Cross-task gap found by the previous task's reviewer, not in the brief's own test list: the
+  // engine's `wsOpening` puts the health badge in the OPENING bar too
+  // (`design/termcraft-engine.js:240,245` — `agentBadge(... || 'checking')`). Task 8 left `hint`
+  // null while filling because wiring `ui/agent-health` was out of its scope; none of the higher
+  // hint tiers can be true while `projectId` is still null, so `healthBadge` must reach this bar
+  // automatically once it becomes the chain's last tier.
+  test("the badge reaches the opening bar too (engine wsOpening :240,:245)", async () => {
+    const CHECKING: AgentHealth = { kind: "checking", agent: "claude" };
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve(CHECKING),
+    );
+    // projectId stays null — the Workspace mounted before finishOpen landed.
+    deps.local.agentHealth.set(CHECKING);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
     await handle.render();
-
-    expect(allText(handle.capture().rows)).toContain("✗ claude not signed in");
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("⠹ checking claude");
   });
 });

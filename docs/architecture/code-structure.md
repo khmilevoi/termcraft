@@ -139,15 +139,6 @@ flowchart LR
    folders inside it are a different matter and are not optional: `CLAUDE.md` puts
    code in `model/` (or `ui/`) even when that folder holds a single file.
 
-   A module that holds no code at all is the one shape with no layer folder to fill.
-   `src/ui/agent-health/` is `types.ts` + `index.ts` and nothing else — `CLAUDE.md` puts
-   both of those at a module's root by rule, and there is no logic to place anywhere.
-   It earns module status not by size but by ownership: two screens read the same agent
-   health reading (`flows/launch.md`), so leaving the type inside either one would have
-   made the other depend on it. `src/entities/turn/` has the same shape for the same
-   reason. Neither is the premature split the rule above warns about — that warning is
-   about a *submodule* carved out of a module that still owns the behaviour.
-
    `src/runtime/generated/` is a sanctioned exception to that shape, not drift. It
    still obeys "never loose at the module root" — its contents sit inside a named
    subfolder rather than scattered at `runtime/`'s top level — and `generated/` names
@@ -344,11 +335,6 @@ final group's own heading spells out which is which).
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
   Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
-- `src/ui/agent-health/types.ts`, `src/ui/agent-health/index.ts` — the landed example of
-  the no-code module shape this item records: one five-member type, no `model/`, no
-  `ui/`. Extracted from `ui/home` (workspace-first launch, 2026-08-02) once
-  `ui/workspace` became a second consumer; `ui/app` and `entrypoint` read it too. Home's
-  own submit policy stayed in `ui/home`, which is what keeps this module type-only
 - `src/runtime/generated/runtime-dts.ts` — the landed example of the `generated/`
   exception this item records: machine-emitted by `scripts/gen-runtime-dts.ts`,
   guarded by `src/runtime/generated/runtime-dts.test.ts`'s drift check, and never

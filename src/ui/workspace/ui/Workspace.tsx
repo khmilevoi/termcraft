@@ -4,6 +4,7 @@ import { reatomComponent, useWrap } from "@reatom/react";
 import type { PinDtoV1 } from "core/protocol";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
+import { agentBlockedNote, agentHealthBadge } from "ui/agent-health";
 import {
   AgentStatusBlock,
   ChatRecord,
@@ -23,7 +24,6 @@ import {
   FrameView,
   HostCrashPanel,
   HostUnavailablePanel,
-  OpeningState,
   PreviewOverlays,
   acknowledgeFrame,
   frameLocalPoint,
@@ -44,8 +44,6 @@ import {
   scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
-import { agentDeadNotice, agentHealthBadge } from "../model/health-badge";
-import type { AgentDeadNotice } from "../model/health-badge";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -76,7 +74,12 @@ function modeChip(
   fullscreen: boolean,
   readOnly: boolean,
   previewHalt: PreviewHalt,
+  filling: boolean,
 ): StatusBarModeChip {
+  // ` OPENING `, not ` STATIC ` (design 30): STATIC asserts a finished, unchanging design, which
+  // is exactly the claim this state cannot make. Checked before `readOnly` only for legibility —
+  // the two are mutually exclusive by construction, since `read-only` needs a non-null projectId.
+  if (filling) return { text: "OPENING", fg: "bg", bg: "amber" };
   if (readOnly) return { text: "READ-ONLY", fg: "amberHi", bg: "line" };
   if (turn.phase === "running") return { text: "GENERATING", fg: "bg", bg: "amber" };
   if (fullscreen) return { text: "FULLSCREEN", fg: "bg", bg: "amber" };
@@ -121,7 +124,12 @@ function hintKeys(
   turn: TurnMirror,
   fullscreen: boolean,
   previewHalt: PreviewHalt,
+  filling: boolean,
 ): readonly StatusBarHintKey[] {
+  // design/termcraft-engine.js:247 — `[['⏎','send','dis']]`, nothing else. F2/F3/F4 are DROPPED
+  // rather than drawn inert: none of the three has anything to act on yet (no preview, no page to
+  // tweak or interact with), and Home's own `checking` state shows the same restraint.
+  if (filling) return [["⏎", "send", "dis"]];
   if (fullscreen) return fullscreenHint("windowed");
   // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
   if (turn.phase === "running")
@@ -150,31 +158,6 @@ function hintKeys(
       : hotkeyHint(action),
   );
 }
-
-/**
- * design `wsOpening`'s own key row (`design/termcraft-engine.js:247`): one disabled `⏎ send`,
- * nothing else.
- *
- * ACCEPTED INCONSISTENCY — F2 IS BOUND WHILE THIS ROW IS DRAWN. `ui/app/model/keymap.ts`'s
- * `resolveKey` resolves global hotkeys through the action registry BEFORE it reaches any
- * screen-specific branch, and `preview.fullscreen` is `kind: "local"` with `capability: null`
- * (`ui/actions/model/registry.ts`), so nothing gates it on the project being open: pressing F2
- * during the open toggles `local.fullscreen` and the chat panel disappears, with this row naming
- * no way back. The other keys this row drops are harmless in the same window: `intent.ts`'s
- * `executeAction` returns before dispatching for F5 (`preview.retry` requires a `circuit-open`
- * preview) and for F6 (`compose-repair`, same requirement), and Ctrl+E does dispatch
- * `export.start`, but `core/capabilities`'s `projectNotReadyReason` refuses every kind outside
- * its short exempt list until the project reaches `ready`. None of those three changes anything
- * on screen. F2 is the one that does.
- *
- * The behaviour is deliberately LEFT AS IS here: gating it is a product decision (does the
- * opening shell offer fullscreen at all?), and it is being surfaced to the controller separately
- * rather than resolved inside a comment-truth pass. Recorded here because this component's own
- * test file asserts the mirror-image rule for the IDLE row — "no bound-but-undrawn page-step
- * keys" (`Workspace.test.tsx`) — and a reader who trusts that rule to hold for every row would
- * otherwise conclude F2 is inert during the open. It is not.
- */
-const OPENING_HINT_KEYS: readonly StatusBarHintKey[] = [["⏎", "send", "dis"]];
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
 function terminalRecordLines(
@@ -285,13 +268,11 @@ function renderTabs(
   );
 }
 
-/** Selects the preview region content: enlarge is handled by the App; here opening/empty/error/frame/ready. */
+/** Selects the preview region content: enlarge is handled by the App; here empty/error/frame/ready. */
 function renderPreviewRegion(
   preview: PreviewMirror,
   uiFrame: UiPreviewFrame | null,
   hasPages: boolean,
-  opening: boolean,
-  agentDead: AgentDeadNotice | null,
   region: CellSize,
   interaction: Readonly<{
     pins: readonly PinDtoV1[];
@@ -302,13 +283,33 @@ function renderPreviewRegion(
     onMouseMove: (event: MouseEvent) => void;
     onMouseDown: (event: MouseEvent) => void;
   }>,
+  filling: boolean,
+  agentBlocked: ReturnType<typeof agentBlockedNote>,
 ) {
-  // FIRST, ahead of every other branch. "There are no pages" and "the pages have not been read
-  // yet" are different facts, and only this one is true while `projectId` is null — the preview
-  // machine cannot have failed or halted for a project that has not opened, so no branch below
-  // is being pre-empted. Design `wsOpening` (`design/30-workspace-first-launch.dc.html`).
-  if (opening) {
-    return <OpeningState id="ws-preview-opening" width={region.w} height={region.h} />;
+  if (filling) {
+    // design/termcraft-engine.js:237-238. Distinct from §20's `No pages yet` (a finished project
+    // that genuinely has none) and §14's `⠹ generating first page…` (a running, cancellable
+    // turn). Neither is true here, so this is a plain amber line with no glyph in front of it —
+    // NOTHING SPINS. Drawing a spinner over a state with no cancel and nothing measurable would
+    // borrow a promise this state cannot keep.
+    return (
+      <box
+        id="ws-preview-opening"
+        flexGrow={1}
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+      >
+        <text id="ws-preview-opening-headline" fg={SHELL_PALETTE.amber} attributes={BOLD}>
+          opening project…
+        </text>
+        {/* The engine leaves one blank row between the two lines (`dh/2-1` and `dh/2+1`). */}
+        <text id="ws-preview-opening-spacer"> </text>
+        <text id="ws-preview-opening-detail" fg={SHELL_PALETTE.faint}>
+          reading .termcraft — preview arrives when it&apos;s ready
+        </text>
+      </box>
+    );
   }
   if (preview.phase === "failed") {
     return (
@@ -335,7 +336,7 @@ function renderPreviewRegion(
           hostMessage={preview.finalFailure.safeMessage}
           attempts={preview.attempts}
           retryAvailable={preview.retryAvailable}
-          agentDead={agentDead}
+          agentBlocked={agentBlocked}
         />
       );
     }
@@ -414,14 +415,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const size = terminal();
   const turn = mirror.turn();
   const preview = mirror.preview();
-  // `projectId === null` inside a mounted Workspace means exactly one thing: `deriveScreen`
-  // routed a pending startup open here and the Kernel's ready sequence has not published
-  // anything yet (`ui/mirror/model/screen.ts`). No new flag is needed for it.
-  const opening = mirror.project().projectId === null;
-  // design `wsOpening`'s own `narrow` (`termcraft-engine.js:235`): at the floor the size segment
-  // is dropped and the phrase shortens, the same restraint the idle shell already applies below
-  // 100 columns.
-  const narrow = size.w < 100;
+  // The Workspace mounted before its project opened (spec 2026-08-02, design
+  // `design/30-workspace-first-launch.dc.html`). NOT a new screen: `deriveScreen` returns
+  // "workspace" for it, so filling in is a re-render rather than a remount.
+  const filling = mirror.project().projectId === null;
   const descriptors = mirror.pageDescriptors();
   // The page the Workspace is showing — the tab-strip pick when there is one, else the Kernel's
   // own active slug (`../model/page-selection.ts`). Read ONCE here so the tab strip, the pin
@@ -431,9 +428,6 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
-  const agentHealth = local.agentHealth();
-  const healthBadge = agentHealthBadge(agentHealth, narrow);
-  const agentDead = agentDeadNotice(agentHealth);
   const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
@@ -497,6 +491,25 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           designAtFault: isDesignRenderFailure(preview.finalFailure),
         }
       : null;
+  // The `hint` slot holds ONE badge. Precedence, highest first (design 30 §"The badge
+  // vocabulary"): read-only → turn running → preview halt → agent health → none. `turn running`
+  // must outrank health by rule — a live turn demonstrates the agent is alive, so a stale
+  // `✗ not signed in` under it would contradict what is happening on screen in the same second.
+  // Health sits last among the real tiers: it is a permanent, ambient fact, not an urgent one.
+  //
+  // DIVERGENCE (narrow-bar layout, pre-existing): the engine's
+  // `workspace()` drops its whole left cluster — hint included — below 100 columns (`:274`). This
+  // component has never implemented that narrow branch, which is why its `⚠ turn running` hint
+  // also survives at 80 columns; health follows the slot's existing behaviour in the short form
+  // the design itself defines (`agentBadge`'s `opt.short`, and `wsOpen80` which keeps the badge at
+  // 80), rather than introducing a narrow rule for one badge alone.
+  //
+  // INHERITED DIVERGENCE (already documented at `Home.tsx:56`): `StatusBarHintBadge` is plain
+  // text and cannot host a live component, so the `⠹` this renders is static, not animated.
+  const healthBadge = agentHealthBadge(local.agentHealth(), { short: w < 100 });
+  // Only the crash panel takes it: `HostUnavailablePanel` names no repair key at all (the host
+  // never got as far as the page), so there is no F6 promise there to correct.
+  const agentBlocked = agentBlockedNote(local.agentHealth());
   const composerAttach = deriveComposerAttach({
     readOnly: props.readOnly,
     selection,
@@ -576,10 +589,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     if (event.button === MouseButton.RIGHT) return requestAtMouse("pin", event);
     if (event.button === MouseButton.LEFT) requestAtMouse("select", event);
   }, "ui.Workspace.onPreviewMouseDown");
-  const composerPlaceholder = opening
-    ? "project opening…"
-    : props.readOnly
-      ? "read-only — Send disabled"
+  const composerPlaceholder = props.readOnly
+    ? "read-only — Send disabled"
+    : filling
+      ? "project opening…"
       : turn.phase === "running"
         ? "generating… esc to cancel"
         : composerFocused
@@ -779,8 +792,6 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             preview,
             uiFrame,
             descriptors.length > 0,
-            opening,
-            agentDead,
             previewRegion,
             {
               pins,
@@ -791,53 +802,37 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
               onMouseMove: onPreviewMouseMove,
               onMouseDown: onPreviewMouseDown,
             },
+            filling,
+            agentBlocked,
           )}
         </box>
       </box>
       <StatusBar
         id="ws-status"
         width={w}
-        // DIVERGENCE (design sample data + no runtime source): `wsOpening` opens its bar with a
-        // ` codex · gpt5.5 · high ` chip. `StatusBar` has no combo segment at all — every workspace
-        // frame after §07 passes `combo:false`, which is exactly what `buildLeftSegments` implements —
-        // and while the project is opening `mirror.agentIdentity()` is still null, so there is no
-        // honest value to draw. The segment is dropped; every other segment of the opening bar is
-        // implemented verbatim.
-        mode={
-          // design `wsOpening`: ` OPENING `, not ` STATIC `. STATIC asserts a finished,
-          // unchanging design, which is exactly the claim this state cannot make.
-          opening
-            ? { text: "OPENING", fg: "bg", bg: "amber" }
-            : modeChip(turn, fullscreen, props.readOnly, previewHalt)
-        }
+        mode={modeChip(turn, fullscreen, props.readOnly, previewHalt, filling)}
+        // Known divergence: the engine's wide `wsOpening` bar also carries a leading
+        // ` codex · gpt5.5 · high ` combo chip (`:242`). `StatusBarProps` has no combo slot at
+        // all — `StatusBar.tsx`'s own comment records that every workspace screen after §07
+        // passes `combo:false` — so this bar drops it exactly as every other Workspace bar
+        // already does. Not a new divergence; inherited.
         page={
-          // The page slot is FILLED, not dropped: there is no page slug yet, so it carries
-          // Home's own phrase for the same state, verbatim (design `wsOpening`, and
-          // `Home.tsx:337` for the identical slot choice).
-          opening
-            ? { text: narrow ? "opening…" : "opening project…", fg: "amber", bold: true }
+          filling
+            ? // Home's own phrase, verbatim, in the slot that is free because there is no page
+              // slug yet (design 30 §"Mid-open"). `opening…` below 100 columns, matching the
+              // engine's own `narrow` branch (`:243`).
+              { text: w >= 100 ? "opening project…" : "opening…", fg: "amber", bold: true }
             : activePageSlug !== null
               ? { text: activePageSlug, fg: "dim" }
               : null
         }
-        // design `wsOpening`: the size segment is one of the two things dropped at the floor.
-        size={opening && narrow ? null : { w, h, min: minSize }}
+        // The engine drops the size segment below 100 columns in this state (`:244`). The idle
+        // bar has never implemented that narrow branch — a pre-existing divergence, out of scope
+        // here — but this state is new code and follows the design it was drawn for.
+        size={filling && w < 100 ? null : { w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
-          // design 30, "The badge vocabulary": precedence, highest first — read-only, turn
-          // running, preview halt, agent health, none.
-          //
-          // `turn running` MUST outrank health by rule, not by taste: while a turn runs the agent
-          // is alive by demonstration, and a stale `✗ … not signed in` sitting under it would
-          // contradict what is happening on screen in the same second.
-          //
-          // Preview halt outranks health because it is the more urgent, more specific fact — and
-          // §30 answers the collision directly: the halt keeps the slot, and when the reading is
-          // blocked or missing the halt PANEL says what health would have said (see
-          // `HostCrashPanel`'s `agentDead`; `agentDeadNotice` returns `null` for `checking` and
-          // `advisory`, so those two readings are simply lost while a halt has the slot — a
-          // known, accepted gap, not a bug this task closes).
           props.readOnly
             ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" }
             : // finding §2.5 (phase-8 Task 16): design/termcraft-engine.js:1005-1006 (`wsSlashTurn`)
@@ -856,13 +851,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   }
                 : healthBadge
         }
-        hintKeys={
-          // design `wsOpening`: `keys:[['⏎','send','dis']]` and nothing else. F2/F3/F4 are
-          // dropped rather than drawn inert — none of the three has anything to act on yet (no
-          // preview, no page to tweak or interact with), and Home's own `checking` state shows
-          // the same restraint.
-          opening ? OPENING_HINT_KEYS : hintKeys(turn, fullscreen, previewHalt)
-        }
+        hintKeys={hintKeys(turn, fullscreen, previewHalt, filling)}
       />
     </box>
   );

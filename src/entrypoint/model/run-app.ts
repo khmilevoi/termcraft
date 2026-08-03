@@ -37,7 +37,7 @@ const NOOP_EXIT: ProcessExit = () => undefined;
 export interface RunAppOptions {
   /**
    * `ShellWithAgentRegistry`, not the bare `AppShell` (`../types`): `runApp` needs the shell's
-   * agent registry to build Task 9's real agent-health probe (`resolveAgentHealthProbe` below).
+   * agent registry to build Task 9's real Home health probe (`resolveAgentHealthProbe` below).
    * A strict superset of `AppShell`, so `bootstrap.ts` — the one production caller — keeps
    * compiling unmodified: `createShell`'s own return type already widened to match.
    */
@@ -125,43 +125,40 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   const app = startShutdownPath(shell, boundary, root, exit);
   closeRef = app.close;
 
-  // Gap D, revised by the workspace-first launch spec (2026-08-02): an EXISTING project — one
-  // with `.termcraft/` on disk — opens straight into the Workspace. The predicate is
-  // `launch.existing`, because `deriveScreen` routes on that same fact: routing to the Workspace
-  // on one fact while dispatching on another would strand an existing-but-empty project in a
-  // Workspace that never opens. `launch.hasContent` is what this dispatch keyed on BEFORE that
-  // revision; it is still computed and still reported on `ShellLaunchV1`, and since the revision
-  // nothing in `src` reads it at all (`../types.ts`) — it is not a second live predicate to be
-  // weighed against `existing` here. `src` holds THREE `project.open` dispatch sites: this one
-  // (the ordinary way an existing project is opened), `ui/app/model/intent.ts`'s `home-submit`
-  // (narrowed by this same spec to Home's ⏎ after a startup open that failed), and
-  // `entrypoint/model/run-export.ts`'s headless export driver.
+  // Gap D: an existing project holding pages or chats opens straight into the Workspace. This is
+  // the ONE interactive caller of `project.open` — before it, the whole of `src` had exactly one
+  // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
+  // Home no matter what was on disk.
   //
-  // WHAT A FAILED STARTUP DISPATCH ACTUALLY DOES TODAY. `abandonStartupOpen` is a strict
-  // improvement on the pre-branch behaviour, and it is still not a SURFACE. What it does: it
-  // clears the UI's pending-open flag, so `deriveScreen` stops routing to the Workspace and
-  // drops back to Home. Without it the user would sit in an empty Workspace shell forever,
-  // since neither `finishOpen` nor `blockOpen` ever arrives on this path. What it does NOT do:
-  // explain anything. The Home it lands on is the ORDINARY prompt — `HomeOpenFailurePanel`
-  // renders only for a non-null `ProjectMirror.openFailure` (`ui/home/ui/Home.tsx`), which is
-  // written ONLY from `kernel.project.blockOpen`'s own metadata (`ui/mirror/model/mirror.ts`),
-  // and on this branch the Kernel published nothing at all. The `project.close` recovery
-  // (`ui/app/model/deps.ts`'s `recoverFromBlockedOpen`) is gated on that same non-null
-  // `openFailure`, so it never fires either, and Home's ⏎ is its ordinary submit rather than the
-  // retry of a named failure. The two `console.error` calls below run while the renderer owns
-  // the terminal, so `infrastructure/debug-log`'s pass-through gate holds them: with tracing on
-  // the line reaches the trace file and nothing else; with tracing off it waits in the bounded
-  // hold buffer and prints only once `dispose()` hands the terminal back — after the user has
-  // already quit. This is recorded as a KNOWN GAP IN SURFACING, the same way
-  // `docs/architecture/flows/launch.md`'s "Falling back from the mounted shell" states it, not
-  // papered over: `design/*.dc.html` has no screen for a startup open that never reached the
-  // Kernel, and inventing one here is forbidden (CLAUDE.md, "Design is a source of truth").
-  // `project.retryOpen` already exists for the recovery-conflict path and would be the natural
-  // action such a surface offers.
+  // WHAT A FAILED STARTUP OPEN ACTUALLY DOES TODAY — the two `console.error` calls below run
+  // while the renderer owns the terminal, so `infrastructure/debug-log`'s pass-through gate is
+  // engaged: with tracing on the line reaches the trace file and nothing else; with tracing off
+  // it waits in the hold buffer and prints only once the user has already quit. That much is
+  // still true, and it is still not a surface. On either failure branch below,
+  // `root.abandonStartupOpen()` retires `startupOpenPending` and `deriveScreen` drops the user
+  // back to Home, so a retry IS possible (⏎ / `ui/app/model/intent.ts`'s `home-submit` branch
+  // dispatches `project.open` again for it) — but `HomeOpenFailurePanel` belongs to a DIFFERENT
+  // failure path: it is gated on `ProjectMirror.openFailure !== null`, and that field is set only
+  // by the Kernel's own `kernel.project.blockOpen`, which neither branch below ever reaches (a
+  // dispatch that failed to reach the Kernel, or one the Kernel rejected outright, was never
+  // admitted, so it cannot have been later blocked either). So the user lands on a bare Home able
+  // to retry but told no reason why the last attempt failed — recovery without diagnosis, still an
+  // open design gap (see `docs/architecture/flows/launch.md`'s matching account of this same
+  // path). `project.retryOpen` remains the separate recovery-conflict path for a startup open the
+  // Kernel actually admitted and only later blocked.
   //
   // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
   // handlers this function awaits nothing before. Dispatching first, as this used to, meant a
-  // Ctrl-C during the (up to ~30s) open sequence had no handler to catch it.
+  // Ctrl-C during the (up to ~30s) open sequence had no handler to catch it — the still-live
+  // renderer never got torn down and the project lease never got released. Moving the dispatch
+  // below costs nothing: `closeRef` is already assigned by the time this `await` starts, so
+  // `requestExit`/a signal firing mid-dispatch tears down the shell correctly either way.
+  //
+  // Spec 2026-08-02: `existing`, not `hasContent`. `deriveScreen` mounts the Workspace off
+  // `UiEnv.projectExists` — the SAME `existing` fact — so routing on one predicate while
+  // dispatching on another would strand an existing-but-empty project in a Workspace that never
+  // opens. The `existing && !hasContent -> Home` branch this replaces was already practically
+  // unreachable (`createProject` always mints the first chat header).
   if (shell.launch.existing) {
     const dispatcher = createDispatcher({
       port: shell.port,
@@ -169,14 +166,16 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     });
     const result = await dispatcher.dispatch("project.open", { root: shell.env.root });
     if (result instanceof Error) {
+      // Neither finishOpen nor blockOpen will ever arrive, so nothing else can end the
+      // Workspace's opening state — telling the UI is the only honest exit (spec 2026-08-02).
+      root.abandonStartupOpen();
       console.error(
         `termcraft: the startup project.open failed to dispatch: ${result.message}`,
         result,
       );
-      root.abandonStartupOpen();
     } else if (result.status === "rejected") {
-      console.error(`termcraft: the startup project.open was rejected (${result.code})`);
       root.abandonStartupOpen();
+      console.error(`termcraft: the startup project.open was rejected (${result.code})`);
     }
   }
 
@@ -229,7 +228,7 @@ async function closeShell(shell: AppShell, boundary: ProcessBoundary): Promise<v
 }
 
 /**
- * Builds the real agent-health probe from the shell's agent registry (phase-8 Task 9 / WP-5). Since
+ * Builds Home's real health probe from the shell's agent registry (phase-8 Task 9 / WP-5). Since
  * phase-8 Task 13 (finding §2.7) this reports HEALTH only — the sibling synchronous fact, the
  * registry's declared default agent/model/effort, is resolved separately by
  * `resolveDefaultAgentSelection` (`./agent-health.ts`) and passed straight into `createUiRoot`'s

@@ -16,6 +16,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   homePrompt: "",
   turnRunning: false,
   projectOpening: false,
+  projectOpen: true,
   ...over,
 });
 
@@ -437,6 +438,41 @@ describe("resolveKey — Workspace composer", () => {
       kind: "slash-open",
     });
     expect(resolveKey(key({ name: "return" }), running)).toEqual({ kind: "composer-submit" });
+  });
+});
+
+describe("the Workspace's opening state (spec 2026-08-02)", () => {
+  test("Enter is refused while the project is still opening", () => {
+    expect(
+      resolveKey(
+        key({ name: "return" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  test("typing is not — only sending is refused", () => {
+    expect(
+      resolveKey(
+        key({ name: "a", sequence: "a" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "composer-input", ch: "a" });
+    expect(
+      resolveKey(
+        key({ name: "backspace" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+      ),
+    ).toEqual({ kind: "composer-backspace" });
+  });
+
+  test("an open project sends as before", () => {
+    expect(
+      resolveKey(
+        key({ name: "return" }),
+        ctx({ screen: "workspace", focus: "composer", projectOpen: true }),
+      ),
+    ).toEqual({ kind: "composer-submit" });
   });
 });
 

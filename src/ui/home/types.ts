@@ -4,16 +4,15 @@ import type { ProjectOpenFailure } from "ui/mirror";
 
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
- * chrome-map "SURFACE: Home"). NARROWED (workspace-first launch, 2026-08-02): Home is now
- * reached in exactly two situations — a genuinely fresh directory, and a startup open that
- * failed. An existing project mounts the Workspace immediately and fills there
- * (`design/30-workspace-first-launch.dc.html`). {@link HomeProps.openFailure} is what makes the
- * second case legible instead of silent. No chat/preview split, no tab strip.
+ * chrome-map "SURFACE: Home"). Normally shown only before `.termcraft/` exists; an existing
+ * project opens straight into Workspace (Gap D). CORRECTED: that is not the ONLY way Home is
+ * reached with a project on disk — an open that ends in the project machine's `blocked` state
+ * leaves `projectId` null, so `deriveScreen` holds Home over a folder that does have a project.
+ * {@link HomeProps.openFailure} is what makes that case legible instead of silent. No
+ * chat/preview split, no tab strip.
  */
 
-/** Submit is refused exactly while the agent is unproven-and-unusable — see {@link AgentHealth}.
- *  Stays in `ui/home` on purpose: this is HOME's submit policy. The Workspace composer is
- *  deliberately not gated on health — a dead CLI does not disable ⏎ there. */
+/** Submit is refused exactly while the agent is unproven-and-unusable — see {@link AgentHealth}. */
 export function homeSubmitAllowed(health: AgentHealth): boolean {
   return health.kind === "ready" || health.kind === "advisory";
 }
@@ -70,13 +69,10 @@ export interface HomeProps {
    */
   readonly openFailure: ProjectOpenFailure | null;
   /**
-   * Whether a `project.create`/`project.open` is in flight (`ProjectMirror.opening`). For a
-   * Home-initiated open — a fresh-directory `create`, or the ⏎ retry after a blocked open — Home
-   * stays mounted throughout: `openFailure` survives `finishClose` (workspace-first launch,
-   * 2026-08-02), so a retry never flashes into the Workspace, and `deriveScreen` only leaves Home
-   * once THIS attempt's own `finishOpen` metadata lands. This is what stops the screen claiming
-   * "no project yet" over a project that is actively loading, and what makes the refused Enter
-   * visible before it is pressed.
+   * Whether a `project.create`/`project.open` is in flight (`ProjectMirror.opening`). Home stays
+   * mounted throughout — `deriveScreen` only leaves it once `finishOpen`'s metadata lands — so
+   * this is what stops the screen claiming "no project yet" over a project that is actively
+   * loading, and what makes the refused Enter visible before it is pressed.
    */
   readonly opening: boolean;
 }

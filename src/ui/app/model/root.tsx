@@ -37,8 +37,7 @@ export interface UiRootOptions {
   readonly env?: UiEnv;
   readonly adapters?: UiRootAdapters;
   /**
-   * The real agent-health probe (phase-8 Task 9 / WP-5) — one reading, read by Home's health
-   * line and by the Workspace status bar's badge — built by the composition root
+   * The real Home agent-health probe (phase-8 Task 9 / WP-5), built by the composition root
    * from the shell's agent registry (`entrypoint/model/agent-health.ts`'s
    * `createAgentHealthProbe`, wired in `entrypoint/model/run-app.ts`). Optional so every
    * existing `createUiRoot` call keeps compiling — `createUiDeps`'s own fourth parameter
@@ -67,11 +66,9 @@ export interface UiRootHandle {
   /** Idempotently tear down the React tree before releasing the terminal renderer. */
   dispose(): void;
   /**
-   * Tells the mounted UI that the composition root's startup `project.open` will never arrive
-   * (workspace-first launch) — see `UiDeps.abandonStartupOpen`. `runApp` calls this on both
-   * failure branches of that dispatch, in addition to its own `console.error`: without it the
-   * user sits on an empty Workspace shell forever, because neither `finishOpen` nor `blockOpen`
-   * will ever set `projectId` or `openFailure`.
+   * "The startup `project.open` will never land" (spec 2026-08-02). `entrypoint/model/run-app.ts`
+   * calls this on both failure branches of its own startup dispatch; without it the Workspace
+   * shell that `deriveScreen` mounted on `UiEnv.projectExists` never resolves to anything.
    */
   abandonStartupOpen(): void;
 }
@@ -158,32 +155,16 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
     return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
 
-  // Hoisted out of the JSX below so the returned handle can close over it — `abandonStartupOpen`
-  // has to reach the SAME `UiDeps` the mounted tree is reading. Still wrapped in `errore.try`,
-  // same as `mounted` below: a synchronous throw here must still destroy the renderer and lift
-  // the console gate before returning, matching every other release path in this function (fix
-  // round 1 — the hoist must not let this one bypass that invariant). Unreachable today
-  // (`createUiDeps` only builds Reatom atoms/actions/computeds and never throws in practice), but
-  // the defensive branch keeps the release paths uniform rather than special-casing this one.
-  const deps = errore.try(() =>
-    createUiDeps(
-      options.port,
-      { w: renderer.width, h: renderer.height },
-      options.env,
-      options.agentHealthProbe,
-      options.requestExit,
-      options.agentSelection,
-    ),
+  // Hoisted out of the JSX below so the returned handle can reach it — `runApp` needs
+  // `abandonStartupOpen` after this function has already returned.
+  const deps = createUiDeps(
+    options.port,
+    { w: renderer.width, h: renderer.height },
+    options.env,
+    options.agentHealthProbe,
+    options.requestExit,
+    options.agentSelection,
   );
-  if (deps instanceof Error) {
-    try {
-      renderer.destroy();
-    } finally {
-      resumeConsolePassthrough();
-    }
-    return new UiRootError({ operation: "mount app", cause: deps.cause ?? deps });
-  }
-
   const mounted = errore.try(() => root.render(<App deps={deps} />));
   if (mounted instanceof Error) {
     try {

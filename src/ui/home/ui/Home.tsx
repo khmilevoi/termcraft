@@ -401,7 +401,7 @@ function HomeAgentMissing(props: HomeAgentMissingProps) {
           <text id={`${props.id}-agent-missing`} fg={SHELL_PALETTE.red} attributes={BOLD}>
             {
               // WP-5 (phase-8 Task 9): the probe (`entrypoint/model/agent-health.ts`'s
-              // `agentHealthFromAgentInfo`) distinguishes several not-ready reasons, but only
+              // `homeHealthFromAgentInfo`) distinguishes several not-ready reasons, but only
               // `missing` (no CLI at all) reaches this full-screen takeover any more (finding
               // §2.7, phase-8 Task 15) — `blocked`/`advisory` render `HomeHealthPanel` instead.
               // design/01-home.dc.html's `homeErr()` (design/termcraft-engine.js:720 —

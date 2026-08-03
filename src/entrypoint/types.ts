@@ -28,35 +28,22 @@ export interface AppShell {
 }
 
 /**
- * What the composition root learned while opening the caller's project, and threw away before
- * this existed (Gap D). Both facts have to be captured INSIDE `openOrCreateProject`: by the time
- * the UI mounts, `.termcraft/` exists on disk in both cases — the shell just created it — so
- * nothing downstream can re-derive them.
+ * What the composition root learned while opening the caller's project (Gap D). `existing` has to
+ * be captured INSIDE `openOrCreateProject`: by the time the UI mounts, `.termcraft/` exists on
+ * disk in both cases — the shell just created it — so nothing downstream can re-derive it.
  *
- * `hasContent` reports whether the project holds anything to view or edit — at least
- * one page, or at least one chat. Its purpose WAS the CLONE case (pages present, zero chats, since
- * `chats/` is git-ignored as of fix-bundle §2.5) reaching the Workspace — that was exactly the
- * case that most needed it, before the predicate moved to `existing` (see below). `createProject`
- * always mints the first chat header, so "exists but is empty" is practically unreachable — this
- * field is `false` essentially only for a genuinely fresh directory. `true` also for an EXISTING
- * project whose content could not actually be confirmed (a manifest or chat-listing read failed,
- * fix round 1 Finding 1, `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing
- * here" just because the disk could not answer, though workspace-first launch (2026-08-02) made
- * that choice moot: an `existing` project's startup dispatch runs regardless of what the probe
- * found.
- *
- * NO LONGER THE ROUTING PREDICATE (workspace-first launch, 2026-08-02): `existing` is. Both
- * `run-app.ts`'s startup dispatch and `deriveScreen` read `existing`, because routing on one
- * fact while dispatching on the other would strand an existing-but-empty project in a Workspace
- * that never opens. `hasContent` is still computed and still reported; nothing reads it.
+ * It was briefly paired with a `hasContent` routing predicate (one manifest read plus one
+ * `ChatStore.list()` before the Kernel was even constructed). Spec 2026-08-02 collapsed the two:
+ * `deriveScreen` routes on the same `existing` fact, so a second, weaker predicate could only
+ * ever disagree with it — and the case it existed to separate, an existing-but-empty project, is
+ * practically unreachable since `createProject` always mints the first chat header.
  */
 export interface ShellLaunchV1 {
   readonly existing: boolean;
-  readonly hasContent: boolean;
 }
 
 /**
- * `AppShell` widened with the live agent registry Task 9's agent-health probe needs
+ * `AppShell` widened with the live agent registry Task 9's Home health probe needs
  * (`run-app.ts`'s `resolveAgentHealthProbe`). Declared here, in the module's shared `types.ts`
  * (this repository's module-shape convention — CLAUDE.md), rather than in a `model/` file —
  * moved from `create-shell.ts` by phase-8 Task 11, which found it living there. Its reasoning is

@@ -21,7 +21,7 @@ interface PanelSpec {
  * standing sample-data divergence (M22): the FIRST line of `login`/`sandbox`/`shutdown` is
  * driven by `health.detail` instead of the literal design string, because `detail` is this
  * module's own honest, already-computed wording (`entrypoint/model/agent-health.ts`'s
- * `agentHealthFromAgentInfo`) built from the SAME pattern minus a version number `AgentInfo`
+ * `homeHealthFromAgentInfo`) built from the SAME pattern minus a version number `AgentInfo`
  * never carries — reusing it here (rather than re-deriving `"{agent} 0.34 found · not signed
  * in"`) is what keeps this panel from fabricating a version the real probe never read (the
  * project's hardest rule). The second/third lines of `login`/`sandbox` carry no per-probe fact,

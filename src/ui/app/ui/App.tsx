@@ -192,6 +192,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
       projectOpening: deps.mirror.project().opening,
+      projectOpen: deps.mirror.project().projectId !== null,
     };
     const intent = resolveKey(key, context);
     // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an

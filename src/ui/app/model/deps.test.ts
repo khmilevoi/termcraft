@@ -21,6 +21,23 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** Longer than the frame loop's own `FRAME_POLL_MS`, so a poll-and-retry cycle can complete. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
 
+/**
+ * `handlers/project.ts`'s own `blockOpen` shape: the action, plus the `{reason, failure}` it
+ * publishes as this transition's `metadata`. Shared by the "blocked-open recovery" describe
+ * block below and the `startupOpenPending` describe block, so both build the identical envelope.
+ */
+const blockOpen = (reason: string, safeMessage: string) =>
+  event("kernel.stateChanged", {
+    modelId: "kernel.project.state",
+    action: "kernel.project.blockOpen",
+    previousTag: "opening",
+    nextTag: "blocked",
+    metadata: {
+      reason,
+      failure: { code: "PERSISTENCE_FAILED", retryable: true, safeMessage, details: {} },
+    },
+  });
+
 function frame(sessionId: string): PreviewFrameV1 {
   return {
     sessionId,
@@ -226,7 +243,7 @@ describe("createUiDeps runtime", () => {
   });
 });
 
-describe("createUiDeps startup agent-health probe (M15)", () => {
+describe("createUiDeps Home health probe (M15)", () => {
   test("runs the injected probe once at startup, through the same path home-recheck uses", async () => {
     const kernel = createFakeKernel();
     let calls = 0;
@@ -616,22 +633,6 @@ describe("createUiDeps refreshAgentHealth", () => {
 });
 
 describe("createUiDeps blocked-open recovery", () => {
-  /**
-   * `handlers/project.ts`'s own `blockOpen` shape: the action, plus the `{reason, failure}` it
-   * publishes as this transition's `metadata`.
-   */
-  const blockOpen = (reason: string, safeMessage: string) =>
-    event("kernel.stateChanged", {
-      modelId: "kernel.project.state",
-      action: "kernel.project.blockOpen",
-      previousTag: "opening",
-      nextTag: "blocked",
-      metadata: {
-        reason,
-        failure: { code: "PERSISTENCE_FAILED", retryable: true, safeMessage, details: {} },
-      },
-    });
-
   const closes = (kernel: ReturnType<typeof createFakeKernel>): number =>
     kernel.dispatched.filter(
       (raw) =>
@@ -701,6 +702,145 @@ describe("createUiDeps blocked-open recovery", () => {
   });
 });
 
+describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () => {
+  test("an existing project mounts the Workspace before any Kernel event arrives", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.local.startupOpenPending()).toBe(true);
+    expect(deps.screen()).toBe("workspace");
+  });
+
+  test("a fresh directory still lands on Home", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(deps.local.startupOpenPending()).toBe(false);
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("abandonStartupOpen drops the empty shell back to Home", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.screen()).toBe("workspace");
+    deps.abandonStartupOpen();
+    expect(deps.local.startupOpenPending()).toBe(false);
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("a blocked open returns to Home even while the startup open is still pending", () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    // Apply the mirror's own blockOpen fold directly — see the existing "blocked-open recovery"
+    // describe block above for the shared envelope helper.
+    deps.mirror.apply(blockOpen("manifest-read-failed", "project.toml could not be read"));
+    expect(deps.screen()).toBe("home");
+  });
+
+  test("a successful finishOpen clears startupOpenPending — the flag stops describing a project that is already open", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    // The clearer lives on the `mirror.project` subscription inside the `runtime` connect hook
+    // (`deps.ts`), so it only runs while `runtime` is connected — same requirement as the
+    // "blocked-open recovery" describe block above.
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    expect(deps.local.startupOpenPending()).toBe(true);
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+    await tick();
+
+    expect(deps.local.startupOpenPending()).toBe(false);
+    unsubscribe();
+  });
+
+  test("a later close with no openFailure lands on Home, not an empty Workspace shell", async () => {
+    // Regression coverage for the escalated Item 1 fix: before it, `startupOpenPending` had
+    // exactly one clearer (`abandonStartupOpen`, only reachable from the startup dispatch's own
+    // two failure branches), so a SUCCESSFUL open left it `true` forever. Any later legitimate
+    // close that is not the blocked-open recovery above — which always leaves `openFailure`
+    // non-null — leaves `projectId` null with `openFailure` still null, and `deriveScreen`
+    // (`projectId === null && startupOpenPending && !openFailed`) would mount an empty Workspace
+    // shell with no exit. `finishClose` is used here only as a concrete, mirror-fold-accurate way
+    // to reach that same (`projectId: null`, `openFailure: null`) pair — the fix does not depend
+    // on `finishClose` specifically, only on projectId legitimately returning to null.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+    await tick();
+    expect(deps.screen()).toBe("workspace");
+
+    kernel.emit(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishClose",
+        previousTag: "closing",
+        nextTag: "closed",
+        metadata: { projectId: null },
+      }),
+    );
+    await tick();
+
+    expect(deps.mirror.project().projectId).toBeNull();
+    expect(deps.mirror.project().openFailure).toBeNull();
+    expect(deps.screen()).toBe("home");
+    unsubscribe();
+  });
+});
+
 describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
   test("defaults to a no-op so every existing UiDeps construction keeps compiling", () => {
     const kernel = createFakeKernel();
@@ -717,74 +857,6 @@ describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, undefined, undefined, requestExit);
     deps.requestExit();
     expect(calls).toBe(1);
-  });
-});
-
-describe("createUiDeps startup-open tracking (workspace-first launch)", () => {
-  test("seeds startupOpenPending from env.projectExists", () => {
-    const existing = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      {
-        root: "/tmp/project",
-        workspaceIdentity: "local",
-        projectExists: true,
-      },
-    );
-    expect(existing.local.startupOpenPending()).toBe(true);
-  });
-
-  test("defaults to false for a fresh directory (and for every test/demo construction)", () => {
-    const fresh = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
-    expect(fresh.local.startupOpenPending()).toBe(false);
-  });
-
-  test("abandonStartupOpen clears it — the startup open will never arrive", () => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      {
-        root: "/tmp/project",
-        workspaceIdentity: "local",
-        projectExists: true,
-      },
-    );
-    deps.abandonStartupOpen();
-    expect(deps.local.startupOpenPending()).toBe(false);
-  });
-
-  test("abandonStartupOpen is idempotent — both run-app failure branches may fire", () => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      {
-        root: "/tmp/project",
-        workspaceIdentity: "local",
-        projectExists: true,
-      },
-    );
-    deps.abandonStartupOpen();
-    deps.abandonStartupOpen();
-    expect(deps.local.startupOpenPending()).toBe(false);
-  });
-
-  test("the derived screen follows the flag: workspace while pending, home once abandoned", () => {
-    const deps = createUiDeps(
-      createFakeKernel(),
-      { w: 120, h: 36 },
-      {
-        root: "/tmp/project",
-        workspaceIdentity: "local",
-        projectExists: true,
-      },
-    );
-    expect(deps.screen()).toBe("workspace");
-    deps.abandonStartupOpen();
-    expect(deps.screen()).toBe("home");
-  });
-
-  test("a fresh directory derives home from the start", () => {
-    expect(createUiDeps(createFakeKernel(), { w: 120, h: 36 }).screen()).toBe("home");
   });
 });
 

@@ -28,16 +28,14 @@ export interface WorkspaceLocalState {
    */
   readonly pageOverride: Atom<string | null>;
   /**
-   * The agent-health reading, shown as the lowest-precedence badge in the status bar's `hint`
-   * slot (workspace-first launch, 2026-08-02). Read-only from this module's point of view: there
-   * is no WORKSPACE re-check, and the reading is never refreshed from here — only Home's own `r`
-   * re-check (`ui/app/model/intent.ts`'s `home-recheck`) replaces it. And Home is reached in
-   * exactly two situations (`ui/mirror/model/screen.ts`'s `deriveScreen`): a genuinely fresh
-   * directory, where `startupOpenPending` was never true, and a startup open that did not
-   * finish. BOTH are before a project is open — an existing project mounts this screen directly,
-   * and once `projectId` is non-null nothing routes back to Home, so from that point the reading
-   * shown here cannot change for the rest of the process. That is a deliberate trade, recorded
-   * in the spec — a `/recheck` action was considered and declined.
+   * The agent-health reading (spec 2026-08-02). Home used to be this atom's only consumer; the
+   * Workspace now renders it in the status bar's `hint` slot, because routing an existing project
+   * straight here would otherwise leave a dead agent CLI with no on-screen signal at all.
+   *
+   * KNOWN, DELIBERATE (design 30 §"The long-lived badge"): the probe runs once at startup and is
+   * never refreshed. Signing in to the agent CLI in another terminal leaves this badge red until
+   * termcraft restarts. A `/recheck` action (~30 lines, reusing `refreshAgentHealth`) was
+   * considered and declined; the design only ever mandated `r` on HOME's error state.
    */
   readonly agentHealth: Atom<AgentHealth>;
 }

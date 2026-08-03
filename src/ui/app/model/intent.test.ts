@@ -108,17 +108,6 @@ describe("applyIntent — text inputs", () => {
   test("composer-submit dispatches turn.start and clears the composer once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    // fix round 1, Finding 2: a bare `createUiDeps` now means `projectId === null`, which the
-    // new opening guard refuses on its own — apply a snapshot so this test keeps exercising the
-    // ordinary accepted-dispatch path it is actually about, not the opening refusal.
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: null,
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
     deps.local.composer.set("make it blue");
     applyIntent({ kind: "composer-submit" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["turn.start"]);
@@ -132,25 +121,6 @@ describe("applyIntent — text inputs", () => {
     expect(deps.local.composer()).toBe("");
   });
 
-  // fix round 1, Finding 2 (workspace-first launch, 2026-08-03): design `wsOpening`'s own
-  // comment says "composer stays live but ⏎ is refused" (`design/termcraft-engine.js:231`) —
-  // the promise the status bar's `dis`-marked `⏎ send` key already draws. Before this guard,
-  // Enter with a draft during the open still dispatched `turn.start`, which the Kernel rejected
-  // silently (no project machine exists yet to accept it) — a refusal by accident, through an
-  // error path, not the design's own real one. A bare `createUiDeps` with no snapshot applied is
-  // exactly the `projectId === null` state this guards.
-  test("Enter while the project is still opening dispatches no turn.start and keeps the draft", async () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    deps.local.composer.set("half a sentence");
-
-    applyIntent({ kind: "composer-submit" }, deps);
-    await tick();
-
-    expect(deps.local.composer()).toBe("half a sentence");
-    expect(dispatchedKinds(kernel)).not.toContain("turn.start");
-  });
-
   // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so Enter keeps
   // resolving to `composer-submit` (keymap.ts's `composerActive` no longer excludes
   // `turnRunning`) — the refusal now happens here, before a second `turn.start` is ever
@@ -160,16 +130,6 @@ describe("applyIntent — text inputs", () => {
   test("Enter during a turn does not clear the draft — `⏎ send disabled — draft kept`", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    // fix round 1, Finding 2: without an open project this test's own turn-running guard would
-    // never be reached — the new opening guard would refuse first, for the wrong reason.
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: null,
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
     deps.mirror.apply(
       event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
     );
@@ -195,17 +155,6 @@ describe("applyIntent — text inputs", () => {
       reasons: [{ code: "TURN_ALREADY_ACTIVE", turnId: uuidv7() as never }],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    // fix round 1, Finding 2: without an open project the new opening guard would refuse before
-    // ever dispatching, and this test would pass for the wrong reason — the rejection path it
-    // names would never actually run.
-    deps.mirror.apply(
-      snapshot({
-        projectId: uuidv7(),
-        activePageSlug: null,
-        activeChatId: uuidv7(),
-        trust: "trusted",
-      }),
-    );
     deps.local.composer.set("make it blue");
     applyIntent({ kind: "composer-submit" }, deps);
     await tick();

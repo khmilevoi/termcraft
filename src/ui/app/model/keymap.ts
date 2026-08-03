@@ -77,10 +77,8 @@ export interface KeyContext {
    *
    * Enter is refused while it is. Not a new restriction — the Kernel ALREADY refuses it, because
    * `beginOpen`/`beginCreate` are legal only from the project machine's `closed` phase — but it
-   * used to refuse it invisibly: for a Home-initiated open — a fresh-directory `create`, or the
-   * ⏎ retry after a blocked open, the only opens Home ever sees (workspace-first launch,
-   * 2026-08-02) — `deriveScreen` keeps Home mounted for the whole (multi-second) open, so the
-   * user pressed Enter on a live-looking prompt and the dispatch came back
+   * used to refuse it invisibly: `deriveScreen` keeps Home mounted for the whole (multi-second)
+   * open, so the user pressed Enter on a live-looking prompt and the dispatch came back
    * `CAPABILITY_UNAVAILABLE` with nothing on screen to show for it. Refusing here instead lets
    * `Home.tsx` draw the `⏎ create` hint in its `dis` state for the same window, so the refusal
    * is visible BEFORE the key is pressed. The typed text is untouched either way.
@@ -99,6 +97,16 @@ export interface KeyContext {
    * for diagnosing a key resolution captured during a running turn.
    */
   readonly turnRunning: boolean;
+  /**
+   * Whether a project is actually open (`ProjectMirror.projectId !== null`). FALSE in the
+   * Workspace's opening state (spec 2026-08-02), where the composer is deliberately live and
+   * typeable but ⏎ is refused — the Kernel would reject a `turn.start` before the project is
+   * ready anyway, and refusing here is what lets the key row draw `⏎ send` in its `dis` state so
+   * the refusal is visible BEFORE the key is pressed. The same shape `projectOpening` already
+   * gives Home's own Enter; a separate field because that one reads
+   * `ProjectMirror.opening`, which is still false between UI mount and command admission.
+   */
+  readonly projectOpen: boolean;
 }
 
 /**
@@ -305,7 +313,10 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   if (composerActive) {
     if (key.sequence === "/" && context.composerValue.length === 0) return { kind: "slash-open" };
-    if (RETURN_NAMES.has(key.name)) return { kind: "composer-submit" };
+    // Refused, not merely rejected downstream — see `KeyContext.projectOpen`.
+    if (RETURN_NAMES.has(key.name)) {
+      return context.projectOpen ? { kind: "composer-submit" } : { kind: "none" };
+    }
     if (key.name === "backspace") return { kind: "composer-backspace" };
     const ch = printableChar(key);
     if (ch !== null) return { kind: "composer-input", ch };

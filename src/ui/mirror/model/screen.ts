@@ -15,39 +15,41 @@ export interface ScreenInput {
   readonly trust: "trusted" | "untrusted-read-only" | null;
   readonly terminal: Readonly<{ w: number; h: number }>;
   /**
-   * Whether the composition root is going to open a project for this run and has not yet been
-   * told otherwise (`UiLocalState.startupOpenPending`). Its DESTINATION is the Workspace, so the
-   * Workspace mounts now and fills when `finishOpen` lands, instead of parking on Home for the
-   * whole ready sequence.
+   * Whether the composition root is going to open a project it already knows is on disk
+   * (`UiEnv.projectExists`, itself `ShellLaunchV1.existing`), and that open is still
+   * outstanding — neither abandoned nor already landed (`UiLocalState.startupOpenPending` in
+   * `ui/app/model/deps.ts` clears it either way). Deliberately NOT `ProjectMirror.opening`: that
+   * only turns true once the command is admitted, so between UI mount and admission `projectId`
+   * is null and `opening` is false — Home would flash for a frame. The composition root knows
+   * this synchronously, before the UI mounts; that fact is the input.
    */
   readonly startupOpenPending: boolean;
-  /** `mirror.project().openFailure !== null` — a blocked open falls back to Home, which owns the
-   *  failure panel and the ⏎ retry. */
+  /** `ProjectMirror.openFailure !== null` — a blocked open, which Home owns. */
   readonly openFailed: boolean;
 }
 
 /**
- * Derives which screen the app root mounts (phase-7 plan D6, revised 2026-08-02 by the
- * workspace-first launch spec).
+ * Derives which screen the app root mounts (phase-7 plan D6). Until the typed
+ * `kernel.snapshot.models` lands, this reads the signals that DO exist — terminal size,
+ * `projectId`, and `trust` — rather than a machine tag.
  *
  * APPROXIMATION (documented): `trust === null` with a project open maps to `trust-prompt`,
  * conflating the true needs-trust state with the brief pre-`ready` opening/recovering window
- * (snapshot `trust` is null throughout both). It stays exactly as unreachable as it was:
- * `kernel.project.finishOpen` folds `projectId` and `trust` in one `project.set`
- * (`ui/mirror/model/mirror.ts:400`), so there is no intermediate state where one is known and
- * the other is not.
+ * (snapshot `trust` is null throughout both). When the typed snapshot lands the derivation
+ * tightens to the project machine's own phase without changing this screen set.
  *
- * THE "OPENING" STATE IS NOT A NEW `ScreenKind`. It is `"workspace"` with `projectId === null`,
- * which is why the transition to a filled Workspace is a re-render rather than a remount, and why
- * only `ui/workspace` needs to know the difference.
+ * The `projectId === null` + `startupOpenPending` case is the Workspace's "opening" state — NOT a
+ * new `ScreenKind`, which is why the transition to a filled Workspace is a re-render rather than
+ * a remount.
  */
 export function deriveScreen(input: ScreenInput): ScreenKind {
   // Below the minimum frame the enlarge placeholder replaces everything (design §9).
   if (input.terminal.w < MIN_FRAME.w || input.terminal.h < MIN_FRAME.h) return "enlarge";
   if (input.projectId === null) {
     // An existing project's destination IS the Workspace — mount it now and let it fill,
-    // rather than parking on Home for the whole ready sequence. A blocked open drops back
-    // to Home, which owns the failure panel and the ⏎ retry.
+    // rather than parking on Home for the whole ready sequence (up to ~30s,
+    // `docs/architecture/flows/launch.md`). A blocked open drops back to Home, which owns
+    // `HomeOpenFailurePanel` and the ⏎ retry.
     if (input.startupOpenPending && !input.openFailed) return "workspace";
     return "home";
   }
@@ -57,10 +59,9 @@ export function deriveScreen(input: ScreenInput): ScreenKind {
 }
 
 /**
- * A reactive `ScreenKind` computed over the project slice, the UI-local terminal size, and the
- * UI-local startup-open flag. Neither the terminal size nor the flag is a mirror atom — one is a
- * render-time value and the other is an environment fact the composition root knows before the
- * Kernel exists — so the App injects both readers here.
+ * A reactive `ScreenKind` computed over the project slice and the UI-local terminal size.
+ * Terminal size is deliberately NOT a mirror atom — it is a render-time value, not Kernel
+ * state — so the App injects its reader here.
  */
 export function createScreenAtom(deps: {
   readonly project: () => ProjectMirror;
@@ -74,7 +75,6 @@ export function createScreenAtom(deps: {
       trust: project.trust,
       terminal: deps.terminal(),
       startupOpenPending: deps.startupOpenPending(),
-      // `createScreenAtom` already holds `() => mirror.project()`, so this needs no new wiring.
       openFailed: project.openFailure !== null,
     });
   }, "ui.mirror.screen");

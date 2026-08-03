@@ -88,24 +88,13 @@ export interface UiLocalState {
    */
   readonly exportDismissed: Atom<UUIDv7 | null>;
   /**
-   * The agent-health reading (M15). Home's `health` prop and the Workspace status bar's badge
-   * both read this — one probe, two surfaces (2026-08-02). There is no Kernel command that
-   * reports agent health (Home is shown *before* any project opens, so there is no
-   * `kernel.snapshot` to read either), so this atom's lifecycle is: seeded with
-   * {@link DEFAULT_AGENT_HEALTH} as a synchronous pre-probe placeholder (the first paint cannot
-   * await a Promise), then `createUiDeps` fires {@link UiDeps.refreshAgentHealth} once at startup
-   * to replace it with the injected probe's real reading, and again on every `home-recheck` — the
-   * SAME probe path, not a duplicated one. There is deliberately NO Workspace re-check: nothing
-   * in `ui/workspace` refreshes this atom, so Home's `r` is the only refresh path there is. Home
-   * is reached in exactly two situations (`ui/mirror/model/screen.ts`'s `deriveScreen`): a
-   * genuinely fresh directory, where `startupOpenPending` was never true, and a startup open that
-   * did not finish — including an EXISTING project whose open is blocked, or whose startup
-   * dispatch never reaches the Kernel. Only once an existing project's open actually finishes
-   * does this path leave the launch route entirely (workspace-first launch, 2026-08-02): the
-   * Workspace mounts directly, and once `projectId` is non-null nothing routes back, so the badge
-   * stays the reading the startup probe took for the rest of the process.
-   * `ui/workspace/types.ts`'s `WorkspaceLocalState.agentHealth` records the same trade from the
-   * consuming side.
+   * The agent-health reading (M15) — Home's `health` prop reads this instead of a
+   * hardcoded literal. There is no Kernel command that reports agent health (Home is shown
+   * *before* any project opens, so there is no `kernel.snapshot` to read either), so this atom's
+   * lifecycle is: seeded with {@link DEFAULT_AGENT_HEALTH} as a synchronous pre-probe placeholder
+   * (Home's very first paint cannot await a Promise), then `createUiDeps` fires
+   * {@link UiDeps.refreshAgentHealth} once at startup to replace it with the injected probe's
+   * real reading, and again on every `home-recheck` — the SAME probe path, not a duplicated one.
    */
   readonly agentHealth: Atom<AgentHealth>;
   /**
@@ -116,30 +105,20 @@ export interface UiLocalState {
    */
   readonly agentSelection: Atom<HomeAgentSelection | null>;
   /**
-   * Whether the composition root is going to dispatch a startup `project.open` for this run
-   * (workspace-first launch, 2026-08-02) — seeded synchronously from {@link UiEnv.projectExists},
-   * which `create-shell.ts` sets from `ShellLaunchV1.existing`.
-   *
-   * NOT `mirror.project().opening`: that only turns true once the Kernel ADMITS the command, so
-   * between UI mount and admission `projectId` is null and `opening` is false — `deriveScreen`
-   * would show Home for a frame. The composition root knows this fact synchronously, before the
-   * UI mounts, which is why it is an injected environment fact rather than a mirror read.
-   *
-   * Exactly one transition: {@link UiDeps.abandonStartupOpen} sets it false when the startup
-   * dispatch fails or is rejected, because in that case neither `finishOpen` nor `blockOpen` will
-   * ever arrive and `projectId`/`openFailure` would both stay null forever.
-   *
-   * A TRAP FOR WHOEVER ADDS A SECOND CLOSE PATH. Because that is the only transition, a
-   * SUCCESSFUL open leaves this `true` forever — `deriveScreen` simply stops consulting it once
-   * `projectId` is non-null. That is safe TODAY only because the UI has exactly one
-   * `project.close` dispatch, `recoverFromBlockedOpen` below, which fires only for a non-null
-   * `ProjectMirror.openFailure` — and `kernel.project.finishClose` is folded to preserve
-   * `openFailure` (`ui/mirror/model/mirror.ts`) precisely so the panel survives the recovery. So
-   * after that close `deriveScreen` sees `projectId === null` WITH `openFailed`, and leaves to
-   * Home through the failure branch rather than through this flag. A future "close the project"
-   * action that carries no `openFailure` would hit the other branch instead — null `projectId`,
-   * no failure, this flag still `true` — and strand the user in a permanent OPENING Workspace
-   * with no project ever coming. Any such action must clear this flag too.
+   * Whether the composition root's own startup `project.open` is still expected to land (spec
+   * 2026-08-02). Seeded from `UiEnv.projectExists` — the SAME `existing` fact `ShellLaunchV1`
+   * carries — so `deriveScreen` can mount the Workspace on the first synchronous frame, before
+   * any Kernel event exists to read. It has two clearers, both `true -> false`, never
+   * `false -> true` again: {@link UiDeps.abandonStartupOpen}, for the two branches where the
+   * startup dispatch itself will never land (it failed to reach the Kernel, or the Kernel
+   * rejected it) — nothing else could end this state for those; and the `mirror.project`
+   * subscription inside `createUiDeps`'s `runtime` connect hook (`deps.ts`), which clears it the
+   * moment `projectId` turns non-null — the open actually landed, so the flag must stop claiming
+   * one is still pending. Without that second clearer this flag would sit `true` for the rest of
+   * the process after a SUCCESSFUL open, and `deriveScreen` would mount an empty Workspace shell
+   * with no exit the next time `projectId` legitimately returns to `null` with no
+   * `openFailure` — exactly the failure {@link UiDeps.abandonStartupOpen} exists to prevent for
+   * its own two branches.
    */
   readonly startupOpenPending: Atom<boolean>;
 }
@@ -155,21 +134,10 @@ export interface UiEnv {
   readonly root: string;
   readonly workspaceIdentity: string;
   /**
-   * Whether `root` was ALREADY a project when this process started (Gap D).
-   *
-   * Its most consequential consumer is now the SCREEN: {@link createUiDeps} seeds
-   * {@link UiLocalState.startupOpenPending} from this value, so it is what decides whether the
-   * very first frame is the opening Workspace or Home (workspace-first launch, 2026-08-02).
-   * `create-shell.ts` sets it from the same `ShellLaunchV1.existing` the composition root's own
-   * startup `project.open` dispatch keys on, so the screen and the dispatch cannot disagree.
-   *
-   * Its original consumer is still here: Home's Enter picks `project.open` over `project.create`
-   * for an existing project — `create` grants trust implicitly, `open` honours a prior grant, and
-   * dispatching `create` against an existing project would silently run the wrong semantics —
-   * though that branch now serves only the ⏎ after a startup open that failed
-   * (`ui/app/model/intent.ts`'s `home-submit`).
-   *
-   * Defaults to `false` — a fresh directory — for every test/demo construction.
+   * Whether `root` was ALREADY a project when this process started (Gap D). Home's Enter picks
+   * `project.open` over `project.create` for it: `create` grants trust implicitly, `open` honours
+   * a prior grant, and dispatching `create` against an existing project would silently run the
+   * wrong semantics. Defaults to `false` — a fresh directory — for every test/demo construction.
    */
   readonly projectExists: boolean;
 }
@@ -221,13 +189,14 @@ export interface UiDeps {
    */
   readonly refreshAgentHealth: () => Promise<void>;
   /**
-   * Records that the startup `project.open` will never arrive (workspace-first launch) — clears
-   * {@link UiLocalState.startupOpenPending}, which drops the derived screen back to Home.
+   * "The startup open will never arrive" — called by `entrypoint/model/run-app.ts` on both
+   * failure branches of its startup `project.open` dispatch. Without it, a dispatch that fails or
+   * is rejected leaves `projectId` and `openFailure` BOTH null forever, and the user sits on an
+   * empty Workspace shell with nothing to explain it.
    *
-   * A named Reatom ACTION rather than a bare `.set` because `runApp` calls it from a promise
-   * continuation, outside any Reatom frame (RTM-A04). It is not an identity setter (RTM-S01): it
-   * names a real transition — "the startup open will never arrive" — that exactly one caller
-   * makes, on exactly two branches.
+   * A named Reatom action rather than a bare setter because `runApp` calls it from a promise
+   * continuation, outside any Reatom frame (RTM-A04). It is NOT an identity setter (RTM-S01):
+   * it takes no value and names a real transition.
    */
   readonly abandonStartupOpen: () => void;
   /**
@@ -248,11 +217,10 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 }) {}
 
 /**
- * The agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected probe
- * once at startup (see `refreshAgentHealth()` below), but the first render — the opening
- * Workspace's status bar or Home's health line, whichever screen this launch mounts — happens
- * synchronously, before that probe's Promise can resolve, and a component render cannot await
- * one. This value only ever shows for that first frame. The real CLI-checking probe IS wired by
+ * The agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
+ * probe once at startup (see `refreshAgentHealth()` below), but Home's very first render happens
+ * synchronously, before that probe's Promise can resolve — a component render cannot await one.
+ * This value only ever shows for that first frame. The real CLI-checking probe IS wired by
  * default now (phase-8 Task 9 / WP-5, `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`
  * supplies it through `agentHealthProbe` below) — this placeholder only ever paints the one
  * synchronous frame before that real probe's first resolution overwrites it.
@@ -296,7 +264,7 @@ const DEFAULT_AGENT_HEALTH: AgentHealth = {
  * the design's own "health unconfirmed" bucket (`homeHealth('shutdown')`) is the literal truth
  * for "no probe ran at all", the most extreme case of "not confirmed". Never `ready` — that
  * specific claim is reserved for an actual passing `AgentBackend.healthCheck()` reading
- * (`entrypoint/model/agent-health.ts`'s `agentHealthFromAgentInfo`, `case "ready"`).
+ * (`entrypoint/model/agent-health.ts`'s `homeHealthFromAgentInfo`, `case "ready"`).
  */
 const DEFAULT_PROBE_RESOLUTION: AgentHealth = {
   kind: "advisory",
@@ -329,13 +297,8 @@ export function createUiDeps(
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
-  // See `UiLocalState.startupOpenPending` for why this is an injected env fact and not a mirror
-  // read. Declared here, above `screen`, because `createScreenAtom` below routes on it.
-  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending");
-  const abandonStartupOpen = action(() => {
-    startupOpenPending.set(false);
-  }, "ui.app.abandonStartupOpen");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
+  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending");
   const screen = createScreenAtom({
     project: () => mirror.project(),
     terminal: () => terminal(),
@@ -695,10 +658,31 @@ export function createUiDeps(
       // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
       // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
       let lastKernelPageSlug: string | null = null;
+      // THE SUCCESS-PATH CLEARER FOR `startupOpenPending` (spec 2026-08-02 escalated decisions,
+      // Item 1). `UiLocalState.startupOpenPending`'s OTHER clearer, `abandonStartupOpen`, only
+      // ever runs on the startup dispatch's two failure branches (`run-app.ts`) — a successful
+      // `finishOpen` left the flag `true` for the rest of the process, so the NEXT time
+      // `projectId` legitimately returned to `null` with no `openFailure` (any future
+      // `project.close` outside the blocked-open recovery below, which always leaves `openFailure`
+      // non-null), `deriveScreen` would mount an empty Workspace shell with no exit — the exact
+      // failure `abandonStartupOpen` exists to prevent, just for a different trigger. Added as a
+      // condition on THIS subscription rather than a new effect: the subscription already has a
+      // lifetime owner (this connect hook, torn down in the cleanup below) and is already the
+      // place `mirror.project`'s truth retires UI-local flags (see `retirePageOverride` above), so
+      // this is one more instance of that same rule, not a second one. Guarded on the atom's
+      // current value so a project that is already open does not re-set `false` on every
+      // unrelated project write (chat/page changes fire this subscriber constantly).
+      const clearStartupOpenPending = bind(() => {
+        if (!startupOpenPending()) return;
+        startupOpenPending.set(false);
+      });
       const unsubscribeProject = mirror.project.subscribe((project) => {
         if (project.activePageSlug !== lastKernelPageSlug) {
           lastKernelPageSlug = project.activePageSlug;
           retirePageOverride();
+        }
+        if (project.projectId !== null) {
+          clearStartupOpenPending();
         }
         // `projectId === null` is what says the open never finished: `finishOpen` clears
         // `openFailure` anyway, so this pair only ever holds for a genuinely blocked open — never
@@ -842,6 +826,10 @@ export function createUiDeps(
     const result = await wrap(agentHealthProbe());
     local.agentHealth.set(result);
   }, "ui.app.refreshAgentHealth").extend(withAsync());
+
+  const abandonStartupOpen = action(() => {
+    startupOpenPending.set(false);
+  }, "ui.app.abandonStartupOpen");
 
   // M15 lifecycle fix: fire the SAME probe path `home-recheck` uses once here, at startup,
   // instead of only seeding `agentHealth` from the placeholder above. A real phase-8 probe

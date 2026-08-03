@@ -1,9 +1,8 @@
 /**
- * `entrypoint/model/agent-health.ts` — phase-8 Task 9 (design §WP-5): the real agent-health
- * probe, whose one reading feeds Home's health line and the Workspace status bar's badge alike.
- * This file imports BOTH `agent` (backend/domain types — `AgentBackend`, `AgentInfo`) and
- * `ui/agent-health` (the presentation type — `AgentHealth`) directly, which is normally forbidden
- * (`docs/architecture/code-structure.md`: "`ui` sees only core boundary types +
+ * `entrypoint/model/agent-health.ts` — phase-8 Task 9 (design §WP-5): the real Home health
+ * probe. This file imports BOTH `agent` (backend/domain types — `AgentBackend`, `AgentInfo`)
+ * and `ui/agent-health` (presentation types — `AgentHealth`) directly, which is normally
+ * forbidden (`docs/architecture/code-structure.md`: "`ui` sees only core boundary types +
  * `PreviewSession` — never `store`, never host stdio, never `agent`"). `entrypoint` is the one
  * exception: it is the composition root, "the ONE place allowed to import across modules" —
  * this module is exactly that kind of glue, not a `ui`-module file reaching into `agent` on
@@ -17,13 +16,12 @@ import type { AgentHealth } from "ui/agent-health";
 
 /**
  * Map from one `AgentBackend.healthCheck()` reading to `ui/agent-health`'s five-outcome
- * `AgentHealth` (finding §2.7, phase-8 Task 15) — the reading itself, named after neither screen
- * that shows it — pure aside from one incidental diagnostic `console.warn`
- * (the `sandbox-degraded` branch, errore rule 21: a fact this function does not propagate into
- * its return value must still be logged). Exhaustive over every `AgentHealthState` variant
- * (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch` with no
- * `default` arm — TypeScript's own control-flow analysis makes a seventh variant added later a
- * `tsc` failure here, not a silent "ready".
+ * `AgentHealth` (finding §2.7, phase-8 Task 15) — pure aside from one incidental diagnostic
+ * `console.warn` (the `sandbox-degraded` branch, errore rule 21: a fact this function does not
+ * propagate into its return value must still be logged). Exhaustive over every `AgentHealthState`
+ * variant (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch`
+ * with no `default` arm — TypeScript's own control-flow analysis makes a seventh variant added
+ * later a `tsc` failure here, not a silent "ready".
  *
  * `AgentHealth` carries no `version` field: `AgentInfo` never had one to report (only
  * `backendId`, `health`, `account` — `agent/types.ts`), so the field was always a fabrication
@@ -48,7 +46,7 @@ import type { AgentHealth } from "ui/agent-health";
  * The other states have no design mock naming their exact text, so their `detail` is this
  * module's own honest wording — documented per branch below, never silently invented.
  */
-export function agentHealthFromAgentInfo(info: AgentInfo): AgentHealth {
+export function homeHealthFromAgentInfo(info: AgentInfo): AgentHealth {
   const { backendId, health } = info;
   switch (health.status) {
     case "ready":
@@ -176,13 +174,11 @@ export function resolveDefaultAgentSelection(
 }
 
 /**
- * Builds the real agent-health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
- * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshAgentHealth` actually calls. ONE
- * probe, TWO surfaces since workspace-first launch (2026-08-02): Home's health line and panels,
- * and the Workspace status bar's badge.
+ * Builds the real Home health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
+ * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshAgentHealth` actually calls.
  *
  * Returns HEALTH ONLY (phase-8 Task 13, finding §2.7): is the CLI there, logged in, healthy?
- * Mapped through {@link agentHealthFromAgentInfo}. It used to also fold in
+ * Mapped through {@link homeHealthFromAgentInfo}. It used to also fold in
  * `capabilities().defaultSelection` — a SEPARATE, synchronous fact with no I/O at all — which
  * meant Home's `agent ‹…› model ‹…› effort ‹…›` combo waited behind this probe's real cold
  * spawn (up to `DEFAULT_PROBE_DEADLINE_MS`, 20 s) for a value that was available at
@@ -216,6 +212,6 @@ export function createAgentHealthProbe(backend: AgentBackend): () => Promise<Age
         detail: info.message,
       };
     }
-    return agentHealthFromAgentInfo(info);
+    return homeHealthFromAgentInfo(info);
   };
 }

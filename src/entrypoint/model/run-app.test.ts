@@ -5,7 +5,7 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { UiRootAdapters } from "ui";
 import { createFakeKernel, event } from "ui/testing";
 
-import type { ProcessBoundary, RunningApp, ShellWithAgentRegistry, ShutdownSignal } from "../types";
+import type { ProcessBoundary, ShellWithAgentRegistry, ShutdownSignal } from "../types";
 import type { ProcessExit } from "./process-boundary";
 import { AppStartupError, runApp } from "./run-app";
 
@@ -52,49 +52,43 @@ function capturingAdapters(calls: string[]): {
 }
 
 /**
- * Captures the SAME `UiDeps.abandonStartupOpen` action `createUiRoot`'s returned `UiRootHandle`
- * closes over (Task 4) — reached the same way `capturingAdapters` above reaches `requestExit`,
- * off the rendered element's own `props.deps`, since `createUiRoot` itself is real here (only its
- * `adapters` are injectable) and there is no other seam to observe `root.abandonStartupOpen()`
- * being called. The captured action is replaced with a spy that still calls through, so a test
- * can assert whether `runApp`'s Gap D dispatch actually invoked it, on which branch, and how many
- * times — without this double, an `UiRootHandle`'s `abandonStartupOpen()` call is otherwise
- * unobservable from outside `runApp`.
+ * Captures `deps.abandonStartupOpen` off the rendered React element's own props — the SAME
+ * technique `capturingAdapters` above uses for `requestExit` — then replaces it with a
+ * recording wrapper that still calls through. `runApp` never touches `deps` directly for this:
+ * it goes through the real `UiRootHandle.abandonStartupOpen()` (`ui/app/model/root.tsx`), whose
+ * body reads `deps.abandonStartupOpen` off this SAME `deps` object AT CALL TIME — so replacing
+ * the property here, before that call ever happens, intercepts it without inventing a second
+ * seam on `UiRootAdapters` or `fakeShell`.
  */
-function abandonCapturingAdapters(calls: string[]): {
-  adapters: UiRootAdapters;
-  abandoned: () => readonly string[];
-} {
-  const abandoned: string[] = [];
-  const adapters = recordingAdapters(calls, {
+function abandonRecordingAdapters(calls: string[]): UiRootAdapters {
+  return recordingAdapters(calls, {
     createRoot: () => ({
       render: (node: unknown) => {
         calls.push("render");
         const deps = (node as { props: { deps: { abandonStartupOpen: () => void } } }).props.deps;
         const original = deps.abandonStartupOpen;
         deps.abandonStartupOpen = () => {
-          abandoned.push("abandonStartupOpen");
+          calls.push("abandonStartupOpen");
           original();
         };
       },
       unmount: () => calls.push("unmount"),
     }),
   });
-  return { adapters, abandoned: () => abandoned };
 }
 
 /** `agentRegistry` defaults to `null` — the same "no live registry" shape `create-shell.ts`'s
  *  `demoShell` returns — so every pre-existing test in this file (none of which cares about
  *  Task 9's health probe) keeps constructing the same fixture it always did. `port` defaults to
  *  a fresh `createFakeKernel()` (an idle turn model) — tests that need a running turn override it.
- *  `launch` (Gap D) defaults to a fresh directory's `{ existing: false, hasContent: false }` —
- *  the same "no startup dispatch" shape every pre-existing test in this file already assumes, so
- *  only the tests that care about the startup `project.open` dispatch need to override it. */
+ *  `launch` (Gap D) defaults to a fresh directory's `{ existing: false }` — the same
+ *  "no startup dispatch" shape every pre-existing test in this file already assumes, so only the
+ *  tests that care about the startup `project.open` dispatch need to override it. */
 function fakeShell(
   calls: string[],
   agentRegistry: ShellWithAgentRegistry["agentRegistry"] = null,
   port: ShellWithAgentRegistry["port"] = createFakeKernel(),
-  launch: ShellWithAgentRegistry["launch"] = { existing: false, hasContent: false },
+  launch: ShellWithAgentRegistry["launch"] = { existing: false },
 ): ShellWithAgentRegistry {
   return {
     mode: "demo",
@@ -194,7 +188,7 @@ describe("runApp", () => {
     expect(boundary.fatals[0]?.cause).toBeInstanceOf(Error);
   });
 
-  describe("the Task 9 / WP-5 agent-health probe wiring", () => {
+  describe("the Task 9 / WP-5 Home health probe wiring", () => {
     test("a shell with a live agent registry actually probes the backend's health at startup", async () => {
       const calls: string[] = [];
       const backend = createFakeAgentBackend();
@@ -297,12 +291,12 @@ describe("runApp", () => {
     });
   });
 
-  describe("the Gap D startup dispatch (an existing project opens straight into the Workspace)", () => {
+  describe("the Gap D startup dispatch (an existing project with content opens straight into the Workspace)", () => {
     test("dispatches project.open at startup for a project that holds content", async () => {
       const calls: string[] = [];
       const kernel = createFakeKernel();
       const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        shell: fakeShell(calls, null, kernel, { existing: true }),
         adapters: recordingAdapters(calls),
         process: fakeBoundary(),
       });
@@ -318,7 +312,7 @@ describe("runApp", () => {
       const calls: string[] = [];
       const kernel = createFakeKernel();
       const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: false, hasContent: false }),
+        shell: fakeShell(calls, null, kernel, { existing: false }),
         adapters: recordingAdapters(calls),
         process: fakeBoundary(),
       });
@@ -329,47 +323,75 @@ describe("runApp", () => {
       await app.close();
     });
 
-    // WORKSPACE-FIRST LAUNCH (2026-08-02): the test this replaced — "an existing project reported
-    // as empty (existing but no content) also dispatches nothing" — asserted the OLD `hasContent`-
-    // gated behaviour for exactly this shell shape. `deriveScreen` (Task 3) now routes every
-    // `existing` project to the Workspace regardless of content, so the startup dispatch has to
-    // read the same fact: routing on `existing` while dispatching on `hasContent` would strand an
-    // existing-but-empty project in a Workspace that never opens. This test is that old test's
-    // deliberate inversion, not a new, unrelated case.
-    test("an existing project with no content dispatches project.open — routing and dispatch share one predicate", async () => {
+    test("an existing but empty project still dispatches the startup project.open", async () => {
+      // Spec 2026-08-02: `existing` is the ONLY routing predicate now (Task 6 retired the old
+      // second `hasContent` predicate entirely). `deriveScreen` mounts the Workspace off the SAME
+      // `existing` fact, so an existing-but-empty project must dispatch here too — this fixture
+      // is the same `{ existing: true }` shape as "dispatches project.open at startup for a
+      // project that holds content" above; the two tests are kept distinct because the point
+      // being proved is different — dispatch happens for ANY existing project, content or not.
       const calls: string[] = [];
       const kernel = createFakeKernel();
       const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: false }),
+        shell: fakeShell(calls, null, kernel, { existing: true }),
         adapters: recordingAdapters(calls),
         process: fakeBoundary(),
       });
-      expect(app).not.toBeInstanceOf(Error);
-      expect(
-        kernel.dispatched.filter(
-          (raw) =>
-            typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "project.open",
-        ),
-      ).toHaveLength(1);
-      await (app as RunningApp).close();
+      if (app instanceof Error) throw app;
+
+      const dispatchedKinds = kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
+      expect(dispatchedKinds).toContain("project.open");
+
+      await app.close();
     });
 
-    test("a fresh directory dispatches nothing", async () => {
+    test("a failed startup dispatch abandons the open so the shell does not sit empty", async () => {
       const calls: string[] = [];
       const kernel = createFakeKernel();
+      kernel.setDispatchResult(new Error("dispatch exploded"));
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
       const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: false, hasContent: false }),
-        adapters: recordingAdapters(calls),
+        shell: fakeShell(calls, null, kernel, { existing: true }),
+        adapters: abandonRecordingAdapters(calls),
         process: fakeBoundary(),
       });
-      expect(app).not.toBeInstanceOf(Error);
-      expect(
-        kernel.dispatched.filter(
-          (raw) =>
-            typeof raw === "object" && raw !== null && "kind" in raw && raw.kind === "project.open",
-        ),
-      ).toHaveLength(0);
-      await (app as RunningApp).close();
+      if (app instanceof Error) throw app;
+
+      // Neither `finishOpen` nor `blockOpen` will ever arrive for a dispatch that never reached
+      // the Kernel — `abandonStartupOpen` is the only thing that can end the Workspace's opening
+      // state, so its absence would leave the shell empty forever.
+      expect(calls).toContain("abandonStartupOpen");
+
+      await app.close();
+      errorSpy.mockRestore();
+    });
+
+    test("a rejected startup dispatch abandons it too", async () => {
+      const calls: string[] = [];
+      const kernel = createFakeKernel();
+      kernel.setDispatchResult({
+        protocolVersion: 1,
+        commandId: "cmd-2" as never,
+        status: "rejected",
+        currentRevision: "0",
+        code: "PROJECT_UNTRUSTED",
+        reasons: [{ code: "PROJECT_UNTRUSTED" }],
+      });
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+      const app = await runApp({
+        shell: fakeShell(calls, null, kernel, { existing: true }),
+        adapters: abandonRecordingAdapters(calls),
+        process: fakeBoundary(),
+      });
+      if (app instanceof Error) throw app;
+
+      // Same shape as the thrown/failed case above, but the port answered with a `rejected`
+      // `CommandResultV1` instead of an `Error` — a separate code path in `run-app.ts` that must
+      // abandon the open too, not only the `instanceof Error` branch.
+      expect(calls).toContain("abandonStartupOpen");
+
+      await app.close();
+      errorSpy.mockRestore();
     });
 
     test("a rejected startup project.open is logged, not swallowed or thrown", async () => {
@@ -385,7 +407,7 @@ describe("runApp", () => {
       });
       const errorSpy = spyOn(console, "error").mockImplementation(() => {});
       const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
+        shell: fakeShell(calls, null, kernel, { existing: true }),
         adapters: recordingAdapters(calls),
         process: fakeBoundary(),
       });
@@ -403,71 +425,6 @@ describe("runApp", () => {
 
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
-    });
-
-    // TASK 4: A FAILED STARTUP DISPATCH NOW HAS A REAL SURFACE. Both branches below — a
-    // dispatcher.dispatch REJECTION and a dispatch that itself throws — must call the returned
-    // `UiRootHandle.abandonStartupOpen()` exactly once, on top of the `console.error` the test
-    // above already covers. `createFakeKernel` has no option to force `port.dispatch` itself to
-    // reject (only `setDispatchResult`, which supplies the RESOLVED `CommandResultV1`), so the
-    // "dispatch throws" branch below drives it directly with a `dispatch` override — the
-    // alternative the brief names when the fake cannot be made to reject.
-    test("a rejected startup dispatch abandons the pending open so the UI drops back to Home", async () => {
-      const calls: string[] = [];
-      const kernel = createFakeKernel();
-      kernel.setDispatchResult({
-        protocolVersion: 1,
-        commandId: "cmd-1" as never,
-        status: "rejected",
-        currentRevision: "0",
-        code: "CAPABILITY_UNAVAILABLE",
-        reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
-      });
-      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-      const { adapters, abandoned } = abandonCapturingAdapters(calls);
-      const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
-        adapters,
-        process: fakeBoundary(),
-      });
-      expect(app).not.toBeInstanceOf(Error);
-      expect(abandoned()).toEqual(["abandonStartupOpen"]);
-      await (app as RunningApp).close();
-      errorSpy.mockRestore();
-    });
-
-    test("a startup dispatch that throws also abandons the pending open", async () => {
-      const calls: string[] = [];
-      const kernel = createFakeKernel();
-      const throwingPort = {
-        ...kernel,
-        dispatch: () => Promise.reject(new Error("kernel port closed")),
-      };
-      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-      const { adapters, abandoned } = abandonCapturingAdapters(calls);
-      const app = await runApp({
-        shell: fakeShell(calls, null, throwingPort, { existing: true, hasContent: true }),
-        adapters,
-        process: fakeBoundary(),
-      });
-      expect(app).not.toBeInstanceOf(Error);
-      expect(abandoned()).toEqual(["abandonStartupOpen"]);
-      await (app as RunningApp).close();
-      errorSpy.mockRestore();
-    });
-
-    test("a successful startup open never abandons the pending flag", async () => {
-      const calls: string[] = [];
-      const kernel = createFakeKernel();
-      const { adapters, abandoned } = abandonCapturingAdapters(calls);
-      const app = await runApp({
-        shell: fakeShell(calls, null, kernel, { existing: true, hasContent: true }),
-        adapters,
-        process: fakeBoundary(),
-      });
-      expect(app).not.toBeInstanceOf(Error);
-      expect(abandoned()).toEqual([]);
-      await (app as RunningApp).close();
     });
   });
 

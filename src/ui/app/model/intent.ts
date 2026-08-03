@@ -47,25 +47,29 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "home-submit": {
       const text = local.prompt();
       if (text.length === 0) return;
-      // Gap D/§2.4: whichever command matches what the shell actually found on disk. NARROWED
-      // (workspace-first launch, 2026-08-02): this branch used to also cover the
-      // existing-but-empty project, which reached Home because the composition root then keyed
-      // its startup dispatch on `ShellLaunchV1.hasContent` — a predicate nothing reads any more
-      // (`entrypoint/types.ts`). `deriveScreen` now routes every existing project to the
-      // Workspace, so Home is reached with a project on disk in exactly ONE scenario — ⏎ after a
-      // startup open that failed — and that is the only caller left. Still required: `create`
-      // would grant trust implicitly over a project whose prior grant is the authority.
+      // Gap D/§2.4: whichever command matches what the shell actually found on disk — `create`
+      // grants trust implicitly, so it must never run against a project a prior grant already
+      // covers.
+      //
+      // This branch used to be written for the exists-but-empty project landing on Home (rare:
+      // project creation always mints the first chat header) — that case no longer reaches Home
+      // at all (spec 2026-08-02): `deriveScreen` now mounts the Workspace directly off
+      // `UiEnv.projectExists` (the SAME `existing` fact `ShellLaunchV1` carries), and the
+      // composition root's own startup `project.open` (`run-app.ts`) opens it there. What still
+      // reaches this branch is the RETRY, and the three ways to land here are not the same on
+      // screen (see `docs/architecture/flows/launch.md` for the full account): when that startup
+      // dispatch was LATER BLOCKED — the Kernel admitted it and only then failed
+      // (`kernel.project.blockOpen`) — `deriveScreen` drops back to Home, which owns
+      // `HomeOpenFailurePanel` and explains why. When it instead FAILED TO REACH the Kernel or WAS
+      // REJECTED outright, `root.abandonStartupOpen()` (`run-app.ts`) is what drops `deriveScreen`
+      // back to Home, and `ProjectMirror.openFailure` stays `null` for both of those — the panel
+      // is gated on `openFailure !== null`, so it renders nothing and the user sees a bare Home
+      // with no explanation, an open design gap. Either way `deps.env.projectExists` stays true,
+      // so the user's own Enter here must still dispatch `project.open`, never `project.create`.
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
-      // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the
-      // identical reason. NARROWED (workspace-first launch, 2026-08-02): this branch's one
-      // remaining caller is the ⏎ retry after a blocked open, and that retry races Home's own
-      // recovery (`deps.ts`'s `recoverFromBlockedOpen`), which dispatches `project.close` the
-      // instant `blockOpen` lands. Hitting Enter before that close resolves fires `project.open`
-      // while the project machine is still `"blocked"`/`"closing"`, not yet `"closed"`, so the
-      // Kernel rejects it `CAPABILITY_UNAVAILABLE`. Clearing only on `accepted` means that
-      // transient rejection never discards what the user retyped, and the text stays put to be
-      // resent once the recovery actually completes.
+      // dispatch — the identical treatment Task 11 gave `composer-submit` — so a rejected retry
+      // never discards what the user typed while trying again.
       if (deps.env.projectExists) {
         dispatchHomeSubmit(
           dispatcher.dispatch("project.open", { root: deps.env.root, text }),
@@ -92,26 +96,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.composer.set(local.composer().slice(0, -1));
       return;
     case "composer-submit": {
-      // DIAGNOSTIC (infrastructure/debug-log): all FOUR refusals below — a read-only screen, a
-      // project still opening, a turn already running, an empty composer — return silently, so a
-      // submit that dies here is indistinguishable on screen from one that was never pressed.
-      // Name which one swallowed it.
+      // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
+      // that dies here is indistinguishable on screen from one that was never pressed. Name
+      // which guard swallowed it.
       if (deps.screen() === "read-only") {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
-        return;
-      }
-      // fix round 1, Finding 2 (workspace-first launch, 2026-08-03): `projectId === null` inside
-      // a mounted Workspace means a pending startup open (`ui/mirror/model/screen.ts`), and the
-      // design's own comment for this state says "composer stays live but ⏎ is refused"
-      // (`design/termcraft-engine.js:231`) — the exact promise the status bar's `dis`-marked
-      // `⏎ send` key already draws (`Workspace.tsx`'s `OPENING_HINT_KEYS`). Without this guard
-      // the refusal happened by accident: Enter still dispatched `turn.start`, the Kernel
-      // rejected it (no project machine exists to accept a turn), and the rejection only ever
-      // reached `console.error` below — invisible while the renderer owns the terminal. Refusing
-      // HERE, before `local.composer` is ever touched, keeps the draft in place exactly like the
-      // read-only and running-turn guards beside it.
-      if (deps.mirror.project().projectId === null) {
-        trace("ui.composerSubmit.refused", { reason: "project is still opening" });
         return;
       }
       // §3.2/finding §2.5: keymap.ts's `composerActive` no longer excludes `turnRunning`, so
