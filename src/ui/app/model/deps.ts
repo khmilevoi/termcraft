@@ -149,6 +149,15 @@ export interface UiLocalState {
    * (this atom) or was admitted and then blocked (the mirror), never both.
    */
   readonly startupOpenFailure: Atom<ProjectOpenFailure | null>;
+  /**
+   * Whether the auto-shown trust prompt (spec §3.1) has been answered this
+   * session — set by `trust-accept`/`trust-decline` (`ui/app/model/intent.ts`).
+   * Starts `false` on every process launch, and only ever goes `false -> true`:
+   * the only way to see the prompt again is relaunching termcraft, which
+   * re-resolves trust from a fresh `project.open` and rebuilds this atom fresh
+   * (confirmed with the user — no in-session re-ask affordance).
+   */
+  readonly trustPromptDismissed: Atom<boolean>;
 }
 
 /**
@@ -350,10 +359,15 @@ export function createUiDeps(
   // .openFailure`, which is Kernel truth and stays untouched by this path. `UiLocalState
   // .startupOpenFailure`'s doc comment carries the full reasoning.
   const startupOpenFailure = atom<ProjectOpenFailure | null>(null, "ui.local.startupOpenFailure");
+  // The auto-shown trust prompt's own answered flag (spec §3.1, 2026-08-03 trust-prompt-on-open
+  // fix) — see `UiLocalState.trustPromptDismissed`'s doc comment for the full lifecycle. Declared
+  // here, above `screen`, because `createScreenAtom` reads it on every recompute.
+  const trustPromptDismissed = atom(false, "ui.local.trustPromptDismissed");
   const screen = createScreenAtom({
     project: () => mirror.project(),
     terminal: () => terminal(),
     startupOpenPending: () => startupOpenPending(),
+    trustPromptDismissed: () => trustPromptDismissed(),
   });
   const actionContext = computed<ActionContext>(
     () => ({
@@ -845,6 +859,7 @@ export function createUiDeps(
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
     startupOpenPending,
     startupOpenFailure,
+    trustPromptDismissed,
   };
 
   const refreshAgentHealth = action(async () => {

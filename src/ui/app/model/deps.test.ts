@@ -13,6 +13,7 @@ import {
   createFakeKernel,
   createFakePreviewSession,
   event,
+  snapshot,
 } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
@@ -928,6 +929,38 @@ describe("startupOpenPending / startupOpenFailure (spec 2026-08-02 — workspace
     expect(deps.mirror.project().openFailure).toBeNull();
     expect(deps.screen()).toBe("home");
     unsubscribe();
+  });
+});
+
+describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 — trust prompt on open)", () => {
+  test("defaults to false, so a never-before-trusted project shows the prompt first", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.local.trustPromptDismissed()).toBe(false);
+    expect(deps.screen()).toBe("trust-prompt");
+  });
+
+  test("flipping it true resolves the screen the rest of the way to read-only", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    deps.local.trustPromptDismissed.set(true);
+    expect(deps.screen()).toBe("read-only");
   });
 });
 
