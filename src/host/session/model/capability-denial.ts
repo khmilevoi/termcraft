@@ -2,9 +2,19 @@ import * as errore from "errore";
 
 /**
  * A page reached a dynamic-code capability the design's §5.8 forbids. Thrown from the denied
- * entry point itself, so the stack names the page's own frame and
- * `host/render/model/error-capture.ts` reports it as an ordinary render error rather than the
- * process dying.
+ * entry point itself, so the stack names the page's own frame — and surfaces one of TWO ways,
+ * depending on WHEN the page reaches it (both measured, task-10-report.md):
+ *
+ * - At RENDER time (inside the component function): caught by
+ *   `host/render/model/error-capture.ts`'s boundary, reported as an ordinary render error —
+ *   `host-state-machine.ts`'s `failRender` turns it into a restartable `PAGE_RENDER_FAILED`,
+ *   the candidate's own fault, not a protocol violation.
+ * - At MODULE-SCOPE (top-level code, before any component ever renders — the route task 10's
+ *   own Step 6 test exercises): never reaches a React boundary at all. `source-mount.ts`'s
+ *   `loadPage` catches the `import()` rejection and reports `MALFORMED_PROTOCOL`, which the
+ *   supervisor (`supervisor/model/session.ts`) treats as a HOST protocol violation and opens
+ *   the restart circuit for. Pre-existing behavior for any module-scope throw, not something
+ *   this task introduced — named here so the difference is not mistaken for a regression.
  */
 export class DynamicCodeDeniedError extends errore.createTaggedError({
   name: "DynamicCodeDeniedError",
@@ -12,9 +22,9 @@ export class DynamicCodeDeniedError extends errore.createTaggedError({
 }) {}
 
 /**
- * Deny every dynamic-code entry point in THIS process: `eval`, and all FOUR "function kind"
+ * Deny every dynamic-code entry point in THIS process: `eval`, all FOUR "function kind"
  * intrinsics ECMAScript defines — `Function`, `AsyncFunction`, `GeneratorFunction`, and
- * `AsyncGeneratorFunction`.
+ * `AsyncGeneratorFunction` — and `Worker`.
  *
  * WHY HERE AND NOT AT THE GATE. `gate/model/import-scan.ts`'s token scan closes every spelling
  * that writes `eval` or `Function` as source text, and cannot close one that reaches the same
@@ -38,6 +48,19 @@ export class DynamicCodeDeniedError extends errore.createTaggedError({
  * function, and give the replacement the ORIGINAL prototype object as its own `.prototype`, so
  * `x instanceof <Kind>` still resolves correctly for any ordinary code that happens to check it.
  *
+ * WHY `Worker` TOO (fix round 1). `new Worker("data:text/javascript," + encodeURIComponent(code))`
+ * loads and runs a string of code in a FRESH realm that this function never touched — measured
+ * through the real `loadPage`, with the rest of this denial already installed, the payload still
+ * answered back with `typeof Function === "function"` inside the worker. No import, no
+ * `require`, straight from a page's module scope — closer to `eval` than the `require` gap
+ * below, and unlike that gap, `Worker` IS an ordinary `globalThis` property, so the same
+ * callable-but-throwing replacement closes it. MEASURED, not assumed, that closing it does not
+ * break anything real: a 12-scenario census (both real `examples/clock` pages plus full
+ * post-mount traffic — resize, hit-test, describe, layout query; a multi-file closure; all six
+ * `loadPage` failure branches; all four host modes with a full hello+mount+resize round trip)
+ * with an OBSERVING `Worker` wrapper found ZERO constructions anywhere in this process's own
+ * code (task-10-report.md, FIX ROUND 1). Denied unconditionally, no warm-up needed.
+ *
  * WHY IT IS SAFE HERE, AND WHERE IT IS ACTUALLY CALLED. This runs only in the `_host --stdio`
  * child, whose whole job is mounting and rendering pages. `entry.ts` calls this as the FIRST
  * statement of the `loadPage` dependency it hands to `createHostSession` — i.e. right before
@@ -58,27 +81,34 @@ export class DynamicCodeDeniedError extends errore.createTaggedError({
  * (`source-mount.ts`, the page's own meta) hits the identical path but is NOT naturally
  * warmed — `validateMeta` runs AFTER `import()`, not before — so `entry.ts` calls
  * `warmPageMetaValidator()` immediately before this function, every time, to force that
- * compile while `Function` still works. ANY zod object schema added later to code that runs
- * between boot and this call site needs the same warm-up, or its own first use will throw
- * `DynamicCodeDeniedError` out of otherwise-legitimate host code.
+ * compile while `Function` still works. THE MAINTENANCE RULE THIS LEAVES BEHIND: any zod
+ * object schema whose FIRST parse can happen AT THIS CALL SITE OR LATER needs the same
+ * warm-up before this call — NOT a schema that only ever parses earlier, during boot or the
+ * handshake, which compiles fine on its own and needs nothing added. Measured either way: a
+ * `z.object` schema throws `DynamicCodeDeniedError` on its first parse if that parse happens
+ * at or after this point, regardless of when the SCHEMA ITSELF was constructed — a future
+ * `resizeBodySchema` in `handleResize`, `decodeLayoutNode` moved into this child, or a schema
+ * reached only on an error branch would all need the same treatment `pageMetaSchema` got.
  *
- * WHAT IT IS NOT. Not a sandbox. It removes the eval/Function-family capability from this realm;
- * a page can still reach anything the realm's own modules — and the realm's own AMBIENT globals
- * — expose. The perimeter's job is unchanged — this closes the class of §5.8 violation the token
- * scan provably cannot see, WITHIN the eval/Function-family domain specifically.
+ * WHAT IT IS NOT. Not a sandbox. It removes the eval/Function-family capability AND `Worker`
+ * from this realm; a page can still reach anything the realm's own modules — and the realm's
+ * own AMBIENT globals — expose. The perimeter's job is unchanged — this closes the class of
+ * §5.8 violation the token scan provably cannot see, WITHIN the eval/Function/Worker domain
+ * specifically.
  *
  * A MEASURED, NOT CLOSED, RESIDUAL GAP. `require` is available in a page's module scope with NO
  * import statement (Bun injects it per module, the way Node's CJS wrapper does), and it is NOT a
  * `globalThis` property (`Object.getOwnPropertyDescriptor(globalThis, "require")` is
- * `undefined`) — so unlike `eval`/`Function`, there is no realm-level object this function can
- * replace to close it. An ALIASED call — `const r = require; r("node:vm").runInNewContext(...)`
- * — was measured to EXECUTE, and is invisible to `Bun.Transpiler.scanImports` (both the gate's
- * and this module's `scanClosureImports`), which pattern-matches only the literal `require(...)`
- * call form. That is a DIFFERENT, WIDER capability than this function closes — arbitrary Node
- * built-in access (`node:fs`, `node:child_process`, `node:vm`, ...), not only code evaluation —
- * and it needs its own owner; see red-debt.md. Because of this gap, "denial closes every
- * spelling, including ones nobody has enumerated" is true for the eval/Function-family
- * capability this function actually touches, and NOT true of dynamic-code capability in general.
+ * `undefined`) — so unlike `eval`/`Function`/`Worker`, there is no realm-level object this
+ * function can replace to close it. An ALIASED call — `const r = require;
+ * r("node:vm").runInNewContext(...)` — was measured to EXECUTE, and is invisible to
+ * `Bun.Transpiler.scanImports` (both the gate's and this module's `scanClosureImports`), which
+ * pattern-matches only the literal `require(...)` call form. That is a DIFFERENT, WIDER
+ * capability than this function closes — arbitrary Node built-in access (`node:fs`,
+ * `node:child_process`, `node:vm`, ...), not only code evaluation — and it needs its own owner;
+ * see red-debt.md. Because of this gap, "denial closes every spelling, including ones nobody
+ * has enumerated" is true for the eval/Function/Worker capability this function actually
+ * touches, and NOT true of dynamic-code capability in general.
  */
 export function denyDynamicCodeCapability(): void {
   const deny = (entryPoint: string) =>
@@ -128,4 +158,17 @@ export function denyDynamicCodeCapability(): void {
   denyFunctionKind(async () => {}, "AsyncFunction");
   denyFunctionKind(function* () {}, "GeneratorFunction");
   denyFunctionKind(async function* () {}, "AsyncGeneratorFunction");
+
+  // `Worker` spins up a FRESH realm this function never touches — a `data:` URL constructor
+  // argument turns a string into running code with none of the above involved (see the doc
+  // block above for the census that measured this safe to deny unconditionally). Same
+  // discipline as `Function`: callable-but-throwing, `.prototype` preserved so
+  // `x instanceof Worker` still resolves for any ordinary code that happens to check it.
+  const deniedWorker = deny("Worker");
+  Object.defineProperty(deniedWorker, "prototype", { value: Worker.prototype });
+  Object.defineProperty(globalThis, "Worker", {
+    configurable: true,
+    writable: true,
+    value: deniedWorker,
+  });
 }

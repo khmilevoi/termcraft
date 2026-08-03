@@ -24,6 +24,7 @@ const asyncGeneratorFunctionPrototype = Object.getPrototypeOf(async function* ()
   constructor: unknown;
 };
 const originalAsyncGeneratorFunctionConstructor = asyncGeneratorFunctionPrototype.constructor;
+const originalGlobalWorker = (globalThis as Record<string, unknown>).Worker;
 
 function restoreRealm(): void {
   Object.defineProperty(Function.prototype, "constructor", {
@@ -56,12 +57,17 @@ function restoreRealm(): void {
     writable: true,
     value: originalAsyncGeneratorFunctionConstructor,
   });
+  Object.defineProperty(globalThis, "Worker", {
+    configurable: true,
+    writable: true,
+    value: originalGlobalWorker,
+  });
 }
 
 afterEach(restoreRealm);
 
 describe("denyDynamicCodeCapability", () => {
-  test("closes every spelling the token scan measured LIVE, plus the three function-kind intrinsics it cannot reach", () => {
+  test("closes every spelling the token scan measured LIVE, plus the three function-kind intrinsics and Worker it cannot reach", () => {
     denyDynamicCodeCapability();
 
     const spellings: readonly (() => unknown)[] = [
@@ -88,6 +94,10 @@ describe("denyDynamicCodeCapability", () => {
       () => (function* () {}.constructor as never as (s: string) => () => unknown)("return 1"),
       () =>
         (async function* () {}.constructor as never as (s: string) => () => unknown)("return 1"),
+      // `Worker` (fix round 1): a `data:` URL turns a string into running code in a FRESH
+      // realm, no `.constructor` chain involved at all — a different route from every spelling
+      // above, closed because `Worker` (unlike `require`) is an ordinary `globalThis` property.
+      () => new Worker("data:text/javascript,1"),
     ];
 
     for (const [index, spelling] of spellings.entries()) {
@@ -108,6 +118,14 @@ describe("denyDynamicCodeCapability", () => {
     denyDynamicCodeCapability();
     expect(() => new Function("return 1")).toThrow(DynamicCodeDeniedError);
     expect(() => (async () => {}).constructor("return 1")).toThrow(DynamicCodeDeniedError);
+    expect(() => new Worker("data:text/javascript,1")).toThrow(DynamicCodeDeniedError);
+  });
+
+  test("Worker is denied but its prototype identity is preserved for instanceof", () => {
+    const originalWorkerPrototype = Worker.prototype;
+    denyDynamicCodeCapability();
+    expect(() => new Worker("data:text/javascript,1")).toThrow(DynamicCodeDeniedError);
+    expect(Worker.prototype).toBe(originalWorkerPrototype);
   });
 
   test("ordinary function values still work", () => {
@@ -122,6 +140,7 @@ describe("denyDynamicCodeCapability", () => {
     expect(typeof (async () => {}).constructor).toBe("function");
     expect(typeof function* () {}.constructor).toBe("function");
     expect(typeof async function* () {}.constructor).toBe("function");
+    expect(typeof Worker).toBe("function");
     // `instanceof` against the now-replaced constructors must still resolve for ordinary
     // values — the replacement keeps the ORIGINAL prototype object as its own `.prototype`.
     expect(double instanceof Function).toBe(true);

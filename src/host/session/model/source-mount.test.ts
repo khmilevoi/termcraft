@@ -521,6 +521,7 @@ describe("loadPage end-to-end: a page cannot reach dynamic code once denyDynamic
     constructor: unknown;
   };
   const originalAsyncGeneratorFunctionConstructor = asyncGeneratorFunctionPrototype.constructor;
+  const originalGlobalWorker = (globalThis as Record<string, unknown>).Worker;
 
   afterEach(() => {
     Object.defineProperty(Function.prototype, "constructor", {
@@ -552,6 +553,11 @@ describe("loadPage end-to-end: a page cannot reach dynamic code once denyDynamic
       configurable: true,
       writable: true,
       value: originalAsyncGeneratorFunctionConstructor,
+    });
+    Object.defineProperty(globalThis, "Worker", {
+      configurable: true,
+      writable: true,
+      value: originalGlobalWorker,
     });
     delete (globalThis as Record<string, unknown>).__TASK10_ATTACK_MARKER__;
   });

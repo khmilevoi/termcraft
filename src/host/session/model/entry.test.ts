@@ -12,13 +12,15 @@ import {
 import { parseHostArgs, runHostStdio } from "./entry";
 
 /**
- * `runHostStdio` now calls `denyDynamicCodeCapability()` on every boot (task 10) — real and
- * correct for the production `_host --stdio` child, which is a dedicated one-shot process. But
- * `describe("runHostStdio ...")` below calls it IN-PROCESS, and `bun test` does NOT run one
- * file per process (measured, task-10-report.md: two files invoked together share one
- * `process.pid`) — so without restoring here, the first test below would leave Function/eval
- * denied for every OTHER file this invocation happens to run afterward. Restored exactly the
- * way `capability-denial.test.ts` does, for the same reason.
+ * `runHostStdio` now reaches `denyDynamicCodeCapability()` from inside the `loadPage`
+ * dependency it hands to `createHostSession` (`entry.ts`) — fired on the first real `mount`
+ * envelope, NOT unconditionally at boot. `describe("runHostStdio ...")` below calls
+ * `runHostStdio` IN-PROCESS, and `bun test` does NOT run one file per process (measured,
+ * task-10-report.md: two files invoked together share one `process.pid`) — so ANY test in this
+ * file that DOES reach a mount would, without restoring, leave Function/eval denied for every
+ * OTHER file this invocation happens to run afterward. This `afterEach` is that safety net,
+ * restored exactly the way `capability-denial.test.ts` does. Neither test below currently sends
+ * a `mount` envelope, so neither currently triggers the denial at all — the guard is defensive.
  */
 const originalFunctionConstructor = Function.prototype.constructor;
 const originalGlobalFunction = (globalThis as Record<string, unknown>).Function;
@@ -33,6 +35,7 @@ const asyncGeneratorFunctionPrototype = Object.getPrototypeOf(async function* ()
   constructor: unknown;
 };
 const originalAsyncGeneratorFunctionConstructor = asyncGeneratorFunctionPrototype.constructor;
+const originalGlobalWorker = (globalThis as Record<string, unknown>).Worker;
 
 function restoreRealm(): void {
   Object.defineProperty(Function.prototype, "constructor", {
@@ -64,6 +67,11 @@ function restoreRealm(): void {
     configurable: true,
     writable: true,
     value: originalAsyncGeneratorFunctionConstructor,
+  });
+  Object.defineProperty(globalThis, "Worker", {
+    configurable: true,
+    writable: true,
+    value: originalGlobalWorker,
   });
 }
 
@@ -143,16 +151,12 @@ describe("runHostStdio (in-memory transport)", () => {
       },
     });
 
-    // `runHostStdio` denies dynamic code the instant its own `host-hello` goes out (task 10)
-    // — correct for production, where decoding that SAME `host-hello` happens in a totally
-    // separate supervisor process that never installed the denial. This in-memory-transport
-    // test plays BOTH roles in one process, so restore BEFORE decoding below: otherwise
-    // `decodeHostHello`'s zod schema would be attempting ITS OWN first-ever JIT compile
-    // (task-10-report.md) against an already-denied `Function`, an artifact of the test
-    // harness sharing a realm across both sides of the wire, not a real production path.
-    restoreRealm();
-
-    // Decode the host's framed output.
+    // Decode the host's framed output. NOTE (fix round 1, corrected): `denyDynamicCodeCapability()`
+    // does NOT fire during this test — it lives inside the `loadPage` wrapper (`entry.ts`),
+    // reached only through a real `mount` envelope, and this test never sends one (only a
+    // `client.hello`). `decodeHostHello` below is therefore decoding against an UNTOUCHED
+    // realm; the file-level `afterEach(restoreRealm)` above is a safety net for tests that DO
+    // reach a mount, not something this specific test relies on.
     const decoder = new FrameDecoder();
     const frames: WireFrame[] = [];
     for (const chunk of output) {
