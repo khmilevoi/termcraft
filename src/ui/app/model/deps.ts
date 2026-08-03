@@ -20,6 +20,7 @@ import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
+import type { ChatOlderPageState } from "ui/chat";
 import type { HomeAgentHealth, HomeAgentSelection } from "ui/home";
 import {
   type AnyEventEnvelope,
@@ -42,7 +43,7 @@ import {
   createPreviewInteractionState,
   handleGeometryResult,
 } from "ui/preview";
-import { type FocusTarget, type OverlayKind, previewRegionSize } from "ui/workspace";
+import { type ChatViewport, type FocusTarget, type OverlayKind, previewRegionSize } from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
@@ -79,6 +80,13 @@ export interface UiLocalState {
    * refused.
    */
   readonly pageOverride: Atom<string | null>;
+  /**
+   * The live chat scroll surface, or `null` before the first render publishes one (and
+   * whenever the Workspace is unmounted). Written only by `Workspace.tsx`'s ref callback.
+   */
+  readonly chatViewport: Atom<ChatViewport | null>;
+  /** The older-page load latch — see `ui/chat`'s {@link ChatOlderPageState}. */
+  readonly olderPage: Atom<ChatOlderPageState>;
   /**
    * The `operationId` of the last export result the user dismissed (M14), or `null`. There is
    * no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member — export
@@ -751,6 +759,8 @@ export function createUiDeps(
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft: atom("", "ui.local.pinDraft"),
     pageOverride,
+    chatViewport: atom<ChatViewport | null>(null, "ui.local.chatViewport"),
+    olderPage: atom<ChatOlderPageState>({ kind: "idle" }, "ui.local.olderPage"),
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),

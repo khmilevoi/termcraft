@@ -69,6 +69,19 @@ export function recordToChatRecordProps(
   };
 }
 
+/**
+ * Whether an older page of this chat's history is being loaded right now, and whether the last
+ * attempt failed (chat-scroll spec §6.6). UI-local: the operation does not complete when the
+ * dispatch promise resolves — it completes when `chat.records.older` arrives — so this is a
+ * plain latch, not a `withAsync` state (spec §6.6 states the reason at length).
+ *
+ * `safeMessage` is the failure's own bounded message, never a path or an environment value.
+ */
+export type ChatOlderPageState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed"; readonly safeMessage: string };
+
 /** Props for {@link ChatScrollback}. `id` is the mandatory stable id (§3.2). */
 export interface ChatScrollbackProps {
   readonly id: string;

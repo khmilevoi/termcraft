@@ -885,3 +885,11 @@ describe("preview resize", () => {
     stop();
   });
 });
+
+describe("createUiDeps chat viewport and older page", () => {
+  test("createUiDeps seeds the chat viewport empty and the older-page latch idle", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(deps.local.chatViewport()).toBeNull();
+    expect(deps.local.olderPage()).toEqual({ kind: "idle" });
+  });
+});
