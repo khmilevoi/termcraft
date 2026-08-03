@@ -4,6 +4,7 @@ import { isCodeFile, parsesJsx } from "entities/design-tree";
 
 import type { ImportScanError } from "./import-scan";
 import { scanImportAllowlist, scanModuleEdges } from "./import-scan";
+import type { SourceStreamTruncatedError } from "./lexer";
 
 export { scanModuleEdges };
 
@@ -77,10 +78,19 @@ export { isCodeFile };
 export { parsesJsx };
 
 /**
- * True when this pass may TRUST a resolution target: either the loader never executes it (so it
- * carries no import syntax to miss), or its source is a key in `files` and was therefore actually
- * scanned above. Handed to {@link scanImportAllowlist} as `isScanned` — asked ONCE, about the
- * path {@link resolveDesignSpecifier} settled on, never about a candidate on the way there.
+ * True when this pass HOLDS a resolution target's source: either the loader never executes it (so
+ * it carries no import syntax to miss), or its source is a key in `files`. Handed to
+ * {@link scanImportAllowlist} as `isScanned` — asked ONCE per scan, about the path
+ * {@link resolveDesignSpecifier} settled on, never about a candidate on the way there.
+ *
+ * HOLDING A FILE'S SOURCE IS NOT THE SAME AS HAVING READ IT (task-12b round-1 re-review, Minor
+ * M4). A file whose own scan failed — {@link TreeFileUnscannableError}, or a returned
+ * `SourceStreamTruncatedError` — stays a key in `files`: its text is right there, untouched by
+ * whatever stopped the scan from finishing. This predicate cannot tell the two apart, and must
+ * not try to: it only ever sees the resolved path, never the outcome of scanning it. What
+ * subtracts an unscannable file from the trusted set is {@link scanTreeImports}'s second phase,
+ * which re-asks this same question with the files that failed already known and excluded — not
+ * a change to what this function itself means.
  *
  * THE BUG THIS SHAPE CLOSES, and why the shape is the fix. Rounds 0 and 1 of task-12b both
  * answered this question through the resolver's own `has`, i.e. by claiming a present-but-
@@ -135,6 +145,85 @@ function isTrustedTarget(
   return !isCodeFile(relPath) || input.files.has(relPath);
 }
 
+/** One file's phase-1 outcome, kept so phase 2 can re-judge only what needs re-judging. */
+interface FileScanV1 {
+  /** The scan's own findings, or the failure that stopped it. Both error arms fold to the same
+   * `UNSCANNABLE_SOURCE` diagnostic, exactly as the old single-pass body folded them. */
+  readonly outcome:
+    | TreeFileUnscannableError
+    | SourceStreamTruncatedError
+    | readonly ImportScanError[];
+  /** Every tree path this file's scan asked `isScanned` about — i.e. every RESOLVED target it
+   * has. Captured during the scan itself, so it costs nothing and cannot disagree with what
+   * the scan actually resolved. */
+  readonly targets: ReadonlySet<string>;
+}
+
+/**
+ * Scan ONE file, capturing every target its trust question was asked about.
+ *
+ * `isUnscannable` lets phase 2 subtract files that turned out unreadable WITHOUT changing what
+ * `isTrustedTarget` means — the two questions stay separate, which is the same separation
+ * task 11 made between `has` and `isScanned`.
+ */
+function scanOne(
+  input: {
+    readonly files: ReadonlyMap<string, string>;
+    readonly has: (relPath: string) => boolean;
+  },
+  from: string,
+  source: string,
+  isUnscannable: (relPath: string) => boolean,
+): FileScanV1 {
+  const targets = new Set<string>();
+  // TWO WAYS THIS FILE CAN FAIL TO BE SCANNED, both fail-closed to the same code:
+  //   - `scanImportAllowlist` RETURNS a `SourceStreamTruncatedError` when the token stream does
+  //     not cover the source (`lexer.ts`'s completeness invariant). Controlled code, reported
+  //     as a value — no `try` involved (task-14 review round 2, M6).
+  //   - the ENGINE throws: `./jsx`'s reader is recursive descent, and past
+  //     `MAX_JSX_NESTING_DEPTH` it raises `JsxNestingTooDeepError` (task 3) — or, for a shape
+  //     that reaches the JS stack limit first, a `RangeError`. That is the one UNCONTROLLED
+  //     boundary in this module, and the only thing `errore.try` is here for.
+  const scanned = errore.try({
+    try: () =>
+      scanImportAllowlist(source, {
+        from,
+        has: input.has,
+        isScanned: (relPath) => {
+          targets.add(relPath);
+          return isTrustedTarget(input, relPath) && !isUnscannable(relPath);
+        },
+        syntax: parsesJsx(from),
+      }),
+    catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
+  });
+  return { outcome: scanned, targets };
+}
+
+/** Shape one unscannable file's fail-closed diagnostic. Unchanged in substance — lifted out of
+ * `scanTreeImports`'s old body so both call sites in the rewrite share one wording. */
+function unscannableError(
+  from: string,
+  failure: TreeFileUnscannableError | SourceStreamTruncatedError,
+): ImportScanError & { readonly file: string } {
+  // A wrapped engine throw carries `cause`; a returned truncation is already the reason.
+  const cause = failure.cause;
+  const reason =
+    cause === undefined
+      ? failure.message
+      : cause instanceof Error
+        ? `${cause.name}: ${cause.message}`
+        : String(cause);
+  return {
+    code: "UNSCANNABLE_SOURCE",
+    specifier: "",
+    message: cause === undefined ? `"${from}": ${reason}` : `${failure.message} — ${reason}`,
+    line: 1,
+    column: 1,
+    file: from,
+  };
+}
+
 /**
  * Run the AUTHORITATIVE allowlist ({@link scanImportAllowlist}) over every CODE file of a tree,
  * tagging each error with the tree-relative path it came from (design §6, §8 step 4). This is
@@ -178,8 +267,7 @@ function isTrustedTarget(
  * things were wrong with that: the resolver then emitted `no file at "lib/foo"` about a file
  * sitting in the tree, and — because it reads that `false` as licence to try the NEXT probe
  * candidate — a scanned sibling could satisfy an import the loader would serve from the unscanned
- * file. See {@link isTrustedTarget} for the measurement and for why no amount of latching on the
- * `has` side closes it.
+ * file. See {@link isTrustedTarget} for the measurement.
  *
  * `runTreeImports` (`gate/model/gate.ts`) is the caller this was written for: `has` is backed by
  * the whole-tree `treePaths`, `files` by whatever text this particular turn's Gate run actually
@@ -189,47 +277,40 @@ export function scanTreeImports(input: {
   readonly files: ReadonlyMap<string, string>;
   readonly has: (relPath: string) => boolean;
 }): readonly (ImportScanError & { readonly file: string })[] {
-  const errors: (ImportScanError & { readonly file: string })[] = [];
-  const isScanned = (relPath: string) => isTrustedTarget(input, relPath);
+  // PHASE 1 — scan every code file once, with today's trust rule, recording which targets each
+  // file's scan resolved to.
+  const scans = new Map<string, FileScanV1>();
   for (const [from, source] of input.files) {
     if (!isCodeFile(from)) continue;
-    // TWO WAYS THIS FILE CAN FAIL TO BE SCANNED, both fail-closed to the same code:
-    //   - `scanImportAllowlist` RETURNS a `SourceStreamTruncatedError` when the token stream
-    //     does not cover the source (`lexer.ts`'s completeness invariant). Controlled code,
-    //     reported as a value — no `try` involved (task-14 review round 2, M6).
-    //   - the ENGINE throws: `./jsx`'s reader is recursive descent and can overflow the stack
-    //     on deep enough nesting. That is the one UNCONTROLLED boundary in this module, and
-    //     the only thing `errore.try` is here for. See {@link TreeFileUnscannableError}.
-    const scanned = errore.try({
-      try: () =>
-        scanImportAllowlist(source, {
-          from,
-          has: input.has,
-          isScanned,
-          syntax: parsesJsx(from),
-        }),
-      catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
-    });
-    if (scanned instanceof Error) {
-      // A wrapped engine throw carries `cause`; a returned truncation is already the reason.
-      const cause = scanned.cause;
-      const reason =
-        cause === undefined
-          ? scanned.message
-          : cause instanceof Error
-            ? `${cause.name}: ${cause.message}`
-            : String(cause);
-      errors.push({
-        code: "UNSCANNABLE_SOURCE",
-        specifier: "",
-        message: cause === undefined ? `"${from}": ${reason}` : `${scanned.message} — ${reason}`,
-        line: 1,
-        column: 1,
-        file: from,
-      });
+    scans.set(
+      from,
+      scanOne(input, from, source, () => false),
+    );
+  }
+
+  // PHASE 2 — a file whose OWN scan failed read nothing, so it can vouch for nothing. Any file
+  // that resolved an import INTO one is re-judged with that knowledge; nothing else is touched.
+  //
+  // WHY NOT JUST MASK THE TRUST PREDICATE IN ONE PASS: the set of unscannable files is not
+  // known until the pass is over, and a file may be scanned before the file it imports. A
+  // single pass would therefore trust whatever it happened to reach first — order-dependent
+  // security, which is worse than the gap it replaces.
+  const unscannable = new Set(
+    [...scans].filter(([, scan]) => scan.outcome instanceof Error).map(([from]) => from),
+  );
+  const errors: (ImportScanError & { readonly file: string })[] = [];
+  for (const [from, scan] of scans) {
+    const tainted =
+      !(scan.outcome instanceof Error) &&
+      [...scan.targets].some((target) => unscannable.has(target));
+    const final = tainted
+      ? scanOne(input, from, input.files.get(from) ?? "", (target) => unscannable.has(target))
+      : scan;
+    if (final.outcome instanceof Error) {
+      errors.push(unscannableError(from, final.outcome));
       continue;
     }
-    for (const error of scanned) errors.push({ ...error, file: from });
+    for (const error of final.outcome) errors.push({ ...error, file: from });
   }
   return errors;
 }

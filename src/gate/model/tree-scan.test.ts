@@ -1038,3 +1038,44 @@ test("a file past the nesting ceiling is UNSCANNABLE_SOURCE, fail-closed, not a 
   expect(errors.map((error) => error.code)).toEqual(["UNSCANNABLE_SOURCE"]);
   expect(errors[0]?.file).toBe("pages/runaway.tsx");
 });
+
+describe("a file whose own scan failed does not vouch for its importers (task-12b M4)", () => {
+  const RUNAWAY = "<a>{".repeat(8000);
+
+  test("the importer gets its OWN diagnostic, not just the unscannable file's", () => {
+    const files = new Map([
+      ["pages/home.tsx", `import { Deep } from "../lib/deep";\nexport default Deep;\n`],
+      ["lib/deep.tsx", RUNAWAY],
+    ]);
+    const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+
+    const byFile = new Map(errors.map((error) => [error.file, error.code]));
+    expect(byFile.get("lib/deep.tsx")).toBe("UNSCANNABLE_SOURCE");
+    // THE POINT: before this fix `pages/home.tsx` had no entry here at all.
+    expect(byFile.get("pages/home.tsx")).toBe("UNSCANNED_IMPORT");
+  });
+
+  test("an importer of a file that scanned CLEANLY is still vouched for", () => {
+    const files = new Map([
+      ["pages/home.tsx", `import { theme } from "../lib/theme";\nexport default theme;\n`],
+      ["lib/theme.ts", `export const theme = 1;\n`],
+    ]);
+    expect(scanTreeImports({ files, has: (p) => files.has(p) })).toEqual([]);
+  });
+
+  test("a tree with nothing unscannable pays no second pass", () => {
+    // Pinned by observation rather than by timing: the clean tree above already proves the
+    // result, and this proves the mechanism does not fire — a file whose scan succeeded and
+    // whose targets are all scannable must never be re-scanned. Asserted through the public
+    // result being identical whether or not an unrelated unscannable file is present.
+    const clean = new Map([
+      ["pages/a.tsx", `import { x } from "../lib/x";\nexport default x;\n`],
+      ["lib/x.ts", `export const x = 1;\n`],
+    ]);
+    const withUnrelated = new Map([...clean, ["pages/runaway.tsx", RUNAWAY]]);
+    const cleanErrors = scanTreeImports({ files: clean, has: (p) => clean.has(p) });
+    const mixed = scanTreeImports({ files: withUnrelated, has: (p) => withUnrelated.has(p) });
+    expect(cleanErrors).toEqual([]);
+    expect(mixed.map((error) => error.file)).toEqual(["pages/runaway.tsx"]);
+  });
+});

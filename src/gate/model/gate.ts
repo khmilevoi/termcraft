@@ -168,15 +168,18 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   //     `SourceStreamTruncatedError | …`, because `tokenize` is `gate`'s own controlled code and
   //     the project constraint permits `errore.try` only at UNCONTROLLED boundaries. They are
   //     ordinary `instanceof Error` checks.
-  //   - the ENGINE can still overflow, and since task 14b fix round 1 that boundary is reached
-  //     by EVERY one of these stages, not just `lintUnpointedElements`: `tokenize` now consults
-  //     `./jsx`'s recursive-descent reader for the JSX text ranges it lexes around, so a page
-  //     nested deeply enough throws out of the page contract and the token lints too. Measured:
-  //     `"<a>{".repeat(32_000)` throws `RangeError` from `checkPageContract`,
-  //     `lintDeterminism`, `lintSilencingAny`, `lintDroppedIds` and `lintUnlistedNavigation`
-  //     alike. `runGate` is SYNCHRONOUSLY inside the turn pipeline, so an escaping throw would
-  //     crash the turn instead of rejecting one page — the whole reason this converter exists.
-  //     One `errore.try` around the group, rather than five.
+  //   - the ENGINE can still throw — since task 3 the dominant cause is `./jsx`'s own deliberate
+  //     `JsxNestingTooDeepError`, raised past `MAX_JSX_NESTING_DEPTH`, with a `RangeError` from
+  //     the raw JS stack limit as the residual for a shape that reaches it first — and since
+  //     task 14b fix round 1 that boundary is reached by EVERY one of these stages, not just
+  //     `lintUnpointedElements`: `tokenize` now consults `./jsx`'s recursive-descent reader for
+  //     the JSX text ranges it lexes around, so a page nested deeply enough throws out of the
+  //     page contract and the token lints too. Measured: `"<a>{".repeat(32_000)` throws
+  //     `JsxNestingTooDeepError` from `checkPageContract`, `lintDeterminism`, `lintSilencingAny`,
+  //     `lintDroppedIds` and `lintUnlistedNavigation` alike. `runGate` is SYNCHRONOUSLY inside
+  //     the turn pipeline, so an escaping throw would crash the turn instead of rejecting one
+  //     page — the whole reason this converter exists. One `errore.try` around the group, rather
+  //     than five.
   //
   // THE PAGE'S SYNTAX IS DERIVED FROM ITS OWN PATH, not assumed (task 14b fix round 2, Minor
   // 2). This used to assert "a candidate page is always JSX" because `entryRelPath`/`fileName`
