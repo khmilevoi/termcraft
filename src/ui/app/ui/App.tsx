@@ -102,7 +102,14 @@ function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null)
     );
   }
   if (overlay === "pin-input") {
-    return <PinInputPopup id="overlay-pin" value={deps.local.pinDraft()} />;
+    return (
+      <PinInputPopup
+        id="overlay-pin"
+        // §7.5: the field is live except on a read-only screen, where pins are refused outright.
+        focused={deps.screen() !== "read-only"}
+        bridge={deps.editors.pin}
+      />
+    );
   }
   if (overlay !== "export") return null;
   const exportState = deps.mirror.export();

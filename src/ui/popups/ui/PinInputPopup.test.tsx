@@ -4,6 +4,7 @@ import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
+import type { EditorBridge } from "ui/text-input";
 import { SHELL_PALETTE } from "ui/theme";
 
 import { PinInputPopup } from "./PinInputPopup";
@@ -17,21 +18,31 @@ afterEach(() => {
 const findRun = (frame: { rows: StyledRun[][] }, needle: string) =>
   frame.rows.flat().find((run) => run.text.includes(needle));
 
+/** A stub bridge that seeds the editor with `seed` at mount and ignores mirror writes. */
+const bridgeWith = (seed: string): EditorBridge => ({
+  attach: (handle) => {
+    if (handle !== null) handle.setText(seed);
+  },
+  mirror: () => undefined,
+});
+
 describe("PinInputPopup component (design wsPinInput)", () => {
   test("renders the 'new pin' title in the amberHi hue", async () => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 5 });
+    const handle = await createHeadlessRenderer({ w: 48, h: 6 });
     open = handle;
-    handle.mount(<PinInputPopup id="pin-input" value="" />);
+    handle.mount(<PinInputPopup id="pin-input" focused bridge={bridgeWith("")} />);
     await handle.render();
     const run = findRun(handle.capture(), "new pin");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberHi);
   });
 
-  test("renders a non-empty value in the foreground hue", async () => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 5 });
+  test("renders a seeded comment in the foreground hue", async () => {
+    const handle = await createHeadlessRenderer({ w: 48, h: 6 });
     open = handle;
-    handle.mount(<PinInputPopup id="pin-input" value="why is this always on top?" />);
+    handle.mount(
+      <PinInputPopup id="pin-input" focused bridge={bridgeWith("why is this always on top?")} />,
+    );
     await handle.render();
     const run = findRun(handle.capture(), "why is this always on top?");
     expect(run).toBeDefined();
@@ -39,25 +50,29 @@ describe("PinInputPopup component (design wsPinInput)", () => {
   });
 
   test("renders the footer hint in the faint hue", async () => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 5 });
+    const handle = await createHeadlessRenderer({ w: 48, h: 6 });
     open = handle;
-    handle.mount(<PinInputPopup id="pin-input" value="" />);
+    handle.mount(<PinInputPopup id="pin-input" focused bridge={bridgeWith("")} />);
     await handle.render();
     const run = findRun(handle.capture(), "⏎ save · esc cancel");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
   });
 
-  test("renders a blinking cursor glyph", async () => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 5 });
+  test("stays one row tall — a pin comment is single-line by design", async () => {
+    const handle = await createHeadlessRenderer({ w: 48, h: 6 });
     open = handle;
-    handle.mount(<PinInputPopup id="pin-input" value="hi" />);
+    handle.mount(<PinInputPopup id="pin-input" focused bridge={bridgeWith("first\nsecond")} />);
     await handle.render();
-    // Note: BLINK has no protocol mask bit (host/render/model/attributes.ts's
-    // `attributesToMask` comment), so the cursor's blink attribute cannot be
-    // asserted through `run.attrs` here — only its presence and color.
-    const run = findRun(handle.capture(), "█");
-    expect(run).toBeDefined();
-    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amber);
+    const frame = handle.capture();
+    // `TextEditorHandle.setText` writes straight into the edit buffer via
+    // `EditBufferRenderable.setText`, bypassing the newline-stripping `InputRenderable.insertText`/
+    // `handlePaste`/the `value` setter apply to typed or pasted input — so the embedded `\n`
+    // survives in the buffer. What proves single-line-ness here instead is the render: the
+    // component pins the editor row's height to 1 whenever `multiline={false}` (see
+    // `TextEditor`'s `height={props.multiline ? props.rows : 1}`), so the second line is clipped,
+    // never painted — "first" shows, "second" never does.
+    expect(findRun(frame, "first")).toBeDefined();
+    expect(findRun(frame, "second")).toBeUndefined();
   });
 });
