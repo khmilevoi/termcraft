@@ -96,12 +96,14 @@ export interface UiLocalState {
    * await a Promise), then `createUiDeps` fires {@link UiDeps.refreshAgentHealth} once at startup
    * to replace it with the injected probe's real reading, and again on every `home-recheck` — the
    * SAME probe path, not a duplicated one. There is deliberately NO Workspace re-check: nothing
-   * in `ui/workspace` refreshes this atom, so Home's `r` is the only refresh path there is. For
-   * an EXISTING project that path is off the launch route entirely (workspace-first launch,
-   * 2026-08-02) — it mounts the Workspace directly and never passes through Home, and once
-   * `projectId` is non-null nothing routes back, so the badge stays the reading the startup probe
-   * took for the rest of the process. (A fresh directory does still land on Home, where `r` works
-   * as it always did — it just happens before the Workspace exists.)
+   * in `ui/workspace` refreshes this atom, so Home's `r` is the only refresh path there is. Home
+   * is reached in exactly two situations (`ui/mirror/model/screen.ts`'s `deriveScreen`): a
+   * genuinely fresh directory, where `startupOpenPending` was never true, and a startup open that
+   * did not finish — including an EXISTING project whose open is blocked, or whose startup
+   * dispatch never reaches the Kernel. Only once an existing project's open actually finishes
+   * does this path leave the launch route entirely (workspace-first launch, 2026-08-02): the
+   * Workspace mounts directly, and once `projectId` is non-null nothing routes back, so the badge
+   * stays the reading the startup probe took for the rest of the process.
    * `ui/workspace/types.ts`'s `WorkspaceLocalState.agentHealth` records the same trade from the
    * consuming side.
    */

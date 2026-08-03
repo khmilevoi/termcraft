@@ -1,11 +1,13 @@
 What happens between typing `termcraft` in a directory and working in the Workspace: the single-instance check, project discovery, the workspace-trust gate that guards design-code execution, canonical-source loading, and first generation. Git inspection is optional and never gates startup. termcraft is an npm package run under Bun (master §4.1); the interactive launch is one of three argv modes of the same installed entry (`src/main.tsx`, run through `bun <entry> …`) — an argv scan runs the `_host --stdio` design-render child or the headless `termcraft export [dir]` command ahead of it — and for the interactive mode the composition root opens (or creates) the project on disk and assembles the real Kernel graph the UI drives.
 
 Which screen the app MOUNTS — the first frame, before the Kernel has published anything — is
-decided from two facts the composition root already holds: the terminal size, and whether a
-startup open is pending (`UiEnv.projectExists`, seeded into the UI-local `startupOpenPending`).
-`deriveScreen` then re-runs on every mirror change and reads more than that: `projectId` and
-`trust` once the open finishes, and `openFailed`, which derives from `openFailure` and can only
-ever be set by a Kernel-published `blockOpen` — so at mount time it is always false.
+decided from two facts: the terminal size, measured by the renderer inside `createUiRoot`
+(`src/ui/app/model/root.tsx`), and whether a startup open is pending — the one fact the
+composition root already holds (`UiEnv.projectExists`, seeded into the UI-local
+`startupOpenPending`). `deriveScreen` then re-runs on every mirror change and reads more than
+that: `projectId` and `trust` once the open finishes, and `openFailed`, which derives from
+`openFailure` and can only ever be set by a Kernel-published `blockOpen` — so at mount time it is
+always false.
 
 ```mermaid
 stateDiagram-v2

@@ -135,8 +135,7 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   // weighed against `existing` here. `src` holds THREE `project.open` dispatch sites: this one
   // (the ordinary way an existing project is opened), `ui/app/model/intent.ts`'s `home-submit`
   // (narrowed by this same spec to Home's ⏎ after a startup open that failed), and
-  // `entrypoint/model/run-export.ts`'s headless export driver — which was the only one in the
-  // whole of `src` before this dispatch existed.
+  // `entrypoint/model/run-export.ts`'s headless export driver.
   //
   // WHAT A FAILED STARTUP DISPATCH ACTUALLY DOES TODAY. `abandonStartupOpen` is a strict
   // improvement on the pre-branch behaviour, and it is still not a SURFACE. What it does: it
