@@ -23,36 +23,44 @@ import type { StatusBarHintBadge } from "ui/status-bar";
  * (`⠹ checking`, not `⠹ checking codex`), the same restraint the idle shell already applies.
  * The two advisory phrases never carried the name, so `short` cannot change them.
  */
+// A `switch` with no `default`, not the `if`-chain's bare final `return` — the same compile-time
+// exhaustiveness idiom `src/entities/turn/types.test.ts`'s `describeEvent` already uses. The
+// explicit `StatusBarHintBadge | null` return type means a sixth `AgentHealth` variant added
+// later leaves this function without a return path for it, which `tsc` rejects at compile time
+// ("Function lacks ending return statement…") — never a silent, alarming `✗ … not found` badge
+// rendered for a case nobody wrote a branch for.
 export function agentHealthBadge(health: AgentHealth, short: boolean): StatusBarHintBadge | null {
-  if (health.kind === "ready") return null;
-  if (health.kind === "checking") {
-    return {
-      text: short ? "⠹ checking" : `⠹ checking ${health.agent}`,
-      fg: "amberHi",
-      bg: "line",
-    };
+  switch (health.kind) {
+    case "ready":
+      return null;
+    case "checking":
+      return {
+        text: short ? "⠹ checking" : `⠹ checking ${health.agent}`,
+        fg: "amberHi",
+        bg: "line",
+      };
+    case "advisory":
+      return {
+        text: health.panel === "sandbox" ? "⚠ sandbox degraded" : "⚠ health unconfirmed",
+        fg: "amberHi",
+        bg: "line",
+      };
+    case "blocked": {
+      const text =
+        health.panel === "latched"
+          ? short
+            ? "✗ unavailable"
+            : `✗ ${health.agent} unavailable`
+          : short
+            ? "✗ not signed in"
+            : `✗ ${health.agent} not signed in`;
+      return { text, fg: "bg", bg: "red" };
+    }
+    case "missing":
+      return {
+        text: short ? "✗ not found" : `✗ ${health.agent} not found`,
+        fg: "bg",
+        bg: "red",
+      };
   }
-  if (health.kind === "advisory") {
-    return {
-      text: health.panel === "sandbox" ? "⚠ sandbox degraded" : "⚠ health unconfirmed",
-      fg: "amberHi",
-      bg: "line",
-    };
-  }
-  if (health.kind === "blocked") {
-    const text =
-      health.panel === "latched"
-        ? short
-          ? "✗ unavailable"
-          : `✗ ${health.agent} unavailable`
-        : short
-          ? "✗ not signed in"
-          : `✗ ${health.agent} not signed in`;
-    return { text, fg: "bg", bg: "red" };
-  }
-  return {
-    text: short ? "✗ not found" : `✗ ${health.agent} not found`,
-    fg: "bg",
-    bg: "red",
-  };
 }

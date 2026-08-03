@@ -29,10 +29,11 @@ export interface WorkspaceLocalState {
   readonly pageOverride: Atom<string | null>;
   /**
    * The agent-health reading, shown as the lowest-precedence badge in the status bar's `hint`
-   * slot (workspace-first launch, 2026-08-02). Read-only from this module's point of view: the
-   * probe runs once at startup and is NEVER refreshed, so a bad reading rides the bar for the
-   * life of the process. That is a deliberate trade, recorded in the spec — a `/recheck` action
-   * was considered and declined.
+   * slot (workspace-first launch, 2026-08-02). Read-only from this module's point of view: there
+   * is no WORKSPACE re-check, and the reading is never refreshed from here — only Home's own `r`
+   * re-check (`ui/app/model/intent.ts:45`) replaces it, and Home is off the launch path (reached
+   * only when a startup open fails, `App.tsx:246`). That is a deliberate trade, recorded in the
+   * spec — a `/recheck` action was considered and declined.
    */
   readonly agentHealth: Atom<AgentHealth>;
 }

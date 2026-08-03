@@ -33,6 +33,10 @@ const allText = (rows: StyledRun[][]) =>
     .join("");
 const findRun = (rows: StyledRun[][], needle: string) =>
   rows.flat().find((run) => run.text.includes(needle));
+// The established idiom for letting a `reatomComponent` re-render after a post-mount atom write
+// reach the frame (same helper, same shape, as `host/render/model/reactive.test.tsx`,
+// `ui/app/model/intent.test.ts`, `ui/preview/model/interaction.test.ts`, …) — no `act()` needed.
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("Workspace read-only presentation", () => {
   test("disables composer affordances and uses only approved read-only vocabulary/colors", async () => {
@@ -1477,5 +1481,27 @@ describe("Workspace agent-health badge (design 30, the badge vocabulary)", () =>
 
     expect(text).toContain("⠹ checking");
     expect(text).not.toContain("⠹ checking claude");
+  });
+
+  // fix round 1, Finding 3: every other test above sets `agentHealth` BEFORE mount, so none of
+  // them can tell a live `local.agentHealth()` read inside the component body apart from one
+  // hoisted out of it (an RTM-C01 violation `Workspace.tsx` does not have) — a hoisted read would
+  // still capture the pre-mount value on the FIRST render and every one of those tests would keep
+  // passing. This test mounts on `ready` (no badge), writes a DIFFERENT reading afterward, and
+  // asserts the second frame changed — a hoisted read remains stuck on the first render's value,
+  // so `not.toContain` below would still hold and this test would fail.
+  test("the badge is reactive — a post-mount health change repaints the bar", async () => {
+    const deps = withHealth({ kind: "ready", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    expect(allText(handle.capture().rows)).not.toContain("✗ claude not signed in");
+
+    deps.local.agentHealth.set({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
+    await tick();
+    await handle.render();
+
+    expect(allText(handle.capture().rows)).toContain("✗ claude not signed in");
   });
 });
