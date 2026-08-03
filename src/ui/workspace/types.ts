@@ -1,5 +1,6 @@
 import type { Atom, Computed } from "@reatom/core";
 
+import type { AgentHealth } from "ui/agent-health";
 import type { Dispatcher, UiPreviewFrame } from "ui/kernel";
 import type { Mirror, ScreenKind } from "ui/mirror";
 import type { PreviewInteractionState } from "ui/preview";
@@ -26,6 +27,14 @@ export interface WorkspaceLocalState {
    * see `model/page-selection.ts` for why a tab click cannot travel through Kernel state.
    */
   readonly pageOverride: Atom<string | null>;
+  /**
+   * The agent-health reading, shown as the lowest-precedence badge in the status bar's `hint`
+   * slot (workspace-first launch, 2026-08-02). Read-only from this module's point of view: the
+   * probe runs once at startup and is NEVER refreshed, so a bad reading rides the bar for the
+   * life of the process. That is a deliberate trade, recorded in the spec — a `/recheck` action
+   * was considered and declined.
+   */
+  readonly agentHealth: Atom<AgentHealth>;
 }
 
 export interface WorkspaceDeps {

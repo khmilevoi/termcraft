@@ -6,6 +6,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { uuidv7 } from "infrastructure/uuid";
+import type { AgentHealth } from "ui/agent-health";
 import { createUiDeps } from "ui/app";
 import {
   TEST_SHA,
@@ -1343,5 +1344,138 @@ describe("Workspace while the project is opening (design 30-workspace-first-laun
     expect(text).not.toContain("OPENING");
     expect(text).not.toContain("opening project…");
     expect(text).toContain("STATIC");
+  });
+});
+
+describe("Workspace agent-health badge (design 30, the badge vocabulary)", () => {
+  // `createUiDeps` fires its own startup agent-health probe fire-and-forget
+  // (`ui/app/model/deps.ts`'s `refreshAgentHealth`), which by default resolves and overwrites
+  // `local.agentHealth` shortly after construction — before `handle.render()` below gets a chance
+  // to capture a frame, clobbering whatever this describe block sets. These tests are about
+  // `agentHealthBadge`'s mapping from a given reading, not the probe race, so a probe that never
+  // resolves keeps the manually-set reading in place (harness adaptation, not an assertion change).
+  const NEVER_RESOLVING_PROBE = () => new Promise<AgentHealth>(() => {});
+
+  const withHealth = (health: AgentHealth) => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      undefined,
+      NEVER_RESOLVING_PROBE,
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.local.agentHealth.set(health);
+    return deps;
+  };
+
+  test("renders the badge for a blocked agent over an otherwise working project", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(
+      <Workspace
+        deps={withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" })}
+        readOnly={false}
+      />,
+    );
+    await handle.render();
+    const rows = handle.capture().rows;
+
+    expect(allText(rows)).toContain("✗ claude not signed in");
+    // No takeover: the project's own chrome is untouched.
+    expect(allText(rows)).toContain("STATIC");
+    const badge = findRun(rows, "✗ claude not signed in");
+    expect(badge && extractRgb(badge.bg)).toBe(SHELL_PALETTE.red);
+  });
+
+  test("renders checking while the probe runs — the point of the whole change", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(
+      <Workspace deps={withHealth({ kind: "checking", agent: "claude" })} readOnly={false} />,
+    );
+    await handle.render();
+    expect(allText(handle.capture().rows)).toContain("⠹ checking claude");
+  });
+
+  test("renders nothing for ready", async () => {
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(
+      <Workspace deps={withHealth({ kind: "ready", agent: "claude" })} readOnly={false} />,
+    );
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).not.toContain("⠹ checking");
+    expect(text).not.toContain("✗ claude");
+  });
+
+  test("a running turn outranks health — the agent is alive by demonstration", async () => {
+    const deps = withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
+    deps.mirror.apply(
+      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("⚠ turn running — send disabled");
+    expect(text).not.toContain("✗ claude not signed in");
+  });
+
+  test("read-only outranks health", async () => {
+    const deps = withHealth({ kind: "blocked", agent: "claude", panel: "login", detail: "x" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("Send · Tweaks · pins disabled");
+    expect(text).not.toContain("✗ claude not signed in");
+  });
+
+  test("the badge shows during the open, beside the OPENING chip", async () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      undefined,
+      NEVER_RESOLVING_PROBE,
+    );
+    deps.local.agentHealth.set({ kind: "checking", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("OPENING");
+    expect(text).toContain("⠹ checking claude");
+  });
+
+  test("at the floor the badge drops the agent name", async () => {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 80, h: 24 },
+      undefined,
+      NEVER_RESOLVING_PROBE,
+    );
+    deps.local.agentHealth.set({ kind: "checking", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 80, h: 24 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+
+    expect(text).toContain("⠹ checking");
+    expect(text).not.toContain("⠹ checking claude");
   });
 });

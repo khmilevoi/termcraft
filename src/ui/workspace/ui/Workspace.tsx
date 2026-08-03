@@ -44,6 +44,7 @@ import {
   scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
+import { agentHealthBadge } from "../model/health-badge";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -407,6 +408,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
+  const healthBadge = agentHealthBadge(local.agentHealth(), narrow);
   const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
@@ -790,6 +792,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
+          // design 30, "The badge vocabulary": precedence, highest first — read-only, turn
+          // running, preview halt, agent health, none.
+          //
+          // `turn running` MUST outrank health by rule, not by taste: while a turn runs the agent
+          // is alive by demonstration, and a stale `✗ … not signed in` sitting under it would
+          // contradict what is happening on screen in the same second.
+          //
+          // Preview halt outranks health because it is the more urgent, more specific fact — and
+          // §30 answers the collision directly: the halt keeps the slot, and the halt PANEL says
+          // what health would have said (see `HostCrashPanel`'s `agentDead`).
           props.readOnly
             ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" }
             : // finding §2.5 (phase-8 Task 16): design/termcraft-engine.js:1005-1006 (`wsSlashTurn`)
@@ -806,7 +818,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                     fg: "red",
                     bg: "redDim",
                   }
-                : null
+                : healthBadge
         }
         hintKeys={
           // design `wsOpening`: `keys:[['⏎','send','dis']]` and nothing else. F2/F3/F4 are
