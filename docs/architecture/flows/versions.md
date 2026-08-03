@@ -146,8 +146,8 @@ below.
   `commit.plan`/`confirm`/`discardPlan`, and `history.open` command targets; the
   command surface this doc walks through exists in the protocol even though no
   live service sits behind it
-- `src/core/protocol/model/event-kind.ts` — the closed 44-kind event registry
-  (`EVENT_KIND_COUNT === 44`, `chat.records` included), holding the
+- `src/core/protocol/model/event-kind.ts` — the closed 45-kind event registry
+  (`EVENT_KIND_COUNT === 45`, `chat.records`/`chat.records.older` included), holding the
   `restore.planReady`/`started`/`recordPending`/`completed`/`failed` and
   `commit.planReady`/`started`/`completed`/`failed` terminal events the diagram's
   states would emit once a service exists

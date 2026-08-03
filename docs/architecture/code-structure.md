@@ -12,7 +12,8 @@ convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
 `entrypoint/` ring that owns their lifecycle have landed, `core`'s own Kernel is
 fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
 WP-1) — `createKernel`, the seven-machine/mailbox/capability wiring, and a real
-command handler registry answering all 43 command kinds — and the production
+command handler registry answering all 44 command kinds (43 → 44, chat-scroll spec
+§6.1: `chat.load-older`) — and the production
 adapter graph mapping `store`/`agent`/`gate`/`host` onto `core/ports/` has landed
 too (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) is the
 composition root that builds a real `KernelDeps` from that graph and constructs a

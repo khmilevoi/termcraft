@@ -12,8 +12,9 @@ document here that addresses how the source tree itself is laid out.
 > documents below anchor those to real source files. All seven components the design
 > names are real code today, including the Kernel (`core/`), now fully self-assembled
 > behind a public `core/index.ts` boundary — `createKernel`, the seven-machine/
-> mailbox/capability wiring, and a real command handler registry answering all 43
-> command kinds (kernel-assembly WP-1). The executable roots (`src/main.tsx`,
+> mailbox/capability wiring, and a real command handler registry answering all 44
+> command kinds (kernel-assembly WP-1; 43 → 44, chat-scroll spec §6.1:
+> `chat.load-older`). The executable roots (`src/main.tsx`,
 > `src/demo.tsx`) and the `entrypoint/` ring that owns terminal lifetime and shutdown
 > have landed too. The production adapter graph inside that composition root has also
 > landed: `store`/`agent`/`gate`/`host` are mapped onto `core/ports/` to build a real

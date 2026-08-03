@@ -1,7 +1,7 @@
 # Scrollable chat message stream with history paging
 
 Date: 2026-08-02
-Status: approved design, not yet implemented
+Status: implemented (2026-08-03) — see docs/superpowers/plans/2026-08-03-chat-scroll.md
 
 ## 1. The gap
 
