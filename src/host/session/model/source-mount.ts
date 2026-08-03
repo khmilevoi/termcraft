@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { lstat } from "node:fs/promises";
 
 import * as errore from "errore";
@@ -156,7 +157,7 @@ export function scanClosureImports(input: {
  * authority at staging time — this is the mount-time restatement of the same discipline, so a
  * path that reached the supervisor some other way still cannot address anything outside
  * `treeRoot`. Kept to the shape question only; the symlink question is
- * {@link assertNoSymlinkedComponent}'s.
+ * {@link createTreePathVerifier}'s.
  */
 function checkTreeRelPath(relPath: string): ProtocolError | void {
   if (relPath.length === 0) return malformed("a tree-relative path may not be empty");
@@ -176,37 +177,55 @@ function checkTreeRelPath(relPath: string): ProtocolError | void {
 }
 
 /**
- * `lstat` every component of `relPath` under `treeRoot` and refuse if any of them is a symlink,
- * junction or other reparse point (design §6: "a specifier whose resolution passes through a
- * symlink, junction, or reparse point" is fatal). `lstat` — never `stat` — is what makes this a
- * check rather than a followed link; on Windows a junction and a reparse point both report
- * `isSymbolicLink()`.
+ * Build ONE MOUNT's symlink verifier. The returned function `lstat`s every component of
+ * `relPath` under `treeRoot` and refuses if any of them is a symlink, junction or other reparse
+ * point (design §6: "a specifier whose resolution passes through a symlink, junction, or reparse
+ * point" is fatal). `lstat` — never `stat` — is what makes this a check rather than a followed
+ * link; on Windows a junction and a reparse point both report `isSymbolicLink()`.
  *
- * The same deliberate duplication of `store/safe-fs/model/no-follow.ts`'s discipline as
- * {@link checkTreeRelPath}, and for the same reason. `treeRoot` itself is NOT walked: it is the
- * mount root the supervisor names, and everything above it is the staging path's business, not
- * this one's.
+ * It also remembers the absolute prefixes it has already proved, so a shared module reached from
+ * a deep entry no longer re-stats `lib/` and `lib/deep/` once per closure member.
+ *
+ * PER CALL, NEVER MODULE-LEVEL: a memo that outlived a mount would answer for a tree that has
+ * since been replaced, which is the staleness class this whole file exists to refuse. Sound
+ * WITHIN one mount for the same reason the hash verification is — if a directory turned into a
+ * link between two members of one closure, every byte this mount already read is suspect, and
+ * the hash check is what catches that.
+ *
+ * The FINAL component is memoized only after its own check passes, exactly like every prefix, so
+ * a file that is itself a symlink is still refused even when its directory was verified for a
+ * sibling. That is not an implementation detail — it is what keeps the memo from becoming a
+ * blanket pass, and it has its own test.
+ *
+ * `treeRoot` itself is NOT walked: it is the mount root the supervisor names, and everything
+ * above it is the staging path's business. The same deliberate duplication of
+ * `store/safe-fs/model/no-follow.ts`'s discipline as {@link checkTreeRelPath}, and for the same
+ * reason — `host` may not import `store`.
  */
-async function assertNoSymlinkedComponent(
-  treeRoot: string,
-  relPath: string,
-): Promise<ProtocolError | void> {
-  const segments = relPath.split("/");
-  let walked = treeRoot;
-  for (const segment of segments) {
-    walked = `${walked}/${segment}`;
-    const stats = await lstat(walked).catch(
-      (cause) =>
-        new ProtocolError({
-          code: "SOURCE_HASH_MISMATCH",
-          reason: `cannot stat ${relPath}`,
-          cause,
-        }),
-    );
-    if (stats instanceof ProtocolError) return stats;
-    if (stats.isSymbolicLink())
-      return malformed(`${relPath} resolves through a symlink or junction at ${segment}`);
-  }
+export function createTreePathVerifier(deps: {
+  readonly lstat: (path: string) => Promise<Stats>;
+}): (treeRoot: string, relPath: string) => Promise<ProtocolError | void> {
+  const verified = new Set<string>();
+  return async (treeRoot, relPath) => {
+    const segments = relPath.split("/");
+    let walked = treeRoot;
+    for (const segment of segments) {
+      walked = `${walked}/${segment}`;
+      if (verified.has(walked)) continue;
+      const stats = await deps.lstat(walked).catch(
+        (cause) =>
+          new ProtocolError({
+            code: "SOURCE_HASH_MISMATCH",
+            reason: `cannot stat ${relPath}`,
+            cause,
+          }),
+      );
+      if (stats instanceof ProtocolError) return stats;
+      if (stats.isSymbolicLink())
+        return malformed(`${relPath} resolves through a symlink or junction at ${segment}`);
+      verified.add(walked);
+    }
+  };
 }
 
 /** One closure member read from disk, verified against the expected inventory, and decoded. */
@@ -233,11 +252,12 @@ async function readTreeFile(
   treeRoot: string,
   relPath: string,
   expectedSha256: string,
+  verifyPath: (treeRoot: string, relPath: string) => Promise<ProtocolError | void>,
 ): Promise<ProtocolError | ReadTreeFileV1> {
   const shapeError = checkTreeRelPath(relPath);
   if (shapeError instanceof ProtocolError) return shapeError;
 
-  const linkError = await assertNoSymlinkedComponent(treeRoot, relPath);
+  const linkError = await verifyPath(treeRoot, relPath);
   if (linkError instanceof ProtocolError) return linkError;
 
   const absolute = `${treeRoot}/${relPath}`;
@@ -298,6 +318,7 @@ async function readClosure(
   args: LoadPageArgs,
   has: (relPath: string) => boolean,
   sha256Of: (relPath: string) => string | undefined,
+  verifyPath: (treeRoot: string, relPath: string) => Promise<ProtocolError | void>,
 ): Promise<ProtocolError | ReadonlyMap<string, ReadTreeFileV1>> {
   const read = new Map<string, ReadTreeFileV1>();
   const queue: string[] = [args.entryRelPath];
@@ -312,7 +333,7 @@ async function readClosure(
       // `resolveDesignSpecifier` resolved it against `has`, which IS the expected inventory.
       return malformed(`${relPath} is not listed in the mount's expected design-tree inventory`);
     }
-    const file = await readTreeFile(args.treeRoot, relPath, expectedSha256);
+    const file = await readTreeFile(args.treeRoot, relPath, expectedSha256, verifyPath);
     if (file instanceof ProtocolError) return file;
     read.set(relPath, file);
 
@@ -366,7 +387,8 @@ export async function loadPage(args: LoadPageArgs): Promise<ProtocolError | Load
     );
   }
 
-  const read = await readClosure(args, has, sha256Of);
+  const verifyPath = createTreePathVerifier({ lstat });
+  const read = await readClosure(args, has, sha256Of, verifyPath);
   if (read instanceof ProtocolError) return read;
 
   const sources = new Map<string, string>();

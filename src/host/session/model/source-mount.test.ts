@@ -8,6 +8,7 @@ import { ProtocolError } from "../../protocol";
 import { registerRuntimeResolver } from "./resolver";
 import {
   computeSourceHash,
+  createTreePathVerifier,
   computeSourceHash as hashBytes,
   loadPage,
   scanClosureImports,
@@ -415,5 +416,73 @@ describe("loadPage", () => {
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
     expect((result as ProtocolError).reason).toContain("traversing");
+  });
+});
+
+describe("createTreePathVerifier", () => {
+  test("a directory prefix shared by several closure members is lstat-ed once per mount", async () => {
+    const seen: string[] = [];
+    const verify = createTreePathVerifier({
+      lstat: async (path: string) => {
+        seen.push(path);
+        return { isSymbolicLink: () => false } as never;
+      },
+    });
+
+    // Three members under one deep directory — the shape a page plus two shared modules has.
+    expect(await verify("/t", "lib/deep/a.ts")).toBeUndefined();
+    expect(await verify("/t", "lib/deep/b.ts")).toBeUndefined();
+    expect(await verify("/t", "lib/deep/c.ts")).toBeUndefined();
+
+    // Before the memo: 9 stats. After: 5 — `lib`, `lib/deep`, and one per distinct file.
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen).toEqual([
+      "/t/lib",
+      "/t/lib/deep",
+      "/t/lib/deep/a.ts",
+      "/t/lib/deep/b.ts",
+      "/t/lib/deep/c.ts",
+    ]);
+  });
+
+  test("a symlinked FILE is still caught after its directory was verified for a sibling", async () => {
+    // The memo must never vouch for the final component. Without this, memoizing the walk would
+    // turn a shared directory into a blanket pass for everything under it.
+    const verify = createTreePathVerifier({
+      lstat: async (path: string) => ({ isSymbolicLink: () => path.endsWith("evil.ts") }) as never,
+    });
+    expect(await verify("/t", "lib/deep/a.ts")).toBeUndefined();
+    const refused = await verify("/t", "lib/deep/evil.ts");
+    expect(refused).toBeInstanceOf(ProtocolError);
+  });
+
+  // The plan's own third test (`expect(first).not.toBe(second)`) proves only that two closures
+  // are distinct objects — true by construction, and no evidence about memo isolation. The
+  // operator ruling that supersedes it for this task: a second verifier must RE-LSTAT the same
+  // directory prefixes the first already proved, counted through the injected `lstat`. That is
+  // what "nothing is vouched for across mounts" actually means, so this test proves it by
+  // observation rather than by object identity.
+  test("each mount gets its own verifier, so a second one re-lstats every prefix the first already proved", async () => {
+    const seenA: string[] = [];
+    const verifyA = createTreePathVerifier({
+      lstat: async (path: string) => {
+        seenA.push(path);
+        return { isSymbolicLink: () => false } as never;
+      },
+    });
+    expect(await verifyA("/t", "lib/deep/a.ts")).toBeUndefined();
+    expect(seenA).toEqual(["/t/lib", "/t/lib/deep", "/t/lib/deep/a.ts"]);
+
+    // A SECOND mount's verifier, over the SAME tree root and the SAME path. If any state leaked
+    // across mounts, `lib` and `lib/deep` would be skipped here — they must not be.
+    const seenB: string[] = [];
+    const verifyB = createTreePathVerifier({
+      lstat: async (path: string) => {
+        seenB.push(path);
+        return { isSymbolicLink: () => false } as never;
+      },
+    });
+    expect(await verifyB("/t", "lib/deep/a.ts")).toBeUndefined();
+    expect(seenB).toEqual(["/t/lib", "/t/lib/deep", "/t/lib/deep/a.ts"]);
   });
 });
