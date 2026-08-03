@@ -210,6 +210,15 @@ export interface PageCursor {
 export interface LoadResult {
   readonly records: readonly ChatRecord[];
   readonly prevCursor: PageCursor | null;
+  /**
+   * The chat's TOTAL record count — every record on disk, not just this page's. Summed from
+   * the index's own page directory (`ChatIndexPageDirectoryEntry.entryCount`), which
+   * `flushEntries` builds one entry per record, so this costs no extra read and no second
+   * scan. The UI's `▲ N earlier messages` row subtracts what it has loaded from this
+   * (chat-scroll spec §6.3), which is what lets that label stay truthful without ever
+   * reading a scroll metric.
+   */
+  readonly totalRecordCount: number;
 }
 
 export interface LoadOptions {
