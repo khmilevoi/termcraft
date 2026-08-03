@@ -315,6 +315,7 @@ function renderPreviewRegion(
   }>,
   filling: boolean,
   agentBlocked: ReturnType<typeof agentBlockedNote>,
+  readOnly: boolean,
 ) {
   if (filling) {
     // design/termcraft-engine.js:237-238. Distinct from §20's `No pages yet` (a finished project
@@ -417,6 +418,33 @@ function renderPreviewRegion(
           selectionRect={interaction.selectionRect}
           hover={interaction.hover}
         />
+      </box>
+    );
+  }
+  if (readOnly) {
+    // A never-before-trusted project that declined the trust prompt (spec §3.1) keeps preview
+    // execution disabled for the rest of this run (`ui/app/model/deps.ts`'s
+    // `createScreenAtom`/`ScreenInput.trustPromptDismissed`) — this replaces the generic
+    // "preparing preview…" fallback below, which never resolves for a project the Kernel will
+    // never render. DIVERGENCE (no `design/*.dc.html` mock covers this exact copy, matching the
+    // precedent `TrustPrompt.tsx` already set for undesigned trust-related states): colors and
+    // layout are reused from the already-approved `filling` branch above — amber headline, one
+    // blank spacer row, faint detail line, no spinner, since nothing here is pending.
+    return (
+      <box
+        id="ws-preview-read-only"
+        flexGrow={1}
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+      >
+        <text id="ws-preview-read-only-headline" fg={SHELL_PALETTE.amber} attributes={BOLD}>
+          preview disabled
+        </text>
+        <text id="ws-preview-read-only-spacer"> </text>
+        <text id="ws-preview-read-only-detail" fg={SHELL_PALETTE.faint}>
+          project is read-only — relaunch to be asked again
+        </text>
       </box>
     );
   }
@@ -838,6 +866,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
             },
             filling,
             agentBlocked,
+            props.readOnly,
           )}
         </box>
       </box>

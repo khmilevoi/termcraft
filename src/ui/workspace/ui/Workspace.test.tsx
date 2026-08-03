@@ -67,6 +67,42 @@ describe("Workspace read-only presentation", () => {
   });
 });
 
+describe("Workspace read-only preview messaging (spec 2026-08-03 — trust prompt on open)", () => {
+  test("a read-only project with pages and no live frame shows the disabled-preview message, never 'preparing preview…'", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+        pageDescriptors: [
+          {
+            status: "ready",
+            pageSlug: "main",
+            sourceHash: TEST_SHA,
+            title: "Main",
+            minSize: { w: 80, h: 24 },
+            theme: "dark-default",
+            kitApiVersion: 1,
+          },
+        ],
+      }),
+    );
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    const text = allText(rows);
+    expect(text).toContain("preview disabled");
+    expect(text).toContain("project is read-only — relaunch to be asked again");
+    expect(text).not.toContain("preparing preview…");
+    const headline = findRun(rows, "preview disabled");
+    expect(headline && extractRgb(headline.fg)).toBe(SHELL_PALETTE.amber);
+  });
+});
+
 describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.html, drawTabs o.scroll)", () => {
   const ready = (slug: string, title: string): PageDescriptorV1 => ({
     status: "ready",
