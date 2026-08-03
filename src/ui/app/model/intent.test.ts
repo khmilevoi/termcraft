@@ -646,19 +646,22 @@ describe("applyIntent — chats and trust", () => {
     expect(deps.local.overlay()).toBeNull();
   });
 
-  test("trust accept and decline dispatch the exact project.setTrust payloads", () => {
+  test("trust accept and decline dispatch the exact project.setTrust payloads and mark the prompt answered", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
       { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
     );
+    expect(deps.local.trustPromptDismissed()).toBe(false);
     applyIntent({ kind: "trust-accept" }, deps);
+    expect(deps.local.trustPromptDismissed()).toBe(true);
     applyIntent({ kind: "trust-decline" }, deps);
     expect(kernel.dispatched.map((raw) => (raw as { payload: unknown }).payload)).toEqual([
       { trust: "trusted", workspaceIdentity: "workspace-id" },
       { trust: "untrusted-read-only", workspaceIdentity: "workspace-id" },
     ]);
+    expect(deps.local.trustPromptDismissed()).toBe(true);
   });
 
   test("popup dismissal closes the overlay without reaching lower Esc layers", () => {

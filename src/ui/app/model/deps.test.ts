@@ -17,6 +17,7 @@ import {
 } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
+import { applyIntent } from "./intent";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** Longer than the frame loop's own `FRAME_POLL_MS`, so a poll-and-retry cycle can complete. */
@@ -960,6 +961,67 @@ describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 
     expect(deps.screen()).toBe("trust-prompt");
 
     deps.local.trustPromptDismissed.set(true);
+    expect(deps.screen()).toBe("read-only");
+  });
+
+  test("trust-accept resolves the screen trust-prompt -> workspace end to end", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-accept" }, deps);
+    // `applyIntent`'s dispatch only reaches the FakeKernel's recorded `dispatched` list — unlike
+    // a real Kernel it never folds anything back on its own — so the mirror's own trust grant is
+    // simulated the same way `mirror.test.ts`'s "kernel.project.setTrust moves the screen the
+    // rest of the way to workspace" test does, by applying the SAME fold the real Kernel would
+    // eventually publish.
+    deps.mirror.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.setTrust",
+        previousTag: "ready",
+        nextTag: "ready",
+        metadata: { workspaceIdentity: "workspace-id", trust: "trusted" },
+      }),
+    );
+    expect(deps.local.trustPromptDismissed()).toBe(true);
+    expect(deps.screen()).toBe("workspace");
+  });
+
+  test("trust-decline resolves the screen trust-prompt -> read-only end to end", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: null,
+        activeChatId: uuidv7(),
+        trust: "untrusted-read-only",
+      }),
+    );
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-decline" }, deps);
+    // Unlike accept, decline needs no Kernel round trip to observe on screen: the mirror's own
+    // `trust` was already "untrusted-read-only" (that is WHY the prompt was showing), so
+    // `trustPromptDismissed` flipping true is the only thing the screen atom needed.
+    expect(deps.local.trustPromptDismissed()).toBe(true);
     expect(deps.screen()).toBe("read-only");
   });
 });

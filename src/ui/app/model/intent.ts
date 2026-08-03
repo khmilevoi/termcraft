@@ -267,6 +267,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         }),
         "project.setTrust:trusted",
       );
+      local.trustPromptDismissed.set(true);
       return;
     case "trust-decline":
       dispatchAndReport(
@@ -276,6 +277,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         }),
         "project.setTrust:untrusted-read-only",
       );
+      local.trustPromptDismissed.set(true);
       return;
     case "overlay-dismiss":
       if (local.overlay() === "pin-input") {
