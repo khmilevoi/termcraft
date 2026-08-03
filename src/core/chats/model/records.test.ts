@@ -13,12 +13,20 @@ import type {
 import { parsePageSlug } from "entities/page";
 import { uuidv7 } from "infrastructure/uuid";
 
-import { buildChatRecordsPayload, chatRecordToDtoV1, resolveChatDisplayName } from "./records";
+import {
+  buildChatRecordsOlderPayload,
+  buildChatRecordsPayload,
+  chatRecordToDtoV1,
+  chatRecordsOlderFailurePayload,
+  resolveChatDisplayName,
+} from "./records";
 
 /**
  * `chatRecordToDtoV1`/`buildChatRecordsPayload` (WP-10 Task 5) — the entities -> wire
  * mapping `chat.switch`/`chat.create`/`project.open` all share to build a `chat.records`
- * payload from `ChatReader.loadTail`'s own `ChatLoadResultV1`.
+ * payload from `ChatReader.loadTail`'s own `ChatLoadResultV1`. `buildChatRecordsOlderPayload`/
+ * `chatRecordsOlderFailurePayload` (chat-scroll spec §6.2) build the sibling
+ * `chat.records.older` payload from the same `ChatLoadResultV1` shape.
  */
 
 const TS = "2026-07-24T00:00:00.000Z";
@@ -233,12 +241,14 @@ describe("buildChatRecordsPayload", () => {
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     };
 
     const payload = buildChatRecordsPayload(chatId, loadResult);
 
     expect(payload.chatId).toBe(chatId);
     expect(payload.prevCursor).toBeNull();
+    expect(payload.totalRecordCount).toBe(2);
     expect(payload.records).toEqual([
       {
         kind: "user",
@@ -266,12 +276,93 @@ describe("buildChatRecordsPayload", () => {
     const loadResult: ChatLoadResultV1 = {
       records: [],
       prevCursor: { generation: 0, beforeOffset: 128 },
+      totalRecordCount: 40,
     };
 
     const payload = buildChatRecordsPayload(chatId, loadResult);
 
     expect(payload.records).toEqual([]);
     expect(payload.prevCursor).toEqual({ generation: 0, beforeOffset: 128 });
+  });
+
+  test("passes totalRecordCount through, independent of the loaded page's own record count (chat-scroll spec §6.3)", () => {
+    const chatId = uuidv7();
+    const loadResult: ChatLoadResultV1 = {
+      records: [],
+      prevCursor: { generation: 0, beforeOffset: 128 },
+      totalRecordCount: 40,
+    };
+
+    const payload = buildChatRecordsPayload(chatId, loadResult);
+
+    expect(payload.totalRecordCount).toBe(40);
+  });
+});
+
+describe("buildChatRecordsOlderPayload (chat.records.older, chat-scroll spec §6.2)", () => {
+  test("maps a successful older page the same way buildChatRecordsPayload does, with a null failure", () => {
+    const chatId = uuidv7();
+    const userRecordId = uuidv7();
+    const userTurnId = uuidv7();
+    const loadResult: ChatLoadResultV1 = {
+      records: [
+        { kind: "user", recordId: userRecordId, turnId: userTurnId, text: "older message", ts: TS },
+      ],
+      prevCursor: { generation: 2, beforeOffset: 256 },
+      totalRecordCount: 40,
+    };
+
+    const payload = buildChatRecordsOlderPayload(chatId, loadResult);
+
+    expect(payload).toEqual({
+      chatId,
+      records: [
+        {
+          kind: "user",
+          recordId: userRecordId,
+          turnId: userTurnId,
+          text: "older message",
+          selection: null,
+          pins: [],
+          ts: TS,
+        },
+      ],
+      prevCursor: { generation: 2, beforeOffset: 256 },
+      totalRecordCount: 40,
+      failure: null,
+    });
+  });
+
+  test("passes a null prevCursor through — the page reached the chat's true beginning", () => {
+    const chatId = uuidv7();
+    const loadResult: ChatLoadResultV1 = { records: [], prevCursor: null, totalRecordCount: 1 };
+
+    const payload = buildChatRecordsOlderPayload(chatId, loadResult);
+
+    expect(payload.prevCursor).toBeNull();
+    expect(payload.failure).toBeNull();
+  });
+});
+
+describe("chatRecordsOlderFailurePayload (chat-scroll spec §7 — failure leaves cursor/window empty)", () => {
+  test("carries the failure and empties every other field, never adopting placeholder cursor/count values", () => {
+    const chatId = uuidv7();
+    const failure: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "chat page could not be read",
+      details: {},
+    };
+
+    const payload = chatRecordsOlderFailurePayload(chatId, failure);
+
+    expect(payload).toEqual({
+      chatId,
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+      failure,
+    });
   });
 });
 
@@ -306,6 +397,7 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
         { kind: "user", recordId: uuidv7(), turnId: uuidv7(), text: "single-page chat", ts: TS },
       ],
       prevCursor: null,
+      totalRecordCount: 1,
     };
 
     const result = await resolveChatDisplayName(handle, tail);
@@ -327,6 +419,7 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     };
     // The tail page is bounded and only carries a LATER user record — the exact
     // "tail longer than one page" scenario the review finding names.
@@ -341,6 +434,7 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
         },
       ],
       prevCursor: { generation: 1, beforeOffset: 512 },
+      totalRecordCount: 2,
     };
     const handle = makeHandle(new Map([[512, firstPage]]));
 
@@ -354,16 +448,19 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
     const tail: ChatLoadResultV1 = {
       records: [],
       prevCursor: { generation: 1, beforeOffset: 900 },
+      totalRecordCount: 3,
     };
     const middlePage: ChatLoadResultV1 = {
       records: [],
       prevCursor: { generation: 1, beforeOffset: 400 },
+      totalRecordCount: 3,
     };
     const firstPage: ChatLoadResultV1 = {
       records: [
         { kind: "user", recordId: uuidv7(), turnId: uuidv7(), text: "genesis message", ts: TS },
       ],
       prevCursor: null,
+      totalRecordCount: 3,
     };
     const handle = makeHandle(
       new Map<number, FailureDtoV1 | ChatLoadResultV1>([
@@ -382,7 +479,11 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
   });
 
   test("returns null when the true first page has no user record", async () => {
-    const tail: ChatLoadResultV1 = { records: [], prevCursor: { generation: 1, beforeOffset: 64 } };
+    const tail: ChatLoadResultV1 = {
+      records: [],
+      prevCursor: { generation: 1, beforeOffset: 64 },
+      totalRecordCount: 1,
+    };
     const firstPage: ChatLoadResultV1 = {
       records: [
         {
@@ -394,6 +495,7 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
         },
       ],
       prevCursor: null,
+      totalRecordCount: 1,
     };
     const handle = makeHandle(new Map([[64, firstPage]]));
 
@@ -409,7 +511,11 @@ describe("resolveChatDisplayName (review finding IMPORTANT — the true first pa
       safeMessage: "page directory corrupt",
       details: {},
     };
-    const tail: ChatLoadResultV1 = { records: [], prevCursor: { generation: 1, beforeOffset: 32 } };
+    const tail: ChatLoadResultV1 = {
+      records: [],
+      prevCursor: { generation: 1, beforeOffset: 32 },
+      totalRecordCount: 1,
+    };
     const handle = makeHandle(new Map([[32, failure]]));
 
     const result = await resolveChatDisplayName(handle, tail);

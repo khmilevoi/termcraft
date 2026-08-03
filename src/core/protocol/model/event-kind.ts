@@ -52,6 +52,7 @@ export const EVENT_KINDS_V1 = [
   "preview.circuitOpened",
   "chat.changed",
   "chat.records",
+  "chat.records.older",
   "selection.changed",
   "pins.changed",
   "git.statusChanged",
@@ -61,16 +62,13 @@ export const EVENT_KINDS_V1 = [
 export type EventKindV1 = (typeof EVENT_KINDS_V1)[number];
 
 /**
- * The exact member count §9 fixes. 43 -> 44 (WP-10 Task 3): `chat.records` is a new
- * event kind — the persisted chat tail travels as a follow-on event correlated by
- * `commandId`, not a command-result field (`AcceptedCommandV1` is a closed
- * `z.strictObject` with no payload slot, `command-result.ts:49-67`), and not a
- * `kernel.snapshot` field either (the active chat and its tail are not known at the
- * first snapshot, see `KernelSnapshotPayloadV1`'s own `activeChatId` nullability
- * comment). See `docs/superpowers/plans/2026-07-24-chat-transport.md`'s Decision
- * section for the full settled record.
+ * The exact member count §9 fixes. 44 -> 45 (chat-scroll spec §6.2): `chat.records.older`
+ * carries one backward page of a chat's history, or the reason it could not be read. It is a
+ * separate kind from `chat.records` because the mirror treats the two differently — a tail
+ * page merges at the tail, an older page prepends (spec §6.5) — and one kind carrying both
+ * would need a direction discriminant on the payload to say which.
  */
-export const EVENT_KIND_COUNT = 44;
+export const EVENT_KIND_COUNT = 45;
 
 const EVENT_KIND_SET: ReadonlySet<string> = new Set(EVENT_KINDS_V1);
 

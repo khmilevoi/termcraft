@@ -12,8 +12,10 @@ export { buildChatChangedPayload } from "./model/chat-changed";
 export { deriveChatDisplayName, truncateChatDisplayName } from "./model/display-name";
 
 export {
+  buildChatRecordsOlderPayload,
   buildChatRecordsPayload,
   chatRecordToDtoV1,
+  chatRecordsOlderFailurePayload,
   resolveChatDisplayName,
 } from "./model/records";
 

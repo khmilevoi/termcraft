@@ -366,6 +366,7 @@ describe("chatHandlers['chat.create']", () => {
       chatId: payload.activeChatId,
       records: [],
       prevCursor: null,
+      totalRecordCount: 0,
     });
   });
 
@@ -465,7 +466,11 @@ describe("chatHandlers['chat.switch']", () => {
     const mutationsStub = createChatMutationsStub();
     const chatId = uuidv7();
     const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
-    const chatReader = createChatReaderStub(chatId, header, { records: [], prevCursor: null });
+    const chatReader = createChatReaderStub(chatId, header, {
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+    });
     const { handlerContext, projectStore, getLaunches } = buildTestContext({
       chatMutations: mutationsStub,
       chatReader,
@@ -500,7 +505,12 @@ describe("chatHandlers['chat.switch']", () => {
     expect(eventPayloadV1SchemaByKind["chat.records"].safeParse(recordsEvent.payload).success).toBe(
       true,
     );
-    expect(recordsEvent.payload).toEqual({ chatId, records: [], prevCursor: null });
+    expect(recordsEvent.payload).toEqual({
+      chatId,
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+    });
   });
 
   test("when the tail loads with records, its launched operation maps them in order into chat.records and derives the summary's displayName from the first user record", async () => {
@@ -530,6 +540,7 @@ describe("chatHandlers['chat.switch']", () => {
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     });
     const { handlerContext, getLaunches } = buildTestContext({
       chatMutations: mutationsStub,
@@ -572,6 +583,7 @@ describe("chatHandlers['chat.switch']", () => {
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     });
   });
 
@@ -679,7 +691,7 @@ describe("chatHandlers['chat.switch']", () => {
         return {
           header,
           async loadTail() {
-            return { records: [], prevCursor: null };
+            return { records: [], prevCursor: null, totalRecordCount: 0 };
           },
           async loadBefore() {
             throw new Error("not used in this test");

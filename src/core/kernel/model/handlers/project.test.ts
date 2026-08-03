@@ -791,6 +791,7 @@ describe("project.open", () => {
           },
         ],
         prevCursor: null,
+        totalRecordCount: 1,
       });
       const harness = buildTestContext({ projectStore, pageReader, chatReader });
 
@@ -842,6 +843,7 @@ describe("project.open", () => {
           },
         ],
         prevCursor: null,
+        totalRecordCount: 1,
       });
     });
   });
@@ -1076,6 +1078,7 @@ describe("project.open", () => {
       const chatReader = createChatReaderStub(activeChatId, header, {
         records: [],
         prevCursor: null,
+        totalRecordCount: 0,
       });
       chatReader.list = async () => FAILURE;
       const harness = buildTestContext({ projectStore, pageReader, chatReader });

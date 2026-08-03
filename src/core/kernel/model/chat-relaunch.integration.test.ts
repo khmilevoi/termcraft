@@ -246,6 +246,7 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     };
 
     // fix-bundle Task 7 (Gap E): the project holds THREE chats on disk — not just the one
@@ -383,6 +384,7 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     });
 
     // Every envelope actually published during this relaunch — not merely the ones this

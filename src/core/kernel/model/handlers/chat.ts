@@ -229,7 +229,14 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
       // — no `ChatReader` round trip: a chat this fresh has nothing on disk to load, and
       // publishing the empty page still clears any stale `ui/mirror` records slice left
       // over from a previously active chat (see the WP-10 plan's own mirror-fence note).
-      chatRecordsEvent({ chatId: header.chatId, records: [], prevCursor: null }),
+      // A chat this fresh has nothing on disk, so its total is 0 — the honest count, not a
+      // placeholder (chat-scroll spec §6.3).
+      chatRecordsEvent({
+        chatId: header.chatId,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+      }),
     ];
   });
 
