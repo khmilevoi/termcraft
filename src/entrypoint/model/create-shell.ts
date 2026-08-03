@@ -122,7 +122,7 @@ async function interactiveShell(
 
   const resolvedEnv = await resolveEnvWithProjectIdentity(env, open, existing);
 
-  const launch = resolveShellLaunch(existing);
+  const launch: ShellLaunchV1 = { existing };
 
   const storeAdapterDeps: StoreAdapterDeps = { open, uuidv7, clock: systemClock };
   const projections = createProjectionsAdapter(storeAdapterDeps);
@@ -345,18 +345,6 @@ async function openOrCreateProject(
     });
   }
   return { open: created, existing: false };
-}
-
-/**
- * Turns `existing` (whether `store.openProject` itself succeeded) into the shell's own launch
- * discriminator. It was briefly a two-input function folding a separate content probe's result
- * in too (fix round 1, Finding 1); spec 2026-08-02 retired that probe (`ShellLaunchV1`'s own doc
- * comment in `../types.ts` explains why) and this narrowed to a straight pass-through — kept as
- * its own named function, not inlined at the one call site, so `create-shell.test.ts` still pins
- * the contract directly.
- */
-export function resolveShellLaunch(existing: boolean): ShellLaunchV1 {
-  return { existing };
 }
 
 /** A thrown `mkdirSync` rejection, converted to a value at this sync-boundary (errore's

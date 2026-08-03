@@ -10,6 +10,7 @@ import {
 import type { AgentHealth } from "ui/agent-health";
 import type { HomeAgentSelection } from "ui/home";
 import type { KernelPort } from "ui/kernel";
+import type { ProjectOpenFailure } from "ui/mirror";
 
 import { App } from "../ui/App";
 import type { UiEnv } from "./deps";
@@ -66,11 +67,16 @@ export interface UiRootHandle {
   /** Idempotently tear down the React tree before releasing the terminal renderer. */
   dispose(): void;
   /**
-   * "The startup `project.open` will never land" (spec 2026-08-02). `entrypoint/model/run-app.ts`
-   * calls this on both failure branches of its own startup dispatch; without it the Workspace
-   * shell that `deriveScreen` mounted on `UiEnv.projectExists` never resolves to anything.
+   * "The startup `project.open` will never land, and this is why" (spec 2026-08-02).
+   * `entrypoint/model/run-app.ts` calls this on both failure branches of its own startup dispatch;
+   * without it the Workspace shell that `deriveScreen` mounted on `UiEnv.projectExists` never
+   * resolves to anything. The `failure` it carries is what the resulting Home actually SHOWS —
+   * `UiDeps.abandonStartupOpen` stores it in `UiLocalState.startupOpenFailure`, which `App.tsx`
+   * composes into Home's `openFailure` prop (branch review finding 2, 2026-08-03). It is a
+   * `ProjectOpenFailure` by SHAPE only: this path never reaches the Kernel's own `blockOpen`, so
+   * nothing here is ever folded into `ProjectMirror.openFailure`.
    */
-  abandonStartupOpen(): void;
+  abandonStartupOpen(failure: ProjectOpenFailure): void;
 }
 
 export class UiRootError extends errore.createTaggedError({
@@ -190,8 +196,8 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
         resumeConsolePassthrough();
       }
     },
-    abandonStartupOpen(): void {
-      deps.abandonStartupOpen();
+    abandonStartupOpen(failure: ProjectOpenFailure): void {
+      deps.abandonStartupOpen(failure);
     },
   };
 }

@@ -702,7 +702,17 @@ describe("createUiDeps blocked-open recovery", () => {
   });
 });
 
-describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () => {
+describe("startupOpenPending / startupOpenFailure (spec 2026-08-02 — workspace-first launch)", () => {
+  /**
+   * The shape `run-app.ts`'s `result instanceof Error` branch builds — a `ProjectOpenFailure` by
+   * shape only, never a Kernel-produced one (no `blockOpen` exists for a dispatch that never
+   * reached the Kernel), which is exactly what the tests below pin.
+   */
+  const ABANDON_FAILURE = {
+    reason: "startup-open-dispatch-failed",
+    safeMessage: "the port was already closed",
+  } as const;
+
   test("an existing project mounts the Workspace before any Kernel event arrives", () => {
     const deps = createUiDeps(
       createFakeKernel(),
@@ -723,7 +733,7 @@ describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () =
     expect(deps.screen()).toBe("home");
   });
 
-  test("abandonStartupOpen drops the empty shell back to Home", () => {
+  test("abandonStartupOpen drops the empty shell back to Home and says why", () => {
     const deps = createUiDeps(
       createFakeKernel(),
       { w: 120, h: 36 },
@@ -734,9 +744,55 @@ describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () =
       },
     );
     expect(deps.screen()).toBe("workspace");
-    deps.abandonStartupOpen();
+    deps.abandonStartupOpen(ABANDON_FAILURE);
     expect(deps.local.startupOpenPending()).toBe(false);
     expect(deps.screen()).toBe("home");
+    // Branch review finding 2 (2026-08-03): dropping back to Home is only half the transition —
+    // the reason has to survive it, or the user reads a bare Home. `App.tsx` composes this atom
+    // into Home's `openFailure` prop, so this IS what the panel renders for this path.
+    expect(deps.local.startupOpenFailure()).toEqual(ABANDON_FAILURE);
+  });
+
+  test("an abandoned startup open never fabricates the Kernel's own openFailure", () => {
+    // The invariant the fix must not trade away: `ProjectMirror.openFailure` is Kernel truth,
+    // written ONLY by a real `kernel.project.blockOpen` fold (`ui/mirror/model/mirror.ts`). A
+    // dispatch that was never admitted cannot have been blocked, so the UI-local reading has to
+    // stay a SEPARATE atom rather than being written into the mirror. This test is what would
+    // fail if a later "simplification" merged the two.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen(ABANDON_FAILURE);
+    expect(deps.mirror.project().openFailure).toBeNull();
+    expect(deps.local.startupOpenFailure()).toEqual(ABANDON_FAILURE);
+  });
+
+  test("a real blockOpen still wins the panel slot over an abandoned startup open", () => {
+    // The `??` compose in `App.tsx` reads Kernel truth first. The two readings are mutually
+    // exclusive by construction for ONE open attempt, so this ordering is only ever exercised by
+    // a sequence like this one (an abandoned startup open, then a later admitted-and-blocked
+    // retry) — and there the Kernel's own account must be the one on screen.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    deps.abandonStartupOpen(ABANDON_FAILURE);
+    deps.mirror.apply(blockOpen("manifest-read-failed", "project.toml could not be read"));
+    expect(deps.mirror.project().openFailure ?? deps.local.startupOpenFailure()).toEqual({
+      reason: "manifest-read-failed",
+      safeMessage: "project.toml could not be read",
+    });
   });
 
   test("a blocked open returns to Home even while the startup open is still pending", () => {
@@ -766,9 +822,11 @@ describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () =
         projectExists: true,
       },
     );
-    // The clearer lives on the `mirror.project` subscription inside the `runtime` connect hook
-    // (`deps.ts`), so it only runs while `runtime` is connected — same requirement as the
-    // "blocked-open recovery" describe block above.
+    // The success path is a `withComputed` on the atom itself (branch review finding 3,
+    // 2026-08-03), so the clear no longer depends on `runtime` being connected at all — but the
+    // KERNEL EVENT still does: nothing folds `kernel.stateChanged` into the mirror unless the
+    // subscription this connect hook owns is live, same requirement as the "blocked-open
+    // recovery" describe block above.
     const unsubscribe = deps.runtime.subscribe(() => undefined);
     await tick();
     expect(deps.local.startupOpenPending()).toBe(true);
@@ -786,6 +844,38 @@ describe("startupOpenPending (spec 2026-08-02 — workspace-first launch)", () =
 
     expect(deps.local.startupOpenPending()).toBe(false);
     unsubscribe();
+  });
+
+  test("any route to a non-null projectId clears the flag, not just the runtime subscription", () => {
+    // Regression coverage for branch review finding 3 (2026-08-03). The clear used to be a
+    // guarded branch inside the `mirror.project` subscriber in `createUiDeps`'s `runtime` connect
+    // hook, so it ran ONLY for a project write observed through that one wiring; it is now a
+    // `withComputed` keyed on `mirror.project().projectId` itself. Folding the SAME `finishOpen`
+    // straight into the mirror — no `runtime.subscribe`, no connect hook, the one route that
+    // deliberately bypasses the old clearer — is what tells the two implementations apart: the
+    // old one leaves this `true`.
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      {
+        root: ".",
+        workspaceIdentity: "local",
+        projectExists: true,
+      },
+    );
+    expect(deps.local.startupOpenPending()).toBe(true);
+
+    deps.mirror.apply(
+      event("kernel.stateChanged", {
+        modelId: "kernel.project.state",
+        action: "kernel.project.finishOpen",
+        previousTag: "opening",
+        nextTag: "ready",
+        metadata: { projectId: uuidv7(), trust: "trusted" },
+      }),
+    );
+
+    expect(deps.local.startupOpenPending()).toBe(false);
   });
 
   test("a later close with no openFailure lands on Home, not an empty Workspace shell", async () => {

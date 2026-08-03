@@ -19,6 +19,15 @@ export interface HomeOpenFailurePanelProps {
  * "what went wrong"; `ui/app/model/deps.ts`'s blocked-open recovery is the "and here is how you
  * get out of it".
  *
+ * TWO FAILURE PATHS, ONE PANEL (branch review finding 2, 2026-08-03). Since `App.tsx` composes
+ * `ProjectMirror.openFailure` with `UiLocalState.startupOpenFailure` into the single prop below,
+ * this panel also explains the OTHER way an open ends on Home: the composition root's startup
+ * `project.open` (`entrypoint/model/run-app.ts`) failing to dispatch or being rejected outright.
+ * That path never reaches the Kernel's `blocked` state, so its `reason`/`safeMessage` are built by
+ * `run-app.ts` from what it actually knows rather than folded from a `blockOpen` — the shape is
+ * identical, the provenance is not, and nothing about that is visible here BY DESIGN: the user is
+ * being told why their project did not open, and both readings answer exactly that.
+ *
  * DIVERGENCE, closest faithful mapping (CLAUDE.md: flag the gap, never guess a value). The
  * design has no screen for a project that fails to open — `design/12-errors-edge-states.dc.html`
  * enumerates its honest failure surface as "missing agent ..., the schema-retry loop, a
@@ -27,7 +36,7 @@ export interface HomeOpenFailurePanelProps {
  * is the SHAPE reused here verbatim: `homeErr()`'s red-bordered box with a red bold `✗`
  * headline followed by explanation lines (`design/termcraft-engine.js:716-727`), already
  * transcribed into this flexbox layout by the sibling `HomeHealthPanel`. Nothing about the
- * failure itself is invented — the second line is the Kernel's own `safeMessage`, the title
+ * failure itself is invented — the second line is the reading's own `safeMessage`, the title
  * carries its own `reason` slug, and neither is reworded here.
  */
 export function HomeOpenFailurePanel(props: HomeOpenFailurePanelProps) {
@@ -47,8 +56,10 @@ export function HomeOpenFailurePanel(props: HomeOpenFailurePanelProps) {
       <text id={`${props.id}-line-1`} fg={P.red} attributes={shellAttrs({ bold: true })}>
         {"✗ this folder's project could not be opened"}
       </text>
-      {/* The Kernel's own `FailureDtoV1.safeMessage`, verbatim — the one line that says what
-          actually went wrong, so it is never paraphrased or truncated here. */}
+      {/* The failure's own `safeMessage`, verbatim — the Kernel's `FailureDtoV1.safeMessage` for a
+          blocked open, `run-app.ts`'s own account for a startup dispatch that was never admitted.
+          The one line that says what actually went wrong either way, so it is never paraphrased or
+          truncated here. */}
       <text id={`${props.id}-line-2`} fg={P.dim}>
         {props.failure.safeMessage}
       </text>

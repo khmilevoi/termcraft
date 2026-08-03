@@ -130,22 +130,29 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
   // (`entrypoint/model/run-export.ts`, the headless export driver), so every relaunch landed on
   // Home no matter what was on disk.
   //
-  // WHAT A FAILED STARTUP OPEN ACTUALLY DOES TODAY — the two `console.error` calls below run
-  // while the renderer owns the terminal, so `infrastructure/debug-log`'s pass-through gate is
-  // engaged: with tracing on the line reaches the trace file and nothing else; with tracing off
-  // it waits in the hold buffer and prints only once the user has already quit. That much is
-  // still true, and it is still not a surface. On either failure branch below,
-  // `root.abandonStartupOpen()` retires `startupOpenPending` and `deriveScreen` drops the user
-  // back to Home, so a retry IS possible (⏎ / `ui/app/model/intent.ts`'s `home-submit` branch
-  // dispatches `project.open` again for it) — but `HomeOpenFailurePanel` belongs to a DIFFERENT
-  // failure path: it is gated on `ProjectMirror.openFailure !== null`, and that field is set only
-  // by the Kernel's own `kernel.project.blockOpen`, which neither branch below ever reaches (a
-  // dispatch that failed to reach the Kernel, or one the Kernel rejected outright, was never
-  // admitted, so it cannot have been later blocked either). So the user lands on a bare Home able
-  // to retry but told no reason why the last attempt failed — recovery without diagnosis, still an
-  // open design gap (see `docs/architecture/flows/launch.md`'s matching account of this same
-  // path). `project.retryOpen` remains the separate recovery-conflict path for a startup open the
-  // Kernel actually admitted and only later blocked.
+  // WHAT A FAILED STARTUP OPEN ACTUALLY DOES — the two `console.error` calls below run while the
+  // renderer owns the terminal, so `infrastructure/debug-log`'s pass-through gate is engaged: with
+  // tracing on the line reaches the trace file and nothing else; with tracing off it waits in the
+  // hold buffer and prints only once the user has already quit. Those calls are a DIAGNOSTIC, not
+  // a surface, and never were one.
+  //
+  // The surface is the `ProjectOpenFailure` each branch hands to `root.abandonStartupOpen(...)`
+  // (branch review finding 2, 2026-08-03). That call retires `startupOpenPending` — so
+  // `deriveScreen` drops the user back to Home instead of an endlessly-opening Workspace — AND
+  // records the cause in `UiLocalState.startupOpenFailure`, which `App.tsx` composes with the
+  // mirror's own `openFailure` into Home's single `openFailure` prop. So `HomeOpenFailurePanel`
+  // now fires for this path too, naming what actually went wrong here (the dispatch error's
+  // message, or the Kernel's rejection code) rather than a Kernel `safeMessage` this path never
+  // produced. Retry is unchanged and still real: ⏎ on that Home re-dispatches `project.open`
+  // (`ui/app/model/intent.ts`'s `home-submit` branch).
+  //
+  // The two failure paths stay strictly separate. `ProjectMirror.openFailure` is Kernel truth,
+  // set only by `kernel.project.blockOpen`, which NEITHER branch below can ever reach: a dispatch
+  // that failed to reach the Kernel, or one the Kernel rejected outright, was never admitted, so
+  // it cannot have been blocked later. Nothing here is folded into the mirror — the composition
+  // happens in the view, over two independent readings that cannot both be set for one open
+  // attempt. `project.retryOpen` remains the separate recovery-conflict path for a startup open
+  // the Kernel actually admitted and only later blocked.
   //
   // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
   // handlers this function awaits nothing before. Dispatching first, as this used to, meant a
@@ -168,13 +175,23 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     if (result instanceof Error) {
       // Neither finishOpen nor blockOpen will ever arrive, so nothing else can end the
       // Workspace's opening state — telling the UI is the only honest exit (spec 2026-08-02).
-      root.abandonStartupOpen();
+      // The `safeMessage` is the dispatch error's OWN message, the only account of this failure
+      // that exists: no Kernel `FailureDtoV1` was ever produced for it.
+      root.abandonStartupOpen({
+        reason: "startup-open-dispatch-failed",
+        safeMessage: result.message,
+      });
       console.error(
         `termcraft: the startup project.open failed to dispatch: ${result.message}`,
         result,
       );
     } else if (result.status === "rejected") {
-      root.abandonStartupOpen();
+      // The Kernel's own guard code, verbatim and unreworded — a `CommandResultV1` rejection
+      // carries no `safeMessage` of its own, so the code IS the diagnosis here.
+      root.abandonStartupOpen({
+        reason: "startup-open-rejected",
+        safeMessage: `request rejected (${result.code})`,
+      });
       console.error(`termcraft: the startup project.open was rejected (${result.code})`);
     }
   }

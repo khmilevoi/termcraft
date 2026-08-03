@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 
 import { createFakeAgentBackend, createFakeAgentRegistry } from "core/ports/fakes";
 import { uuidv7 } from "infrastructure/uuid";
-import type { UiRootAdapters } from "ui";
+import type { ProjectOpenFailure, UiRootAdapters } from "ui";
 import { createFakeKernel, event } from "ui/testing";
 
 import type { ProcessBoundary, ShellWithAgentRegistry, ShutdownSignal } from "../types";
@@ -59,17 +59,29 @@ function capturingAdapters(calls: string[]): {
  * body reads `deps.abandonStartupOpen` off this SAME `deps` object AT CALL TIME — so replacing
  * the property here, before that call ever happens, intercepts it without inventing a second
  * seam on `UiRootAdapters` or `fakeShell`.
+ *
+ * `failures` records the `ProjectOpenFailure` each call carries, not merely that a call happened
+ * (branch review finding 2, 2026-08-03): the argument IS the fix — it is what reaches
+ * `UiLocalState.startupOpenFailure` and, through `App.tsx`'s compose, `HomeOpenFailurePanel` — so
+ * a branch that abandoned the open with an empty or wrong reason would still satisfy the bare
+ * `calls.toContain("abandonStartupOpen")` assertion these tests used to make on their own.
  */
-function abandonRecordingAdapters(calls: string[]): UiRootAdapters {
+function abandonRecordingAdapters(
+  calls: string[],
+  failures: ProjectOpenFailure[] = [],
+): UiRootAdapters {
   return recordingAdapters(calls, {
     createRoot: () => ({
       render: (node: unknown) => {
         calls.push("render");
-        const deps = (node as { props: { deps: { abandonStartupOpen: () => void } } }).props.deps;
+        const deps = (
+          node as { props: { deps: { abandonStartupOpen: (failure: ProjectOpenFailure) => void } } }
+        ).props.deps;
         const original = deps.abandonStartupOpen;
-        deps.abandonStartupOpen = () => {
+        deps.abandonStartupOpen = (failure: ProjectOpenFailure) => {
           calls.push("abandonStartupOpen");
-          original();
+          failures.push(failure);
+          original(failure);
         };
       },
       unmount: () => calls.push("unmount"),
@@ -347,12 +359,13 @@ describe("runApp", () => {
 
     test("a failed startup dispatch abandons the open so the shell does not sit empty", async () => {
       const calls: string[] = [];
+      const failures: ProjectOpenFailure[] = [];
       const kernel = createFakeKernel();
       kernel.setDispatchResult(new Error("dispatch exploded"));
       const errorSpy = spyOn(console, "error").mockImplementation(() => {});
       const app = await runApp({
         shell: fakeShell(calls, null, kernel, { existing: true }),
-        adapters: abandonRecordingAdapters(calls),
+        adapters: abandonRecordingAdapters(calls, failures),
         process: fakeBoundary(),
       });
       if (app instanceof Error) throw app;
@@ -361,6 +374,12 @@ describe("runApp", () => {
       // the Kernel — `abandonStartupOpen` is the only thing that can end the Workspace's opening
       // state, so its absence would leave the shell empty forever.
       expect(calls).toContain("abandonStartupOpen");
+      // And it must carry the reason, not just end the state (branch review finding 2,
+      // 2026-08-03). `safeMessage` is the dispatch error's own message verbatim — the only
+      // account of this failure that exists, since no Kernel `FailureDtoV1` was ever produced.
+      expect(failures).toEqual([
+        { reason: "startup-open-dispatch-failed", safeMessage: "dispatch exploded" },
+      ]);
 
       await app.close();
       errorSpy.mockRestore();
@@ -368,6 +387,7 @@ describe("runApp", () => {
 
     test("a rejected startup dispatch abandons it too", async () => {
       const calls: string[] = [];
+      const failures: ProjectOpenFailure[] = [];
       const kernel = createFakeKernel();
       kernel.setDispatchResult({
         protocolVersion: 1,
@@ -380,7 +400,7 @@ describe("runApp", () => {
       const errorSpy = spyOn(console, "error").mockImplementation(() => {});
       const app = await runApp({
         shell: fakeShell(calls, null, kernel, { existing: true }),
-        adapters: abandonRecordingAdapters(calls),
+        adapters: abandonRecordingAdapters(calls, failures),
         process: fakeBoundary(),
       });
       if (app instanceof Error) throw app;
@@ -389,6 +409,12 @@ describe("runApp", () => {
       // `CommandResultV1` instead of an `Error` — a separate code path in `run-app.ts` that must
       // abandon the open too, not only the `instanceof Error` branch.
       expect(calls).toContain("abandonStartupOpen");
+      // A DIFFERENT `reason` slug and a `safeMessage` built from the Kernel's own guard code —
+      // the two branches must stay distinguishable on screen, since one dispatch never reached
+      // the Kernel and this one reached it and was refused.
+      expect(failures).toEqual([
+        { reason: "startup-open-rejected", safeMessage: "request rejected (PROJECT_UNTRUSTED)" },
+      ]);
 
       await app.close();
       errorSpy.mockRestore();

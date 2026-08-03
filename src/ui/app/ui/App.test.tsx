@@ -1189,6 +1189,46 @@ describe("workspace-first launch (2026-08-02)", () => {
     expect(text).not.toContain("OPENING");
   });
 
+  test("an abandoned startup open lands on a Home that names the failure", async () => {
+    // THE REGRESSION TEST for branch review finding 2 (2026-08-03). `run-app.ts`'s two startup
+    // failure branches never reach the Kernel's `kernel.project.blockOpen`, so
+    // `ProjectMirror.openFailure` stays null for them — and `HomeOpenFailurePanel`, gated on that
+    // one field, used to render nothing at all here: the user was dropped on a bare Home with the
+    // only diagnostic sitting in a trace file. `App.tsx` now composes the mirror's field with
+    // `local.startupOpenFailure` (written by `abandonStartupOpen`) into the same prop, so the
+    // panel fires for this path too.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitForFrame((frame) => frame.includes("OPENING"));
+
+    await renderer.act(() =>
+      deps.abandonStartupOpen({
+        reason: "startup-open-rejected",
+        safeMessage: "request rejected (PROJECT_UNTRUSTED)",
+      }),
+    );
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("request rejected (PROJECT_UNTRUSTED)"),
+    );
+    // Home is live (its placeholder is on screen, cursor-adjusted as everywhere else in this
+    // file) and the panel is on it, carrying both halves of the failure: the `reason` slug as the
+    // box title and the message as its second line.
+    expect(text).toContain("escribe the TUI you want to design");
+    expect(text).toContain("startup-open-rejected");
+    expect(text).toContain("request rejected (PROJECT_UNTRUSTED)");
+    expect(text).toContain("this folder's project could not be opened");
+    expect(text).not.toContain("OPENING");
+    // The invariant the fix must not break: nothing was written into the mirror. The panel is on
+    // screen purely through the UI-local reading, with Kernel truth still null.
+    expect(deps.mirror.project().openFailure).toBeNull();
+  });
+
   test("finishOpen turns the opening Workspace into a filled one", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);

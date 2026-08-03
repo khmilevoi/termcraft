@@ -62,10 +62,16 @@ export interface HomeProps {
   /** Index of the highlighted row within {@link rows} (caller lands it on the first enabled row). */
   readonly selectedIndex: number;
   /**
-   * Why the project on disk failed to open, when one did — `ProjectMirror.openFailure`, straight
-   * through. `null` is the ordinary case (nothing has failed to open). Independent of
-   * {@link HomeProps.health}: the agent can be perfectly healthy and the project still unopenable,
-   * and both panels render together when both apply.
+   * Why the project on disk failed to open, when one did. `null` is the ordinary case (nothing
+   * has failed to open). Independent of {@link HomeProps.health}: the agent can be perfectly
+   * healthy and the project still unopenable, and both panels render together when both apply.
+   *
+   * TWO SOURCES reach this one prop, composed by `App.tsx` (branch review finding 2, 2026-08-03):
+   * `ProjectMirror.openFailure` — Kernel truth, folded only from a real `kernel.project.blockOpen`
+   * — and `UiLocalState.startupOpenFailure`, the UI's own reading of a startup `project.open` that
+   * was never admitted at all, so no `blockOpen` could ever exist for it. Home neither knows nor
+   * needs to know which one it got: both are a `ProjectOpenFailure` describing the same user-facing
+   * event, and they are mutually exclusive per open attempt.
    */
   readonly openFailure: ProjectOpenFailure | null;
   /**

@@ -124,10 +124,17 @@ describe("createUiRoot", () => {
     // `startupOpenPending && !openFailed` branch).
     expect(capturedDeps.local.startupOpenPending()).toBe(true);
     expect(capturedDeps.screen()).toBe("workspace");
-    result.abandonStartupOpen();
-    // The observable effect: the pending flag clears and the screen falls back to Home.
+    const failure = {
+      reason: "startup-open-rejected",
+      safeMessage: "request rejected (PROJECT_UNTRUSTED)",
+    };
+    result.abandonStartupOpen(failure);
+    // The observable effect: the pending flag clears, the screen falls back to Home, and the
+    // reason the handle was handed reaches the atom Home's own failure panel is fed from
+    // (branch review finding 2, 2026-08-03) — the handle forwards the value, it does not drop it.
     expect(capturedDeps.local.startupOpenPending()).toBe(false);
     expect(capturedDeps.screen()).toBe("home");
+    expect(capturedDeps.local.startupOpenFailure()).toEqual(failure);
     result.dispose();
   });
 });

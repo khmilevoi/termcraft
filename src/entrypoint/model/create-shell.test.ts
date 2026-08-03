@@ -26,7 +26,6 @@ import {
   buildGateRunner,
   closeShellResources,
   createShell,
-  resolveShellLaunch,
   toPreviewSessionHandle,
 } from "./create-shell";
 import type { ShellDeps, ShellTeardownStep } from "./create-shell";
@@ -470,13 +469,6 @@ describe("createShell", () => {
     expect(chatsListCalls).toBe(1);
 
     await shell.close();
-  });
-});
-
-describe("resolveShellLaunch (spec 2026-08-02 — one predicate)", () => {
-  test("carries only the open-vs-create fact", () => {
-    expect(resolveShellLaunch(true)).toEqual({ existing: true });
-    expect(resolveShellLaunch(false)).toEqual({ existing: false });
   });
 });
 

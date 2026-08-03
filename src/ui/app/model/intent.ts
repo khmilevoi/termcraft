@@ -56,16 +56,19 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // at all (spec 2026-08-02): `deriveScreen` now mounts the Workspace directly off
       // `UiEnv.projectExists` (the SAME `existing` fact `ShellLaunchV1` carries), and the
       // composition root's own startup `project.open` (`run-app.ts`) opens it there. What still
-      // reaches this branch is the RETRY, and the three ways to land here are not the same on
-      // screen (see `docs/architecture/flows/launch.md` for the full account): when that startup
-      // dispatch was LATER BLOCKED — the Kernel admitted it and only then failed
-      // (`kernel.project.blockOpen`) — `deriveScreen` drops back to Home, which owns
-      // `HomeOpenFailurePanel` and explains why. When it instead FAILED TO REACH the Kernel or WAS
-      // REJECTED outright, `root.abandonStartupOpen()` (`run-app.ts`) is what drops `deriveScreen`
-      // back to Home, and `ProjectMirror.openFailure` stays `null` for both of those — the panel
-      // is gated on `openFailure !== null`, so it renders nothing and the user sees a bare Home
-      // with no explanation, an open design gap. Either way `deps.env.projectExists` stays true,
-      // so the user's own Enter here must still dispatch `project.open`, never `project.create`.
+      // reaches this branch is the RETRY, and the three ways to land here differ in WHERE the
+      // reason on screen comes from, never in whether there is one (see
+      // `docs/architecture/flows/launch.md` for the full account): when that startup dispatch was
+      // LATER BLOCKED — the Kernel admitted it and only then failed (`kernel.project.blockOpen`)
+      // — `deriveScreen` drops back to Home and `HomeOpenFailurePanel` renders the Kernel's own
+      // `safeMessage`. When it instead FAILED TO REACH the Kernel or WAS REJECTED outright,
+      // `root.abandonStartupOpen(failure)` (`run-app.ts`) is what drops `deriveScreen` back to
+      // Home, and `ProjectMirror.openFailure` stays `null` for both of those — correctly, since
+      // no `blockOpen` ever happened — but the failure those branches build lands in
+      // `UiLocalState.startupOpenFailure`, which `App.tsx` composes into the SAME `openFailure`
+      // prop, so the panel fires for them too (branch review finding 2, 2026-08-03). Either way
+      // `deps.env.projectExists` stays true, so the user's own Enter here must still dispatch
+      // `project.open`, never `project.create`.
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
       // dispatch — the identical treatment Task 11 gave `composer-submit` — so a rejected retry

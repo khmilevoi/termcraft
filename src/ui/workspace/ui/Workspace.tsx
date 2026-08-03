@@ -34,7 +34,7 @@ import {
 import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
 import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
-import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
+import type { StatusBarHintKey, StatusBarModeChip, StatusBarSegment } from "ui/status-bar";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import {
@@ -68,18 +68,53 @@ const BOLD = shellAttrs({ bold: true });
  */
 type PreviewHalt = null | { readonly retryAvailable: boolean; readonly designAtFault: boolean };
 
+/**
+ * The five status-bar/composer facts the "filling" (opening) state overrides, bundled so a
+ * future change to the opening presentation touches one function body instead of five scattered
+ * `filling ? … : …` branches (review finding 4, 2026-08-03). Deliberately excludes
+ * `renderPreviewRegion`'s own `filling` branch (a full JSX subtree, not a small value) and the
+ * mode-chip/hint-key TABLES for the non-filling states — `modeChip`/`hintKeys` below still branch
+ * on turn/fullscreen/readOnly/previewHalt independently, since `filling` and those facts are
+ * mutually exclusive by construction (`readOnly` needs a non-null projectId, `filling` needs a
+ * null one) and never need to be checked together.
+ */
+function workspaceOpeningChrome(w: number): {
+  readonly modeChip: StatusBarModeChip;
+  readonly hintKeys: readonly StatusBarHintKey[];
+  readonly composerPlaceholder: string;
+  readonly page: StatusBarSegment;
+  /** Whether the status bar's `size` segment stays hidden while opening (`w < 100`). */
+  readonly hidesSize: boolean;
+} {
+  return {
+    // ` OPENING `, not ` STATIC ` (design 30): STATIC asserts a finished, unchanging design,
+    // which is exactly the claim this state cannot make.
+    modeChip: { text: "OPENING", fg: "bg", bg: "amber" },
+    // design/termcraft-engine.js:247 — `[['⏎','send','dis']]`, nothing else. F2/F3/F4 are
+    // DROPPED rather than drawn inert: none of the three has anything to act on yet (no
+    // preview, no page to tweak or interact with), and Home's own `checking` state shows the
+    // same restraint.
+    hintKeys: [["⏎", "send", "dis"]],
+    // design/termcraft-engine.js:239 (`chatSeq`'s own `placeholder`).
+    composerPlaceholder: "project opening…",
+    // Home's own phrase, verbatim, in the slot that is free because there is no page slug yet
+    // (design 30 §"Mid-open"). `opening…` below 100 columns, matching the engine's own
+    // `narrow` branch (`:243`).
+    page: { text: w >= 100 ? "opening project…" : "opening…", fg: "amber", bold: true },
+    // The engine drops the size segment below 100 columns in this state (`:244`). The idle
+    // bar has never implemented that narrow branch — a pre-existing divergence, out of scope
+    // here — but this state is new code and follows the design it was drawn for.
+    hidesSize: w < 100,
+  };
+}
+
 /** The status-bar mode chip for the current turn/fullscreen state (design mode-chip literals). */
 function modeChip(
   turn: TurnMirror,
   fullscreen: boolean,
   readOnly: boolean,
   previewHalt: PreviewHalt,
-  filling: boolean,
 ): StatusBarModeChip {
-  // ` OPENING `, not ` STATIC ` (design 30): STATIC asserts a finished, unchanging design, which
-  // is exactly the claim this state cannot make. Checked before `readOnly` only for legibility —
-  // the two are mutually exclusive by construction, since `read-only` needs a non-null projectId.
-  if (filling) return { text: "OPENING", fg: "bg", bg: "amber" };
   if (readOnly) return { text: "READ-ONLY", fg: "amberHi", bg: "line" };
   if (turn.phase === "running") return { text: "GENERATING", fg: "bg", bg: "amber" };
   if (fullscreen) return { text: "FULLSCREEN", fg: "bg", bg: "amber" };
@@ -124,12 +159,7 @@ function hintKeys(
   turn: TurnMirror,
   fullscreen: boolean,
   previewHalt: PreviewHalt,
-  filling: boolean,
 ): readonly StatusBarHintKey[] {
-  // design/termcraft-engine.js:247 — `[['⏎','send','dis']]`, nothing else. F2/F3/F4 are DROPPED
-  // rather than drawn inert: none of the three has anything to act on yet (no preview, no page to
-  // tweak or interact with), and Home's own `checking` state shows the same restraint.
-  if (filling) return [["⏎", "send", "dis"]];
   if (fullscreen) return fullscreenHint("windowed");
   // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
   if (turn.phase === "running")
@@ -458,6 +488,10 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
 
   const w = size.w;
   const h = size.h;
+  // The bundled opening-state overrides (see `workspaceOpeningChrome`'s own doc comment).
+  // Computed unconditionally, right after `w` becomes available — it's cheap and pure, and
+  // every call site below just picks it with its own `filling ? opening.X : …` ternary.
+  const opening = workspaceOpeningChrome(w);
   const chatW = chatColumnWidth(w);
   // Every preview measurement comes from ONE module (`../model/preview-geometry.ts`) so the
   // rectangle the host is asked to render into, the box it is painted into, and the origin
@@ -592,7 +626,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerPlaceholder = props.readOnly
     ? "read-only — Send disabled"
     : filling
-      ? "project opening…"
+      ? opening.composerPlaceholder
       : turn.phase === "running"
         ? "generating… esc to cancel"
         : composerFocused
@@ -810,7 +844,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       <StatusBar
         id="ws-status"
         width={w}
-        mode={modeChip(turn, fullscreen, props.readOnly, previewHalt, filling)}
+        mode={filling ? opening.modeChip : modeChip(turn, fullscreen, props.readOnly, previewHalt)}
         // Known divergence: the engine's wide `wsOpening` bar also carries a leading
         // ` codex · gpt5.5 · high ` combo chip (`:242`). `StatusBarProps` has no combo slot at
         // all — `StatusBar.tsx`'s own comment records that every workspace screen after §07
@@ -818,18 +852,12 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
         // already does. Not a new divergence; inherited.
         page={
           filling
-            ? // Home's own phrase, verbatim, in the slot that is free because there is no page
-              // slug yet (design 30 §"Mid-open"). `opening…` below 100 columns, matching the
-              // engine's own `narrow` branch (`:243`).
-              { text: w >= 100 ? "opening project…" : "opening…", fg: "amber", bold: true }
+            ? opening.page
             : activePageSlug !== null
               ? { text: activePageSlug, fg: "dim" }
               : null
         }
-        // The engine drops the size segment below 100 columns in this state (`:244`). The idle
-        // bar has never implemented that narrow branch — a pre-existing divergence, out of scope
-        // here — but this state is new code and follows the design it was drawn for.
-        size={filling && w < 100 ? null : { w, h, min: minSize }}
+        size={filling && opening.hidesSize ? null : { w, h, min: minSize }}
         ctx={ctx}
         ctxCaution={ctx !== null && ctx >= 80}
         hint={
@@ -851,7 +879,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   }
                 : healthBadge
         }
-        hintKeys={hintKeys(turn, fullscreen, previewHalt, filling)}
+        hintKeys={filling ? opening.hintKeys : hintKeys(turn, fullscreen, previewHalt)}
       />
     </box>
   );

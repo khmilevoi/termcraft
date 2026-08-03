@@ -108,19 +108,47 @@ export interface UiLocalState {
    * Whether the composition root's own startup `project.open` is still expected to land (spec
    * 2026-08-02). Seeded from `UiEnv.projectExists` — the SAME `existing` fact `ShellLaunchV1`
    * carries — so `deriveScreen` can mount the Workspace on the first synchronous frame, before
-   * any Kernel event exists to read. It has two clearers, both `true -> false`, never
-   * `false -> true` again: {@link UiDeps.abandonStartupOpen}, for the two branches where the
-   * startup dispatch itself will never land (it failed to reach the Kernel, or the Kernel
-   * rejected it) — nothing else could end this state for those; and the `mirror.project`
-   * subscription inside `createUiDeps`'s `runtime` connect hook (`deps.ts`), which clears it the
-   * moment `projectId` turns non-null — the open actually landed, so the flag must stop claiming
-   * one is still pending. Without that second clearer this flag would sit `true` for the rest of
-   * the process after a SUCCESSFUL open, and `deriveScreen` would mount an empty Workspace shell
-   * with no exit the next time `projectId` legitimately returns to `null` with no
-   * `openFailure` — exactly the failure {@link UiDeps.abandonStartupOpen} exists to prevent for
-   * its own two branches.
+   * any Kernel event exists to read. It only ever goes `true -> false`, never back, and the two
+   * ways that happens are not the same kind of thing:
+   *
+   * - THE SUCCESS PATH is a `withComputed` derivation on the atom itself (branch review finding 3,
+   *   2026-08-03), not a hand-wired clearer: it recomputes to `false` whenever
+   *   `mirror.project().projectId` is non-null — the open actually landed, so the flag must stop
+   *   claiming one is still pending. Keyed on that mirror field DIRECTLY rather than on one
+   *   chosen subscription, so every route to a non-null `projectId` clears it by construction
+   *   (RTM-S02: writable state derived from another atom belongs to the atom, not to a sync
+   *   effect). Without it the flag would sit `true` for the rest of the process after a
+   *   SUCCESSFUL open, and `deriveScreen` would mount an empty Workspace shell with no exit the
+   *   next time `projectId` legitimately returned to `null` with no `openFailure`.
+   * - THE FAILURE PATH is the manual override {@link UiDeps.abandonStartupOpen} writes, for the
+   *   two branches where the startup dispatch itself will never land (it failed to reach the
+   *   Kernel, or the Kernel rejected it). No derivation could ever see those end — no `projectId`
+   *   will arrive for them at all. `withComputed` narrows nothing here: it overrides only ON
+   *   RECOMPUTE, so a direct `.set` still passes straight through, which is what lets one atom
+   *   carry both paths.
    */
   readonly startupOpenPending: Atom<boolean>;
+  /**
+   * Why that startup `project.open` never landed, when it did not — written by
+   * {@link UiDeps.abandonStartupOpen} alongside clearing {@link UiLocalState.startupOpenPending},
+   * and `null` for every launch where nothing failed before admission.
+   *
+   * A SEPARATE reading from `ProjectMirror.openFailure`, deliberately reusing its
+   * {@link ProjectOpenFailure} shape but NEVER written into it. That mirror field is Kernel truth:
+   * `ui/mirror/model/mirror.ts` folds it only from a real `kernel.project.blockOpen`, reading the
+   * reason and `safeMessage` out of that event's own metadata rather than synthesizing them. The
+   * two branches this atom covers never reach the Kernel's `blocked` state at all — a dispatch
+   * that failed to reach the Kernel, or one it rejected outright, was never admitted, so it
+   * cannot have been blocked later — and writing them into the mirror would make the UI fabricate
+   * a Kernel fact it was never told.
+   *
+   * `App.tsx` composes the two into Home's single `openFailure` prop instead, so
+   * `HomeOpenFailurePanel` explains this path too (branch review finding 2, 2026-08-03) rather
+   * than leaving the user on a bare, unexplained Home. The compose is lossless because the two
+   * are mutually exclusive by construction: one open attempt either never reached the Kernel
+   * (this atom) or was admitted and then blocked (the mirror), never both.
+   */
+  readonly startupOpenFailure: Atom<ProjectOpenFailure | null>;
 }
 
 /**
@@ -189,16 +217,23 @@ export interface UiDeps {
    */
   readonly refreshAgentHealth: () => Promise<void>;
   /**
-   * "The startup open will never arrive" — called by `entrypoint/model/run-app.ts` on both
-   * failure branches of its startup `project.open` dispatch. Without it, a dispatch that fails or
-   * is rejected leaves `projectId` and `openFailure` BOTH null forever, and the user sits on an
-   * empty Workspace shell with nothing to explain it.
+   * "The startup open will never arrive, and this is why" — called by
+   * `entrypoint/model/run-app.ts` on both failure branches of its startup `project.open` dispatch,
+   * carrying the {@link ProjectOpenFailure} that branch built from what it actually knows (the
+   * dispatch error's message, or the Kernel's own rejection code). It performs the whole
+   * transition: {@link UiLocalState.startupOpenPending} goes `false`, so `deriveScreen` stops
+   * holding the opening Workspace shell, AND {@link UiLocalState.startupOpenFailure} takes the
+   * cause, which `App.tsx` composes into Home's `openFailure` prop so `HomeOpenFailurePanel`
+   * names the failure on screen. Without it, a dispatch that fails or is rejected leaves
+   * `projectId` and `openFailure` BOTH null forever, and the user sits on an empty Workspace
+   * shell with nothing to explain it.
    *
    * A named Reatom action rather than a bare setter because `runApp` calls it from a promise
-   * continuation, outside any Reatom frame (RTM-A04). It is NOT an identity setter (RTM-S01):
-   * it takes no value and names a real transition.
+   * continuation, outside any Reatom frame (RTM-A04). It is NOT an identity setter (RTM-S01): it
+   * names a real transition and writes two atoms, which is exactly the grouped transition
+   * RTM-S04 says belongs in a model action rather than at the call site.
    */
-  readonly abandonStartupOpen: () => void;
+  readonly abandonStartupOpen: (failure: ProjectOpenFailure) => void;
   /**
    * The one shutdown trigger (phase-8 Task 11 / WP-10): `applyIntent`'s `exit` intent (the `q`
    * keys on the agent-missing/too-small-terminal screens) and the `/exit` slash command both
@@ -298,7 +333,23 @@ export function createUiDeps(
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
   const dispatcher = createDispatcher({ port, revision: () => mirror.stateRevision() });
-  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending");
+  // The success path of `UiLocalState.startupOpenPending` (see its doc comment for the whole
+  // lifecycle) — a derivation, not a hand-wired clearer. A non-null `projectId` IS "the startup
+  // open landed", so the flag reads that fact off the mirror directly; the previous shape hung the
+  // same clear off ONE `mirror.project` subscription inside the `runtime` connect hook below,
+  // which left any future route to a non-null `projectId` that did not pass through that
+  // subscription able to strand the flag `true` (branch review finding 3, 2026-08-03). Every other
+  // recompute returns the stored `state` untouched, so the failure path's own `.set(false)` in
+  // `abandonStartupOpen` survives — `withComputed` overrides on recompute, it does not remove
+  // `.set` (RTM-S02, and upstream `core.md`'s `currentTab` example has the identical `?? state`
+  // shape).
+  const startupOpenPending = atom(env.projectExists, "ui.local.startupOpenPending").extend(
+    withComputed((state) => (mirror.project().projectId !== null ? false : state)),
+  );
+  // The UI-local half of the "why did the open never land" reading — NOT `ProjectMirror
+  // .openFailure`, which is Kernel truth and stays untouched by this path. `UiLocalState
+  // .startupOpenFailure`'s doc comment carries the full reasoning.
+  const startupOpenFailure = atom<ProjectOpenFailure | null>(null, "ui.local.startupOpenFailure");
   const screen = createScreenAtom({
     project: () => mirror.project(),
     terminal: () => terminal(),
@@ -658,31 +709,15 @@ export function createUiDeps(
       // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
       // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
       let lastKernelPageSlug: string | null = null;
-      // THE SUCCESS-PATH CLEARER FOR `startupOpenPending` (spec 2026-08-02 escalated decisions,
-      // Item 1). `UiLocalState.startupOpenPending`'s OTHER clearer, `abandonStartupOpen`, only
-      // ever runs on the startup dispatch's two failure branches (`run-app.ts`) — a successful
-      // `finishOpen` left the flag `true` for the rest of the process, so the NEXT time
-      // `projectId` legitimately returned to `null` with no `openFailure` (any future
-      // `project.close` outside the blocked-open recovery below, which always leaves `openFailure`
-      // non-null), `deriveScreen` would mount an empty Workspace shell with no exit — the exact
-      // failure `abandonStartupOpen` exists to prevent, just for a different trigger. Added as a
-      // condition on THIS subscription rather than a new effect: the subscription already has a
-      // lifetime owner (this connect hook, torn down in the cleanup below) and is already the
-      // place `mirror.project`'s truth retires UI-local flags (see `retirePageOverride` above), so
-      // this is one more instance of that same rule, not a second one. Guarded on the atom's
-      // current value so a project that is already open does not re-set `false` on every
-      // unrelated project write (chat/page changes fire this subscriber constantly).
-      const clearStartupOpenPending = bind(() => {
-        if (!startupOpenPending()) return;
-        startupOpenPending.set(false);
-      });
+      // `startupOpenPending`'s success-path clearer used to be a third branch on THIS subscriber,
+      // guarded on `project.projectId !== null`. It is now a `withComputed` on the atom itself
+      // (see its declaration above and `UiLocalState.startupOpenPending`'s doc comment): the same
+      // `mirror.project().projectId` fact, read where the flag lives instead of where one
+      // subscription happened to notice it.
       const unsubscribeProject = mirror.project.subscribe((project) => {
         if (project.activePageSlug !== lastKernelPageSlug) {
           lastKernelPageSlug = project.activePageSlug;
           retirePageOverride();
-        }
-        if (project.projectId !== null) {
-          clearStartupOpenPending();
         }
         // `projectId === null` is what says the open never finished: `finishOpen` clears
         // `openFailure` anyway, so this pair only ever holds for a genuinely blocked open — never
@@ -809,6 +844,7 @@ export function createUiDeps(
     agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
     startupOpenPending,
+    startupOpenFailure,
   };
 
   const refreshAgentHealth = action(async () => {
@@ -827,8 +863,15 @@ export function createUiDeps(
     local.agentHealth.set(result);
   }, "ui.app.refreshAgentHealth").extend(withAsync());
 
-  const abandonStartupOpen = action(() => {
+  // Both writes belong to the SAME transition and must land together: clearing the pending flag
+  // alone is what used to drop the user on a bare Home with nothing to read (branch review
+  // finding 2, 2026-08-03). The `.set(false)` still works through `startupOpenPending`'s
+  // `withComputed` — that derivation only overrides on recompute, and no recompute is possible
+  // for this path anyway, since `projectId` will never turn non-null for an open that was never
+  // admitted.
+  const abandonStartupOpen = action((failure: ProjectOpenFailure) => {
     startupOpenPending.set(false);
+    startupOpenFailure.set(failure);
   }, "ui.app.abandonStartupOpen");
 
   // M15 lifecycle fix: fire the SAME probe path `home-recheck` uses once here, at startup,
