@@ -110,14 +110,21 @@ Kernel has said anything at all:
   (tracing on) or a held buffer flushed at quit (tracing off), never the screen — and were never
   the surface.
 - `deriveScreen` (`src/ui/mirror/model/screen.ts`) no longer waits for `finishOpen` to leave Home.
-  Its `ScreenInput` gained two fields: `startupOpenPending` — seeded from `UiEnv.projectExists`
-  (the SAME `existing` fact) into `UiLocalState.startupOpenPending` at UI construction, before any
-  Kernel event exists to read — and `openFailed` (`ProjectMirror.openFailure !== null`, this time
-  the genuine kind, set only by a real `blockOpen`). `projectId === null && startupOpenPending &&
-  !openFailed` now mounts `"workspace"` directly; NOT a new `ScreenKind` — the Workspace's own
-  opening state (`Workspace.tsx`'s `filling`, `mirror.project().projectId === null`) is what
-  fills in as the ready sequence's events arrive, so the transition to a populated Workspace is a
-  re-render, never a remount.
+  Its `ScreenInput` gained three fields (Gap D plus the trust-prompt-on-open fix, 2026-08-03):
+  `startupOpenPending` — seeded from `UiEnv.projectExists` (the SAME `existing` fact) into
+  `UiLocalState.startupOpenPending` at UI construction, before any Kernel event exists to read —
+  `openFailed` (`ProjectMirror.openFailure !== null`, this time the genuine kind, set only by a
+  real `blockOpen`) — and `trustPromptDismissed` (`UiLocalState.trustPromptDismissed`), the
+  session-scoped flag `trust-accept`/`trust-decline` set. `projectId === null &&
+  startupOpenPending && !openFailed` still mounts `"workspace"` directly; NOT a new `ScreenKind` —
+  the Workspace's own opening state (`Workspace.tsx`'s `filling`, `mirror.project().projectId ===
+  null`) is what fills in as the ready sequence's events arrive, so THAT transition to a populated
+  Workspace is a re-render, never a remount — for an already-trusted (or newly created) project.
+  An untrusted project takes a different path once `projectId` arrives: `trust ===
+  "untrusted-read-only"` with the prompt not yet dismissed routes to the separate
+  `"trust-prompt"` `ScreenKind` (below) before ever reaching `"workspace"`, so that sequence —
+  opening Workspace -> trust prompt -> filled Workspace — DOES unmount and remount the Workspace
+  subtree at each `ScreenKind` change, rather than staying inside one re-rendering component.
 - Home's own Enter (`ui/app/model/intent.ts`'s `home-submit`) still picks `project.open` over
   `project.create` for the SAME `deps.env.projectExists` fact, but what reaches this branch has
   narrowed along with everything else: since the startup dispatch above already tried
@@ -133,8 +140,10 @@ Trust is not a complication for an already-trusted project: an existing project 
 machine that created it resolves `trusted` and goes straight to the Workspace. A moved, copied,
 or otherwise never-before-trusted workspace resolves `untrusted-read-only` instead, and —
 CORRECTED (trust-prompt-on-open fix, 2026-08-03; spec §3.1 required this from the start) — the
-Workspace mounts the existing `TrustPrompt` popup for it before anything else renders, rather
-than landing silently on the read-only screen the way it used to: `deriveScreen`
+app root replaces the whole screen with the existing `TrustPrompt` (`App.tsx`'s
+`screen === "trust-prompt"` branch — a separate, full-screen box centered over the terminal; the
+Workspace itself does not mount at all while this screen shows) before anything else renders,
+rather than landing silently on the read-only screen the way it used to: `deriveScreen`
 (`src/ui/mirror/model/screen.ts`) now checks a session-scoped `trustPromptDismissed` flag
 (`UiLocalState.trustPromptDismissed`, `src/ui/app/model/deps.ts`) alongside `trust`, so an
 `untrusted-read-only` resolution shows `"trust-prompt"` until the designer actually answers it,

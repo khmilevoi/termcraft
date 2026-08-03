@@ -964,7 +964,7 @@ describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 
     expect(deps.screen()).toBe("read-only");
   });
 
-  test("trust-accept resolves the screen trust-prompt -> workspace end to end", () => {
+  test("trust-accept resolves the screen trust-prompt -> workspace end to end", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
       kernel,
@@ -982,6 +982,10 @@ describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 
     expect(deps.screen()).toBe("trust-prompt");
 
     applyIntent({ kind: "trust-accept" }, deps);
+    // `trustPromptDismissed` is now set only once the dispatch RESOLVES accepted (fix round 2,
+    // Finding 2 — the same treatment `dispatchHomeSubmit` already gives `local.prompt`), so this
+    // await is required before the mirror fold below and the final assertion.
+    await tick();
     // `applyIntent`'s dispatch only reaches the FakeKernel's recorded `dispatched` list — unlike
     // a real Kernel it never folds anything back on its own — so the mirror's own trust grant is
     // simulated the same way `mirror.test.ts`'s "kernel.project.setTrust moves the screen the
@@ -1000,7 +1004,7 @@ describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 
     expect(deps.screen()).toBe("workspace");
   });
 
-  test("trust-decline resolves the screen trust-prompt -> read-only end to end", () => {
+  test("trust-decline resolves the screen trust-prompt -> read-only end to end", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
       kernel,
@@ -1020,7 +1024,10 @@ describe("trustPromptDismissed — the auto-shown trust prompt (spec 2026-08-03 
     applyIntent({ kind: "trust-decline" }, deps);
     // Unlike accept, decline needs no Kernel round trip to observe on screen: the mirror's own
     // `trust` was already "untrusted-read-only" (that is WHY the prompt was showing), so
-    // `trustPromptDismissed` flipping true is the only thing the screen atom needed.
+    // `trustPromptDismissed` flipping true is the only thing the screen atom needed — but that
+    // flip itself now only happens once the dispatch RESOLVES accepted (fix round 2, Finding 2),
+    // hence this await.
+    await tick();
     expect(deps.local.trustPromptDismissed()).toBe(true);
     expect(deps.screen()).toBe("read-only");
   });

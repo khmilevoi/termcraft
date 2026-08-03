@@ -788,6 +788,10 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       pageDescriptors: [readyPage()],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), so the app root would
+    // render `TrustPrompt` instead of the read-only Workspace this test asserts on.
+    deps.local.trustPromptDismissed.set(true);
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,
       height: 36,

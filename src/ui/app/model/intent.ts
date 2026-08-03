@@ -102,6 +102,12 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
       // that dies here is indistinguishable on screen from one that was never pressed. Name
       // which guard swallowed it.
+      //
+      // INVARIANT (trust-prompt-on-open fix, 2026-08-03): "read-only" here specifically means
+      // untrusted AND the trust prompt has already been answered — an untrusted project still on
+      // the `"trust-prompt"` screen never reaches this guard (nor `pin-input`/`pin-backspace`/
+      // `pin-save`'s identical checks below), because `keymap.ts`'s `resolveKey` only ever
+      // resolves `trust-accept`/`trust-decline`/`none` while `screen === "trust-prompt"`.
       if (deps.screen() === "read-only") {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;
@@ -260,24 +266,31 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     }
     case "trust-accept":
-      dispatchAndReport(
+      // Marks the prompt answered ONLY once the Kernel actually accepted `project.setTrust`
+      // (fix round 2, Finding 2 — the identical treatment `dispatchHomeSubmit` and
+      // `composer-submit` above already give their own local state): a rejection (e.g. a
+      // `STALE_REVISION` race during the ready sequence) must not move the screen to
+      // `"read-only"` irreversibly when trust was never actually granted — `trustPromptDismissed`
+      // only ever goes `false -> true` for the rest of this run.
+      dispatchTrustSetTrust(
         dispatcher.dispatch("project.setTrust", {
           trust: "trusted",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
         "project.setTrust:trusted",
+        local,
       );
-      local.trustPromptDismissed.set(true);
       return;
     case "trust-decline":
-      dispatchAndReport(
+      // Same shape as `trust-accept` immediately above — see its comment.
+      dispatchTrustSetTrust(
         dispatcher.dispatch("project.setTrust", {
           trust: "untrusted-read-only",
           workspaceIdentity: deps.env.workspaceIdentity,
         }),
         "project.setTrust:untrusted-read-only",
+        local,
       );
-      local.trustPromptDismissed.set(true);
       return;
     case "overlay-dismiss":
       if (local.overlay() === "pin-input") {
@@ -349,6 +362,35 @@ function dispatchHomeSubmit(
       }
       trace("ui.dispatch.result", { kind, result });
       if (result.status === "accepted") local.prompt.set("");
+    }),
+  );
+}
+
+/**
+ * `trust-accept`/`trust-decline`'s own dispatch continuation (fix round 2, Finding 2) — the same
+ * shape {@link dispatchHomeSubmit} already uses: marks {@link UiLocalState.trustPromptDismissed}
+ * ONLY once the Kernel actually accepted `project.setTrust`, never on a rejection or a dispatch
+ * that never reached the Kernel. Before this fix the flag was set synchronously with the dispatch
+ * call, so a Kernel refusal (e.g. `STALE_REVISION` during the ready sequence) still moved the
+ * screen to `"read-only"` irreversibly, even though trust was never actually granted or
+ * declined — and since the flag only ever goes `false -> true` for the rest of the run, the user
+ * could never be re-asked this session. `wrap` (RTM-A04) around the continuation — it touches
+ * `local.trustPromptDismissed`, a Reatom atom, after the dispatch's own `.then()` boundary.
+ */
+function dispatchTrustSetTrust(
+  promise: Promise<CommandResultV1 | Error>,
+  kind: string,
+  local: UiLocalState,
+): void {
+  void promise.then(
+    wrap((result) => {
+      if (result instanceof Error) {
+        console.error("UI command dispatch failed:", result);
+        trace("ui.dispatch.result", { kind, result });
+        return;
+      }
+      trace("ui.dispatch.result", { kind, result });
+      if (result.status === "accepted") local.trustPromptDismissed.set(true);
     }),
   );
 }

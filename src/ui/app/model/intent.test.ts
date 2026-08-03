@@ -549,6 +549,10 @@ describe("applyIntent — slash menu", () => {
         capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
       }),
     );
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), not `"read-only"`, which
+    // this test's own name claims to exercise.
+    deps.local.trustPromptDismissed.set(true);
     deps.local.composer.set("/new");
     deps.local.overlay.set("slash-menu");
     deps.local.slashSelection.set(0);
@@ -646,7 +650,7 @@ describe("applyIntent — chats and trust", () => {
     expect(deps.local.overlay()).toBeNull();
   });
 
-  test("trust accept and decline dispatch the exact project.setTrust payloads and mark the prompt answered", () => {
+  test("trust accept and decline dispatch the exact project.setTrust payloads and mark the prompt answered once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
       kernel,
@@ -655,13 +659,46 @@ describe("applyIntent — chats and trust", () => {
     );
     expect(deps.local.trustPromptDismissed()).toBe(false);
     applyIntent({ kind: "trust-accept" }, deps);
+    // Not marked answered synchronously with the dispatch call — only once it RESOLVES accepted
+    // (fix round 2, Finding 2), mirroring `dispatchHomeSubmit`'s own fix (`home-submit`) exactly.
+    await tick();
     expect(deps.local.trustPromptDismissed()).toBe(true);
     applyIntent({ kind: "trust-decline" }, deps);
+    await tick();
     expect(kernel.dispatched.map((raw) => (raw as { payload: unknown }).payload)).toEqual([
       { trust: "trusted", workspaceIdentity: "workspace-id" },
       { trust: "untrusted-read-only", workspaceIdentity: "workspace-id" },
     ]);
     expect(deps.local.trustPromptDismissed()).toBe(true);
+  });
+
+  test("trust-accept does not mark the prompt answered when the Kernel rejects project.setTrust (fix round 2, Finding 2)", async () => {
+    const kernel = createFakeKernel();
+    // The exact race the finding named: a `STALE_REVISION` rejection during the ready sequence
+    // must not move the screen to `"read-only"` irreversibly when trust was never actually
+    // granted — `trustPromptDismissed` only ever goes `false -> true` for the rest of the run, so
+    // a premature `true` here would mean the user could never be re-asked this session.
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "STALE_REVISION",
+      reasons: [{ code: "STALE_REVISION", requiredRevision: "1" }],
+    });
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "untrusted-read-only" }));
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-accept" }, deps);
+    await tick();
+
+    expect(deps.local.trustPromptDismissed()).toBe(false);
+    expect(deps.screen()).toBe("trust-prompt");
   });
 
   test("popup dismissal closes the overlay without reaching lower Esc layers", () => {
@@ -778,6 +815,10 @@ describe("applyIntent — pin draft", () => {
         trust: "untrusted-read-only",
       }),
     );
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), not `"read-only"`, which
+    // is the screen this test means to exercise.
+    deps.local.trustPromptDismissed.set(true);
     deps.interaction.pendingPin.set({ geometryToken: uuidv7(), point: { x: 1, y: 1 } });
     deps.local.pinDraft.set("must not save");
     deps.local.overlay.set("pin-input");
