@@ -57,9 +57,9 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
     // under a name this grammar rejects would be unreadable through `SafeProjectFs`.
     expectNamespace("workspace", "REATOM.md", "agent-runtime-doc");
     expectNamespace("workspace", "runtime.generated.d.ts", "agent-runtime-doc");
-    // A NESTED `.d.ts` (`classifyWorkspace`'s "last component" branch), distinct from the
-    // single-segment case above.
-    expectNamespace("workspace", "types/runtime.d.ts", "agent-runtime-doc");
+    // A nested `.d.ts` is no longer admitted (task 6: `classifyWorkspace`'s root-only rule) —
+    // see the dedicated test below for the full case.
+    expectUnknown("workspace", "types/runtime.d.ts");
     expectUnknown("workspace", "pages/home.tsx");
     expectUnknown("workspace", "pages.json");
   });
@@ -97,6 +97,19 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
   test("a markdown file outside the staged doc set is still rejected", () => {
     expectUnknown("workspace", "NOTES.md");
     expectUnknown("workspace", "readme.md");
+  });
+
+  test("a runtime declaration is a workspace-ROOT input, never a nested one", () => {
+    expectNamespace("workspace", "runtime.d.ts", "agent-runtime-doc");
+    expectNamespace("workspace", "RUNTIME.md", "agent-runtime-doc");
+    expectNamespace("workspace", "REATOM.md", "agent-runtime-doc");
+    // The gap: nothing stages these, and admitting them widened a READ-ONLY namespace.
+    expectUnknown("workspace", "lib/runtime.d.ts");
+    expectUnknown("workspace", "a/b/c/anything.d.ts");
+  });
+
+  test("a .d.ts INSIDE the tree is authored source, not a runtime doc", () => {
+    expectNamespace("workspace", "design/lib/kit.d.ts", "design-source");
   });
 
   test("a candidate shares the workspace grammar", () => {

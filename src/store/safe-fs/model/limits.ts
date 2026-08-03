@@ -113,6 +113,12 @@ const DESIGN_DIRNAME = "design";
  * retired, and `pages.json` now lives INSIDE the tree. {@link AGENT_DOC_FILES} and runtime
  * type declarations remain read-only inputs staged BESIDE the tree at the workspace root,
  * never inside it (design §10).
+ *
+ * A `.d.ts` is admitted at the ROOT ONLY. `agent/prompt/model/runtime-docs.ts` stages exactly
+ * three single-component paths — `runtime.d.ts`, `RUNTIME.md`, `REATOM.md` — so a nested
+ * `*.d.ts` is a path nothing produces, and admitting it widened a READ-ONLY namespace for no
+ * caller. A declaration the agent authors lives inside `design/` and is `design-source`, which
+ * the branch above already answers first.
  */
 function classifyWorkspace(components: readonly string[]): ManagedNamespace | null {
   const [first] = components;
@@ -125,8 +131,6 @@ function classifyWorkspace(components: readonly string[]): ManagedNamespace | nu
     if (first.endsWith(".d.ts")) return "agent-runtime-doc";
     return null;
   }
-  const last = components[components.length - 1];
-  if (last !== undefined && last.endsWith(".d.ts")) return "agent-runtime-doc";
   return null;
 }
 

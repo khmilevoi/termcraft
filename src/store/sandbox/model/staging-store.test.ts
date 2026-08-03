@@ -228,7 +228,7 @@ function validInput(overrides: Partial<CreateTurnWorkspaceInput> = {}): CreateTu
     ],
     runtimeDocs: [
       { relPath: "RUNTIME.md", absSourcePath: "/runtime/RUNTIME.md" },
-      { relPath: "types/foo.d.ts", absSourcePath: "/runtime/foo.d.ts" },
+      { relPath: "foo.d.ts", absSourcePath: "/runtime/foo.d.ts" },
     ],
     readSet: sampleReadSet(),
     ...overrides,
@@ -270,7 +270,7 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
       "design/pages.json",
       "design/pages/about.tsx",
       "design/pages/home.tsx",
-      "types/foo.d.ts",
+      "foo.d.ts",
     ]);
 
     const home = result.files.find((f) => f.relPath === "design/pages/home.tsx");
@@ -284,7 +284,7 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     expect(manifest.namespace).toBe("design-source");
     expect(manifest.sha256).toBe(crypto.createHash("sha256").update(MANIFEST).digest("hex"));
 
-    const dts = result.files.find((f) => f.relPath === "types/foo.d.ts");
+    const dts = result.files.find((f) => f.relPath === "foo.d.ts");
     if (dts === undefined) throw new Error("runtime .d.ts missing");
     expect(dts.namespace).toBe("agent-runtime-doc");
   });
@@ -633,7 +633,7 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
     expect(result.files.map((f) => f.relPath).sort()).toEqual([
       "RUNTIME.md",
       "design/pages.json",
-      "types/foo.d.ts",
+      "foo.d.ts",
     ]);
   });
 
@@ -644,7 +644,7 @@ describe("createTurnWorkspace — turn-durability §6.2/§7.2", () => {
 
     const result = await store.createTurnWorkspace(validInput({ treeFiles: [] }));
     if (result instanceof Error) throw result;
-    expect(result.files.map((f) => f.relPath).sort()).toEqual(["RUNTIME.md", "types/foo.d.ts"]);
+    expect(result.files.map((f) => f.relPath).sort()).toEqual(["RUNTIME.md", "foo.d.ts"]);
     // No `design/` directory is fabricated for an honestly-empty tree.
     expect(memory.dirs.has(path.join(result.root, "design"))).toBe(false);
   });
