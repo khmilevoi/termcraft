@@ -129,6 +129,46 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     },
   },
   {
+    // SCROLLING THE CHAT STREAM FROM THE KEYBOARD (chat-scroll spec §5.5). Like
+    // `page.prev`/`page.next` above, this is a DESIGN EXTENSION and is recorded as one:
+    // §3.8's two hotkey tiers name no chat key at all, and the design's own
+    // `▲ N earlier messages` indicator (`design/termcraft-engine.js:569`) leads nowhere.
+    // Design iteration 10 decides only whether these keys are DRAWN in the status-bar key
+    // row (`hint` below); the binding itself is this project's.
+    //
+    // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u`/`ctrl+d` AS ALIASES:
+    //   - it must be GLOBAL tier: the composer owns focus by default, so a bare letter would
+    //     be swallowed as text — the same hazard `keymap.ts`'s `home-recheck` note records;
+    //   - `PgUp`/`PgDn` arrive as multi-character CSI sequences, which `printableChar`
+    //     rejects on length alone, so they can never reach the composer as input;
+    //   - `ctrl+u`/`ctrl+d` are C0 control bytes (0x15 / 0x04): one byte, no encoding to get
+    //     wrong, and below 0x20 so `printableChar` rejects them too;
+    //   - `ctrl+`-arrows are deliberately NOT bound — they were dead on the maintainer's
+    //     terminal, which is exactly why `page.prev`/`page.next` are `ctrl+b`/`ctrl+n`.
+    id: "chat.scroll-up",
+    execution: { kind: "local", effect: "chat-scroll-up" },
+    hotkey: {
+      id: "chat.scroll-up",
+      key: "pageup",
+      aliases: ["ctrl+u"],
+      label: "scroll up",
+      capability: null,
+      hint: false,
+    },
+  },
+  {
+    id: "chat.scroll-down",
+    execution: { kind: "local", effect: "chat-scroll-down" },
+    hotkey: {
+      id: "chat.scroll-down",
+      key: "pagedown",
+      aliases: ["ctrl+d"],
+      label: "scroll down",
+      capability: null,
+      hint: false,
+    },
+  },
+  {
     id: "preview.tweaks",
     execution: { kind: "inert" },
     hotkey: {

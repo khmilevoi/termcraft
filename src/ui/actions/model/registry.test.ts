@@ -59,6 +59,8 @@ describe("SLASH_COMMANDS registry", () => {
       ["preview.repair", { kind: "local", effect: "compose-repair" }],
       ["page.prev", { kind: "local", effect: "page-prev" }],
       ["page.next", { kind: "local", effect: "page-next" }],
+      ["chat.scroll-up", { kind: "local", effect: "chat-scroll-up" }],
+      ["chat.scroll-down", { kind: "local", effect: "chat-scroll-down" }],
       ["preview.tweaks", { kind: "inert" }],
       ["preview.interact", { kind: "inert" }],
       ["export.start", { kind: "command", command: "export.start" }],

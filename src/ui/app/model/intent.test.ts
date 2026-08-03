@@ -785,6 +785,45 @@ describe("applyIntent — pin draft", () => {
   });
 });
 
+describe("chat scroll intents (chat-scroll spec §5.5)", () => {
+  function fakeViewport() {
+    const calls: (-1 | 1)[] = [];
+    return {
+      calls,
+      viewport: {
+        scrollByPage: (direction: -1 | 1) => calls.push(direction),
+        scrollToBottom: () => {},
+        atBottom: () => true,
+        anchorFromBottom: () => 0,
+        restoreAnchor: () => {},
+      },
+    };
+  }
+
+  test("PgUp scrolls the published viewport up a page", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const fake = fakeViewport();
+    deps.local.chatViewport.set(fake.viewport);
+    applyIntent({ kind: "action-execute", actionId: "chat.scroll-up" }, deps);
+    expect(fake.calls).toEqual([-1]);
+  });
+
+  test("PgDn scrolls it down a page", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const fake = fakeViewport();
+    deps.local.chatViewport.set(fake.viewport);
+    applyIntent({ kind: "action-execute", actionId: "chat.scroll-down" }, deps);
+    expect(fake.calls).toEqual([1]);
+  });
+
+  test("with no viewport published the key is inert, not a crash", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(() =>
+      applyIntent({ kind: "action-execute", actionId: "chat.scroll-up" }, deps),
+    ).not.toThrow();
+  });
+});
+
 describe("applyIntent — Esc layers", () => {
   test("esc closes an open overlay first", () => {
     const kernel = createFakeKernel();

@@ -428,6 +428,19 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     selectPage(deps, target);
     return;
   }
+  if (execution.effect === "chat-scroll-up" || execution.effect === "chat-scroll-down") {
+    // The keyboard half of chat scrolling (chat-scroll spec §5.5). `applyIntent` stays pure of
+    // the renderer: it calls a port `Workspace.tsx` published, exactly as it calls `dispatcher`.
+    const viewport = deps.local.chatViewport();
+    if (viewport === null) {
+      // Reachable for one frame at mount, and on every non-Workspace screen — the keys are
+      // global tier, so they resolve there too and must be inert rather than throw.
+      trace("ui.chat.scroll.refused", { effect: execution.effect, reason: "no viewport" });
+      return;
+    }
+    viewport.scrollByPage(execution.effect === "chat-scroll-down" ? 1 : -1);
+    return;
+  }
   if (execution.effect === "compose-repair") {
     // The composer is the destination, so the same refusal `composer-submit` applies here:
     // filling an input that cannot send would promise an action the screen does not offer.

@@ -81,6 +81,26 @@ describe("resolveKey — global keys (design §3.8)", () => {
       kind: "none",
     });
   });
+
+  test("PgUp/PgDn and their ctrl aliases resolve to the chat scroll actions", () => {
+    const context = ctx({}); // reuse this file's own context builder
+    expect(resolveKey({ name: "pageup", ctrl: false, sequence: "\x1b[5~" }, context)).toEqual({
+      kind: "action-execute",
+      actionId: "chat.scroll-up",
+    });
+    expect(resolveKey({ name: "pagedown", ctrl: false, sequence: "\x1b[6~" }, context)).toEqual({
+      kind: "action-execute",
+      actionId: "chat.scroll-down",
+    });
+    expect(resolveKey({ name: "u", ctrl: true, sequence: "\x15" }, context)).toEqual({
+      kind: "action-execute",
+      actionId: "chat.scroll-up",
+    });
+    expect(resolveKey({ name: "d", ctrl: true, sequence: "\x04" }, context)).toEqual({
+      kind: "action-execute",
+      actionId: "chat.scroll-down",
+    });
+  });
 });
 
 describe("resolveKey — Home", () => {
