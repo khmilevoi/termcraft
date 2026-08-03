@@ -13,6 +13,24 @@ import { TEXT_EDITOR_KEY_BINDINGS } from "./key-bindings";
  * `lib/keybinding.internal.js`, which the package neither re-exports nor makes reachable by deep
  * import — `package.json`'s `exports` map has no wildcard entry. Driving the renderable is the
  * same resolution path, exercised end to end.
+ *
+ * G8 (measured against the installed `@opentui/core@0.4.5`'s `createTestRenderer`, on top of
+ * G1–G7 in the plan): the mock's `mockInput.pressKey(value, modifiers)` behaves asymmetrically
+ * across keyboard modes. Under `kittyKeyboard: true` it ALWAYS re-encodes a single-character
+ * `value` into a kitty CSI sequence — even with no `modifiers` argument — so a pre-encoded raw
+ * ASCII control byte (e.g. `"\u0017"` for Ctrl+W) loses its ctrl-ness and arrives as an unmodified
+ * keypress of that codepoint instead. Under `kittyKeyboard: false` the same call passes the raw
+ * byte straight through. Chords below that need an explicit ctrl modifier under the kitty tests
+ * therefore use `pressKey("<letter>", { ctrl: true })` (or `{ ctrl: true, shift: true }`) rather
+ * than a pre-encoded byte; a bare Ctrl+J uses `pressKeys(["\n"])` (the same raw-passthrough
+ * primitive `typeText` is built on) since the mock has no symbolic name for a modified linefeed.
+ * Separately, `TextareaRenderable`'s `initialValue` seeds the buffer with the cursor at position
+ * 0, not at the end — tests that need to type AFTER a seeded value seed with `""` and type the
+ * seed as their own first action instead. And `pressBackspace({ ctrl: true })` always encodes an
+ * explicit modifier-carrying sequence in both keyboard modes (verified by reading
+ * `testing.bun.js`), so it cannot simulate a legacy terminal's inability to distinguish
+ * Ctrl+Backspace from plain Backspace — that one test sends a bare, unmodified `pressBackspace()`
+ * instead, which is what a real legacy terminal actually sends either way.
  */
 let open: TestRendererSetup | null = null;
 let editor: TextareaRenderable | null = null;
@@ -61,19 +79,21 @@ describe("TEXT_EDITOR_KEY_BINDINGS — with the extended keyboard protocol", () 
   });
 
   test("Shift+Enter, Alt+Enter and Ctrl+J all insert a newline", async () => {
-    const setup = await mount(true, "a");
+    const setup = await mount(true, "");
+    setup.mockInput.typeText("a");
     setup.mockInput.pressEnter({ shift: true });
     setup.mockInput.typeText("b");
     setup.mockInput.pressEnter({ meta: true });
     setup.mockInput.typeText("c");
-    setup.mockInput.pressKey("\n");
+    setup.mockInput.pressKeys(["\n"]);
     setup.mockInput.typeText("d");
     await setup.renderOnce();
     expect(text()).toBe("a\nb\nc\nd");
   });
 
   test("Shift+numpad-Enter inserts a newline", async () => {
-    const setup = await mount(true, "a");
+    const setup = await mount(true, "");
+    setup.mockInput.typeText("a");
     setup.mockInput.pressKey("\u001b[57414;2u");
     setup.mockInput.typeText("b");
     await setup.renderOnce();
@@ -86,7 +106,7 @@ describe("TEXT_EDITOR_KEY_BINDINGS — with the extended keyboard protocol", () 
     setup.mockInput.pressBackspace({ ctrl: true });
     await setup.renderOnce();
     expect(text()).toBe("alpha beta ");
-    setup.mockInput.pressKey("\u0017");
+    setup.mockInput.pressKey("w", { ctrl: true });
     await setup.renderOnce();
     expect(text()).toBe("alpha ");
   });
@@ -117,15 +137,15 @@ describe("TEXT_EDITOR_KEY_BINDINGS — with the extended keyboard protocol", () 
     const setup = await mount(true, "");
     setup.mockInput.typeText("abc");
     await setup.renderOnce();
-    setup.mockInput.pressKey("\u001a");
+    setup.mockInput.pressKey("z", { ctrl: true });
     await setup.renderOnce();
     expect(text()).not.toBe("abc");
     setup.mockInput.pressKey("\u001b[122;6u");
     await setup.renderOnce();
     expect(text()).toBe("abc");
-    setup.mockInput.pressKey("\u001a");
+    setup.mockInput.pressKey("z", { ctrl: true });
     await setup.renderOnce();
-    setup.mockInput.pressKey("\u0019");
+    setup.mockInput.pressKey("y", { ctrl: true });
     await setup.renderOnce();
     expect(text()).toBe("abc");
   });
@@ -133,7 +153,7 @@ describe("TEXT_EDITOR_KEY_BINDINGS — with the extended keyboard protocol", () 
   test("Ctrl+A selects all rather than jumping to line start — the default is not removable", async () => {
     const setup = await mount(true, "");
     setup.mockInput.typeText("abcdef");
-    setup.mockInput.pressKey("\u0001");
+    setup.mockInput.pressKey("a", { ctrl: true });
     setup.mockInput.typeText("Z");
     await setup.renderOnce();
     // select-all then a printable replaces the selection; line-home would have prefixed it.
@@ -143,7 +163,8 @@ describe("TEXT_EDITOR_KEY_BINDINGS — with the extended keyboard protocol", () 
 
 describe("TEXT_EDITOR_KEY_BINDINGS — the universal fallbacks on a legacy terminal", () => {
   test("Ctrl+J still breaks the line where Shift+Enter cannot be encoded at all", async () => {
-    const setup = await mount(false, "a");
+    const setup = await mount(false, "");
+    setup.mockInput.typeText("a");
     setup.mockInput.pressEnter({ shift: true });
     await setup.renderOnce();
     // The byte for Shift+Enter does not exist outside the extended protocol, so nothing arrives.
@@ -157,7 +178,10 @@ describe("TEXT_EDITOR_KEY_BINDINGS — the universal fallbacks on a legacy termi
   test("Ctrl+W still deletes a word where Ctrl+Backspace collapses to a plain backspace", async () => {
     const setup = await mount(false, "");
     setup.mockInput.typeText("alpha beta");
-    setup.mockInput.pressBackspace({ ctrl: true });
+    // A legacy terminal cannot encode Ctrl+Backspace distinctly from plain Backspace — both arrive
+    // as a bare 0x08 — so this sends that bare byte directly rather than asking the mock to
+    // synthesize a modifier-carrying sequence no real legacy terminal would produce (G8).
+    setup.mockInput.pressBackspace();
     await setup.renderOnce();
     // The parser reports `backspace` with NO ctrl for 0x08, so the word binding cannot fire.
     expect(text()).toBe("alpha bet");
