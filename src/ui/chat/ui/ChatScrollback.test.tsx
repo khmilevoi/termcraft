@@ -8,7 +8,13 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { ChatRecord as ChatRecordDto } from "ui/mirror";
 import { SHELL_PALETTE } from "ui/theme";
 
-import { ChatScrollback, recordToChatRecordProps } from "./ChatScrollback";
+import {
+  CHAT_START_TEXT,
+  ChatScrollback,
+  type ChatScrollbackProps,
+  OLDER_LOADING_TEXT,
+  recordToChatRecordProps,
+} from "./ChatScrollback";
 
 let open: RenderHandle | null = null;
 afterEach(() => {
@@ -18,6 +24,8 @@ afterEach(() => {
 
 const findRowIndex = (rows: StyledRun[][], needle: string) =>
   rows.findIndex((row) => row.some((run) => run.text.includes(needle)));
+
+const allText = (rows: StyledRun[][]) => rows.flat().map((r) => r.text).join("");
 
 type UserRecordDto = Extract<ChatRecordDto, { kind: "user" }>;
 type AgentRecordDto = Extract<ChatRecordDto, { kind: "agent" }>;
@@ -135,7 +143,9 @@ describe("ChatScrollback (design §3.2 — persisted records above the ephemeral
         records={records}
         agentLabel="claude"
         width={58}
-        maxRows={10}
+        unloadedCount={0}
+        atStart
+        olderPage={{ kind: "idle" }}
       />,
     );
     await handle.render();
@@ -155,11 +165,19 @@ describe("ChatScrollback (design §3.2 — persisted records above the ephemeral
     expect((boldRun?.attrs ?? 0) & 1).toBe(1);
   });
 
-  test("renders nothing for an empty tail", async () => {
+  test("renders nothing for an empty tail with nothing to say", async () => {
     const handle = await createHeadlessRenderer({ w: 60, h: 10 });
     open = handle;
     handle.mount(
-      <ChatScrollback id="scrollback" records={[]} agentLabel="claude" width={58} maxRows={10} />,
+      <ChatScrollback
+        id="scrollback"
+        records={[]}
+        agentLabel="claude"
+        width={58}
+        unloadedCount={0}
+        atStart
+        olderPage={{ kind: "idle" }}
+      />,
     );
     await handle.render();
     const rows = handle.capture().rows;
@@ -167,93 +185,115 @@ describe("ChatScrollback (design §3.2 — persisted records above the ephemeral
   });
 });
 
-describe("ChatScrollback row budget (design chatSeq o.scrollback, termcraft-engine.js:569)", () => {
-  const three = () => [
-    userRecord({ text: "oldest" }),
-    agentRecord({ text: "middle" }),
-    userRecord({ text: "newest" }),
-  ];
-
-  test("renders every record and no indicator when the tail fits", async () => {
-    const handle = await createHeadlessRenderer({ w: 60, h: 12 });
+describe("ChatScrollback (chat-scroll spec §5.2/§5.4)", () => {
+  async function frameOf(props: Partial<ChatScrollbackProps>, h = 40) {
+    const handle = await createHeadlessRenderer({ w: 60, h });
     open = handle;
     handle.mount(
       <ChatScrollback
-        id="scrollback"
-        records={three()}
+        id="sb"
+        records={[userRecord({ recordId: "r1", text: "hello" })]}
         agentLabel="claude"
-        width={58}
-        maxRows={12}
+        width={40}
+        unloadedCount={0}
+        atStart
+        olderPage={{ kind: "idle" }}
+        {...props}
       />,
     );
     await handle.render();
-    const rows = handle.capture().rows;
-    expect(findRowIndex(rows, "oldest")).toBeGreaterThanOrEqual(0);
-    expect(findRowIndex(rows, "newest")).toBeGreaterThanOrEqual(0);
-    expect(findRowIndex(rows, "earlier message")).toBe(-1);
+    return handle.capture();
+  }
+
+  test("renders every loaded record, with no row budget", async () => {
+    const records = Array.from({ length: 60 }, (_, i) =>
+      userRecord({ recordId: `r${i}`, text: `message ${i}` }),
+    );
+    const text = allText((await frameOf({ records }, 200)).rows);
+    expect(text).toContain("message 0");
+    expect(text).toContain("message 59");
   });
 
-  test("drops the OLDEST records and keeps the newest when the tail does not fit", async () => {
-    const handle = await createHeadlessRenderer({ w: 60, h: 12 });
-    open = handle;
-    // Each record costs 2 rows (header + one body line); 4 rows holds the indicator block (2)
-    // plus exactly one record.
-    handle.mount(
-      <ChatScrollback
-        id="scrollback"
-        records={three()}
-        agentLabel="claude"
-        width={58}
-        maxRows={4}
-      />,
-    );
-    await handle.render();
-    const rows = handle.capture().rows;
-    expect(findRowIndex(rows, "newest")).toBeGreaterThanOrEqual(0);
-    expect(findRowIndex(rows, "oldest")).toBe(-1);
-    expect(findRowIndex(rows, "middle")).toBe(-1);
+  test("the indicator counts UNLOADED records, not records off screen", async () => {
+    const text = allText((await frameOf({ unloadedCount: 249, atStart: false })).rows);
+    expect(text).toContain("249");
   });
 
-  test("names how many records it dropped, in the design's own amberDim bold indicator", async () => {
-    const handle = await createHeadlessRenderer({ w: 60, h: 12 });
-    open = handle;
-    handle.mount(
-      <ChatScrollback
-        id="scrollback"
-        records={three()}
-        agentLabel="claude"
-        width={58}
-        maxRows={4}
-      />,
-    );
-    await handle.render();
-    const rows = handle.capture().rows;
-    const indicatorRow = findRowIndex(rows, "2 earlier messages");
-    expect(indicatorRow).toBeGreaterThanOrEqual(0);
-    const run = rows[indicatorRow]?.find((entry) => entry.text.includes("earlier messages"));
-    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.amberDim);
-    expect((run?.attrs ?? 0) & 1).toBe(1);
+  test("no indicator once the chat's start is loaded", async () => {
+    expect(allText((await frameOf({})).rows)).not.toContain("earlier");
   });
 
-  test("never spends more rows than its budget", async () => {
-    const handle = await createHeadlessRenderer({ w: 60, h: 20 });
-    open = handle;
-    handle.mount(
-      <ChatScrollback
-        id="scrollback"
-        records={three()}
-        agentLabel="claude"
-        width={58}
-        maxRows={4}
-      />,
+  test("the loading state replaces the indicator's own label", async () => {
+    const text = allText(
+      (await frameOf({ unloadedCount: 249, atStart: false, olderPage: { kind: "loading" } })).rows,
     );
-    await handle.render();
-    const rows = handle.capture().rows.map((row) =>
-      row
-        .map((run) => run.text)
-        .join("")
-        .trimEnd(),
+    expect(text).toContain(OLDER_LOADING_TEXT);
+  });
+
+  test("a failed load shows its own bounded message", async () => {
+    const text = allText(
+      (
+        await frameOf({
+          unloadedCount: 249,
+          atStart: false,
+          olderPage: { kind: "failed", safeMessage: "page unreadable" },
+        })
+      ).rows,
     );
-    expect(rows.findLastIndex((row) => row !== "") + 1).toBeLessThanOrEqual(4);
+    expect(text).toContain("page unreadable");
+  });
+
+  // Design iteration 10, answer 4 (design/termcraft-engine.js:1505-1506): the failed state is
+  // TWO separate rows, not one string folded together — the bounded message (red, bold) then
+  // the fixed "PgUp retries" hint (faint, not bold) on the row directly beneath it. The test
+  // above only checks the message text is present; this locks the exact two-row shape and
+  // styling so a regression that merges them back into one line, or swaps a color/weight,
+  // fails loudly instead of silently passing the looser `toContain` check.
+  test("a failed load renders the message bold-red and 'PgUp retries' faint on its own row beneath it", async () => {
+    const { rows } = await frameOf({
+      unloadedCount: 249,
+      atStart: false,
+      olderPage: { kind: "failed", safeMessage: "page unreadable" },
+    });
+    const messageRow = findRowIndex(rows, "page unreadable");
+    const retryRow = findRowIndex(rows, "PgUp retries");
+    expect(messageRow).toBeGreaterThanOrEqual(0);
+    expect(retryRow).toBe(messageRow + 1);
+
+    const messageRun = rows[messageRow]?.find((run) => run.text.includes("page unreadable"));
+    expect(messageRun && extractRgb(messageRun.fg)).toBe<string>(SHELL_PALETTE.red);
+    expect((messageRun?.attrs ?? 0) & 1).toBe(1);
+
+    const retryRun = rows[retryRow]?.find((run) => run.text.includes("PgUp retries"));
+    expect(retryRun && extractRgb(retryRun.fg)).toBe<string>(SHELL_PALETTE.faint);
+    expect((retryRun?.attrs ?? 0) & 1).toBe(0);
+  });
+
+  // Design iteration 10, answer 1 (design/termcraft-engine.js:1502-1503): the "more" state pins
+  // a second, un-bold `▲` mark at the row's right edge alongside the bold label — a second
+  // visual cue the plan's dispatch explicitly asked to reproduce rather than silently drop.
+  test("the 'more' state pins a second, un-bold ▲ mark at the row's right edge", async () => {
+    const { rows } = await frameOf({ unloadedCount: 8, atStart: false });
+    const labelRow = findRowIndex(rows, "8 earlier messages");
+    expect(labelRow).toBeGreaterThanOrEqual(0);
+
+    const markRun = rows[labelRow]?.find((run) => run.text.trim() === "▲");
+    expect(markRun).toBeDefined();
+    expect(markRun && extractRgb(markRun.fg)).toBe<string>(SHELL_PALETTE.amberDim);
+    expect((markRun?.attrs ?? 0) & 1).toBe(0);
+  });
+
+  // Design iteration 10, answer 5 (design/termcraft-engine.js:1507): the chat-start marker is
+  // faint, never bold, and renders alongside no indicator (§11 answer 1's "more" state and the
+  // "start" state are mutually exclusive in practice — reaching the true start means nothing is
+  // left unloaded above).
+  test("the start marker renders the design's exact literal, faint, and not bold", async () => {
+    const { rows } = await frameOf({});
+    const startRow = findRowIndex(rows, CHAT_START_TEXT);
+    expect(startRow).toBeGreaterThanOrEqual(0);
+
+    const startRun = rows[startRow]?.find((run) => run.text.includes(CHAT_START_TEXT));
+    expect(startRun && extractRgb(startRun.fg)).toBe<string>(SHELL_PALETTE.faint);
+    expect((startRun?.attrs ?? 0) & 1).toBe(0);
   });
 });
