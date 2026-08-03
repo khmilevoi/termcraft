@@ -115,6 +115,10 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
   test("a candidate shares the workspace grammar", () => {
     expectNamespace("candidate", "design/pages/home.tsx", "design-source");
     expectNamespace("candidate", "design/pages.json", "design-source");
+    // `classifyWorkspace` serves both root kinds from the same function — the root-only .d.ts
+    // narrowing above holds for `candidate` by construction, but pin it directly rather than
+    // leaving that as an inference from the `workspace` cases.
+    expectUnknown("candidate", "lib/runtime.d.ts");
   });
 
   test("classifies the `.termcraft` project's remaining namespaces unchanged", () => {

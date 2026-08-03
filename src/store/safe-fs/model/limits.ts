@@ -126,11 +126,9 @@ function classifyWorkspace(components: readonly string[]): ManagedNamespace | nu
 
   if (first === DESIGN_DIRNAME) return components.length >= 2 ? "design-source" : null;
 
-  if (components.length === 1) {
-    if (AGENT_DOC_FILES.has(first)) return "agent-runtime-doc";
-    if (first.endsWith(".d.ts")) return "agent-runtime-doc";
-    return null;
-  }
+  if (components.length !== 1) return null;
+  if (AGENT_DOC_FILES.has(first)) return "agent-runtime-doc";
+  if (first.endsWith(".d.ts")) return "agent-runtime-doc";
   return null;
 }
 
