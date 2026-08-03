@@ -1203,16 +1203,60 @@ describe("project.open", () => {
     });
   });
 
-  test("a pass error naming NO page invalidates nothing and is logged, never dropped in silence", async () => {
+  test("a CRASHED type check invalidates EVERY descriptor — a compiler that never ran is not evidence the tree is clean", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const about = slug("about");
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" },
+          { pageSlug: about, bytes: FAKE_SOURCE_BYTES, entry: "pages/about.tsx" },
+        ],
+      });
+      const gateRunner = createFakeGateRunner();
+      // `gate/model/type-check.ts`'s crash path VERBATIM in shape: ONE fatal for the WHOLE tree,
+      // carrying no `file` — deliberately, so it is never mis-attributed to a single page — and
+      // therefore no `blockedPages` either. Review round 1 found that this was structurally
+      // indistinguishable from the orphan-module case below, so it warned and invalidated NOTHING:
+      // every page in the project published "ready" while the type check had not run at all. That
+      // is the exact fail-open this task exists to prevent, and this test is what keeps it fixed.
+      const crashed = {
+        kind: "type" as const,
+        code: "TYPE_CHECK_UNAVAILABLE",
+        message: "type check unavailable — the TypeScript compiler subprocess failed: EPIPE",
+      };
+      gateRunner.queueRunTreeResult({ errors: [crashed], warnings: [], closures: [] });
+      const harness = buildTestContext({ gateRunner, designReader });
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+
+      // BOTH pages, not just one, and not none: the fake's default `runPage` passes every page, so
+      // a version that dropped this error would publish two "ready" descriptors here.
+      expect(descriptors.map((descriptor) => descriptor.status)).toEqual(["invalid", "invalid"]);
+      for (const descriptor of descriptors) {
+        expect(descriptor.status === "invalid" ? descriptor.error : null).toEqual({
+          code: "TYPE_CHECK_UNAVAILABLE",
+          safeMessage: crashed.message,
+        });
+      }
+    });
+  });
+
+  test("a pass error naming NO page but naming a FILE invalidates nothing and is logged, never dropped in silence", async () => {
     await context.start(async () => {
       const home = slug("home");
       const designReader = createFakeDesignStoreForPages({
         pages: [{ pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" }],
       });
       const gateRunner = createFakeGateRunner();
-      // An orphan module's type error: no closure reaches it, so it names no page. It is still
-      // fatal for the tree, but there is no descriptor it could honestly invalidate — Task 4's
-      // `dead-module` warning is what will tell the agent why nothing reaches it.
+      // An orphan module's type error: it NAMES A FILE, and no closure reaches that file, so it
+      // names no page. It is still fatal for the tree, but there is no descriptor it could
+      // honestly invalidate — the `dead-module` warning that will tell the agent why nothing
+      // reaches it is a later task's job. The `file` is what separates this from the crashed-
+      // compiler case directly above, which names no file and therefore invalidates everything.
       gateRunner.queueRunTreeResult({
         errors: [
           {

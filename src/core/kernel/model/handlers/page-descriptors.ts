@@ -121,37 +121,70 @@ async function readTreeSources(designReader: HandlerContext["deps"]["designReade
   return { inventory, files };
 }
 
+/** Where each of the whole-tree pass's errors lands once it is routed to descriptors. */
+interface PassErrorRoutingV1 {
+  /**
+   * Errors that invalidate EVERY descriptor, because the pass is reporting about the TREE and not
+   * about any page in it — see {@link routePassErrors}'s second case.
+   */
+  readonly treeWide: readonly GateErrorV1[];
+  /** Errors that invalidate exactly the pages they name in `blockedPages`. */
+  readonly byPage: ReadonlyMap<PageSlug, readonly GateErrorV1[]>;
+}
+
 /**
- * The whole-tree pass's errors, indexed by the pages each one names in `blockedPages`.
+ * Route the whole-tree pass's errors onto descriptors. THREE cases, and the difference between the
+ * last two is the whole point of this function:
  *
- * A pass error naming NO page invalidates nothing — there is no descriptor it could honestly
- * belong to — but it is LOGGED rather than dropped (errore: never swallow an error without
- * leaving a trace). That case is real and not a defect in the pass: a type error in a module no
- * page's closure reaches is still fatal for the tree, and the `dead-module` warning that will
- * explain why nothing reaches it is a later task's job.
+ * 1. `blockedPages` names pages — invalidate exactly those. A shared module's fault is a fault for
+ *    every page reaching it and for no other.
+ *
+ * 2. No `blockedPages` and NO `file` — invalidate EVERY descriptor. A pass error with no file is
+ *    not a statement about a page at all; it is a statement about the run. The case that makes
+ *    this load-bearing is `gate/model/type-check.ts`'s crash path: a crashed or unavailable
+ *    compiler yields exactly ONE fatal `TYPE_CHECK_UNAVAILABLE` for the WHOLE tree, deliberately
+ *    carrying no `file` so it is never mis-attributed to one page. Any global/config diagnostic
+ *    the compiler cannot place in a tree file lands here too.
+ *
+ *    TREATING THIS LIKE CASE 3 IS A FAIL-OPEN, and it was the shape of this code for one review
+ *    round: a file-less crash error is structurally indistinguishable from "no closure reaches
+ *    this" under a test that only asks whether `blockedPages` is empty, so every page in the
+ *    project published `"ready"` while the type check had not run at all. That is precisely the
+ *    failure this whole task exists to prevent — "type errors silently stop reaching descriptors,
+ *    a fail-open dressed as a refactor" — reintroduced one layer further down. The compiler not
+ *    running is never evidence that the tree is clean.
+ *
+ * 3. No `blockedPages` but a real `file` — the orphan-module case: a genuine diagnostic in a file
+ *    no page's closure reaches. It invalidates nothing, because there is no descriptor it could
+ *    honestly belong to, and it is LOGGED rather than dropped (errore: never swallow an error
+ *    without leaving a trace). This is not a defect in the pass; the `dead-module` warning that
+ *    will explain why nothing reaches that file is a later task's job.
  */
-function indexPassErrorsByPage(
-  errors: readonly GateErrorV1[],
-): ReadonlyMap<PageSlug, GateErrorV1[]> {
-  const bySlug = new Map<PageSlug, GateErrorV1[]>();
+function routePassErrors(errors: readonly GateErrorV1[]): PassErrorRoutingV1 {
+  const treeWide: GateErrorV1[] = [];
+  const byPage = new Map<PageSlug, GateErrorV1[]>();
   for (const error of errors) {
     const blocked = error.blockedPages ?? [];
-    if (blocked.length === 0) {
-      console.warn(
-        `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file ?? "<no file>"}" that no page's closure reaches, so it invalidates no descriptor: ${error.message}`,
-      );
+    if (blocked.length > 0) {
+      for (const slug of blocked) {
+        const existing = byPage.get(slug);
+        if (existing === undefined) {
+          byPage.set(slug, [error]);
+          continue;
+        }
+        existing.push(error);
+      }
       continue;
     }
-    for (const slug of blocked) {
-      const existing = bySlug.get(slug);
-      if (existing === undefined) {
-        bySlug.set(slug, [error]);
-        continue;
-      }
-      existing.push(error);
+    if (error.file === undefined) {
+      treeWide.push(error);
+      continue;
     }
+    console.warn(
+      `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file}" that no page's closure reaches, so it invalidates no descriptor: ${error.message}`,
+    );
   }
-  return bySlug;
+  return { treeWide, byPage };
 }
 
 /**
@@ -168,10 +201,12 @@ function indexPassErrorsByPage(
  * `runPage` would therefore publish `"ready"` for a page that does not compile — a fail-open
  * dressed as a refactor, which is precisely why this call is here and not deferred.
  *
- * A page is `"invalid"` if EITHER its own `runPage` reported a fatal or the pass reported one
- * naming it in `blockedPages`. Its own error is reported first when both exist: a broken page
- * contract is a better first thing to show than a shared module's type error, and preserving
- * that ordering is what keeps this change invisible to every page that has its own defect.
+ * A page is `"invalid"` if ANY of three things holds: its own `runPage` reported a fatal, the pass
+ * reported one naming it in `blockedPages`, or the pass reported a TREE-WIDE fatal — one carrying
+ * no file at all, such as a crashed compiler. See {@link routePassErrors} for why that third case
+ * cannot be folded into "names no page". Errors are ordered most-specific first — the page's own,
+ * then the ones attributed to it, then the tree-wide ones — so a broken page contract still leads,
+ * which is what keeps this change invisible to every page that has its own defect.
  */
 export async function buildPageDescriptors(
   context: HandlerContext,
@@ -191,7 +226,15 @@ export async function buildPageDescriptors(
       pages,
     }),
   );
-  const passErrorsByPage = indexPassErrorsByPage(pass.errors);
+  const routed = routePassErrors(pass.errors);
+  if (routed.treeWide.length > 0 && pages.length === 0) {
+    // No descriptor exists to carry them, so they would otherwise vanish here. The manifest naming
+    // no page is the only way to reach this, and it is still worth a trace: "the compiler crashed"
+    // is a fact about the run, not about how many pages the project happens to have.
+    console.warn(
+      `core/kernel/handlers/page-descriptors: the whole-tree pass reported ${routed.treeWide.length} tree-wide fatal(s) but the manifest lists no page to attribute them to: ${routed.treeWide.map((error) => `[${error.kind}/${error.code}] ${error.message}`).join("; ")}`,
+    );
+  }
 
   const descriptors: PageDescriptorV1[] = [];
   for (const entry of pages) {
@@ -217,7 +260,7 @@ export async function buildPageDescriptors(
       }),
     );
 
-    const errors = [...result.errors, ...(passErrorsByPage.get(entry.slug) ?? [])];
+    const errors = [...result.errors, ...(routed.byPage.get(entry.slug) ?? []), ...routed.treeWide];
     if (errors.length === 0 && result.descriptor !== null) {
       const { meta } = result.descriptor;
       descriptors.push({

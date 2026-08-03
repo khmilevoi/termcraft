@@ -52,10 +52,19 @@ export interface GateErrorV1 {
    * attributability: a fault in a module three pages share is reported once, naming the module,
    * carrying all three slugs here instead of being copied per reaching page.
    *
-   * ABSENT IS NOT "HARMLESS". A diagnostic no closure reaches (an orphan module) carries no
-   * `blockedPages` and is STILL fatal — the turn's verdict is whole-tree and never filters on
-   * this field. A consumer that attributes per page (`core/kernel`'s `buildPageDescriptors`)
-   * must log such a diagnostic rather than drop it.
+   * ABSENT IS NOT "HARMLESS", AND IT COVERS TWO DIFFERENT FACTS. Either way the diagnostic is
+   * STILL fatal — the turn's verdict is whole-tree and never filters on this field — but a
+   * consumer that attributes per page (`core/kernel`'s `buildPageDescriptors`) must tell them
+   * apart by {@link GateErrorV1.file}:
+   *
+   * - absent `blockedPages` WITH a `file`: an orphan module — a real diagnostic in a file no
+   *   page's closure reaches. There is no descriptor it could honestly belong to, so it
+   *   invalidates none, and the consumer logs it rather than dropping it.
+   * - absent `blockedPages` with NO `file`: a statement about the TREE, not about any page —
+   *   most consequentially the type check's own `TYPE_CHECK_UNAVAILABLE`, one fatal for the whole
+   *   tree with no file precisely so it is never mis-attributed to one page. A per-page consumer
+   *   must invalidate EVERY page for it. Treating it as "names no page, so it invalidates
+   *   nothing" publishes a whole project as valid on the strength of a compiler that never ran.
    *
    * Populated ONLY by {@link GateRunner.runTree}; every other method on this port leaves it
    * absent, since no other method holds a closure.
@@ -340,8 +349,10 @@ export interface GateRunner {
    *
    * The DESCRIPTOR path is the one consumer that legitimately attributes per page, because its
    * output IS per page — one `PageDescriptorV1` per slug, `"ready"` or `"invalid"`. It stays
-   * honest about the gap above by never treating an unattributed diagnostic as absent: a pass
-   * error naming no page invalidates nothing and is logged.
+   * honest about the gap above by never treating an unattributed diagnostic as absent: an orphan
+   * module's diagnostic invalidates nothing and is logged, while a file-less TREE-WIDE fatal
+   * invalidates every page. See {@link GateErrorV1.blockedPages} for why that split is not
+   * optional.
    */
   runTree(input: {
     readonly files: ReadonlyMap<string, string>;
