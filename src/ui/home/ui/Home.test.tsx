@@ -5,6 +5,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import type { ScoredSlashRow } from "ui/actions";
+import type { EditorBridge } from "ui/text-input";
 import { SHELL_PALETTE } from "ui/theme";
 
 import type { HomeProps } from "../types";
@@ -53,7 +54,20 @@ function hintKeyState(frame: Frame, glyph: string): "dis" | "active" | "plain" |
 
 const BOLD = 0b1;
 
-const baseProps: HomeProps = {
+/**
+ * The minimal {@link EditorBridge} every Home test needs: `attach` seeds the buffer with `seed`
+ * the moment `TextEditor` mounts (its own `attach(handle)` call), exactly like a real
+ * `createEditorBridge` would seed from the mirror atom (§7.2) — `mirror` is unused because no
+ * test here drives a live keystroke through the rendered editor.
+ */
+const bridgeWith = (seed: string): EditorBridge => ({
+  attach: (handle) => {
+    if (handle !== null) handle.setText(seed);
+  },
+  mirror: () => undefined,
+});
+
+const homeProps: HomeProps = {
   id: "home",
   width: 80,
   height: 20,
@@ -64,6 +78,7 @@ const baseProps: HomeProps = {
   selectedIndex: -1,
   openFailure: null,
   opening: false,
+  promptBridge: bridgeWith(""),
 };
 
 // §3.10, phase-8 Task 17: the exact two rows `filterSlashRows("/", {..., screen: "home"})`
@@ -93,9 +108,18 @@ const HOME_SLASH_ROWS: readonly ScoredSlashRow[] = [
   },
 ];
 
-/** Renders `Home` with `baseProps` plus overrides and returns the captured frame. */
+/**
+ * Renders `Home` with `homeProps` plus overrides and returns the captured frame.
+ *
+ * `promptBridge` re-derives from the EFFECTIVE `prompt` (base or overridden) whenever the caller
+ * does not pass its own bridge — otherwise a test overriding only `prompt` would render an editor
+ * still seeded from `homeProps`'s own empty default, since the bridge (not the `prompt` prop) is
+ * what actually seeds `TextEditor`'s buffer (see {@link HomeProps.promptBridge}'s own doc comment).
+ */
 async function renderHome(overrides: Partial<HomeProps> = {}): Promise<Frame> {
-  const props: HomeProps = { ...baseProps, ...overrides };
+  const prompt = overrides.prompt ?? homeProps.prompt;
+  const promptBridge = overrides.promptBridge ?? bridgeWith(prompt);
+  const props: HomeProps = { ...homeProps, ...overrides, promptBridge };
   const handle = await createHeadlessRenderer({ w: props.width, h: props.height });
   open = handle;
   handle.mount(<Home {...props} />);
@@ -117,23 +141,20 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.dim);
   });
 
-  // finding §2.6 (phase-8 Task 18): the cursor overlaps the placeholder's first cell (design
-  // `home()`, `design/termcraft-engine.js:145-146` — `text(...)` then `put(...)` at the SAME
-  // column), so the "D" is the cursor glyph itself and the faint run is the REST of the
-  // placeholder, not the whole string. This replaces the old assertion that pinned the previous
-  // defect (cursor appended after the full placeholder text).
-  test("an empty prompt shows the faint placeholder, cursor overlapping its first cell", async () => {
+  // Design `home()`, `design/termcraft-engine.js:145-146` overlaps a blinking cursor onto the
+  // placeholder's first cell via `text(...)` then `put(...)` at the SAME column — the prior,
+  // now-deleted single-line input emulated that by splitting the placeholder into two runs.
+  // `TextEditor` (Task 9) reproduces the overlap BY CONSTRUCTION instead: the cursor is the
+  // terminal's own native hardware cursor, physically occupying the placeholder's first cell,
+  // never a painted glyph — see `TextEditor.test.tsx`'s own documentation of this. `host/render`'s
+  // `capture()`/styled-run buffer has no cursor overlay to observe (confirmed by inspecting
+  // `renderer.ts`: it reads `getSpanLines()` only), so the placeholder renders as ONE
+  // uninterrupted run and there is no `█` glyph to assert on any more.
+  test("an empty prompt shows the faint placeholder as one uninterrupted run", async () => {
     const frame = await renderHome();
-    const rest = findRun(frame, "escribe the TUI you want to design");
-    expect(rest).toBeDefined();
-    expect(rest && extractRgb(rest.fg)).toBe<string>(SHELL_PALETTE.faint);
-    expect(frameContains(frame, "█")).toBe(true);
-    // Review fix round 1 (Important): the two assertions above alone pass against the OLD
-    // trailing-cursor defect too — `findRun` is a substring match, so
-    // `"Describe the TUI you want to design…█"` also contains "escribe the TUI you want to
-    // design" and its own `█`. This is the assertion that actually distinguishes the two: only
-    // the FIXED, overlapping render never contains the full un-split placeholder text as one run.
-    expect(frameContains(frame, "Describe the TUI")).toBe(false);
+    const placeholder = findRun(frame, "Describe the TUI you want to design…");
+    expect(placeholder).toBeDefined();
+    expect(placeholder && extractRgb(placeholder.fg)).toBe<string>(SHELL_PALETTE.faint);
   });
 
   test("a non-empty prompt replaces the placeholder", async () => {
@@ -190,6 +211,47 @@ describe("Home screen — idle (design home(), design/01-home.dc.html)", () => {
     const run = findRun(frame, "· / model");
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
+  });
+});
+
+// Task 9: the prompt box grows with the editor's own row count instead of design's fixed
+// `boxH=6` — the closest faithful mapping the composer already takes (spec §3), pinned here for
+// Home's own prompt.
+describe("Home screen — the prompt editor grows the box (Task 9)", () => {
+  test("the prompt box grows with a multi-line prompt, keeping the hint row below it", async () => {
+    const handle = await createHeadlessRenderer({ w: 100, h: 30 });
+    open = handle;
+    handle.mount(
+      <Home
+        {...homeProps}
+        prompt={"first line\nsecond line\nthird line"}
+        promptBridge={bridgeWith("first line\nsecond line\nthird line")}
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "first line")).toBeDefined();
+    expect(findRun(frame, "third line")).toBeDefined();
+    // The `⏎ create` hint is pushed down by the grown editor, never overdrawn by it.
+    expect(findRun(frame, "⏎ create")).toBeDefined();
+  });
+
+  test("the box is exactly its design height while the prompt fits one row", async () => {
+    const handle = await createHeadlessRenderer({ w: 100, h: 30 });
+    open = handle;
+    handle.mount(<Home {...homeProps} prompt="" promptBridge={bridgeWith("")} />);
+    await handle.render();
+    // design `home()` :139 — `const boxH=6;`. At one editor row nothing about this screen moves.
+    // `rectOf` is `RenderHandle`'s own absolute-rectangle query (`host/render/types.ts`).
+    expect(handle.rectOf(`${homeProps.id}-prompt-box`)?.height).toBe(6);
+  });
+
+  test("the box gains exactly one row per extra editor row", async () => {
+    const handle = await createHeadlessRenderer({ w: 100, h: 30 });
+    open = handle;
+    handle.mount(<Home {...homeProps} prompt={"a\nb\nc"} promptBridge={bridgeWith("a\nb\nc")} />);
+    await handle.render();
+    expect(handle.rectOf(`${homeProps.id}-prompt-box`)?.height).toBe(8);
   });
 });
 
@@ -271,11 +333,13 @@ describe("Home screen — checking outcome (design home('checking'), :139-161)",
     expect(findRun(frame, "⠹ checking claude")).toBeDefined();
   });
 
-  test("the prompt box itself stays live (unlike blocked) — title amberHi, cursor shown", async () => {
+  // `cursor shown` is no longer independently assertable — `TextEditor` never paints a cursor
+  // glyph (see the empty-placeholder test above); `focused`/`showCursor` are both `true` here
+  // (only `blocked` blurs and hides them), which is the real, if unobservable-from-a-frame, signal.
+  test("the prompt box itself stays live (unlike blocked) — title amberHi", async () => {
     const frame = await renderHome({ health: checkingHealth });
     const title = findRun(frame, "describe");
     expect(title && extractRgb(title.fg)).toBe<string>(SHELL_PALETTE.amberHi);
-    expect(findRun(frame, "█")).toBeDefined();
   });
 
   test("renders no health panel (checking is not blocked/advisory)", async () => {
@@ -299,10 +363,21 @@ describe("Home screen — blocked/login outcome (design homeHealth('login'), :16
     expect(border && extractRgb(border.fg)).toBe<string>(SHELL_PALETTE.border);
     const title = findRun(frame, "describe");
     expect(title && extractRgb(title.fg)).toBe<string>(SHELL_PALETTE.dim);
-    // Exact match, not `.includes`: the LOGO ("❯ termcraft") also starts with "❯ " and renders
-    // earlier in the frame, so a substring search would find the wrong run.
-    const caret = frame.rows.flat().find((run) => run.text === "❯ ");
+    // `TextEditor`'s caret run carries no `attributes` (unlike the prior single-line input's bold
+    // caret), so while
+    // `blocked` — where `caretFg` and `placeholderFg` are BOTH `faint` — host/render's own
+    // adjacent-same-style-run merge (the same mechanism `hintKeyState`'s own comment above
+    // documents for the status bar) coalesces the caret and the placeholder into ONE run,
+    // `"❯ Describe the TUI you want to design…"`, not a standalone `"❯ "`. A row-scoped search (the
+    // row directly below the bordered title) still finds the caret's own start reliably, without
+    // risking the LOGO's unrelated, differently-colored `"❯ termcraft"` run above it.
+    const titleRow = rowIndexOf(frame, "describe");
+    expect(titleRow).toBeGreaterThanOrEqual(0);
+    const caret = (frame.rows[titleRow + 1] ?? []).find((run) => run.text.startsWith("❯ "));
     expect(caret && extractRgb(caret.fg)).toBe<string>(SHELL_PALETTE.faint);
+    // Still true, though now vacuously so — `TextEditor` never paints a `█` glyph regardless of
+    // `blocked` (see the empty-placeholder test's own note); `focused={false}`/`showCursor={false}`
+    // is the real mechanism that hides the terminal's own native cursor here.
     expect(frameContains(frame, "█")).toBe(false);
   });
 
@@ -410,11 +485,12 @@ describe("Home screen — advisory outcome (design homeHealth('shutdown'|'sandbo
     expect(homeSubmitAllowed(sandboxHealth)).toBe(true);
   });
 
-  test("the prompt box stays live (advisory is not blocking) — title amberHi, cursor shown", async () => {
+  // Same non-assertable-cursor note as the checking describe block above — `focused`/`showCursor`
+  // are both `true` for advisory (only `blocked` blurs and hides them).
+  test("the prompt box stays live (advisory is not blocking) — title amberHi", async () => {
     const frame = await renderHome({ health: shutdownHealth });
     const title = findRun(frame, "describe");
     expect(title && extractRgb(title.fg)).toBe<string>(SHELL_PALETTE.amberHi);
-    expect(frameContains(frame, "█")).toBe(true);
   });
 
   // fix round 1, Finding 5: the status-bar badge IS shown for advisory (design `:192`), but no

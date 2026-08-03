@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 
 import { uuidv7 } from "infrastructure/uuid";
 import type { PinListRow } from "ui/chat";
@@ -41,12 +41,21 @@ describe("pinListRowCount", () => {
 });
 
 describe("composerRowCount", () => {
-  it("is 2 rows with no attach line (seam + input)", () => {
-    expect(composerRowCount(false)).toBe(2);
+  test("is the seam row plus the editor's own rows, with no attach line", () => {
+    expect(composerRowCount(false, 1)).toBe(2);
+    expect(composerRowCount(false, 3)).toBe(4);
+    expect(composerRowCount(false, 6)).toBe(7);
   });
 
-  it("is 3 rows with an attach line (seam + attach + input)", () => {
-    expect(composerRowCount(true)).toBe(3);
+  test("adds one for the attach line", () => {
+    expect(composerRowCount(true, 1)).toBe(3);
+    expect(composerRowCount(true, 4)).toBe(6);
+  });
+
+  test("at one editor row it is exactly what the design's fixed composer always was", () => {
+    // The single-row case must stay pixel-identical (spec §3): 2 without an attach line, 3 with.
+    expect(composerRowCount(false, 1)).toBe(2);
+    expect(composerRowCount(true, 1)).toBe(3);
   });
 });
 
@@ -106,6 +115,29 @@ describe("agentStatusMaxRows", () => {
     // panel's pinned chrome alone, so an ever-growing history can never squeeze it.
     const input = { frameH: 39, chromeRows: 3, hasAgentLine: true, composerRows: 2 } as const;
     expect(agentStatusMaxRows({ ...input, pinListRows: 0 })).toBe(MAX_TIMELINE_ROWS);
+  });
+
+  test("a grown composer takes its rows out of the live block's budget", () => {
+    // frameH is deliberately small here (unlike this file's other frameH=35+ fixtures): at 35 both
+    // readings' `available` land comfortably above MAX_TIMELINE_ROWS and clamp to the SAME 11-row
+    // ceiling, so the 3-row composer growth this test is about would be invisible in the result —
+    // masked by the clamp rather than exercised by it. 15 keeps both readings inside the
+    // unclamped [3, MAX_TIMELINE_ROWS] band, where the subtraction actually shows.
+    const base = agentStatusMaxRows({
+      frameH: 15,
+      chromeRows: 1,
+      hasAgentLine: true,
+      pinListRows: 0,
+      composerRows: composerRowCount(false, 1),
+    });
+    const grown = agentStatusMaxRows({
+      frameH: 15,
+      chromeRows: 1,
+      hasAgentLine: true,
+      pinListRows: 0,
+      composerRows: composerRowCount(false, 4),
+    });
+    expect(base - grown).toBe(3);
   });
 });
 

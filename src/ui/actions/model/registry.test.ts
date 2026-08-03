@@ -422,10 +422,13 @@ describe("resolveHotkey", () => {
     expect(resolveHotkey("x")).toBeNull();
   });
 
-  test("page stepping resolves from both its canonical key and its arrow alias", () => {
+  // G1: the ctrl+arrow aliases were dropped when the composer became a real editor — keeping them
+  // would have made Ctrl+Left/Ctrl+Right switch pages from inside a text field, shadowing the
+  // editor's own word-movement bindings. `ctrl+b`/`ctrl+n` remain the sole canonical page steps.
+  test("the page steps are ctrl+b / ctrl+n only — the arrow aliases belong to the editor now", () => {
     expect(resolveHotkey("ctrl+b")?.id).toBe("page.prev");
     expect(resolveHotkey("ctrl+n")?.id).toBe("page.next");
-    expect(resolveHotkey("ctrl+left")?.id).toBe("page.prev");
-    expect(resolveHotkey("ctrl+right")?.id).toBe("page.next");
+    expect(resolveHotkey("ctrl+left")).toBeNull();
+    expect(resolveHotkey("ctrl+right")).toBeNull();
   });
 });

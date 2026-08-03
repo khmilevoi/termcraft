@@ -367,7 +367,8 @@ final group's own heading spells out which is which).
   `createUiRoot`, `createUiDeps`, and the UI-declared `KernelPort`
 - `src/ui/app/model/root.tsx`, `src/ui/app/ui/App.tsx` — the disposable OpenTUI
   root seam and reactive application root that phase 8 composes
-- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`, and
+- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`,
+  `src/ui/app/model/primary-input.ts`, `src/ui/text-input/model/`, and
   `src/ui/preview/model/interaction.ts` — the interaction ownership boundary from
   terminal input through exact Kernel commands and displayed-frame geometry tokens
 

@@ -4,6 +4,7 @@ import type { AgentHealth } from "ui/agent-health";
 import type { Dispatcher, UiPreviewFrame } from "ui/kernel";
 import type { Mirror, ScreenKind } from "ui/mirror";
 import type { PreviewInteractionState } from "ui/preview";
+import type { EditorBridge, TextEditorHandle } from "ui/text-input";
 
 import type { FocusTarget, OverlayKind } from "./model/focus";
 
@@ -27,6 +28,8 @@ export interface WorkspaceLocalState {
    * see `model/page-selection.ts` for why a tab click cannot travel through Kernel state.
    */
   readonly pageOverride: Atom<string | null>;
+  /** The mounted composer editor, or `null`. See `ui/app/model/primary-input.ts`. */
+  readonly composerEditor: Atom<TextEditorHandle | null>;
   /**
    * The agent-health reading (spec 2026-08-02). Home used to be this atom's only consumer; the
    * Workspace now renders it in the status bar's `hint` slot, because routing an existing project
@@ -49,6 +52,12 @@ export interface WorkspaceDeps {
   readonly runtimeError: Atom<Error | null>;
   readonly interaction: PreviewInteractionState;
   readonly local: WorkspaceLocalState;
+  /**
+   * The composer editor's wiring. Declared here, structurally, for the same reason the rest of
+   * this interface is: `ui/workspace` never imports `ui/app`, and the App's `UiDeps` satisfies
+   * this shape.
+   */
+  readonly editors: { readonly composer: EditorBridge };
   /**
    * The page the Workspace is actually showing: the tab-strip override when the user has picked
    * one, else the Kernel's own `activePageSlug`. Every consumer — tab strip, status bar, pin

@@ -4,7 +4,7 @@ import { SlashMenu } from "ui/slash-menu";
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintBadge, StatusBarHintKey } from "ui/status-bar";
-import { TextInput } from "ui/text-input";
+import { TextEditor, editorRowCount } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { homeSubmitAllowed } from "../types";
@@ -23,6 +23,9 @@ const PLACEHOLDER = "Describe the TUI you want to design…";
 // centered-prompt sizing.
 const promptBoxWidth = (width: number) => Math.min(width - 16, 84);
 const PROMPT_BOX_HEIGHT = 6;
+
+/** The `❯ ` caret run drawn before the editor — two cells, matching design `home()` `:145`. */
+const PROMPT_CARET_COLUMNS = 2;
 
 const BOLD = shellAttrs({ bold: true });
 
@@ -132,6 +135,15 @@ function homeIdleHintKeys(health: AgentHealth, opening: boolean): readonly Statu
 function HomeIdle(props: HomeProps) {
   const { health } = props;
   const iw = promptBoxWidth(props.width);
+  // The editor wraps inside the bordered box: its width less the border and the caret run. The
+  // box grows with it, keeping design's own `boxH=6` (`design/termcraft-engine.js:139`) as the
+  // one-row case exactly — the same approved divergence the composer takes (spec §3).
+  const promptEditorWidth = Math.max(1, iw - 2 - PROMPT_CARET_COLUMNS);
+  const promptEditorRows = editorRowCount({
+    text: props.prompt,
+    width: promptEditorWidth,
+    frameH: props.height - 1,
+  });
   const checking = health.kind === "checking";
   // Design `homeHealth('login')` dims the shared "describe" prompt box itself (frame color,
   // caret, cursor) for the blocking outcome only — `checking`'s own box in `home()` stays
@@ -177,7 +189,7 @@ function HomeIdle(props: HomeProps) {
           <box
             id={`${props.id}-prompt-box`}
             width={iw}
-            height={PROMPT_BOX_HEIGHT}
+            height={PROMPT_BOX_HEIGHT + promptEditorRows - 1}
             border
             borderStyle="rounded"
             borderColor={blocked ? SHELL_PALETTE.border : SHELL_PALETTE.amber}
@@ -189,22 +201,31 @@ function HomeIdle(props: HomeProps) {
             {
               // Design overlaps the blinking cursor onto the placeholder's first cell
               // (design/termcraft-engine.js:145-146, `put` at the SAME column as the preceding
-              // `text`) — `TextInput` (finding §2.6, phase-8 Task 18) reproduces that exactly,
-              // no absolute positioning needed. Cursor omitted entirely while `blocked`,
-              // matching design `homeHealth('login')`'s own `if(!blocking) this.put(...)`
-              // (`:173`), which never draws a cursor over a refused prompt. `blocked`'s own
-              // prompt is also genuinely non-interactive now (`keymap.ts`'s own comment, fix
-              // round 1 Finding 6) — appearance matches behaviour on both counts.
+              // `text`) — `TextEditor` reproduces that by construction — the cursor is the
+              // terminal's own, and it physically occupies the placeholder's first cell. Cursor
+              // omitted entirely while `blocked`, matching design `homeHealth('login')`'s own
+              // `if(!blocking) this.put(...)` (`:173`), which never draws a cursor over a refused
+              // prompt. `blocked`'s own prompt is also genuinely non-interactive now (`keymap.ts`'s
+              // own comment, fix round 1 Finding 6) — appearance matches behaviour on both counts.
             }
-            <TextInput
+            <TextEditor
               id={`${props.id}-prompt-row`}
-              value={props.prompt}
               placeholder={PLACEHOLDER}
               caret={"❯ "}
               caretFg={blocked ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
               valueFg={SHELL_PALETTE.fg}
               placeholderFg={SHELL_PALETTE.faint}
+              cursorFg={SHELL_PALETTE.amber}
+              multiline
+              rows={promptEditorRows}
+              width={promptEditorWidth}
+              // `blocked` is the one outcome with a genuinely non-interactive prompt (keymap.ts's
+              // own fix-round-1 Finding 6): design `homeHealth('login')` `:173` draws no cursor
+              // over a refused prompt, and blurring it is what makes the `r`/`q` keys safe to bind
+              // literally there. `missing` never reaches this component at all.
+              focused={!blocked}
               showCursor={!blocked}
+              bridge={props.promptBridge}
             />
             <box id={`${props.id}-prompt-hint`} flexDirection="row">
               <text

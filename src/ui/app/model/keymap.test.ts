@@ -3,9 +3,16 @@ import { describe, expect, test } from "bun:test";
 import type { AgentHealth } from "ui/agent-health";
 
 import type { KeyContext, KeyLike } from "./keymap";
-import { resolveActiveOverlay, resolveKey } from "./keymap";
+import { isClaimedKey, resolveActiveOverlay, resolveKey } from "./keymap";
 
-const key = (over: Partial<KeyLike>): KeyLike => ({ name: "", ctrl: false, sequence: "", ...over });
+const key = (over: Partial<KeyLike>): KeyLike => ({
+  name: "",
+  ctrl: false,
+  shift: false,
+  meta: false,
+  sequence: "",
+  ...over,
+});
 const READY_HEALTH: AgentHealth = { kind: "ready", agent: "claude" };
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
   screen: "workspace",
@@ -50,14 +57,17 @@ describe("resolveKey — global keys (design §3.8)", () => {
     });
   });
 
-  test("Ctrl+Left / Ctrl+Right still step pages where the terminal encodes the chord", () => {
+  test("Ctrl+Left / Ctrl+Right are NOT page steps — they move the cursor by word (G1)", () => {
+    // The aliases were dropped when the composer became a real editor: `ctrl+b`/`ctrl+n` are the
+    // page-step keys (the registry's own comment already names them the reliable primary, "one
+    // byte, no encoding to get wrong"), and neither arrow chord is drawn anywhere — both entries
+    // carry `hint: false`. Keeping them would have made Ctrl+Left switch pages inside a text
+    // editor, which is the "advertised but wrong" trap this codebase has already fixed twice.
     expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
-      kind: "action-execute",
-      actionId: "page.prev",
+      kind: "none",
     });
     expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
-      kind: "action-execute",
-      actionId: "page.next",
+      kind: "none",
     });
   });
 
@@ -85,22 +95,6 @@ describe("resolveKey — global keys (design §3.8)", () => {
 });
 
 describe("resolveKey — Home", () => {
-  test("printable chars feed the prompt", () => {
-    expect(resolveKey(key({ name: "a", sequence: "a" }), ctx({ screen: "home" }))).toEqual({
-      kind: "home-input",
-      ch: "a",
-    });
-  });
-
-  test("Enter submits, Backspace deletes", () => {
-    expect(resolveKey(key({ name: "return" }), ctx({ screen: "home" }))).toEqual({
-      kind: "home-submit",
-    });
-    expect(resolveKey(key({ name: "backspace" }), ctx({ screen: "home" }))).toEqual({
-      kind: "home-backspace",
-    });
-  });
-
   test("Tab on Home does nothing", () => {
     expect(resolveKey(key({ name: "tab" }), ctx({ screen: "home" }))).toEqual({ kind: "none" });
   });
@@ -114,13 +108,15 @@ describe("resolveKey — Home", () => {
     ).toEqual({ kind: "home-recheck" });
   });
 
-  test("r still types into the idle Home prompt when the agent is ready", () => {
+  // `home-input` is gone (§6.1/§6.4): a live `r` now falls through to `none`, letting the mounted
+  // editor type it, rather than resolving to an intent.
+  test("r falls through to the editor on the idle Home prompt when the agent is ready", () => {
     expect(
       resolveKey(
         key({ name: "r", sequence: "r" }),
         ctx({ screen: "home", agentHealth: READY_HEALTH }),
       ),
-    ).toEqual({ kind: "home-input", ch: "r" });
+    ).toEqual({ kind: "none" });
   });
 
   test("on the missing-agent error panel, only r and q are live — no submit/backspace/input affordance exists there", () => {
@@ -253,34 +249,20 @@ describe("resolveKey — Home", () => {
       expect(resolveKey(key({ name: "q", sequence: "q" }), latched)).toEqual({ kind: "none" }); // prompt still "x"
     });
 
-    test("r types into the prompt on checking/advisory/ready — only blocked wires it to re-check", () => {
-      const checking = ctx({ screen: "home", agentHealth: { kind: "checking", agent: "claude" } });
-      const advisory = ctx({
-        screen: "home",
-        agentHealth: { kind: "advisory", agent: "claude", panel: "shutdown", detail: "x" },
-      });
-      expect(resolveKey(key({ name: "r", sequence: "r" }), checking)).toEqual({
-        kind: "home-input",
-        ch: "r",
-      });
-      expect(resolveKey(key({ name: "r", sequence: "r" }), advisory)).toEqual({
-        kind: "home-input",
-        ch: "r",
-      });
-    });
-
     // finding §2.7, fix round 1 Finding 6: advisory's prompt stays genuinely live (design draws
-    // its own blinking cursor for it too, `:173`), so `q` must still type into it — only
-    // `blocked`/`missing`, whose prompts are genuinely disabled, get the literal `q`-quits key.
-    test("q types into the prompt on checking/advisory/ready — only blocked/missing bind it to quit", () => {
+    // its own blinking cursor for it too, `:173`), so `r`/`q` must reach the editor rather than
+    // resolving to `home-recheck`/`exit` — only `blocked`/`missing`, whose prompts are genuinely
+    // disabled, bind those literally. `home-input` is gone (§6.1/§6.4): a live `r`/`q` now falls
+    // through to `none`, letting the mounted editor type it, rather than resolving to an intent.
+    test("r/q fall through to the editor on checking/advisory/ready — only blocked/missing bind them", () => {
+      const checking = ctx({ screen: "home", agentHealth: { kind: "checking", agent: "claude" } });
       const advisory = ctx({
         screen: "home",
         agentHealth: { kind: "advisory", agent: "claude", panel: "sandbox", detail: "x" },
       });
-      expect(resolveKey(key({ name: "q", sequence: "q" }), advisory)).toEqual({
-        kind: "home-input",
-        ch: "q",
-      });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), checking)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "r", sequence: "r" }), advisory)).toEqual({ kind: "none" });
+      expect(resolveKey(key({ name: "q", sequence: "q" }), advisory)).toEqual({ kind: "none" });
     });
 
     test("advisory allows Enter — a timeout/degraded reading proves nothing that blocks submit", () => {
@@ -306,10 +288,10 @@ describe("resolveKey — Home", () => {
       ).toEqual({ kind: "slash-open" });
     });
 
-    test("types as literal text once the Home prompt already holds content", () => {
+    test("falls through to the editor as literal text once the Home prompt already holds content", () => {
       expect(
         resolveKey(key({ sequence: "/", name: "/" }), ctx({ screen: "home", homePrompt: "abc" })),
-      ).toEqual({ kind: "home-input", ch: "/" });
+      ).toEqual({ kind: "none" });
     });
 
     // The `missing`/`blocked` branches return above this check for every key but `r`/`q`
@@ -380,13 +362,6 @@ describe("resolveKey — too-small-terminal (enlarge)", () => {
 });
 
 describe("resolveKey — Workspace composer", () => {
-  test("printable chars feed the composer when it is focused", () => {
-    expect(resolveKey(key({ name: "x", sequence: "x" }), ctx({}))).toEqual({
-      kind: "composer-input",
-      ch: "x",
-    });
-  });
-
   test("Enter submits the composer", () => {
     expect(resolveKey(key({ name: "return" }), ctx({}))).toEqual({ kind: "composer-submit" });
   });
@@ -425,14 +400,11 @@ describe("resolveKey — Workspace composer", () => {
   // Master §3.2: "Typing the next message while a turn runs is allowed, but sending is
   // disabled." `composer-submit` still resolves normally here; the refusal moves to
   // `applyIntent` (`intent.ts`), which no-ops without clearing the draft (see `intent.test.ts`).
-  test("keeps typing, backspace, / and Enter-submit live for the whole turn (§3.2)", () => {
+  test("keeps typing, backspace, / and Enter-submit reaching the editor for the whole turn (§3.2)", () => {
     const running = ctx({ turnRunning: true, composerValue: "" });
-    expect(resolveKey(key({ name: "a", sequence: "a" }), running)).toEqual({
-      kind: "composer-input",
-      ch: "a",
-    });
+    expect(resolveKey(key({ name: "a", sequence: "a" }), running)).toEqual({ kind: "none" });
     expect(resolveKey(key({ name: "backspace" }), { ...running, composerValue: "ab" })).toEqual({
-      kind: "composer-backspace",
+      kind: "none",
     });
     expect(resolveKey(key({ sequence: "/", name: "/" }), running)).toEqual({
       kind: "slash-open",
@@ -457,13 +429,13 @@ describe("the Workspace's opening state (spec 2026-08-02)", () => {
         key({ name: "a", sequence: "a" }),
         ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
       ),
-    ).toEqual({ kind: "composer-input", ch: "a" });
+    ).toEqual({ kind: "none" });
     expect(
       resolveKey(
         key({ name: "backspace" }),
         ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
       ),
-    ).toEqual({ kind: "composer-backspace" });
+    ).toEqual({ kind: "none" });
   });
 
   test("an open project sends as before", () => {
@@ -482,18 +454,7 @@ describe("resolveKey — slash menu", () => {
       kind: "slash-open",
     });
     expect(resolveKey(key({ sequence: "/", name: "/" }), ctx({ composerValue: "hello" }))).toEqual({
-      kind: "composer-input",
-      ch: "/",
-    });
-  });
-
-  test("printable chars and backspace edit the slash filter", () => {
-    expect(resolveKey(key({ sequence: "c", name: "c" }), ctx({ overlay: "slash-menu" }))).toEqual({
-      kind: "slash-input",
-      ch: "c",
-    });
-    expect(resolveKey(key({ name: "backspace" }), ctx({ overlay: "slash-menu" }))).toEqual({
-      kind: "slash-backspace",
+      kind: "none",
     });
   });
 
@@ -534,22 +495,6 @@ describe("resolveKey — slash menu", () => {
 });
 
 describe("resolveKey — modal controls", () => {
-  test("pin input edits, saves, and dismisses without leaking keys below the modal", () => {
-    expect(resolveKey(key({ sequence: "x", name: "x" }), ctx({ overlay: "pin-input" }))).toEqual({
-      kind: "pin-input",
-      ch: "x",
-    });
-    expect(resolveKey(key({ name: "backspace" }), ctx({ overlay: "pin-input" }))).toEqual({
-      kind: "pin-backspace",
-    });
-    expect(resolveKey(key({ name: "enter" }), ctx({ overlay: "pin-input" }))).toEqual({
-      kind: "pin-save",
-    });
-    expect(resolveKey(key({ name: "escape" }), ctx({ overlay: "pin-input" }))).toEqual({
-      kind: "overlay-dismiss",
-    });
-  });
-
   test("a stale pin input is mutation-inert after transition to read-only", () => {
     const readOnlyPin = ctx({ screen: "read-only", overlay: "pin-input" });
     expect(resolveKey(key({ sequence: "x", name: "x" }), readOnlyPin)).toEqual({ kind: "none" });
@@ -620,5 +565,137 @@ describe("resolveKey — export popup vs. another overlay (precedence bug repro)
     const chatListWins = ctx({ overlay: resolveActiveOverlay("chat-list", true) });
     expect(resolveKey(key({ name: "enter" }), chatListWins)).toEqual({ kind: "chat-switch" });
     expect(resolveKey(key({ name: "escape" }), chatListWins)).toEqual({ kind: "overlay-dismiss" });
+  });
+});
+
+describe("the claim rule — preventDefault iff resolveKey returned something other than none (§6.4)", () => {
+  test("isClaimedKey is exactly 'the intent is not none'", () => {
+    expect(isClaimedKey({ kind: "none" })).toBe(false);
+    expect(isClaimedKey({ kind: "composer-submit" })).toBe(true);
+    expect(isClaimedKey({ kind: "esc" })).toBe(true);
+    expect(isClaimedKey({ kind: "action-execute", actionId: "preview.fullscreen" })).toBe(true);
+  });
+
+  const reachesTheEditor: ReadonlyArray<readonly [string, KeyLike, Partial<KeyContext>]> = [
+    ["a printable in the composer", key({ name: "a", sequence: "a" }), {}],
+    ["Backspace in the composer", key({ name: "backspace" }), {}],
+    ["Left with no menu open", key({ name: "left" }), {}],
+    ["Right with no menu open", key({ name: "right" }), {}],
+    ["Ctrl+Left (word back)", key({ name: "left", ctrl: true }), {}],
+    ["Ctrl+Right (word forward)", key({ name: "right", ctrl: true }), {}],
+    ["Ctrl+W (delete word back)", key({ name: "w", ctrl: true, sequence: "\u0017" }), {}],
+    ["Ctrl+Backspace", key({ name: "backspace", ctrl: true }), {}],
+    ["Ctrl+Delete", key({ name: "delete", ctrl: true }), {}],
+    ["Shift+Enter", key({ name: "return", shift: true }), {}],
+    ["Alt+Enter", key({ name: "return", meta: true }), {}],
+    ["Ctrl+J", key({ name: "linefeed", sequence: "\n" }), {}],
+    ["Ctrl+Z (undo)", key({ name: "z", ctrl: true, sequence: "\u001a" }), {}],
+    ["Ctrl+Y (redo)", key({ name: "y", ctrl: true, sequence: "\u0019" }), {}],
+    ["Ctrl+A (select all)", key({ name: "a", ctrl: true, sequence: "\u0001" }), {}],
+    ["Home", key({ name: "home" }), {}],
+    ["End", key({ name: "end" }), {}],
+    ["a printable in the Home prompt", key({ name: "x", sequence: "x" }), { screen: "home" }],
+    ["Backspace in the Home prompt", key({ name: "backspace" }), { screen: "home" }],
+    [
+      "a printable while the slash menu is open",
+      key({ name: "e", sequence: "e" }),
+      { overlay: "slash-menu", composerValue: "/" },
+    ],
+    [
+      "Backspace while the slash menu is open",
+      key({ name: "backspace" }),
+      { overlay: "slash-menu", composerValue: "/e" },
+    ],
+    [
+      "Ctrl+Left while the slash menu is open",
+      key({ name: "left", ctrl: true }),
+      { overlay: "slash-menu", composerValue: "/e" },
+    ],
+    ["a printable in the pin input", key({ name: "p", sequence: "p" }), { overlay: "pin-input" }],
+    ["Backspace in the pin input", key({ name: "backspace" }), { overlay: "pin-input" }],
+  ];
+
+  for (const [label, pressed, context] of reachesTheEditor) {
+    test(`${label} resolves to none and falls through`, () => {
+      expect(resolveKey(pressed, ctx(context))).toEqual({ kind: "none" });
+    });
+  }
+
+  const claimed: ReadonlyArray<readonly [string, KeyLike, Partial<KeyContext>]> = [
+    ["Enter in the composer", key({ name: "return" }), {}],
+    ["numpad Enter in the composer", key({ name: "kpenter" }), {}],
+    ["Escape", key({ name: "escape" }), {}],
+    ["Tab", key({ name: "tab" }), {}],
+    ["F2", key({ name: "f2" }), {}],
+    ["Ctrl+E", key({ name: "e", ctrl: true, sequence: "\u0005" }), {}],
+    ["Ctrl+B", key({ name: "b", ctrl: true, sequence: "\u0002" }), {}],
+    ["/ on an empty composer", key({ name: "/", sequence: "/" }), {}],
+    ["Up while the slash menu is open", key({ name: "up" }), { overlay: "slash-menu" }],
+    ["Down while the slash menu is open", key({ name: "down" }), { overlay: "slash-menu" }],
+    ["Enter while the slash menu is open", key({ name: "return" }), { overlay: "slash-menu" }],
+    ["Enter in the pin input", key({ name: "return" }), { overlay: "pin-input" }],
+  ];
+
+  for (const [label, pressed, context] of claimed) {
+    test(`${label} is claimed by the App`, () => {
+      expect(isClaimedKey(resolveKey(pressed, ctx(context)))).toBe(true);
+    });
+  }
+
+  // The table above only asserts that the key is CLAIMED, which any non-`none` kind satisfies —
+  // a mapping that regressed to, say, `overlay-dismiss` would still pass. Every other kind it
+  // covers is pinned to its exact intent somewhere else in this file; `pin-save` was the one that
+  // was not, so it is pinned here rather than left resting on the weaker assertion.
+  test("Enter in the pin input resolves to pin-save specifically, not merely to something claimed", () => {
+    expect(resolveKey(key({ name: "return" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "pin-save",
+    });
+  });
+});
+
+describe("dead-binding guard — the two editor defaults the App shadows (§4.7)", () => {
+  test("Ctrl+B and Ctrl+E resolve to registry actions, so the editor's defaults are unreachable", () => {
+    // PAIRED with `key-bindings.test.ts`: the editor's own map still resolves ctrl+b to move-left
+    // and ctrl+e to line-end, because `mergeKeyBindings` can shadow but never remove. Together
+    // the two assertions mean "unreachable by construction". If someone later drops ctrl+e from
+    // the registry, THIS assertion fails and points straight at the collision instead of letting
+    // export silently become "go to end of line".
+    expect(resolveKey(key({ name: "b", ctrl: true, sequence: "\u0002" }), ctx({}))).toEqual({
+      kind: "action-execute",
+      actionId: "page.prev",
+    });
+    expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\u0005" }), ctx({}))).toEqual({
+      kind: "action-execute",
+      actionId: "export.start",
+    });
+  });
+});
+
+describe("Home while the agent is blocked — the one surviving editing intent", () => {
+  test("backspace still resolves to home-backspace, the only way to empty a non-empty prompt", () => {
+    const blocked: AgentHealth = {
+      kind: "blocked",
+      agent: "claude",
+      panel: "login",
+      detail: "not signed in",
+    };
+    expect(
+      resolveKey(
+        key({ name: "backspace" }),
+        ctx({ screen: "home", agentHealth: blocked, homePrompt: "typed" }),
+      ),
+    ).toEqual({ kind: "home-backspace" });
+  });
+
+  test("a printable is still inert there — the editor is blurred and the intent is gone", () => {
+    const blocked: AgentHealth = {
+      kind: "blocked",
+      agent: "claude",
+      panel: "login",
+      detail: "not signed in",
+    };
+    expect(
+      resolveKey(key({ name: "d", sequence: "d" }), ctx({ screen: "home", agentHealth: blocked })),
+    ).toEqual({ kind: "none" });
   });
 });
