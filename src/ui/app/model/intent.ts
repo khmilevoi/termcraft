@@ -1,4 +1,4 @@
-import { type Atom, wrap } from "@reatom/core";
+import { wrap } from "@reatom/core";
 
 import type { CommandResultV1 } from "core/protocol";
 import { trace } from "infrastructure/debug-log";
@@ -8,8 +8,14 @@ import { sortChatSummariesNewestFirst } from "ui/mirror";
 import { buildRepairPrompt, isDesignRenderFailure } from "ui/preview";
 import { deriveTabs, neighbourTabSlug, nextFocus, resolveEsc, selectPage } from "ui/workspace";
 
-import type { UiDeps, UiLocalState } from "./deps";
+import type { UiDeps } from "./deps";
 import type { KeyIntent } from "./keymap";
+import {
+  deletePrimaryInputChar,
+  primaryInputAtom,
+  setPinInput,
+  setPrimaryInput,
+} from "./primary-input";
 
 /**
  * Applies one resolved {@link KeyIntent} — the effectful half of the keyboard layer. It
@@ -32,10 +38,14 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
 
   switch (intent.kind) {
     case "home-input":
-      local.prompt.set(local.prompt() + intent.ch);
+      setPrimaryInput(deps, local.prompt() + intent.ch);
       return;
     case "home-backspace":
-      local.prompt.set(local.prompt().slice(0, -1));
+      // Only reachable while `homeHealth.kind === "blocked"`, where the editor is blurred and
+      // receives no keys of its own (keymap.ts's fix-round-3 escape route). It mutates the buffer
+      // through the handle; the buffer's own content-change listener projects the result into the
+      // mirror, exactly as a typed key would — so there is no paired atom write here.
+      deletePrimaryInputChar(deps);
       return;
     case "home-recheck":
       // No Kernel command reports agent health, and Home precedes any project/kernel.snapshot
@@ -66,7 +76,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         dispatchHomeSubmit(
           dispatcher.dispatch("project.open", { root: deps.env.root, text }),
           "project.open",
-          local,
+          deps,
         );
         return;
       }
@@ -77,15 +87,15 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
           text,
         }),
         "project.create",
-        local,
+        deps,
       );
       return;
     }
     case "composer-input":
-      local.composer.set(local.composer() + intent.ch);
+      setPrimaryInput(deps, local.composer() + intent.ch);
       return;
     case "composer-backspace":
-      local.composer.set(local.composer().slice(0, -1));
+      setPrimaryInput(deps, local.composer().slice(0, -1));
       return;
     case "composer-submit": {
       // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
@@ -131,7 +141,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
             return;
           }
           trace("ui.dispatch.result", { kind: "turn.start", result });
-          if (result.status === "accepted") local.composer.set("");
+          if (result.status === "accepted") setPrimaryInput(deps, "");
         }),
       );
       return;
@@ -153,14 +163,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // either real screen today (`/model`+`/exit` always cover Home; every row covers Workspace),
       // but the check stays screen-generic rather than assuming that forever.
       if (filterSlashRows("/", deps.actionContext()).length === 0) return;
-      primaryInput(deps).set("/");
+      setPrimaryInput(deps, "/");
       local.overlay.set("slash-menu");
       return;
     }
     case "slash-input": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const input = primaryInput(deps);
-      input.set(input() + intent.ch);
+      setPrimaryInput(deps, primaryInputAtom(deps)() + intent.ch);
       // TYPING PAST EVERY MATCH LEAVES SLASH MODE (defect fix, 2026-07-26).
       //
       // Nothing used to close the menu on a forward-typed miss — only `slash-backspace` at
@@ -173,14 +182,14 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // §3.10's rule is the same in both directions — "when nothing applies the menu simply does
       // not open" — so a prefix that matches nothing is just text. Dropping the overlay restores
       // exactly that: the characters stay in the input, and Enter submits them the ordinary way.
-      if (filterSlashRows(input(), deps.actionContext()).length === 0) local.overlay.set(null);
+      if (filterSlashRows(primaryInputAtom(deps)(), deps.actionContext()).length === 0)
+        local.overlay.set(null);
       return;
     }
     case "slash-backspace": {
       if (!slashMenuActive(deps)) return closeStaleSlash(deps);
-      const input = primaryInput(deps);
-      const next = input().slice(0, -1);
-      input.set(next);
+      const next = primaryInputAtom(deps)().slice(0, -1);
+      setPrimaryInput(deps, next);
       if (next.length === 0) {
         local.overlay.set(null);
         return;
@@ -199,7 +208,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (row === undefined || row.state.availability !== "available") return;
       const entry = resolveSlashAction(row.command);
       if (entry === null) return;
-      primaryInput(deps).set("");
+      setPrimaryInput(deps, "");
       local.overlay.set(null);
       executeAction(entry, deps);
       return;
@@ -226,11 +235,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     }
     case "pin-input":
       if (deps.screen() === "read-only") return;
-      local.pinDraft.set(local.pinDraft() + intent.ch);
+      setPinInput(deps, local.pinDraft() + intent.ch);
       return;
     case "pin-backspace":
       if (deps.screen() === "read-only") return;
-      local.pinDraft.set(local.pinDraft().slice(0, -1));
+      setPinInput(deps, local.pinDraft().slice(0, -1));
       return;
     case "pin-save": {
       if (deps.screen() === "read-only") return;
@@ -244,7 +253,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         "pin.create",
       );
       deps.interaction.pendingPin.set(null);
-      local.pinDraft.set("");
+      setPinInput(deps, "");
       local.overlay.set(null);
       return;
     }
@@ -269,7 +278,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
     case "overlay-dismiss":
       if (local.overlay() === "pin-input") {
         deps.interaction.pendingPin.set(null);
-        local.pinDraft.set("");
+        setPinInput(deps, "");
       }
       local.overlay.set(null);
       return;
@@ -325,7 +334,7 @@ function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: stri
 function dispatchHomeSubmit(
   promise: Promise<CommandResultV1 | Error>,
   kind: "project.create" | "project.open",
-  local: UiLocalState,
+  deps: UiDeps,
 ): void {
   void promise.then(
     wrap((result) => {
@@ -335,22 +344,13 @@ function dispatchHomeSubmit(
         return;
       }
       trace("ui.dispatch.result", { kind, result });
-      if (result.status === "accepted") local.prompt.set("");
+      if (result.status === "accepted") setPrimaryInput(deps, "");
     }),
   );
 }
 
-/**
- * The primary text input for the current screen (§3.10 calls them both "primary input"): the
- * Home prompt or the Workspace composer. Selects between two ALREADY-EXISTING atoms — never
- * creates one — so calling this repeatedly within one intent handler is free.
- */
-function primaryInput(deps: UiDeps): Atom<string> {
-  return deps.screen() === "home" ? deps.local.prompt : deps.local.composer;
-}
-
 function slashRows(deps: UiDeps) {
-  return filterSlashRows(primaryInput(deps)(), deps.actionContext());
+  return filterSlashRows(primaryInputAtom(deps)(), deps.actionContext());
 }
 
 function slashMenuActive(deps: UiDeps): boolean {
@@ -462,10 +462,11 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
       attempts: preview.attempts,
     });
     // NEVER overwrite a draft: this codebase already carries two defect fixes built on that
-    // principle (`home-submit` and `composer-submit` both clear their input only once the Kernel
-    // accepted). An empty composer is filled; a non-empty one keeps every character.
+    // principle. An empty composer is filled; a non-empty one keeps every character. This has
+    // been writing `\n\n` since 2026-07-27 with nothing able to render it — the existing proof
+    // that multi-line composer content is normal (§7.4).
     const draft = deps.local.composer();
-    deps.local.composer.set(draft.length === 0 ? text : `${draft}\n\n${text}`);
+    setPrimaryInput(deps, draft.length === 0 ? text : `${draft}\n\n${text}`);
     deps.local.focus.set("composer");
     return;
   }

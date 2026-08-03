@@ -21,8 +21,6 @@ describe("applyIntent — text inputs", () => {
     applyIntent({ kind: "home-input", ch: "h" }, deps);
     applyIntent({ kind: "home-input", ch: "i" }, deps);
     expect(deps.local.prompt()).toBe("hi");
-    applyIntent({ kind: "home-backspace" }, deps);
-    expect(deps.local.prompt()).toBe("h");
   });
 
   test("home-submit dispatches project.create carrying the prompt as text", () => {
@@ -108,6 +106,9 @@ describe("applyIntent — text inputs", () => {
   test("composer-submit dispatches turn.start and clears the composer once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.local.composer.set("make it blue");
     applyIntent({ kind: "composer-submit" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["turn.start"]);
@@ -160,6 +161,59 @@ describe("applyIntent — text inputs", () => {
     await tick();
     // A rejection must not discard what the user typed.
     expect(deps.local.composer()).toBe("make it blue");
+  });
+
+  test("the post-accept clear reaches the mounted editor, not only the mirror", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    const calls: string[] = [];
+    deps.local.composerEditor.set({
+      setText: (text) => calls.push(`setText:${text}`),
+      clear: () => calls.push("clear"),
+      deleteCharBackward: () => calls.push("deleteCharBackward"),
+      focus: () => calls.push("focus"),
+      blur: () => calls.push("blur"),
+    });
+    deps.local.composer.set("send me");
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+    expect(deps.local.composer()).toBe("");
+    expect(calls).toEqual(["setText:"]);
+  });
+
+  test("slash-open writes the '/' into both sides, so there is one writer for that transition", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    const calls: string[] = [];
+    deps.local.composerEditor.set({
+      setText: (text) => calls.push(`setText:${text}`),
+      clear: () => calls.push("clear"),
+      deleteCharBackward: () => calls.push("deleteCharBackward"),
+      focus: () => calls.push("focus"),
+      blur: () => calls.push("blur"),
+    });
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.composer()).toBe("/");
+    expect(calls).toEqual(["setText:/"]);
+  });
+
+  test("home-backspace drives the editor handle rather than slicing the mirror", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const calls: string[] = [];
+    deps.local.promptEditor.set({
+      setText: (text) => calls.push(`setText:${text}`),
+      clear: () => calls.push("clear"),
+      deleteCharBackward: () => calls.push("deleteCharBackward"),
+      focus: () => calls.push("focus"),
+      blur: () => calls.push("blur"),
+    });
+    applyIntent({ kind: "home-backspace" }, deps);
+    // In `blocked` the editor is blurred and receives no keys, so this intent is the ONLY route
+    // that can empty the prompt — and `q` stays inert until it is empty (keymap.ts, fix round 3).
+    expect(calls).toEqual(["deleteCharBackward"]);
   });
 });
 
@@ -347,8 +401,19 @@ describe("applyIntent — F6 compose-repair", () => {
   test("fills an empty composer with the repair message and moves focus there", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.focus.set("preview");
+    const calls: string[] = [];
+    deps.local.composerEditor.set({
+      setText: (text) => calls.push(`setText:${text}`),
+      clear: () => calls.push("clear"),
+      deleteCharBackward: () => calls.push("deleteCharBackward"),
+      focus: () => calls.push("focus"),
+      blur: () => calls.push("blur"),
+    });
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 
@@ -358,18 +423,33 @@ describe("applyIntent — F6 compose-repair", () => {
     expect(deps.local.focus()).toBe("composer");
     // Nothing is sent — the design says so on the frame ("nothing is sent — you press ⏎").
     expect(kernel.dispatched).toHaveLength(0);
+    // §7.4: the repair fill is an external write and must land on both sides — the mounted
+    // editor's handle carries the SAME text the mirror ends up holding.
+    expect(calls).toEqual([`setText:${deps.local.composer()}`]);
   });
 
   test("appends below a blank line rather than overwriting an existing draft", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.composer.set("my own words");
+    const calls: string[] = [];
+    deps.local.composerEditor.set({
+      setText: (text) => calls.push(`setText:${text}`),
+      clear: () => calls.push("clear"),
+      deleteCharBackward: () => calls.push("deleteCharBackward"),
+      focus: () => calls.push("focus"),
+      blur: () => calls.push("blur"),
+    });
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 
     expect(deps.local.composer().startsWith("my own words\n\n")).toBe(true);
     expect(deps.local.composer()).toContain(CRASH);
+    expect(calls).toEqual([`setText:${deps.local.composer()}`]);
   });
 
   test("no-ops when the preview is not in an error phase", () => {
