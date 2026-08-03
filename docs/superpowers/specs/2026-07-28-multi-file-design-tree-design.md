@@ -449,6 +449,32 @@ landing on a working system:
    the host keys an incarnation on `(pageSlug, sourceHash)` while VERIFYING the whole
    closure (revision-keying is plan 3), and the export package's shared-module prose in
    `design-prompt.md` is plan 3's.
+
+   **CLOSEOUT LANDED** — `1cc6431..d57c2a3` on branch `design-tree`, plan
+   `docs/superpowers/plans/2026-08-02-design-tree-phase-1-closeout.md`, tasks 1-11. This plan
+   closed six rows of the red-window debt this plan's own tasks and reviews had left open
+   (raw NUL bytes hiding two sources from grep; a transitive vouching gap in the import
+   scan's trust set; `runPage`'s optional tree-coordinate fallback; the fake-vs-real
+   contract's hash/size blindness; five of the §5.8 dynamic-code spellings plus `Worker`;
+   and the ~77-minute worst-case synchronous JSX scan) — full evidence in
+   `docs/superpowers/red-debt.md`. It also settled three decisions this plan's own text left
+   implicit, recorded here so plan 2 inherits them rather than re-deciding:
+   1. **The JSX reader has a fail-closed nesting ceiling** (task 3). Recursion past
+      `MAX_JSX_NESTING_DEPTH` (64) throws a deliberate `JsxNestingTooDeepError`, which the
+      whole-tree scan converts into `UNSCANNABLE_SOURCE` — a source past the ceiling is
+      refused outright, never partially scanned.
+   2. **The whole-tree verdict is no longer the only thing neutralising `isTrustedTarget`**
+      (task 4). A file that failed its own scan, or that transitively resolves an import
+      into one, is excluded from the trusted set at a FIXED POINT — so §8's per-entry
+      reporting is now safe to build in plan 2. It was not safe at depth 1: before this fix
+      a re-judged file with a clean scan of its own kept vouching for its importers even
+      though one of ITS OWN imports had failed to scan.
+   3. **The §5.8 perimeter is detection at the Gate PLUS capability denial in the preview
+      child, and the boundary between the two is measured, not argued** (task 10). The Gate's
+      token scan and the host's `denyDynamicCodeCapability()` together close every measured
+      `eval`/`Function`/`Worker` spelling; an aliased `require` reaching arbitrary Node
+      built-ins is measured to reach past BOTH layers and remains open
+      (`docs/superpowers/red-debt.md`).
 1b. **Migration.** §12 — the `migrate-80` dialog, `findSteps` wired into the open sequence,
    the first `MIGRATION_CHAIN` entry over the existing verified-backup protocol, and the
    seeded refactor turn. Separable from plan 1 and worth its own plan: it is the only part

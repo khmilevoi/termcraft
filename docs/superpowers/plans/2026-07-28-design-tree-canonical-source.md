@@ -3118,6 +3118,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## What this plan deliberately leaves undone
 
+**Closeout note (design-tree-phase-1-closeout, `1cc6431..d57c2a3`, tasks 1-11).** That plan closed
+six red-window debt rows this plan's own tasks and reviews had left open — full ledger in
+`docs/superpowers/red-debt.md` — but NONE of them are rows of the table immediately below: every
+row here was already, correctly, deferred to plan 1b/2/3 territory (§12, §7-§8, §9/§11) that the
+closeout plan's Files lists never touched. So the table below is unchanged by the closeout and
+every row still stands exactly as this plan left it.
+
 Named here so the next plan inherits a list, not a surprise.
 
 | left undone | design section | picked up by |
