@@ -44,7 +44,8 @@ import {
   scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
-import { agentHealthBadge } from "../model/health-badge";
+import { agentDeadNotice, agentHealthBadge } from "../model/health-badge";
+import type { AgentDeadNotice } from "../model/health-badge";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -268,6 +269,7 @@ function renderPreviewRegion(
   uiFrame: UiPreviewFrame | null,
   hasPages: boolean,
   opening: boolean,
+  agentDead: AgentDeadNotice | null,
   region: CellSize,
   interaction: Readonly<{
     pins: readonly PinDtoV1[];
@@ -313,6 +315,7 @@ function renderPreviewRegion(
           hostMessage={preview.finalFailure.safeMessage}
           attempts={preview.attempts}
           retryAvailable={preview.retryAvailable}
+          agentDead={agentDead}
         />
       );
     }
@@ -409,6 +412,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
   const healthBadge = agentHealthBadge(local.agentHealth(), narrow);
+  const agentDead = agentDeadNotice(local.agentHealth());
   const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
@@ -750,15 +754,23 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           />
           {/* design `paneShell`: `dy = 4` — one blank row between the rule and the design. */}
           <box id="ws-preview-gap" height={1} />
-          {renderPreviewRegion(preview, uiFrame, descriptors.length > 0, opening, previewRegion, {
-            pins,
-            pendingPin,
-            selectionRect,
-            hover,
-            onRendered: acknowledgeRenderedFrame,
-            onMouseMove: onPreviewMouseMove,
-            onMouseDown: onPreviewMouseDown,
-          })}
+          {renderPreviewRegion(
+            preview,
+            uiFrame,
+            descriptors.length > 0,
+            opening,
+            agentDead,
+            previewRegion,
+            {
+              pins,
+              pendingPin,
+              selectionRect,
+              hover,
+              onRendered: acknowledgeRenderedFrame,
+              onMouseMove: onPreviewMouseMove,
+              onMouseDown: onPreviewMouseDown,
+            },
+          )}
         </box>
       </box>
       <StatusBar

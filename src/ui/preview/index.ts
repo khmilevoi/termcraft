@@ -35,7 +35,7 @@ export type { OpeningStateProps } from "./ui/OpeningState";
 export { OpeningState } from "./ui/OpeningState";
 export type { ErrorPanelProps } from "./ui/ErrorPanel";
 export { ErrorPanel } from "./ui/ErrorPanel";
-export type { HostCrashPanelProps } from "./ui/HostCrashPanel";
+export type { HostCrashAgentNotice, HostCrashPanelProps } from "./ui/HostCrashPanel";
 export { HostCrashPanel } from "./ui/HostCrashPanel";
 export type { HostUnavailablePanelProps } from "./ui/HostUnavailablePanel";
 export { HostUnavailablePanel } from "./ui/HostUnavailablePanel";

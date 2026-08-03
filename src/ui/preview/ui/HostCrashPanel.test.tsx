@@ -6,6 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 import { SHELL_PALETTE } from "ui/theme";
 
+import type { HostCrashAgentNotice } from "./HostCrashPanel";
 import { HostCrashPanel } from "./HostCrashPanel";
 
 let open: RenderHandle | null = null;
@@ -25,6 +26,9 @@ async function mount(opts?: {
   attempts?: number;
   w?: number;
   h?: number;
+  // `null` (a healthy or unconfirmed agent) unless a test says otherwise — see the "agent-health
+  // correction" describe block below for the `agentDead` shape itself.
+  agentDead?: HostCrashAgentNotice | null;
 }) {
   const width = opts?.w ?? 76;
   const height = opts?.h ?? 26;
@@ -39,6 +43,7 @@ async function mount(opts?: {
       hostMessage={opts?.hostMessage ?? MESSAGE}
       attempts={opts?.attempts ?? 4}
       retryAvailable={opts?.retryAvailable ?? true}
+      agentDead={opts?.agentDead ?? null}
     />,
   );
   await handle.render();

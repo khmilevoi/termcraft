@@ -3,6 +3,13 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { relativePageSourcePath } from "../model/repair-prompt";
 
+/** The dead-agent correction (`ui/workspace/model/health-badge.ts`'s `AgentDeadNotice`), taken
+ *  structurally so `ui/preview` does not import `ui/workspace`. */
+export interface HostCrashAgentNotice {
+  readonly f6Detail: string | null;
+  readonly line: string;
+}
+
 /** Props for the {@link HostCrashPanel} halted-preview surface. */
 export interface HostCrashPanelProps {
   /** Stable id the host selects and answers geometry on. */
@@ -14,6 +21,12 @@ export interface HostCrashPanelProps {
   readonly hostMessage: string;
   readonly attempts: number;
   readonly retryAvailable: boolean;
+  /**
+   * The agent-health correction, or `null` when the agent can actually run the repair (design 30,
+   * "The collision"). `null` renders this panel byte-identically to every frame drawn before that
+   * iteration.
+   */
+  readonly agentDead: HostCrashAgentNotice | null;
 }
 
 const BOLD = shellAttrs({ bold: true });
@@ -135,17 +148,35 @@ export function HostCrashPanel(props: HostCrashPanelProps) {
           noteFg={noteFg}
           bold={props.retryAvailable}
         />
+        {/* DIVERGENCE 3: `wsHostCrash`'s `keyRow` writes `d2` at a fixed column with no wrap —
+            on a flat canvas the string simply runs past the block's own right edge. The two
+            agent-dead lines below are noticeably longer than every other note/detail this panel
+            draws, and a real bordered box wraps text at its own width rather than overflow it;
+            they may land on two visual rows here where the design's mock draws one that bleeds
+            past the border. The wording is the design's own, verbatim — only the line count
+            can differ. */}
         <KeyRow
           id={`${props.id}-f6`}
           hotkey="F6"
           label="repair…"
           note="write the failure into the composer"
-          detail="nothing is sent — you press ⏎"
+          // design 30: F6's own promise to run is the one line that would otherwise be false.
+          detail={props.agentDead?.f6Detail ?? "nothing is sent — you press ⏎"}
           keyFg={SHELL_PALETTE.amber}
           labelFg={SHELL_PALETTE.amberHi}
           noteFg={SHELL_PALETTE.dim}
           bold
         />
+        {props.agentDead !== null && (
+          <>
+            {/* design 30: a blank row, then the correction, rather than letting the composer
+                quietly swallow an ⏎ that goes nowhere. */}
+            <text id={`${props.id}-agent-dead-spacer`}> </text>
+            <text id={`${props.id}-agent-dead`} fg={SHELL_PALETTE.red}>
+              {props.agentDead.line}
+            </text>
+          </>
+        )}
       </box>
     </box>
   );

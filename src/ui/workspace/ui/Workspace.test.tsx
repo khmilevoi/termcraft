@@ -984,6 +984,114 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
   });
 });
 
+describe("Workspace halted preview + dead agent (design 30, the collision)", () => {
+  const CRASH = "PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function";
+
+  const crashed = () =>
+    event("preview.circuitOpened", {
+      previewSessionId: uuidv7(),
+      pageSlug: "main",
+      sourceHash: TEST_SHA,
+      attempts: 4,
+      finalFailure: {
+        code: "HOST_CIRCUIT_OPEN",
+        retryable: true,
+        safeMessage: CRASH,
+        details: { pageSlug: "main", attempts: 4, hostFailureCode: "DESIGN_RENDER_FAILED" },
+      },
+      retryCapability: { available: true },
+    });
+
+  // Same race the "Workspace agent-health badge" describe block below already documents:
+  // `createUiDeps`' default `agentHealthProbe` resolves and overwrites `local.agentHealth`
+  // shortly after construction — before `handle.render()` below gets a chance to capture a
+  // frame. VERIFIED, not assumed: running this block's tests with the brief's literal harness
+  // (no probe override) fails both "blocked" tests — the frame renders the default `advisory`
+  // reading's un-corrected F6 wording instead of the one this test sets. A never-resolving probe
+  // keeps the manually-set reading in place (harness adaptation, not an assertion change).
+  const NEVER_RESOLVING_PROBE = () => new Promise<AgentHealth>(() => {});
+
+  // The two agent-dead lines are longer than every other note/detail string this panel draws
+  // (`HostCrashPanel.tsx`'s new "DIVERGENCE 3") and wrap onto a second physical terminal row
+  // inside this two-pane frame. `allText` flattens row-major across BOTH the chat pane and the
+  // preview pane with no separator, so a wrapped fragment's tail sits many unrelated cells (box
+  // borders, the OTHER pane's own row) away from its continuation — never adjacent in the joined
+  // string, verified by inspecting the captured rows directly. This is the same reason
+  // `HostCrashPanel.test.tsx`'s own "renders the host message verbatim and wrapped" test checks
+  // word-by-word rather than the whole phrase, rather than an assertion being weakened: every
+  // word present (not just some) still proves the exact wording rendered, not a paraphrase or a
+  // truncation. Proven to still fail on regression: with `agentDead` forced back to `null`,
+  // "runs" and "until" (unique to these two lines — nothing else in the frame contains either
+  // substring) are absent and this helper reports `false`.
+  const containsPhrase = (text: string, phrase: string) =>
+    phrase.split(" ").every((word) => text.includes(word));
+
+  async function renderHalted(health: AgentHealth) {
+    const deps = createUiDeps(
+      createFakeKernel(),
+      { w: 120, h: 36 },
+      undefined,
+      NEVER_RESOLVING_PROBE,
+    );
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.mirror.apply(crashed());
+    deps.local.agentHealth.set(health);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+    return handle.capture().rows;
+  }
+
+  test("the halt keeps the hint slot and the panel says the repair cannot run", async () => {
+    const rows = await renderHalted({
+      kind: "blocked",
+      agent: "claude",
+      panel: "login",
+      detail: "not signed in",
+    });
+    const text = allText(rows);
+
+    // One badge, and the halt's own is the more urgent, more specific fact.
+    expect(findRun(rows, "render crashed")).toBeDefined();
+    expect(text).toContain("HALTED");
+    // The panel carries the correction the hint slot cannot.
+    expect(containsPhrase(text, "claude is not signed in — nothing runs until it is")).toBe(true);
+    expect(
+      containsPhrase(text, "✗ claude not signed in — F6 fills the composer, but nothing runs yet"),
+    ).toBe(true);
+    expect(text).not.toContain("nothing is sent — you press ⏎");
+  });
+
+  test("a latched agent gets the generic line and keeps F6's ordinary detail", async () => {
+    const text = allText(
+      await renderHalted({
+        kind: "blocked",
+        agent: "claude",
+        panel: "latched",
+        detail: "unconfirmed exit lockout",
+      }),
+    );
+    expect(
+      containsPhrase(text, "✗ claude unavailable — F6 fills the composer, but nothing runs yet"),
+    ).toBe(true);
+    expect(text).toContain("nothing is sent — you press ⏎");
+  });
+
+  test("a healthy agent leaves the halt panel exactly as it was", async () => {
+    const text = allText(await renderHalted({ kind: "ready", agent: "claude" }));
+    expect(text).toContain("nothing is sent — you press ⏎");
+    expect(text).not.toContain("nothing runs yet");
+  });
+});
+
 describe("Workspace halted-preview chat notice", () => {
   test("raises the design's two system lines in the chat panel, and drops them on recovery", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });

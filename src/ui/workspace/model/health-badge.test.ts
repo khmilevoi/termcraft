@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { AgentHealth } from "ui/agent-health";
 
-import { agentHealthBadge } from "./health-badge";
+import { agentDeadNotice, agentHealthBadge } from "./health-badge";
 
 const CLAUDE = "claude";
 
@@ -81,5 +81,37 @@ describe("agentHealthBadge (design 30, engine agentBadge :208-218)", () => {
       agentHealthBadge({ kind: "advisory", agent: CLAUDE, panel: "sandbox", detail: "x" }, true)
         ?.text,
     ).toBe("⚠ sandbox degraded");
+  });
+});
+
+describe("agentDeadNotice (design 30, the collision)", () => {
+  test("a healthy or merely advisory agent produces no notice", () => {
+    expect(agentDeadNotice({ kind: "ready", agent: "claude" })).toBeNull();
+    expect(agentDeadNotice({ kind: "checking", agent: "claude" })).toBeNull();
+    expect(
+      agentDeadNotice({ kind: "advisory", agent: "claude", panel: "shutdown", detail: "x" }),
+    ).toBeNull();
+  });
+
+  test("blocked/login gets the design's own F6 detail and its red line", () => {
+    expect(
+      agentDeadNotice({ kind: "blocked", agent: "claude", panel: "login", detail: "x" }),
+    ).toEqual({
+      f6Detail: "claude is not signed in — nothing runs until it is",
+      line: "✗ claude not signed in — F6 fills the composer, but nothing runs yet",
+    });
+  });
+
+  test("latched and missing get the generic line, and leave F6's own detail alone", () => {
+    expect(
+      agentDeadNotice({ kind: "blocked", agent: "claude", panel: "latched", detail: "x" }),
+    ).toEqual({
+      f6Detail: null,
+      line: "✗ claude unavailable — F6 fills the composer, but nothing runs yet",
+    });
+    expect(agentDeadNotice({ kind: "missing", agent: "claude", detail: "x" })).toEqual({
+      f6Detail: null,
+      line: "✗ claude not found — F6 fills the composer, but nothing runs yet",
+    });
   });
 });
