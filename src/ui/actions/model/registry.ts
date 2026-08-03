@@ -134,7 +134,25 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // §3.8's two hotkey tiers name no chat key at all, and the design's own
     // `▲ N earlier messages` indicator (`design/termcraft-engine.js:569`) leads nowhere.
     // Design iteration 10 decides only whether these keys are DRAWN in the status-bar key
-    // row (`hint` below); the binding itself is this project's.
+    // row; the binding itself is this project's.
+    //
+    // HINTED, UNLIKE `page.prev`/`page.next` ABOVE (chat-scroll spec §11 answer 7): every one
+    // of the design's seven `wsStatus(...)` calls lists `PgUp`/`PgDn` in its key row
+    // (`design/28-chat-scroll.dc.html:46`, e.g. `design/termcraft-engine.js:1541`), so —
+    // unlike the page-step keys above, which the design never draws at all — these two are
+    // NOT excluded from `hintKeys()` (`ui/workspace/ui/Workspace.tsx`).
+    //
+    // DIVERGENCE (closest faithful mapping, CLAUDE.md "design is a source of truth"): the
+    // design's own status row shows ONE combined hint, `PgUp/PgDn` paired with the single
+    // label `scroll` (`design/termcraft-engine.js:1541` etc.,
+    // `wsStatus(...,keys:[['PgUp/PgDn','scroll'],...])`). `Workspace.tsx`'s `hintKeys()` and
+    // this file's own `HotkeyAction` shape have no mechanism to merge two registry entries
+    // into one combined glyph/label tuple — every other hint in this file is one glyph, one
+    // label, 1:1 with one action, and building a merge mechanism for this single pair is out
+    // of scope for the task that dropped `hint: false` below (chat-scroll spec, Task 12). So
+    // the status bar renders TWO separate entries, `PAGEUP scroll up` and `PAGEDOWN scroll
+    // down` (this registry's own glyph/label pair below), rather than the design's one
+    // `PgUp/PgDn scroll`.
     //
     // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u`/`ctrl+d` AS ALIASES:
     //   - it must be GLOBAL tier: the composer owns focus by default, so a bare letter would
@@ -153,7 +171,6 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       aliases: ["ctrl+u"],
       label: "scroll up",
       capability: null,
-      hint: false,
     },
   },
   {
@@ -165,7 +182,6 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       aliases: ["ctrl+d"],
       label: "scroll down",
       capability: null,
-      hint: false,
     },
   },
   {

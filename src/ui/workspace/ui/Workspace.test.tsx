@@ -9,6 +9,7 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { UiDeps } from "ui/app";
 import { createUiDeps } from "ui/app";
 import type { ChatRecord as ChatRecordDto } from "ui/mirror";
+import type { FakeKernel } from "ui/testing";
 import {
   TEST_SHA,
   TEST_TS,
@@ -63,7 +64,21 @@ function seedHistory(
   },
 ): void {
   deps.mirror.apply(
-    snapshot({ projectId: uuidv7(), activePageSlug: null, activeChatId: CHAT, trust: "trusted" }),
+    snapshot({
+      projectId: uuidv7(),
+      activePageSlug: null,
+      activeChatId: CHAT,
+      trust: "trusted",
+      // Published from the start, matching what a real trusted-project Kernel snapshot would
+      // already carry: `maybeLoadOlder` (chat-scroll spec §6.6, WP-10 Task 12) gates its own
+      // dispatch on this exact capability, and an unpublished entry reads as unavailable
+      // (`ui/actions`' `isCapabilityAvailable` — "a missing capability is treated as
+      // unavailable"). Every caller of this fixture that exercises paging needs the realistic
+      // default; `Workspace.test.tsx`'s own "capability unavailable" tests override it.
+      capabilities: [
+        { id: "chat.load-older", target: { chatId: CHAT }, state: { available: true } },
+      ],
+    }),
   );
   deps.mirror.apply(
     event("chat.changed", { activeChatId: CHAT, added: [], updated: [], removedChatIds: [] }),
@@ -587,6 +602,13 @@ describe("Workspace action-derived hotkey hints", () => {
    * `action.hint === false` filter puts `Ctrl+B prev page` and `Ctrl+N next page` on every
    * workspace screen with the whole suite still green. This asserts the EXACT row instead, so
    * the extra pair is a failure rather than an unnoticed divergence from `design/*.dc.html`.
+   *
+   * UPDATED (chat-scroll spec §11 answer 7, WP-10 Task 12): `chat.scroll-up`/`chat.scroll-down`
+   * dropped their own `hint: false` — every one of the design's seven `wsStatus(...)` calls
+   * lists `PgUp`/`PgDn` in its key row, so unlike the page-step keys these two are NOT excluded
+   * — so the row now carries them too, right after F2 (`HOTKEYS`' own array order,
+   * `ui/actions/model/registry.ts`). Two separate entries, not the design's one combined
+   * `PgUp/PgDn scroll` — see that registry's own divergence comment on why.
    */
   test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
@@ -598,12 +620,17 @@ describe("Workspace action-derived hotkey hints", () => {
     // The status bar is the frame's bottom row; its right-aligned cluster is the key row.
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
     // `^E export` never appears — `StatusBar`'s own `HIDDEN_HINT_GLYPHS` drops it (design
-    // `hintKeys`, `termcraft-engine.js:500`), which is why the row is these four and only
-    // these four: F2 full · F3 tweaks · F4 act · Ctrl+P preview. `full`/`act` are the design's
-    // own shortenings (`hintKeys`, `termcraft-engine.js:499`) of `fullscreen`/`interact`.
-    expect(statusRow.trimEnd().endsWith(" F2  full  F3  tweaks  F4  act  Ctrl+P  preview")).toBe(
-      true,
-    );
+    // `hintKeys`, `termcraft-engine.js:500`), which is why the row is these six and only
+    // these six: F2 full · PAGEUP scroll up · PAGEDOWN scroll down · F3 tweaks · F4 act ·
+    // Ctrl+P preview. `full`/`act` are the design's own shortenings (`hintKeys`,
+    // `termcraft-engine.js:499`) of `fullscreen`/`interact`.
+    expect(
+      statusRow
+        .trimEnd()
+        .endsWith(
+          " F2  full  PAGEUP  scroll up  PAGEDOWN  scroll down  F3  tweaks  F4  act  Ctrl+P  preview",
+        ),
+    ).toBe(true);
     for (const absent of ["Ctrl+B", "Ctrl+N", "prev page", "next page"]) {
       expect(allText(rows)).not.toContain(absent);
     }
@@ -1290,5 +1317,203 @@ describe("chat stream viewport (chat-scroll spec §5.1)", () => {
     // 230 on disk, 10 in the window — the row counts what is NOT loaded (spec §5.4), never
     // what is scrolled off screen.
     expect(allText(handle.capture().rows)).toContain("220");
+  });
+});
+
+type LoadOlderCommand = {
+  readonly kind: "chat.load-older";
+  readonly payload: { readonly chatId: string; readonly cursor: unknown };
+};
+
+/**
+ * Narrows `FakeKernel.dispatched`'s raw envelopes to the ones this describe block cares about —
+ * `dispatched` is `readonly unknown[]` (`ui/testing/model/fake-kernel.ts`), so every test below
+ * filters rather than casts.
+ */
+function loadOlderCommands(kernel: FakeKernel): readonly LoadOlderCommand[] {
+  return kernel.dispatched.filter(
+    (raw): raw is LoadOlderCommand => (raw as { kind?: unknown }).kind === "chat.load-older",
+  );
+}
+
+/**
+ * Renders until the older-page latch leaves "loading" (bounded, not a fixed count — a latch
+ * genuinely stuck past this many passes is a real failure, not a slow one), plus a few extra
+ * passes: `handle.render()`'s own `renderer.intermediateRender()` is what actually drives
+ * `<scrollbox>`'s Yoga layout and fires `content.onSizeChange` (`Workspace.tsx`'s own
+ * position-retention hook reacts to that event directly, not to a render count — see that
+ * hook's own doc comment), so at least one render is required for it to fire at all; a few extra
+ * cover a render that lands before `mirror.apply()`'s effects have propagated.
+ *
+ * TDD NOTE: an EARLIER version of this fixture (checking `scrollHeight` from `Workspace.tsx`'s
+ * own render body instead of hooking `content.onSizeChange`) needed a much larger, still
+ * occasionally-insufficient bound here, because a `reatomComponent` only re-renders when a
+ * Reatom atom it reads changes — once `records`/`olderPage` settled, nothing forced it to render
+ * again, so a render-body check got exactly one chance to see `scrollHeight` catch up. Hooking
+ * the widget's own authoritative layout-changed event removed that dependency on render count
+ * entirely; this loop stays modest on purpose, as a regression guard against needing another
+ * large bound again.
+ */
+async function renderUntilSettled(handle: RenderHandle, deps: UiDeps): Promise<void> {
+  for (let i = 0; i < 20 && deps.local.olderPage().kind === "loading"; i++) {
+    await handle.render();
+  }
+  for (let i = 0; i < 3; i++) {
+    await handle.render();
+  }
+}
+
+/**
+ * Mounts a trusted, `loaded: 20`-of-`total: 300` Workspace — the shared shape every test below
+ * scrolls to the top of. `20`, not the OTHER describe block's `80` (used there specifically to
+ * prove clipping, chat-scroll spec §5.1): at `w:120,h:36` a `scrollByPage(-1)`'s one
+ * viewport-height step only reaches `scrollTop <= TOP_TRIGGER_ROWS` starting from a bottom-
+ * sticky mount when the loaded content is within roughly one viewport of the top already — the
+ * same magnitude the "reaching the top…" test right below (its own, un-shared setup) uses.
+ * `loadOlderAvailable: false` overrides `seedHistory`'s own default `chat.load-older: {
+ * available: true }` publication with the read-only-project refusal.
+ */
+async function mounted(input: {
+  cursor: { generation: number; beforeOffset: number } | null;
+  loadOlderAvailable?: boolean;
+}) {
+  const kernel = createFakeKernel();
+  const deps = createUiDeps(kernel, { w: 120, h: 36 });
+  seedHistory(deps, { loaded: 20, total: 300, cursor: input.cursor });
+  if (input.loadOlderAvailable === false) {
+    deps.mirror.apply(
+      event("kernel.capabilitiesChanged", {
+        changed: [
+          {
+            id: "chat.load-older",
+            target: { chatId: CHAT },
+            state: { available: false, reasons: [{ code: "PROJECT_UNTRUSTED" }] },
+          },
+        ],
+        removed: [],
+      }),
+    );
+  }
+  const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+  open = handle;
+  handle.mount(<Workspace deps={deps} readOnly={false} />);
+  await handle.render();
+  return { deps, handle, kernel };
+}
+
+describe("older-page paging (chat-scroll spec §6.6)", () => {
+  test("reaching the top dispatches chat.load-older with the cursor the client was given", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    seedHistory(deps, { loaded: 20, total: 300, cursor: { generation: 1, beforeOffset: 400 } });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    await handle.render();
+
+    deps.local.chatViewport()?.scrollByPage(-1);
+    await handle.render();
+
+    const sent = loadOlderCommands(kernel);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.payload).toEqual({ chatId: CHAT, cursor: { generation: 1, beforeOffset: 400 } });
+    expect(deps.local.olderPage()).toEqual({ kind: "loading" });
+  });
+
+  test("a second request is latched out while one is in flight", async () => {
+    const { deps, kernel } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    deps.local.chatViewport()?.scrollByPage(-1);
+    expect(loadOlderCommands(kernel)).toHaveLength(1);
+  });
+
+  test("no request once the chat's start is loaded", async () => {
+    const { deps, kernel } = await mounted({ cursor: null });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    expect(loadOlderCommands(kernel)).toHaveLength(0);
+  });
+
+  test("no request when the capability is unavailable (read-only project)", async () => {
+    const { deps, kernel } = await mounted({
+      cursor: { generation: 1, beforeOffset: 400 },
+      loadOlderAvailable: false,
+    });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    expect(loadOlderCommands(kernel)).toHaveLength(0);
+  });
+
+  test("a refused dispatch clears the latch and records the failure", async () => {
+    const { deps, handle, kernel } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    // `FakeKernel` has one dispatch-outcome override, `setDispatchResult` — there is no
+    // per-kind rejection injector, and this test issues exactly one command.
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      status: "rejected",
+      reason: { code: "CAPABILITY_UNAVAILABLE" },
+    } as never);
+    deps.local.chatViewport()?.scrollByPage(-1);
+    await renderUntilSettled(handle, deps);
+    expect(deps.local.olderPage().kind).toBe("failed");
+  });
+
+  test("the arriving page retires the latch", async () => {
+    const { deps, handle } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    deps.mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [chatUserRecord("r-old", "oldest")],
+        prevCursor: null,
+        totalRecordCount: 300,
+        failure: null,
+      }),
+    );
+    await renderUntilSettled(handle, deps);
+    expect(deps.local.olderPage()).toEqual({ kind: "idle" });
+  });
+
+  test("a failed page shows its message and clears the latch", async () => {
+    const { deps, handle } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    deps.mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+        failure: {
+          code: "PERSISTENCE_FAILED",
+          retryable: true,
+          safeMessage: "page unreadable",
+          details: {},
+        },
+      }),
+    );
+    await renderUntilSettled(handle, deps);
+    expect(deps.local.olderPage()).toEqual({ kind: "failed", safeMessage: "page unreadable" });
+    expect(allText(handle.capture().rows)).toContain("page unreadable");
+  });
+
+  // Task 2 probe finding 5 (`docs/spikes/2026-08-03-scrollbox-findings.md`): `<scrollbox>` does
+  // NOT hold scroll position across a prepend on its own, so `maybeLoadOlder`/the retirement
+  // effect carry a `pendingAnchor`/`restoreAnchor` fallback (chat-scroll spec §6.6/§9). This
+  // proves the fallback actually holds the reader's place: without it, the 20 newly-prepended
+  // records would push "message 0" off the top of a viewport whose `scrollTop` never moved to
+  // follow them.
+  test("a prepended page keeps the reader where they were", async () => {
+    const { deps, handle } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.chatViewport()?.scrollByPage(-1);
+    deps.mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: Array.from({ length: 20 }, (_, i) => chatUserRecord(`r-old-${i}`, `older ${i}`)),
+        prevCursor: null,
+        totalRecordCount: 300,
+        failure: null,
+      }),
+    );
+    await renderUntilSettled(handle, deps);
+    expect(allText(handle.capture().rows)).toContain("message 0");
   });
 });

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import { MouseButton, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core";
+import { bind, wrap } from "@reatom/core";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import type { PinDtoV1 } from "core/protocol";
@@ -380,7 +381,7 @@ function renderPreviewRegion(
  * `PreviewSession` consumer.
  */
 export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolean }>((props) => {
-  const { mirror, terminal, previewFrame, local, interaction } = props.deps;
+  const { mirror, terminal, previewFrame, local, interaction, dispatcher } = props.deps;
   const size = terminal();
   const turn = mirror.turn();
   const preview = mirror.preview();
@@ -488,14 +489,179 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   );
   // The live chat scroll surface, published for the keyboard layer (`ChatViewport`,
   // `../types.ts`) — see that interface's own doc comment for why an imperative ref, not a
-  // Reatom-derived value, is what bridges the renderable to `applyIntent`. STUB for this task
-  // (WP-10 Task 11): only the ref is stored here. Filling `local.chatViewport` with a real
-  // adapter over `box` and wiring the paging trigger are Task 12's job, not this one's — see
-  // this task's own dispatch for why that boundary is deliberate, not an oversight.
+  // Reatom-derived value, is what bridges the renderable to `applyIntent`.
   const viewportRef = useRef<ScrollBoxRenderable | null>(null);
+  // Both set by `maybeLoadOlder` right before it dispatches, read (and cleared) by the
+  // position-retention check below once the load actually lands — see that check's own doc
+  // comment for why the widget needs this at all (chat-scroll spec §6.6/§9, Task 2 probe
+  // finding 5, `docs/spikes/2026-08-03-scrollbox-findings.md`: `<scrollbox>` does NOT hold
+  // scroll position across a prepend on its own).
+  const pendingAnchor = useRef<number | null>(null);
+  // The renderable's own `scrollHeight` at the moment `pendingAnchor` was captured — read
+  // alongside `recordCountBeforeLoad` below by the position-retention check to know the
+  // prepended content has actually been laid out, not merely that the Kernel event carrying it
+  // has arrived.
+  const heightBeforeLoad = useRef<number | null>(null);
+  // The active chat's loaded record count at the same moment — the position-retention check's
+  // real gate (see that function's own doc comment for why `scrollHeight` differing ALONE is
+  // not enough).
+  const recordCountBeforeLoad = useRef<number | null>(null);
+  // A monotonically-increasing token, bumped on every `maybeRestorePosition` call while a
+  // restore is pending — see that function's own doc comment for what it debounces.
+  const restoreToken = useRef(0);
+
+  /**
+   * POSITION RETENTION (chat-scroll spec §9, Task 2 probe finding 5,
+   * `docs/spikes/2026-08-03-scrollbox-findings.md`): `<scrollbox>` does NOT hold scroll position
+   * across a prepend on its own. Restores the distance-from-bottom `maybeLoadOlder` captured
+   * just before dispatching, so a page that grows the window above the reader's position doesn't
+   * yank them somewhere else in the stream.
+   *
+   * Called from `box.content.onSizeChange` (wired in `publishChatViewport` below), NOT checked
+   * from `Workspace`'s own render body. A render-body check (matching the task brief's own
+   * prescribed shape) WAS tried first and is the simpler of the two — but confirmed during this
+   * task's TDD pass, it only gets ONE chance to see `scrollHeight` catch up: `Workspace` (a
+   * `reatomComponent`) re-renders exactly once when `records`/`olderPage` settle together in one
+   * Reatom transaction, and nothing forces it to render again afterward, while `scrollHeight`'s
+   * own update comes from `<scrollbox>`'s INTERNAL `content.onSizeChange` -> `recalculateBarProps()`
+   * — an OpenTUI-internal callback backed by no Reatom atom, so nothing guarantees it has
+   * finished by that one render. `content.onSizeChange` IS the authoritative "this renderable's
+   * own layout just changed" signal, so hooking it directly needs no race with React re-renders
+   * at all — but see the two safeguards below, both found necessary by this same TDD pass.
+   *
+   * GATED ON RECORD COUNT, not merely on `scrollHeight` differing from the snapshot: also
+   * confirmed during this task's TDD pass, `content.onSizeChange` fires for ANY layout change on
+   * the content renderable, including the indicator row's own one-line ("loading") to two-line
+   * ("failed") growth — a load that never actually grows the record window at all. Reading
+   * `mirror.history()` here (a Reatom atom call, always current, unlike a plain closed-over
+   * variable) tells apart "the window actually grew" from "the indicator merely got taller."
+   *
+   * DEBOUNCED, not applied on the first differing reading: also confirmed during this task's TDD
+   * pass, laying out a large prepended batch fires `content.onSizeChange` multiple times with
+   * intermediate, not-yet-final heights — a single React commit does not lay out every affected
+   * Yoga node in one synchronous step. Applying the restore on every qualifying firing (not just
+   * the first) keeps it correct at each intermediate step; `restoreToken` defers CLEARING
+   * `pendingAnchor` to a microtask, so a later firing in the same burst still finds it set and
+   * can correct the earlier, now-stale restore. Only the LAST firing's microtask survives
+   * uninvalidated — any newer firing bumps the token first, turning the stale one into a no-op.
+   */
+  const maybeRestorePosition = () => {
+    const anchor = pendingAnchor.current;
+    const box = viewportRef.current;
+    if (anchor === null || box === null) return;
+    if (mirror.history().records.length === recordCountBeforeLoad.current) return;
+    if (box.scrollHeight === heightBeforeLoad.current) return;
+    box.scrollTop = Math.max(0, box.scrollHeight - box.viewport.height - anchor);
+    const token = ++restoreToken.current;
+    queueMicrotask(() => {
+      // A newer firing already invalidated this one — its OWN microtask is the one that gets
+      // to finalize.
+      if (token !== restoreToken.current) return;
+      pendingAnchor.current = null;
+      heightBeforeLoad.current = null;
+      recordCountBeforeLoad.current = null;
+    });
+  };
+
+  /**
+   * Publishes the live `ScrollBoxRenderable` as a {@link ChatViewport} (chat-scroll spec §5.5).
+   * `useWrap` because the callback writes a Reatom atom from React's commit phase — outside any
+   * Reatom frame otherwise (RTM-C02).
+   */
   const publishChatViewport = useWrap((box: ScrollBoxRenderable | null) => {
     viewportRef.current = box;
+    if (box === null) {
+      local.chatViewport.set(null);
+      return;
+    }
+    // Wraps, rather than replaces, `<scrollbox>`'s OWN `content.onSizeChange` handler (set
+    // inside its constructor to call its own `recalculateBarProps()`, `node_modules/@opentui/
+    // core`) — overwriting it outright would silently break the widget's own scrollbar/sticky-
+    // scroll bookkeeping. `bind` (RTM-A04), not `useWrap`: this handler is invoked LATER by
+    // OpenTUI, from outside any Reatom frame, the same shape `deps.ts`'s own
+    // `bind((frame) => previewFrame.set(frame))` and `bind(() => pageOverride.set(null))` are
+    // already used for — `maybeRestorePosition` reads `mirror.history()`, a Reatom atom read,
+    // which needs the frame `bind` restores just as much as a write would.
+    const scrollboxOwnOnSizeChange = box.content.onSizeChange;
+    box.content.onSizeChange = bind(() => {
+      scrollboxOwnOnSizeChange?.call(box.content);
+      maybeRestorePosition();
+    });
+    local.chatViewport.set({
+      scrollByPage(direction) {
+        box.scrollBy({ x: 0, y: direction }, "viewport");
+        maybeLoadOlder();
+      },
+      scrollToBottom() {
+        box.scrollTo({ x: 0, y: box.scrollHeight });
+      },
+      atBottom() {
+        return box.scrollTop + box.viewport.height >= box.scrollHeight;
+      },
+      anchorFromBottom() {
+        return box.scrollHeight - box.scrollTop - box.viewport.height;
+      },
+      restoreAnchor(distanceFromBottom) {
+        box.scrollTop = Math.max(0, box.scrollHeight - box.viewport.height - distanceFromBottom);
+      },
+    });
   }, "ui.Workspace.publishChatViewport");
+
+  /** How close to the top edge counts as "at the top" — one row of slack, so a wheel step that
+   *  lands at 1 rather than 0 still pages. */
+  const TOP_TRIGGER_ROWS = 1;
+
+  /**
+   * The ONE paging trigger (chat-scroll spec §6.6), reached from all three routes: the wheel
+   * (`onMouseScroll` below), the keyboard (through the adapter's own `scrollByPage` above, which
+   * `applyIntent`'s `chat-scroll-up`/`chat-scroll-down` cases call), and a click on the
+   * indicator row (`ChatScrollback`'s `onLoadOlder` below). Four guards, in the order they can
+   * refuse most cheaply.
+   *
+   * `withAsync` is deliberately NOT used here even though it is this project's default
+   * (RTM-A02/A03), and the reason is worth stating: the operation does not complete when the
+   * dispatch promise resolves — it completes when `chat.records.older` arrives. The dispatch
+   * promise reports only whether the dispatcher itself refused, which is handled in the
+   * established `.then(wrap(...))` form.
+   */
+  const maybeLoadOlder = useWrap(() => {
+    const box = viewportRef.current;
+    if (box === null) return;
+    if (box.scrollTop > TOP_TRIGGER_ROWS) return;
+
+    const held = mirror.history();
+    if (held.prevCursor === null) return;
+    if (local.olderPage().kind === "loading") return;
+
+    const chatId = mirror.chats().activeChatId;
+    if (chatId === null) return;
+    // No affordance for an unavailable action: §7.1 fixes the untrusted-read-only exemption
+    // list at three commands by name, so paging is genuinely unavailable there. Checking the
+    // mirrored capability keeps the stream from showing a failure the user cannot act on.
+    if (mirror.capabilities().get("chat.load-older")?.available !== true) return;
+
+    pendingAnchor.current = box.scrollHeight - box.scrollTop - box.viewport.height;
+    heightBeforeLoad.current = box.scrollHeight;
+    recordCountBeforeLoad.current = mirror.history().records.length;
+    local.olderPage.set({ kind: "loading" });
+    void dispatcher.dispatch("chat.load-older", { chatId, cursor: held.prevCursor }).then(
+      wrap((result) => {
+        if (result instanceof Error) {
+          console.error("UI command dispatch failed:", result);
+          // §11 answer 4's own literal fallback (`design/termcraft-engine.js:1505`, the
+          // `top.err||'chat file could not be read'` the design engine itself falls back to
+          // when no failure text is available): this branch has no `chat.records.older`
+          // failure to relay — the dispatcher itself refused — so the design's own default
+          // stands in rather than an invented message.
+          local.olderPage.set({ kind: "failed", safeMessage: "chat file could not be read" });
+          return;
+        }
+        if (result.status !== "accepted")
+          local.olderPage.set({ kind: "failed", safeMessage: "chat file could not be read" });
+      }),
+    );
+  }, "ui.Workspace.maybeLoadOlder");
+
   const requestAtMouse = (purpose: "hover" | "select" | "pin", event: MouseEvent) => {
     const current = previewFrame();
     if (current === null) return;
@@ -601,13 +767,16 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                *
                * Follow-the-tail and its disengagement on manual scroll are the renderable's
                * OWN behavior (`stickyScroll` + `stickyStart`); this project implements
-               * neither. `publishChatViewport` below is a STUB for this task (WP-10 Task 11)
-               * — it only stores the ref; the adapter that fills `local.chatViewport` and the
-               * paging trigger are Task 12's job.
+               * neither. `publishChatViewport` below is the {@link ChatViewport} adapter over
+               * this live renderable; `onMouseScroll` is one of the paging trigger's three
+               * routes (chat-scroll spec §6.6 — the other two are the keyboard, through the
+               * adapter's own `scrollByPage`, and a click on `ChatScrollback`'s indicator row
+               * below).
                */}
               <scrollbox
                 id="ws-chat-scroll"
                 ref={publishChatViewport}
+                onMouseScroll={maybeLoadOlder}
                 flexGrow={1}
                 // `flexBasis={0}` is load-bearing, not decoration (verified with a standalone
                 // Yoga repro during this task): `<scrollbox>` is a composite renderable whose
@@ -658,6 +827,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                   unloadedCount={Math.max(0, history.totalRecordCount - records.length)}
                   atStart={history.prevCursor === null}
                   olderPage={local.olderPage()}
+                  onLoadOlder={maybeLoadOlder}
                 />
                 {/* Below the persisted tail, above the live turn block — chronologically the crash
                     follows the turn that produced the design, which is exactly where the design

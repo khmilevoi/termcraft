@@ -749,6 +749,38 @@ export function createUiDeps(
   // otherwise consume it — and an edit to whichever input is primary would not re-derive.
   void slashSelection();
 
+  // The older-page load latch (chat-scroll spec §6.6, WP-10 Task 12) is state DERIVED from two
+  // mirror facts once it is "loading": the active chat's record count (`chat.records.older`
+  // growing the window is a success) and the last older-page failure (a non-null one is a
+  // failure). Owned by the atom (RTM-S02) rather than re-set by hand from a `Workspace.tsx`
+  // effect — the same reasoning `slashSelection` above already states for itself, and this
+  // reads more cleanly here too: `Workspace.tsx`'s own `maybeLoadOlder` still writes `{ kind:
+  // "loading" }`/`{ kind: "failed", ... }` directly for the OTHER two transitions (starting a
+  // request, a dispatch the Kernel itself refused) — that is the point of `withComputed` over a
+  // plain `computed`, exactly as `slashSelection`'s own comment already explains.
+  const olderPage = atom<ChatOlderPageState>({ kind: "idle" }, "ui.local.olderPage").extend(
+    withComputed((state) => {
+      // Read every dependency BEFORE the early return, matching `slashSelection` above: an
+      // early return that skipped reading one would register no dependency for it, and this
+      // atom would never recompute again once THAT value changed. `mirror.history()`'s own
+      // return value is intentionally discarded here — the record count growing is what marks
+      // a SUCCESSFUL page (chat-scroll spec §6.6: "a FAILED page changes no record count and a
+      // SUCCESSFUL one clears no failure"), but which count it grows TO doesn't matter to the
+      // branch below; only that this atom is asked to recompute again when it does.
+      mirror.history();
+      const olderFailure = mirror.lastOlderPageFailure();
+      if (state.kind !== "loading") return state;
+      return olderFailure === null
+        ? { kind: "idle" }
+        : { kind: "failed", safeMessage: olderFailure.safeMessage };
+    }),
+  );
+  // Prime the computation here, the same reason `slashSelection` above does it — while the
+  // mirror's `history`/`lastOlderPageFailure` are both still at their pristine post-construction
+  // values: the FIRST natural read otherwise belongs to whichever component happens to read
+  // `local.olderPage()` first, which would then be the read that registers the dependencies.
+  void olderPage();
+
   const local: UiLocalState = {
     prompt,
     composer,
@@ -760,7 +792,7 @@ export function createUiDeps(
     pinDraft: atom("", "ui.local.pinDraft"),
     pageOverride,
     chatViewport: atom<ChatViewport | null>(null, "ui.local.chatViewport"),
-    olderPage: atom<ChatOlderPageState>({ kind: "idle" }, "ui.local.olderPage"),
+    olderPage,
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     homeHealth: atom<HomeAgentHealth>(DEFAULT_HOME_HEALTH, "ui.local.homeHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),
