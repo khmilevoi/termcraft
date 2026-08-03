@@ -26,8 +26,11 @@ async function mount(opts?: {
   attempts?: number;
   w?: number;
   h?: number;
-  // `null` (a healthy or unconfirmed agent) unless a test says otherwise — see the "agent-health
-  // correction" describe block below for the `agentDead` shape itself.
+  // `null` (a healthy or unconfirmed agent) unless a test says otherwise. This file has no test
+  // for the `agentDead !== null` branches themselves — that coverage lives in
+  // `ui/workspace/ui/Workspace.test.tsx`'s "Workspace halted preview + dead agent (design 30, the
+  // collision)" describe block. `HostCrashAgentNotice` (this module's own type, above) is the
+  // shape.
   agentDead?: HostCrashAgentNotice | null;
 }) {
   const width = opts?.w ?? 76;

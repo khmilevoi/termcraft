@@ -411,8 +411,9 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
-  const healthBadge = agentHealthBadge(local.agentHealth(), narrow);
-  const agentDead = agentDeadNotice(local.agentHealth());
+  const agentHealth = local.agentHealth();
+  const healthBadge = agentHealthBadge(agentHealth, narrow);
+  const agentDead = agentDeadNotice(agentHealth);
   const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
@@ -812,8 +813,11 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
           // contradict what is happening on screen in the same second.
           //
           // Preview halt outranks health because it is the more urgent, more specific fact — and
-          // §30 answers the collision directly: the halt keeps the slot, and the halt PANEL says
-          // what health would have said (see `HostCrashPanel`'s `agentDead`).
+          // §30 answers the collision directly: the halt keeps the slot, and when the reading is
+          // blocked or missing the halt PANEL says what health would have said (see
+          // `HostCrashPanel`'s `agentDead`; `agentDeadNotice` returns `null` for `checking` and
+          // `advisory`, so those two readings are simply lost while a halt has the slot — a
+          // known, accepted gap, not a bug this task closes).
           props.readOnly
             ? { text: "Send · Tweaks · pins disabled", fg: "faint", bg: "line" }
             : // finding §2.5 (phase-8 Task 16): design/termcraft-engine.js:1005-1006 (`wsSlashTurn`)

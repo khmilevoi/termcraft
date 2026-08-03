@@ -1018,11 +1018,19 @@ describe("Workspace halted preview + dead agent (design 30, the collision)", () 
   // borders, the OTHER pane's own row) away from its continuation — never adjacent in the joined
   // string, verified by inspecting the captured rows directly. This is the same reason
   // `HostCrashPanel.test.tsx`'s own "renders the host message verbatim and wrapped" test checks
-  // word-by-word rather than the whole phrase, rather than an assertion being weakened: every
-  // word present (not just some) still proves the exact wording rendered, not a paraphrase or a
-  // truncation. Proven to still fail on regression: with `agentDead` forced back to `null`,
-  // "runs" and "until" (unique to these two lines — nothing else in the frame contains either
-  // substring) are absent and this helper reports `false`.
+  // word-by-word rather than the whole phrase.
+  //
+  // What this ACTUALLY proves, no more: every word of `phrase` is present SOMEWHERE in the frame
+  // — `text.includes` per word, no ordering, no word-boundary check, no adjacency. That catches
+  // truncation and the whole-feature-off case (proven: with `agentDead` forced back to `null`,
+  // "runs" and "until" — unique to these two lines, nothing else in the frame contains either
+  // substring — are absent and this helper reports `false`). It does NOT by itself catch a wrong
+  // VARIANT: `login`'s red line and `latched`'s share every word except `unavailable`, because
+  // `login`'s three extra words ("not", "signed", "in") are ALSO supplied by `f6Detail`, rendered
+  // in the same frame regardless of which line's text won. The `login` test below adds its own
+  // `latched`-only-word check to close that gap. The exact composed string, char-for-char, is
+  // already pinned by `health-badge.test.ts`'s `toEqual` assertions — this integration test's job
+  // is only to confirm the notice actually reaches the render.
   const containsPhrase = (text: string, phrase: string) =>
     phrase.split(" ").every((word) => text.includes(word));
 
@@ -1068,6 +1076,15 @@ describe("Workspace halted preview + dead agent (design 30, the collision)", () 
       containsPhrase(text, "✗ claude not signed in — F6 fills the composer, but nothing runs yet"),
     ).toBe(true);
     expect(text).not.toContain("nothing is sent — you press ⏎");
+    // Discriminates this from a bug that renders `latched`'s red line under a `login` reading:
+    // "unavailable" is `latched`'s own word (`agentHealthBadge`'s blocked/latched text), and
+    // nothing else in this frame can produce it — F5 is available here (`crashed()`'s
+    // `retryCapability: { available: true }`), so its own note/detail read "re-establish the
+    // host and mount again" / "a broken design will die again", never "unavailable in this
+    // session". The two `containsPhrase` checks above cannot tell the two variants apart on
+    // their own (see `containsPhrase`'s own comment) since `f6Detail` already supplies "not",
+    // "signed" and "in" independent of which red line rendered.
+    expect(text).not.toContain("unavailable");
   });
 
   test("a latched agent gets the generic line and keeps F6's ordinary detail", async () => {
