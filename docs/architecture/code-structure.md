@@ -621,10 +621,14 @@ vendor tier's own pre-split run-loop file.
   `src/gate/adapters/gate-runner.ts`'s `GateRunnerAdapterDeps.runtimeDts` is now
   supplied by the composition root — `src/entrypoint/model/create-shell.ts`'s
   `interactiveShell` resolves `tscExePath` via `resolveCompilerPath()` and passes
-  `RUNTIME_DTS` as `runtimeDts` on every construction, so `typeCheck` runs live in
+  `RUNTIME_DTS` as `runtimeDts` on every construction, so the type check runs live in
   the shipped configuration (phase-8 Task 7; a failed compiler resolution aborts
   shell construction as a `ShellCompositionError` rather than shipping a Gate that
-  silently skips the check). This test-only edge is not a
+  silently skips the check). The check itself is now ONE `tsc` program over the whole
+  tree, run inside `GateRunner.runTree` rather than once per entry file inside
+  `runGate` (design-tree phase 2): the per-file program could not resolve a sibling
+  module at all, so every page importing shared code failed with a spurious `TS2307`.
+  This test-only edge is not a
   leaf-rule violation: item 10's "`runtime` is a leaf that imports no termcraft
   module" constrains `runtime`'s OUTGOING imports only, and item 11's
   forbidden-shapes table carries no "X importing `runtime`" row — nothing in this

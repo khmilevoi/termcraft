@@ -1360,21 +1360,23 @@ async function resolveExportPageInputs(
  * `closures/<slug>.json` records in the export package.
  *
  * WHY THE GATE PORT, AND WHY HERE. Resolving a closure means walking the import graph, which
- * needs a scanner `core` does not have and may not import; `GateRunner.runTreeImports` is the
+ * needs a scanner `core` does not have and may not import; `GateRunner.runTree` is the
  * one port that answers it, and it answers over TEXT, so the snapshot's own bytes are decoded
  * here rather than re-read from disk — the package then describes exactly the revision it
  * ships. It runs AFTER the write permit is released (`captureExportSnapshot` releases it
- * before returning), so a whole-tree scan never holds the project's write lock. A one-off scan
+ * before returning), so a whole-tree pass never holds the project's write lock. A one-off pass
  * is proportionate at this point: an export already spawns a host child per page and per
- * ladder size.
+ * ladder size, so one more `tsc` program (the pass type-checks the tree too since design-tree
+ * phase 2 Task 3) is not what makes an export expensive.
  *
  * A REFUSAL IS NOT FATAL TO THE EXPORT, and that is deliberate. The renders have already
  * succeeded, so the package's snapshots and layout trees are real; losing the closure listing
  * costs an implementer a convenience, not correctness, and failing the whole export for it
  * would throw away work the user waited for. Every drop is logged (errore rule 21) and
  * `design-prompt.md` says out loud which pages have no closure, so nothing is silently absent.
- * `runTreeImports` reporting errors means some file could not be scanned — those pages are
- * simply absent from `closures`, never given a truncated stand-in.
+ * `runTree` reporting errors means some file could not be scanned, or the tree does not
+ * type-check — a page whose closure could not be PROVED is simply absent from `closures`, never
+ * given a truncated stand-in.
  */
 async function resolveExportClosures(
   context: HandlerContext,
@@ -1393,7 +1395,7 @@ async function resolveExportClosures(
     snapshot.tree.map((file) => [file.relPath, decoder.decode(file.bytes)] as const),
   );
   const result = await wrap(
-    context.deps.gateRunner.runTreeImports({
+    context.deps.gateRunner.runTree({
       files,
       treePaths: snapshot.tree.map((file) => file.relPath),
       pages: entries,
@@ -1410,7 +1412,7 @@ async function resolveExportClosures(
   for (const closure of result.closures) {
     const entry = entryBySlug.get(closure.slug);
     if (entry === undefined) {
-      // Unreachable while `runTreeImports` walks the very `pages` list above — a closure for a
+      // Unreachable while `runTree` walks the very `pages` list above — a closure for a
       // slug that list does not name would be the port contradicting its own input. Dropped
       // rather than given a guessed entry, and logged so it is never silently absent.
       console.warn(

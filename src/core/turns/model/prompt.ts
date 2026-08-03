@@ -63,7 +63,7 @@ function formatPosition(line: number | null, column: number | null): string {
 }
 
 /**
- * Which pages a whole-tree closure blocker actually blocked, rendered for the agent.
+ * Which pages a whole-tree diagnostic is attributed to, rendered for the agent.
  *
  * ADDED (task-14 review round 1, Important 2). `blockedPages` was carried across the DTO and
  * the wire schema so it could reach the agent's retry prompt — and then this renderer, which
@@ -73,8 +73,14 @@ function formatPosition(line: number | null, column: number | null): string {
  *
  * It is exactly the fact the agent cannot derive for itself: a diagnostic names the MODULE
  * (`lib/theme.ts`), and the agent has no import graph with which to work out which pages that
- * module broke. Absent (or empty) when the fact blocked no page's closure, in which case the
- * clause is omitted rather than rendered as an empty list.
+ * module broke. Absent (or empty) when the diagnostic names no page, in which case the clause is
+ * omitted rather than rendered as an empty list.
+ *
+ * The field's meaning WIDENED (design-tree phase 2 Task 3) from "the pages whose closure the pass
+ * could not complete here" to "the pages whose closure contains this file", so a shared module's
+ * TYPE error now renders the same clause a forbidden import already did. The renderer needed no
+ * change for that, and the wording here is corrected so it does not go on describing only half of
+ * what it prints — `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages` is the full account.
  */
 function formatBlockedPages(blockedPages: readonly PageSlug[] | null): string {
   if (blockedPages === null || blockedPages.length === 0) return "";

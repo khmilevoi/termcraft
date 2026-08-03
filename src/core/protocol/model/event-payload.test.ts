@@ -492,7 +492,7 @@ describe("turnGateRejectedPayloadV1Schema", () => {
           file: null,
           line: null,
           column: null,
-          // Widened by task 14 so `runTreeImports`' per-page attribution can cross the wire —
+          // Widened by task 14 so `runTree`'s per-page attribution can cross the wire —
           // `.nullable()`, never `.optional()`, matching this payload's own convention for
           // every other widened echo of an optional port field.
           blockedPages: null,

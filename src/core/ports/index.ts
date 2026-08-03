@@ -140,7 +140,7 @@ export type {
   ManifestSliceResultV1,
   ManifestSliceV1,
   PageMetaExtractionV1,
-  RunTreeImportsResultV1,
+  RunTreeResultV1,
 } from "./gate-runner";
 export { PAGE_META_EXTRACTOR_VERSION } from "./gate-runner";
 

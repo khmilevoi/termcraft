@@ -19,7 +19,7 @@ export { scanModuleEdges, scanTreeImports } from "./model/tree-scan";
 export { checkPageContract } from "./model/page-contract";
 export type { PageContractError, PageContractResult } from "./model/page-contract";
 export { resolveCompilerPath, CompilerExtractError } from "./model/tsc-extract";
-export { createTypeChecker, TypeCheckUnavailableError } from "./model/type-check";
+export { createTreeTypeChecker, TypeCheckUnavailableError } from "./model/type-check";
 export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
 export type { ManifestScanInput, ManifestScanResult } from "./model/manifest";

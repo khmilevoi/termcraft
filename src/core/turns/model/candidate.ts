@@ -92,7 +92,7 @@ export interface TurnCandidateV1 {
   readonly totalBytes: number;
   /** The frozen candidate's own `design/pages.json`, decoded — see this file's header. */
   readonly manifestText: string;
-  /** The candidate's design-tree files, TREE-relative (the `design/` prefix stripped) — Gate's `runManifestSlice`/`runTreeImports` `treePaths` input. */
+  /** The candidate's design-tree files, TREE-relative (the `design/` prefix stripped) — Gate's `runManifestSlice`/`runTree` `treePaths` input. */
   readonly treeFiles: readonly StagedFileV1[];
   readonly fileChanges: readonly DesignFileChangeV1[];
 }
@@ -224,7 +224,7 @@ export function diffTreeInventory(
  * that inventory) counts as changed. That is the honest answer: "I cannot prove it is
  * unchanged" must never be reported as "unchanged".
  *
- * `closures` arrives through the `GateRunner` port's `runTreeImports` result (design §7's
+ * `closures` arrives through the `GateRunner` port's `runTree` result (design §7's
  * whole-tree scan is what resolves each entry's transitive file set) — never computed here:
  * `core` may not import `gate`, and this function has no `edgesOf`/specifier resolver of its
  * own. Wiring a real caller is Task 14's job (`.superpowers/sdd/2026-07-28-design-tree-

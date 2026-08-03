@@ -1068,8 +1068,9 @@ describe('turnHandlers["turn.start"]', () => {
       errors: [],
       slice: { pages: [{ slug: HOME, entry: defaultFakeEntry(HOME) }], active: null },
     });
-    gateRunner.queueRunTreeImportsResult({
+    gateRunner.queueRunTreeResult({
       errors: [],
+      warnings: [],
       closures: [{ slug: HOME, files: [defaultFakeEntry(HOME)] }],
     });
     const { handlerContext, getLaunchedOperations, getPublishedEvents } = buildTestContext({
@@ -1838,7 +1839,7 @@ describe('turnHandlers["turn.start"]', () => {
       }),
       // Never reached on this path either — the whole-tree scan (task 12) is a separate,
       // once-per-turn call this test does not drive.
-      runTreeImports: async () => ({ errors: [], closures: [] }),
+      runTree: async () => ({ errors: [], warnings: [], closures: [] }),
       runPage: async (input) => {
         capturedRunPageInputs.push(input);
         return {
@@ -1965,7 +1966,7 @@ describe('turnHandlers["turn.start"]', () => {
         ],
       }),
       // Never reached on this path either — see the sibling double above.
-      runTreeImports: async () => ({ errors: [], closures: [] }),
+      runTree: async () => ({ errors: [], warnings: [], closures: [] }),
       runPage: async (input) => {
         pageCallCount += 1;
         // `treeRoot`/`entryRelPath` are required inputs now (task 16) — every production

@@ -7,6 +7,7 @@ import type { GateErrorV1 } from "core/ports";
 import { createFakeGateRunner } from "core/ports/fakes";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "../ports/smoke-renderer";
 import { createGateRunnerAdapter } from "./gate-runner";
@@ -145,7 +146,7 @@ describe("createGateRunnerAdapter", () => {
     // RETITLED AND RE-FRAMED BY TASK 14. This test used to be called "KNOWN SECURITY GAP, NOT
     // CORRECT BEHAVIOR" and its body said `smokeRan === true` "is the bug, not the feature".
     // Both claims rested on the same premise — that NOTHING in the shipped pipeline called
-    // `runTreeImports`, so a forbidden import reached the smoke render undetected. Task 14
+    // `runTree`, so a forbidden import reached the smoke render undetected. Task 14
     // wired `core/turns/model/validation.ts` to call it once per turn, before any `runPage`,
     // so the premise is now false and the old title asserted a hole that no longer exists. A
     // test that pins a security hole as intended behaviour is worse than no test, which is why
@@ -156,7 +157,7 @@ describe("createGateRunnerAdapter", () => {
     // page both misses a module no page's own source is run against and reports one violation
     // once per reaching page), and it must stay true or the split silently regresses. It is
     // NOT the wiring proof: this test drives `adapter.runPage(...)` directly, so it would keep
-    // passing even if the turn stopped calling `runTreeImports` entirely. That proof lives in
+    // passing even if the turn stopped calling `runTree` entirely. That proof lives in
     // `src/entrypoint/model/turn-import-perimeter.test.ts` (the REAL adapter through the REAL
     // `runTurnValidation`, one row per forbidden form in a SHARED module no page names) and in
     // `core/turns/model/validation.test.ts` (the call shape, and that its errors reject the
@@ -182,10 +183,10 @@ describe("createGateRunnerAdapter", () => {
     expect(smokeRan).toBe(true);
   });
 
-  test("runTreeImports() catches the SAME forbidden import once per turn, over the whole tree", async () => {
+  test("runTree() catches the SAME forbidden import once per turn, over the whole tree", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
     const badSource = `import { x } from "lodash"\n${cleanSource}`;
-    const result = await adapter.runTreeImports({
+    const result = await adapter.runTree({
       files: new Map([["dash.tsx", badSource]]),
       treePaths: ["dash.tsx"],
       pages: [],
@@ -195,7 +196,7 @@ describe("createGateRunnerAdapter", () => {
     expect(result.errors[0]?.file).toBe("dash.tsx");
   });
 
-  describe("runTreeImports() closures (task-13 review round 1, Critical C1)", () => {
+  describe("runTree() closures (task-13 review round 1, Critical C1)", () => {
     test("a page's closure reaches a module TRANSITIVELY, not just its own entry's direct imports", async () => {
       // pages/a.tsx -> lib/theme.ts -> lib/tokens.ts: a shallow (entry-only, or one-hop) closure
       // would pass this test with `lib/tokens.ts` missing, and would then report "nothing
@@ -212,7 +213,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
@@ -239,7 +240,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx", "pages/b.tsx", "lib/theme.ts"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [
@@ -261,7 +262,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
@@ -279,7 +280,7 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  describe("runTreeImports() closure-completeness diagnostics (task-13 review round 2, Important 1)", () => {
+  describe("runTree() closure-completeness diagnostics (task-13 review round 2, Important 1)", () => {
     test("BEFORE/AFTER PROOF: an entry whose own source is missing from `files` used to silently truncate to a single-file closure with ZERO diagnostics — now excluded from `closures` with an explicit error", async () => {
       // The exact probe the review executed against `eeaf80f`: `treePaths` names the entry,
       // but `files` never got its text (a caller bug, or a caching gap) — `lib/theme.ts`/
@@ -296,7 +297,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
@@ -330,7 +331,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx", "lib/theme.ts", "lib/tokens.ts"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [{ slug: "a" as PageSlug, entry: "pages/a.tsx" }],
@@ -343,7 +344,7 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  describe("runTreeImports() no longer duplicates a shared-module violation per reaching page (task-13 review round 2, Important 2)", () => {
+  describe("runTree() no longer duplicates a shared-module violation per reaching page (task-13 review round 2, Important 2)", () => {
     test("BEFORE/AFTER PROOF: three pages sharing one forbidden import in one shared module used to report it 4 times (1 flat-scan + 3 closure-walk copies) — now reports it exactly once", async () => {
       // The exact probe the review executed against `eeaf80f`: pages a/b/c each import
       // `lib/theme.ts`, which imports the forbidden `node:fs`. `eeaf80f` returned 4
@@ -360,7 +361,7 @@ describe("createGateRunnerAdapter", () => {
       ]);
       const treePaths = ["pages/a.tsx", "pages/b.tsx", "pages/c.tsx", "lib/theme.ts"];
 
-      const result = await adapter.runTreeImports({
+      const result = await adapter.runTree({
         files,
         treePaths,
         pages: [
@@ -379,7 +380,7 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
-  describe("runTreeImports() closure invariant harness (task-13 review round 3)", () => {
+  describe("runTree() closure invariant harness (task-13 review round 3)", () => {
     /**
      * THE JOINT INVARIANT THIS TABLE EXISTS TO PIN, and why it is a table rather than more
      * one-off tests. Task 13's fix loop see-sawed for two rounds because two obligations are in
@@ -741,7 +742,7 @@ describe("createGateRunnerAdapter", () => {
     for (const row of rows) {
       test(row.name, async () => {
         const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-        const result = await adapter.runTreeImports({
+        const result = await adapter.runTree({
           files: new Map(row.files),
           treePaths: row.treePaths,
           pages: row.pages,
@@ -757,7 +758,7 @@ describe("createGateRunnerAdapter", () => {
       // and so the property survives even if every individual expectation above were edited.
       for (const row of rows) {
         const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-        const result = await adapter.runTreeImports({
+        const result = await adapter.runTree({
           files: new Map(row.files),
           treePaths: row.treePaths,
           pages: row.pages,
@@ -802,7 +803,7 @@ describe("createGateRunnerAdapter", () => {
         "lib/orphan.ts",
       ];
       const codesOf = async (pages: readonly PageEntryV1[]) =>
-        (await adapter.runTreeImports({ files: shared, treePaths, pages })).errors
+        (await adapter.runTree({ files: shared, treePaths, pages })).errors
           .map((error) => `${error.code} @ ${String(error.file)}`)
           .sort();
 
@@ -843,17 +844,12 @@ describe("createGateRunnerAdapter", () => {
     );
   });
 
-  test("runPage() without compilerAssets/runtimeDts skips the type-check stage (an honest omission, not a fabricated pass)", async () => {
-    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const result = await adapter.runPage({
-      source: cleanSource,
-      slug: SLUG,
-      treeRoot: "/proj/.termcraft/design",
-      expectedFiles: [],
-      entryRelPath: "pages/dash.tsx",
-    });
-    expect(result.errors.some((e) => e.kind === "type")).toBe(false);
-  });
+  // The "runPage() without compilerAssets/runtimeDts skips the type-check stage" test that used
+  // to live here is RETIRED, not merely retitled: design-tree phase 2 Task 3 moved the type check
+  // out of `runPage` entirely, so the presence or absence of a compiler no longer changes
+  // anything about what `runPage` returns, and a test on it would pin nothing. The honest-omission
+  // property it guarded moved with the stage — see the `runTree()` suite at the bottom of this
+  // file, which pins both halves (omitted without a compiler; live with one).
 
   test("runPage() forwards an injected checkManifest port", async () => {
     let checkManifestCalled = false;
@@ -976,5 +972,170 @@ describe("createGateRunnerAdapter", () => {
     const realResult = await real.runPage(input);
     expect(realResult.ok).toBe(fakeResult.ok);
     expect(realResult.descriptor?.slug).toBe(fakeResult.descriptor?.slug);
+  });
+});
+
+/**
+ * Task 3: the type check now lives INSIDE the whole-tree pass, and each diagnostic is attributed
+ * to every page whose closure — the one THIS pass just resolved, never a second walk — contains
+ * the file the diagnostic names (design §8 step 5: "A diagnostic in a shared file is attributed
+ * to every page whose closure contains it").
+ *
+ * Driven against the REAL compiler and the REAL generated declaration, for the same reason
+ * `gate/model/type-check.test.ts` is: a fake type checker here would prove the plumbing and
+ * nothing about the defect this task exists to fix (a page importing a shared module used to
+ * fail with a spurious `TS2307` under the per-file program). This is the same TEST-ONLY
+ * `gate -> runtime` edge that file's own header documents; production wiring stays in the
+ * composition root.
+ */
+const TSC_EXE = path.join(
+  process.cwd(),
+  "node_modules/@typescript/typescript-win32-x64/lib/tsc.exe",
+);
+const HAS_TSC = fs.existsSync(TSC_EXE);
+const withTsc = HAS_TSC ? test : test.skip;
+const TYPE_CHECK_TIMEOUT_MS = 30_000;
+
+/** A shared module both pages below import. Its `WIDTH` initializer is the ONE planted defect. */
+const SHARED_CLEAN = `export const TITLE = "Shared"
+export const WIDTH: number = 80
+`;
+const SHARED_BROKEN = `export const TITLE = "Shared"
+export const WIDTH: number = "eighty"
+`;
+
+/** A page in the shape §5.8 asks agents for, importing the shared module above. */
+function consumerPage(title: string, extra = ""): string {
+  return `import { definePage, reatomComponent, Panel, Text } from "@termcraft/runtime"
+import { TITLE, WIDTH } from "../lib/theme"
+${extra}
+export const meta = definePage({
+  kitApiVersion: 1, title: "${title}", minSize: { w: WIDTH, h: 24 }, theme: "dark-default",
+})
+
+export default reatomComponent(() => (
+  <Panel id="root" title={TITLE}><Text id="label" color="accent">hi</Text></Panel>
+), "${title}")
+`;
+}
+
+const TREE_PATHS = ["lib/theme.ts", "pages/about.tsx", "pages/home.tsx"];
+const TREE_PAGES = [
+  { slug: "home" as PageSlug, entry: "pages/home.tsx" },
+  { slug: "about" as PageSlug, entry: "pages/about.tsx" },
+];
+
+function treeAdapter() {
+  return createGateRunnerAdapter({
+    smokeRenderer: fakeSmokeRenderer({ ok: true }),
+    tscExePath: TSC_EXE,
+    runtimeDts: RUNTIME_DTS,
+  });
+}
+
+describe("runTree() — the type check inside the whole-tree pass (design §8 step 5)", () => {
+  withTsc(
+    "a type error in a SHARED module is reported ONCE, naming the module, and blocks every page whose closure contains it",
+    async () => {
+      const result = await treeAdapter().runTree({
+        files: new Map([
+          ["lib/theme.ts", SHARED_BROKEN],
+          ["pages/home.tsx", consumerPage("Home")],
+          ["pages/about.tsx", consumerPage("About")],
+        ]),
+        treePaths: TREE_PATHS,
+        pages: TREE_PAGES,
+      });
+
+      const typeErrors = result.errors.filter((error) => error.kind === "type");
+      expect(typeErrors).toHaveLength(1);
+      expect(typeErrors[0]?.file).toBe("lib/theme.ts");
+      // SORTED, and both pages named: the closure walk this same pass just ran is what says
+      // which pages reach `lib/theme.ts` — the diagnostic is not copied once per page.
+      expect(typeErrors[0]?.blockedPages).toEqual(["about", "home"] as PageSlug[]);
+      // Not a fatal for the tree's structure: closures still resolved for both pages.
+      expect(result.closures).toHaveLength(2);
+      // Task 4 fills these; Task 3 only threads the field.
+      expect(result.warnings).toEqual([]);
+    },
+    TYPE_CHECK_TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a type error in ONE page's own entry blocks only that page",
+    async () => {
+      const result = await treeAdapter().runTree({
+        files: new Map([
+          ["lib/theme.ts", SHARED_CLEAN],
+          ["pages/home.tsx", consumerPage("Home", 'const n: number = "not a number"\n')],
+          ["pages/about.tsx", consumerPage("About")],
+        ]),
+        treePaths: TREE_PATHS,
+        pages: TREE_PAGES,
+      });
+
+      const typeErrors = result.errors.filter((error) => error.kind === "type");
+      expect(typeErrors).toHaveLength(1);
+      expect(typeErrors[0]?.file).toBe("pages/home.tsx");
+      expect(typeErrors[0]?.blockedPages).toEqual(["home"] as PageSlug[]);
+    },
+    TYPE_CHECK_TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a clean tree reports no type errors — and `runPage` reports none for a BROKEN page either, because the stage really left it",
+    async () => {
+      const adapter = treeAdapter();
+      const clean = new Map([
+        ["lib/theme.ts", SHARED_CLEAN],
+        ["pages/home.tsx", consumerPage("Home")],
+        ["pages/about.tsx", consumerPage("About")],
+      ]);
+      const cleanResult = await adapter.runTree({
+        files: clean,
+        treePaths: TREE_PATHS,
+        pages: TREE_PAGES,
+      });
+      expect(cleanResult.errors.filter((error) => error.kind === "type")).toEqual([]);
+
+      // The mirror half, and the one that actually proves the move: the SAME page source that
+      // `runTree` above rejects for a type error passes `runPage` with no `type` error at all,
+      // because `runPage` no longer runs a type check. A test that only checked the clean tree
+      // could not tell "the stage moved" from "the stage is silently disabled".
+      const brokenPage = consumerPage("Home", 'const n: number = "not a number"\n');
+      const brokenTree = await adapter.runTree({
+        files: new Map([
+          ["lib/theme.ts", SHARED_CLEAN],
+          ["pages/home.tsx", brokenPage],
+          ["pages/about.tsx", consumerPage("About")],
+        ]),
+        treePaths: TREE_PATHS,
+        pages: TREE_PAGES,
+      });
+      expect(brokenTree.errors.some((error) => error.kind === "type")).toBe(true);
+
+      const pageResult = await adapter.runPage({
+        source: brokenPage,
+        slug: "home" as PageSlug,
+        treeRoot: "/proj/.termcraft/design",
+        expectedFiles: [],
+        entryRelPath: "pages/home.tsx",
+      });
+      expect(pageResult.errors.some((error) => error.kind === "type")).toBe(false);
+    },
+    TYPE_CHECK_TIMEOUT_MS,
+  );
+
+  test("runTree() without tscExePath/runtimeDts skips the type check — an honest omission, never a fabricated pass", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const result = await adapter.runTree({
+      files: new Map([
+        ["lib/theme.ts", SHARED_BROKEN],
+        ["pages/home.tsx", consumerPage("Home")],
+      ]),
+      treePaths: ["lib/theme.ts", "pages/home.tsx"],
+      pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+    });
+    expect(result.errors.some((error) => error.kind === "type")).toBe(false);
   });
 });

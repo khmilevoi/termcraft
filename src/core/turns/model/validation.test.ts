@@ -146,7 +146,7 @@ describe("runTurnValidation — the whole-tree stages", () => {
 
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
         "runManifestSlice",
-        "runTreeImports",
+        "runTree",
         "runPage",
         "runPage",
       ]);
@@ -162,10 +162,10 @@ describe("runTurnValidation — the whole-tree stages", () => {
       // 4 files / 4 treePaths: `pages.json`, both entries, AND `lib/theme.ts` — the module no
       // page names. A `files` map narrowed to the manifest's own entries would read `2` here
       // and would leave every shared module unscanned, which is exactly the hole
-      // `runTreeImports` exists to close.
+      // `runTree` exists to close.
       expect(h.gateRunner.calls[0]).toEqual({ method: "runManifestSlice", treePathCount: 4 });
       expect(h.gateRunner.calls[1]).toEqual({
-        method: "runTreeImports",
+        method: "runTree",
         fileCount: 4,
         treePathCount: 4,
         pageCount: 2,
@@ -176,12 +176,12 @@ describe("runTurnValidation — the whole-tree stages", () => {
   test("SECURITY: a whole-tree import error fails the turn even when every page's own runPage passes", async () => {
     // The wiring proof, at this module's own boundary: `runPage` returns `ok` for both pages
     // (the fake's default), so the ONLY thing that can reject this turn is the whole-tree
-    // scan. Before task 14 this module never called `runTreeImports` at all, and this exact
+    // scan. Before task 14 this module never called `runTree` at all, and this exact
     // input passed.
     await context.start(async () => {
       const h = harness();
       h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1, ABOUT_ENTRY_V1));
-      h.gateRunner.queueRunTreeImportsResult({
+      h.gateRunner.queueRunTreeResult({
         errors: [
           {
             kind: "import",
@@ -191,6 +191,7 @@ describe("runTurnValidation — the whole-tree stages", () => {
             blockedPages: [PAGE_HOME, PAGE_ABOUT],
           },
         ],
+        warnings: [],
         closures: [],
       });
 
@@ -220,7 +221,7 @@ describe("runTurnValidation — the whole-tree stages", () => {
     await context.start(async () => {
       const h = harness();
       h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1));
-      h.gateRunner.queueRunTreeImportsResult({
+      h.gateRunner.queueRunTreeResult({
         errors: [
           {
             kind: "import",
@@ -229,6 +230,7 @@ describe("runTurnValidation — the whole-tree stages", () => {
             file: "lib/orphan.ts",
           },
         ],
+        warnings: [],
         closures: [],
       });
 
@@ -256,7 +258,7 @@ describe("runTurnValidation — the whole-tree stages", () => {
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
         "runManifestSlice",
         // No `runPage`: an undecodable manifest names no entries, so there is no page to run.
-        "runTreeImports",
+        "runTree",
       ]);
       // …and it was told there are no validated entries, rather than a fabricated page list.
       expect(h.gateRunner.calls[1]).toMatchObject({ pageCount: 0 });
@@ -288,8 +290,8 @@ describe("runTurnValidation — the per-entry stage", () => {
             ],
           };
         },
-        async runTreeImports() {
-          return { errors: [], closures: [] };
+        async runTree() {
+          return { errors: [], warnings: [], closures: [] };
         },
         async runPage(input) {
           runPageCalls.push({
@@ -334,12 +336,13 @@ describe("runTurnValidation — the per-entry stage", () => {
     await context.start(async () => {
       const h = harness();
       h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1, ABOUT_ENTRY_V1));
-      h.gateRunner.queueRunTreeImportsResult({
+      h.gateRunner.queueRunTreeResult({
         errors: [],
         // `about` is absent — but with zero errors that shape cannot occur through the real
         // adapter (its CONTRACT pairs every omission with a diagnostic). Scripted here purely
         // to observe that a slug with no closure is simply not given one, rather than being
         // handed a fabricated or another page's file list.
+        warnings: [],
         closures: [{ slug: PAGE_HOME, files: [HOME_ENTRY, SHARED_MODULE] }],
       });
 
@@ -366,8 +369,9 @@ describe("runTurnValidation — the per-entry stage", () => {
           [entry, HOME_SOURCE],
         ]);
         h.gateRunner.queueRunManifestSliceResult(sliceOf({ slug: PAGE_HOME, entry }));
-        h.gateRunner.queueRunTreeImportsResult({
+        h.gateRunner.queueRunTreeResult({
           errors: [],
+          warnings: [],
           closures: [{ slug: PAGE_HOME, files: [entry] }],
         });
 

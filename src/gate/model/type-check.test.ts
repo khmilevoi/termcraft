@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 
-import { createTreeTypeChecker, createTypeChecker } from "./type-check";
+import { createTreeTypeChecker } from "./type-check";
 
 // Integration test against the REAL Go compiler. The libs are co-located with the exe
 // in the platform package, so no extraction is needed — point straight at it. Skips
@@ -28,9 +28,15 @@ const runtimeDts = `declare module "@termcraft/runtime" {
 }
 `;
 
-const checker = createTypeChecker({ tscExePath: TSC_EXE, runtimeDts });
+const checker = createTreeTypeChecker({ tscExePath: TSC_EXE, runtimeDts });
 
-describe("createTypeChecker (Spike C: typescript/unstable/sync diagnostics)", () => {
+// MIGRATED, NOT REWRITTEN (design-tree phase 2 Task 3). These five cases were written against the
+// per-file `createTypeChecker`, which Task 3 deleted along with its last caller. Every one of them
+// asserts a property the WHOLE-TREE program must have just as much — the lib chain loading off
+// disk, the global diagnostic bucket being in the union, a crashed compiler never reading as
+// clean — so they move to `createTreeTypeChecker` rather than being deleted with the function they
+// happened to be phrased against. Deleting them would have quietly dropped the coverage.
+describe("createTreeTypeChecker (Spike C: typescript/unstable/sync diagnostics)", () => {
   withTsc(
     "a clean page type-checks with no errors",
     async () => {
@@ -38,7 +44,7 @@ describe("createTypeChecker (Spike C: typescript/unstable/sync diagnostics)", ()
 export const meta = definePage({ kitApiVersion: 1, title: "Clean", minSize: { w: 80, h: 24 }, theme: "dark-default" })
 export default reatomComponent(() => Panel({ id: "p", title: "hello" }))
 `;
-      const errors = await checker(source, "clean.tsx");
+      const errors = await checker({ files: new Map([["pages/clean.tsx", source]]) });
       expect(errors).toEqual([]);
     },
     TIMEOUT_MS,
@@ -50,11 +56,13 @@ export default reatomComponent(() => Panel({ id: "p", title: "hello" }))
       const source = `const x: string = 42
 export default x
 `;
-      const errors = await checker(source, "bad.tsx");
+      const errors = await checker({ files: new Map([["pages/bad.tsx", source]]) });
       expect(errors.length).toBe(1);
       expect(errors[0]?.kind).toBe("type");
       expect(errors[0]?.code).toBe("TS2322");
-      expect(errors[0]?.file).toBe("bad.tsx");
+      // The TREE-relative path the diagnostic belongs to, resolved back from the synthetic
+      // absolute path the compiler reports.
+      expect(errors[0]?.file).toBe("pages/bad.tsx");
       // The API reports a character offset; the checker converts it to a 1-based line.
       expect(errors[0]?.line).toBe(1);
       expect(typeof errors[0]?.column).toBe("number");
@@ -72,7 +80,7 @@ export const p: Promise<string> = Promise.resolve("x")
 export const f: Float16Array = new Float16Array(1)
 export const bad: number = "not a number"
 `;
-      const errors = await checker(source, "libcheck.tsx");
+      const errors = await checker({ files: new Map([["pages/libcheck.tsx", source]]) });
       expect(errors.length).toBe(1);
       expect(errors[0]?.code).toBe("TS2322");
     },
@@ -88,8 +96,25 @@ export const bad: number = "not a number"
       const source = `const n: number = "oops"
 export default n
 `;
-      const errors = await checker(source, "guard.tsx");
+      const errors = await checker({ files: new Map([["pages/guard.tsx", source]]) });
       expect(errors.some((e) => e.code === "TS2322")).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a NON-code tree file is never fed to the compiler",
+    async () => {
+      // Difference #1: `isCodeFile` is the single measured predicate the scan, the closure walk
+      // and this program all key on. Feeding a `.json`/`.md` asset through a TS program would
+      // manufacture a fatal out of content the loader would never have run.
+      const errors = await checker({
+        files: new Map([
+          ["assets/copy.md", '# not TypeScript at all — `const x: number = "no"`\n'],
+          ["pages/clean.ts", "export const x: number = 1\n"],
+        ]),
+      });
+      expect(errors).toEqual([]);
     },
     TIMEOUT_MS,
   );
@@ -103,13 +128,17 @@ export default n
       // returns the fatal error as a value. A truly-nonexistent path is avoided on purpose:
       // the library spawns its child with no `error` handler, so ENOENT would surface as an
       // unhandled async error rather than the crash-as-value this check is asserting.
-      const broken = createTypeChecker({ tscExePath: process.execPath, runtimeDts });
-      const errors = await broken("const x = 1\nexport default x\n", "page.tsx");
+      const broken = createTreeTypeChecker({ tscExePath: process.execPath, runtimeDts });
+      const errors = await broken({
+        files: new Map([["pages/page.tsx", "const x = 1\nexport default x\n"]]),
+      });
       expect(errors.length).toBe(1);
       expect(errors[0]?.kind).toBe("type");
       expect(errors[0]?.code).toBe("TYPE_CHECK_UNAVAILABLE");
       expect(errors[0]?.message.length).toBeGreaterThan(0);
-      // The point of the whole check: a crashed compiler never reads as a clean page.
+      // ONE error for the WHOLE tree, and never an empty list: a crashed compiler must not read
+      // as a clean tree, and must not be silently attributed to one page either.
+      expect(errors[0]?.file).toBeUndefined();
       expect(errors).not.toEqual([]);
     },
     TIMEOUT_MS,
@@ -129,9 +158,6 @@ export default n
 // module DAG requires. `tscExePath` is resolved locally here, from the same `TSC_EXE` the suite
 // above already uses, rather than through `./tsc-extract` — the compiler-resolution helper is
 // being reshaped by phase-8 WP-1 and this check must not depend on which name it lands under.
-const realChecker = createTypeChecker({ tscExePath: TSC_EXE, runtimeDts: RUNTIME_DTS });
-
-// Task 2: the whole-tree replacement primitive, same real compiler + real declaration.
 const treeChecker = createTreeTypeChecker({ tscExePath: TSC_EXE, runtimeDts: RUNTIME_DTS });
 
 /** A page in the shape §5.8 asks agents for: `definePage` meta, a Reatom atom, JSX from the catalog. */
@@ -158,7 +184,7 @@ describe("the generated @termcraft/runtime declaration, through the real type ch
   withTsc(
     "a valid JSX page against the real generated declaration type-checks clean",
     async () => {
-      const errors = await realChecker(FIXTURE_PAGE, "fixture.tsx");
+      const errors = await treeChecker({ files: new Map([["pages/fixture.tsx", FIXTURE_PAGE]]) });
       expect(errors).toEqual([]);
     },
     TIMEOUT_MS,
@@ -173,11 +199,11 @@ describe("the generated @termcraft/runtime declaration, through the real type ch
       const broken = FIXTURE_PAGE.replace("value={load()}", 'value="half"');
       expect(broken).not.toBe(FIXTURE_PAGE);
 
-      const errors = await realChecker(broken, "fixture.tsx");
+      const errors = await treeChecker({ files: new Map([["pages/fixture.tsx", broken]]) });
       expect(errors.length).toBeGreaterThan(0);
       expect(errors.every((e) => e.kind === "type")).toBe(true);
       expect(errors.some((e) => e.code === "TS2322")).toBe(true);
-      expect(errors.some((e) => e.file === "fixture.tsx")).toBe(true);
+      expect(errors.some((e) => e.file === "pages/fixture.tsx")).toBe(true);
     },
     TIMEOUT_MS,
   );
@@ -229,14 +255,10 @@ export default reatomComponent(() => (
     TIMEOUT_MS,
   );
 
-  // The regression this whole task exists to prevent coming back.
-  // DELETE WITH createTypeChecker (Task 3)
-  withTsc(
-    "the per-file program this replaces could not see the sibling at all",
-    async () => {
-      const errors = await realChecker(CONSUMER, "pages/home.tsx");
-      expect(errors.some((e) => e.code === "TS2307")).toBe(true);
-    },
-    TIMEOUT_MS,
-  );
+  // The "the per-file program this replaces could not see the sibling at all" case that lived
+  // here is DELETED, as Task 2 said it would be: it drove `createTypeChecker`, which Task 3
+  // deleted along with its last caller, so there is no per-file program left to pin. The defect
+  // it documented is now pinned from the other side — the two tests directly above prove a page
+  // importing a shared module type-checks clean, which is exactly what the per-file program
+  // could not do.
 });

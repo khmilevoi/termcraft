@@ -9,12 +9,13 @@ import type { PageMeta, PageSlug } from "entities/page";
  * are plain data (no class instances), so nothing here needs `FailureDtoV1` mapping — the
  * shapes are simply redrawn locally so `core` never imports `gate`.
  *
- * The composition root is what closes over `gate`'s real `runGate(input, ports)` — baking
- * in the heavier `typeCheck`/`checkManifest`/`smokeRender` stages (the last of which is
- * itself `gate`'s own `SmokeRenderer` port, implemented by `host`) — and hands `core` the
- * resulting `GateRunner` adapter with no `GatePorts` parameter ever visible here: item 4 of
- * code-structure.md ("the consumer declares the port") means `core` names only the two
- * calls it makes, not the internal wiring that produces their answers.
+ * The composition root is what closes over `gate`'s real `runGate(input, ports)` and its
+ * whole-tree pass — baking in the heavier stages: the `checkManifest`/`smokeRender` ports
+ * `runGate` takes (the latter is itself `gate`'s own `SmokeRenderer` port, implemented by
+ * `host`) and the compiler the tree type check spawns — and hands `core` the resulting
+ * `GateRunner` adapter with no `GatePorts` parameter ever visible here: item 4 of
+ * code-structure.md ("the consumer declares the port") means `core` names only the calls it
+ * makes, not the internal wiring that produces their answers.
  */
 
 export type GateErrorKindV1 = "import" | "contract" | "type" | "manifest" | "smoke";
@@ -27,20 +28,37 @@ export interface GateErrorV1 {
   readonly line?: number;
   readonly column?: number;
   /**
-   * The page entries whose closure {@link GateRunner.runTreeImports} could not complete AT
-   * {@link GateErrorV1.file} — the structural attribution that lets a consumer partitioning
-   * diagnostics per page find this one (task-13 review round 3, Minor: the slug used to survive
-   * only inside free-text `message`, so a consumer that dropped the unattributable lost both the
-   * page's closure AND its diagnostic — a silent fail-open).
+   * The pages this whole-tree diagnostic is ATTRIBUTED to — those whose closure contains
+   * {@link GateErrorV1.file} — sorted, and absent (never `[]`) when the set is empty.
    *
-   * This is what makes ONE diagnostic per underlying fact compatible with per-page
-   * attributability: a forbidden import in a module three pages share is still reported once,
-   * naming the module, and carries all three slugs here instead of being copied per reaching
-   * page. Absent (never `[]`) when the fact blocked no page's closure — either no page reaches
-   * the file, or every page that does resolved completely.
+   * WIDENED BY TASK 3 (design-tree phase 2), and the widening SUBSUMES the old meaning rather
+   * than replacing it. The field used to mean "the pages whose closure the pass could not
+   * complete AT `file`". It now means "the pages whose closure CONTAINS `file`", which is design
+   * §8 step 5's own rule ("a diagnostic in a shared file is attributed to every page whose
+   * closure contains it") — and the old reading falls out of it, because under one flat
+   * whole-tree verdict a fatal in a shared module does block every page that reaches it. One
+   * field, one meaning, two producers inside the SAME pass:
    *
-   * Populated ONLY by `runTreeImports`; every other method on this port leaves it absent, since
-   * no other method walks a closure.
+   * - the closure walk, for a fact that stopped a closure being proved complete (a bad edge, a
+   *   file with no source text) — the page is then absent from
+   *   {@link RunTreeResultV1.closures} entirely, and this is the only remaining signal that it
+   *   was excluded (task-13 review round 3, Minor: the slug used to survive only inside free-text
+   *   `message`, so a consumer that dropped the unattributable lost both the page's closure AND
+   *   its diagnostic — a silent fail-open);
+   * - the type check, for a diagnostic in a file some closure reaches — attributed from the
+   *   closures THAT SAME PASS just resolved, never a second walk of the import graph.
+   *
+   * Either way it is what makes ONE diagnostic per underlying fact compatible with per-page
+   * attributability: a fault in a module three pages share is reported once, naming the module,
+   * carrying all three slugs here instead of being copied per reaching page.
+   *
+   * ABSENT IS NOT "HARMLESS". A diagnostic no closure reaches (an orphan module) carries no
+   * `blockedPages` and is STILL fatal — the turn's verdict is whole-tree and never filters on
+   * this field. A consumer that attributes per page (`core/kernel`'s `buildPageDescriptors`)
+   * must log such a diagnostic rather than drop it.
+   *
+   * Populated ONLY by {@link GateRunner.runTree}; every other method on this port leaves it
+   * absent, since no other method holds a closure.
    */
   readonly blockedPages?: readonly PageSlug[];
 }
@@ -144,14 +162,21 @@ export interface GateClosureV1 {
 }
 
 /**
- * {@link GateRunner.runTreeImports}'s result: the flat allowlist errors alongside every
- * manifest entry's resolved closure. Both come out of the SAME whole-tree scan/resolve pass —
- * splitting them into two port calls would mean walking the tree's import graph twice (once
- * per method) for no reason, since the adapter already has everything it needs (the tree's
- * file text, the resolved manifest entries) to produce both in one call.
+ * {@link GateRunner.runTree}'s result: every diagnostic the whole-tree pass produced —
+ * the flat allowlist scan's, the closure walk's, and the type check's — alongside every
+ * manifest entry's resolved closure. All of them come out of the SAME pass, because splitting
+ * them across port calls would mean walking the tree's import graph (and spawning the compiler)
+ * once per method for no reason: the adapter already holds everything it needs (the tree's file
+ * text, the resolved manifest entries) to produce all three in one call.
  */
-export interface RunTreeImportsResultV1 {
+export interface RunTreeResultV1 {
   readonly errors: readonly GateErrorV1[];
+  /**
+   * The pass's non-fatal findings. EMPTY until the `import-cycle`/`dead-module` graph analyses
+   * land — the field exists now so both callers already thread it, rather than gaining a new
+   * result member later and having one caller silently keep dropping it.
+   */
+  readonly warnings: readonly GateWarningV1[];
   readonly closures: readonly GateClosureV1[];
 }
 
@@ -169,9 +194,21 @@ export interface GateRunner {
     readonly treePaths: readonly string[];
   }): Promise<ManifestSliceResultV1>;
   /**
-   * The per-page pipeline: page contract, type check, determinism lints, then (only if
-   * nothing fatal yet) the manifest + smoke stages. The import allowlist does NOT run here
-   * (design §8 step 4) — see {@link runTreeImports}.
+   * The per-page pipeline: page contract and determinism lints, then (only if nothing fatal
+   * yet) the manifest + smoke stages.
+   *
+   * TWO STAGES DELIBERATELY DO NOT RUN HERE, both for the same reason — a shared module belongs
+   * to no single page, so a per-page reading of it is either redundant or blind:
+   * - the import allowlist (design §8 step 4), moved out in task 12;
+   * - the TYPE CHECK (design §8 step 5), moved out by design-tree phase 2 Task 3. The per-file
+   *   program it used to run served a virtual FS holding that one file, so a page importing a
+   *   sibling failed with a spurious `TS2307` — measured. One program over the whole tree is the
+   *   only shape that can type-check a page which imports shared code at all.
+   *
+   * Both now live in {@link runTree}, which a caller runs ONCE before this loop. A caller that
+   * needs a page's `"invalid"` verdict — `core/kernel`'s `buildPageDescriptors` — must fold that
+   * pass's errors in by {@link GateErrorV1.blockedPages}; running only this method would report
+   * a type-clean page that does not compile.
    */
   runPage(input: {
     readonly source: string;
@@ -203,28 +240,38 @@ export interface GateRunner {
     readonly entryRelPath: string;
     /**
      * The entry's resolved closure (design §7), threaded through for the smoke stage and
-     * future stages (design §8 steps 5 and 8 — see `runTreeImports`'s own doc for why neither
-     * is implemented by this plan). Optional: `page-descriptors.ts` has no closure to give, and
-     * deriving one per descriptor publish would mean running the synchronous whole-tree scan
-     * whose cost Task 3 exists to bound — controller ruling #15's trade, unchanged.
+     * design §8 step 8's future smoke scoping. Optional: `page-descriptors.ts` has no closure to
+     * give, and deriving one per descriptor publish would mean running the synchronous
+     * whole-tree scan whose cost Task 3 exists to bound — controller ruling #15's trade,
+     * unchanged.
      */
     readonly closure?: ClosureV1;
   }): Promise<GateRunResultV1>;
   /**
-   * The whole-tree import allowlist (design §6; §8 step 4), run ONCE per turn — before any
-   * per-page stage, not per page — over every file the tree names. A forbidden import in a
-   * SHARED module (`lib/theme.ts`, reached by every page that imports it) compromises every
-   * page that reaches it; scanning it once here, rather than once per page inside `runPage`,
-   * is what catches it even in a module no page's own source ever runs `runPage` against
-   * directly, and reports it exactly once rather than once per reaching page. `files` is the
-   * text this turn's Gate run holds for each tree-relative path; `treePaths` is the tree's
+   * THE WHOLE-TREE PASS (design §8 steps 4 and 5) — the single place a tree is judged, run ONCE
+   * per tree read, before any per-page stage and never per page. In order:
+   *
+   * 1. the flat import allowlist (design §6) over every code file the tree names;
+   * 2. every manifest entry's closure resolution (design §7);
+   * 3. ONE `tsc` program over the whole tree, whose diagnostics are attributed back onto the
+   *    closures step 2 just produced.
+   *
+   * A fault in a SHARED module (`lib/theme.ts`, reached by every page that imports it)
+   * compromises every page that reaches it; judging it once here, rather than once per page
+   * inside `runPage`, is what catches it even in a module no page's own source ever runs
+   * `runPage` against directly, and reports it exactly once rather than once per reaching page.
+   * For the type check it is stronger than economy: the per-file program this replaced served a
+   * virtual FS holding one file, so a page importing a sibling failed with a spurious `TS2307`
+   * — one whole-tree program is the only shape that can check such a page at all.
+   *
+   * `files` is the text the caller holds for each tree-relative path; `treePaths` is the tree's
    * full inventory (`store`'s `listTree`), which may legitimately name files `files` holds no
    * text for (a `.json`/`.md`/`.svg` asset — see `gate/model/tree-scan.ts`'s own doc for the
    * exact contract this enforces).
    *
    * `pages` is the validated manifest's own entry list (`ManifestSliceV1.pages` — a caller
    * runs `runManifestSlice` first, per design §8's own step ordering, and threads its `slice
-   * .pages` through here) — what makes {@link RunTreeImportsResultV1.closures} possible at
+   * .pages` through here) — what makes {@link RunTreeResultV1.closures} possible at
    * all: a closure is walked FROM an entry, and the entry-to-slug binding is `pages.json`'s
    * own job, never derivable from a slug (task-13 review round 1, Critical C1 — the same
    * whole-tree scan this method already runs is what resolves every entry's transitive file
@@ -244,7 +291,12 @@ export interface GateRunner {
    *
    * And every diagnostic is emitted ONCE PER UNDERLYING FACT, never once per page that happens
    * to reach it: a bad import in a module three pages share is one `errors` entry naming the
-   * module, with all three slugs in `blockedPages`.
+   * module, with all three slugs in `blockedPages`. A TYPE diagnostic follows the same rule and
+   * the same field, attributed to every page whose resolved closure CONTAINS its `file` — see
+   * {@link GateErrorV1.blockedPages} for why that widening subsumes the closure walk's own
+   * meaning rather than competing with it. Note the asymmetry, which is not an inconsistency: a
+   * closure blocker EXCLUDES its pages from `closures`, a type error does not — a page whose
+   * shared module does not compile still has a perfectly well-defined file set.
    *
    * "EXACTLY ONE" is enforced, not assumed (task-13 review round 4, M-1). Both limbs are keyed
    * by SLUG, so two `pages` entries sharing a slug would otherwise satisfy both at once — one
@@ -265,33 +317,44 @@ export interface GateRunner {
    * dynamic-code ban: `import-scan.ts`'s KNOWN GAPS 1-4 reach `eval`/`Function` through alias
    * and property indirection no token-level scan can follow. Read this method as "the import
    * perimeter holds; the dynamic-code ban is best-effort".
-   * `core/turns/model/validation.ts` calls this ONCE per turn, after `runManifestSlice` and
-   * before any per-page `runPage`, threading `slice.pages` through as `pages`. It is called
-   * UNCONDITIONALLY, including when the manifest itself failed to decode (with an empty
-   * `pages`): the flat allowlist scan covers every code file in the tree regardless of which
-   * pages exist, so skipping it on a bad manifest would hide every import violation behind a
-   * manifest typo and spend one of only four attempts learning about just one of them.
    *
-   * The turn's verdict over the returned `errors` is WHOLE-TREE — any error rejects the turn,
+   * TWO PRODUCTION CALLERS, both running it exactly once per tree they judge:
+   * - `core/turns/model/validation.ts`, once per turn, after `runManifestSlice` and before any
+   *   per-page `runPage`, threading `slice.pages` through as `pages`. It is called
+   *   UNCONDITIONALLY, including when the manifest itself failed to decode (with an empty
+   *   `pages`): the flat allowlist scan covers every code file in the tree regardless of which
+   *   pages exist, so skipping it on a bad manifest would hide every import violation behind a
+   *   manifest typo and spend one of only four attempts learning about just one of them.
+   * - `core/kernel/model/handlers/page-descriptors.ts`'s `buildPageDescriptors`, once per
+   *   descriptor publish (project open, and after every commit). It cannot skip it: this is
+   *   where the type check lives now, and a descriptor path that ran only `runPage` would
+   *   publish `"ready"` for a page that does not compile.
+   *
+   * The TURN's verdict over the returned `errors` is WHOLE-TREE — any error rejects the turn,
    * and nothing filters by `file` or by {@link GateErrorV1.blockedPages}. That is a deliberate
    * choice, not an omission: `gate/model/tree-scan.ts`'s `isTrustedTarget` vouches for an
    * importer whose target is a key in `files` even when that target's OWN scan threw, which is
    * harmless under one flat verdict and becomes a fail-open the moment a consumer attributes
-   * rejections per page or per file (task-12b review round 1, Minor M4). `blockedPages` is
-   * carried to the agent as a diagnostic, never consulted to decide pass/fail.
+   * rejections per page or per file (task-12b review round 1, Minor M4). For the turn,
+   * `blockedPages` is carried to the agent as a diagnostic, never consulted to decide pass/fail.
+   *
+   * The DESCRIPTOR path is the one consumer that legitimately attributes per page, because its
+   * output IS per page — one `PageDescriptorV1` per slug, `"ready"` or `"invalid"`. It stays
+   * honest about the gap above by never treating an unattributed diagnostic as absent: a pass
+   * error naming no page invalidates nothing and is logged.
    */
-  runTreeImports(input: {
+  runTree(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
     readonly pages: readonly PageEntryV1[];
-  }): Promise<RunTreeImportsResultV1>;
+  }): Promise<RunTreeResultV1>;
   /**
    * The page-contract stage ALONE — parses the page's static `meta` export and nothing else.
-   * Deliberately NOT `runPage`: the full pipeline additionally spawns a TypeScript compiler
-   * and a smoke-render child process, neither of which a caller that only wants the page's
-   * declared size/theme/kit version should pay for or be blocked by. A page that fails the
-   * type check still has a perfectly readable `meta`, and reporting THAT failure as "this
-   * page has no settings" would be a false diagnosis.
+   * Deliberately NOT `runPage`, and deliberately not {@link runTree} either: between them those
+   * spawn a TypeScript compiler and a smoke-render child process, neither of which a caller that
+   * only wants the page's declared size/theme/kit version should pay for or be blocked by. A
+   * page that fails the type check still has a perfectly readable `meta`, and reporting THAT
+   * failure as "this page has no settings" would be a false diagnosis.
    *
    * Cheap and pure enough to run on a `PageMetaCache` miss, which is its one caller today
    * (`core/kernel`'s `resolvePageSettings`); results cached under

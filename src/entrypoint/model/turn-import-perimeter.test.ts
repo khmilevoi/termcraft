@@ -18,7 +18,7 @@ import { buildGateRunner } from "./create-shell";
  * must-wire;
  * task-14-supplement §1).
  *
- * `GateRunner.runTreeImports` — the whole-tree import allowlist and, inside it, design §5.8's
+ * `GateRunner.runTree` — the whole-tree import allowlist and, inside it, design §5.8's
  * `eval`/`new Function` ban — had NO production caller before task 14. Task 14 wires it into
  * `core/turns/model/validation.ts`. Every test below drives the REAL `gate` adapter
  * (`buildGateRunner`, the exact factory `createShell` hands the Kernel) through the REAL

@@ -352,7 +352,7 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       expect(retireCall.root).toBe(capturedCandidateRoot);
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
         "runManifestSlice",
-        "runTreeImports",
+        "runTree",
         "runPage",
       ]);
       expect(h.startedTasks.length).toBe(1);
@@ -407,10 +407,10 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       // so the tree it must vouch for is a different tree.
       expect(h.gateRunner.calls.map((c) => c.method)).toEqual([
         "runManifestSlice",
-        "runTreeImports",
+        "runTree",
         "runPage",
         "runManifestSlice",
-        "runTreeImports",
+        "runTree",
         "runPage",
       ]);
     });

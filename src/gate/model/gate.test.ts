@@ -148,21 +148,13 @@ describe("runGate (§6.3 pipeline)", () => {
     ).toBe(true);
   });
 
-  test("an injected type-check stage contributes fatal errors", async () => {
-    const typeError: GateError = {
-      kind: "type",
-      code: "TYPE_ERROR",
-      message: "Type 'string' is not assignable to 'number'",
-    };
-    const result = await runGate(
-      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE },
-      { typeCheck: () => [typeError] },
-    );
-    expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.kind === "type")).toBe(true);
-  });
+  // The "an injected type-check stage contributes fatal errors" test that used to live here is
+  // DELETED, not patched: design-tree phase 2 Task 3 removed `GatePorts.typeCheck` outright.
+  // The check now runs once over the whole tree, in `gate/adapters/gate-runner.ts`'s `runTree`,
+  // and its own suite proves it there against the REAL compiler — a fake `typeCheck` port here
+  // would have pinned a seam that no longer exists.
 
-  test("manifest + smoke stages only run when the contract + type check are clean", async () => {
+  test("manifest + smoke stages only run when the page contract is clean", async () => {
     let smokeRan = false;
     const brokenContractSource = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     await runGate(

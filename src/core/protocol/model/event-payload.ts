@@ -808,8 +808,17 @@ const turnGateErrorV1Schema = z.strictObject({
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
   /**
-   * Which pages a whole-tree closure blocker actually blocked (`core/ports/gate-runner.ts`'s
-   * `GateErrorV1.blockedPages`), `null` when the diagnostic blocked none.
+   * The pages this whole-tree diagnostic is attributed to — those whose closure contains its
+   * `file` (`core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages`) — `null` when it names
+   * none.
+   *
+   * MEANING WIDENED BY design-tree phase 2 Task 3, in step with the port and `gate/types.ts`, so
+   * all three declarations of this field say the same thing. It used to mean "the pages whose
+   * closure the pass could not complete AT `file`"; the whole-tree pass now also runs the TYPE
+   * CHECK, whose diagnostics are attributed by the same rule (design §8 step 5: "a diagnostic in
+   * a shared file is attributed to every page whose closure contains it"). The old reading is
+   * subsumed, not replaced. `null` here does NOT mean harmless: a diagnostic no closure reaches
+   * is still fatal, and the turn's verdict never consults this field.
    *
    * WIDENED BY TASK 14 (task-13 review round 4, M-4). The field was added at the port surface
    * in task 13 so ONE diagnostic per underlying fact could still be attributed to the N pages

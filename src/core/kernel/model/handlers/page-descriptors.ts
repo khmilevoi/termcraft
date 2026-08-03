@@ -1,6 +1,7 @@
 import { wrap } from "@reatom/core";
 
 import type { PublishableEventV1 } from "core/mailbox";
+import type { GateErrorV1 } from "core/ports";
 import {
   PageDescriptorsAssemblyError,
   buildPageDescriptorsChangedPayload,
@@ -82,26 +83,127 @@ export async function readTreeInventory(
 }
 
 /**
- * Reads one page's source and runs it through the Gate, mapping the result to a
- * `PageDescriptorV1`. A source-read failure is returned to the caller (on the open path it
- * blocks the whole open, matching `core/project/model/open-sequence.ts`'s own
- * `validateProjectContents`); a Gate rejection produces an `"invalid"` descriptor for just that
- * page, never a failure for the rest.
+ * The canonical tree's inventory AND every file's text, read together in ONE pass over
+ * `listTree()`. Shaped after `core/export/model/snapshot.ts`'s `readWholeTree`, and for the same
+ * reason: a read failure anywhere is a wholesale refusal, never a partial tree — judging a
+ * design against a file set that is missing the module its pages import would produce
+ * diagnostics about the reader, not about the design.
+ *
+ * The text is UNFILTERED, deliberately. `gate` alone decides which files are code
+ * (`entities/design-tree`'s measured `isCodeFile`), and a predicate here would be a second,
+ * independently derived copy of it — see `core/turns/model/validation.ts`'s `files` doc for the
+ * full argument and its measurement.
+ */
+async function readTreeSources(designReader: HandlerContext["deps"]["designReader"]): Promise<
+  | FailureDtoV1
+  | {
+      readonly inventory: readonly DesignFileEntryV1[];
+      readonly files: ReadonlyMap<string, string>;
+    }
+> {
+  const inventory = await readTreeInventory(designReader);
+  if ("code" in inventory) return inventory;
+
+  const decoder = new TextDecoder();
+  const files = new Map<string, string>();
+  for (const file of inventory) {
+    const read = await wrap(designReader.readTreeFile(file.relPath));
+    if ("code" in read) {
+      return {
+        code: "PERSISTENCE_FAILED",
+        retryable: read.retryable,
+        safeMessage: `failed to read design tree file "${file.relPath}": ${read.safeMessage}`,
+        details: { relPath: file.relPath },
+      };
+    }
+    files.set(file.relPath, decoder.decode(read.bytes));
+  }
+  return { inventory, files };
+}
+
+/**
+ * The whole-tree pass's errors, indexed by the pages each one names in `blockedPages`.
+ *
+ * A pass error naming NO page invalidates nothing — there is no descriptor it could honestly
+ * belong to — but it is LOGGED rather than dropped (errore: never swallow an error without
+ * leaving a trace). That case is real and not a defect in the pass: a type error in a module no
+ * page's closure reaches is still fatal for the tree, and the `dead-module` warning that will
+ * explain why nothing reaches it is a later task's job.
+ */
+function indexPassErrorsByPage(
+  errors: readonly GateErrorV1[],
+): ReadonlyMap<PageSlug, GateErrorV1[]> {
+  const bySlug = new Map<PageSlug, GateErrorV1[]>();
+  for (const error of errors) {
+    const blocked = error.blockedPages ?? [];
+    if (blocked.length === 0) {
+      console.warn(
+        `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file ?? "<no file>"}" that no page's closure reaches, so it invalidates no descriptor: ${error.message}`,
+      );
+      continue;
+    }
+    for (const slug of blocked) {
+      const existing = bySlug.get(slug);
+      if (existing === undefined) {
+        bySlug.set(slug, [error]);
+        continue;
+      }
+      existing.push(error);
+    }
+  }
+  return bySlug;
+}
+
+/**
+ * Runs the project's pages through the Gate and maps each result to a `PageDescriptorV1`. A
+ * source-read failure is returned to the caller (on the open path it blocks the whole open,
+ * matching `core/project/model/open-sequence.ts`'s own `validateProjectContents`); a Gate
+ * rejection produces an `"invalid"` descriptor for just that page, never a failure for the rest.
+ *
+ * TWO GATE CALLS, AND THE FIRST IS NOT OPTIONAL (design-tree phase 2 Task 3). `GateRunner
+ * .runTree` — the whole-tree pass — runs ONCE for the whole publish, then `runPage` once per
+ * entry. The pass is where the TYPE CHECK lives now: it moved out of `runPage`, because the
+ * per-file program it used to run could not see a sibling module at all (a page importing shared
+ * code failed with a spurious `TS2307`, measured). A descriptor path that kept calling only
+ * `runPage` would therefore publish `"ready"` for a page that does not compile — a fail-open
+ * dressed as a refactor, which is precisely why this call is here and not deferred.
+ *
+ * A page is `"invalid"` if EITHER its own `runPage` reported a fatal or the pass reported one
+ * naming it in `blockedPages`. Its own error is reported first when both exist: a broken page
+ * contract is a better first thing to show than a shared module's type error, and preserving
+ * that ordering is what keeps this change invisible to every page that has its own defect.
  */
 export async function buildPageDescriptors(
   context: HandlerContext,
   pages: readonly PageEntryV1[],
 ): Promise<FailureDtoV1 | readonly PageDescriptorV1[]> {
-  // The tree inventory the Gate's smoke stage hash-verifies each page's closure against
-  // (design §9.2). Read ONCE for the whole loop, like the manifest list threaded in above.
-  const expectedFiles = await readTreeInventory(context.deps.designReader);
-  if ("code" in expectedFiles) return expectedFiles;
+  // Read ONCE for the whole publish, like the manifest list threaded in above: the inventory the
+  // Gate's smoke stage hash-verifies each page's closure against (design §9.2), and the text the
+  // whole-tree pass scans and type-checks.
+  const tree = await readTreeSources(context.deps.designReader);
+  if ("code" in tree) return tree;
   const treeRoot = designTreeRoot(context.deps.projectStore.root);
+
+  const pass = await wrap(
+    context.deps.gateRunner.runTree({
+      files: tree.files,
+      treePaths: tree.inventory.map((file) => file.relPath),
+      pages,
+    }),
+  );
+  const passErrorsByPage = indexPassErrorsByPage(pass.errors);
 
   const descriptors: PageDescriptorV1[] = [];
   for (const entry of pages) {
     // The already-read manifest list is threaded through, so this loop reads
     // `design/pages.json` ONCE for every page rather than once per page.
+    //
+    // KNOWN, OWNED COST: this re-reads the entry file `readTreeSources` above already read, so a
+    // publish does `tree + pages` reads rather than `tree`. Kept deliberately — `readPageEntrySource`
+    // is what owns "the manifest binds this slug to this file, and here is its hash", and
+    // reproducing that lookup off the map here would be a second reading of the same binding for
+    // the sake of one file read. The whole redundancy disappears when the canonical tree index
+    // lands and both halves come from one read.
     const source = await wrap(readPageEntrySource(context.deps.designReader, entry.slug, pages));
     if ("code" in source) return source;
 
@@ -110,12 +212,13 @@ export async function buildPageDescriptors(
         source: new TextDecoder().decode(source.bytes),
         slug: entry.slug,
         treeRoot,
-        expectedFiles,
+        expectedFiles: tree.inventory,
         entryRelPath: source.relPath,
       }),
     );
 
-    if (result.ok && result.descriptor !== null) {
+    const errors = [...result.errors, ...(passErrorsByPage.get(entry.slug) ?? [])];
+    if (errors.length === 0 && result.descriptor !== null) {
       const { meta } = result.descriptor;
       descriptors.push({
         status: "ready",
@@ -130,7 +233,7 @@ export async function buildPageDescriptors(
       continue;
     }
 
-    const firstError = result.errors[0];
+    const firstError = errors[0];
     descriptors.push({
       status: "invalid",
       pageSlug: entry.slug,

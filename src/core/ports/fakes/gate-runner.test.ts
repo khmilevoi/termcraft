@@ -41,30 +41,31 @@ describe("createFakeGateRunner", () => {
     expect(result.slice).toEqual({ pages: [], active: null });
   });
 
-  test("runTreeImports() defaults to no errors and no closures, and records the file/tree-path/page counts", async () => {
+  test("runTree() defaults to no diagnostics and no closures, and records the file/tree-path/page counts", async () => {
     const runner = createFakeGateRunner();
-    const result = await runner.runTreeImports({
+    const result = await runner.runTree({
       files: new Map([["pages/home.tsx", "export const x = 1\n"]]),
       treePaths: ["pages/home.tsx", "lib/theme.ts"],
       pages: [{ slug: slug("home"), entry: "pages/home.tsx" }],
     });
-    expect(result).toEqual({ errors: [], closures: [] });
+    expect(result).toEqual({ errors: [], warnings: [], closures: [] });
     expect(runner.calls).toEqual([
-      { method: "runTreeImports", fileCount: 1, treePathCount: 2, pageCount: 1 },
+      { method: "runTree", fileCount: 1, treePathCount: 2, pageCount: 1 },
     ]);
   });
 
-  test("queueRunTreeImportsResult() scripts the next runTreeImports() outcome, one shot", async () => {
+  test("queueRunTreeResult() scripts the next runTree() outcome, one shot", async () => {
     const runner = createFakeGateRunner();
     const scripted = {
       errors: [{ kind: "import" as const, code: "FORBIDDEN_IMPORT", message: "no" }],
+      warnings: [],
       closures: [{ slug: slug("home"), files: ["pages/home.tsx"] }],
     };
-    runner.queueRunTreeImportsResult(scripted);
-    const first = await runner.runTreeImports({ files: new Map(), treePaths: [], pages: [] });
+    runner.queueRunTreeResult(scripted);
+    const first = await runner.runTree({ files: new Map(), treePaths: [], pages: [] });
     expect(first).toEqual(scripted);
-    const second = await runner.runTreeImports({ files: new Map(), treePaths: [], pages: [] });
-    expect(second).toEqual({ errors: [], closures: [] });
+    const second = await runner.runTree({ files: new Map(), treePaths: [], pages: [] });
+    expect(second).toEqual({ errors: [], warnings: [], closures: [] });
   });
 
   test("queueRunPageResult() scripts the next runPage() outcome, one shot", async () => {

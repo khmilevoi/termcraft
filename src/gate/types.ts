@@ -22,12 +22,19 @@ export interface GateError {
   readonly line?: number;
   readonly column?: number;
   /**
-   * The page entries whose closure the whole-tree pass could not complete AT {@link
-   * GateError.file}. Set only by `gate/adapters/gate-runner.ts`'s closure resolution (design §7)
-   * — every other stage leaves it absent, because no other stage walks a closure. Mirrors
-   * `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages` field for field (both redraw the
-   * SAME shape per decision C1); read that one for why the attribution lives on the diagnostic
-   * rather than being duplicated into one diagnostic per page.
+   * The pages this whole-tree diagnostic is ATTRIBUTED to — those whose closure contains
+   * {@link GateError.file} — sorted, and absent (never `[]`) when the set is empty.
+   *
+   * WIDENED BY design-tree phase 2 Task 3, and the widening SUBSUMES the old reading ("the pages
+   * whose closure the pass could not complete AT `file`") rather than replacing it: under one
+   * flat whole-tree verdict a fatal in a shared module does block every page reaching it. Set
+   * only by `gate/adapters/gate-runner.ts`'s whole-tree pass — its closure resolution (design §7)
+   * for a fact that stopped a closure being proved, and its type check (design §8 step 5) for a
+   * diagnostic in a file some closure reaches. Every other stage leaves it absent, because no
+   * other stage holds a closure. Mirrors `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages`
+   * field for field (both redraw the SAME shape per decision C1); read that one for why the
+   * attribution lives on the diagnostic rather than being duplicated into one diagnostic per
+   * page, and for why an ABSENT `blockedPages` is still fatal.
    */
   readonly blockedPages?: readonly PageSlug[];
 }

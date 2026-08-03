@@ -1126,6 +1126,121 @@ describe("project.open", () => {
       });
     });
   });
+
+  // --- Task 3 (design-tree phase 2): the whole-tree pass reaches the descriptors -----------------
+
+  test("runs the whole-tree pass ONCE per publish, not once per page", async () => {
+    await context.start(async () => {
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: slug("home"), bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" },
+          { pageSlug: slug("about"), bytes: FAKE_SOURCE_BYTES, entry: "pages/about.tsx" },
+        ],
+      });
+      const gateRunner = createFakeGateRunner();
+      const harness = buildTestContext({ gateRunner, designReader });
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      await buildPageDescriptors(harness.handlerContext, manifest.pages);
+
+      expect(gateRunner.calls.filter((call) => call.method === "runTree")).toEqual([
+        // Every tree file's text travels, whole and unfiltered — `gate` alone decides what is
+        // code — alongside the manifest's own entry list.
+        { method: "runTree", fileCount: 3, treePathCount: 3, pageCount: 2 },
+      ]);
+      expect(gateRunner.calls.filter((call) => call.method === "runPage")).toHaveLength(2);
+    });
+  });
+
+  test("a page whose SHARED module has a type error is `invalid`, even though its own runPage is clean", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const about = slug("about");
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" },
+          { pageSlug: about, bytes: FAKE_SOURCE_BYTES, entry: "pages/about.tsx" },
+        ],
+        extraFiles: new Map([
+          ["lib/theme.ts", { bytes: new TextEncoder().encode("export const WIDTH: number = 1\n") }],
+        ]),
+      });
+      const gateRunner = createFakeGateRunner();
+      // THE MOVE'S OWN RISK, pinned: the type check left `runPage`, so `runPage` is clean for
+      // both pages (the fake's default). If the pass's diagnostics did not reach the
+      // descriptors, both pages would publish as "ready" — a fail-open dressed as a refactor.
+      gateRunner.queueRunTreeResult({
+        errors: [
+          {
+            kind: "type",
+            code: "TS2322",
+            message: `Type 'string' is not assignable to type 'number'.`,
+            file: "lib/theme.ts",
+            line: 1,
+            column: 30,
+            blockedPages: [home],
+          },
+        ],
+        warnings: [],
+        closures: [],
+      });
+      const harness = buildTestContext({ gateRunner, designReader });
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+
+      const bySlug = new Map(descriptors.map((descriptor) => [descriptor.pageSlug, descriptor]));
+      const homeDescriptor = bySlug.get(home);
+      expect(homeDescriptor?.status).toBe("invalid");
+      expect(homeDescriptor?.status === "invalid" ? homeDescriptor.error.code : null).toBe(
+        "TS2322",
+      );
+      // And ONLY the page the pass named: `about` reaches no broken module.
+      expect(bySlug.get(about)?.status).toBe("ready");
+    });
+  });
+
+  test("a pass error naming NO page invalidates nothing and is logged, never dropped in silence", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const designReader = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" }],
+      });
+      const gateRunner = createFakeGateRunner();
+      // An orphan module's type error: no closure reaches it, so it names no page. It is still
+      // fatal for the tree, but there is no descriptor it could honestly invalidate — Task 4's
+      // `dead-module` warning is what will tell the agent why nothing reaches it.
+      gateRunner.queueRunTreeResult({
+        errors: [
+          {
+            kind: "type",
+            code: "TS2322",
+            message: "an orphan module no page imports",
+            file: "lib/orphan.ts",
+          },
+        ],
+        warnings: [],
+        closures: [],
+      });
+      const harness = buildTestContext({ gateRunner, designReader });
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+
+      expect(descriptors.map((descriptor) => descriptor.status)).toEqual(["ready"]);
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("lib/orphan.ts"))).toBe(
+        true,
+      );
+      warnSpy.mockRestore();
+    });
+  });
 });
 
 // --- project.retryOpen --------------------------------------------------------------------------

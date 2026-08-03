@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { Kernel } from "core/kernel";
-import type { GateRunResultV1, PreviewFrameV1, PreviewIdentityV1 } from "core/ports";
+import type { PreviewFrameV1, PreviewIdentityV1, RunTreeResultV1 } from "core/ports";
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
 import { PagesManifestInvalidError, encodePagesManifest } from "entities/design-tree";
@@ -665,7 +665,7 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
 /**
  * WP-2 / Task 7 acceptance (phase-8 design §WP-2: "the Gate catches a deliberate type error on
  * a fixture page against the real generated declaration, in the shipped configuration") — the
- * composed Gate's `typeCheck` stage is genuinely LIVE, not just non-throwing.
+ * composed Gate's type-check stage is genuinely LIVE, not just non-throwing.
  *
  * `AppShell`/`KernelPort` expose no seam to reach the Kernel's own internally-wired
  * `gateRunner` directly: the only way to drive it live is a full `turn.start`, which needs a
@@ -678,9 +678,12 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
  * successful construction here already exercises that guard on the happy path); (2)
  * `runGateOnFixture` below calls `create-shell.ts`'s own EXPORTED `buildGateRunner` — the exact
  * production function `interactiveShell` itself calls to build `kernelDeps.gateRunner` — with a
- * fake `smokeRenderer` so no real host process spawns, and runs a fixture through its `runPage`
+ * fake `smokeRenderer` so no real host process spawns, and runs a fixture through its `runTree`
  * entry. That makes this test depend on `create-shell.ts`'s real Task 7 wiring, not a
  * reimplementation of it: reverting `buildGateRunner`'s body would fail this test too.
+ *
+ * `runTree`, not `runPage`, since design-tree phase 2 Task 3 moved the type check into the
+ * whole-tree pass — see `runGateOnFixture` below.
  */
 describe("createShell + the composed Gate's type-check stage (phase-8 WP-2)", () => {
   /** Always reports a clean render, never spawning a real host process. Mirrors
@@ -702,20 +705,24 @@ describe("createShell + the composed Gate's type-check stage (phase-8 WP-2)", ()
    *  production composition, not a local reimplementation — paired with a fake `smokeRenderer`.
    *  Throws on a failed compiler resolution (a fixture-setup failure, not an assertion this test
    *  is making) so a broken install fails loudly instead of the type check silently reporting no
-   *  errors. */
+   *  errors.
+   *
+   *  DRIVES `runTree`, NOT `runPage` (design-tree phase 2 Task 3): the type check moved into the
+   *  whole-tree pass, so `runPage` is now structurally incapable of producing the diagnostic this
+   *  suite exists to observe. A test left on `runPage` would keep "passing" by never checking
+   *  anything — the exact failure mode this suite's own mirror assertion guards against. */
   async function runGateOnFixture(fixture: {
     readonly slug: PageSlug;
     readonly source: string;
-  }): Promise<GateRunResultV1> {
+  }): Promise<RunTreeResultV1> {
     const tscExePath = resolveCompilerPath();
     if (tscExePath instanceof Error) throw tscExePath;
     const gateRunner = buildGateRunner(tscExePath, createFakeSmokeRenderer());
-    return gateRunner.runPage({
-      source: fixture.source,
-      slug: fixture.slug,
-      treeRoot: "/proj/.termcraft/design",
-      expectedFiles: [],
-      entryRelPath: "pages/home.tsx",
+    const entryRelPath = "pages/home.tsx";
+    return gateRunner.runTree({
+      files: new Map([[entryRelPath, fixture.source]]),
+      treePaths: [entryRelPath],
+      pages: [{ slug: fixture.slug, entry: entryRelPath }],
     });
   }
 

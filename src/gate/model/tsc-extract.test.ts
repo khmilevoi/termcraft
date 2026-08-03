@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { resolveCompilerPath } from "./tsc-extract";
-import { createTypeChecker } from "./type-check";
+import { createTreeTypeChecker } from "./type-check";
 
 const TIMEOUT_MS = 30_000;
 
@@ -52,9 +52,9 @@ describe("resolveCompilerPath", () => {
 });
 
 /** Local helper (this file only — `gate/model/type-check.ts`'s own suite has its own copy):
- *  runs one hermetic check through the module's existing type-checker entry, with an empty
- *  `runtimeDts` since the fixtures above import nothing from `@termcraft/runtime`. */
+ *  runs one hermetic check through the module's type-checker entry over a one-file tree, with an
+ *  empty `runtimeDts` since the fixtures above import nothing from `@termcraft/runtime`. */
 async function typeCheckFixture(tscExePath: string, source: string) {
-  const checker = createTypeChecker({ tscExePath, runtimeDts: "" });
-  return checker(source, "fixture.tsx");
+  const checker = createTreeTypeChecker({ tscExePath, runtimeDts: "" });
+  return checker({ files: new Map([["pages/fixture.tsx", source]]) });
 }

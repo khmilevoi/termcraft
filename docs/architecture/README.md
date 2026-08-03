@@ -24,9 +24,11 @@ document here that addresses how the source tree itself is laid out.
 > runs against real production adapters rather than fakes; Git history remains v1
 > scope with no adapter yet. Phase 8 (npm distribution, the live Gate type check, and
 > the documented-debt sweep) has landed: `KernelPort.preview()`'s `acknowledgeDisplay`
-> is wired to a real frame-token ledger (Task 16); the Gate's `typeCheck` stage runs
+> is wired to a real frame-token ledger (Task 16); the Gate's type-check stage runs
 > live in the shipped configuration (Task 7, a generated `runtimeDts` plus a resolved
-> compiler path); session resume works within one live process (WP-7 — cross-restart
+> compiler path) and, since design-tree phase 2, as ONE program over the whole tree
+> inside `GateRunner.runTree` rather than one per entry file; session resume works
+> within one live process (WP-7 — cross-restart
 > resume remains a stated, deliberate limit for Claude, not a gap); `turn.failed`'s
 > `failure.code` distinguishes Gate-exhaustion from a backend failure where a typed
 > reason is available (WP-8 item 4); and termcraft ships as a real npm package — `npm

@@ -35,12 +35,13 @@ import { trace } from "infrastructure/debug-log";
  * documented split `finalize.ts`/`terminalize.ts` use for the identical shape of decision.
  *
  * ORDER (design §8's own step numbering): the manifest-slice check (step 1) runs EXACTLY ONCE
- * PER TURN; the whole-tree import allowlist (step 4) runs EXACTLY ONCE PER TURN immediately
- * after it; only then does every manifest entry run the per-page `GateRunner.runPage`
- * pipeline. Neither once-per-turn stage is ever interleaved with, or repeated inside, the
- * per-page loop. Every entry then runs `runPage` regardless of whether an earlier one already
- * failed, so a rejection carries the COMPLETE set of diagnostics across every page in one
- * report, not just the first failure.
+ * PER TURN; the WHOLE-TREE PASS (`GateRunner.runTree` — the import allowlist of step 4, closure
+ * resolution, and the one `tsc` program of step 5) runs EXACTLY ONCE PER TURN immediately after
+ * it; only then does every manifest entry run the per-page `GateRunner.runPage` pipeline.
+ * Neither once-per-turn stage is ever interleaved with, or repeated inside, the per-page loop.
+ * Every entry then runs `runPage` regardless of whether an earlier one already failed, so a
+ * rejection carries the COMPLETE set of diagnostics across every page in one report, not just
+ * the first failure.
  *
  * WHAT FOLLOWS DESCRIBES THE CALLER, not the perimeter: this module calls the Gate, it is not
  * the Gate. The scan's own source coverage — a separate problem this file used to say was still
@@ -49,18 +50,20 @@ import { trace } from "infrastructure/debug-log";
  * `gate/model/lexer.oracle.test.ts`. The residual is design §5.8's dynamic-code ban, whose
  * KNOWN GAPS 1-4 are registered in the plan's red-debt ledger.
  *
- * THE IMPORT PERIMETER IS WIRED HERE, AND ONLY HERE (red-debt.md's SECURITY-CRITICAL
- * must-wire; task-14-supplement §1). `GateRunner.runTreeImports` — the import allowlist and,
- * inside it, design §5.8's `eval`/`new Function` ban — had NO production caller before task
- * 14: `runPage` deliberately stopped scanning imports in task 12 (a shared module belongs to
- * no single page, so scanning per page both misses a module no page's own source is run
- * against and reports a shared violation once per reaching page). Between those two changes a
- * page importing `lodash`, calling `require("fs")`, `eval(...)`, `new Function(...)` or a
- * dynamic `import()` passed the whole Gate and reached the smoke render. The
- * `runTreeImports` call below is the fix. `src/entrypoint/model/turn-import-perimeter.test.ts`
- * proves it end to end against the REAL `gate` adapter for each of those six forms placed in a
- * SHARED module no page names directly; the tests beside this file prove the call shape and
- * the verdict rule against the port fake.
+ * THE IMPORT PERIMETER IS WIRED HERE FOR THE TURN (red-debt.md's SECURITY-CRITICAL must-wire;
+ * task-14-supplement §1). `GateRunner.runTree` — the import allowlist and, inside it, design
+ * §5.8's `eval`/`new Function` ban — had NO production caller before task 14: `runPage`
+ * deliberately stopped scanning imports in task 12 (a shared module belongs to no single page,
+ * so scanning per page both misses a module no page's own source is run against and reports a
+ * shared violation once per reaching page). Between those two changes a page importing `lodash`,
+ * calling `require("fs")`, `eval(...)`, `new Function(...)` or a dynamic `import()` passed the
+ * whole Gate and reached the smoke render. The `runTree` call below is the fix.
+ * `src/entrypoint/model/turn-import-perimeter.test.ts` proves it end to end against the REAL
+ * `gate` adapter for each of those six forms placed in a SHARED module no page names directly;
+ * the tests beside this file prove the call shape and the verdict rule against the port fake.
+ * (`core/kernel/model/handlers/page-descriptors.ts` calls the same method on its own path, for
+ * its own reason — it needs the pass's TYPE diagnostics to mark a page `"invalid"`. Two callers,
+ * one method, no second reading of the tree.)
  *
  * THE VERDICT IS WHOLE-TREE, DELIBERATELY (task-12b review round 1, Minor M4 — task 14 owns
  * the choice). `isTrustedTarget` (`gate/model/tree-scan.ts`) treats "the path is a key in
@@ -113,7 +116,7 @@ export interface RunTurnValidationInputV1 {
    * complete, with no filter of this ring's own.
    *
    * WHY NO FILTER, AND WHY THAT IS THE POINT (task-14-supplement §2; Task 13's
-   * closure-completeness contract on `GateRunner.runTreeImports`). That contract requires
+   * closure-completeness contract on `GateRunner.runTree`). That contract requires
    * `files` to hold text for every CODE file any page's closure reaches, or the closure is
    * refused and the page reports "unchanged" forever. `core` may not import `gate`, so any
    * predicate here deciding "which files are code" would be a SECOND, independently derived
@@ -146,7 +149,7 @@ export type TurnValidationResultV1 =
       readonly descriptors: readonly GatePageDescriptorV1[];
       readonly warnings: readonly GateWarningV1[];
       /**
-       * Every manifest entry's PROVEN-COMPLETE closure, straight from `runTreeImports`
+       * Every manifest entry's PROVEN-COMPLETE closure, straight from `runTree`
        * (design §7) — `core/turns/model/candidate.ts`'s `selectChangedPages` input, and the
        * only thing that makes "an edit to `lib/theme.ts` changed these pages" answerable at
        * all. A slug missing here on a PASSED validation is impossible by that method's own
@@ -250,16 +253,19 @@ export async function runTurnValidation(
   // just one of the two problems. `pages` is the VALIDATED entry list — a closure is walked
   // FROM an entry, and the entry-to-slug binding is `pages.json`'s job, never derivable from a
   // slug — so it is honestly empty when the slice did not decode, and no closure is claimed.
-  const treeImports = await wrap(
-    deps.gateRunner.runTreeImports({
+  const treePass = await wrap(
+    deps.gateRunner.runTree({
       files: input.files,
       treePaths: input.treePaths,
       pages: sliceResult.slice?.pages ?? [],
     }),
   );
-  errors.push(...treeImports.errors);
+  errors.push(...treePass.errors);
+  // The pass's own warnings land in the SAME list the per-page ones do, because the turn's
+  // report is per turn, not per stage: a warning about a shared module has no page to belong to.
+  warnings.push(...treePass.warnings);
 
-  const closureBySlug = new Map(treeImports.closures.map((closure) => [closure.slug, closure]));
+  const closureBySlug = new Map(treePass.closures.map((closure) => [closure.slug, closure]));
 
   // Design §8's per-entry stage. Driven off the VALIDATED manifest, never off a caller-supplied
   // page list: which file a page lives in is `pages.json`'s `entry` value, and a slug-derived
@@ -296,7 +302,7 @@ export async function runTurnValidation(
         // never the absolute path, which would leak a filesystem location into agent-facing
         // Gate messages.
         entryRelPath: entry.entry,
-        // Only when this pass PROVED the closure complete. `runTreeImports`' CONTRACT makes
+        // Only when this pass PROVED the closure complete. `runTree`'s CONTRACT makes
         // the two cases exclusive: a slug absent from `closures` always carries a fatal in
         // `errors`, so omitting `closure` here can never quietly hand a downstream stage a
         // truncated file list — the turn is already rejected.
@@ -325,7 +331,7 @@ export async function runTurnValidation(
       pageCount: descriptors.length,
       warnings: warnings.map(toGateWarningDto),
     });
-    return { kind: "passed", slice, descriptors, warnings, closures: treeImports.closures };
+    return { kind: "passed", slice, descriptors, warnings, closures: treePass.closures };
   }
 
   const diagnostics: TurnGateDiagnosticsV1 = {

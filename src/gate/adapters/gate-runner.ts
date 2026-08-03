@@ -7,7 +7,7 @@ import type {
   GateRunner,
   ManifestSliceResultV1,
   PageMetaExtractionV1,
-  RunTreeImportsResultV1,
+  RunTreeResultV1,
 } from "core/ports";
 import { PAGES_MANIFEST_RELPATH, resolveClosure } from "entities/design-tree";
 import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
@@ -27,7 +27,7 @@ import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
 import { isCodeFile, parsesJsx, scanModuleEdges } from "../model/tree-scan";
-import { createTypeChecker } from "../model/type-check";
+import { createTreeTypeChecker } from "../model/type-check";
 import type { SmokeRenderer } from "../ports/smoke-renderer";
 import type { GateError, GateErrorKind } from "../types";
 
@@ -53,17 +53,23 @@ import type { GateError, GateErrorKind } from "../types";
  * own entry path. The real host `SmokeRenderer` resolves `<treeRoot>/<entryRelPath>` via
  * `Bun.file` in a fresh child process cwd.
  *
- * CLOSED (phase-8 Task 7): `typeCheck` is wired whenever BOTH `tscExePath` and `runtimeDts` are
- * supplied, and the composition root now always supplies both. `entrypoint/model/
- * create-shell.ts`'s `interactiveShell` resolves `tscExePath` via `gate/model/tsc-extract.ts`'s
- * `resolveCompilerPath()` before any project I/O runs — a failed resolution aborts the whole
- * shell construction as a `ShellCompositionError` rather than reaching this adapter at all — and
- * passes `runtime/generated/runtime-dts.ts`'s generated `RUNTIME_DTS` as `runtimeDts`. So in the
- * shipped configuration `typeCheck` is never actually omitted; the `tscExePath`/`runtimeDts`
- * parameters stay OPTIONAL on this adapter only so a caller with no compiler available (a unit
- * test, a hermetic fixture) can still run the source-only stages standalone — `runGate`'s own
- * `ports.typeCheck` parameter being optional is what makes that fallback honest, never a
- * fabricated pass.
+ * CLOSED (phase-8 Task 7; MOVED by design-tree phase 2 Task 3): the type check is wired whenever
+ * BOTH `tscExePath` and `runtimeDts` are supplied, and the composition root now always supplies
+ * both. `entrypoint/model/create-shell.ts`'s `interactiveShell` resolves `tscExePath` via
+ * `gate/model/tsc-extract.ts`'s `resolveCompilerPath()` before any project I/O runs — a failed
+ * resolution aborts the whole shell construction as a `ShellCompositionError` rather than
+ * reaching this adapter at all — and passes `runtime/generated/runtime-dts.ts`'s generated
+ * `RUNTIME_DTS` as `runtimeDts`. So in the shipped configuration the check is never actually
+ * omitted; the `tscExePath`/`runtimeDts` parameters stay OPTIONAL on this adapter only so a
+ * caller with no compiler available (a unit test, a hermetic fixture) can still run the
+ * source-only stages standalone, and that omission is honest rather than a fabricated pass.
+ *
+ * WHAT TASK 3 MOVED, and why it is not merely a relocation: the check used to be a `GatePorts
+ * .typeCheck` running ONE `tsc` program per ENTRY FILE inside `runGate`, over a virtual FS that
+ * served only that file — so a page importing a sibling module failed with a spurious `TS2307`
+ * (measured). It now runs ONCE, inside {@link createGateRunnerAdapter}'s `runTree`, over every
+ * code file in the tree at once, and its diagnostics are attributed to pages through the
+ * closures that SAME pass just resolved.
  *
  * CLOSED (task 10/12): `runManifestSlice`'s input carries `treePaths` (design tree file
  * inventory), not the pre-design-tree `presentSlugs` (page slugs) — a slug list could never
@@ -80,7 +86,7 @@ import type { GateError, GateErrorKind } from "../types";
  * impossible to construct. `closure` stays optional: see `gate/model/gate.ts`'s own
  * `GateInput.closure` doc for why.
  *
- * CLOSED (task-13 review round 1, Critical C1): `runTreeImports`'s result now carries
+ * CLOSED (task-13 review round 1, Critical C1): `runTree`'s result now carries
  * `closures` alongside `errors` — one per `input.pages` entry, resolved by `entities/
  * design-tree`'s `resolveClosure` walking `edgesOf` (`../model/tree-scan`'s `scanModuleEdges`,
  * the SAME edge reader `scanImportAllowlist` itself uses, so the closure walk and the
@@ -101,12 +107,50 @@ import type { GateError, GateErrorKind } from "../types";
  * invariant, the case-by-case attributability argument, and the one computed suppression.
  */
 
-function createTypeCheckPort(
+/**
+ * The whole-tree type check, or `undefined` when this adapter was built with no compiler to run
+ * it (see this file's header for why that stays possible and why it is honest). Both halves of
+ * the config are required together — a `tsc` path with no ambient runtime declaration would
+ * report every `@termcraft/runtime` import as unresolved, which is a fabricated diagnostic, not
+ * a degraded one.
+ */
+function createTreeTypeCheckStage(
   tscExePath: string | undefined,
   runtimeDts: string | undefined,
-): ((source: string, fileName: string) => Promise<GateError[]>) | undefined {
+): ((input: { readonly files: ReadonlyMap<string, string> }) => Promise<GateError[]>) | undefined {
   if (tscExePath === undefined || runtimeDts === undefined) return undefined;
-  return createTypeChecker({ tscExePath, runtimeDts });
+  return createTreeTypeChecker({ tscExePath, runtimeDts });
+}
+
+/**
+ * Every slug whose resolved closure contains a given file, sorted — built ONCE from the closures
+ * {@link resolveTreeClosures} just produced, and read once per type diagnostic.
+ *
+ * THE ATTRIBUTION IS A LOOKUP, NEVER A SECOND WALK. Design §8 step 5 asks for "a diagnostic in a
+ * shared file attributed to every page whose closure contains it", and the pass already holds
+ * exactly that relation: `closures` is `slug -> files`, so inverting it costs one traversal of
+ * data already in hand. Re-deriving reachability from the import graph here would mean a second
+ * reading of the same question — the failure mode this whole plan keeps designing against, where
+ * two readings disagree and the disagreement is the defect.
+ *
+ * A page ABSENT from `closures` (its closure was not proved complete) therefore contributes
+ * nothing: it is already carrying its own blocker diagnostic, and claiming a type error blocks a
+ * page whose file set this pass could not establish would be a fabricated attribution.
+ */
+function createClosureIndex(
+  closures: readonly GateClosureV1[],
+): (file: string | undefined) => readonly PageSlug[] | undefined {
+  const slugsByFile = new Map<string, Set<PageSlug>>();
+  for (const closure of closures) {
+    for (const file of closure.files) addSlug(slugsByFile, file, closure.slug);
+  }
+  return (file) => {
+    if (file === undefined) return undefined;
+    const slugs = slugsByFile.get(file);
+    // Absent, never `[]` — the field's own contract. A diagnostic no closure reaches (an orphan
+    // module, or a global/config diagnostic with no `file` at all) stays fatal and unattributed.
+    return slugs === undefined ? undefined : sortedSlugs(slugs);
+  };
 }
 
 /**
@@ -258,7 +302,7 @@ function readClosureEdges(
  * sharing one slug make the port's "EXACTLY ONE of these holds" absolute false by construction:
  * measured on `pages=[{a,"pages/a.tsx"},{a,"pages/ghost.tsx"}]`, `a` appeared in `closures` AND
  * in a diagnostic's `blockedPages` at once. `entities/design-tree`'s `decodePagesManifest`
- * already refuses a duplicate slug under this same `DUPLICATE_SLUG` code, but `runTreeImports`
+ * already refuses a duplicate slug under this same `DUPLICATE_SLUG` code, but `runTree`
  * accepts `pages` independently of it — and "the guarantee holds because another module checks
  * it" is the exact prose-guarantee shape that produced round 3's Critical (a). One `Set` closes
  * it structurally instead.
@@ -540,7 +584,8 @@ export function resolveTreeClosures(input: {
 export interface GateRunnerAdapterDeps {
   readonly smokeRenderer: SmokeRenderer;
   /** A path already resolved by `gate/model/tsc-extract.ts`'s `resolveCompilerPath()` — this
-   *  adapter does no resolution of its own; see this file's header note. */
+   *  adapter does no resolution of its own; see this file's header note. Consumed by the
+   *  WHOLE-TREE type check inside `runTree` since Task 3, not by any per-page stage. */
   readonly tscExePath?: string;
   /** See this file's header note — the composition root supplies `runtime/generated
    *  /runtime-dts.ts`'s `RUNTIME_DTS` here (phase-8 Task 7). */
@@ -549,7 +594,7 @@ export interface GateRunnerAdapterDeps {
 }
 
 export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner {
-  const typeCheck = createTypeCheckPort(deps.tscExePath, deps.runtimeDts);
+  const treeTypeCheck = createTreeTypeCheckStage(deps.tscExePath, deps.runtimeDts);
 
   async function runManifestSlice(input: {
     readonly manifestText: string;
@@ -576,7 +621,6 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
       expectedFiles: input.expectedFiles,
     };
     const ports: GatePorts = {
-      ...(typeCheck !== undefined ? { typeCheck } : {}),
       ...(deps.checkManifest !== undefined ? { checkManifest: deps.checkManifest } : {}),
       smokeRender: createSmokeRender(deps.smokeRenderer, smokeContext, fileName),
     };
@@ -592,22 +636,48 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
   }
 
   /**
-   * The whole-tree import allowlist (design §8 step 4) plus every manifest entry's resolved
-   * closure (task-13 review round 1, Critical C1 — see this file's header). `gate/model/
-   * gate.ts`'s own `runTreeImports` is synchronous — it does no I/O, only token-scanning over
-   * the text it is handed — so this only wraps it in a promise the same way every other method
-   * on this port is async, keeping `core` looking at one uniform shape. The flat scan runs
-   * FIRST and its findings are an INPUT to the closure pass ({@link resolveTreeClosures}), not
-   * merely concatenated afterwards: which files it managed to read, and which it found to carry
-   * an edge form the closure walk does not follow, is what decides both whether a closure may be
-   * called complete and whether a fact already has a diagnostic.
+   * THE WHOLE-TREE PASS — the single place a tree is judged (design §8 steps 4 and 5). Three
+   * stages, in this order, and the order is load-bearing rather than incidental:
+   *
+   * 1. `runTreeImports` — the flat import allowlist over every code file the tree names.
+   *    `gate/model/gate.ts`'s own function is synchronous (it does no I/O, only token-scanning
+   *    over the text it is handed).
+   * 2. {@link resolveTreeClosures} — every manifest entry's closure. The flat scan's findings
+   *    are an INPUT here, not merely concatenated afterwards: which files it managed to read,
+   *    and which it found to carry an edge form the closure walk does not follow, is what
+   *    decides both whether a closure may be called complete and whether a fact already has a
+   *    diagnostic.
+   * 3. the whole-tree type check, when a compiler was supplied. Its diagnostics are attributed
+   *    through {@link createClosureIndex} over step 2's OWN closures — the pass never walks the
+   *    import graph a second time to answer "which pages reach this file".
+   *
+   * WHY THE TYPE CHECK RUNS UNCONDITIONALLY rather than only when the earlier stages are clean,
+   * unlike `runGate`'s manifest/smoke stages. Those two MOUNT and EXECUTE the candidate, so
+   * running them on a page that failed its contract would be unsafe. The type check only reads
+   * text, and an agent fixing a rejected turn is better served by both the import violation and
+   * the type errors in one report than by discovering them one attempt at a time — there are
+   * only four attempts.
    */
-  async function runTreeImportsPort(input: {
+  async function runTree(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
     readonly pages: readonly PageEntryV1[];
-  }): Promise<RunTreeImportsResultV1> {
-    return resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
+  }): Promise<RunTreeResultV1> {
+    const resolved = resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
+    // `warnings` is empty by construction until the graph analyses (import cycles, modules no
+    // page reaches) land — an honest empty, not a placeholder for something computed and dropped.
+    if (treeTypeCheck === undefined) return { ...resolved, warnings: [] };
+
+    const blockedBy = createClosureIndex(resolved.closures);
+    const typeErrors = (await treeTypeCheck({ files: input.files })).map((error) => {
+      const blockedPages = blockedBy(error.file);
+      return blockedPages === undefined ? error : { ...error, blockedPages };
+    });
+    return {
+      errors: [...resolved.errors, ...typeErrors],
+      warnings: [],
+      closures: resolved.closures,
+    };
   }
 
   /**
@@ -673,7 +743,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     };
   }
 
-  return { runManifestSlice, runPage, runTreeImports: runTreeImportsPort, extractPageMeta };
+  return { runManifestSlice, runPage, runTree, extractPageMeta };
 }
 
 type _Conforms = AssertConforms<GateRunner, ReturnType<typeof createGateRunnerAdapter>>;

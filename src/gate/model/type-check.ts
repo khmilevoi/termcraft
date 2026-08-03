@@ -48,10 +48,10 @@ function norm(p: string): string {
 }
 
 /**
- * The synthesized compiler options (Spike C), shared BYTE-IDENTICAL between the
- * per-file program ({@link synthesizeTsconfig}) and the whole-tree program
- * ({@link synthesizeTreeTsconfig}) — the two configs differ ONLY in their `files`
- * array, so this lives in one place rather than being copied twice and drifting.
+ * The synthesized compiler options (Spike C). Named separately from
+ * {@link synthesizeTreeTsconfig} because it once had to stay BYTE-IDENTICAL across two configs
+ * that differed only in their `files` array — the per-file program is gone (design-tree phase 2
+ * Task 3), and the shape is kept so the options remain one readable, citable block.
  *
  * `lib: ["esnext"]` is PINNED and load-bearing: the default for `target: esnext` is
  * `lib.esnext.full.d.ts`, which pulls in `dom` + four other libs neither embedded nor
@@ -81,14 +81,6 @@ const SYNTHESIZED_COMPILER_OPTIONS = {
   types: [],
   skipLibCheck: true,
 };
-
-/** The synthesized tsconfig for the per-file program: one candidate file plus the runtime `.d.ts`. */
-function synthesizeTsconfig(candidatePath: string, runtimeDtsPath: string): string {
-  return JSON.stringify({
-    compilerOptions: SYNTHESIZED_COMPILER_OPTIONS,
-    files: [candidatePath, runtimeDtsPath],
-  });
-}
 
 /**
  * The synthesized tsconfig for the whole-tree program (Task 2, design §8 step 5): every
@@ -126,53 +118,13 @@ function collectDiagnostics(program: {
 }
 
 /**
- * Map one diagnostic to a `GateError`. The API exposes a character-offset `pos` (not
- * a line/column), so line/column are derived via `lineColOf` — but only for a
- * diagnostic that belongs to the candidate file (a global/config diagnostic has no
- * candidate position, so its location is omitted).
- */
-function toGateError(
-  d: Diagnostic,
-  ctx: { source: string; candidatePath: string; fileName: string },
-): GateError {
-  const inCandidate =
-    d.fileName !== undefined && norm(d.fileName) === ctx.candidatePath && d.pos >= 0;
-  const loc = inCandidate ? lineColOf(ctx.source, d.pos) : null;
-  return {
-    kind: "type",
-    code: `TS${d.code}`,
-    message: d.text,
-    ...(inCandidate ? { file: ctx.fileName } : {}),
-    ...(loc !== null ? { line: loc.line, column: loc.column } : {}),
-  };
-}
-
-/**
- * Dedupe on `(code, fileName, pos)` (Spike C: the union double-reports) and map each
- * surviving diagnostic to a `type`-kind `GateError`.
- */
-function mapDiagnostics(
-  diags: readonly Diagnostic[],
-  ctx: { source: string; candidatePath: string; fileName: string },
-): GateError[] {
-  const seen = new Set<string>();
-  const out: GateError[] = [];
-  for (const d of diags) {
-    const key = `${d.code}|${d.fileName ?? ""}|${d.pos}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(toGateError(d, ctx));
-  }
-  return out;
-}
-
-/**
- * Map one diagnostic to a `GateError` for the WHOLE-TREE program (Task 2 difference #5):
- * unlike the per-file `toGateError`, there is no single candidate — `d.fileName` is looked
- * up against the tree's own `Map<absPath, {relPath, source}>` to find which file (if any)
- * the diagnostic belongs to. A diagnostic whose `fileName` names no tree file, or whose
- * `pos` is negative (a file-level/global diagnostic carries no position), keeps today's
- * shape: no `file`, no location — exactly the `inCandidate`-false branch of `toGateError`.
+ * Map one diagnostic to a `GateError` (Task 2 difference #5). There is no single candidate file:
+ * `d.fileName` is looked up against the tree's own `Map<absPath, {relPath, source}>` to find
+ * which file (if any) the diagnostic belongs to. The API exposes a character-offset `pos` (not a
+ * line/column), so the location is derived via `lineColOf` against THAT file's own source. A
+ * diagnostic whose `fileName` names no tree file, or whose `pos` is negative (a file-level/global
+ * diagnostic carries no position), gets no `file` and no location — an honest "the compiler said
+ * this about the program, not about a page".
  */
 function toGateErrorTree(
   d: Diagnostic,
@@ -193,9 +145,9 @@ function toGateErrorTree(
 }
 
 /**
- * Dedupe on `(code, fileName, pos)` (same rule as {@link mapDiagnostics} — the union
- * double-reports) and map each surviving diagnostic to a `type`-kind `GateError`, resolved
- * against whichever tree file (if any) it belongs to.
+ * Dedupe on `(code, fileName, pos)` (Spike C: the diagnostic-bucket union double-reports, so a
+ * missing file surfaces in program + global at once) and map each surviving diagnostic to a
+ * `type`-kind `GateError`, resolved against whichever tree file (if any) it belongs to.
  */
 function mapTreeDiagnostics(
   diags: readonly Diagnostic[],
@@ -240,101 +192,6 @@ function unavailableMessage(error: TypeCheckUnavailableError): string {
   );
 }
 
-/**
- * Run one hermetic type check over the candidate (Spike C). The API construction +
- * `updateSnapshot` + diagnostic retrieval are the subprocess boundary and can throw
- * (non-Error included), so the whole span is wrapped and any failure — including "no
- * project loaded" — becomes a `TypeCheckUnavailableError`. `api.close()` runs on every
- * path; a close failure is logged, never allowed to turn a successful check into a crash.
- */
-function runTypeCheck(
-  config: TypeCheckerConfig,
-  source: string,
-  fileName: string,
-): GateError[] | TypeCheckUnavailableError {
-  const cwd = norm(os.tmpdir());
-  const candidatePath = norm(path.join(cwd, fileName));
-  const tsconfigPath = `${cwd}/${TSCONFIG_NAME}`;
-  const runtimeDtsPath = `${cwd}/${RUNTIME_DTS_NAME}`;
-  const tsconfig = synthesizeTsconfig(candidatePath, runtimeDtsPath);
-
-  // The virtual FS serves ONLY the three synthetic files — the tsconfig, the runtime
-  // .d.ts, and the in-memory candidate. Everything else (the libs, next to the exe)
-  // returns `undefined` = "read it off the real disk" (Spike C).
-  const virtualFs = {
-    readFile(name: string): string | null | undefined {
-      const n = norm(name);
-      if (n === tsconfigPath) return tsconfig;
-      if (n === runtimeDtsPath) return config.runtimeDts;
-      if (n === candidatePath) return source;
-      return undefined;
-    },
-    fileExists(name: string): boolean | undefined {
-      const n = norm(name);
-      if (n === tsconfigPath || n === runtimeDtsPath || n === candidatePath) return true;
-      return undefined;
-    },
-    realpath(p: string): string | undefined {
-      const n = norm(p);
-      if (n === tsconfigPath || n === runtimeDtsPath || n === candidatePath) return n;
-      return undefined;
-    },
-  };
-
-  // Raw try/catch at the subprocess boundary — NOT `errore.try`: the Bun/Go bridge can
-  // throw NON-Error values, which `errore.try` re-throws rather than wrapping (Spike C
-  // concern #4; the plan's global constraints). So this boundary catches `unknown`
-  // itself and returns the failure as a domain-error value. `api.close()` runs on every
-  // path; a close failure is logged, never allowed to turn a successful check into a crash.
-  try {
-    const api = new API({ cwd, tsserverPath: config.tscExePath, fs: virtualFs });
-    try {
-      const snapshot = api.updateSnapshot({ openProjects: [tsconfigPath] });
-      const project = snapshot.getProject(tsconfigPath) ?? snapshot.getProjects()[0];
-      if (project === undefined)
-        return new TypeCheckUnavailableError({
-          cause: new Error("no project loaded from the synthesized tsconfig"),
-        });
-      return mapDiagnostics(collectDiagnostics(project.program), {
-        source,
-        candidatePath,
-        fileName,
-      });
-    } finally {
-      try {
-        api.close();
-      } catch (closeCause) {
-        console.warn(
-          "type-check: api.close() failed:",
-          closeCause instanceof Error ? closeCause.message : String(closeCause),
-        );
-      }
-    }
-  } catch (cause) {
-    return new TypeCheckUnavailableError({ cause });
-  }
-}
-
-/**
- * Build the gate's `typeCheck` port (phase-3 T4, master §6.3 / Spike C): a checker
- * that type-checks one candidate page's source against the pinned esnext lib set and
- * the ambient runtime types, and returns fatal `type`-kind `GateError`s. A crashed or
- * unavailable compiler yields a single fatal `TYPE_CHECK_UNAVAILABLE` error — NEVER an
- * empty list — so "the checker never ran" can never read as "the page is clean".
- */
-export function createTypeChecker(
-  config: TypeCheckerConfig,
-): (source: string, fileName: string) => Promise<GateError[]> {
-  return async (source, fileName) => {
-    const result = runTypeCheck(config, source, fileName);
-    if (result instanceof Error)
-      return [
-        { kind: "type", code: "TYPE_CHECK_UNAVAILABLE", message: unavailableMessage(result) },
-      ];
-    return result;
-  };
-}
-
 /** One directory's immediate children (Task 2 difference #3) — basenames only, mirroring the compiler's own `FileSystemEntries` shape (`node_modules/typescript/dist/api/fs.d.ts:1-4`). */
 interface DirEntries {
   readonly files: Set<string>;
@@ -372,11 +229,10 @@ function buildSyntheticTree(cwd: string, absPaths: readonly string[]): Map<strin
 }
 
 /**
- * The whole-tree virtual FS (Task 2 difference #3): FIVE hooks, not the per-file program's
- * three. `readFile`/`fileExists`/`realpath` serve the tsconfig, the runtime `.d.ts`, and
- * every code file exactly as the per-file program does for its one candidate; `undefined`
- * for anything else still means "read the real disk" (difference #4), which is how the libs
- * next to the exe are found.
+ * The whole-tree virtual FS (Task 2 difference #3): FIVE hooks, not the three the deleted
+ * per-file program used. `readFile`/`fileExists`/`realpath` serve the tsconfig, the runtime
+ * `.d.ts`, and every code file; `undefined` for anything else still means "read the real disk"
+ * (difference #4), which is how the libs next to the exe are found.
  *
  * `directoryExists`/`getAccessibleEntries` are the two hooks the per-file program never
  * needed, because a program with one file has no sibling to resolve. MEASURED against the
@@ -476,8 +332,10 @@ function runTreeTypeCheck(
     tree,
   });
 
-  // Same raw try/catch boundary as `runTypeCheck` — NOT `errore.try`: the Bun/Go bridge can
-  // throw non-Error values, which `errore.try` re-throws rather than wrapping.
+  // Raw try/catch at the subprocess boundary — NOT `errore.try`: the Bun/Go bridge can throw
+  // NON-Error values, which `errore.try` re-throws rather than wrapping (Spike C concern #4; the
+  // plan's global constraints). So this boundary catches `unknown` itself and returns the failure
+  // as a domain-error value.
   try {
     const api = new API({ cwd, tsserverPath: config.tscExePath, fs: virtualFs });
     try {
@@ -504,28 +362,28 @@ function runTreeTypeCheck(
 }
 
 /**
- * Build the gate's WHOLE-TREE `typeCheck` primitive (Task 2, design §8 step 5): ONE `tsc`
- * program over every code file in the tree at once, replacing the per-file
- * {@link createTypeChecker} — which cannot see a sibling module at all, so a page importing
- * shared code always failed with a spurious `TS2307`. `files` is the SAME tree-relative
- * path → source text map the whole-tree scan already receives. Every returned error carries
- * `file` set to the tree-relative path it belongs to, with `line`/`column` derived from
- * THAT file's own source; a diagnostic the compiler attributes to no known tree file (a
- * global/config diagnostic) keeps today's shape — no `file`, no location. A crashed or
- * unavailable compiler yields a single fatal `TYPE_CHECK_UNAVAILABLE` error for the WHOLE
- * tree — NEVER an empty list, and never silently attributed to one page.
+ * The gate's ONLY type check (Task 2, design §8 step 5): ONE `tsc` program over every code file
+ * in the tree at once. It REPLACED a per-file `createTypeChecker`, deleted by Task 3 along with
+ * its last caller, which could not see a sibling module at all — so a page importing shared code
+ * always failed with a spurious `TS2307`. `files` is the SAME tree-relative path → source text
+ * map the whole-tree scan already receives. Every returned error carries `file` set to the
+ * tree-relative path it belongs to, with `line`/`column` derived from THAT file's own source; a
+ * diagnostic the compiler attributes to no known tree file (a global/config diagnostic) carries
+ * neither. A crashed or unavailable compiler yields a single fatal `TYPE_CHECK_UNAVAILABLE` error
+ * for the WHOLE tree — NEVER an empty list, and never silently attributed to one page.
  *
- * Not wired to any port or caller yet — `createTypeChecker` stays in place, still used by
- * production code, until Task 3 deletes its last caller and deletes it along with the
- * per-file-only regression test in `type-check.test.ts`.
+ * WHO ATTRIBUTES A DIAGNOSTIC TO PAGES, and why not this function: `gate/adapters/gate-runner.ts`
+ * 's `runTree` does, from the closures the same pass resolved. This primitive knows files, not
+ * pages — it is handed a `files` map and no manifest — so a `blockedPages` computed here would
+ * need a second reading of the import graph.
  *
- * MEASURED (Step 5, 2026-08-03, Bun 1.3.14, this machine): a synthesized fixture of N files
- * (1 shared module + N-1 pages importing it, mirroring the two tests above) run through N
- * sequential `createTypeChecker` calls (the per-file program, one per file, including the
- * shared module itself) vs. ONE `createTreeTypeChecker` call (this function) over all N at
- * once, wall-clock, real `tsc.exe`. Two independent runs, both directionally identical:
+ * MEASURED (Task 2 Step 5, 2026-08-03, Bun 1.3.14, this machine): a synthesized fixture of N
+ * files (1 shared module + N-1 pages importing it) run through N sequential per-file
+ * `createTypeChecker` calls (one per file, including the shared module itself) vs. ONE call to
+ * this function over all N at once, wall-clock, real `tsc.exe`. Two independent runs, both
+ * directionally identical:
  *
- * | N (files) | N × per-file `createTypeChecker` | 1 × `createTreeTypeChecker` |
+ * | N (files) | N × the deleted per-file program | 1 × `createTreeTypeChecker` |
  * | --------- | --------------------------------- | ---------------------------- |
  * |         3 |                   208ms / 164ms   |            63ms / 66ms       |
  * |        10 |                   499ms / 568ms   |            54ms / 70ms       |

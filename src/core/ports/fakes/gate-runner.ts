@@ -6,7 +6,7 @@ import type {
   GateRunner,
   ManifestSliceResultV1,
   PageMetaExtractionV1,
-  RunTreeImportsResultV1,
+  RunTreeResultV1,
 } from "../gate-runner";
 import type { AssertConforms } from "../index";
 
@@ -28,7 +28,7 @@ export type GateRunnerCall =
       readonly entryRelPath: string;
     }
   | {
-      readonly method: "runTreeImports";
+      readonly method: "runTree";
       readonly fileCount: number;
       readonly treePathCount: number;
       readonly pageCount: number;
@@ -41,8 +41,8 @@ export interface FakeGateRunner extends GateRunner {
   queueRunPageResult(result: GateRunResultV1): void;
   /** Queues the next `runManifestSlice()` result (FIFO), one shot. */
   queueRunManifestSliceResult(result: ManifestSliceResultV1): void;
-  /** Queues the next `runTreeImports()` result (FIFO), one shot. */
-  queueRunTreeImportsResult(result: RunTreeImportsResultV1): void;
+  /** Queues the next `runTree()` result (FIFO), one shot. */
+  queueRunTreeResult(result: RunTreeResultV1): void;
   /** Queues the next `extractPageMeta()` result (FIFO), one shot — a failing extraction is one with `meta: null` and a non-empty `errors`. */
   queueExtractPageMetaResult(result: PageMetaExtractionV1): void;
 }
@@ -51,7 +51,7 @@ export function createFakeGateRunner(): FakeGateRunner {
   const calls: GateRunnerCall[] = [];
   const pageResults: GateRunResultV1[] = [];
   const manifestResults: ManifestSliceResultV1[] = [];
-  const treeImportsResults: RunTreeImportsResultV1[] = [];
+  const treeResults: RunTreeResultV1[] = [];
   const extractionResults: PageMetaExtractionV1[] = [];
 
   function queueRunPageResult(result: GateRunResultV1): void {
@@ -66,8 +66,8 @@ export function createFakeGateRunner(): FakeGateRunner {
     manifestResults.push(result);
   }
 
-  function queueRunTreeImportsResult(result: RunTreeImportsResultV1): void {
-    treeImportsResults.push(result);
+  function queueRunTreeResult(result: RunTreeResultV1): void {
+    treeResults.push(result);
   }
 
   async function runManifestSlice(input: {
@@ -118,23 +118,24 @@ export function createFakeGateRunner(): FakeGateRunner {
     };
   }
 
-  async function runTreeImports(input: {
+  async function runTree(input: {
     files: ReadonlyMap<string, string>;
     treePaths: readonly string[];
     pages: readonly PageEntryV1[];
-  }): Promise<RunTreeImportsResultV1> {
+  }): Promise<RunTreeResultV1> {
     calls.push({
-      method: "runTreeImports",
+      method: "runTree",
       fileCount: input.files.size,
       treePathCount: input.treePaths.length,
       pageCount: input.pages.length,
     });
-    const queued = treeImportsResults.shift();
+    const queued = treeResults.shift();
     if (queued !== undefined) return queued;
-    // Honest empty, not a fabricated closure walk: this in-memory fake has no real import
-    // scanner to derive edges from (that scanner lives in `gate`, which `core/ports` may not
-    // import) — a test that wants specific closures scripts them via
-    // `queueRunTreeImportsResult` instead of relying on a synthesized default.
+    // Honest empty, not a fabricated closure walk or a fabricated type check: this in-memory
+    // fake has neither an import scanner nor a compiler to derive an answer from (both live in
+    // `gate`, which `core/ports` may not import) — a test that wants specific closures or
+    // diagnostics scripts them via `queueRunTreeResult` instead of relying on a synthesized
+    // default.
     //
     // TRAP FOR ANY CALLER OF THIS FAKE (task-13 review round 2, Minor M-d), NAMED LOUDLY: the
     // REAL adapter (`gate/adapters/gate-runner.ts`) returns one closure per `input.pages` entry
@@ -142,7 +143,7 @@ export function createFakeGateRunner(): FakeGateRunner {
     // which became inaccurate the moment an entry could resolve and still be omitted (a code
     // file with no source text, an edge form the walk does not follow: see the port's own
     // CONTRACT) — this fake never returns one, for ANY `pages` you pass it, unless you
-    // `queueRunTreeImportsResult(...)` first. A test built against this default sees
+    // `queueRunTreeResult(...)` first. A test built against this default sees
     // `closures: []` unconditionally, so `selectChangedPages(...)` against it always reports
     // "nothing changed for any page" — the EXACT silent-nothing-changed failure mode design §7
     // and this whole task exist to prevent, now reproduced by a fixture default instead of
@@ -150,7 +151,11 @@ export function createFakeGateRunner(): FakeGateRunner {
     // asserting on `changedPageSlugs`/pin resolution MUST queue a real closure list — the
     // silent honest-empty default here will otherwise look identical to "no page changed" in
     // every test that forgets to.
-    return { errors: [], closures: [] };
+    //
+    // THE SECOND HALF OF THE SAME TRAP, since design-tree phase 2 Task 3 moved the TYPE CHECK
+    // in here: `errors: []` means "this fake ran nothing", never "the tree type-checks". A
+    // descriptor/turn test that wants to prove a type error reaches its subject must queue one.
+    return { errors: [], warnings: [], closures: [] };
   }
 
   async function extractPageMeta(input: {
@@ -170,12 +175,12 @@ export function createFakeGateRunner(): FakeGateRunner {
   return {
     runManifestSlice,
     runPage,
-    runTreeImports,
+    runTree,
     extractPageMeta,
     calls,
     queueRunPageResult,
     queueRunManifestSliceResult,
-    queueRunTreeImportsResult,
+    queueRunTreeResult,
     queueExtractPageMetaResult,
   };
 }

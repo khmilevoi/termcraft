@@ -40,7 +40,7 @@ export interface ExportTreeFileV1 {
 
 /**
  * One page's transitive file set as the export package records it (design §7, §11) — the
- * closure `GateRunner.runTreeImports` resolved over the very bytes this snapshot captured.
+ * closure `GateRunner.runTree` resolved over the very bytes this snapshot captured.
  * Paths are TREE-relative here; `package.ts` is what prefixes them with `design/` on the way
  * into the package, so a reader of the package never has to know this convention exists.
  */

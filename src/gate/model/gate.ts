@@ -68,15 +68,19 @@ function unscannablePage(fileName: string, error: Error): GateResult {
 }
 
 /**
- * The gate's injected validation stages that need more than the page source
- * (code-structure ports). Each is optional so the pipeline runs the source-only
- * checks standalone and gains the heavier stages as they are wired: `typeCheck`
- * (phase-3 T4, the tsc/unstable-sync diagnostics), `checkManifest` (T5, gated on
- * the phase-4 pages.json schema), and `smokeRender` (T6, the host's one-shot
- * SmokeRenderer). Each may be sync or async and returns fatal `GateError`s.
+ * The gate's injected PER-PAGE validation stages that need more than the page source
+ * (code-structure ports). Each is optional so the pipeline runs the source-only checks
+ * standalone and gains the heavier stages as they are wired: `checkManifest` (T5, gated on the
+ * phase-4 pages.json schema) and `smokeRender` (T6, the host's one-shot SmokeRenderer). Each may
+ * be sync or async and returns fatal `GateError`s.
+ *
+ * `typeCheck` USED TO BE HERE and is gone (design-tree phase 2 Task 3). It ran one `tsc` program
+ * per entry file over a virtual FS holding only that file, so a page importing a shared module
+ * failed with a spurious `TS2307` — measured. The check now runs ONCE over the whole tree, in
+ * `gate/adapters/gate-runner.ts`'s `runTree`, which is also the only place that can attribute a
+ * shared module's diagnostic to the pages reaching it. Do not reintroduce a per-page one.
  */
 export interface GatePorts {
-  readonly typeCheck?: (source: string, fileName: string) => GateError[] | Promise<GateError[]>;
   readonly checkManifest?: (
     descriptor: PageDescriptor,
     source: string,
@@ -108,11 +112,11 @@ export interface GateInput {
    */
   readonly entryRelPath: string;
   /**
-   * The entry's resolved closure (design §7) — so the smoke stage and future stages (design
-   * §8 steps 5 and 8: one whole-tree `tsc` program, and smoke scoped to only the pages whose
-   * `closureHash` changed) have it once they land. NEITHER is implemented by this plan (see
-   * `runTreeImports`'s own doc comment below) — `closure` is threaded through today so the
-   * pipeline's shape is already correct, not because any stage here reads it yet.
+   * The entry's resolved closure (design §7) — so the smoke stage and design §8 step 8 (smoke
+   * scoped to only the pages whose `closureHash` changed) have it once that lands. Step 5's
+   * whole-tree `tsc` program does NOT read it: that check runs over the whole tree at once, in
+   * `gate/adapters/gate-runner.ts`'s `runTree`, and never per page. `closure` is threaded through
+   * today so the pipeline's shape is already correct, not because any stage here reads it yet.
    *
    * STAYS OPTIONAL, deliberately, unlike `entryRelPath` above (task 16): `page-descriptors.ts`
    * has no closure to give, and deriving one per descriptor publish would mean running the
@@ -128,14 +132,18 @@ export interface GateInput {
 
 /**
  * Run the validation gate over one immutable candidate page (master §6.3). The page contract
- * (§4) is fatal; the determinism lints (§6.3) are warnings. The injected `typeCheck` runs
- * next. The manifest + smoke stages run ONLY when nothing fatal has surfaced yet, because a
- * candidate with a broken contract or a type error must never be imported/rendered. A
- * candidate passes only when there are zero fatal errors; warnings never reject.
+ * (§4) is fatal; the determinism lints (§6.3) are warnings. The manifest + smoke stages run
+ * ONLY when nothing fatal has surfaced yet, because a candidate with a broken contract must
+ * never be imported/rendered. A candidate passes only when there are zero fatal errors;
+ * warnings never reject.
  *
- * The static-import allowlist (§3.1) does NOT run here (task 12: moved out, into
- * {@link runTreeImports}, run once per turn over the whole tree — see its own doc comment for
- * why a per-page scan would be both redundant and incomplete for a shared module).
+ * TWO STAGES DELIBERATELY DO NOT RUN HERE, both moved out for the same reason — a shared module
+ * belongs to no single page, so a per-page reading of it is either redundant or blind:
+ * the static-import allowlist (§3.1; task 12) and the TYPE CHECK (§8 step 5; design-tree phase 2
+ * Task 3). Both now live in the whole-tree pass, whose port method is `GateRunner.runTree`. This
+ * function's result is therefore NOT a complete verdict on a page by itself — a caller must fold
+ * the pass's own diagnostics in, as `core/turns/model/validation.ts` and
+ * `core/kernel/model/handlers/page-descriptors.ts` both do.
  */
 export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<GateResult> {
   const errors: GateError[] = [];
@@ -210,16 +218,11 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
     });
   }
 
-  if (ports.typeCheck !== undefined) {
-    errors.push(...(await ports.typeCheck(input.source, fileName)));
-  }
-
   const descriptor: PageDescriptor | null =
     contract.meta === null ? null : { slug: input.slug, meta: contract.meta };
 
-  // Only mount/render/consult the manifest when the candidate is otherwise safe:
-  // a broken contract or a type error means the source cannot be imported or
-  // rendered, so skip the heavier stages.
+  // Only mount/render/consult the manifest when the candidate is otherwise safe: a broken
+  // contract means the source cannot be imported or rendered, so skip the heavier stages.
   if (errors.length === 0 && descriptor !== null) {
     if (ports.checkManifest !== undefined)
       errors.push(...(await ports.checkManifest(descriptor, input.source)));
@@ -248,15 +251,18 @@ export function hasTreePath(treePaths: readonly string[]): (relPath: string) => 
  * single page: scanning it per page would report the same violation N times and would miss
  * it entirely for a module no page reaches.
  *
- * NOT YET DONE (design §8 steps 5 and 8, deferred to plan 2): the type check is still ONE
- * `tsc` program per entry file rather than one over the whole tree, and smoke still runs for
- * every present page rather than only those whose `closureHash` changed. Both are correct as
- * they stand — they are simply more expensive than the design's end state.
+ * DONE SINCE (design §8 step 5): the type check is no longer one `tsc` program per entry file —
+ * `gate/adapters/gate-runner.ts`'s `runTree` runs ONE program over the whole tree, in the same
+ * pass this scan opens. STILL NOT DONE (design §8 step 8): smoke runs for every present page
+ * rather than only those whose `closureHash` changed. That is correct as it stands — simply more
+ * expensive than the design's end state.
  *
  * WIRED (task 14 — the red-debt.md entry this used to carry is closed). This function's only
- * production caller is `gate/adapters/gate-runner.ts`'s `runTreeImports` port method, which
- * `core/turns/model/validation.ts` now calls ONCE per turn, after the manifest slice and
- * before any per-page `runPage`, per design §8's own step ordering. Until that landed this
+ * production caller is `gate/adapters/gate-runner.ts`'s `runTree` port method, which
+ * `core/turns/model/validation.ts` calls ONCE per turn, after the manifest slice and
+ * before any per-page `runPage`, per design §8's own step ordering, and which
+ * `core/kernel/model/handlers/page-descriptors.ts` calls ONCE per descriptor publish. Until task
+ * 14 landed this
  * function had NO non-test caller at all, so a page containing a forbidden import,
  * `eval(...)`, `new Function(...)`, `require(...)` or a dynamic `import()` passed the whole
  * Gate and reached the smoke render.
