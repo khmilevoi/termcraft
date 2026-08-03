@@ -159,6 +159,13 @@ export type { PageCursor } from "store/jsonl";
 export interface LoadResult {
   readonly records: readonly ChatRecord[];
   readonly prevCursor: PageCursor | null;
+  /**
+   * The chat's TOTAL record count, mirroring `store/jsonl`'s `LoadResult.totalRecordCount`
+   * (redrawn here per code-structure Decision C1). Not derivable from `records` — that is
+   * one bounded page — and not derivable from `prevCursor` either, which says only *whether*
+   * more exist, never how many.
+   */
+  readonly totalRecordCount: number;
 }
 
 export interface ChatHandle {
