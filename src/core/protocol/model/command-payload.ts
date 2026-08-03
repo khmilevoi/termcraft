@@ -4,11 +4,7 @@ import { pageSlugSchema } from "entities/page";
 
 import { type CommandKindV1 } from "./command-kind";
 import { uuidv7Schema } from "./ids";
-import {
-  chatPageCursorDtoV1Schema,
-  frameTokenV1Schema,
-  geometryTokenV1Schema,
-} from "./shared-dto";
+import { chatPageCursorDtoV1Schema, frameTokenV1Schema, geometryTokenV1Schema } from "./shared-dto";
 
 /**
  * The closed v1 command-payload registry (kernel-command-contract §8.2): one Zod schema

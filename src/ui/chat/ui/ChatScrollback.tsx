@@ -191,7 +191,11 @@ function renderIndicator(props: ChatScrollbackProps) {
         width={props.width}
         onMouseDown={props.onLoadOlder}
       >
-        <text id={`${id}-earlier-label`} fg={OLDER_FAILED_FG} attributes={shellAttrs({ bold: true })}>
+        <text
+          id={`${id}-earlier-label`}
+          fg={OLDER_FAILED_FG}
+          attributes={shellAttrs({ bold: true })}
+        >
           {`✗ ${props.olderPage.safeMessage}`}
         </text>
         <text id={`${id}-earlier-retry`} fg={OLDER_RETRY_FG}>
@@ -241,7 +245,12 @@ export function ChatScrollback(props: ChatScrollbackProps) {
     <box id={props.id} flexDirection="column">
       {showIndicator && renderIndicator(props)}
       {props.atStart && (
-        <box id={`${props.id}-start`} width={props.width} flexDirection="row" justifyContent="center">
+        <box
+          id={`${props.id}-start`}
+          width={props.width}
+          flexDirection="row"
+          justifyContent="center"
+        >
           <text id={`${props.id}-start-label`} fg={CHAT_START_FG}>
             {CHAT_START_TEXT}
           </text>

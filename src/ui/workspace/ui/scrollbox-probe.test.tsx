@@ -1,5 +1,6 @@
-import type { ScrollBoxRenderable } from "@opentui/core";
 import { afterEach, describe, expect, test } from "bun:test";
+
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useState } from "react";
 
 import type { StyledRun } from "host/protocol";
@@ -44,7 +45,13 @@ function Probe(props: {
   readonly onBox: (box: ScrollBoxRenderable | null) => void;
 }) {
   return (
-    <box id="probe-frame" width={24} height={VIEWPORT_ROWS} flexDirection="column" overflow="hidden">
+    <box
+      id="probe-frame"
+      width={24}
+      height={VIEWPORT_ROWS}
+      flexDirection="column"
+      overflow="hidden"
+    >
       <scrollbox
         id="probe"
         ref={props.onBox}
@@ -110,7 +117,11 @@ async function mountStatefulProbe(rows: readonly string[]) {
   await handle.render();
   if (box === null) throw new Error("the scrollbox ref never resolved");
   if (setRows === null) throw new Error("setRows never captured");
-  return { handle, box: box as ScrollBoxRenderable, setRows: setRows as (rows: readonly string[]) => void };
+  return {
+    handle,
+    box: box as ScrollBoxRenderable,
+    setRows: setRows as (rows: readonly string[]) => void,
+  };
 }
 
 describe("scrollbox probe (spec §9)", () => {
@@ -165,7 +176,9 @@ describe("scrollbox probe (spec §9)", () => {
     // `holds` means the widget compensated for the rows inserted above the viewport.
     const grew = box.scrollHeight - heightBefore;
     const holds = box.scrollTop === before + grew;
-    console.log(`[probe] prepend: scrollTop ${before} -> ${box.scrollTop}, grew ${grew}, holds=${holds}`);
+    console.log(
+      `[probe] prepend: scrollTop ${before} -> ${box.scrollTop}, grew ${grew}, holds=${holds}`,
+    );
     expect(typeof holds).toBe("boolean");
   });
 });

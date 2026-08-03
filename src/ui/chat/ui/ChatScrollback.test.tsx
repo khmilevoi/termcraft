@@ -25,7 +25,11 @@ afterEach(() => {
 const findRowIndex = (rows: StyledRun[][], needle: string) =>
   rows.findIndex((row) => row.some((run) => run.text.includes(needle)));
 
-const allText = (rows: StyledRun[][]) => rows.flat().map((r) => r.text).join("");
+const allText = (rows: StyledRun[][]) =>
+  rows
+    .flat()
+    .map((r) => r.text)
+    .join("");
 
 type UserRecordDto = Extract<ChatRecordDto, { kind: "user" }>;
 type AgentRecordDto = Extract<ChatRecordDto, { kind: "agent" }>;

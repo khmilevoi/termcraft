@@ -86,7 +86,9 @@ function seedHistory(
   deps.mirror.apply(
     event("chat.records", {
       chatId: CHAT,
-      records: Array.from({ length: input.loaded }, (_, i) => chatUserRecord(`r${i}`, `message ${i}`)),
+      records: Array.from({ length: input.loaded }, (_, i) =>
+        chatUserRecord(`r${i}`, `message ${i}`),
+      ),
       prevCursor: input.cursor,
       totalRecordCount: input.total,
     }),
@@ -1416,7 +1418,10 @@ describe("older-page paging (chat-scroll spec §6.6)", () => {
 
     const sent = loadOlderCommands(kernel);
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.payload).toEqual({ chatId: CHAT, cursor: { generation: 1, beforeOffset: 400 } });
+    expect(sent[0]?.payload).toEqual({
+      chatId: CHAT,
+      cursor: { generation: 1, beforeOffset: 400 },
+    });
     expect(deps.local.olderPage()).toEqual({ kind: "loading" });
   });
 
@@ -1443,7 +1448,9 @@ describe("older-page paging (chat-scroll spec §6.6)", () => {
   });
 
   test("a refused dispatch clears the latch and records the failure", async () => {
-    const { deps, handle, kernel } = await mounted({ cursor: { generation: 1, beforeOffset: 400 } });
+    const { deps, handle, kernel } = await mounted({
+      cursor: { generation: 1, beforeOffset: 400 },
+    });
     // `FakeKernel` has one dispatch-outcome override, `setDispatchResult` — there is no
     // per-kind rejection injector, and this test issues exactly one command.
     kernel.setDispatchResult({

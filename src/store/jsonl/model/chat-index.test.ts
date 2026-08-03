@@ -492,7 +492,9 @@ describe("total record count", () => {
     const pages = makePageStore();
     const state = unwrap(await buildFor(bytes, pages));
 
-    const tail = unwrap(await loadChatIndexTail(state, { pages }, makeSource(bytes), { limit: 10 }));
+    const tail = unwrap(
+      await loadChatIndexTail(state, { pages }, makeSource(bytes), { limit: 10 }),
+    );
     expect(tail.records).toHaveLength(10);
     expect(tail.totalRecordCount).toBe(250);
   });
@@ -516,9 +518,7 @@ describe("total record count", () => {
   test("a header-only chat reports zero", async () => {
     const pages = makePageStore();
     const state = unwrap(await buildFor(chatHeaderBytes(), pages));
-    const loaded = unwrap(
-      await loadChatIndexTail(state, { pages }, makeSource(chatHeaderBytes())),
-    );
+    const loaded = unwrap(await loadChatIndexTail(state, { pages }, makeSource(chatHeaderBytes())));
     expect(loaded.totalRecordCount).toBe(0);
   });
 });

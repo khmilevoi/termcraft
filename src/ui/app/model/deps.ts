@@ -43,7 +43,12 @@ import {
   createPreviewInteractionState,
   handleGeometryResult,
 } from "ui/preview";
-import { type ChatViewport, type FocusTarget, type OverlayKind, previewRegionSize } from "ui/workspace";
+import {
+  type ChatViewport,
+  type FocusTarget,
+  type OverlayKind,
+  previewRegionSize,
+} from "ui/workspace";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
