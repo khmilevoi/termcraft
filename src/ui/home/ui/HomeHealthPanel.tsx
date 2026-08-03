@@ -1,6 +1,5 @@
+import type { AgentHealth } from "ui/agent-health";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
-
-import type { HomeAgentHealth } from "../types";
 
 /** One line of `homeHealth(kind)`'s panel body — a static three-line spec per kind. */
 interface PanelLine {
@@ -31,7 +30,7 @@ interface PanelSpec {
  * documents. `shutdown`'s second line and the whole of `latched` are NOT design-literal — see
  * their own comments below for why.
  */
-function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisory" }>): PanelSpec {
+function panelSpec(health: Extract<AgentHealth, { kind: "blocked" | "advisory" }>): PanelSpec {
   const P = SHELL_PALETTE;
   if (health.kind === "blocked" && health.panel === "login") {
     return {
@@ -89,7 +88,7 @@ function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisor
       { text: `⚠ ${health.detail}`, fg: P.amberHi, bold: true },
       // CORRECTED (fix round 1, Finding 4): design's own line (`:182`) reads verbatim "version
       // read · health unproven" — but this runtime never reads a version (`AgentInfo` carries
-      // none — `agent-health.ts`'s own note on `HomeAgentHealth`), so printing it would assert a
+      // none — `agent-health.ts`'s own note on `AgentHealth`), so printing it would assert a
       // read that never happened, the exact class of fabrication the "agent ready" line was
       // removed for. Honest replacement: name what actually happened (the probe reached no
       // verdict), never a version.
@@ -102,7 +101,7 @@ function panelSpec(health: Extract<HomeAgentHealth, { kind: "blocked" | "advisor
 export interface HomeHealthPanelProps {
   readonly id: string;
   readonly width: number;
-  readonly health: Extract<HomeAgentHealth, { kind: "blocked" | "advisory" }>;
+  readonly health: Extract<AgentHealth, { kind: "blocked" | "advisory" }>;
 }
 
 /**

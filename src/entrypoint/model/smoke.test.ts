@@ -473,7 +473,7 @@ describe("the §10 scripted-terminal smoke (WP-12, M19): open project -> prompt 
       // The seeded pre-probe placeholder is `checking` (finding §2.7, phase-8 Task 15), which
       // also renders "termcraft" — Enter below needs the outcome to have actually settled to
       // `ready` (this test's own injected probe), not merely the first seeded frame.
-      await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
+      await renderer.waitFor(() => deps.local.agentHealth().kind === "ready");
 
       const projectReady = waitForEvent(
         kernel,
@@ -641,7 +641,7 @@ describe("the preview render-failure regression (2026-07-27)", () => {
       >[0];
       renderer = await createReactTestRenderer(appElement, { width: 120, height: 36 });
       await renderer.waitForFrame((frame) => frame.includes("termcraft"));
-      await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
+      await renderer.waitFor(() => deps.local.agentHealth().kind === "ready");
 
       const projectReady = waitForEvent(
         kernel,

@@ -188,10 +188,11 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       // surface owns the keys, not a second independently derived export-popup check (M14 fix).
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
       composerValue: deps.local.composer(),
-      homeHealth: deps.local.homeHealth(),
+      agentHealth: deps.local.agentHealth(),
       homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
       projectOpening: deps.mirror.project().opening,
+      projectOpen: deps.mirror.project().projectId !== null,
     };
     const intent = resolveKey(key, context);
     // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an
@@ -254,12 +255,21 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         id="app-home"
         width={size.w}
         height={size.h}
-        health={deps.local.homeHealth()}
+        health={deps.local.agentHealth()}
         prompt={deps.local.prompt()}
         combo={homeCombo(deps.local.agentSelection())}
         rows={homeSlashOpen ? filterSlashRows(deps.local.prompt(), deps.actionContext()) : []}
         selectedIndex={deps.local.slashSelection()}
-        openFailure={deps.mirror.project().openFailure}
+        // THE TWO WAYS AN OPEN CAN FAIL, composed into the one prop `HomeOpenFailurePanel` is
+        // gated on (branch review finding 2, 2026-08-03). `ProjectMirror.openFailure` is Kernel
+        // truth — folded only from a real `kernel.project.blockOpen`; `local.startupOpenFailure`
+        // is the UI's own reading of a startup dispatch that was never admitted at all
+        // (`run-app.ts`'s two branches, through `abandonStartupOpen`). `??` loses nothing because
+        // the two are mutually exclusive BY CONSTRUCTION: one open attempt either reached the
+        // Kernel and was later blocked (the mirror's field) or never reached it (this atom), and
+        // the second case is precisely the one where no `blockOpen` can exist. Kernel truth is
+        // read first regardless, so a genuine block always wins the slot.
+        openFailure={deps.mirror.project().openFailure ?? deps.local.startupOpenFailure()}
         opening={deps.mirror.project().opening}
       />
     );

@@ -1686,9 +1686,9 @@ describe("Gap D — an existing project opens into the Workspace", () => {
       const projectStore = createFakeProjectStore({
         root: "/fake-root",
         manifest: { projectId: "fake-project-1", pages: [home] },
-        // Zero chats: no chat has ever been made active — exactly the clone shape
-        // `ShellLaunchV1.hasContent`'s own doc comment names as its real purpose (pages
-        // present, zero chats, since `chats/` is git-ignored as of fix-bundle §2.5).
+        // Zero chats: no chat has ever been made active — exactly the clone shape Gap D routes
+        // into the Workspace via `ShellLaunchV1.existing` (pages present, zero chats, since
+        // `chats/` is git-ignored as of fix-bundle §2.5).
         workspaceState: { activePageSlug: home, activeChatId: null },
       });
       const pageReader = createFakePageStore({
@@ -1716,8 +1716,9 @@ describe("Gap D — an existing project opens into the Workspace", () => {
       const descriptors = findEvent(terminalEvents, "page.descriptorsChanged");
       expect(descriptors).toBeDefined();
       expect(descriptors?.payload.descriptors.map((d) => d.pageSlug)).toEqual([home]);
-      // No chat ever existed to publish — this is the load-bearing half of the clone case:
-      // `hasContent` must resolve from PAGES alone, since chats never make it true here.
+      // No chat ever existed to publish — this is the load-bearing half of the clone case: Gap D
+      // routes on `existing` alone, so this fixture proves the ready sequence itself is what
+      // publishes descriptors from pages, independent of whether any chat exists.
       expect(terminalEvents.some((event) => event.kind === "chat.changed")).toBe(false);
     });
   });

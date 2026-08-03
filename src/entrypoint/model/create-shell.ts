@@ -122,17 +122,7 @@ async function interactiveShell(
 
   const resolvedEnv = await resolveEnvWithProjectIdentity(env, open, existing);
 
-  // Evaluated BEFORE the Kernel is constructed — it must precede the startup dispatch
-  // (`run-app.ts`'s Gap D dispatch), because `deriveScreen` keys on `projectId`, which
-  // `finishOpen` sets: by the time the command has gone, the screen is already decided (spec
-  // §3.2). The probe is skipped entirely for a freshly created project — a real I/O round trip
-  // would only ever confirm what `existing` already says, since a fresh directory never held
-  // anything before `openOrCreateProject` just created it — so `contentProbe` stays the
-  // definite `"no-content"` without touching disk again.
-  const contentProbe: ProjectContentProbeV1 = existing
-    ? await probeProjectContent(open)
-    : "no-content";
-  const launch = resolveShellLaunch(existing, contentProbe);
+  const launch: ShellLaunchV1 = { existing };
 
   const storeAdapterDeps: StoreAdapterDeps = { open, uuidv7, clock: systemClock };
   const projections = createProjectionsAdapter(storeAdapterDeps);
@@ -357,78 +347,6 @@ async function openOrCreateProject(
   return { open: created, existing: false };
 }
 
-/**
- * The three outcomes reading a project's pages and chats can produce (fix round 1, Finding 1).
- * `"no-content"` is a DEFINITE fact — reserved for the one case both reads actually succeeded
- * and both came back empty. A read that fails establishes nothing about the disk at all, so it
- * is never folded into that negative: the Global Constraints govern here over the brief's own
- * `return false` snippet — "Never fabricate a fact. A port that cannot answer honestly refuses
- * (logged) rather than substituting a placeholder" — and `false`/"no content" is exactly such a
- * placeholder for an unread disk.
- */
-export type ProjectContentProbeV1 = "has-content" | "no-content" | "unknown";
-
-/**
- * "At least one page, or at least one chat" (fix-bundle spec §2.4). Both signals are already
- * available at open with no extra I/O beyond one manifest read and one chat listing:
- * `project.toml` carries the `pages` list the open sequence reads anyway, and chat presence
- * comes free with Gap E's listing (`ChatStore.list()`, `store/model/chat-listing.ts`).
- *
- * A read failure resolves `"unknown"`, never `"no-content"` (fix round 1, Finding 1) — logged
- * either way (errore rule 21). `"unknown"` is folded into a dispatch-anyway decision by
- * {@link resolveShellLaunch}, not into a silent Home: the Kernel's own open sequence
- * (`core/kernel/model/handlers/project.ts`'s `runProjectReadySequence`) re-reads the same two
- * facts and is the one place a genuine failure can reach the event stream a real client
- * observes — this composition-root probe's own `console.warn` fires during shell composition,
- * before `createUiRoot` has even taken the terminal, so it is not user-visible on its own.
- *
- * Exported — narrowed to `Pick<OpenProject, "manifest" | "chats">` — so `create-shell.test.ts`
- * can drive both failure branches directly against a narrow fake: a TRANSIENT failure on either
- * read, occurring AFTER `store.openProject` already succeeded, has no seam the real `Store`
- * exposes to inject honestly (a corrupt manifest, for one, would already have failed
- * `store.openProject` itself, before this function is ever called).
- */
-export async function probeProjectContent(
-  open: Pick<OpenProject, "chats" | "manifest">,
-): Promise<ProjectContentProbeV1> {
-  const manifest = await open.manifest.read();
-  if (manifest instanceof Error) {
-    console.warn(
-      `termcraft: could not read the manifest to route the launch (${manifest.message}) — routing as unknown, not "no content"`,
-    );
-    return "unknown";
-  }
-  if (manifest.pages.length > 0) return "has-content";
-
-  const chats = await open.chats.list();
-  if (chats instanceof Error) {
-    console.warn(
-      `termcraft: could not list chats to route the launch (${chats.message}) — routing as unknown, not "no content"`,
-    );
-    return "unknown";
-  }
-  return chats.length > 0 ? "has-content" : "no-content";
-}
-
-/**
- * Turns `existing` (whether `store.openProject` itself succeeded) and the content probe into
- * the shell's own launch discriminator (fix round 1, Finding 1). `"unknown"` folds into
- * `hasContent: true`, exactly like `"has-content"` — dispatching `project.open` anyway is the
- * only honest response to "the disk could not confirm there is nothing here"; defaulting to
- * Home would assert the opposite fact the failed read never established. The `existing` gate is
- * unchanged: a freshly created project (`existing: false`) never reaches this with anything but
- * `"no-content"` (`interactiveShell` skips the probe entirely for it), so it always resolves
- * `hasContent: false` regardless of what `probe` would say.
- *
- * A pure function of its two inputs — exported and unit-tested directly (fix round 1) rather
- * than only indirectly through a disk-backed `createShell` fixture, since forcing the `"unknown"`
- * branch through real disk I/O is exactly what {@link probeProjectContent}'s own doc comment
- * explains the real `Store` has no seam for.
- */
-export function resolveShellLaunch(existing: boolean, probe: ProjectContentProbeV1): ShellLaunchV1 {
-  return { existing, hasContent: existing && probe !== "no-content" };
-}
-
 /** A thrown `mkdirSync` rejection, converted to a value at this sync-boundary (errore's
  *  `.try` rule) — `root` pre-existing is the common case and never reaches this branch. */
 class RootDirectoryError extends errore.createTaggedError({
@@ -649,9 +567,9 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
     // — `run-app.ts`'s `resolveAgentHealthProbe` treats `null` as "leave `createUiDeps`'s
     // default probe in place", preserving demo's existing seeded reading exactly.
     agentRegistry: null,
-    // A demo owns no project on disk (Gap D) — never an existing project, never any content
-    // to route a startup `project.open` dispatch against.
-    launch: { existing: false, hasContent: false },
+    // A demo owns no project on disk (Gap D) — never an existing project to route a startup
+    // `project.open` dispatch against.
+    launch: { existing: false },
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

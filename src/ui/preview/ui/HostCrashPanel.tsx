@@ -14,6 +14,16 @@ export interface HostCrashPanelProps {
   readonly hostMessage: string;
   readonly attempts: number;
   readonly retryAvailable: boolean;
+  /**
+   * Why a repair turn cannot run right now, or `null` when it can (design
+   * `design/30-workspace-first-launch.dc.html` §"The collision", engine `wsHostCrash`'s
+   * `o.agentDead` branch). Built by `ui/agent-health`'s `agentBlockedNote` so the line here and
+   * the badge in the status bar cannot state the same fact two different ways.
+   *
+   * The hint slot is NOT affected: preview halt still outranks health there — one badge, and this
+   * one is already the point of the frame.
+   */
+  readonly agentBlocked: { readonly line: string; readonly f6Detail: string } | null;
 }
 
 const BOLD = shellAttrs({ bold: true });
@@ -140,12 +150,81 @@ export function HostCrashPanel(props: HostCrashPanelProps) {
           hotkey="F6"
           label="repair…"
           note="write the failure into the composer"
-          detail="nothing is sent — you press ⏎"
+          detail={props.agentBlocked?.f6Detail ?? "nothing is sent — you press ⏎"}
           keyFg={SHELL_PALETTE.amber}
           labelFg={SHELL_PALETTE.amberHi}
           noteFg={SHELL_PALETTE.dim}
           bold
         />
+        {/* DIVERGENCE 3: the engine's own `keyRow`/`text` helpers write characters at a fixed
+            column offset with no bounds check, so a real `agentBlockedNote` line — built from the
+            agent's own name and cause — would silently overflow the block's right border in the
+            raw mockup. OpenTUI's `<text>` wraps instead, the closest faithful mapping: nothing is
+            hidden or truncated, unlike an invented truncation would be. Same applies to the F6
+            row's `detail` above.
+
+            KNOWN DEFECT (branch review finding 1, 2026-08-02 fix wave), not merely a coverage
+            gap. The engine's own `bh` budgets +2 rows for this branch
+            (`design/termcraft-engine.js:1207`, `bh += agentDead ? 2 : 0`) — one spacer, one
+            line, on the assumption the line fits in a single row. The wrapping this DIVERGENCE
+            describes actually costs +4 at OpenTUI's real (`BLOCK_MAX_WIDTH`-bounded) content
+            width for the default fixtures this file's own tests use: the F6 `detail` wraps to a
+            second line (+1), the spacer above this block (+1), and the wrapped `line` itself
+            becomes two rows instead of one (+2). At a 120×24 terminal (region {w:74, h:18} per
+            `previewRegionSize`) the block then needs 22 rows against an 18-row region it is
+            handed — a real, measured 4-row overflow AT THAT WIDTH, confirmed by rendering (not
+            reasoned about abstractly): `rectOf("...-block").height` reads 18 with
+            `agentBlocked: null` and 22 with it set, at every height in 24..27 — see
+            `HostCrashPanel.test.tsx`'s own "KNOWN DEFECT" test for the exact pinned numbers.
+
+            120×24 is NOT the worst supported case. `MIN_FRAME` (`ui/mirror/model/screen.ts:11`)
+            is 80×24, which narrows the region to {w:48, h:18} — the block's own
+            `BLOCK_MAX_WIDTH` clamp does not help at a width this narrow, the same text just
+            wraps onto more lines instead — and there the block needs 31 rows against the same
+            18-row region: an overflow of 13, not 4. 100×24 (region {w:61, h:18}) sits between
+            the two, at 27 rows needed, an overflow of 9. Only at 120 columns does the `null`
+            variant exactly fill the region with no slack to begin with (18 of 18) — at 80 and
+            100 columns `agentBlocked: null` ALREADY overflows on its own, with no `agentBlocked`
+            involved at all: 27 rows at 80×24 and 24 rows at 100×24, both against the same
+            18-row region. This branch therefore DEEPENED an existing overflow rather than
+            introducing one, and a correct bounding fix has to work across widths — not just
+            recover the 4 rows this branch adds at 120 columns.
+
+            `Workspace.tsx`'s `ws-preview` box clips this with its own `overflow="hidden"`
+            (`:778`), and because this component centers the block (`justifyContent="center"`
+            above), the excess splits across both edges rather than pinning to the top the way
+            the engine's own `Math.max(0, ...)` clamp on `by` would. The concrete visible
+            consequence depends on how much chrome sits above the region at a given terminal
+            height (the tab strip and its rule, absorbed into the SAME `overflow="hidden"`
+            ancestor), measured here at 120 columns: at h=24 it collides with the tab rule (the
+            block's top border overwrites it) and its own bottom border row vanishes; at h=25
+            both the bottom padding row and the bottom border row are lost; at h=26..27 only the
+            bottom border row is lost. For the exact fixtures this suite uses, no MESSAGE TEXT is
+            lost at any of those heights — only border/padding chrome — but that is a property of
+            these specific string lengths splitting the 4-row deficit evenly across the block's
+            own top and bottom padding+border (2 non-text rows each) at 120 columns; it is not a
+            guarantee for other message lengths, and the 80×24/100×24 numbers above show it does
+            not hold at narrower widths either, where the deficit is far larger than border and
+            padding chrome alone can absorb.
+
+            Bounding the block's own height to the region it is given, without breaking the
+            "wrapped, never truncated" contract text that fits must keep, needs predicting every
+            wrapped region's row count (this block's host message, the F6 detail line, and now
+            this `agentBlocked.line` too) BEFORE OpenTUI's own layout pass runs, in order to
+            reproduce the engine's own `Math.max(0, floor((dh-bh)/2))` clamp on `by` — which pins
+            the block to the region's top rather than centering it into negative space once
+            content overflows. That prediction has to track a wrap algorithm this component does
+            not own end-to-end (row layout inside a `flexDirection="row"` `KeyRow`, not just
+            `wrapText`'s own single-column case), which is a bigger change than this fix wave
+            carries. Tracked here, not silently accepted — see the pinning test below. */}
+        {props.agentBlocked !== null && (
+          <>
+            <text id={`${props.id}-agent-spacer`}> </text>
+            <text id={`${props.id}-agent-blocked`} fg={SHELL_PALETTE.red}>
+              {props.agentBlocked.line}
+            </text>
+          </>
+        )}
       </box>
     </box>
   );
