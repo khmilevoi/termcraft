@@ -2,6 +2,7 @@ import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol";
 import {
   PAGES_MANIFEST_RELPATH,
   PAGES_MANIFEST_SCHEMA_VERSION,
+  computeSourceHash,
   encodePagesManifest,
 } from "entities/design-tree";
 import type { PageEntryV1, PagesManifestV1 } from "entities/design-tree";
@@ -47,6 +48,32 @@ function fakeSha256Hex(seed: string): Sha256Hex {
   return base.repeat(8).slice(0, 64);
 }
 
+/**
+ * A seeded tree file: `bytes` is mandatory, `sha256` is OPTIONAL — see {@link seededSha256}.
+ * `DesignTreeFileV1` (`core/ports/design-store.ts`) itself keeps `sha256` required, because
+ * that is the real port's return shape every caller of `readTreeFile()`/`listTree()` gets back;
+ * this is strictly the SEED a test hands `createFakeDesignStore`, which is allowed to omit it.
+ */
+export interface DesignTreeFileSeedV1 {
+  readonly bytes: Uint8Array;
+  readonly sha256?: Sha256Hex;
+}
+
+/**
+ * The seeded bytes' REAL SHA-256, computed the same way the real adapter computes it
+ * (`entities/design-tree`'s `computeSourceHash`, which `store`'s own `sha256Hex` is pinned
+ * against — see `store/jsonl/model/line-codec.test.ts`'s "sha256Hex parity" test), unless the
+ * seed pins one explicitly, which a test doing drift/mismatch scenarios needs.
+ *
+ * A fabricated constant here is not a harmless shortcut: `sha256` is what `closureHash` and
+ * `treeRevision` fold and what the host verifies every closure member against at mount, so a
+ * fake that reports a hash corresponding to no bytes makes every `core` test blind to a defect
+ * that swaps a path for its content.
+ */
+function seededSha256(file: DesignTreeFileSeedV1): Sha256Hex {
+  return file.sha256 ?? computeSourceHash(file.bytes);
+}
+
 export type DesignStoreFailableMethod =
   | "readTreeFile"
   | "listTree"
@@ -84,10 +111,10 @@ export interface FakeDesignStore extends DesignTreeReader, PageMutations {
 
 export function createFakeDesignStore(options: {
   readonly manifest: PagesManifestV1;
-  readonly files?: ReadonlyMap<string, DesignTreeFileV1>;
+  readonly files?: ReadonlyMap<string, DesignTreeFileSeedV1>;
 }): FakeDesignStore {
   let manifest = options.manifest;
-  const files = new Map(options.files ?? []);
+  const files = new Map<string, DesignTreeFileSeedV1>(options.files ?? []);
   const titles = new Map<PageSlug, string>();
   const calls: DesignStoreCall[] = [];
 
@@ -110,7 +137,7 @@ export function createFakeDesignStore(options: {
     if (queued !== undefined) return queued;
     const file = files.get(relPath);
     if (file === undefined) return notFound(relPath);
-    return file;
+    return { bytes: file.bytes, sha256: seededSha256(file) };
   }
 
   async function listTree(): Promise<
@@ -121,7 +148,11 @@ export function createFakeDesignStore(options: {
     const queued = queues.listTree.shift();
     if (queued !== undefined) return queued;
     return [...files.entries()]
-      .map(([relPath, file]) => ({ relPath, sha256: file.sha256, size: file.bytes.byteLength }))
+      .map(([relPath, file]) => ({
+        relPath,
+        sha256: seededSha256(file),
+        size: file.bytes.byteLength,
+      }))
       .sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
   }
 

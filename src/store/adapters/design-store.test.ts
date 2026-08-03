@@ -378,4 +378,32 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
       await open.close();
     }
   });
+
+  test("listTree() agrees on sha256 and size, not only on relPath", async () => {
+    const fake = createFakeDesignStore({
+      manifest: {
+        schemaVersion: 1,
+        pages: [{ slug: HOME_SLUG, entry: HOME_ENTRY }],
+        requestedActivePage: null,
+      },
+      // NO sha256 seeded: the fake must derive it from the bytes, the way the real adapter does.
+      files: new Map([[HOME_ENTRY, { bytes: new TextEncoder().encode(HOME_SOURCE) }]]),
+    });
+
+    const { open, deps } = await createRealProjectFixture();
+    try {
+      await seedHomeAndAboutPages(open);
+      const real = createDesignStoreAdapter(deps);
+
+      const fakeTree = await fake.listTree();
+      const realTree = await real.listTree();
+      if ("code" in fakeTree || "code" in realTree) throw new Error("fixture bug: listTree failed");
+
+      const realHome = realTree.find((entry) => entry.relPath === HOME_ENTRY);
+      const fakeHome = fakeTree.find((entry) => entry.relPath === HOME_ENTRY);
+      expect(fakeHome?.sha256).toBe(realHome?.sha256);
+    } finally {
+      await open.close();
+    }
+  });
 });

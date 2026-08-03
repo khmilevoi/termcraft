@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { FailureDtoV1, PageRemovePlanV1 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
@@ -85,6 +86,49 @@ describe("createFakeDesignStore", () => {
     const store = createFakeDesignStore({ manifest: manifestOf([]) });
     const result = await store.readTreeFile("pages/missing.tsx");
     expect("code" in result).toBe(true);
+  });
+
+  // Task 7 (`red-debt.md`'s fake-fidelity row): before this, a seed's `sha256` was required
+  // and every existing fixture just supplied one (often `fakeDesignTreeFile`'s own fabricated
+  // digest) — nothing exercised what happens when it is OMITTED. `DesignFileEntryV1.sha256` is
+  // what `closureHash`/`treeRevision` fold and what the host verifies at mount, so a fake that
+  // silently reported a hash over no bytes would make a path/content mixup invisible to every
+  // `core` test running on it.
+  test("readTreeFile()/listTree() derive the real sha256 from the bytes when the seed omits one", async () => {
+    const bytes = new TextEncoder().encode("computed, not fabricated");
+    const store = createFakeDesignStore({
+      manifest: manifestOf([slug("home")]),
+      files: new Map([["pages/home.tsx", { bytes }]]),
+    });
+    const expected = computeSourceHash(bytes);
+
+    const file = await store.readTreeFile("pages/home.tsx");
+    if ("code" in file) throw new Error("unexpected failure");
+    expect(file.sha256).toBe(expected);
+
+    const tree = await store.listTree();
+    if ("code" in tree) throw new Error("unexpected failure");
+    expect(tree.find((entry) => entry.relPath === "pages/home.tsx")?.sha256).toBe(expected);
+  });
+
+  // The escape hatch Step 3's own doc comment calls for: a test doing a drift/mismatch
+  // scenario needs to PIN a hash that does not correspond to the seeded bytes, on purpose.
+  test("an explicitly seeded sha256 is honored verbatim, not overwritten by the real digest", async () => {
+    const pinned = "0".repeat(64);
+    const store = createFakeDesignStore({
+      manifest: manifestOf([slug("home")]),
+      files: new Map([
+        ["pages/home.tsx", { bytes: new TextEncoder().encode("x"), sha256: pinned }],
+      ]),
+    });
+
+    const file = await store.readTreeFile("pages/home.tsx");
+    if ("code" in file) throw new Error("unexpected failure");
+    expect(file.sha256).toBe(pinned);
+
+    const tree = await store.listTree();
+    if ("code" in tree) throw new Error("unexpected failure");
+    expect(tree.find((entry) => entry.relPath === "pages/home.tsx")?.sha256).toBe(pinned);
   });
 
   test("listTree() enumerates every seeded file as (relPath, sha256, size), sorted by relPath", async () => {

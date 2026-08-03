@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ChatUserRecord } from "entities/chat";
+import { computeSourceHash } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 
@@ -250,5 +251,16 @@ describe("sha256Hex", () => {
     expect(sha256Hex(new Uint8Array(0))).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     );
+  });
+
+  // Parity pin (same pattern as `gate/model/smoke.test.ts`'s own "the gate-side hash matches
+  // the host's computeSourceHash" test): this module's `sha256Hex` (`node:crypto`) and
+  // `entities/design-tree`'s `computeSourceHash` (`Bun.CryptoHasher`) are two independent
+  // implementations of the identical digest — `core/ports/fakes/design-store.ts` needs the
+  // `entities/` copy because `core/ports` may not import `store`. Pinned here, not unified,
+  // matching this repo's established way of keeping such duplicates honest.
+  test("agrees with entities/design-tree's computeSourceHash over the same bytes (parity pin)", () => {
+    const bytes = new TextEncoder().encode("export const x = 1\n");
+    expect(sha256Hex(bytes)).toBe(computeSourceHash(bytes));
   });
 });
