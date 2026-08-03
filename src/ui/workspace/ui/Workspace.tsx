@@ -34,6 +34,7 @@ import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
 import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip } from "ui/status-bar";
+import { editorRowCount } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import {
@@ -43,6 +44,7 @@ import {
   scrollbackMaxRows,
 } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
+import type { OverlayKind } from "../model/focus";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -179,6 +181,9 @@ function terminalRecordLines(
  * citation this value does NOT independently derive from.
  */
 const AGENT_BLOCK_CHROME_ROWS = 1;
+
+/** The `❯ ` caret run `Composer` draws before the editor — two cells, matching `drawChat` `:651`. */
+const COMPOSER_CARET_COLUMNS = 2;
 
 /**
  * Renders the ordered tab strip (design `drawTabs`, `design/18-tab-management.dc.html`):
@@ -371,7 +376,17 @@ function renderPreviewRegion(
  * GAP decision on frame junctions). Live frame streaming fills `previewFrame` from the App's
  * `PreviewSession` consumer.
  */
-export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolean }>((props) => {
+export const Workspace = reatomComponent<{
+  deps: WorkspaceDeps;
+  readOnly: boolean;
+  /**
+   * Which surface owns the keys, ALREADY precedence-resolved by the App's own
+   * `resolveActiveOverlay` — the same call `renderOverlay` and the key-context builder make. Read
+   * here rather than re-derived from `local.overlay()` so the composer's focus, the popup that is
+   * drawn, and the keys `resolveKey` routes can never disagree about who owns the keyboard.
+   */
+  activeOverlay: OverlayKind | null;
+}>((props) => {
   const { mirror, terminal, previewFrame, local, interaction } = props.deps;
   const size = terminal();
   const turn = mirror.turn();
@@ -385,7 +400,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const composerFocused = local.focus() === "composer";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
-  const slashOpen = !props.readOnly && local.overlay() === "slash-menu";
+  const slashOpen = !props.readOnly && props.activeOverlay === "slash-menu";
   const slashRows = slashOpen
     ? filterSlashRows(composerValue, {
         capabilities: mirror.capabilities(),
@@ -462,8 +477,19 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   // at the design's own 11-row ceiling AND measure real remaining space inside `ws-chat-stream`
   // — not bare `frameH`, which ignores `ws-chat`'s own border and every sibling this block shares
   // the panel with. See `agentStatusMaxRows`'s own doc comment (`../model/agent-block-budget.ts`).
+  //
+  // `ws-chat`'s own inner content width: the panel's width less its left/right border. This is
+  // what every `<text>` inside `ws-chat-stream` wraps against, and — less the caret run — what
+  // the composer's editor wraps against too.
+  const chatContentWidth = Math.max(1, chatW - 2);
+  const composerEditorWidth = Math.max(1, chatContentWidth - COMPOSER_CARET_COLUMNS);
+  const composerEditorRows = editorRowCount({
+    text: composerValue,
+    width: composerEditorWidth,
+    frameH,
+  });
   const pinRowCount = pinListRowCount(pinRows);
-  const composerRows = composerRowCount(composerAttach !== null);
+  const composerRows = composerRowCount(composerAttach !== null, composerEditorRows);
   const agentBlockMaxRows = agentStatusMaxRows({
     frameH,
     chromeRows: AGENT_BLOCK_CHROME_ROWS,
@@ -471,10 +497,6 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
     pinListRows: pinRowCount,
     composerRows,
   });
-  // `ws-chat`'s own inner content width: the panel's width less its left/right border. This is
-  // what every `<text>` inside `ws-chat-stream` actually wraps against, so it is what the row
-  // budget must measure with.
-  const chatContentWidth = Math.max(1, chatW - 2);
   const terminalLines = turn.phase === "terminal" ? terminalRecordLines(turn) : [];
   // What the ephemeral region claims this frame — the running turn's block, the finished turn's
   // collapsed record, or nothing. The scrollback below takes whatever is left over.
@@ -534,6 +556,14 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       : composerFocused
         ? "Ask for changes…"
         : "tab → focus composer";
+  // §7.5's focus table. The composer keeps the keys while the slash menu is open — the filter IS
+  // this buffer — and loses them to any modal overlay, to a preview-focused Tab, and on a
+  // read-only screen. Exactly one editor is focused at any moment, which is a requirement rather
+  // than a coincidence: the terminal has one hardware cursor.
+  const composerEditorFocused =
+    !props.readOnly &&
+    composerFocused &&
+    (props.activeOverlay === null || props.activeOverlay === "slash-menu");
 
   return (
     <box
@@ -680,8 +710,11 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
                 (turn.phase === "running" && composerValue.length === 0)
               }
               placeholder={composerPlaceholder}
-              value={composerValue}
               attach={composerAttach}
+              focused={composerEditorFocused}
+              rows={composerEditorRows}
+              width={composerEditorWidth}
+              bridge={props.deps.editors.composer}
             />
             {
               // design/termcraft-engine.js:966 (`slashMenu(){ const rows=…; if(!rows.length)

@@ -19,6 +19,7 @@ import {
 import { EnlargePlaceholder } from "ui/preview";
 import { SHELL_PALETTE } from "ui/theme";
 import { Workspace } from "ui/workspace";
+import type { OverlayKind } from "ui/workspace";
 
 import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
@@ -69,9 +70,12 @@ function exportPopupShowing(deps: UiDeps): boolean {
  * `nowMs` is the App's injected clock reading (see {@link App}'s own `clock` prop) — threaded in
  * rather than read via `Date.now()` here so the WHEN column ({@link formatChatWhen}) stays
  * deterministic under test.
+ *
+ * `overlay` is the ALREADY precedence-resolved value — the App's own `resolveActiveOverlay` call,
+ * hoisted so this and the `<Workspace>` mount below (and the `onKey` context builder) all read
+ * the SAME resolution rather than three independently-computed ones that could drift apart.
  */
-function renderOverlay(deps: UiDeps, nowMs: number) {
-  const overlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
+function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null) {
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
     // Design 24-chats.dc.html (wsChats): rows list newest-first. `chat-move`/`chat-switch`
@@ -130,8 +134,8 @@ function renderOverlay(deps: UiDeps, nowMs: number) {
       />
     );
   }
-  // Unreachable: exportPopupShowing (via resolveActiveOverlay) above narrowed the phase to
-  // "done" | "failed".
+  // Unreachable: exportPopupShowing (via resolveActiveOverlay, in the caller) narrowed the phase
+  // to "done" | "failed".
   return null;
 }
 
@@ -290,7 +294,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
   }
 
   // Workspace owns the non-modal slash anchor; App owns only modal centered overlays.
-  const overlay = renderOverlay(deps, clock());
+  //
+  // Hoisted so `<Workspace>`'s `activeOverlay` prop, `renderOverlay`'s own render, and `onKey`'s
+  // context builder above all read the SAME resolved value — `resolveActiveOverlay` is still the
+  // ONE precedence function, just called once per render instead of once per consumer.
+  const activeOverlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
+  const overlay = renderOverlay(deps, clock(), activeOverlay);
   return (
     <box
       id="app-root"
@@ -299,7 +308,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       backgroundColor={SHELL_PALETTE.bg}
       position="relative"
     >
-      <Workspace deps={deps} readOnly={screen === "read-only"} />
+      <Workspace deps={deps} readOnly={screen === "read-only"} activeOverlay={activeOverlay} />
       {overlay !== null && (
         <box
           id="app-modal-layer"

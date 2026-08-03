@@ -46,7 +46,7 @@ describe("Workspace read-only presentation", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly />);
+    handle.mount(<Workspace deps={deps} readOnly activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
@@ -88,7 +88,7 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     );
     const handle = await createHeadlessRenderer({ w: 40, h: 10 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const left = findRun(rows, "‹");
@@ -115,7 +115,7 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     deps.local.pageOverride.set("b");
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).toContain("▸ Bravo");
@@ -135,7 +135,7 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rect = handle.rectOf("ws-tab-b");
     expect(rect).not.toBeNull();
@@ -156,7 +156,7 @@ describe("Workspace tab-strip overflow indicators (design 18-tab-management.dc.h
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).not.toContain("‹");
@@ -193,7 +193,7 @@ describe("Workspace fullscreen preview sizing (F2, design paneShell noChat:true)
     deps.local.fullscreen.set(true);
     const handle = await createHeadlessRenderer({ w: 60, h: 20 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     // paneShell's `noChat:true` branch (design engine.js:392-401) gives the preview pane the
@@ -244,7 +244,7 @@ describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).toContain("PINS · main");
@@ -276,7 +276,7 @@ describe("Workspace pin list (design 08-pin-comments.dc.html, M12)", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     // The open pin is the FIRST (and only) open pin, so its badge must read "1" — never "2",
@@ -309,7 +309,7 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const chip = findRun(rows, "▣ gauge-cpu");
@@ -338,7 +338,7 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).not.toContain("▣");
@@ -377,7 +377,7 @@ describe("Workspace composer attach chip (design 07-selection-hover.dc.html / 08
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const attach = findRun(rows, "2 open pins attached · sent next");
@@ -406,7 +406,7 @@ describe("Workspace chat panel header during a running turn", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
 
     // Design `chatSeq` (`design/termcraft-engine.js:568`) draws the presence line once at the
@@ -438,7 +438,7 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
@@ -447,7 +447,7 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
     expect(text).toContain("⚠ turn running — send disabled");
   });
 
-  test("a non-empty draft renders live — amber caret, blinking cursor, the draft text itself, and the design's draft-kept line", async () => {
+  test("a non-empty draft renders live — amber caret, the draft text itself, and the design's draft-kept line", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(
       snapshot({
@@ -463,12 +463,15 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
     deps.local.composer.set("and label the peaks");
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
     expect(text).toContain("and label the peaks");
-    expect(text).toContain("█");
+    // WAS also `expect(text).toContain("█")`. Task 8's `Composer` renders `ui/text-input`'s
+    // `TextEditor`, whose cursor is the TERMINAL's own native hardware cursor, never a painted
+    // glyph (`ui/text-input`'s own `TextEditor.test.tsx`) — unassertable through
+    // `handle.capture()`'s styled rows, so its visibility is that component's own test's job.
     expect(text).toContain("⏎ send disabled — draft kept");
     // Exact-text match, not substring: the chat panel's own focused title also starts with
     // "❯ chat..." (`SHELL_PALETTE.amberHi`), which `findRun`'s `.includes` would match FIRST —
@@ -492,7 +495,7 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
@@ -512,12 +515,39 @@ describe("Workspace composer during a running turn (finding §2.5)", () => {
   });
 });
 
+// Task 8: `Composer` now renders `TextEditor`, sized by `composerEditorRows`
+// (`editorRowCount`) — a multi-line draft grows the editor past one row, and that growth is fed
+// straight into `composerRowCount` -> `agentStatusMaxRows`/`scrollbackMaxRows` the SAME frame,
+// not one frame later.
+describe("Workspace composer editor sizing (Task 8)", () => {
+  test("a grown composer takes its rows out of the scrollback, in the same frame", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "main",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+      }),
+    );
+    deps.local.composer.set("one\ntwo\nthree");
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const text = allText(handle.capture().rows);
+    expect(text).toContain("one");
+    expect(text).toContain("two");
+    expect(text).toContain("three");
+  });
+});
+
 describe("Workspace action-derived hotkey hints", () => {
   test("keeps F2 active while F3, F4, and Ctrl+P remain visible but faint", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const text = allText(rows);
@@ -547,7 +577,7 @@ describe("Workspace action-derived hotkey hints", () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     // The status bar is the frame's bottom row; its right-aligned cluster is the key row.
@@ -609,7 +639,7 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
     deps.mirror.apply(event("turn.started", { turnId: uuidv7(), chatId, deadline: TEST_TS }));
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const findRow = (needle: string) =>
@@ -658,7 +688,7 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
 
@@ -702,7 +732,7 @@ describe("Workspace agent identity (M22 — data-driven, not the design's codex/
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).toContain("chat · claude");
@@ -725,7 +755,7 @@ describe("Workspace agent identity (M22 — data-driven, not the design's codex/
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).toContain("chat");
@@ -749,7 +779,7 @@ describe("Workspace agent identity (M22 — data-driven, not the design's codex/
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).not.toContain("chat ·");
@@ -781,7 +811,7 @@ describe("Workspace slash menu (design termcraft-engine.js:966, :155 — do not 
     deps.local.composer.set("/nomatch-xyz");
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay="slash-menu" />);
     await handle.render();
     const rows = handle.capture().rows;
     // `SlashMenu` titles its box with the typed text itself (`props.typed`), bold amberHi
@@ -809,7 +839,7 @@ describe("Workspace slash menu (design termcraft-engine.js:966, :155 — do not 
     deps.local.composer.set("/e");
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay="slash-menu" />);
     await handle.render();
     const text = allText(handle.capture().rows);
     expect(text).toContain("/export");
@@ -839,7 +869,7 @@ describe("Workspace live-turn connection line (design termcraft-engine.js:568 he
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     // The chat panel's own title legitimately reads "❯ chat · working" (unaffected by this fix —
@@ -893,7 +923,7 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
     deps.mirror.apply(applyCircuit);
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     return handle.capture().rows;
   }
@@ -985,7 +1015,7 @@ describe("Workspace halted-preview chat notice", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
 
@@ -1042,7 +1072,7 @@ describe("Workspace preview clipping", () => {
 
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const lines = rows.map((row) => row.map((run) => run.text).join(""));
@@ -1090,7 +1120,7 @@ describe("Workspace preview clipping", () => {
 
     const handle = await createHeadlessRenderer({ w: 100, h: 20 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const lines = rows.map((row) => row.map((run) => run.text).join(""));
@@ -1118,7 +1148,7 @@ describe("Workspace preview placeholder sizing", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 20 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const lines = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
 
@@ -1143,7 +1173,7 @@ describe("Workspace preview pane header", () => {
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const lines = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
 
@@ -1172,7 +1202,7 @@ describe("Workspace preview pane header", () => {
     // override needed to exercise the composer-focused branch.
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
@@ -1193,7 +1223,7 @@ describe("Workspace preview pane header", () => {
     deps.local.focus.set("preview");
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;
-    handle.mount(<Workspace deps={deps} readOnly={false} />);
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
     await handle.render();
     const rows = handle.capture().rows;
     const ruleRun = rows[2]?.find((run) => run.text.includes("─"));
