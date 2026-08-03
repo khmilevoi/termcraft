@@ -9,7 +9,7 @@ import {
   defaultFakeEntry,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
-import { PAGES_MANIFEST_RELPATH } from "entities/design-tree";
+import { PAGES_MANIFEST_RELPATH, computeSourceHash } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -61,8 +61,11 @@ const ABOUT_INPUT: ExportPageInputV1 = {
 
 const HOME_BYTES = new Uint8Array([1, 2, 3]);
 const ABOUT_BYTES = new Uint8Array([4, 5, 6]);
-const HOME_HASH = "a".repeat(64);
-const ABOUT_HASH = "b".repeat(64);
+// Task 7 fix round 1: was `"a"`/`"b".repeat(64)` — fabricated, unrelated to `HOME_BYTES`/
+// `ABOUT_BYTES` above despite the direct round-trip assertion below (`sourceHash: HOME_HASH`)
+// depending on it matching what the fake actually reports for those exact bytes.
+const HOME_HASH = computeSourceHash(HOME_BYTES);
+const ABOUT_HASH = computeSourceHash(ABOUT_BYTES);
 
 function setup() {
   const machine = reatomExportStateMachine();

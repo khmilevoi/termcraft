@@ -57,6 +57,7 @@ import {
   type UUIDv7,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -72,7 +73,13 @@ function slug(value: string) {
 }
 
 const HOME = slug("home");
-const HOME_SOURCE_HASH = "a".repeat(64);
+// Task 7 fix round 1: was `"a".repeat(64)`, a fabricated constant unrelated to the bytes it was
+// paired with below. Derived from the SAME bytes `buildDeps()` seeds so it stays true if that
+// source text is ever edited — never a hand-computed hex literal (that would just be a more
+// convincing fabrication).
+const HOME_SOURCE_TEXT = "export const meta = {}";
+const HOME_SOURCE_BYTES = new TextEncoder().encode(HOME_SOURCE_TEXT);
+const HOME_SOURCE_HASH = computeSourceHash(HOME_SOURCE_BYTES);
 
 function buildDeps(overrides?: {
   readonly hostSupervisor?: KernelDeps["hostSupervisor"];
@@ -84,7 +91,7 @@ function buildDeps(overrides?: {
     pages: [
       {
         pageSlug: HOME,
-        bytes: new TextEncoder().encode("export const meta = {}"),
+        bytes: HOME_SOURCE_BYTES,
         sha256: HOME_SOURCE_HASH,
       },
     ],

@@ -17,6 +17,7 @@ import {
   createFakeRenderCache,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -35,6 +36,13 @@ function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
 }
 
+// Task 7 fix round 1: `sourceHash` below was fabricated (`"a"`/`"b".repeat(64)`), unrelated to
+// `bytes`, despite feeding both a design-store fake seed (below) and several direct assertions.
+const HOME_BYTES = new Uint8Array([1]);
+const ABOUT_BYTES = new Uint8Array([2]);
+const HOME_SOURCE_HASH = computeSourceHash(HOME_BYTES);
+const ABOUT_SOURCE_HASH = computeSourceHash(ABOUT_BYTES);
+
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
   treeRoot: "/proj/.termcraft/design",
@@ -44,8 +52,8 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
-  sourceHash: "a".repeat(64),
-  bytes: new Uint8Array([1]),
+  sourceHash: HOME_SOURCE_HASH,
+  bytes: HOME_BYTES,
 };
 
 const ABOUT: ExportPageSnapshotV1 = {
@@ -57,8 +65,8 @@ const ABOUT: ExportPageSnapshotV1 = {
   minSize: { w: 200, h: 50 }, // larger than both standard sizes -> single-size ladder
   theme: "dark",
   kitApiVersion: 2,
-  sourceHash: "b".repeat(64),
-  bytes: new Uint8Array([2]),
+  sourceHash: ABOUT_SOURCE_HASH,
+  bytes: ABOUT_BYTES,
 };
 
 /**

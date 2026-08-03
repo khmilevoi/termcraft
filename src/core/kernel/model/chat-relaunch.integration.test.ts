@@ -78,8 +78,6 @@ import { uuidv7 } from "infrastructure/uuid";
  * carry the restored tail.
  */
 
-const FAKE_SOURCE_HASH = "a".repeat(64);
-
 function slug(value: string): PageSlug {
   const parsed = parsePageSlug(value);
   if (parsed instanceof Error) throw parsed;
@@ -276,12 +274,14 @@ describe("WP-10 Task 10 — the chat tail round-trips on relaunch (core half, §
       manifest: { projectId: "0192f000-0000-7000-8000-00000000aaaa" },
       workspaceState: { activePageSlug: home, activeChatId: chatId },
     });
+    // Task 7 fix round 1: `sha256` used to be a required, fabricated `"a".repeat(64)` here —
+    // never read back by anything in this file (nothing here asserts a page's hash). Omitted so
+    // the fake derives the real hash of these bytes instead.
     const pageStore = createFakeDesignStoreForPages({
       pages: [
         {
           pageSlug: home,
           bytes: new TextEncoder().encode("export const meta = {}"),
-          sha256: FAKE_SOURCE_HASH,
         },
       ],
     });

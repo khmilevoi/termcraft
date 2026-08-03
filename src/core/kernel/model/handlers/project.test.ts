@@ -51,6 +51,7 @@ import {
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
 import type { ChatRecord } from "entities/chat";
+import { computeSourceHash } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -82,7 +83,14 @@ function slug(value: string) {
   return parsed;
 }
 
-const FAKE_SOURCE_HASH = "a".repeat(64);
+// Task 7 fix round 1: was `"a".repeat(64)`, unrelated to the bytes every seed site below pairs
+// it with. This constant is purely seed-side in this file (never read back in an expectation —
+// grepped `sourceHash` here: zero hits), but deriving it from the SAME bytes every
+// `createFakeDesignStoreForPages` call below seeds keeps the pairing honest rather than merely
+// convenient.
+const FAKE_SOURCE_TEXT = "export const meta = {}";
+const FAKE_SOURCE_BYTES = new TextEncoder().encode(FAKE_SOURCE_TEXT);
+const FAKE_SOURCE_HASH = computeSourceHash(FAKE_SOURCE_BYTES);
 
 const FAILURE: FailureDtoV1 = {
   code: "PERSISTENCE_FAILED",
@@ -465,7 +473,7 @@ describe("project.create", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -599,7 +607,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -642,7 +650,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -675,7 +683,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -718,7 +726,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -751,7 +759,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -837,7 +845,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -868,7 +876,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -922,7 +930,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -982,7 +990,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1024,7 +1032,7 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1069,13 +1077,13 @@ describe("project.open", () => {
         pages: [
           {
             pageSlug: dashboard,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
             entry: "screens/board/dashboard.tsx",
           },
           {
             pageSlug: calendar,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
             entry: "widgets/cal/index.tsx",
           },
@@ -1136,7 +1144,7 @@ describe("project.retryOpen", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1273,7 +1281,7 @@ describe("Gap A — enablePreviewIfTrusted", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1324,7 +1332,7 @@ describe("Gap A — enablePreviewIfTrusted", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1358,7 +1366,7 @@ describe("Gap A — enablePreviewIfTrusted", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1394,8 +1402,11 @@ describe("Gap A — enablePreviewIfTrusted", () => {
         manifest: { projectId: "fake-project-1" },
         workspaceState: { activePageSlug: null, activeChatId: null },
       });
+      // `readManifest` is failed below before any hash is ever read, so this page's own hash
+      // genuinely does not matter here — left to the fake's real-hash default rather than
+      // reusing `FAKE_SOURCE_HASH`, which would misrepresent these (empty) bytes.
       const designReader = createFakeDesignStoreForPages({
-        pages: [{ pageSlug: home, bytes: new Uint8Array(), sha256: FAKE_SOURCE_HASH }],
+        pages: [{ pageSlug: home, bytes: new Uint8Array() }],
       });
       designReader.failNext("readManifest", FAILURE);
       const harness = buildTestContext({ projectStore, designReader });
@@ -1460,7 +1471,7 @@ describe("Gap C — the first turn from create/open text", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1518,7 +1529,7 @@ describe("Gap C — the first turn from create/open text", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1557,7 +1568,7 @@ describe("Gap C — the first turn from create/open text", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1604,7 +1615,7 @@ describe("Gap C — the first turn from create/open text", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1652,7 +1663,7 @@ describe("Gap D — an existing project opens into the Workspace", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1689,12 +1700,12 @@ describe("Gap D — an existing project opens into the Workspace", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
           {
             pageSlug: about,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],
@@ -1745,7 +1756,7 @@ describe("Gap D — an existing project opens into the Workspace", () => {
         pages: [
           {
             pageSlug: home,
-            bytes: new TextEncoder().encode("export const meta = {}"),
+            bytes: FAKE_SOURCE_BYTES,
             sha256: FAKE_SOURCE_HASH,
           },
         ],

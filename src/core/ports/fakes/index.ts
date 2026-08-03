@@ -46,6 +46,7 @@ export { createFakeChatStore } from "./chat-store";
 export type {
   DesignStoreCall,
   DesignStoreFailableMethod,
+  DesignTreeFileSeedV1,
   FakeDesignPageV1,
   FakeDesignStore,
 } from "./design-store";

@@ -8,6 +8,7 @@ import {
   createFakeProjectWriteCoordinator,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 
 import { confirmPageRemove, discardPageRemovePlan, renameTitle, reorder } from "./page-mutations";
@@ -27,9 +28,20 @@ import { type PageRemovePlanLedger, createPageRemovePlanLedger } from "./page-re
  * a Reatom atom, so their `.calls` logs and awaited methods are safe to read from anywhere.
  */
 
+// Task 7 fix round 1: `HOME_HASH`/`ABOUT_HASH` were fabricated (`"a"`/`"b".repeat(64)`) AND both
+// pages shared the identical empty `PAGE_BYTES` — so a naive swap to `computeSourceHash(bytes)`
+// over shared bytes would have made both hashes equal, silently breaking the one test below that
+// needs "about"'s minted `sourceHash` to genuinely differ from a re-read mismatch (`"returns
+// PLAN_STALE-shaped drift..."`). `home` and `about` now carry distinct real bytes so their real
+// hashes are, in fact, distinct. `PAGE_BYTES` stays for the one place that still wants empty,
+// content-irrelevant bytes: the drift test's own explicitly-pinned `"c".repeat(64)` mismatch
+// (a legitimate drift/mismatch scenario per this fake's own documented escape hatch — see
+// `core/ports/fakes/design-store.ts`'s `seededSha256`).
 const PAGE_BYTES = new Uint8Array();
-const HOME_HASH = "a".repeat(64);
-const ABOUT_HASH = "b".repeat(64);
+const HOME_BYTES = new TextEncoder().encode("home");
+const ABOUT_BYTES = new TextEncoder().encode("about");
+const HOME_HASH = computeSourceHash(HOME_BYTES);
+const ABOUT_HASH = computeSourceHash(ABOUT_BYTES);
 
 function slug(value: string): PageSlug {
   const parsed = parsePageSlug(value);
@@ -52,7 +64,7 @@ describe("renameTitle", () => {
   test("rewrites the title through the page store and invalidates any active remove plan", async () => {
     const { call, readCurrent, pageStore } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
-        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
+        pages: [{ pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH }],
       });
       const planLedger = createPageRemovePlanLedger();
       planLedger.mint({
@@ -80,7 +92,7 @@ describe("renameTitle", () => {
   test("propagates a page-store failure and leaves an active plan untouched", async () => {
     const { call, readCurrent } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
-        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
+        pages: [{ pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH }],
       });
       pageStore.failNext("renameTitle", FAILURE);
       const planLedger = createPageRemovePlanLedger();
@@ -108,8 +120,8 @@ describe("reorder", () => {
     const { call, readCurrent, pageStore } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
         pages: [
-          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
-          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+          { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: ABOUT_BYTES, sha256: ABOUT_HASH },
         ],
       });
       const planLedger = createPageRemovePlanLedger();
@@ -139,7 +151,7 @@ describe("reorder", () => {
   test("rejects a permutation that adds a slug, without writing", async () => {
     const { call, pageStore } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
-        pages: [{ pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH }],
+        pages: [{ pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH }],
       });
       const planLedger = createPageRemovePlanLedger();
       return { call: reorder({ pageStore, planLedger }, [slug("home"), slug("about")]), pageStore };
@@ -155,8 +167,8 @@ describe("reorder", () => {
     const { call, pageStore } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
         pages: [
-          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
-          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+          { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: ABOUT_BYTES, sha256: ABOUT_HASH },
         ],
       });
       const planLedger = createPageRemovePlanLedger();
@@ -173,8 +185,8 @@ describe("reorder", () => {
     const { call, pageStore } = context.start(() => {
       const pageStore = createFakeDesignStoreForPages({
         pages: [
-          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
-          { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+          { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("about"), bytes: ABOUT_BYTES, sha256: ABOUT_HASH },
         ],
       });
       const planLedger = createPageRemovePlanLedger();
@@ -219,8 +231,8 @@ describe("discardPageRemovePlan", () => {
 function setupConfirmScenario() {
   const pageStore = createFakeDesignStoreForPages({
     pages: [
-      { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
-      { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: ABOUT_HASH },
+      { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
+      { pageSlug: slug("about"), bytes: ABOUT_BYTES, sha256: ABOUT_HASH },
     ],
   });
   const projectStore = createFakeProjectStore({
@@ -231,7 +243,7 @@ function setupConfirmScenario() {
   const planLedger = createPageRemovePlanLedger();
   const plan = planLedger.mint({
     pageSlug: slug("about"),
-    sourceHash: "b".repeat(64),
+    sourceHash: ABOUT_HASH,
     orderedPageSlugs: [slug("home"), slug("about")],
     activePageSlug: slug("about"),
   });
@@ -316,11 +328,15 @@ describe("confirmPageRemove", () => {
   test("returns PLAN_STALE-shaped drift and performs NO write when the source hash changed", async () => {
     const { call, mutex, mutated } = context.start(() => {
       const { projectStore, mutex, planLedger, plan } = setupConfirmScenario();
-      // Simulate a concurrent write to the plan's target page, bypassing this module, by
-      // reading the fresh facts from a store seeded with different source bytes for "about".
+      // Simulate a concurrent write to the plan's target page, bypassing this module: a store
+      // whose "about" entry reports a hash that does NOT match what the plan minted
+      // (`ABOUT_HASH`, from `setupConfirmScenario()`). `sha256` is EXPLICITLY pinned here — the
+      // one legitimate use of this fake's drift/mismatch escape hatch in this file — because the
+      // test's whole point is a hash that disagrees with the plan, not a hash that matches
+      // whatever bytes happen to be seeded.
       const mutated = createFakeDesignStoreForPages({
         pages: [
-          { pageSlug: slug("home"), bytes: PAGE_BYTES, sha256: HOME_HASH },
+          { pageSlug: slug("home"), bytes: HOME_BYTES, sha256: HOME_HASH },
           { pageSlug: slug("about"), bytes: PAGE_BYTES, sha256: "c".repeat(64) },
         ],
       });

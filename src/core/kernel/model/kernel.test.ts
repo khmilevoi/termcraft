@@ -613,7 +613,9 @@ describe("the real-registry spine (kernel-assembly Task 9 Step C3, §11)", () =>
   test("project.open -> project.setTrust -> chat.create -> page.removePlan -> page.removeDiscardPlan: every non-snapshot event parses against its own schema, eventSeq strictly increases, and stateRevision never decreases", async () => {
     const home = slug("home");
     const pageStore = createFakeDesignStoreForPages({
-      pages: [{ pageSlug: home, bytes: new Uint8Array(), sha256: "a".repeat(64) }],
+      // Task 7 fix round 1: `sha256` was a fabricated `"a".repeat(64)`, never read back here —
+      // omitted so the fake derives the real hash of these (empty) bytes instead.
+      pages: [{ pageSlug: home, bytes: new Uint8Array() }],
     });
     const deps = buildDeps({ chatMutations: createChatMutationsStub() });
     const openedProjectId = "0192f000-0000-7000-8000-00000000fed1";
@@ -788,7 +790,9 @@ describe("late-subscriber liveness for activePageSlug/activeChatId (Task 17)", (
   test("a subscriber attaching after the active page and active chat changed reads the CURRENT values, not null", async () => {
     const home = slug("home");
     const pageStore = createFakeDesignStoreForPages({
-      pages: [{ pageSlug: home, bytes: new Uint8Array(), sha256: "a".repeat(64) }],
+      // Task 7 fix round 1: `sha256` was a fabricated `"a".repeat(64)`, never read back here —
+      // omitted so the fake derives the real hash of these (empty) bytes instead.
+      pages: [{ pageSlug: home, bytes: new Uint8Array() }],
     });
     const deps = buildDeps({ chatMutations: createChatMutationsStub() });
     const kernel = createKernel({

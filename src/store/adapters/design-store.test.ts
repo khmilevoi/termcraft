@@ -392,6 +392,12 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
 
     const { open, deps } = await createRealProjectFixture();
     try {
+      // Two pages, not one, so `pages.json` is the same real manifest file the test above's own
+      // documented divergence (:355-357) is about — that divergence never reaches THIS test:
+      // it compares `HOME_ENTRY`'s own two entries by identity below (never a length/set
+      // comparison of the two `listTree()` results), so `pages.json` being present on the real
+      // side and absent from the fake's own `files` seed is simply not something either lookup
+      // below can observe.
       await seedHomeAndAboutPages(open);
       const real = createDesignStoreAdapter(deps);
 
@@ -401,7 +407,15 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
 
       const realHome = realTree.find((entry) => entry.relPath === HOME_ENTRY);
       const fakeHome = fakeTree.find((entry) => entry.relPath === HOME_ENTRY);
-      expect(fakeHome?.sha256).toBe(realHome?.sha256);
+      // A guard, not a redundant check: without it, a regression that makes either side stop
+      // returning `HOME_ENTRY` collapses both variables to `undefined`, and
+      // `expect(undefined).toBe(undefined)` PASSES — silently proving nothing, the exact
+      // regression class this test exists to catch.
+      if (realHome === undefined || fakeHome === undefined) {
+        throw new Error("fixture bug: HOME_ENTRY missing from one of the two listTree() results");
+      }
+      expect(fakeHome.sha256).toBe(realHome.sha256);
+      expect(fakeHome.size).toBe(realHome.size);
     } finally {
       await open.close();
     }

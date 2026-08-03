@@ -12,6 +12,7 @@ import {
   createSequence,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -53,6 +54,13 @@ function spyMachine(inner: StateMachine<ExportState, ExportAction>): {
   return { machine, actions };
 }
 
+// Task 7 fix round 1: `sourceHash` below was `"a".repeat(64)`, fabricated and unrelated to
+// `bytes`. `setup()`'s own `currentHash` override (further down, `"c".repeat(64)`) stays a
+// deliberately DIFFERENT, hand-picked literal — that one test is specifically about "the page
+// was edited after capture" (a real drift/mismatch scenario), so it must not derive from these
+// same bytes.
+const HOME_BYTES = new Uint8Array([1]);
+
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
   treeRoot: "/proj/.termcraft/design",
@@ -62,8 +70,8 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
-  sourceHash: "a".repeat(64),
-  bytes: new Uint8Array([1]),
+  sourceHash: computeSourceHash(HOME_BYTES),
+  bytes: HOME_BYTES,
 };
 
 /**

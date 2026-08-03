@@ -45,6 +45,7 @@ import {
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
 import type { ChatRecord } from "entities/chat";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -134,7 +135,13 @@ function homeSlug(): PageSlug {
   return parsed;
 }
 const HOME = homeSlug();
-const HOME_SOURCE_HASH = fakeSha256Hex("home-page-source");
+// Task 7 fix round 1: was `fakeSha256Hex("home-page-source")` — a seed string that did not even
+// match the bytes it got paired with below (`"export const meta = {}"`). Every downstream use is
+// a correlation (a preview/backoff circuit key, a page-meta cache lookup, a published frame's
+// `sourceHash`) that only has to match what `buildDeps()` seeds, so deriving it from those same
+// bytes keeps every one of those sites self-consistent automatically.
+const HOME_SOURCE_BYTES = new TextEncoder().encode("export const meta = {}");
+const HOME_SOURCE_HASH = computeSourceHash(HOME_SOURCE_BYTES);
 
 /**
  * `seedRecords` closes the fake-fidelity gap the §10 smoke closeout found (WP-1 smoke
@@ -306,7 +313,7 @@ function buildDeps(
     pages: [
       {
         pageSlug: HOME,
-        bytes: new TextEncoder().encode("export const meta = {}"),
+        bytes: HOME_SOURCE_BYTES,
         sha256: HOME_SOURCE_HASH,
       },
     ],

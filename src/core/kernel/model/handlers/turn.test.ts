@@ -55,6 +55,7 @@ import {
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
 import type { ChatUserRecord } from "entities/chat";
+import { computeSourceHash } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -137,6 +138,15 @@ function withHonestChatAppendBase(
     },
   };
 }
+
+// Task 7 fix round 1: several tests below seed a HOME page with these exact "home-source" bytes
+// paired with a fabricated `sha256` (several different hand-picked literals, none of them the
+// real hash). Sharing one real-hash pair here means the one test that reads its seed back
+// (`"admission never reads page bytes, it stages by listTree() alone"`, further down) stays
+// honest, and every other site that reused the same bytes with a different fabricated literal
+// now gets a real hash too rather than a fabricated one.
+const HOME_SOURCE_BYTES = new TextEncoder().encode("home-source");
+const HOME_SOURCE_HASH = computeSourceHash(HOME_SOURCE_BYTES);
 
 const FAKE_BACKEND_CAPABILITIES: BackendCapabilities = {
   backendId: "claude",
@@ -499,9 +509,7 @@ describe('turnHandlers["turn.start"]', () => {
     // is exactly what a future edit could quietly undo.
     const HOME = "home" as PageSlug;
     const pageStore = createFakeDesignStoreForPages({
-      pages: [
-        { pageSlug: HOME, bytes: new TextEncoder().encode("home-source"), sha256: "e".repeat(64) },
-      ],
+      pages: [{ pageSlug: HOME, bytes: HOME_SOURCE_BYTES, sha256: HOME_SOURCE_HASH }],
     });
     const staging = createFakeStagingService();
     // The design-store calls made up to the moment staging is asked to copy the tree — i.e.
@@ -564,7 +572,7 @@ describe('turnHandlers["turn.start"]', () => {
     // written to page order and identity.
     expect(createCall.input.readSet.designFiles).toEqual([
       { relPath: "pages.json", snapshot: { sha256: expect.any(String), size: expect.any(Number) } },
-      { relPath: defaultFakeEntry(HOME), snapshot: { sha256: "e".repeat(64), size: 11 } },
+      { relPath: defaultFakeEntry(HOME), snapshot: { sha256: HOME_SOURCE_HASH, size: 11 } },
     ]);
     // `readTreeFile` is the only byte-reading method on this port, and admission never calls
     // it — every hash above came from the `listTree` walk. (After the commit it IS called, by
@@ -851,7 +859,6 @@ describe('turnHandlers["turn.start"]', () => {
           {
             pageSlug: HOME,
             bytes: new TextEncoder().encode("export const meta = {}"),
-            sha256: "c".repeat(64),
           },
         ],
       }),
@@ -1078,7 +1085,6 @@ describe('turnHandlers["turn.start"]', () => {
           {
             pageSlug: HOME,
             bytes: new TextEncoder().encode("export const meta = {}"),
-            sha256: "d".repeat(64),
           },
         ],
       }),
@@ -1260,8 +1266,8 @@ describe('turnHandlers["turn.start"]', () => {
 
     const pageStore = createFakeDesignStoreForPages({
       pages: [
-        { pageSlug: HOME, sha256: "a".repeat(64), bytes: new TextEncoder().encode("home") },
-        { pageSlug: ABOUT, sha256: "b".repeat(64), bytes: new TextEncoder().encode("about") },
+        { pageSlug: HOME, bytes: new TextEncoder().encode("home") },
+        { pageSlug: ABOUT, bytes: new TextEncoder().encode("about") },
       ],
     });
 
@@ -1851,8 +1857,8 @@ describe('turnHandlers["turn.start"]', () => {
       pages: [
         {
           pageSlug: HOME,
-          bytes: new TextEncoder().encode("home-source"),
-          sha256: "a".repeat(64),
+          bytes: HOME_SOURCE_BYTES,
+          sha256: HOME_SOURCE_HASH,
         },
       ],
     });
@@ -1999,8 +2005,8 @@ describe('turnHandlers["turn.start"]', () => {
       pages: [
         {
           pageSlug: HOME,
-          bytes: new TextEncoder().encode("home-source"),
-          sha256: "a".repeat(64),
+          bytes: HOME_SOURCE_BYTES,
+          sha256: HOME_SOURCE_HASH,
         },
       ],
     });
@@ -3180,8 +3186,8 @@ describe("turn.start — canonical page source paths (Gap G)", () => {
       pages: [
         {
           pageSlug: HOME,
-          bytes: new TextEncoder().encode("home-source"),
-          sha256: "a".repeat(64),
+          bytes: HOME_SOURCE_BYTES,
+          sha256: HOME_SOURCE_HASH,
         },
       ],
     });

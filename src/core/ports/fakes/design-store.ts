@@ -239,12 +239,16 @@ export function fakeDesignTreeFile(seed: string): DesignTreeFileV1 {
 
 /**
  * A page to seed into {@link createFakeDesignStoreForPages}: its slug, its source bytes, and
- * — optionally — the tree-relative `entry` `design/pages.json` binds it to.
+ * — optionally — the tree-relative `entry` `design/pages.json` binds it to. `sha256` is
+ * OPTIONAL (Task 7, fix round 1): omit it and {@link createFakeDesignStoreForPages} derives the
+ * real hash of `bytes` the same way `createFakeDesignStore` does; pass it explicitly only for a
+ * test that needs a hash pinned away from what `bytes` actually hashes to (a drift/mismatch
+ * scenario).
  */
 export interface FakeDesignPageV1 {
   readonly pageSlug: PageSlug;
   readonly bytes: Uint8Array;
-  readonly sha256: Sha256Hex;
+  readonly sha256?: Sha256Hex;
   /** Defaults to {@link defaultFakeEntry}. Pass an arbitrary path when the test is ABOUT manifest lookup. */
   readonly entry?: string;
 }
@@ -280,10 +284,10 @@ export function defaultFakeEntry(pageSlug: PageSlug): string {
  */
 export function createFakeDesignStoreForPages(options: {
   readonly pages: readonly FakeDesignPageV1[];
-  readonly extraFiles?: ReadonlyMap<string, DesignTreeFileV1>;
+  readonly extraFiles?: ReadonlyMap<string, DesignTreeFileSeedV1>;
   readonly requestedActivePage?: PageSlug | null;
 }): FakeDesignStore {
-  const files = new Map<string, DesignTreeFileV1>(options.extraFiles ?? []);
+  const files = new Map<string, DesignTreeFileSeedV1>(options.extraFiles ?? []);
   const entries: PageEntryV1[] = [];
   for (const page of options.pages) {
     const entry = page.entry ?? defaultFakeEntry(page.pageSlug);
@@ -307,9 +311,12 @@ export function createFakeDesignStoreForPages(options: {
   //     honest-empty page order, and four tests measured exactly that before this line existed.
   // `createFakeDesignStore` itself deliberately does NOT do this: a caller using it directly
   // is the one modelling a tree-less or partially-staged project.
+  //
+  // `sha256` is OMITTED here (Task 7, fix round 1) rather than run through `fakeSha256Hex` —
+  // `seededSha256` derives the real hash of these exact manifest bytes on read, the same way it
+  // does for every page file above.
   files.set(PAGES_MANIFEST_RELPATH, {
     bytes: new TextEncoder().encode(encodePagesManifest(manifest)),
-    sha256: fakeSha256Hex(`manifest:${entries.map((entry) => entry.entry).join(",")}`),
   });
   return createFakeDesignStore({ manifest, files });
 }

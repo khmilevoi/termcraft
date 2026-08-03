@@ -259,8 +259,41 @@ describe("sha256Hex", () => {
   // implementations of the identical digest — `core/ports/fakes/design-store.ts` needs the
   // `entities/` copy because `core/ports` may not import `store`. Pinned here, not unified,
   // matching this repo's established way of keeping such duplicates honest.
-  test("agrees with entities/design-tree's computeSourceHash over the same bytes (parity pin)", () => {
-    const bytes = new TextEncoder().encode("export const x = 1\n");
-    expect(sha256Hex(bytes)).toBe(computeSourceHash(bytes));
-  });
+  //
+  // Parameterized (Task 7 fix round 1) rather than pinned on one 19-byte ASCII string: both
+  // implementations were verified to already agree on all four cases below, so this is
+  // regression insurance, not a bug hunt — but "a subarray view with a non-zero byteOffset" is
+  // the one case where two hashers genuinely diverge if either one stops respecting the view's
+  // window and reads from its whole backing buffer instead.
+  const VIEW_TEXT = "view-window";
+  const backingBuffer = new Uint8Array([
+    0xff,
+    0xff,
+    0xff,
+    ...new TextEncoder().encode(VIEW_TEXT),
+    0xff,
+    0xff,
+  ]);
+  const subarrayWithOffset = backingBuffer.subarray(3, 3 + VIEW_TEXT.length);
+  // The case only exercises what its name claims if this view genuinely starts mid-buffer.
+  if (subarrayWithOffset.byteOffset <= 0) {
+    throw new Error("fixture bug: subarrayWithOffset has no non-zero byteOffset");
+  }
+
+  const largeInput = new Uint8Array(200_000);
+  for (let i = 0; i < largeInput.length; i++) largeInput[i] = i % 256;
+
+  const PARITY_CASES: { readonly name: string; readonly bytes: Uint8Array }[] = [
+    { name: "empty input", bytes: new Uint8Array(0) },
+    { name: "multi-byte UTF-8", bytes: new TextEncoder().encode("héllo wörld — 日本語 🎉") },
+    { name: "a subarray view with a non-zero byteOffset", bytes: subarrayWithOffset },
+    { name: "a large input (200,000 bytes)", bytes: largeInput },
+  ];
+
+  test.each(PARITY_CASES)(
+    "agrees with entities/design-tree's computeSourceHash for $name (parity pin)",
+    ({ bytes }) => {
+      expect(sha256Hex(bytes)).toBe(computeSourceHash(bytes));
+    },
+  );
 });

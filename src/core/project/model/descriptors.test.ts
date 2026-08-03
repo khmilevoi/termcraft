@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import { context, wrap } from "@reatom/core";
 
-import { createFakeDesignStore } from "core/ports/fakes";
+import { type DesignTreeFileSeedV1, createFakeDesignStore } from "core/ports/fakes";
 import { type PageDescriptorV1, type Sha256Hex, eventPayloadV1SchemaByKind } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 
 import {
@@ -174,8 +175,13 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
   /** Deliberately unlike `pages/<slug>.tsx`: a fixture whose entry is derivable from the slug cannot tell a manifest lookup apart from a path computation. */
   const HOME_ENTRY = "screens/landing/main.tsx";
   const HOME_BYTES = new TextEncoder().encode("export default function Home() {}");
+  // Task 7 fix round 1: this block's own `HASH_A`/`HASH_B` (module-level, shared with the
+  // unrelated descriptor-diff tests above where there is no `bytes` to hash against) used to
+  // stand in for this entry's hash too. Scoped locally here instead, derived from the actual
+  // seeded bytes, so the one assertion that reads it back (below) stays honest.
+  const HOME_ENTRY_HASH = computeSourceHash(HOME_BYTES);
 
-  function storeWith(files: ReadonlyMap<string, { bytes: Uint8Array; sha256: Sha256Hex }>) {
+  function storeWith(files: ReadonlyMap<string, DesignTreeFileSeedV1>) {
     return createFakeDesignStore({
       manifest: {
         schemaVersion: 1,
@@ -188,11 +194,13 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
 
   test("reads the entry the manifest names — never a path derived from the slug", async () => {
     await context.start(async () => {
-      const store = storeWith(new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HASH_A }]]));
+      const store = storeWith(
+        new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HOME_ENTRY_HASH }]]),
+      );
       const source = await wrap(readPageEntrySource(store, HOME));
       if ("code" in source) throw new Error(`expected a source, got ${source.safeMessage}`);
       expect(source.relPath).toBe(HOME_ENTRY);
-      expect(source.sourceHash).toBe(HASH_A);
+      expect(source.sourceHash).toBe(HOME_ENTRY_HASH);
       // The ONLY tree path it asked for was the manifest's own entry.
       expect(store.calls.filter((c) => c.method === "readTreeFile")).toEqual([
         { method: "readTreeFile", relPath: HOME_ENTRY },
@@ -202,7 +210,9 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
 
   test("a slug the manifest does not list is a typed refusal, never a speculative read", async () => {
     await context.start(async () => {
-      const store = storeWith(new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HASH_A }]]));
+      const store = storeWith(
+        new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HOME_ENTRY_HASH }]]),
+      );
       const source = await wrap(readPageEntrySource(store, slug("ghost")));
       if (!("code" in source)) throw new Error("expected a refusal for an unlisted slug");
       expect(source.safeMessage).toContain('lists no entry for page "ghost"');
@@ -235,9 +245,7 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
     // a corrupt-but-present manifest must still refuse, or a decode error would silently read
     // as "this project has no pages" and invite an agent to recreate every one of them.
     await context.start(async () => {
-      const store = storeWith(
-        new Map([["pages.json", { bytes: new TextEncoder().encode("{"), sha256: HASH_B }]]),
-      );
+      const store = storeWith(new Map([["pages.json", { bytes: new TextEncoder().encode("{") }]]));
       store.failNext("readManifest", {
         code: "PERSISTENCE_FAILED",
         retryable: false,
@@ -282,8 +290,8 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
       const store = createFakeDesignStore({
         manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
         files: new Map([
-          ["design/tokens.ts", { bytes: HOME_BYTES, sha256: HASH_A }],
-          ["lib/theme.ts", { bytes: HOME_BYTES, sha256: HASH_B }],
+          ["design/tokens.ts", { bytes: HOME_BYTES }],
+          ["lib/theme.ts", { bytes: HOME_BYTES }],
         ]),
       });
       store.failNext("readManifest", {
@@ -299,7 +307,9 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
 
   test("VALID INPUT: caller-supplied tree-relative paths that include a `design/` subdirectory still resolve normally", async () => {
     await context.start(async () => {
-      const store = storeWith(new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HASH_A }]]));
+      const store = storeWith(
+        new Map([[HOME_ENTRY, { bytes: HOME_BYTES, sha256: HOME_ENTRY_HASH }]]),
+      );
       const order = await wrap(
         readPageOrder(store, ["pages.json", "design/tokens.ts", HOME_ENTRY]),
       );

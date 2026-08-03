@@ -12,8 +12,9 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { BackendCapabilities, DesignTreeFileV1 } from "core/ports";
+import type { BackendCapabilities } from "core/ports";
 import {
+  type DesignTreeFileSeedV1,
   type FakeProjectStore,
   createFakeAgentBackend,
   createFakeAgentPromptSource,
@@ -45,6 +46,7 @@ import {
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 
@@ -92,7 +94,7 @@ interface TestContext {
  * schemas — never just count them.
  */
 function buildTestContext(options?: {
-  readonly pageSources?: ReadonlyMap<PageSlug, DesignTreeFileV1>;
+  readonly pageSources?: ReadonlyMap<PageSlug, DesignTreeFileSeedV1>;
   readonly backends?: readonly ReturnType<typeof createFakeAgentBackend>[];
 }): TestContext {
   return context.start(() => {
@@ -114,7 +116,7 @@ function buildTestContext(options?: {
     };
 
     const chatStore = createFakeChatStore();
-    const pageSources = options?.pageSources ?? new Map<PageSlug, DesignTreeFileV1>();
+    const pageSources = options?.pageSources ?? new Map<PageSlug, DesignTreeFileSeedV1>();
     const pageStore = createFakeDesignStoreForPages({
       pages: [...pageSources.entries()].map(([pageSlug, file]) => ({
         pageSlug,
@@ -243,8 +245,9 @@ describe('selectionHandlers["selection.clear"]', () => {
 
 describe('selectionHandlers["selection.set"]', () => {
   test("returns a synchronous started outcome and launches exactly one operation", () => {
+    // Never read back — the fake derives the real hash of these (empty) bytes.
     const { handlerContext, getLaunchedOperations } = buildTestContext({
-      pageSources: new Map([[HOME, { bytes: new Uint8Array(), sha256: "a".repeat(64) }]]),
+      pageSources: new Map([[HOME, { bytes: new Uint8Array() }]]),
     });
 
     const outcome = selectionHandlers["selection.set"](
@@ -258,9 +261,12 @@ describe('selectionHandlers["selection.set"]', () => {
   });
 
   test("the launched operation resolves a schema-valid selection.changed once the page source is read", async () => {
-    const sourceHash = "b".repeat(64);
+    // Task 7 fix round 1: was `"b".repeat(64)`, fabricated and unrelated to the seeded bytes,
+    // even though the assertion below reads it back verbatim.
+    const bytes = new Uint8Array([1, 2, 3]);
+    const sourceHash = computeSourceHash(bytes);
     const { handlerContext, getLaunchedOperations } = buildTestContext({
-      pageSources: new Map([[HOME, { bytes: new Uint8Array([1, 2, 3]), sha256: sourceHash }]]),
+      pageSources: new Map([[HOME, { bytes, sha256: sourceHash }]]),
     });
 
     selectionHandlers["selection.set"]({ pageSlug: HOME, elementId: "el-1" }, handlerContext);

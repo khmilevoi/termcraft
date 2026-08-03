@@ -12,8 +12,8 @@ import {
   reatomTurnStateMachine,
 } from "core/machines";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { DesignTreeFileV1 } from "core/ports";
 import {
+  type DesignTreeFileSeedV1,
   type FakeDesignStore,
   type FakePinStore,
   type FakeProjectStore,
@@ -54,6 +54,7 @@ import {
   type UUIDv7,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
+import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { PinEvent } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
@@ -89,6 +90,15 @@ const FAILURE: FailureDtoV1 = {
   details: {},
 };
 
+// Task 7 fix round 1: `setupConfirmScenario()`'s "about" page seed and its minted plan's own
+// `sourceHash` used to independently repeat the identical `"b".repeat(64)` literal — coincidence,
+// not derivation. `detectPageRemovePlanDrift` genuinely compares these two at runtime (that
+// comparison is what makes the "happy path" removal test below assert a real removal instead of
+// a stale result), so they must stay equal; deriving both from the SAME real hash keeps that true
+// by construction instead of by two hand-copied literals staying in sync.
+const EMPTY_BYTES = new Uint8Array();
+const ABOUT_SOURCE_HASH = computeSourceHash(EMPTY_BYTES);
+
 interface LaunchedOperation {
   readonly label: string;
   readonly run: () => Promise<readonly PublishableEventV1[]>;
@@ -108,7 +118,7 @@ function buildTestContext(options?: {
   readonly pageOrder?: readonly PageSlug[];
   readonly pageSources?: ReadonlyMap<
     PageSlug,
-    { readonly bytes: Uint8Array; readonly sourceHash: Sha256Hex }
+    { readonly bytes: Uint8Array; readonly sourceHash?: Sha256Hex }
   >;
   readonly workspaceActivePageSlug?: PageSlug | null;
 }): TestFixture {
@@ -119,7 +129,13 @@ function buildTestContext(options?: {
     // those entries actually have a FILE. Keeping the two separate is what preserves this
     // fixture's "listed but unreadable" case — the shape the retired fake expressed as "in
     // `order`, absent from `sources`" — which several tests below depend on.
-    const pageFiles = new Map<string, DesignTreeFileV1>();
+    //
+    // `sourceHash` on `pageSources` is now OPTIONAL (Task 7 fix round 1: this local shape used
+    // to pin the fake's old required-`sha256` shape, one of the two "local types" a review
+    // measured as still fabricating hashes after round 1's own fix). Omitted, `seededSha256`
+    // derives the real hash of `seeded.bytes` the same way `createFakeDesignStore` does
+    // everywhere else.
+    const pageFiles = new Map<string, DesignTreeFileSeedV1>();
     for (const [pageSlug, seeded] of options?.pageSources ?? []) {
       pageFiles.set(defaultFakeEntry(pageSlug), {
         bytes: seeded.bytes,
@@ -297,9 +313,7 @@ describe("pageHandlers['page.renameTitle']", () => {
   test("its launched operation rewrites the title through PageMutations and invalidates any active remove plan, resolving with no events", async () => {
     const { handlerContext, pageStore, getLaunches } = buildTestContext({
       pageOrder: [slug("home")],
-      pageSources: new Map([
-        [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-      ]),
+      pageSources: new Map([[slug("home"), { bytes: new Uint8Array() }]]),
     });
     const plan = handlerContext.pageRemovePlanLedger.mint({
       pageSlug: slug("home"),
@@ -420,9 +434,7 @@ describe("pageHandlers['page.removePlan']", () => {
   test("its launched operation gathers fresh facts, mints a plan through the Kernel ledger, and publishes a page.removePlanReady event that parses against eventPayloadV1SchemaByKind", async () => {
     const { handlerContext, getLaunches } = buildTestContext({
       pageOrder: [slug("home"), slug("about")],
-      pageSources: new Map([
-        [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-      ]),
+      pageSources: new Map([[slug("home"), { bytes: new Uint8Array() }]]),
       workspaceActivePageSlug: slug("home"),
     });
 
@@ -458,9 +470,7 @@ describe("pageHandlers['page.removePlan']", () => {
   test("when reading workspace state fails, its launched operation logs the failure and mints no plan", async () => {
     const { handlerContext, projectStore, getLaunches } = buildTestContext({
       pageOrder: [slug("home")],
-      pageSources: new Map([
-        [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-      ]),
+      pageSources: new Map([[slug("home"), { bytes: new Uint8Array() }]]),
     });
     projectStore.failNext("readWorkspaceState", FAILURE);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
@@ -523,14 +533,14 @@ describe("pageHandlers['page.removeConfirm']", () => {
     const { handlerContext, pageStore, projectStore, mutex, getLaunches } = buildTestContext({
       pageOrder: [slug("home"), slug("about")],
       pageSources: new Map([
-        [slug("home"), { bytes: new Uint8Array(), sourceHash: "a".repeat(64) }],
-        [slug("about"), { bytes: new Uint8Array(), sourceHash: "b".repeat(64) }],
+        [slug("home"), { bytes: new Uint8Array() }],
+        [slug("about"), { bytes: EMPTY_BYTES, sourceHash: ABOUT_SOURCE_HASH }],
       ]),
       workspaceActivePageSlug: slug("about"),
     });
     const plan = handlerContext.pageRemovePlanLedger.mint({
       pageSlug: slug("about"),
-      sourceHash: "b".repeat(64),
+      sourceHash: ABOUT_SOURCE_HASH,
       orderedPageSlugs: [slug("home"), slug("about")],
       activePageSlug: slug("about"),
     });
