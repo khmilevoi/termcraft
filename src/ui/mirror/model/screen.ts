@@ -26,6 +26,14 @@ export interface ScreenInput {
   readonly startupOpenPending: boolean;
   /** `ProjectMirror.openFailure !== null` — a blocked open, which Home owns. */
   readonly openFailed: boolean;
+  /**
+   * Whether the auto-shown trust prompt (spec §3.1, 2026-08-03 trust-prompt-on-open fix) has
+   * already been answered this session (`ui/app/model/deps.ts`'s `UiLocalState
+   * .trustPromptDismissed`, set by the `trust-accept`/`trust-decline` intents). Starts `false` on
+   * every process launch — see that atom's own doc comment for why there is no in-session way
+   * to flip it back.
+   */
+  readonly trustPromptDismissed: boolean;
 }
 
 /**
@@ -53,7 +61,9 @@ export function deriveScreen(input: ScreenInput): ScreenKind {
     if (input.startupOpenPending && !input.openFailed) return "workspace";
     return "home";
   }
-  if (input.trust === "untrusted-read-only") return "read-only";
+  if (input.trust === "untrusted-read-only") {
+    return input.trustPromptDismissed ? "read-only" : "trust-prompt";
+  }
   if (input.trust === null) return "trust-prompt";
   return "workspace";
 }
@@ -67,6 +77,7 @@ export function createScreenAtom(deps: {
   readonly project: () => ProjectMirror;
   readonly terminal: () => Readonly<{ w: number; h: number }>;
   readonly startupOpenPending: () => boolean;
+  readonly trustPromptDismissed: () => boolean;
 }): Computed<ScreenKind> {
   return computed(() => {
     const project = deps.project();
@@ -76,6 +87,7 @@ export function createScreenAtom(deps: {
       terminal: deps.terminal(),
       startupOpenPending: deps.startupOpenPending(),
       openFailed: project.openFailure !== null,
+      trustPromptDismissed: deps.trustPromptDismissed(),
     });
   }, "ui.mirror.screen");
 }
