@@ -1078,4 +1078,56 @@ describe("a file whose own scan failed does not vouch for its importers (task-12
     expect(cleanErrors).toEqual([]);
     expect(mixed.map((error) => error.file)).toEqual(["pages/runaway.tsx"]);
   });
+
+  test("the taint is a FIXED POINT: an importer's importer also gets its own diagnostic (task-4 review round 2, Important 1)", () => {
+    // Measured on the single-subtraction checkout: `pages/home.tsx` -> `lib/b.tsx` ->
+    // `lib/c.tsx` with only `lib/c.tsx` unscannable produced `UNSCANNABLE_SOURCE` on `c` and
+    // `UNSCANNED_IMPORT` on `b` — but `pages/home.tsx` got ZERO errors, because the trusted-set
+    // subtraction only ever held files whose OWN scan failed, and `b`'s re-judged
+    // `UNSCANNED_IMPORT` outcome never joined that set, so `b` kept vouching for `home` even
+    // though `b` could no longer vouch for anything itself. A file that cannot vouch must itself
+    // stop being trusted, transitively — not just the file at the bottom of the chain.
+    const files = new Map([
+      ["pages/home.tsx", `import { B } from "../lib/b";\nexport default B;\n`],
+      ["lib/b.tsx", `import { C } from "./c";\nexport const B = C;\n`],
+      ["lib/c.tsx", RUNAWAY],
+    ]);
+    const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+    const byFile = new Map(errors.map((error) => [error.file, error.code]));
+    expect(byFile.get("lib/c.tsx")).toBe("UNSCANNABLE_SOURCE");
+    expect(byFile.get("lib/b.tsx")).toBe("UNSCANNED_IMPORT");
+    // THE POINT: before the fixed-point fix, `pages/home.tsx` had no entry here at all.
+    expect(byFile.get("pages/home.tsx")).toBe("UNSCANNED_IMPORT");
+    expect(errors).toHaveLength(3);
+  });
+
+  test("an import cycle that reaches an unscannable file still terminates (task-4 review round 2, Important 1)", () => {
+    // `lib/a.tsx` <-> `lib/b.tsx` is a genuine cycle; `lib/b.tsx` also imports the unscannable
+    // `lib/c.tsx`. This proves the fixed-point loop terminates on a cycle rather than looping
+    // forever chasing its own tail (`a` taints `b` taints `a`...), and that every member of the
+    // cycle still ends up correctly tainted rather than the loop giving up partway through.
+    const files = new Map([
+      ["lib/a.tsx", `import { B } from "./b";\nexport const A = B;\n`],
+      [
+        "lib/b.tsx",
+        `import { A } from "./a";\nimport { C } from "./c";\nexport const B = [A, C];\n`,
+      ],
+      ["lib/c.tsx", RUNAWAY],
+    ]);
+    const errors = scanTreeImports({ files, has: (p) => files.has(p) });
+    const byFile = new Map(errors.map((error) => [error.file, error.code]));
+    // `lib/b.tsx` imports both `a` and `c`, both now untrusted, so it carries two entries —
+    // asserted below by specifier, not just by the last-write-wins `byFile` map.
+    expect(byFile.get("lib/c.tsx")).toBe("UNSCANNABLE_SOURCE");
+    expect(byFile.get("lib/b.tsx")).toBe("UNSCANNED_IMPORT");
+    expect(byFile.get("lib/a.tsx")).toBe("UNSCANNED_IMPORT");
+    expect([...new Set(errors.map((error) => error.file))].sort()).toEqual([
+      "lib/a.tsx",
+      "lib/b.tsx",
+      "lib/c.tsx",
+    ]);
+    const bErrors = errors.filter((error) => error.file === "lib/b.tsx");
+    expect(bErrors.map((error) => error.specifier).sort()).toEqual(["./a", "./c"]);
+    expect(bErrors.every((error) => error.code === "UNSCANNED_IMPORT")).toBe(true);
+  });
 });

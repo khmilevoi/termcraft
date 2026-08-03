@@ -12,14 +12,19 @@ export { scanModuleEdges };
  * One tree file the allowlist scan could not read to the end. Carried as a value (never thrown
  * on) so {@link scanTreeImports} can report it as a fatal like any other finding.
  *
- * THE ONE MEASURED CAUSE, and why this exists at all. `./jsx`'s reader is recursive descent, so
- * absurdly deep JSX nesting exhausts the JS stack and the engine throws `RangeError: Maximum call
- * stack size exceeded`. Measured through this very function under Bun 1.3.14: `"<a>{".repeat(k)`
- * returns normally at 24 000 characters (3 375 ms, zero errors) and THROWS at 32 000; well-formed
- * `"<a>".repeat(k) + "x" + "</a>".repeat(k)` returns at 59 998 characters (140 ms) and throws at
- * 99 996. This is NOT introduced by the element memo — the same shapes overflow at the same order
- * of magnitude on the pre-memo reader, which simply never got that far on the unterminated one
- * because it hung first.
+ * WHY THIS EXISTS, AND ITS CAUSE TODAY (task-4 review round 2, Important 3 — this paragraph used
+ * to state a stale, pre-task-3 measurement, falsified by task 3 itself). `./jsx`'s reader is
+ * recursive descent; the DOMINANT cause today is its own ceiling, `MAX_JSX_NESTING_DEPTH`
+ * (task 3), which raises a DELIBERATE `JsxNestingTooDeepError` once nesting passes it — `./jsx`'s
+ * own code choosing to stop, not the engine failing. Measured through this very function under
+ * Bun 1.3.14: `"<a>{".repeat(k)` and the well-formed `"<a>".repeat(k) + "x" + "</a>".repeat(k)`
+ * both stay clean exactly through k = 64 and both raise `JsxNestingTooDeepError` from k = 65 on —
+ * including at k = 24 000 and k = 32 000, the two figures a pre-task-3 revision of this doc
+ * measured as landing on either side of an engine `RangeError: Maximum call stack size exceeded`
+ * boundary. Both now raise the deliberate error instead, thousands of characters before that
+ * boundary is ever reached. The engine's `RangeError` remains the RESIDUAL cause this class also
+ * exists to catch — for whatever depth the raw JS stack limit sits at, on a shape that reaches it
+ * by some route the ceiling does not cover.
  *
  * `runTreeImports` (`gate/model/gate.ts`) is SYNCHRONOUS and Task 14 calls it once per turn with
  * no `try` of its own, so an escaping throw would crash the turn pipeline rather than reject a
@@ -89,8 +94,9 @@ export { parsesJsx };
  * whatever stopped the scan from finishing. This predicate cannot tell the two apart, and must
  * not try to: it only ever sees the resolved path, never the outcome of scanning it. What
  * subtracts an unscannable file from the trusted set is {@link scanTreeImports}'s second phase,
- * which re-asks this same question with the files that failed already known and excluded — not
- * a change to what this function itself means.
+ * which re-asks this same question with the full FIXED POINT of files that cannot vouch — not
+ * only the ones whose own scan failed, but every file that transitively resolves an import into
+ * one — already known and excluded. Still not a change to what this function itself means.
  *
  * THE BUG THIS SHAPE CLOSES, and why the shape is the fix. Rounds 0 and 1 of task-12b both
  * answered this question through the resolver's own `has`, i.e. by claiming a present-but-
@@ -157,6 +163,14 @@ interface FileScanV1 {
    * has. Captured during the scan itself, so it costs nothing and cannot disagree with what
    * the scan actually resolved. */
   readonly targets: ReadonlySet<string>;
+  /** The exact source phase 1 scanned this file with, carried alongside the outcome so a
+   * phase-2 re-scan reads the SAME bytes by construction (task-4 review round 2, Important 4).
+   * The old body re-fetched it with `input.files.get(from) ?? ""` — a fallback that could only
+   * ever fire on a bug, but a `??` sitting inside the fail-CLOSED half of a security perimeter is
+   * itself a latent fail-open: an empty source scans clean, so a lookup that silently lost a
+   * file's text would pass the gate in silence. Carrying the value removes the lookup, and with
+   * it the fallback there was nothing honest to fall back to. */
+  readonly source: string;
 }
 
 /**
@@ -181,9 +195,11 @@ function scanOne(
   //     not cover the source (`lexer.ts`'s completeness invariant). Controlled code, reported
   //     as a value — no `try` involved (task-14 review round 2, M6).
   //   - the ENGINE throws: `./jsx`'s reader is recursive descent, and past
-  //     `MAX_JSX_NESTING_DEPTH` it raises `JsxNestingTooDeepError` (task 3) — or, for a shape
-  //     that reaches the JS stack limit first, a `RangeError`. That is the one UNCONTROLLED
-  //     boundary in this module, and the only thing `errore.try` is here for.
+  //     `MAX_JSX_NESTING_DEPTH` it raises a DELIBERATE `JsxNestingTooDeepError` (task 3) — the
+  //     dominant case today, and the opposite of an uncontrolled boundary. `errore.try` is here
+  //     for the engine's residual `RangeError`, for a shape that reaches the raw JS stack limit
+  //     by some other route, AND because `runTreeImports` is SYNCHRONOUS with no `try` of its
+  //     own: nothing from this call may escape into the turn's pipeline, deliberate or not.
   const scanned = errore.try({
     try: () =>
       scanImportAllowlist(source, {
@@ -197,7 +213,7 @@ function scanOne(
       }),
     catch: (cause) => new TreeFileUnscannableError({ file: from, cause }),
   });
-  return { outcome: scanned, targets };
+  return { outcome: scanned, targets, source };
 }
 
 /** Shape one unscannable file's fail-closed diagnostic. Unchanged in substance — lifted out of
@@ -288,23 +304,61 @@ export function scanTreeImports(input: {
     );
   }
 
-  // PHASE 2 — a file whose OWN scan failed read nothing, so it can vouch for nothing. Any file
-  // that resolved an import INTO one is re-judged with that knowledge; nothing else is touched.
+  // PHASE 2 — THE FIXED POINT (task-4 review round 2, Important 1). A file cannot vouch for an
+  // import if its OWN scan failed, OR if it resolves an import into a file that cannot vouch —
+  // recursively. A single subtraction only catches the first case: `pages/home.tsx` ->
+  // `lib/b.tsx` -> `lib/c.tsx` with only `lib/c.tsx` unscannable must taint BOTH `lib/b.tsx`
+  // (which imports `c` directly) AND `pages/home.tsx` (which imports `b`, which can no longer
+  // vouch for anything once `b`'s own verdict moves to `UNSCANNED_IMPORT`) — subtracting only
+  // phase-1 failures stops at `b` and leaves `pages/home.tsx` with zero errors of its own, which
+  // is the exact defect this task exists to close, moved one hop out rather than closed.
+  //
+  // Seed `cannotVouch` with every file whose own phase-1 scan failed — exactly the old single
+  // subtraction. Then repeat: any file NOT already in the set whose phase-1 `targets` reach a
+  // member of it joins the set too. Stop when a full pass adds nothing.
+  //
+  // TERMINATION is structural, not argued: the set only grows (nothing is ever removed) and is
+  // bounded by `scans.size`, so the loop runs at most that many passes before it can no longer
+  // add anything — an import cycle that reaches an unscannable file still terminates, it just
+  // costs one extra pass per hop of the cycle (pinned by a test below).
+  //
+  // ZERO COST ON A CLEAN TREE is unchanged, and is what makes this loop safe to add: with
+  // nothing unscannable the seed is empty, the first pass finds no target intersecting it, adds
+  // nothing, and the loop exits after that one pass — the same single sweep the old
+  // single-subtraction version already paid.
+  //
+  // THE TARGET SETS DO NOT CHANGE BETWEEN PASSES. `has` is fixed for the whole call and
+  // resolution is deterministic, so any later re-scan of a file resolves the SAME paths phase 1
+  // did — only the verdict on an already-resolved target can move. That is what makes checking a
+  // file's already-recorded `targets` against a still-growing `cannotVouch` sound: nothing here
+  // is racing a moving resolution, only a monotonically growing verdict.
   //
   // WHY NOT JUST MASK THE TRUST PREDICATE IN ONE PASS: the set of unscannable files is not
   // known until the pass is over, and a file may be scanned before the file it imports. A
   // single pass would therefore trust whatever it happened to reach first — order-dependent
   // security, which is worse than the gap it replaces.
-  const unscannable = new Set(
+  const cannotVouch = new Set(
     [...scans].filter(([, scan]) => scan.outcome instanceof Error).map(([from]) => from),
   );
+  for (let added = true; added;) {
+    added = false;
+    for (const [from, scan] of scans) {
+      if (cannotVouch.has(from)) continue;
+      if ([...scan.targets].some((target) => cannotVouch.has(target))) {
+        cannotVouch.add(from);
+        added = true;
+      }
+    }
+  }
+
   const errors: (ImportScanError & { readonly file: string })[] = [];
   for (const [from, scan] of scans) {
-    const tainted =
-      !(scan.outcome instanceof Error) &&
-      [...scan.targets].some((target) => unscannable.has(target));
-    const final = tainted
-      ? scanOne(input, from, input.files.get(from) ?? "", (target) => unscannable.has(target))
+    if (scan.outcome instanceof Error) {
+      errors.push(unscannableError(from, scan.outcome));
+      continue;
+    }
+    const final = cannotVouch.has(from)
+      ? scanOne(input, from, scan.source, (target) => cannotVouch.has(target))
       : scan;
     if (final.outcome instanceof Error) {
       errors.push(unscannableError(from, final.outcome));

@@ -451,8 +451,12 @@ const OPAQUE_KINDS: ReadonlySet<number> = new Set<number>([
  * engine). The union is both errore-correct and materially safer here: it makes `tsc` enumerate
  * every consumer of `tokenize` rather than leaving "is a truncated stream getting through
  * somewhere else?" to reasoning — which matters, because this defect has now reopened twice.
- * The genuine uncontrolled boundary that remains is `./jsx`'s recursive-descent reader, which
- * the ENGINE can overflow; that one is still an `errore.try`, in `tree-scan.ts` and `gate.ts`.
+ * `./jsx`'s recursive-descent reader stays behind an `errore.try`, in `tree-scan.ts` and
+ * `gate.ts` — not because it is this module's own uncontrolled boundary (since task 3 the
+ * dominant thing that guard catches is a DELIBERATE `JsxNestingTooDeepError`, `./jsx`'s own
+ * nesting ceiling choosing to stop), but for the engine's residual `RangeError` on a shape that
+ * reaches the raw stack limit some other way, and because neither may escape into a synchronous
+ * caller either way.
  */
 export class SourceStreamTruncatedError extends errore.createTaggedError({
   name: "SourceStreamTruncatedError",
