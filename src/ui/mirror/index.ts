@@ -6,6 +6,7 @@ export type {
   AgentIdentity,
   CapabilityEntry,
   CapabilityState,
+  ChatHistoryMirror,
   ChatRecord,
   ChatsMirror,
   ChatSummary,

@@ -604,6 +604,7 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
           },
         ],
         prevCursor: null,
+        totalRecordCount: 2,
       }),
     );
     deps.mirror.apply(event("turn.started", { turnId: uuidv7(), chatId, deadline: TEST_TS }));
@@ -654,6 +655,7 @@ describe("Workspace chat scrollback (design §3.2 — persisted records above th
           ts: TEST_TS,
         })),
         prevCursor: null,
+        totalRecordCount: 40,
       }),
     );
     const handle = await createHeadlessRenderer({ w: 120, h: 36 });

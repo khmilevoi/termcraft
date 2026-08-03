@@ -436,7 +436,7 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
   const pins = activePageSlug === null ? [] : (mirror.pinsByPage().get(activePageSlug) ?? []);
   const pinRows = derivePinListRows(pins);
-  const records = mirror.records();
+  const records = mirror.history().records;
   const selection = mirror.selection();
   const previewNotice = mirror.previewNotice();
   // The one preview state the status bar, the composer attach line and the preview panel all

@@ -191,6 +191,22 @@ export interface ChatsMirror {
  */
 export type ChatRecord = EventPayloadByKindV1["chat.records"]["records"][number];
 
+/**
+ * The active chat's loaded window plus what the client knows about the rest of it
+ * (chat-scroll spec §6.5). One slice, not three atoms: `records`, `prevCursor` and
+ * `totalRecordCount` are established together by every event that touches any of them, and
+ * splitting them would mean three writes where the merge produces one new value.
+ *
+ * `records` still holds ONLY the active chat (`mirror.ts`'s clear-on-switch is unchanged) —
+ * paging widens the window backwards, it does not turn this into a per-chat cache.
+ */
+export interface ChatHistoryMirror {
+  readonly records: readonly ChatRecord[];
+  readonly prevCursor: EventPayloadByKindV1["chat.records"]["prevCursor"];
+  /** Every record the chat has on disk. `records.length` subtracted from this is the `▲ N` count. */
+  readonly totalRecordCount: number;
+}
+
 /** The selection slice — the `selection.changed` DTO or null. */
 export type SelectionMirror = EventPayloadByKindV1["selection.changed"];
 
