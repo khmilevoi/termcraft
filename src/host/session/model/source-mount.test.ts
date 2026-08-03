@@ -454,6 +454,10 @@ describe("createTreePathVerifier", () => {
     expect(await verify("/t", "lib/deep/a.ts")).toBeUndefined();
     const refused = await verify("/t", "lib/deep/evil.ts");
     expect(refused).toBeInstanceOf(ProtocolError);
+    // Asked twice on purpose: if `verified.add` ran BEFORE the symlink check, evil.ts would be
+    // memoised on the first refusal and this second call would return undefined — the blanket
+    // pass the docblock names as the thing this ordering exists to prevent.
+    expect(await verify("/t", "lib/deep/evil.ts")).toBeInstanceOf(ProtocolError);
   });
 
   // The plan's own third test (`expect(first).not.toBe(second)`) proves only that two closures
