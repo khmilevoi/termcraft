@@ -95,8 +95,15 @@ export interface UiLocalState {
    * {@link DEFAULT_AGENT_HEALTH} as a synchronous pre-probe placeholder (the first paint cannot
    * await a Promise), then `createUiDeps` fires {@link UiDeps.refreshAgentHealth} once at startup
    * to replace it with the injected probe's real reading, and again on every `home-recheck` — the
-   * SAME probe path, not a duplicated one. There is deliberately NO Workspace re-check: the badge
-   * is the reading taken at startup and it is never refreshed for the life of the process.
+   * SAME probe path, not a duplicated one. There is deliberately NO Workspace re-check: nothing
+   * in `ui/workspace` refreshes this atom, so Home's `r` is the only refresh path there is. For
+   * an EXISTING project that path is off the launch route entirely (workspace-first launch,
+   * 2026-08-02) — it mounts the Workspace directly and never passes through Home, and once
+   * `projectId` is non-null nothing routes back, so the badge stays the reading the startup probe
+   * took for the rest of the process. (A fresh directory does still land on Home, where `r` works
+   * as it always did — it just happens before the Workspace exists.)
+   * `ui/workspace/types.ts`'s `WorkspaceLocalState.agentHealth` records the same trade from the
+   * consuming side.
    */
   readonly agentHealth: Atom<AgentHealth>;
   /**
@@ -119,6 +126,18 @@ export interface UiLocalState {
    * Exactly one transition: {@link UiDeps.abandonStartupOpen} sets it false when the startup
    * dispatch fails or is rejected, because in that case neither `finishOpen` nor `blockOpen` will
    * ever arrive and `projectId`/`openFailure` would both stay null forever.
+   *
+   * A TRAP FOR WHOEVER ADDS A SECOND CLOSE PATH. Because that is the only transition, a
+   * SUCCESSFUL open leaves this `true` forever — `deriveScreen` simply stops consulting it once
+   * `projectId` is non-null. That is safe TODAY only because the UI has exactly one
+   * `project.close` dispatch, `recoverFromBlockedOpen` below, which fires only for a non-null
+   * `ProjectMirror.openFailure` — and `kernel.project.finishClose` is folded to preserve
+   * `openFailure` (`ui/mirror/model/mirror.ts`) precisely so the panel survives the recovery. So
+   * after that close `deriveScreen` sees `projectId === null` WITH `openFailed`, and leaves to
+   * Home through the failure branch rather than through this flag. A future "close the project"
+   * action that carries no `openFailure` would hit the other branch instead — null `projectId`,
+   * no failure, this flag still `true` — and strand the user in a permanent OPENING Workspace
+   * with no project ever coming. Any such action must clear this flag too.
    */
   readonly startupOpenPending: Atom<boolean>;
 }
@@ -134,10 +153,21 @@ export interface UiEnv {
   readonly root: string;
   readonly workspaceIdentity: string;
   /**
-   * Whether `root` was ALREADY a project when this process started (Gap D). Home's Enter picks
-   * `project.open` over `project.create` for it: `create` grants trust implicitly, `open` honours
-   * a prior grant, and dispatching `create` against an existing project would silently run the
-   * wrong semantics. Defaults to `false` — a fresh directory — for every test/demo construction.
+   * Whether `root` was ALREADY a project when this process started (Gap D).
+   *
+   * Its most consequential consumer is now the SCREEN: {@link createUiDeps} seeds
+   * {@link UiLocalState.startupOpenPending} from this value, so it is what decides whether the
+   * very first frame is the opening Workspace or Home (workspace-first launch, 2026-08-02).
+   * `create-shell.ts` sets it from the same `ShellLaunchV1.existing` the composition root's own
+   * startup `project.open` dispatch keys on, so the screen and the dispatch cannot disagree.
+   *
+   * Its original consumer is still here: Home's Enter picks `project.open` over `project.create`
+   * for an existing project — `create` grants trust implicitly, `open` honours a prior grant, and
+   * dispatching `create` against an existing project would silently run the wrong semantics —
+   * though that branch now serves only the ⏎ after a startup open that failed
+   * (`ui/app/model/intent.ts`'s `home-submit`).
+   *
+   * Defaults to `false` — a fresh directory — for every test/demo construction.
    */
   readonly projectExists: boolean;
 }
@@ -216,10 +246,11 @@ export class UiPreviewStreamError extends errore.createTaggedError({
 }) {}
 
 /**
- * The Home agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected
- * probe once at startup (see `refreshAgentHealth()` below), but Home's very first render happens
- * synchronously, before that probe's Promise can resolve — a component render cannot await one.
- * This value only ever shows for that first frame. The real CLI-checking probe IS wired by
+ * The agent-health reading's pre-probe placeholder (M15): `createUiDeps` fires the injected probe
+ * once at startup (see `refreshAgentHealth()` below), but the first render — the opening
+ * Workspace's status bar or Home's health line, whichever screen this launch mounts — happens
+ * synchronously, before that probe's Promise can resolve, and a component render cannot await
+ * one. This value only ever shows for that first frame. The real CLI-checking probe IS wired by
  * default now (phase-8 Task 9 / WP-5, `entrypoint/model/run-app.ts`'s `resolveAgentHealthProbe`
  * supplies it through `agentHealthProbe` below) — this placeholder only ever paints the one
  * synchronous frame before that real probe's first resolution overwrites it.

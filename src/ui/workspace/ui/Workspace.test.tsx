@@ -1087,6 +1087,36 @@ describe("Workspace halted preview + dead agent (design 30, the collision)", () 
     expect(text).not.toContain("unavailable");
   });
 
+  /**
+   * PINS THE PRECEDENCE IN THE SLOT ITSELF (final-review fix wave). The test above proves the
+   * panel carries the correction and that `render crashed` is somewhere in the frame — but a
+   * regression that ALSO dropped the health badge into the `hint` slot would pass it unchanged:
+   * `✗ claude not signed in` is already present frame-wide, drawn by the panel's own red line
+   * (`agentDeadNotice`'s `line`, built FROM the badge text). A frame-wide `not.toContain` for it
+   * would therefore be vacuous by construction — it can never hold while the collision feature
+   * is on.
+   *
+   * The status bar is the frame's bottom row (the same scoping the opening-chrome tests in this
+   * file already use), and `StatusBar`'s `hint` is the only slot in that row either badge can
+   * reach — so restricting the assertion to that row is what actually discriminates "the halt
+   * kept the slot" from "both are on screen somewhere".
+   */
+  test("the hint slot carries the halt's badge, not the health badge", async () => {
+    const rows = await renderHalted({
+      kind: "blocked",
+      agent: "claude",
+      panel: "login",
+      detail: "not signed in",
+    });
+    const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
+
+    expect(statusRow).toContain("render crashed");
+    expect(statusRow).not.toContain("not signed in");
+    // The health phrase IS in the frame — just not in the bar. Asserted so the check above can
+    // never pass merely because the reading failed to render at all.
+    expect(allText(rows)).toContain("✗ claude not signed in");
+  });
+
   test("a latched agent gets the generic line and keeps F6's ordinary detail", async () => {
     const text = allText(
       await renderHalted({

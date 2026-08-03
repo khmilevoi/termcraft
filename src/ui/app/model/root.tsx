@@ -37,7 +37,8 @@ export interface UiRootOptions {
   readonly env?: UiEnv;
   readonly adapters?: UiRootAdapters;
   /**
-   * The real Home agent-health probe (phase-8 Task 9 / WP-5), built by the composition root
+   * The real agent-health probe (phase-8 Task 9 / WP-5) — one reading, read by Home's health
+   * line and by the Workspace status bar's badge — built by the composition root
    * from the shell's agent registry (`entrypoint/model/agent-health.ts`'s
    * `createAgentHealthProbe`, wired in `entrypoint/model/run-app.ts`). Optional so every
    * existing `createUiRoot` call keeps compiling — `createUiDeps`'s own fourth parameter

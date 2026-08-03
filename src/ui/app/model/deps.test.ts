@@ -226,7 +226,7 @@ describe("createUiDeps runtime", () => {
   });
 });
 
-describe("createUiDeps Home health probe (M15)", () => {
+describe("createUiDeps startup agent-health probe (M15)", () => {
   test("runs the injected probe once at startup, through the same path home-recheck uses", async () => {
     const kernel = createFakeKernel();
     let calls = 0;

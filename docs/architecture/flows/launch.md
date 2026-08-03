@@ -1,8 +1,11 @@
 What happens between typing `termcraft` in a directory and working in the Workspace: the single-instance check, project discovery, the workspace-trust gate that guards design-code execution, canonical-source loading, and first generation. Git inspection is optional and never gates startup. termcraft is an npm package run under Bun (master §4.1); the interactive launch is one of three argv modes of the same installed entry (`src/main.tsx`, run through `bun <entry> …`) — an argv scan runs the `_host --stdio` design-render child or the headless `termcraft export [dir]` command ahead of it — and for the interactive mode the composition root opens (or creates) the project on disk and assembles the real Kernel graph the UI drives.
 
-Which screen the app mounts is decided before the Kernel has published anything, from three
-facts the composition root and the mirror already hold: the terminal size, whether a startup
-open is still pending, and whether one has failed.
+Which screen the app MOUNTS — the first frame, before the Kernel has published anything — is
+decided from two facts the composition root already holds: the terminal size, and whether a
+startup open is pending (`UiEnv.projectExists`, seeded into the UI-local `startupOpenPending`).
+`deriveScreen` then re-runs on every mirror change and reads more than that: `projectId` and
+`trust` once the open finishes, and `openFailed`, which derives from `openFailure` and can only
+ever be set by a Kernel-published `blockOpen` — so at mount time it is always false.
 
 ```mermaid
 stateDiagram-v2
@@ -27,6 +30,14 @@ stateDiagram-v2
     opening --> home: the startup dispatch never reached the Kernel
     home --> workspace: the ⏎ retry's own open finishes
 ```
+
+The diagram omits one outcome `deriveScreen` can in principle return: `trust-prompt`, for a
+project open with `trust === null`. That is deliberate, and it matches the spec's own omission —
+`trust-prompt` stays exactly as unreachable as it is today, because `kernel.project.finishOpen`
+folds `projectId` and `trust` in one `project.set` (`src/ui/mirror/model/mirror.ts`), so there is
+no intermediate state where one is known and the other is not. It is listed among the outcomes in
+the `deriveScreen` anchor below because the function really does return it; drawing it here would
+suggest a transition the launch flow cannot take.
 
 The filling shell is not a fourth screen: it is the Workspace with no project behind it
 yet, which is why it becomes the finished Workspace by re-rendering rather than by being
@@ -325,6 +336,7 @@ that did not finish — and in the fresh case its Enter is the only entry into t
 - `src/ui/app/model/root.tsx` — `UiRootHandle.abandonStartupOpen`: the one method the composition root uses to tell a mounted UI that its startup `project.open` will never arrive, forwarding to `UiDeps.abandonStartupOpen`. Without it a failed startup dispatch leaves the shell mounted forever, since neither `finishOpen` nor `blockOpen` ever sets `projectId` or `openFailure`.
 - `src/ui/workspace/ui/Workspace.tsx` — the opening chrome, all keyed off `mirror.project().projectId === null` and no new flag: the `OPENING` mode chip (design `wsOpening` — not `STATIC`, which would assert a finished design), the `opening project…` page slot (`opening…` below 100 columns, where the size segment is dropped too), a live composer with the `project opening…` placeholder, and a lone `dis`-marked `⏎ send` hint key. Also the status bar's `hint` slot precedence — read-only, running turn, halted preview, agent health, none — and the `agentDead` prop it hands `HostCrashPanel`.
 - `src/ui/workspace/model/health-badge.ts` — `agentHealthBadge`: the health reading as a status-bar badge, five readings to four shapes (`ready` draws nothing), with the agent name dropped below 100 columns — the same width the design engine's own `narrow` uses. `agentDeadNotice`: the correction a halted preview's own panel carries when health separately reads `blocked` or `missing`, so the halt keeps the hint slot while the panel still says the repair turn cannot run; `null` for `ready`, `checking` and `advisory`, which are simply not shown while a halt owns the slot.
+- `src/ui/preview/ui/HostCrashPanel.tsx` — where step 9's collision actually lands on screen: the halted-preview panel takes that `AgentDeadNotice` structurally (as its own `HostCrashAgentNotice`, so `ui/preview` never imports `ui/workspace`) and draws the correction the `hint` slot deliberately does not — the F6 row's second line where the design supplies one, and the red line under the tee rule. `agentDead: null` renders the panel byte-identically to every frame drawn before design 30's collision frame. Only for a `DESIGN_RENDER_FAILED` circuit-open; every other host failure code gets `HostUnavailablePanel`, which offers no repair at all.
 - `src/ui/preview/ui/OpeningState.tsx` — the preview region while the project opens: two static lines, no spinner (a spinner is turn vocabulary and this state has nothing measurable and no cancel), deliberately distinct from both the "no pages yet" empty state and the generating block.
 - `src/ui/agent-health/types.ts` — `AgentHealth`: the five-member health reading (`checking`/`ready`/`advisory`/`blocked`/`missing`), and the whole of the module. Extracted from `ui/home` when the Workspace became its second consumer — leaving it there would have made `ui/workspace` depend on `ui/home` and made its name false. Home's own submit policy (`homeSubmitAllowed`) deliberately stayed behind: the Workspace composer is not gated on health.
 - `src/entrypoint/model/agent-health.ts` — `agentHealthFromAgentInfo`/`createAgentHealthProbe` (phase-8 WP-5): the pure `AgentInfo -> AgentHealth` mapper and the real probe factory the composition root builds around the live `AgentBackend`, returning health only since phase-8 Task 13. The reading carries no `version` field — `AgentInfo` never had one to report. `resolveDefaultAgentSelection` (same file, phase-8 Task 13) is the sibling function delivering the registry's declared agent/model/effort default synchronously into `UiRootOptions.agentSelection`.

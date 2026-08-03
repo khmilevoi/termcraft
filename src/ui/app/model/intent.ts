@@ -49,11 +49,12 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (text.length === 0) return;
       // Gap D/§2.4: whichever command matches what the shell actually found on disk. NARROWED
       // (workspace-first launch, 2026-08-02): this branch used to also cover the
-      // existing-but-empty project, which reached Home through `hasContent`. `deriveScreen` now
-      // routes every existing project to the Workspace, so Home is reached with a project on
-      // disk in exactly ONE scenario — ⏎ after a startup open that failed — and that is the only
-      // caller left. Still required: `create` would grant trust implicitly over a project whose
-      // prior grant is the authority.
+      // existing-but-empty project, which reached Home because the composition root then keyed
+      // its startup dispatch on `ShellLaunchV1.hasContent` — a predicate nothing reads any more
+      // (`entrypoint/types.ts`). `deriveScreen` now routes every existing project to the
+      // Workspace, so Home is reached with a project on disk in exactly ONE scenario — ⏎ after a
+      // startup open that failed — and that is the only caller left. Still required: `create`
+      // would grant trust implicitly over a project whose prior grant is the authority.
       //
       // fix round 1, Finding 2: clears the prompt ONLY once the Kernel actually accepted the
       // dispatch — the identical treatment Task 11 gave `composer-submit`, applied here for the
@@ -91,9 +92,10 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.composer.set(local.composer().slice(0, -1));
       return;
     case "composer-submit": {
-      // DIAGNOSTIC (infrastructure/debug-log): both guards below return silently, so a submit
-      // that dies here is indistinguishable on screen from one that was never pressed. Name
-      // which guard swallowed it.
+      // DIAGNOSTIC (infrastructure/debug-log): all FOUR refusals below — a read-only screen, a
+      // project still opening, a turn already running, an empty composer — return silently, so a
+      // submit that dies here is indistinguishable on screen from one that was never pressed.
+      // Name which one swallowed it.
       if (deps.screen() === "read-only") {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;

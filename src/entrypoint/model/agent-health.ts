@@ -1,8 +1,8 @@
 /**
- * `entrypoint/model/agent-health.ts` — phase-8 Task 9 (design §WP-5): the real Home health
- * probe. This file imports BOTH `agent` (backend/domain types — `AgentBackend`, `AgentInfo`)
- * and `ui/agent-health` (the presentation type — `AgentHealth`) directly, which is normally
- * forbidden
+ * `entrypoint/model/agent-health.ts` — phase-8 Task 9 (design §WP-5): the real agent-health
+ * probe, whose one reading feeds Home's health line and the Workspace status bar's badge alike.
+ * This file imports BOTH `agent` (backend/domain types — `AgentBackend`, `AgentInfo`) and
+ * `ui/agent-health` (the presentation type — `AgentHealth`) directly, which is normally forbidden
  * (`docs/architecture/code-structure.md`: "`ui` sees only core boundary types +
  * `PreviewSession` — never `store`, never host stdio, never `agent`"). `entrypoint` is the one
  * exception: it is the composition root, "the ONE place allowed to import across modules" —
@@ -16,8 +16,9 @@ import type { AgentRegistry } from "core/ports";
 import type { AgentHealth } from "ui/agent-health";
 
 /**
- * Map from one `AgentBackend.healthCheck()` reading to Home's five-outcome `AgentHealth`
- * (finding §2.7, phase-8 Task 15) — pure aside from one incidental diagnostic `console.warn`
+ * Map from one `AgentBackend.healthCheck()` reading to `ui/agent-health`'s five-outcome
+ * `AgentHealth` (finding §2.7, phase-8 Task 15) — the reading itself, named after neither screen
+ * that shows it — pure aside from one incidental diagnostic `console.warn`
  * (the `sandbox-degraded` branch, errore rule 21: a fact this function does not propagate into
  * its return value must still be logged). Exhaustive over every `AgentHealthState` variant
  * (`agent/types.ts`, mirrored verbatim at `core/ports/agent-backend.ts`) via a `switch` with no
@@ -175,8 +176,10 @@ export function resolveDefaultAgentSelection(
 }
 
 /**
- * Builds the real Home health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
- * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshAgentHealth` actually calls.
+ * Builds the real agent-health probe around one live `AgentBackend` (phase-8 Task 9 / WP-5) —
+ * the value `UiRootOptions.agentHealthProbe` / `UiDeps.refreshAgentHealth` actually calls. ONE
+ * probe, TWO surfaces since workspace-first launch (2026-08-02): Home's health line and panels,
+ * and the Workspace status bar's badge.
  *
  * Returns HEALTH ONLY (phase-8 Task 13, finding §2.7): is the CLI there, logged in, healthy?
  * Mapped through {@link agentHealthFromAgentInfo}. It used to also fold in

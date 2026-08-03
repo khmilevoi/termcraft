@@ -19,9 +19,24 @@ import type { StatusBarHintBadge } from "ui/status-bar";
  * (`ui/home/ui/Home.tsx:56` already documents this), so the `⠹` is static, not animated. Home
  * lives with it; so does this.
  *
- * `short` is the design's own `opt.short` — at the 80-column floor the agent name is dropped
- * (`⠹ checking`, not `⠹ checking codex`), the same restraint the idle shell already applies.
- * The two advisory phrases never carried the name, so `short` cannot change them.
+ * `short` drops the agent name (`⠹ checking`, not `⠹ checking codex`). The caller that varies it,
+ * `ui/workspace/ui/Workspace.tsx`, passes its own `narrow` — `w < 100`, the same threshold the
+ * rest of that status bar shortens at. ({@link agentDeadNotice} below is the other caller and
+ * passes a fixed `false`: it wants the fully-named form for a panel line that wraps, not a
+ * fixed-width bar slot.) NOTE THE ENGINE'S OWN INCONSISTENCY: the comment above `agentBadge`
+ * (`design/termcraft-engine.js:211`) says `opt.short` "drops the agent name for 80 columns", but
+ * the only place the engine actually passes the option, `wsOpening`, computes `const narrow=w<100`
+ * (`:235`) and hands it straight through as `{short:narrow}` (`:240`). The drawn code is the
+ * design's ground truth (CLAUDE.md), so 100 is the threshold and the engine's prose is the stale
+ * half. The two advisory phrases never carried the name, so `short` cannot change them either way.
+ *
+ * DIVERGENCE (extrapolation beyond what the design states): `wsOpening` is the ONLY place the
+ * engine supplies `short` at all. `workspace()`'s own health branch
+ * (`design/termcraft-engine.js:271`) calls `this.agentBadge(o.health.kind, o.health.detail)` with
+ * no option, and `workspace()`'s own `w<100` branch (`:274`) rebuilds the bar's left cluster as
+ * `[mode, ' main ']` — dropping the badge outright rather than shortening it. Passing `short` on a
+ * narrow NON-opening Workspace is therefore this module's own reasonable extrapolation (keep the
+ * reading, shorten it) and not something §30 or the engine says.
  */
 // A `switch` with no `default`, not the `if`-chain's bare final `return` — the same compile-time
 // exhaustiveness idiom `src/entities/turn/types.test.ts`'s `describeEvent` already uses. The

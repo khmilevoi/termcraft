@@ -56,7 +56,7 @@ export interface ShellLaunchV1 {
 }
 
 /**
- * `AppShell` widened with the live agent registry Task 9's Home health probe needs
+ * `AppShell` widened with the live agent registry Task 9's agent-health probe needs
  * (`run-app.ts`'s `resolveAgentHealthProbe`). Declared here, in the module's shared `types.ts`
  * (this repository's module-shape convention — CLAUDE.md), rather than in a `model/` file —
  * moved from `create-shell.ts` by phase-8 Task 11, which found it living there. Its reasoning is

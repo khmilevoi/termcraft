@@ -37,7 +37,7 @@ const NOOP_EXIT: ProcessExit = () => undefined;
 export interface RunAppOptions {
   /**
    * `ShellWithAgentRegistry`, not the bare `AppShell` (`../types`): `runApp` needs the shell's
-   * agent registry to build Task 9's real Home health probe (`resolveAgentHealthProbe` below).
+   * agent registry to build Task 9's real agent-health probe (`resolveAgentHealthProbe` below).
    * A strict superset of `AppShell`, so `bootstrap.ts` — the one production caller — keeps
    * compiling unmodified: `createShell`'s own return type already widened to match.
    */
@@ -127,19 +127,38 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
 
   // Gap D, revised by the workspace-first launch spec (2026-08-02): an EXISTING project — one
   // with `.termcraft/` on disk — opens straight into the Workspace. The predicate is
-  // `launch.existing`, not `launch.hasContent`, because `deriveScreen` routes on the same fact:
-  // routing to the Workspace on one fact while dispatching on another would strand an
-  // existing-but-empty project in a Workspace that never opens. This is the ONE interactive
-  // caller of `project.open` — before it, the whole of `src` had exactly one
-  // (`entrypoint/model/run-export.ts`, the headless export driver).
+  // `launch.existing`, because `deriveScreen` routes on that same fact: routing to the Workspace
+  // on one fact while dispatching on another would strand an existing-but-empty project in a
+  // Workspace that never opens. `launch.hasContent` is what this dispatch keyed on BEFORE that
+  // revision; it is still computed and still reported on `ShellLaunchV1`, and since the revision
+  // nothing in `src` reads it at all (`../types.ts`) — it is not a second live predicate to be
+  // weighed against `existing` here. `src` holds THREE `project.open` dispatch sites: this one
+  // (the ordinary way an existing project is opened), `ui/app/model/intent.ts`'s `home-submit`
+  // (narrowed by this same spec to Home's ⏎ after a startup open that failed), and
+  // `entrypoint/model/run-export.ts`'s headless export driver — which was the only one in the
+  // whole of `src` before this dispatch existed.
   //
-  // A FAILED STARTUP DISPATCH now has a real surface. The two `console.error` calls below still
-  // run while the renderer owns the terminal, so `infrastructure/debug-log`'s pass-through gate
-  // swallows them — which is why they are no longer the only handling. `abandonStartupOpen`
-  // clears the UI's pending-open flag, and `deriveScreen` drops back to Home: the screen that
-  // owns `HomeOpenFailurePanel`, the `project.close` recovery and the ⏎ retry. Without it the
-  // user would sit on an empty Workspace shell forever, since neither `finishOpen` nor
-  // `blockOpen` ever arrives on this path.
+  // WHAT A FAILED STARTUP DISPATCH ACTUALLY DOES TODAY. `abandonStartupOpen` is a strict
+  // improvement on the pre-branch behaviour, and it is still not a SURFACE. What it does: it
+  // clears the UI's pending-open flag, so `deriveScreen` stops routing to the Workspace and
+  // drops back to Home. Without it the user would sit in an empty Workspace shell forever,
+  // since neither `finishOpen` nor `blockOpen` ever arrives on this path. What it does NOT do:
+  // explain anything. The Home it lands on is the ORDINARY prompt — `HomeOpenFailurePanel`
+  // renders only for a non-null `ProjectMirror.openFailure` (`ui/home/ui/Home.tsx`), which is
+  // written ONLY from `kernel.project.blockOpen`'s own metadata (`ui/mirror/model/mirror.ts`),
+  // and on this branch the Kernel published nothing at all. The `project.close` recovery
+  // (`ui/app/model/deps.ts`'s `recoverFromBlockedOpen`) is gated on that same non-null
+  // `openFailure`, so it never fires either, and Home's ⏎ is its ordinary submit rather than the
+  // retry of a named failure. The two `console.error` calls below run while the renderer owns
+  // the terminal, so `infrastructure/debug-log`'s pass-through gate holds them: with tracing on
+  // the line reaches the trace file and nothing else; with tracing off it waits in the bounded
+  // hold buffer and prints only once `dispose()` hands the terminal back — after the user has
+  // already quit. This is recorded as a KNOWN GAP IN SURFACING, the same way
+  // `docs/architecture/flows/launch.md`'s "Falling back from the mounted shell" states it, not
+  // papered over: `design/*.dc.html` has no screen for a startup open that never reached the
+  // Kernel, and inventing one here is forbidden (CLAUDE.md, "Design is a source of truth").
+  // `project.retryOpen` already exists for the recovery-conflict path and would be the natural
+  // action such a surface offers.
   //
   // Placed AFTER `startShutdownPath` (fix round 1): that call registers the SIGINT/SIGTERM
   // handlers this function awaits nothing before. Dispatching first, as this used to, meant a

@@ -31,9 +31,13 @@ export interface WorkspaceLocalState {
    * The agent-health reading, shown as the lowest-precedence badge in the status bar's `hint`
    * slot (workspace-first launch, 2026-08-02). Read-only from this module's point of view: there
    * is no WORKSPACE re-check, and the reading is never refreshed from here — only Home's own `r`
-   * re-check (`ui/app/model/intent.ts:45`) replaces it, and Home is off the launch path (reached
-   * only when a startup open fails, `App.tsx:246`). That is a deliberate trade, recorded in the
-   * spec — a `/recheck` action was considered and declined.
+   * re-check (`ui/app/model/intent.ts`'s `home-recheck`) replaces it. And Home is reached in
+   * exactly two situations (`ui/mirror/model/screen.ts`'s `deriveScreen`): a genuinely fresh
+   * directory, where `startupOpenPending` was never true, and a startup open that did not
+   * finish. BOTH are before a project is open — an existing project mounts this screen directly,
+   * and once `projectId` is non-null nothing routes back to Home, so from that point the reading
+   * shown here cannot change for the rest of the process. That is a deliberate trade, recorded
+   * in the spec — a `/recheck` action was considered and declined.
    */
   readonly agentHealth: Atom<AgentHealth>;
 }

@@ -122,10 +122,19 @@ async function interactiveShell(
 
   const resolvedEnv = await resolveEnvWithProjectIdentity(env, open, existing);
 
-  // Evaluated BEFORE the Kernel is constructed — it must precede the startup dispatch
-  // (`run-app.ts`'s Gap D dispatch), because `deriveScreen` keys on `projectId`, which
-  // `finishOpen` sets: by the time the command has gone, the screen is already decided (spec
-  // §3.2). The probe is skipped entirely for a freshly created project — a real I/O round trip
+  // Placed here for locality, NOT for ordering: the probe needs the `OpenProject` handle
+  // `openOrCreateProject` just returned, and it belongs beside the other launch fact derived
+  // from that same open. CORRECTED (2026-08-03): this comment used to assert a live ordering
+  // requirement against `run-app.ts`'s Gap D dispatch, on the grounds that `deriveScreen` keys
+  // on `projectId`. That constraint no longer exists in either half. `deriveScreen` does not key
+  // on `projectId` alone (`ui/mirror/model/screen.ts` also reads `startupOpenPending`,
+  // `openFailed` and `trust`), and more decisively `contentProbe` feeds only `hasContent`, which
+  // since workspace-first launch (2026-08-02) NOTHING reads (`../types.ts`'s `ShellLaunchV1`).
+  // Both the startup dispatch and the screen routing key on `existing`, which
+  // `openOrCreateProject` above already established — so moving this probe earlier or later
+  // cannot change which screen mounts or whether anything is dispatched.
+  //
+  // The probe is skipped entirely for a freshly created project — a real I/O round trip
   // would only ever confirm what `existing` already says, since a fresh directory never held
   // anything before `openOrCreateProject` just created it — so `contentProbe` stays the
   // definite `"no-content"` without touching disk again.
@@ -170,7 +179,7 @@ async function interactiveShell(
 
   // Captured once so the SAME registry both feeds the Kernel's own `agentRegistry` port AND is
   // exposed on the returned shell (`ShellWithAgentRegistry.agentRegistry`) for `run-app.ts`'s
-  // Task 9 Home health probe — never two independently constructed registries drifting apart.
+  // Task 9 agent-health probe — never two independently constructed registries drifting apart.
   const agentRegistry = createProductionAgentRegistry();
 
   const kernelDeps: KernelDeps = {

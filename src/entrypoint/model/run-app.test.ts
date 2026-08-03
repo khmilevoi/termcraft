@@ -194,7 +194,7 @@ describe("runApp", () => {
     expect(boundary.fatals[0]?.cause).toBeInstanceOf(Error);
   });
 
-  describe("the Task 9 / WP-5 Home health probe wiring", () => {
+  describe("the Task 9 / WP-5 agent-health probe wiring", () => {
     test("a shell with a live agent registry actually probes the backend's health at startup", async () => {
       const calls: string[] = [];
       const backend = createFakeAgentBackend();

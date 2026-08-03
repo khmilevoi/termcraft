@@ -151,7 +151,29 @@ function hintKeys(
   );
 }
 
-/** design `wsOpening`'s own key row (`design/termcraft-engine.js:247`). */
+/**
+ * design `wsOpening`'s own key row (`design/termcraft-engine.js:247`): one disabled `⏎ send`,
+ * nothing else.
+ *
+ * ACCEPTED INCONSISTENCY — F2 IS BOUND WHILE THIS ROW IS DRAWN. `ui/app/model/keymap.ts`'s
+ * `resolveKey` resolves global hotkeys through the action registry BEFORE it reaches any
+ * screen-specific branch, and `preview.fullscreen` is `kind: "local"` with `capability: null`
+ * (`ui/actions/model/registry.ts`), so nothing gates it on the project being open: pressing F2
+ * during the open toggles `local.fullscreen` and the chat panel disappears, with this row naming
+ * no way back. The other keys this row drops are harmless in the same window: `intent.ts`'s
+ * `executeAction` returns before dispatching for F5 (`preview.retry` requires a `circuit-open`
+ * preview) and for F6 (`compose-repair`, same requirement), and Ctrl+E does dispatch
+ * `export.start`, but `core/capabilities`'s `projectNotReadyReason` refuses every kind outside
+ * its short exempt list until the project reaches `ready`. None of those three changes anything
+ * on screen. F2 is the one that does.
+ *
+ * The behaviour is deliberately LEFT AS IS here: gating it is a product decision (does the
+ * opening shell offer fullscreen at all?), and it is being surfaced to the controller separately
+ * rather than resolved inside a comment-truth pass. Recorded here because this component's own
+ * test file asserts the mirror-image rule for the IDLE row — "no bound-but-undrawn page-step
+ * keys" (`Workspace.test.tsx`) — and a reader who trusts that rule to hold for every row would
+ * otherwise conclude F2 is inert during the open. It is not.
+ */
 const OPENING_HINT_KEYS: readonly StatusBarHintKey[] = [["⏎", "send", "dis"]];
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
@@ -288,8 +310,6 @@ function renderPreviewRegion(
   if (opening) {
     return <OpeningState id="ws-preview-opening" width={region.w} height={region.h} />;
   }
-  // every existing branch below stays exactly as it is: failed -> circuit-open -> !hasPages ->
-  // frame -> "preparing preview…"
   if (preview.phase === "failed") {
     return (
       <ErrorPanel
