@@ -96,8 +96,16 @@ const FAILURE: FailureDtoV1 = {
 // comparison is what makes the "happy path" removal test below assert a real removal instead of
 // a stale result), so they must stay equal; deriving both from the SAME real hash keeps that true
 // by construction instead of by two hand-copied literals staying in sync.
-const EMPTY_BYTES = new Uint8Array();
-const ABOUT_SOURCE_HASH = computeSourceHash(EMPTY_BYTES);
+//
+// Fix round 2: `ABOUT_SOURCE_HASH` must NOT be `computeSourceHash` of the same empty bytes
+// `home` seeds below (`new Uint8Array()`, `sha256` omitted) — both are the real SHA-256 of
+// nothing, so that made `home` and `about` hash-indistinguishable, which is exactly the
+// discrimination `detectPageRemovePlanDrift`'s own comparison relies on to catch a defect that
+// reads one page's hash in place of the other's. `ABOUT_BYTES` gives `about` genuinely
+// different, non-empty content so the two stay distinguishable by construction, the same shape
+// `page-mutations.test.ts` already uses for the identical hazard.
+const ABOUT_BYTES = new TextEncoder().encode("about");
+const ABOUT_SOURCE_HASH = computeSourceHash(ABOUT_BYTES);
 
 interface LaunchedOperation {
   readonly label: string;
@@ -534,7 +542,7 @@ describe("pageHandlers['page.removeConfirm']", () => {
       pageOrder: [slug("home"), slug("about")],
       pageSources: new Map([
         [slug("home"), { bytes: new Uint8Array() }],
-        [slug("about"), { bytes: EMPTY_BYTES, sourceHash: ABOUT_SOURCE_HASH }],
+        [slug("about"), { bytes: ABOUT_BYTES, sourceHash: ABOUT_SOURCE_HASH }],
       ]),
       workspaceActivePageSlug: slug("about"),
     });
