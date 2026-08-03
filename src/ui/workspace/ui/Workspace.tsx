@@ -648,16 +648,22 @@ export const Workspace = reatomComponent<{ deps: WorkspaceDeps; readOnly: boolea
       wrap((result) => {
         if (result instanceof Error) {
           console.error("UI command dispatch failed:", result);
-          // §11 answer 4's own literal fallback (`design/termcraft-engine.js:1505`, the
-          // `top.err||'chat file could not be read'` the design engine itself falls back to
-          // when no failure text is available): this branch has no `chat.records.older`
-          // failure to relay — the dispatcher itself refused — so the design's own default
-          // stands in rather than an invented message.
-          local.olderPage.set({ kind: "failed", safeMessage: "chat file could not be read" });
+          // CORRECTED (review round 2): a dispatcher-level refusal — a transport failure here,
+          // `CAPABILITY_UNAVAILABLE` or similar below — happens BEFORE any Kernel round trip
+          // ever touches the chat file, so it is not a `chat.records.older` load failure.
+          // §11 answer 4's own literal (`design/termcraft-engine.js:1505`,
+          // `'chat file could not be read'`) illustrates THAT failure — `wsScrollFailed`'s own
+          // sample data is a genuine disk-read problem — and would misstate the cause here. The
+          // real load-failure path stays exactly as designed: `mirror.lastOlderPageFailure()`
+          // feeds `olderPage`'s own `withComputed` (`ui/app/model/deps.ts`) with the Kernel's
+          // actual `safeMessage`, untouched by this branch. This generic, bounded message —
+          // this task's own original placeholder, restored — describes only what is actually
+          // known: the dispatch itself was not accepted.
+          local.olderPage.set({ kind: "failed", safeMessage: "the page could not be requested" });
           return;
         }
         if (result.status !== "accepted")
-          local.olderPage.set({ kind: "failed", safeMessage: "chat file could not be read" });
+          local.olderPage.set({ kind: "failed", safeMessage: "the page could not be requested" });
       }),
     );
   }, "ui.Workspace.maybeLoadOlder");
