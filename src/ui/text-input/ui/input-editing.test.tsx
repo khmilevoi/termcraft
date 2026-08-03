@@ -44,7 +44,8 @@ const WORKSPACE_SNAPSHOT_OVERRIDES = () => ({
 });
 
 async function workspace(kittyKeyboard: boolean) {
-  const deps = createUiDeps(createFakeKernel({ snapshot: WORKSPACE_SNAPSHOT_OVERRIDES() }), {
+  const kernel = createFakeKernel({ snapshot: WORKSPACE_SNAPSHOT_OVERRIDES() });
+  const deps = createUiDeps(kernel, {
     w: 120,
     h: 36,
   });
@@ -55,7 +56,7 @@ async function workspace(kittyKeyboard: boolean) {
   });
   open = renderer;
   await renderer.waitForFrame((frame) => frame.includes("Ask for changes…"));
-  return { deps, renderer };
+  return { deps, kernel, renderer };
 }
 
 describe("the two-mode run — §9.2's degradation table as an executable test", () => {
@@ -79,8 +80,6 @@ describe("the two-mode run — §9.2's degradation table as an executable test",
     const { deps, renderer } = await workspace(false);
     await renderer.act(() => {
       renderer.mockInput.typeText("alpha beta");
-      // The byte for Shift+Enter does not exist here — this is a no-op, not a failure.
-      renderer.mockInput.pressEnter({ shift: true });
       renderer.mockInput.pressKey("\n");
       renderer.mockInput.typeText("gamma");
     });
@@ -95,10 +94,30 @@ describe("the two-mode run — §9.2's degradation table as an executable test",
     expect(deps.local.composer()).toBe("alpha beta\ngamm");
     // Ctrl+W (bound by default, needing no encoding beyond a single control byte — the reason
     // it's the universal fallback) is what actually deletes the word here.
-    await renderer.act(() => renderer.mockInput.pressKey(""));
+    await renderer.act(() => renderer.mockInput.pressKey("\u0017"));
     // Same native boundary behaviour as the kitty case above: `delete-word-backward` eats the
     // newline together with "gamm".
     expect(deps.local.composer()).toBe("alpha beta");
+  });
+
+  test("without it, a Shift+Enter press is an ordinary Enter — and therefore SENDS", async () => {
+    const { deps, kernel, renderer } = await workspace(false);
+    await renderer.act(() => renderer.mockInput.typeText("alpha beta"));
+    // CORRECTED 2026-08-03 (final-review fix wave). This press used to sit inside the test above
+    // under the comment "the byte for Shift+Enter does not exist here — this is a no-op, not a
+    // failure". Half right: §4.4's table says the `CSI 13;2u` byte does not exist in legacy mode,
+    // but what the terminal delivers instead is a BARE `\r`, indistinguishable from Enter — so it
+    // is not a no-op, it is a submit. `mock-keys.js` reproduces that faithfully (with neither
+    // kitty nor modifyOtherKeys there is no encoding for the modifier, so the `\r` goes out
+    // unchanged), and it is the whole reason §4.4 binds `Ctrl+J`/`Alt+Enter` as the universal
+    // newline fallbacks rather than treating Shift+Enter as merely unavailable.
+    //
+    // The old placement only passed because the mirror lagged the editor's buffer: the burst was
+    // drained synchronously, so `composer-submit` read `local.composer()` as still empty and
+    // refused silently. `flushEditors` removes that accident, which is what surfaced this.
+    await renderer.act(() => renderer.mockInput.pressEnter({ shift: true }));
+    expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toContain("turn.start");
+    await renderer.waitFor(() => deps.local.composer() === "");
   });
 });
 
@@ -193,6 +212,51 @@ describe("the slash menu's two new closing rules, end to end", () => {
       renderer.mockInput.typeText("X");
     });
     expect(deps.local.composer()).toBe("/exporXt");
+  });
+});
+
+/**
+ * The mirror atom lags the editor's own buffer by a microtask, and every synchronous reader of
+ * that atom — `resolveKey`'s context, `applyIntent`'s submit guards — has to be caught up first.
+ *
+ * MEASURED (against the installed `@opentui/core@0.4.5`): `onContentChange` is driven by the
+ * native `content-changed` event, which the FFI event bus delivers inside a `queueMicrotask`
+ * (`chunk-bun-t2myhmwd.js`, `setupEventBus`), while `CliRenderer.stdinListener` pushes a whole
+ * chunk into `StdinParser` and drains EVERY key event out of it in one synchronous `while` loop
+ * (`StdinParser.drain`). No microtask runs between two keys carried by the same chunk.
+ *
+ * These two tests are the only ones in the repo that reproduce that: they emit ONE `data` event
+ * carrying several bytes. `mockInput.typeText()` cannot stand in for it — it emits one `data`
+ * event per character, so each key arrives through its own listener call.
+ */
+describe("several keys in ONE stdin chunk — the mirror is caught up before the keymap reads it", () => {
+  test("a slash typed right after other text in the same chunk does not destroy the draft", async () => {
+    const { deps, renderer } = await workspace(true);
+    await renderer.act(() => {
+      // Four bytes, one chunk — what a terminal delivers for fast typing, key-repeat, or an
+      // SSH/tmux-coalesced burst. With a stale mirror the `/` byte resolves to `slash-open`
+      // (`keymap.ts`'s `composerValue.length === 0` check reads the PRE-"abc" value), the App
+      // claims the key, and `setPrimaryInput(deps, "/")` overwrites the buffer with just "/".
+      renderer.renderer.stdin.emit("data", Buffer.from("abc/"));
+    });
+    expect(deps.local.composer()).toBe("abc/");
+    expect(deps.local.overlay()).toBeNull();
+  });
+
+  test("typed text plus Enter in the same chunk still sends the full text", async () => {
+    const { deps, kernel, renderer } = await workspace(true);
+    await renderer.act(() => {
+      renderer.renderer.stdin.emit("data", Buffer.from("send me\r"));
+    });
+    // `composer-submit` reads `local.composer()` the instant Enter is processed and refuses an
+    // empty one silently — a stale mirror makes the whole turn disappear with nothing on screen.
+    const started = kernel.dispatched.find(
+      (raw) => (raw as { kind: string }).kind === "turn.start",
+    ) as { kind: string; payload: { text: string } } | undefined;
+    expect(started?.payload.text).toBe("send me");
+    // And the composer clears only once the Kernel ACCEPTS the turn (`intent.ts`), so an empty
+    // composer afterwards is the observable proof the submit actually landed.
+    await renderer.waitFor(() => deps.local.composer() === "");
   });
 });
 

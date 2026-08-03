@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 
 import { uuidv7 } from "infrastructure/uuid";
 import { TEST_SHA, TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
+import type { TextEditorHandle } from "ui/text-input";
 
 import { createUiDeps } from "./deps";
 import { applyIntent } from "./intent";
@@ -9,6 +10,25 @@ import { applyIntent } from "./intent";
 beforeEach(() => resetEventSeq());
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * A recording stand-in for a mounted editor, appending to the caller's own `calls` array.
+ *
+ * ONE helper rather than the five identical inline literals this file used to carry: that
+ * duplication is why `TextEditorHandle`'s `clear`/`focus`/`blur` could sit dead in the interface
+ * for three tasks with every fake still dutifully implementing them.
+ */
+function recordingHandle(calls: string[]): TextEditorHandle {
+  const state = { text: "" };
+  return {
+    setText: (text) => {
+      state.text = text;
+      calls.push(`setText:${text}`);
+    },
+    text: () => state.text,
+    deleteCharBackward: () => calls.push("deleteCharBackward"),
+  };
+}
 
 function dispatchedKinds(kernel: { dispatched: readonly unknown[] }): string[] {
   return kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
@@ -162,13 +182,7 @@ describe("applyIntent — text inputs", () => {
     // primary input rather than the prompt.
     deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     const calls: string[] = [];
-    deps.local.composerEditor.set({
-      setText: (text) => calls.push(`setText:${text}`),
-      clear: () => calls.push("clear"),
-      deleteCharBackward: () => calls.push("deleteCharBackward"),
-      focus: () => calls.push("focus"),
-      blur: () => calls.push("blur"),
-    });
+    deps.local.composerEditor.set(recordingHandle(calls));
     deps.local.composer.set("send me");
     applyIntent({ kind: "composer-submit" }, deps);
     await tick();
@@ -180,13 +194,7 @@ describe("applyIntent — text inputs", () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     const calls: string[] = [];
-    deps.local.composerEditor.set({
-      setText: (text) => calls.push(`setText:${text}`),
-      clear: () => calls.push("clear"),
-      deleteCharBackward: () => calls.push("deleteCharBackward"),
-      focus: () => calls.push("focus"),
-      blur: () => calls.push("blur"),
-    });
+    deps.local.composerEditor.set(recordingHandle(calls));
     applyIntent({ kind: "slash-open" }, deps);
     expect(deps.local.composer()).toBe("/");
     expect(calls).toEqual(["setText:/"]);
@@ -195,13 +203,7 @@ describe("applyIntent — text inputs", () => {
   test("home-backspace drives the editor handle rather than slicing the mirror", () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
     const calls: string[] = [];
-    deps.local.promptEditor.set({
-      setText: (text) => calls.push(`setText:${text}`),
-      clear: () => calls.push("clear"),
-      deleteCharBackward: () => calls.push("deleteCharBackward"),
-      focus: () => calls.push("focus"),
-      blur: () => calls.push("blur"),
-    });
+    deps.local.promptEditor.set(recordingHandle(calls));
     applyIntent({ kind: "home-backspace" }, deps);
     // In `blocked` the editor is blurred and receives no keys, so this intent is the ONLY route
     // that can empty the prompt — and `q` stays inert until it is empty (keymap.ts, fix round 3).
@@ -399,13 +401,7 @@ describe("applyIntent — F6 compose-repair", () => {
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.focus.set("preview");
     const calls: string[] = [];
-    deps.local.composerEditor.set({
-      setText: (text) => calls.push(`setText:${text}`),
-      clear: () => calls.push("clear"),
-      deleteCharBackward: () => calls.push("deleteCharBackward"),
-      focus: () => calls.push("focus"),
-      blur: () => calls.push("blur"),
-    });
+    deps.local.composerEditor.set(recordingHandle(calls));
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 
@@ -429,13 +425,7 @@ describe("applyIntent — F6 compose-repair", () => {
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.composer.set("my own words");
     const calls: string[] = [];
-    deps.local.composerEditor.set({
-      setText: (text) => calls.push(`setText:${text}`),
-      clear: () => calls.push("clear"),
-      deleteCharBackward: () => calls.push("deleteCharBackward"),
-      focus: () => calls.push("focus"),
-      blur: () => calls.push("blur"),
-    });
+    deps.local.composerEditor.set(recordingHandle(calls));
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 

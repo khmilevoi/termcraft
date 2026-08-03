@@ -33,6 +33,45 @@ export function primaryEditorAtom(deps: UiDeps): Atom<TextEditorHandle | null> {
 }
 
 /**
+ * Synchronously catches every mounted editor's mirror atom up with its own live buffer.
+ *
+ * `onContentChange` — the downstream projection {@link mirrorPrimaryInput} implements — is
+ * delivered through `queueMicrotask` by `@opentui/core`'s native event bus, but a stdin chunk
+ * carrying more than one key is drained synchronously in a single pass (`CliRenderer
+ * .stdinListener` -> `StdinParser.drain`'s `while` loop). So a second key in the same chunk (fast
+ * typing, key-repeat, an SSH/tmux-coalesced burst) would otherwise be resolved against the
+ * PREVIOUS key's pre-edit mirror value: typing `"abc/"` in one chunk resolved `slash-open`
+ * (`keymap.ts` read `composerValue` as still empty) and `setPrimaryInput(deps, "/")` then
+ * destroyed the `"abc"`; an `Enter` in the same chunk as its own text was refused as an empty
+ * composer.
+ *
+ * `App.tsx`'s `onKey` calls this before building `resolveKey`'s context and before `applyIntent`
+ * reads any mirror atom, which closes the gap for every surface rather than just whichever
+ * happens to be focused — the cost of checking an unmounted or already-current editor is one
+ * atom read.
+ *
+ * Writes each atom DIRECTLY, not through {@link mirrorPrimaryInput}: this flush's only job is
+ * making the mirror accurate for THIS key's synchronous reads. The buffer's own
+ * `onContentChange` call is still scheduled on that edit's microtask and still runs afterwards,
+ * still carrying the slash-menu-closing checks — duplicating those here would only risk running
+ * them twice.
+ */
+export function flushEditors(deps: UiDeps): void {
+  flushEditor(deps.local.composerEditor, deps.local.composer);
+  flushEditor(deps.local.promptEditor, deps.local.prompt);
+  flushEditor(deps.local.pinEditor, deps.local.pinDraft);
+}
+
+function flushEditor(handleAtom: Atom<TextEditorHandle | null>, mirrorAtom: Atom<string>): void {
+  const handle = handleAtom();
+  // No trace here, unlike `withEditor` below: an unmounted editor is the ORDINARY case for two of
+  // the three surfaces on every keystroke, so reporting it would bury the diagnostics that matter.
+  if (handle === null) return;
+  const live = handle.text();
+  if (live !== mirrorAtom()) mirrorAtom.set(live);
+}
+
+/**
  * Applies `apply` to a mounted editor, or records that there was none.
  *
  * The atom always exists; the handle does not — the component may be unmounted, or belong to

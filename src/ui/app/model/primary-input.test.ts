@@ -7,16 +7,24 @@ import type { TextEditorHandle } from "ui/text-input";
 import { createUiDeps } from "./deps";
 import { mirrorPrimaryInput, primaryInputAtom, setPrimaryInput } from "./primary-input";
 
-/** A handle that records what was done to it, standing in for a mounted editor. */
-function fakeHandle(): TextEditorHandle & { readonly calls: string[] } {
+/**
+ * A handle that records what was done to it, standing in for a mounted editor.
+ *
+ * It carries its own buffer so `text()` answers what a real editor's live buffer would, which is
+ * what `flushEditors` reads — the mirror atom and the buffer are allowed to disagree here exactly
+ * as they transiently do in production.
+ */
+function fakeHandle(buffer = ""): TextEditorHandle & { readonly calls: string[] } {
   const calls: string[] = [];
+  const state = { text: buffer };
   return {
     calls,
-    setText: (text) => calls.push(`setText:${text}`),
-    clear: () => calls.push("clear"),
+    setText: (text) => {
+      state.text = text;
+      calls.push(`setText:${text}`);
+    },
+    text: () => state.text,
     deleteCharBackward: () => calls.push("deleteCharBackward"),
-    focus: () => calls.push("focus"),
-    blur: () => calls.push("blur"),
   };
 }
 
@@ -114,6 +122,41 @@ describe("mirrorPrimaryInput — the one downstream projection (§7.3)", () => {
     deps.local.overlay.set("slash-menu");
     mirrorPrimaryInput(deps, "/e");
     expect(deps.local.overlay()).toBe("slash-menu");
+  });
+
+  test("the same closing rules apply on Home, whose prompt is the other primary input", () => {
+    // NO `mirror.apply(snapshot(...))`: `deriveScreen` holds `"home"` until a `projectId` lands.
+    // `mirrorPrimaryInput` branches on `screen !== "workspace" && screen !== "home"`, so `"home"`
+    // is a genuinely distinct arm — and every test above runs on `workspace`, leaving it unproven.
+    const home = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(home.screen()).toBe("home");
+
+    // Erased to empty.
+    home.local.prompt.set("/e");
+    home.local.overlay.set("slash-menu");
+    mirrorPrimaryInput(home, "");
+    expect(home.local.overlay()).toBeNull();
+    expect(home.local.prompt()).toBe("");
+
+    // The leading slash itself deleted.
+    home.local.overlay.set("slash-menu");
+    mirrorPrimaryInput(home, "exit");
+    expect(home.local.overlay()).toBeNull();
+    expect(home.local.prompt()).toBe("exit");
+
+    // A filter matching no row. `/export` is the honest Home case rather than a contrived string:
+    // `filterSlashRows` runs its SCREEN filter first and Home carries only `/model` and `/exit`,
+    // so a prefix that matches on Workspace matches nothing here.
+    home.local.overlay.set("slash-menu");
+    mirrorPrimaryInput(home, "/export");
+    expect(home.local.overlay()).toBeNull();
+
+    // …while a prefix that does still match a Home row leaves the menu open.
+    home.local.overlay.set("slash-menu");
+    mirrorPrimaryInput(home, "/e");
+    expect(home.local.overlay()).toBe("slash-menu");
+    // The Workspace composer is never touched by any of it — `primaryInputAtom` picked the prompt.
+    expect(home.local.composer()).toBe("");
   });
 });
 

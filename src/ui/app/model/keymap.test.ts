@@ -536,15 +536,15 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
     ["Right with no menu open", key({ name: "right" }), {}],
     ["Ctrl+Left (word back)", key({ name: "left", ctrl: true }), {}],
     ["Ctrl+Right (word forward)", key({ name: "right", ctrl: true }), {}],
-    ["Ctrl+W (delete word back)", key({ name: "w", ctrl: true, sequence: "" }), {}],
+    ["Ctrl+W (delete word back)", key({ name: "w", ctrl: true, sequence: "\u0017" }), {}],
     ["Ctrl+Backspace", key({ name: "backspace", ctrl: true }), {}],
     ["Ctrl+Delete", key({ name: "delete", ctrl: true }), {}],
     ["Shift+Enter", key({ name: "return", shift: true }), {}],
     ["Alt+Enter", key({ name: "return", meta: true }), {}],
     ["Ctrl+J", key({ name: "linefeed", sequence: "\n" }), {}],
-    ["Ctrl+Z (undo)", key({ name: "z", ctrl: true, sequence: "" }), {}],
-    ["Ctrl+Y (redo)", key({ name: "y", ctrl: true, sequence: "" }), {}],
-    ["Ctrl+A (select all)", key({ name: "a", ctrl: true, sequence: "" }), {}],
+    ["Ctrl+Z (undo)", key({ name: "z", ctrl: true, sequence: "\u001a" }), {}],
+    ["Ctrl+Y (redo)", key({ name: "y", ctrl: true, sequence: "\u0019" }), {}],
+    ["Ctrl+A (select all)", key({ name: "a", ctrl: true, sequence: "\u0001" }), {}],
     ["Home", key({ name: "home" }), {}],
     ["End", key({ name: "end" }), {}],
     ["a printable in the Home prompt", key({ name: "x", sequence: "x" }), { screen: "home" }],
@@ -580,8 +580,8 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
     ["Escape", key({ name: "escape" }), {}],
     ["Tab", key({ name: "tab" }), {}],
     ["F2", key({ name: "f2" }), {}],
-    ["Ctrl+E", key({ name: "e", ctrl: true, sequence: "" }), {}],
-    ["Ctrl+B", key({ name: "b", ctrl: true, sequence: "" }), {}],
+    ["Ctrl+E", key({ name: "e", ctrl: true, sequence: "\u0005" }), {}],
+    ["Ctrl+B", key({ name: "b", ctrl: true, sequence: "\u0002" }), {}],
     ["/ on an empty composer", key({ name: "/", sequence: "/" }), {}],
     ["Up while the slash menu is open", key({ name: "up" }), { overlay: "slash-menu" }],
     ["Down while the slash menu is open", key({ name: "down" }), { overlay: "slash-menu" }],
@@ -594,6 +594,16 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
       expect(isClaimedKey(resolveKey(pressed, ctx(context)))).toBe(true);
     });
   }
+
+  // The table above only asserts that the key is CLAIMED, which any non-`none` kind satisfies —
+  // a mapping that regressed to, say, `overlay-dismiss` would still pass. Every other kind it
+  // covers is pinned to its exact intent somewhere else in this file; `pin-save` was the one that
+  // was not, so it is pinned here rather than left resting on the weaker assertion.
+  test("Enter in the pin input resolves to pin-save specifically, not merely to something claimed", () => {
+    expect(resolveKey(key({ name: "return" }), ctx({ overlay: "pin-input" }))).toEqual({
+      kind: "pin-save",
+    });
+  });
 });
 
 describe("dead-binding guard — the two editor defaults the App shadows (§4.7)", () => {
@@ -603,11 +613,11 @@ describe("dead-binding guard — the two editor defaults the App shadows (§4.7)
     // the two assertions mean "unreachable by construction". If someone later drops ctrl+e from
     // the registry, THIS assertion fails and points straight at the collision instead of letting
     // export silently become "go to end of line".
-    expect(resolveKey(key({ name: "b", ctrl: true, sequence: "" }), ctx({}))).toEqual({
+    expect(resolveKey(key({ name: "b", ctrl: true, sequence: "\u0002" }), ctx({}))).toEqual({
       kind: "action-execute",
       actionId: "page.prev",
     });
-    expect(resolveKey(key({ name: "e", ctrl: true, sequence: "" }), ctx({}))).toEqual({
+    expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\u0005" }), ctx({}))).toEqual({
       kind: "action-execute",
       actionId: "export.start",
     });

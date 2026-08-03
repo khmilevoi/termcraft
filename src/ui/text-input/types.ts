@@ -4,14 +4,29 @@
  */
 
 /**
- * A mounted editor, reduced to the five operations something outside it actually performs.
- * Nothing speculative — one method per existing external write, plus the focus pair.
+ * A mounted editor, reduced to the three operations something outside it actually performs:
+ * the one external write, the one synchronous read-back the key layer needs, and the one edit
+ * routed through the handle rather than through a key.
+ *
+ * Nothing speculative, and nothing kept for symmetry. A `clear()`, a `focus()` and a `blur()`
+ * lived here until 2026-08-03 and were removed once verified dead in production: the post-accept
+ * clear their doc comment named has gone through `setPrimaryInput(deps, "")` -> `setText("")`
+ * since this module landed, and focus is a PROP (`TextEditorProps.focused`), driven by the
+ * render, never imperatively.
  */
 export interface TextEditorHandle {
   /** Replace the whole content, cursor to the end. Used by the F6 repair fill and by seeding. */
   setText(text: string): void;
-  /** Empty it, cursor to zero. Used by the post-accept clear. */
-  clear(): void;
+  /**
+   * The editor's current text, read synchronously off its live buffer.
+   *
+   * Exists for exactly one caller: `App.tsx`'s `onKey`, which must catch the mirror atom up with
+   * the buffer BEFORE `resolveKey` reads it. `onContentChange` — the buffer's own downstream
+   * projection into the mirror — is delivered through `queueMicrotask` by `@opentui/core`'s
+   * native event bus, while every key carried by one stdin chunk is drained synchronously. So
+   * without this, a second key in the same chunk sees the previous key's edit still unmirrored.
+   */
+  text(): string;
   /**
    * Delete the character left of the cursor.
    *
@@ -21,14 +36,12 @@ export interface TextEditorHandle {
    * reasoning as a fix-round-3 correction. In `blocked` the editor is blurred and receives no
    * keys, so the `home-backspace` intent survives and drives this instead.
    *
-   * Unlike the other four this needs no paired mirror write: it mutates the buffer, and the
+   * Unlike {@link setText} this needs no paired mirror write: it mutates the buffer, and the
    * buffer's own content-change listener is registered against the edit buffer rather than
    * against focus, so the mirror updates exactly as it does for a typed key. It is an edit routed
    * through the handle, not an external write.
    */
   deleteCharBackward(): void;
-  focus(): void;
-  blur(): void;
 }
 
 /**

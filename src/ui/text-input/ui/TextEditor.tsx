@@ -42,12 +42,13 @@ function createHandle(renderable: EditorRenderable): TextEditorHandle {
       renderable.setText(text);
       renderable.cursorOffset = text.length;
     },
-    clear: () => renderable.clear(),
+    // `EditBuffer.getText()` reads straight out of the native buffer, so this is the buffer's
+    // OWN truth at call time — not the mirror atom, which the native event bus only catches up
+    // on a microtask. That difference is the whole point of the accessor (`types.ts`).
+    text: () => renderable.plainText,
     deleteCharBackward: () => {
       renderable.deleteCharBackward();
     },
-    focus: () => renderable.focus(),
-    blur: () => renderable.blur(),
   };
 }
 

@@ -24,6 +24,7 @@ import type { OverlayKind } from "ui/workspace";
 import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
 import { isClaimedKey, resolveActiveOverlay, resolveKey } from "../model/keymap";
+import { flushEditors } from "../model/primary-input";
 
 /**
  * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design `home()`,
@@ -192,6 +193,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
   }
 
   const onKey = useWrap((key: KeyEvent) => {
+    // FIRST, before anything reads a mirror atom. Every key in one stdin chunk is drained
+    // synchronously, while the editors' own `onContentChange` projections are delivered on a
+    // microtask — so without this the context below (and every `applyIntent` guard it leads to)
+    // would be built from the PREVIOUS key's pre-edit value. See `flushEditors` itself for the
+    // measured mechanism and the two failures it produced.
+    flushEditors(deps);
     const context = {
       screen: deps.screen(),
       focus: deps.local.focus(),
