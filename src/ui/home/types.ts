@@ -1,5 +1,6 @@
 import type { ScoredSlashRow } from "ui/actions";
 import type { ProjectOpenFailure } from "ui/mirror";
+import type { EditorBridge } from "ui/text-input";
 
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
@@ -120,4 +121,10 @@ export interface HomeProps {
    * loading, and what makes the refused Enter visible before it is pressed.
    */
   readonly opening: boolean;
+  /**
+   * The Home prompt editor's wiring — `deps.editors.prompt`. The prompt TEXT is not a prop of the
+   * editor (see `ui/text-input`'s `TextEditorProps`); {@link HomeProps.prompt} above stays because
+   * the slash menu still renders the typed prefix and the `/`-open gate still reads its length.
+   */
+  readonly promptBridge: EditorBridge;
 }

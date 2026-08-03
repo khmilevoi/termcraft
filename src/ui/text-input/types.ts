@@ -84,20 +84,3 @@ export interface TextEditorProps {
   /** See {@link EditorBridge} — must be stable across renders. */
   readonly bridge: EditorBridge;
 }
-
-/**
- * Props for the outgoing {@link TextInput}. Deleted with the component in Task 9, once Home and
- * the composer both render {@link TextEditor}.
- */
-export interface TextInputProps {
-  readonly id: string;
-  readonly value: string;
-  readonly placeholder: string;
-  /** The caret run drawn before the text, e.g. `"❯ "`. */
-  readonly caret: string;
-  readonly caretFg: `#${string}`;
-  readonly valueFg: `#${string}`;
-  readonly placeholderFg: `#${string}`;
-  /** `false` renders no cursor at all — the design's faint, cursor-less disabled input. */
-  readonly showCursor: boolean;
-}

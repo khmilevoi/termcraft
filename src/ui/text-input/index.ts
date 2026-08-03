@@ -8,5 +8,3 @@ export { editorMaxRows, editorRowCount, wrappedLineCount } from "./model/editor-
 export { TEXT_EDITOR_KEY_BINDINGS } from "./model/key-bindings";
 export type { EditorBridge, TextEditorHandle, TextEditorProps } from "./types";
 export { TextEditor } from "./ui/TextEditor";
-export type { TextInputProps } from "./types";
-export { TextInput } from "./ui/TextInput";

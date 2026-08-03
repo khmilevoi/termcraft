@@ -271,6 +271,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         selectedIndex={deps.local.slashSelection()}
         openFailure={deps.mirror.project().openFailure}
         opening={deps.mirror.project().opening}
+        promptBridge={deps.editors.prompt}
       />
     );
   }
