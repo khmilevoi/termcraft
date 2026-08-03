@@ -42,6 +42,7 @@ function toHandleV1(chatId: string, handle: ChatHandle): ChatHandleV1 {
       return {
         records: result.records,
         prevCursor: result.prevCursor === null ? null : toCursorV1(result.prevCursor),
+        totalRecordCount: result.totalRecordCount,
       };
     },
     async loadBefore(cursor, limit, byteBudget): Promise<FailureDtoV1 | ChatLoadResultV1> {
@@ -50,6 +51,7 @@ function toHandleV1(chatId: string, handle: ChatHandle): ChatHandleV1 {
       return {
         records: result.records,
         prevCursor: result.prevCursor === null ? null : toCursorV1(result.prevCursor),
+        totalRecordCount: result.totalRecordCount,
       };
     },
   };

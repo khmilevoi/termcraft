@@ -128,3 +128,31 @@ describe("createFakeChatStore", () => {
     });
   });
 });
+
+describe("totalRecordCount", () => {
+  test("the fake reports the chat's whole record count on both loaders", async () => {
+    const fixed = new Date("2026-01-02T03:04:05.000Z");
+    const store = createFakeChatStore({ clock: { now: () => fixed } });
+    const header = await store.create();
+    if ("code" in header) throw new Error("create failed");
+    store.seedRecords(header.chatId, [
+      userRecord("r1"),
+      userRecord("r2"),
+      userRecord("r3"),
+      userRecord("r4"),
+    ]);
+
+    const handle = await store.open(header.chatId);
+    if ("code" in handle) throw new Error("open failed");
+
+    const tail = await handle.loadTail(2);
+    if ("code" in tail) throw new Error("loadTail failed");
+    expect(tail.records).toHaveLength(2);
+    expect(tail.totalRecordCount).toBe(4);
+
+    if (tail.prevCursor === null) throw new Error("expected a prevCursor");
+    const older = await handle.loadBefore(tail.prevCursor, 2);
+    if ("code" in older) throw new Error("loadBefore failed");
+    expect(older.totalRecordCount).toBe(4);
+  });
+});

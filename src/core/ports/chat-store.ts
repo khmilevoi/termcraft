@@ -45,6 +45,13 @@ export interface ChatPageCursorV1 {
 export interface ChatLoadResultV1 {
   readonly records: readonly ChatRecord[];
   readonly prevCursor: ChatPageCursorV1 | null;
+  /**
+   * The chat's TOTAL record count, mirroring `store/jsonl`'s `LoadResult.totalRecordCount`
+   * (redrawn here per code-structure Decision C1, like every other member of this port).
+   * Not derivable from `records` — that is one bounded page — and not derivable from
+   * `prevCursor` either, which says only *whether* more exist, never how many.
+   */
+  readonly totalRecordCount: number;
 }
 
 export interface ChatHandleV1 {
