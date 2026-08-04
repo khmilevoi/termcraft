@@ -397,7 +397,13 @@ describe("runApp", () => {
       const app = await runApp({ shell, adapters: recordingAdapters([]), process: fakeBoundary() });
       if (app instanceof Error) throw app;
 
-      expect(dispatched).toContainEqual({ kind: "project.open", payload: { root: shell.env.root } });
+      const opened = dispatched.find((entry) => entry.kind === "project.open");
+      // `toStrictEqual`, NOT `toContainEqual`/`toEqual`: bun:test's looser equality treats a
+      // present `text: undefined` key as equal to an absent one, which would let this test pass
+      // even if `run-app.ts` regressed to building the payload with an explicit `text: undefined`
+      // — exactly the bug this test exists to catch, since `projectOpenPayloadSchema`'s
+      // `strictObject` rejects that shape as a decode failure, not an absent field.
+      expect(opened?.payload).toStrictEqual({ root: shell.env.root });
 
       await app.close();
     });
