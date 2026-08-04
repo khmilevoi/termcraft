@@ -1825,6 +1825,16 @@ async function openMigrationContext(
  * doc comment already treats this read as best-effort — `migrateProject` re-scans and re-derives
  * rather than trusting a plan carried across from here — so skipping the lease costs nothing this
  * store does not already account for.
+ *
+ * DELIBERATE ROBUSTNESS TRADEOFF, not an oversight: because this skips the lease, `readJournalFormat`,
+ * and `recoverTransactions` that {@link openMigrationContext} runs, `planMigration` has no protection
+ * against reading a project concurrently with another process's `migrateProject`, and no
+ * crash-recovery pass over a filesystem left mid-transaction by a prior crashed migration. Neither
+ * hazard threatens data integrity: `scanLegacyProject`'s strict identity/shape checks turn a
+ * mid-migration or mid-crash read into a confusing-but-safe `LegacyScanError` rather than silently
+ * wrong output, and the actual write path (`migrateProject` via `openMigrationContext`) remains
+ * fully lease-protected and runs recovery before it ever plans a transaction — this function only
+ * ever affects what a best-effort PREVIEW reports, never what gets written.
  */
 function openMigrationReadFs(deps: StoreDeps, root: AbsPath): Error | SafeProjectFs {
   const termcraftDir = path.join(root, ".termcraft");
