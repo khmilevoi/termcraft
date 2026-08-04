@@ -343,15 +343,20 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
           onPumpFatal(frameIdentityError);
           return;
         }
-        // Identity passed, so a broker "stale" can only be a non-monotonic frameSeq
-        // from the current incarnation — also a fatal §5.3 violation, not a drop.
+        // Identity passed, so `frame.sourceHash` names SOME hash this incarnation legitimately
+        // mounted (`mountedHashes`) — but the broker's own guard only ever expects the ONE hash
+        // the pump hook above last called `broker.expect(...)` with. A "stale" verdict here is
+        // therefore fatal for one of two DIFFERENT reasons (§9.2/§5.3), and the diagnosis must
+        // say which: (a) the hash is legitimate but SUPERSEDED — this frame's page had its own
+        // switch's `ready` already observed, so no frame naming it should still be arriving; or
+        // (b) the hash IS the currently expected one and frameSeq itself regressed. Both are
+        // still fatal protocol violations, not a drop; only the message differs.
         if (broker.publish(frame) === "stale") {
-          onPumpFatal(
-            new ProtocolError({
-              code: "MALFORMED_PROTOCOL",
-              reason: `non-monotonic frameSeq ${frame.frameSeq}`,
-            }),
-          );
+          const reason =
+            frame.sourceHash !== mounted.sourceHash
+              ? `frame for a superseded page (${frame.sourceHash}) arrived after its switch's ready`
+              : `non-monotonic frameSeq ${frame.frameSeq}`;
+          onPumpFatal(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason }));
           return;
         }
         continue;
@@ -757,6 +762,13 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   // the kit-API check runs (and can refuse) before anything is written to the child, same as
   // the phase check. `pendingMount` is committed by `runPump`'s inline hook the moment the
   // correlated `ready` is SEEN, not when this promise resolves — see that hook's comment.
+  //
+  // Callers must SERIALIZE mount calls — await one mount's promise before issuing the next.
+  // `pendingMount` is a single slot, not a queue: a second `mount()` while one is still
+  // outstanding is refused outright (below) rather than silently overwriting the slot, which
+  // would orphan the first mount's `ready` (the pump hook would no longer recognise it, so
+  // neither `mounted` nor the broker's expected hash would ever move for it) and very likely
+  // fatal the incarnation on the next frame the child correctly sends.
   async function mount(
     page: MountPageV1,
   ): Promise<ProtocolError | SupervisorError | ControlEnvelope> {
@@ -764,6 +776,12 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       return new SupervisorError({
         code: "TRANSPORT_ERROR",
         reason: `mount requires a ready session (was "${phase}")`,
+      });
+    }
+    if (pendingMount !== null) {
+      return new SupervisorError({
+        code: "TRANSPORT_ERROR",
+        reason: `a mount is already in flight (waiting on requestId ${pendingMount.requestId})`,
       });
     }
     const kitError = checkKitApiVersion(page.kitApiVersion);
@@ -778,12 +796,15 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
         kitApiVersion: page.kitApiVersion,
       },
     };
-    // `deterministic` is `false` because a repeated mount only ever happens in
-    // `preview`/`historical` (smoke and export are one-shot) — the same value `start()`
-    // computes for those modes. `buildMountBody` is reused verbatim: it is what enforces "the
-    // session's identity hash agrees with the inventory's row for this entry"
-    // (`mount-request.ts`), exactly as load-bearing for this mount as for the first.
-    const body = buildMountBody({ ...spec, ...page }, false);
+    // `deterministic` is DERIVED the same way `start()` derives it (`:276`), not hardcoded —
+    // it MUST equal `false` for every mode `mount()` is actually reachable from (only
+    // `preview`/`historical` ever reach `ready` and call this twice; smoke/export are
+    // one-shot), and deriving it from `spec.mode` makes that an enforced fact instead of an
+    // assumed one. `buildMountBody` is reused verbatim: it is what enforces "the session's
+    // identity hash agrees with the inventory's row for this entry" (`mount-request.ts`),
+    // exactly as load-bearing for this mount as for the first.
+    const deterministic = spec.mode === "export" || spec.mode === "smoke";
+    const body = buildMountBody({ ...spec, ...page }, deterministic);
     if (body instanceof ProtocolError) {
       pendingMount = null;
       return body;

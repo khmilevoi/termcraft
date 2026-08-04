@@ -8,9 +8,10 @@ import type {
   RuntimeDeclarationBundleV1,
 } from "../../protocol";
 import type { HostSessionSpec } from "../../types";
-import type { FloodMonitor, HostSessionDeps, MountPageV1 } from "../types";
+import type { FloodMonitor, FrameBroker, HostSessionDeps, MountPageV1 } from "../types";
 import { createManualClock } from "./clock";
 import { SupervisorError } from "./errors";
+import { createFrameBroker } from "./frame-broker";
 import { livePreviewChild } from "./preview-test-host";
 import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table";
 import { createScriptedChild, frameControl, frameFrame, frameHostHello } from "./scripted-child";
@@ -1094,6 +1095,48 @@ function emitReadyFor(child: ScriptedChild, id: CapturedIdentity, requestId: str
   child.emit(framed);
 }
 
+/**
+ * One recorded call into a spying `FrameBroker` (below) — order-of-calls evidence, not timing
+ * evidence. Proves `broker.expect(newHash)` was actually invoked BETWEEN the old page's last
+ * accepted publish and the new page's first publish, which an `await`-based assertion on
+ * `mount()`'s own promise cannot: awaiting that promise only proves the re-seed happened by
+ * SOME point before the await resolves, not that it happened synchronously, inline, in the
+ * exact pump iteration that decoded the switch's `ready` (session.ts's pending-mount hook).
+ */
+type BrokerCall =
+  | { readonly kind: "expect"; readonly sourceHash: string }
+  | {
+      readonly kind: "publish";
+      readonly sourceHash: string;
+      readonly frameSeq: string;
+      readonly result: "accepted" | "stale";
+    };
+
+/** Wraps the REAL frame broker so every `publish`/`expect` call is recorded, in call order. */
+function createSpyingBroker(
+  guard: { sessionId: string; nonce: string; sourceHash: string },
+  calls: BrokerCall[],
+): FrameBroker {
+  const real = createFrameBroker(guard);
+  return {
+    ...real,
+    publish: (frame) => {
+      const result = real.publish(frame);
+      calls.push({
+        kind: "publish",
+        sourceHash: frame.sourceHash,
+        frameSeq: frame.frameSeq,
+        result,
+      });
+      return result;
+    },
+    expect: (sourceHash) => {
+      calls.push({ kind: "expect", sourceHash });
+      real.expect(sourceHash);
+    },
+  };
+}
+
 describe("createHostSession.mount() — switch pages inside a live incarnation (design §9.2)", () => {
   test("mount() from ready sends a correlated mount and resolves on its ready", async () => {
     const child = switchableChild();
@@ -1114,11 +1157,69 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
     await session.stop();
   });
 
+  // Review finding 4: `deterministic` must be DERIVED from `spec.mode`, not hardcoded — a
+  // hardcoded `false` would pass every OTHER test in this suite (all of which use `preview`
+  // mode, where the derived value also happens to be `false`) while silently being wrong for
+  // `smoke`/`export`. Exercising `mount()` from a `smoke`-mode session is what actually
+  // discriminates a derived value from a hardcoded one.
+  test("mount() derives deterministic from spec.mode instead of hardcoding it", async () => {
+    const smokeSpec: HostSessionSpec = { ...specWithB, mode: "smoke" };
+    const child = switchableChild();
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(smokeSpec, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const result = await session.mount(pageB);
+    expect(result).not.toBeInstanceOf(Error);
+
+    const written = await Promise.all(child.written.map(decodeWrittenEnvelope));
+    const mounts = written.filter((e): e is ControlEnvelope => e !== null && e.kind === "mount");
+    expect(mounts.at(-1)?.body.deterministic).toBe(true);
+
+    await session.stop();
+  });
+
+  // Review finding 3: `pendingMount` is a single slot, not a queue. A second `mount()` while
+  // one is still outstanding must be refused outright — silently overwriting the slot would
+  // orphan the first mount's `ready` (the pump hook would no longer recognise it) and could
+  // fatal the incarnation over a frame the child was correct to send.
+  test("a second mount() call while one is already in flight is refused, not silently overwritten", async () => {
+    const child = switchableChild({ autoReplyMounts: false });
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const firstMountPromise = session.mount(pageB);
+    await waitUntil(() => child.mountRequestIds.length === 2, "first repeated mount written");
+
+    const secondResult = await session.mount(pageB);
+    expect(secondResult).toBeInstanceOf(SupervisorError);
+    if (secondResult instanceof SupervisorError) expect(secondResult.code).toBe("TRANSPORT_ERROR");
+    expect(child.mountRequestIds.length).toBe(2); // the refused second call wrote nothing
+
+    // Let the first (still legitimate) mount settle so stop() below does not hang —
+    // `autoReplyMounts: false` leaves it undriven, so drive it by hand.
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+    emitReadyFor(child, id, child.mountRequestIds[1] as string);
+    const firstResult = await firstMountPromise;
+    expect(firstResult).not.toBeInstanceOf(Error);
+
+    await session.stop();
+  });
+
   test("a frame naming the NEW page is accepted only after its ready is observed", async () => {
     const fatals: (SupervisorError | ProtocolError)[] = [];
+    const brokerCalls: BrokerCall[] = [];
     const child = switchableChild({ autoReplyMounts: false });
     const base = deps(child).deps;
-    const session = createHostSession(specWithB, { ...base, onFatal: (e) => fatals.push(e) });
+    const session = createHostSession(specWithB, {
+      ...base,
+      onFatal: (e) => fatals.push(e),
+      createBroker: (guard) => createSpyingBroker(guard, brokerCalls),
+    });
     const started = await session.start();
     if (started instanceof Error) throw started;
     const id = child.identity();
@@ -1153,6 +1254,28 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
 
     expect(fatals).toHaveLength(0);
     expect(session.phase).toBe("ready");
+
+    // The discriminating evidence (review finding 1): `await`ing `mountResult` above only
+    // proves the re-seed happened by SOME point — it cannot tell a synchronous, inline
+    // re-seed apart from one that merely happened to settle before this particular await
+    // returned. The RECORDED CALL ORDER can: `expect(B)` must land strictly between the old
+    // page's last accepted publish and the new page's first publish, which is true only if
+    // the pump re-seeds the guard in the SAME iteration it decodes the switch's `ready`.
+    const publishOldIndex = brokerCalls.findIndex(
+      (c) => c.kind === "publish" && c.sourceHash === spec.sourceHash && c.frameSeq === "2",
+    );
+    const expectNewIndex = brokerCalls.findIndex(
+      (c) => c.kind === "expect" && c.sourceHash === PAGE_B_SOURCE_HASH,
+    );
+    const publishNewIndex = brokerCalls.findIndex(
+      (c) => c.kind === "publish" && c.sourceHash === PAGE_B_SOURCE_HASH && c.frameSeq === "3",
+    );
+    expect(publishOldIndex).toBeGreaterThanOrEqual(0);
+    expect(expectNewIndex).toBeGreaterThanOrEqual(0);
+    expect(publishNewIndex).toBeGreaterThanOrEqual(0);
+    expect(publishOldIndex).toBeLessThan(expectNewIndex);
+    expect(expectNewIndex).toBeLessThan(publishNewIndex);
+
     await session.stop();
   });
 
@@ -1172,6 +1295,36 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
     await waitUntil(() => fatals.length === 1, "pump fataled on the never-mounted hash");
     expect(session.phase).toBe("failed");
     expect(fatals[0] instanceof ProtocolError && fatals[0].code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  // Review finding 2: a frame naming a page this incarnation LEGITIMATELY mounted but has
+  // since been SUPERSEDED by a later mount is a different failure than a frameSeq regression
+  // (`checkFrameIdentity` accepts it via `mountedHashes`, but `broker.publish` rejects it as
+  // stale because it no longer names the CURRENTLY expected hash) — the diagnosis must say so
+  // honestly instead of blaming a monotonic frameSeq that was never actually out of order.
+  test("a frame naming a SUPERSEDED (but legitimately mounted) page is fatal with an honest diagnosis, not a frameSeq accusation", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild();
+    const base = deps(child).deps;
+    const session = createHostSession(specWithB, { ...base, onFatal: (e) => fatals.push(e) });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+
+    const mountResult = await session.mount(pageB);
+    expect(mountResult).not.toBeInstanceOf(Error);
+
+    // Page A (spec.sourceHash) is still in `mountedHashes` (legitimately mounted first), but
+    // is no longer the CURRENT page — the broker now expects B. This frame's own seq (2) is
+    // perfectly monotonic; it is fatal ONLY because it names a superseded page.
+    emitFrame(child, id, spec.sourceHash, "2");
+    await waitUntil(() => fatals.length === 1, "pump fataled on the superseded-page frame");
+    expect(session.phase).toBe("failed");
+    const fatal = fatals[0];
+    expect(fatal instanceof ProtocolError && fatal.code).toBe("MALFORMED_PROTOCOL");
+    expect(fatal instanceof ProtocolError && fatal.reason).toContain("superseded page");
+    expect(fatal instanceof ProtocolError && fatal.reason).not.toContain("frameSeq");
   });
 
   test("identity reports the currently mounted page and a stable sessionId/nonce", async () => {

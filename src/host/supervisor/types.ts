@@ -191,6 +191,11 @@ export interface HostSession {
    * Mount a different page in this live incarnation (design §9.2). Only valid from `ready`.
    * Resolves once the correlated `ready` has arrived; the first frame after it is awaited
    * under its own deadline by a later task, not by this promise.
+   *
+   * CALLERS MUST SERIALIZE: at most one `mount()` may be outstanding at a time. Calling it
+   * again before the previous call's promise has settled is refused (a `SupervisorError`),
+   * not queued — overwriting an in-flight mount would orphan its `ready` and could fatal the
+   * incarnation over a frame the child was correct to send.
    */
   mount(page: MountPageV1): Promise<ProtocolError | SupervisorError | ControlEnvelope>;
 }
