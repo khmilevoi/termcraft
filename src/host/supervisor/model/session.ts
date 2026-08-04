@@ -14,8 +14,9 @@ import type {
   FrameEnvelope,
   FrameIdentity,
   ProtocolViolationCode,
+  RuntimeDeclarationBundleV1,
 } from "../../protocol";
-import type { HostSessionSpec, InteractionMode, Size } from "../../types";
+import type { HostSessionIdentity, HostSessionSpec, InteractionMode, Size } from "../../types";
 import { SupervisorError } from "./errors";
 import { buildClientHello, verifyHostHello } from "./handshake";
 import { mintIdentity } from "./identity";
@@ -35,6 +36,7 @@ import type {
   HeartbeatWatchdog,
   HostSession,
   HostSessionDeps,
+  MountPageV1,
   ReadyOutcome,
   RequestTable,
   SessionPhase,
@@ -62,7 +64,34 @@ const REAP_TIMEOUT_MS = 1_000;
  */
 export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps): HostSession {
   const offeredLimits = deps.offeredLimits ?? PROTOCOL_HARD_LIMITS;
-  const identity = mintIdentity(spec, deps.sessionId);
+  // The incarnation identity, split into a stable half and a mutable half (design §9.2). One
+  // incarnation now serves one tree REVISION and mounts a page at a time, so only
+  // sessionId/nonce/mode stay fixed for the incarnation's whole life; pageSlug/sourceHash/
+  // kitApiVersion describe whichever page is CURRENTLY mounted and move on every accepted
+  // `mount()`.
+  const stable = mintIdentity(spec, deps.sessionId);
+  let mounted = {
+    pageSlug: spec.pageSlug,
+    sourceHash: spec.sourceHash,
+    kitApiVersion: spec.kitApiVersion,
+  };
+  // Every hash this incarnation has legitimately mounted. `checkFrameIdentity` accepts any of
+  // them: stdout is ordered, so the previous page's last frames arrive BEFORE the switch's
+  // `ready`, and killing the child over a frame it was correct to send would turn every page
+  // switch into a crash. A hash that was never mounted is still a violation — that is the part
+  // of the guard worth keeping.
+  const mountedHashes = new Set<string>([spec.sourceHash]);
+  const identityOf = (): HostSessionIdentity => ({ ...stable, ...mounted });
+  // The runtime declaration the handshake actually negotiated (§6.4), kept so `mount()` can
+  // re-run the kit-API membership check for a LATER page without re-negotiating the handshake.
+  let negotiatedDeclaration: RuntimeDeclarationBundleV1 | null = null;
+  // A mount request awaiting its correlated `ready` (design §9.2). Set by `mount()` before the
+  // write, cleared by `runPump`'s pending-mount hook the moment the matching envelope arrives —
+  // see that hook's comment for why the commit must happen inline, not via a `.then`.
+  let pendingMount: {
+    requestId: string;
+    mounted: { pageSlug: string; sourceHash: string; kitApiVersion: number };
+  } | null = null;
   let phase: SessionPhase = "created";
 
   // Post-ready components. The watchdog escalation and the request-table timeout
@@ -74,9 +103,9 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     onTimeout: () => watchdog.noteRequestTimeout(),
   });
   const broker: FrameBroker = (deps.createBroker ?? createFrameBroker)({
-    sessionId: identity.sessionId,
-    nonce: identity.nonce,
-    sourceHash: identity.sourceHash,
+    sessionId: stable.sessionId,
+    nonce: stable.nonce,
+    sourceHash: mounted.sourceHash,
   });
   // §8 rolling-second output flood detection. Metered on RAW inbound payload bytes
   // (before decode/coalescing), so a 2000-frame/s or >128 MiB/s or >1 MiB/s-stderr
@@ -196,7 +225,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     phase = "negotiating";
     const clientHello = buildClientHello({
       spec,
-      identity,
+      identity: identityOf(),
       runtimeDeclaration: deps.runtimeDeclaration,
       offeredLimits,
     });
@@ -215,7 +244,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     // budgeted (`restart-policy.ts`) is invisible as a single event — it shows up only as four
     // spawns and a frozen app — so the number that decides it belongs in the log.
     trace("host.handshake", {
-      sessionId: identity.sessionId,
+      sessionId: stable.sessionId,
       waitedMs: deps.clock.now() - handshakeStartedAt,
       budgetMs: HANDSHAKE_TIMEOUT_MS,
       outcome: helloMessage instanceof Error ? helloMessage.code : "hello",
@@ -232,27 +261,30 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     if (hostHello instanceof ProtocolError) return failWith(hostHello);
     const negotiation = verifyHostHello(hostHello, {
       spec,
-      identity,
+      identity: identityOf(),
       runtimeDeclaration: deps.runtimeDeclaration,
       offeredLimits,
     });
     if (negotiation instanceof ProtocolError) return failWith(negotiation);
+    // Keep what the handshake proved: `mount()` re-runs this membership check for a LATER
+    // page without re-negotiating (read-claim 6).
+    negotiatedDeclaration = negotiation.hostHello.runtimeDeclaration;
 
     // --- mount: send correlated mount request, await ready within 10s ---
     phase = "mounting";
     const mountRequestId = nextRequestId();
     const mountBody = buildMountBody(spec, spec.mode === "export" || spec.mode === "smoke");
     if (mountBody instanceof ProtocolError) return failWith(mountBody);
-    const mount: ControlEnvelope = {
+    const mountEnvelope: ControlEnvelope = {
       protocolVersion: 1,
       kind: "mount",
-      sessionId: identity.sessionId,
-      nonce: identity.nonce,
+      sessionId: stable.sessionId,
+      nonce: stable.nonce,
       messageId: nextMessageId(),
       requestId: mountRequestId,
       body: mountBody,
     };
-    const mountBytes = encodeControlEnvelope(mount);
+    const mountBytes = encodeControlEnvelope(mountEnvelope);
     if (mountBytes instanceof ProtocolError) return failWith(mountBytes);
     const mountSent = await writeFramed(spawned, mountBytes);
     if (mountSent instanceof SupervisorError) return failWith(mountSent);
@@ -264,7 +296,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     phase = "ready";
     startPump(readyResult.firstFrame);
     return {
-      identity,
+      identity: identityOf(),
       negotiatedLimits: negotiation.negotiatedLimits,
       ready: readyResult.ready,
       firstFrame: readyResult.firstFrame,
@@ -333,6 +365,23 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       if (identityError instanceof ProtocolError) {
         onPumpFatal(identityError);
         return;
+      }
+      // THE ONE ENVELOPE THE PUMP INSPECTS BEFORE ROUTING IT (design §9.2). A page switch's
+      // `ready` is the exact wire position where the source hash the child stamps into frames
+      // changes: everything before it belongs to the old page, everything after it to the new
+      // one. Re-seeding here — synchronously, inside the same loop iteration that decoded it —
+      // is what makes that true without a reordering window. Doing it from a `.then` on the
+      // request table's promise would leave a microtask between this envelope and the frame
+      // that follows it, and a frame that misses the guard is FATAL (below), not dropped.
+      if (pendingMount !== null && envelope.responseTo === pendingMount.requestId) {
+        if (envelope.kind === "ready") {
+          mounted = pendingMount.mounted;
+          mountedHashes.add(pendingMount.mounted.sourceHash);
+          broker.expect(pendingMount.mounted.sourceHash);
+        }
+        // A non-`ready` reply is the child's typed refusal — clear WITHOUT re-seeding, so the
+        // guard keeps naming the page that is actually on screen.
+        pendingMount = null;
       }
       if (envelope.responseTo !== undefined) {
         requestTable.resolve(envelope.responseTo, envelope);
@@ -476,7 +525,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   }
 
   function checkEnvelopeIdentity(envelope: ControlEnvelope): ProtocolError | null {
-    if (envelope.sessionId !== identity.sessionId || envelope.nonce !== identity.nonce) {
+    if (envelope.sessionId !== stable.sessionId || envelope.nonce !== stable.nonce) {
       return new ProtocolError({
         code: "MALFORMED_PROTOCOL",
         reason: "inbound envelope identity does not match the incarnation",
@@ -484,15 +533,30 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     }
     return null;
   }
+  // §9.2: a frame naming any hash this incarnation has LEGITIMATELY mounted is accepted, not
+  // just the currently mounted one — stdout is ordered, so the previous page's trailing frames
+  // arrive before the switch's `ready` (see `mountedHashes`' own doc comment above).
   function checkFrameIdentity(frame: FrameEnvelope): ProtocolError | null {
     if (
-      frame.sessionId !== identity.sessionId ||
-      frame.nonce !== identity.nonce ||
-      frame.sourceHash !== identity.sourceHash
+      frame.sessionId !== stable.sessionId ||
+      frame.nonce !== stable.nonce ||
+      !mountedHashes.has(frame.sourceHash)
     ) {
       return new ProtocolError({
         code: "MALFORMED_PROTOCOL",
         reason: "inbound frame identity does not match the incarnation",
+      });
+    }
+    return null;
+  }
+  function checkKitApiVersion(kitApiVersion: number): ProtocolError | null {
+    if (
+      negotiatedDeclaration === null ||
+      !negotiatedDeclaration.supportedKitApiVersions.includes(kitApiVersion)
+    ) {
+      return new ProtocolError({
+        code: "KIT_API_MISMATCH",
+        reason: `source kit API version ${kitApiVersion} is not in the host supported set`,
       });
     }
     return null;
@@ -531,9 +595,13 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     }
   }
 
-  async function sendRequest(
+  // Extracted so `mount()` can mint its requestId BEFORE the write and register it as the
+  // pump's `pendingMount` — the pump needs to recognise the reply as it arrives, not after.
+  async function sendRequestWithId(
+    requestId: string,
     kind: string,
     body: ControlEnvelope["body"],
+    timeoutMs?: number,
   ): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
     if (phase !== "ready" || child === null) {
       return new SupervisorError({
@@ -548,13 +616,12 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
         reason: `request table full (${REQUEST_TABLE_CAPACITY})`,
       });
     }
-    const requestId = nextRequestId();
-    const promise = requestTable.register(requestId, kind);
+    const promise = requestTable.register(requestId, kind, timeoutMs);
     const envelope: ControlEnvelope = {
       protocolVersion: 1,
       kind,
-      sessionId: identity.sessionId,
-      nonce: identity.nonce,
+      sessionId: stable.sessionId,
+      nonce: stable.nonce,
       messageId: nextMessageId(),
       requestId,
       body,
@@ -570,6 +637,13 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     }
     void pumpOutbound();
     return promise;
+  }
+
+  async function sendRequest(
+    kind: string,
+    body: ControlEnvelope["body"],
+  ): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
+    return sendRequestWithId(nextRequestId(), kind, body);
   }
 
   const resize = (size: Size) => sendRequest("resize", { size: { w: size.w, h: size.h } });
@@ -679,6 +753,44 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     return parseGeometryReply(result, frameIdentity);
   }
 
+  // Mount a different page in this live incarnation (design §9.2). Only valid from `ready`;
+  // the kit-API check runs (and can refuse) before anything is written to the child, same as
+  // the phase check. `pendingMount` is committed by `runPump`'s inline hook the moment the
+  // correlated `ready` is SEEN, not when this promise resolves — see that hook's comment.
+  async function mount(
+    page: MountPageV1,
+  ): Promise<ProtocolError | SupervisorError | ControlEnvelope> {
+    if (phase !== "ready" || child === null) {
+      return new SupervisorError({
+        code: "TRANSPORT_ERROR",
+        reason: `mount requires a ready session (was "${phase}")`,
+      });
+    }
+    const kitError = checkKitApiVersion(page.kitApiVersion);
+    if (kitError instanceof ProtocolError) return kitError;
+
+    const requestId = nextRequestId();
+    pendingMount = {
+      requestId,
+      mounted: {
+        pageSlug: page.pageSlug,
+        sourceHash: page.sourceHash,
+        kitApiVersion: page.kitApiVersion,
+      },
+    };
+    // `deterministic` is `false` because a repeated mount only ever happens in
+    // `preview`/`historical` (smoke and export are one-shot) — the same value `start()`
+    // computes for those modes. `buildMountBody` is reused verbatim: it is what enforces "the
+    // session's identity hash agrees with the inventory's row for this entry"
+    // (`mount-request.ts`), exactly as load-bearing for this mount as for the first.
+    const body = buildMountBody({ ...spec, ...page }, false);
+    if (body instanceof ProtocolError) {
+      pendingMount = null;
+      return body;
+    }
+    return sendRequestWithId(requestId, "mount", body, MOUNT_TIMEOUT_MS);
+  }
+
   // Kill + reap the child and tear down all resources; used on every failure path.
   async function failWith<E extends ProtocolError | SupervisorError>(error: E): Promise<E> {
     await teardown(true);
@@ -772,8 +884,8 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const shutdown: ControlEnvelope = {
       protocolVersion: 1,
       kind: "shutdown",
-      sessionId: identity.sessionId,
-      nonce: identity.nonce,
+      sessionId: stable.sessionId,
+      nonce: stable.nonce,
       messageId: nextMessageId(),
       requestId: shutdownRequestId,
       body: {},
@@ -827,7 +939,9 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
   }
 
   return {
-    identity,
+    get identity() {
+      return identityOf();
+    },
     get phase() {
       return phase;
     },
@@ -838,5 +952,6 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     setMode,
     ping,
     query,
+    mount,
   };
 }

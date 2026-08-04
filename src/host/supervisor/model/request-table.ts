@@ -18,22 +18,25 @@ interface PendingEntry {
 /**
  * The outstanding request table (host-supervision §7, §8, §9). Every registered
  * request has exactly ONE terminal outcome: a matching `resolve`, a local
- * `supersede` (`SUPERSEDED`), a 2 s `QUERY_TIMEOUT`, or a teardown `clear`. A
- * response for an unknown/already-settled correlation id is discarded. `onTimeout`
- * feeds the heartbeat watchdog's unresponsiveness counter (§9).
+ * `supersede` (`SUPERSEDED`), a `QUERY_TIMEOUT` at the table's default budget or
+ * at the per-request budget the caller named (`mount` names §9.4's mount
+ * deadline, five times the default), or a teardown `clear`. A response for an
+ * unknown/already-settled correlation id is discarded. `onTimeout` feeds the
+ * heartbeat watchdog's unresponsiveness counter (§9).
  */
 export function createRequestTable(
   clock: Clock,
   opts?: { onTimeout?: () => void; capacity?: number; timeoutMs?: number },
 ): RequestTable {
   const capacity = opts?.capacity ?? REQUEST_TABLE_CAPACITY;
-  const timeoutMs = opts?.timeoutMs ?? QUERY_TIMEOUT_MS;
+  const tableTimeoutMs = opts?.timeoutMs ?? QUERY_TIMEOUT_MS;
   const onTimeout = opts?.onTimeout;
   const entries = new Map<string, PendingEntry>();
 
   function register(
     requestId: string,
     kind: string,
+    timeoutMs?: number,
   ): Promise<ControlEnvelope | ProtocolError | SupervisorError> {
     if (entries.size >= capacity) {
       return Promise.resolve(
@@ -56,13 +59,14 @@ export function createRequestTable(
     const { promise, resolve: settle } = Promise.withResolvers<
       ControlEnvelope | ProtocolError | SupervisorError
     >();
-    const timer = clock.setTimer(timeoutMs, () => {
+    const effectiveTimeoutMs = timeoutMs ?? tableTimeoutMs;
+    const timer = clock.setTimer(effectiveTimeoutMs, () => {
       entries.delete(requestId);
       onTimeout?.();
       settle(
         new SupervisorError({
           code: "QUERY_TIMEOUT",
-          reason: `no response for ${kind} within ${timeoutMs}ms`,
+          reason: `no response for ${kind} within ${effectiveTimeoutMs}ms`,
         }),
       );
     });

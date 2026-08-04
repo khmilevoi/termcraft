@@ -90,6 +90,9 @@ function fakeFactory() {
           result: {},
         };
       },
+      async mount() {
+        return ready;
+      },
     };
   };
 }

@@ -180,6 +180,9 @@ function fakeFactory(opts?: {
           // test prove WHICH incarnation actually answered, across a restart.
           return { ok: true, frameIdentity, result: { answeredByNonce: nonce } };
         },
+        async mount() {
+          return ready;
+        },
       },
       crash(error) {
         phase = "failed";

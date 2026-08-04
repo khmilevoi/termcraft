@@ -10,12 +10,24 @@ import type { FrameBroker } from "../types";
  * checked against the incarnation guard (session + nonce + source hash) and a
  * strictly-monotonic `frameSeq` before it is accepted; a stale frame is rejected
  * without touching the slot. `close()` ends the frame iterator (§10.1).
+ *
+ * §9.3 of the design doc claims this file is unchanged by the mount-in-ready work
+ * (design-tree phase 3). It is not: `expect()` (below) lets the guard's expected
+ * source hash move after an accepted mount, because one incarnation now renders
+ * more than one page across its life (§9.2).
  */
 export function createFrameBroker(guard: {
   sessionId: string;
   nonce: string;
   sourceHash: string;
 }): FrameBroker {
+  // MUTABLE, AND §9.3's "frame-broker.ts is unchanged" DOES NOT SURVIVE (design-tree phase 3).
+  // The construction-time guard was right exactly while an incarnation rendered one page for
+  // its whole life. §9.2 retires that: one incarnation serves one tree REVISION and mounts a
+  // page at a time, so the hash the guard expects moves on every accepted mount. `lastSeq` is
+  // deliberately NOT reset — the child's frame counter runs across mounts, so monotonicity is
+  // still the ordering oracle and a replayed older frame is still refused.
+  let expectedSourceHash = guard.sourceHash;
   let pending: PreviewFrame | null = null;
   let coalesced = 0;
   let lastSeq: bigint | null = null;
@@ -33,7 +45,7 @@ export function createFrameBroker(guard: {
     if (
       frame.sessionId !== guard.sessionId ||
       frame.nonce !== guard.nonce ||
-      frame.sourceHash !== guard.sourceHash
+      frame.sourceHash !== expectedSourceHash
     ) {
       return "stale";
     }
@@ -80,6 +92,10 @@ export function createFrameBroker(guard: {
 
   return {
     publish,
+    /** Re-seed the incarnation guard's expected source hash after an accepted mount (§9.2). */
+    expect: (sourceHash: string) => {
+      expectedSourceHash = sourceHash;
+    },
     frames,
     framesCoalesced: () => coalesced,
     close: () => {

@@ -146,8 +146,25 @@ export type GeometryQueryResult =
     }
   | { readonly ok: false; readonly code: "STALE_FRAME"; readonly reason: string };
 
+/** What one page switch has to name (design §9.2). */
+export interface MountPageV1 {
+  readonly pageSlug: string;
+  readonly entryRelPath: string;
+  readonly sourceHash: string;
+  readonly kitApiVersion: number;
+  readonly size: Size;
+  readonly interactionMode: InteractionMode;
+  readonly theme: string;
+}
+
 /** The typed session handle returned to Kernel code (§3.1). No raw streams/process. */
 export interface HostSession {
+  /**
+   * The incarnation's identity (§3.1, §9.2). `sessionId`/`nonce`/`mode` are stable for the
+   * incarnation's whole life; `pageSlug`/`sourceHash`/`kitApiVersion` describe whichever page
+   * is CURRENTLY MOUNTED and move on every accepted `mount()` — this is a live getter, not a
+   * snapshot taken once at `start()`.
+   */
   readonly identity: HostSessionIdentity;
   readonly phase: SessionPhase;
   start(): Promise<ProtocolError | SupervisorError | ReadyOutcome>;
@@ -170,6 +187,12 @@ export interface HostSession {
     frameIdentity: FrameIdentity,
     query: GeometryQuery,
   ): Promise<ProtocolError | SupervisorError | GeometryQueryResult>;
+  /**
+   * Mount a different page in this live incarnation (design §9.2). Only valid from `ready`.
+   * Resolves once the correlated `ready` has arrived; the first frame after it is awaited
+   * under its own deadline by a later task, not by this promise.
+   */
+  mount(page: MountPageV1): Promise<ProtocolError | SupervisorError | ControlEnvelope>;
 }
 
 /** The UI-facing preview facade subset the 2C child supports today (§3.2). */
@@ -194,6 +217,8 @@ export interface PreviewSession {
 export interface FrameBroker {
   /** Atomic capacity-1 replace. Rejects a frame failing the §10.1 identity/seq guard. */
   publish(frame: FrameEnvelope): "accepted" | "stale";
+  /** Re-seed the incarnation guard's expected source hash after an accepted mount (§9.2). */
+  expect(sourceHash: string): void;
   readonly frames: AsyncIterable<PreviewFrame>;
   framesCoalesced(): number;
   close(): void;
@@ -201,10 +226,15 @@ export interface FrameBroker {
 
 /** The outstanding request table (§7, §8, §9). Every request has one terminal outcome. */
 export interface RequestTable {
-  /** Reserve a correlation id; resolves on resolve()/supersede()/timeout/clear. */
+  /**
+   * Reserve a correlation id; resolves on resolve()/supersede()/timeout/clear. `timeoutMs`
+   * overrides the table's default budget for this ONE request (`mount` names §9.4's mount
+   * deadline, five times the default); omitted, the table's own default applies.
+   */
   register(
     requestId: string,
     kind: string,
+    timeoutMs?: number,
   ): Promise<ControlEnvelope | ProtocolError | SupervisorError>;
   resolve(responseTo: string, envelope: ControlEnvelope): void;
   supersede(requestId: string, reason: string): void;

@@ -8,7 +8,7 @@ import type {
   RuntimeDeclarationBundleV1,
 } from "../../protocol";
 import type { HostSessionSpec } from "../../types";
-import type { FloodMonitor, HostSessionDeps } from "../types";
+import type { FloodMonitor, HostSessionDeps, MountPageV1 } from "../types";
 import { createManualClock } from "./clock";
 import { SupervisorError } from "./errors";
 import { livePreviewChild } from "./preview-test-host";
@@ -38,6 +38,31 @@ const spec: HostSessionSpec = {
   size: { w: 80, h: 24 },
   theme: "dark-default",
   capabilities: { colorDepth: 24 },
+};
+
+// --- fixtures for the mount() suite (design §9.2): a second page in the SAME tree revision.
+// One incarnation now serves one tree revision and mounts a page at a time, so `expectedFiles`
+// must already carry every page that could be mounted during the incarnation's life — hence
+// `specWithB` extends `spec`'s inventory rather than replacing it.
+const PAGE_B_SOURCE_HASH = "b".repeat(64);
+// Deliberately absent from every spec's `expectedFiles` — used to prove a frame naming a page
+// this incarnation never mounted is still fatal, distinct from a legitimately mounted-then-
+// superseded hash.
+const PAGE_C_SOURCE_HASH = "c".repeat(64);
+
+const specWithB: HostSessionSpec = {
+  ...spec,
+  expectedFiles: [...spec.expectedFiles, { relPath: "pages/b.tsx", sha256: PAGE_B_SOURCE_HASH }],
+};
+
+const pageB: MountPageV1 = {
+  pageSlug: "b",
+  entryRelPath: "pages/b.tsx",
+  sourceHash: PAGE_B_SOURCE_HASH,
+  kitApiVersion: 1,
+  size: { w: 80, h: 24 },
+  interactionMode: "static",
+  theme: "dark-default",
 };
 
 /**
@@ -676,6 +701,19 @@ async function decodeWrittenKind(bytes: Uint8Array): Promise<string | null> {
   return null;
 }
 
+/** Decode a single written control envelope in full (kind + body + requestId), or null. */
+async function decodeWrittenEnvelope(bytes: Uint8Array): Promise<ControlEnvelope | null> {
+  const carrier = createScriptedChild();
+  carrier.emit(bytes);
+  carrier.endStdout();
+  for await (const message of readInbound(carrier)) {
+    if (message instanceof Error) return null;
+    if (message.messageClass !== "control") return null;
+    return JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope;
+  }
+  return null;
+}
+
 describe("createHostSession request-table capacity guard (2D-2 adversarial review)", () => {
   test("sendRequest's pre-send guard rejects TOO_MANY_REQUESTS before writing any envelope when the table reports full", async () => {
     const child = livePreviewChild(spec, runtimeDeclaration);
@@ -905,5 +943,283 @@ describe("createHostSession inbound control-mailbox wiring (§8, CONTROL_BACKPRE
       "onControlEvent fired via the mailbox drain",
     );
     await session.stop();
+  });
+});
+
+// --- Task 3: HostSession.mount() — a correlated mount in the ready phase (design §9.2) ---
+
+interface CapturedIdentity {
+  sessionId: string;
+  nonce: string;
+}
+
+/**
+ * A scripted child for the mount() suite. Answers the handshake and the FIRST mount (the one
+ * start() sends) automatically, exactly like `respondingChild` above. When `autoReplyMounts` is
+ * true (the default) every LATER mount also gets an immediate correlated `ready` — enough for
+ * `mount()` to resolve, since committing the new identity only needs the `ready` envelope, not a
+ * frame (session.ts's pending-mount pump hook). When false, every mount past the first is left
+ * for the test to drive by hand via `emitFrame`/`emitReadyFor` below — used by tests that need
+ * to control exactly when a frame arrives relative to the switch's `ready`.
+ */
+function switchableChild(options?: {
+  autoReplyMounts?: boolean;
+}): ScriptedChild & { identity: () => CapturedIdentity | null; mountRequestIds: string[] } {
+  const autoReplyMounts = options?.autoReplyMounts ?? true;
+  const child = createScriptedChild();
+  let id: CapturedIdentity | null = null;
+  let replyMessageId = 500n;
+  const nextReplyMessageId = () => {
+    const value = replyMessageId.toString();
+    replyMessageId += 1n;
+    return value;
+  };
+  const mountRequestIds: string[] = [];
+  child.onWrite = (bytes) => void decodeWrite(bytes);
+  async function decodeWrite(bytes: Uint8Array) {
+    const carrier = createScriptedChild();
+    carrier.emit(bytes);
+    carrier.endStdout();
+    for await (const message of readInbound(carrier)) {
+      if (message instanceof Error) return;
+      if (message.messageClass !== "control") return;
+      const parsed = JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope;
+      if (parsed.kind === "client.hello" && id === null) {
+        id = { sessionId: parsed.sessionId, nonce: parsed.nonce };
+        const hostHello: HostHelloV1 = {
+          framingVersion: 1,
+          kind: "host.hello",
+          sessionId: id.sessionId,
+          nonce: id.nonce,
+          selectedFramingVersion: 1,
+          selectedProtocolVersion: 1,
+          runtimeDeclaration,
+          limits: PROTOCOL_HARD_LIMITS,
+        };
+        const framed = frameHostHello(hostHello);
+        if (!(framed instanceof ProtocolError)) child.emit(framed);
+        return;
+      }
+      if (id === null) return;
+      if (parsed.kind === "shutdown") {
+        const ack: ControlEnvelope = {
+          protocolVersion: 1,
+          kind: "shutdown-ack",
+          sessionId: id.sessionId,
+          nonce: id.nonce,
+          messageId: nextReplyMessageId(),
+          responseTo: parsed.requestId,
+          body: { ok: true },
+        };
+        const framed = frameControl(ack);
+        if (!(framed instanceof ProtocolError)) child.emit(framed);
+        child.simulateExit({ code: 0 });
+        return;
+      }
+      if (parsed.kind !== "mount") return;
+      mountRequestIds.push(parsed.requestId ?? "");
+      const isFirst = mountRequestIds.length === 1;
+      if (!isFirst && !autoReplyMounts) return; // left for the test to drive by hand
+      const ready: ControlEnvelope = {
+        protocolVersion: 1,
+        kind: "ready",
+        sessionId: id.sessionId,
+        nonce: id.nonce,
+        messageId: nextReplyMessageId(),
+        responseTo: parsed.requestId,
+        body: { size: { w: 80, h: 24 }, interactionMode: "static" },
+      };
+      const readyFramed = frameControl(ready);
+      if (!(readyFramed instanceof ProtocolError)) child.emit(readyFramed);
+      if (isFirst) {
+        // awaitReady needs BOTH ready and a first frame before start() can reach "ready".
+        const frame: FrameEnvelope = {
+          protocolVersion: 1,
+          kind: "frame",
+          sessionId: id.sessionId,
+          nonce: id.nonce,
+          sourceHash: spec.sourceHash,
+          frameSeq: "1",
+          width: 80,
+          height: 24,
+          rows: Array.from({ length: 24 }, () => []),
+        };
+        const frameFramed = frameFrame(frame);
+        if (!(frameFramed instanceof ProtocolError)) child.emit(frameFramed);
+      }
+    }
+  }
+  return Object.assign(child, { identity: () => id, mountRequestIds });
+}
+
+/** Hand-emit a frame with a specific sourceHash/frameSeq, for tests that control ordering. */
+function emitFrame(
+  child: ScriptedChild,
+  id: CapturedIdentity,
+  sourceHash: string,
+  frameSeq: string,
+): void {
+  const frame: FrameEnvelope = {
+    protocolVersion: 1,
+    kind: "frame",
+    sessionId: id.sessionId,
+    nonce: id.nonce,
+    sourceHash,
+    frameSeq,
+    width: 80,
+    height: 24,
+    rows: Array.from({ length: 24 }, () => []),
+  };
+  const framed = frameFrame(frame);
+  if (framed instanceof ProtocolError) throw framed;
+  child.emit(framed);
+}
+
+let emittedReadyMessageId = 9_000n;
+/** Hand-emit a correlated `ready` for a given requestId, for tests that control ordering. */
+function emitReadyFor(child: ScriptedChild, id: CapturedIdentity, requestId: string): void {
+  const messageId = emittedReadyMessageId.toString();
+  emittedReadyMessageId += 1n;
+  const ready: ControlEnvelope = {
+    protocolVersion: 1,
+    kind: "ready",
+    sessionId: id.sessionId,
+    nonce: id.nonce,
+    messageId,
+    responseTo: requestId,
+    body: { size: { w: 80, h: 24 }, interactionMode: "static" },
+  };
+  const framed = frameControl(ready);
+  if (framed instanceof ProtocolError) throw framed;
+  child.emit(framed);
+}
+
+describe("createHostSession.mount() — switch pages inside a live incarnation (design §9.2)", () => {
+  test("mount() from ready sends a correlated mount and resolves on its ready", async () => {
+    const child = switchableChild();
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const result = await session.mount(pageB);
+    expect(result).not.toBeInstanceOf(Error);
+
+    const written = await Promise.all(child.written.map(decodeWrittenEnvelope));
+    const mounts = written.filter((e): e is ControlEnvelope => e !== null && e.kind === "mount");
+    expect(mounts.length).toBe(2); // start()'s mount + this one
+    expect(mounts.at(-1)?.body.entryRelPath).toBe("pages/b.tsx");
+    expect((result as ControlEnvelope).responseTo).toBe(mounts.at(-1)?.requestId);
+
+    await session.stop();
+  });
+
+  test("a frame naming the NEW page is accepted only after its ready is observed", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild({ autoReplyMounts: false });
+    const base = deps(child).deps;
+    const session = createHostSession(specWithB, { ...base, onFatal: (e) => fatals.push(e) });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+
+    const iterator = session.frames[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect(first.value?.frameSeq).toBe("1");
+
+    const mountPromise = session.mount(pageB);
+    await waitUntil(() => child.mountRequestIds.length === 2, "second mount written");
+    const secondRequestId = child.mountRequestIds[1] as string;
+
+    // A trailing OLD-page frame that was already in flight when the switch was requested —
+    // every frame of the old page was written before the child even processed the mount
+    // (read-claim 5), so this must be ACCEPTED, not treated as fatal.
+    emitFrame(child, id, spec.sourceHash, "2");
+    const second = await iterator.next();
+    expect(second.value?.frameSeq).toBe("2");
+    expect(second.done).toBe(false);
+
+    // Only once the switch's `ready` is OBSERVED does the guard's expected hash move.
+    emitReadyFor(child, id, secondRequestId);
+    const mountResult = await mountPromise;
+    expect(mountResult).not.toBeInstanceOf(Error);
+
+    // A NEW-page frame after the switch's ready — accepted under the re-seeded guard.
+    emitFrame(child, id, PAGE_B_SOURCE_HASH, "3");
+    const third = await iterator.next();
+    expect(third.value?.frameSeq).toBe("3");
+    expect(third.done).toBe(false);
+
+    expect(fatals).toHaveLength(0);
+    expect(session.phase).toBe("ready");
+    await session.stop();
+  });
+
+  test("a frame naming a page this incarnation never mounted is still fatal", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild();
+    const base = deps(child).deps;
+    const session = createHostSession(specWithB, { ...base, onFatal: (e) => fatals.push(e) });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+
+    // PAGE_C_SOURCE_HASH was never named by any mount this incarnation sent — a protocol
+    // violation, not a frame to display, even though its shape is otherwise well-formed.
+    emitFrame(child, id, PAGE_C_SOURCE_HASH, "2");
+    await waitUntil(() => fatals.length === 1, "pump fataled on the never-mounted hash");
+    expect(session.phase).toBe("failed");
+    expect(fatals[0] instanceof ProtocolError && fatals[0].code).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("identity reports the currently mounted page and a stable sessionId/nonce", async () => {
+    const child = switchableChild();
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const before = { ...session.identity };
+    const result = await session.mount(pageB);
+    expect(result).not.toBeInstanceOf(Error);
+
+    expect(session.identity.sessionId).toBe(before.sessionId);
+    expect(session.identity.nonce).toBe(before.nonce);
+    expect(session.identity.mode).toBe(before.mode);
+    expect(session.identity.pageSlug).toBe("b");
+    expect(session.identity.sourceHash).toBe(PAGE_B_SOURCE_HASH);
+    expect(session.identity.kitApiVersion).toBe(1);
+
+    await session.stop();
+  });
+
+  test("mounting a page whose kitApiVersion the host does not support is refused, deterministically", async () => {
+    const child = switchableChild();
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const writtenAtReady = child.written.length;
+
+    const result = await session.mount({ ...pageB, kitApiVersion: 99 });
+    expect(result).toBeInstanceOf(ProtocolError);
+    if (result instanceof ProtocolError) expect(result.code).toBe("KIT_API_MISMATCH");
+    expect(child.written.length).toBe(writtenAtReady); // nothing written for the refused mount
+
+    await session.stop();
+  });
+
+  test("mount() before ready is refused without writing anything", async () => {
+    const child = switchableChild();
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    // deliberately never call session.start() — phase stays "created"
+
+    const result = await session.mount(pageB);
+    expect(result).toBeInstanceOf(SupervisorError);
+    if (result instanceof SupervisorError) expect(result.code).toBe("TRANSPORT_ERROR");
+    expect(child.written.length).toBe(0); // the scripted child received no bytes at all
   });
 });

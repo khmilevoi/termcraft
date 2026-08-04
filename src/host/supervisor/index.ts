@@ -53,6 +53,7 @@ export type {
   HostSessionDeps,
   HostSupervisor,
   HostSupervisorDeps,
+  MountPageV1,
   OneShotDeps,
   OneShotResult,
   PreviewRelay,

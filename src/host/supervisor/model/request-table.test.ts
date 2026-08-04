@@ -31,6 +31,21 @@ describe("createRequestTable", () => {
     expect(table.size()).toBe(0);
   });
 
+  test("a per-request timeout overrides the 2s default and leaves other entries alone", async () => {
+    const clock = createManualClock();
+    const table = createRequestTable(clock);
+    const slow = table.register("1", "mount", 10_000);
+    const fast = table.register("2", "ping");
+    clock.advance(2_001);
+    const fastResult = await fast;
+    expect(fastResult).toBeInstanceOf(SupervisorError);
+    expect(clock.pending()).toBe(1); // the slow entry's own timer is still armed
+    clock.advance(8_000);
+    const slowResult = await slow;
+    expect(slowResult).toBeInstanceOf(SupervisorError);
+    if (slowResult instanceof SupervisorError) expect(slowResult.code).toBe("QUERY_TIMEOUT");
+  });
+
   test("2 s with no response completes the request once with QUERY_TIMEOUT and fires onTimeout", async () => {
     const clock = createManualClock();
     let timeouts = 0;

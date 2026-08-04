@@ -90,6 +90,19 @@ describe("createFrameBroker", () => {
     expect(broker.publish(makeFrame({ frameSeq: "1" }))).toBe("stale");
   });
 
+  test("expect() re-seeds the source-hash guard and keeps the monotonic frameSeq (§9.2)", () => {
+    const otherHash = "d".repeat(64);
+    const broker = createFrameBroker(GUARD);
+    expect(broker.publish(makeFrame({ frameSeq: "5" }))).toBe("accepted");
+    expect(broker.publish(makeFrame({ sourceHash: otherHash, frameSeq: "6" }))).toBe("stale"); // not yet expected
+    broker.expect(otherHash);
+    expect(broker.publish(makeFrame({ sourceHash: GUARD.sourceHash, frameSeq: "7" }))).toBe(
+      "stale",
+    ); // no longer expected
+    expect(broker.publish(makeFrame({ sourceHash: otherHash, frameSeq: "7" }))).toBe("accepted");
+    expect(broker.publish(makeFrame({ sourceHash: otherHash, frameSeq: "7" }))).toBe("stale"); // seq still guards
+  });
+
   test("a second concurrent parked consumer is rejected loudly instead of silently clobbering the first's resolver", async () => {
     const broker = createFrameBroker(GUARD);
     const iteratorA = broker.frames[Symbol.asyncIterator]();
