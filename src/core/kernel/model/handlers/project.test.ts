@@ -1285,6 +1285,87 @@ describe("project.open", () => {
       warnSpy.mockRestore();
     });
   });
+
+  // --- Task 5 (design-tree phase 2): the caller's page list and the index's can disagree --------
+
+  test("a page the whole-tree pass never judged is `invalid`, never published `ready` un-type-checked", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const ghost = slug("ghost");
+      const GHOST_ENTRY = "pages/ghost.tsx";
+      const designReader = createFakeDesignStoreForPages({
+        pages: [{ pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" }],
+        // The ghost's entry file IS in the tree, so `readPageEntrySource` can read it — what the
+        // MANIFEST does not carry is its identity.
+        extraFiles: new Map([[GHOST_ENTRY, { bytes: FAKE_SOURCE_BYTES }]]),
+      });
+      const gateRunner = createFakeGateRunner();
+      const harness = buildTestContext({ gateRunner, designReader });
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      // THE RACE, REPRODUCED: the caller read a page list that carries `ghost`, then the index
+      // read `design/pages.json` again and got one that does not. `runTree` therefore judged only
+      // `home`, so NOTHING the pass reports can ever name `ghost` in `blockedPages` — and the
+      // fake's default `runPage` passes every page. Without the `unjudged` guard this publishes
+      // `ghost` as "ready" on the strength of a type check that never covered it.
+      const descriptors = await buildPageDescriptors(harness.handlerContext, [
+        ...manifest.pages,
+        { slug: ghost, entry: GHOST_ENTRY },
+      ]);
+      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+
+      const bySlug = new Map(descriptors.map((descriptor) => [descriptor.pageSlug, descriptor]));
+      const ghostDescriptor = bySlug.get(ghost);
+      expect(ghostDescriptor?.status).toBe("invalid");
+      expect(ghostDescriptor?.status === "invalid" ? ghostDescriptor.error.code : null).toBe(
+        "PAGE_NOT_JUDGED",
+      );
+      // And only the unjudged one: `home` was judged, so it publishes normally.
+      expect(bySlug.get(home)?.status).toBe("ready");
+    });
+  });
+
+  test("a page the pass BLOCKED that this publish does not list is logged, never silently dropped", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const about = slug("about");
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" },
+          { pageSlug: about, bytes: FAKE_SOURCE_BYTES, entry: "pages/about.tsx" },
+        ],
+      });
+      const gateRunner = createFakeGateRunner();
+      // THE MIRROR OF THE TEST ABOVE: the pass judged and BLOCKED `about`, but this publish's own
+      // page list names only `home`, so that diagnostic has no descriptor to land on. It
+      // invalidates nothing — correctly — but it must not vanish in silence.
+      gateRunner.queueRunTreeResult({
+        errors: [
+          {
+            kind: "type",
+            code: "TS2322",
+            message: "Type 'string' is not assignable to type 'number'.",
+            file: "pages/about.tsx",
+            blockedPages: [about],
+          },
+        ],
+        warnings: [],
+        closures: [],
+      });
+      const harness = buildTestContext({ gateRunner, designReader });
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+      const descriptors = await buildPageDescriptors(harness.handlerContext, [
+        { slug: home, entry: "pages/home.tsx" },
+      ]);
+      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+
+      expect(descriptors.map((descriptor) => descriptor.status)).toEqual(["ready"]);
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('"about"'))).toBe(true);
+      warnSpy.mockRestore();
+    });
+  });
 });
 
 // --- project.retryOpen --------------------------------------------------------------------------

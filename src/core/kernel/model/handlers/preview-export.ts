@@ -235,6 +235,39 @@ async function extractAndCachePageMeta(
 }
 
 /**
+ * THE WHOLE-TREE PASS'S OWN DIAGNOSTICS, ON A PATH WITH NO DESCRIPTOR TO CARRY THEM (task-5
+ * review round 1, Important). Since Task 5 both of this file's tree readers run
+ * `GateRunner.runTree` — a full allowlist scan and one `tsc` program — and therefore RECEIVE its
+ * fatals. Neither path publishes a `PageDescriptorV1`, so neither has anywhere to attribute them,
+ * and consuming only `index.pages`/`index.inventory` dropped them on the floor: exactly the
+ * "know and don't say" defect errore rule 21 forbids, and a direct contradiction of
+ * `CanonicalTreeIndexV1.errors`' own contract ("carried so a caller can attribute them; never
+ * swallowed"). Attribution proper is not this task's — Task 6 is where this path starts consuming
+ * `closureHashOf` and a per-page reading becomes meaningful — so the honest interim is a trace
+ * that names every diagnostic.
+ *
+ * ONCE PER INDEX BUILT, NEVER ONCE PER PAGE: {@link resolvePageSettings} logs only when it built
+ * the index ITSELF. A caller-supplied index was already reported by whoever built it, and logging
+ * again inside the loop would repeat one tree-wide fatal once per page of the export.
+ */
+function warnTreePassDiagnostics(origin: string, index: CanonicalTreeIndexV1): void {
+  if (index.errors.length === 0 && index.warnings.length === 0) return;
+  const reported = [
+    ...index.errors.map(
+      (error) =>
+        `[${error.kind}/${error.code}]${error.file === undefined ? "" : ` ${error.file}`} ${error.message}`,
+    ),
+    ...index.warnings.map(
+      (warning) =>
+        `[warning/${warning.kind}]${warning.file === undefined ? "" : ` ${warning.file}`} ${warning.message}`,
+    ),
+  ];
+  console.warn(
+    `core/kernel/handlers/preview-export: ${origin} ran the whole-tree pass, which reported ${index.errors.length} error(s) and ${index.warnings.length} warning(s) this path has no descriptor to attribute them to: ${reported.join("; ")}`,
+  );
+}
+
+/**
  * ONE TREE READ PER RESOLVE, AND ONE PER LOOP (design-tree phase 2 Task 5). `treeIndex` replaced
  * the pair of optional `pages`/`treeInventory` parameters this function used to take, for the
  * same reason they existed and one more: `readCanonicalTreeIndex` produces the manifest's page
@@ -255,6 +288,7 @@ async function resolvePageSettings(
 ): Promise<FailureDtoV1 | ResolvedPageSettingsV1> {
   const index = treeIndex ?? (await wrap(readCanonicalTreeIndex(deps)));
   if ("code" in index) return index;
+  if (treeIndex === undefined) warnTreePassDiagnostics(`resolvePageSettings("${pageSlug}")`, index);
 
   const source = await readPageEntrySource(deps.designReader, pageSlug, index.pages);
   if ("code" in source) return source;
@@ -1348,6 +1382,7 @@ async function resolveExportPageInputs(
   // every page of one export renders against the same tree revision (design §9.2).
   const index = await wrap(readCanonicalTreeIndex(context.deps));
   if ("code" in index) return index;
+  warnTreePassDiagnostics("export.start's page-input resolution", index);
 
   const pages: ExportPageInputV1[] = [];
   for (const [manifestIndex, entry] of index.pages.entries()) {

@@ -180,6 +180,22 @@ export async function buildPageDescriptors(
   // `blockedPages` attribution, which is a fail-open (a page published `"ready"` that the type
   // check never covered). Checked rather than assumed — see the loop's own `unjudged` branch.
   const judged = new Set(index.pages.map((entry) => entry.slug));
+
+  // THE MIRROR DIRECTION, AND IT WAS SILENT (task-5 review round 1, Minor M2). The `unjudged`
+  // branch below covers a slug this loop publishes that the pass never judged; this covers the
+  // reverse — a slug the pass DID judge, and blocked, that this loop does not publish. Its
+  // `blockedPages` entry then has no descriptor to land on, so the diagnostic vanishes exactly
+  // the way an orphan module's would, except that this one names a real page. Unlike
+  // `routePassErrors`' own orphan case it left no trace at all, so it is warned here for the same
+  // reason and in the same shape.
+  const published = new Set(pages.map((entry) => entry.slug));
+  const unpublished = [...routed.byPage.keys()].filter((pageSlug) => !published.has(pageSlug));
+  if (unpublished.length > 0) {
+    console.warn(
+      `core/kernel/handlers/page-descriptors: the whole-tree pass blocked page(s) ${unpublished.map((pageSlug) => `"${pageSlug}"`).join(", ")} that this publish does not list, so their diagnostics invalidate no descriptor`,
+    );
+  }
+
   if (routed.treeWide.length > 0 && pages.length === 0) {
     // No descriptor exists to carry them, so they would otherwise vanish here. The manifest naming
     // no page is the only way to reach this, and it is still worth a trace: "the compiler crashed"
