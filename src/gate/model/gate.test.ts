@@ -26,6 +26,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
@@ -47,6 +48,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.kind === "contract")).toBe(true);
@@ -63,6 +65,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: "screens/overview/index.tsx",
       closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
+      smoke: "run",
     });
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
   });
@@ -79,6 +82,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.warnings.some((w) => w.kind === "unguarded-randomness")).toBe(true);
@@ -90,6 +94,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.warnings.some((w) => w.kind === "dropped-id")).toBe(false);
   });
@@ -101,6 +106,7 @@ describe("runGate (§6.3 pipeline)", () => {
       entryRelPath: ENTRY,
       closure: CLOSURE,
       referencedIds: ["t", "cpu-gauge"],
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(
@@ -115,6 +121,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.warnings.some((w) => w.kind === "unpointed-element")).toBe(true);
@@ -127,6 +134,7 @@ describe("runGate (§6.3 pipeline)", () => {
       slug: SLUG,
       entryRelPath: ENTRY,
       closure: CLOSURE,
+      smoke: "run",
     });
     expect(result.warnings.some((w) => w.kind === "unlisted-navigation")).toBe(false);
   });
@@ -139,6 +147,7 @@ describe("runGate (§6.3 pipeline)", () => {
       entryRelPath: ENTRY,
       closure: CLOSURE,
       listedSlugs: [SLUG],
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(
@@ -158,7 +167,15 @@ describe("runGate (§6.3 pipeline)", () => {
     let smokeRan = false;
     const brokenContractSource = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     await runGate(
-      { source: brokenContractSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE },
+      // `smoke: "run"` deliberately: the EXISTING precondition (nothing fatal yet) is what
+      // must keep this candidate out of the smoke stage, not the step-8 scoping added beside it.
+      {
+        source: brokenContractSource,
+        slug: SLUG,
+        entryRelPath: ENTRY,
+        closure: CLOSURE,
+        smoke: "run",
+      },
       {
         smokeRender: () => {
           smokeRan = true;
@@ -176,10 +193,72 @@ describe("runGate (§6.3 pipeline)", () => {
       message: "render threw",
     };
     const result = await runGate(
-      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE },
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE, smoke: "run" },
       { smokeRender: () => [smokeError] },
     );
     expect(result.errors.some((e) => e.kind === "smoke")).toBe(true);
+  });
+
+  // --- design §8 step 8: the caller scopes the smoke stage, and `smoke` has no default -------
+
+  test('`smoke: "skip"` calls no smoke port at all, and still returns the page\'s descriptor', async () => {
+    // Step 8's economy: a page whose whole closure is byte-identical to the send-time read set
+    // has already been smoke-rendered, so re-rendering it costs a host child process per
+    // attempt for an answer that cannot have changed. Everything else about the page still
+    // runs — the descriptor below is what the caller needs from an unchanged page.
+    let smokeRan = false;
+    const result = await runGate(
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE, smoke: "skip" },
+      {
+        smokeRender: () => {
+          smokeRan = true;
+          return [{ kind: "smoke", code: "DESIGN_RENDER_FAILED", message: "render threw" }];
+        },
+      },
+    );
+    expect(smokeRan).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.descriptor).toEqual({
+      slug: SLUG,
+      meta: {
+        kitApiVersion: 1,
+        title: "Dashboard",
+        minSize: { w: 80, h: 24 },
+        theme: "dark-default",
+      },
+    });
+  });
+
+  test('the identical input with `smoke: "run"` DOES reach the port — no over-fire in the skip test above', async () => {
+    let smokeRan = false;
+    await runGate(
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE, smoke: "run" },
+      {
+        smokeRender: () => {
+          smokeRan = true;
+          return [];
+        },
+      },
+    );
+    expect(smokeRan).toBe(true);
+  });
+
+  test('`smoke: "skip"` does not weaken the manifest stage — that one is gated only on the contract', async () => {
+    // The new precondition is ADDITIVE, and it is the SMOKE stage's alone: `checkManifest`
+    // reads the descriptor, costs no child process, and has nothing to do with which pages
+    // changed.
+    let manifestRan = false;
+    await runGate(
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY, closure: CLOSURE, smoke: "skip" },
+      {
+        checkManifest: () => {
+          manifestRan = true;
+          return [];
+        },
+      },
+    );
+    expect(manifestRan).toBe(true);
   });
 
   // --- Step 1's second sample, verbatim (task-12 brief) ---
@@ -191,6 +270,7 @@ describe("runGate (§6.3 pipeline)", () => {
         slug: HOME,
         entryRelPath: "pages/home.tsx",
         closure: CLOSURE,
+        smoke: "run",
       },
       {
         smokeRender: () => {
@@ -211,6 +291,7 @@ describe("runGate (§6.3 pipeline)", () => {
       source: `export const meta = definePage({ title: "t" })\nexport default () => null\n`,
       slug: "home" as PageSlug,
       entryRelPath: "screens/home/index.tsx",
+      smoke: "run",
     });
     // `GateWarning.file` is now optional too (design-tree phase 2 Task 4), set ONLY by
     // `gate/adapters/gate-runner.ts`'s whole-tree pass (`import-cycle`/`dead-module`) — `runGate`
@@ -300,6 +381,7 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hi</Text></Panel
       slug: dashboardSlug,
       entryRelPath: entry,
       closure: { entry, files: [entry] },
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.errors[0]).toBeUndefined();
@@ -334,6 +416,7 @@ describe("runGate — a page whose own source cannot be read to the end", () => 
       source: TRUNCATED,
       slug: "home" as PageSlug,
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(result.ok).toBe(false);
     // The CODE matters: a truncated stream also has no `meta` in it, so a naive implementation
@@ -351,6 +434,7 @@ describe("runGate — a page whose own source cannot be read to the end", () => 
       source: sameShape,
       slug: "home" as PageSlug,
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(kept.errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
   });
@@ -361,6 +445,7 @@ describe("runGate — a page whose own source cannot be read to the end", () => 
       source: clean,
       slug: "home" as PageSlug,
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(result.errors.map((e) => e.code)).not.toContain("UNSCANNABLE_SOURCE");
   });

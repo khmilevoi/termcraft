@@ -803,6 +803,10 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly expectedFiles: readonly DesignFileEntryV1[];
     readonly entryRelPath: string;
     readonly closure?: ClosureV1;
+    /** Forwarded VERBATIM to `runGate` — this adapter decides nothing about it (design §8 step
+     *  8). Required, with no default here either: a fallback in this bridge would be exactly
+     *  the silent one the port's own doc forbids. */
+    readonly smoke: "run" | "skip";
   }): Promise<GateRunResultV1> {
     const fileName = input.entryRelPath;
     // The smoke stage mounts the page's whole closure off a real tree on disk (see this file's
@@ -822,6 +826,7 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
         source: input.source,
         slug: input.slug,
         entryRelPath: input.entryRelPath,
+        smoke: input.smoke,
         ...(input.closure !== undefined ? { closure: input.closure } : {}),
       },
       ports,

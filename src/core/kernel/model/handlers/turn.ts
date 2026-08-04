@@ -1318,6 +1318,19 @@ async function runTurnStart(
   const cachingStaging = createContentCachingStaging(context.deps.staging);
 
   /**
+   * THE TURN'S SEND-TIME TREE INVENTORY — the `before` side of design §7's closure diff, built
+   * ONCE here and read by BOTH consumers below: the Gate's smoke scoping (design §8 step 8,
+   * through `buildValidationInput`) and the turn's own `changedPages` report (through
+   * `buildFinalizeInput`'s `selectChangedPages`).
+   *
+   * One construction, deliberately. Both answer the same question — "which pages changed since
+   * this turn was sent" — from the same `designFiles` read set, and a second construction is the
+   * shape in which the Gate could skip a page's smoke render while the very same turn reports
+   * that page to the designer as changed.
+   */
+  const sendTimeTreeInventory = readSetTreeInventory(designFiles);
+
+  /**
    * WHOLE-TREE, NOT PER-PAGE (task 14). `runTurnValidation` decides which pages exist by
    * decoding the candidate's OWN `design/pages.json`; this builder's job is to hand it the
    * tree, not a page list.
@@ -1342,6 +1355,11 @@ async function runTurnStart(
     // `candidateTreeInventory` rather than open-coded so this and `buildFinalizeInput`'s
     // changed-page diff cannot disagree about the inventory's shape.
     treeInventory: candidateTreeInventory(candidate.treeFiles).files,
+    // THE OTHER SIDE OF THE SAME DIFF (design §8 step 8): the tree as it stood when this turn
+    // was SENT, so `runTurnValidation` can smoke only the pages whose closure actually moved.
+    // The SAME value `buildFinalizeInput` diffs below for the turn's own `changedPages` report
+    // — see {@link sendTimeTreeInventory}.
+    sendTimeInventory: sendTimeTreeInventory,
     files: new Map(
       candidate.treeFiles.map((file) => [
         file.relPath,
@@ -1414,7 +1432,10 @@ async function runTurnStart(
     // omitted", and a caller re-deriving either one is how they come to disagree.
     const changedPageSlugs = selectChangedPages({
       closures: validation.closures,
-      beforeInventory: readSetTreeInventory(designFiles),
+      // The SAME send-time inventory `buildValidationInput` handed the Gate for its smoke
+      // scoping (design §8 step 8) — built once above, so this report and that decision are
+      // literally the same comparison, not two agreeing ones.
+      beforeInventory: sendTimeTreeInventory,
       afterInventory: candidateTreeInventory(candidate.treeFiles),
     });
 

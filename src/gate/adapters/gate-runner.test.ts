@@ -72,6 +72,7 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
@@ -178,6 +179,7 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run",
     });
     expect(result.errors.some((e) => e.kind === "import")).toBe(false);
     expect(smokeRan).toBe(true);
@@ -1003,11 +1005,39 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run",
     });
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.kind === "smoke" && e.code === "DESIGN_RENDER_FAILED")).toBe(
       true,
     );
+  });
+
+  test('runPage() with smoke: "skip" never reaches the SmokeRenderer at all, and still returns the descriptor', async () => {
+    // Design §8 step 8, at the adapter boundary: the real renderer here is a host CHILD
+    // PROCESS per page per attempt, so "the caller said this page's closure did not change"
+    // has to stop before the port, not inside it. The renderer below fails every render, so a
+    // forwarded call would be impossible to miss.
+    let rendered = 0;
+    const adapter = createGateRunnerAdapter({
+      smokeRenderer: {
+        render: async () => {
+          rendered += 1;
+          return { ok: false, code: "DESIGN_RENDER_FAILED", message: "must not run" };
+        },
+      },
+    });
+    const result = await adapter.runPage({
+      source: cleanSource,
+      slug: SLUG,
+      treeRoot: "/proj/.termcraft/design",
+      expectedFiles: [],
+      entryRelPath: "pages/dash.tsx",
+      smoke: "skip",
+    });
+    expect(rendered).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.descriptor?.slug).toBe(SLUG);
   });
 
   // The "runPage() without compilerAssets/runtimeDts skips the type-check stage" test that used
@@ -1032,6 +1062,7 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run",
     });
     expect(checkManifestCalled).toBe(true);
   });
@@ -1074,6 +1105,7 @@ describe("createGateRunnerAdapter", () => {
         treeRoot: dir,
         entryRelPath: "dash.tsx",
         expectedFiles: [{ relPath: "dash.tsx", sha256: "0".repeat(64) }],
+        smoke: "run",
       });
       expect(result.ok).toBe(true);
       expect(result.errors).toEqual([]);
@@ -1098,6 +1130,7 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run",
     });
     expect(result.ok).toBe(false);
     expect(
@@ -1115,6 +1148,7 @@ describe("createGateRunnerAdapter", () => {
       expectedFiles: [],
       entryRelPath: "screens/overview/index.tsx",
       closure: { entry: "screens/overview/index.tsx", files: ["screens/overview/index.tsx"] },
+      smoke: "run",
     });
     expect(result.ok).toBe(false);
     expect(result.errors[0]?.file).toBe("screens/overview/index.tsx");
@@ -1133,6 +1167,7 @@ describe("createGateRunnerAdapter", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/dash.tsx",
+      smoke: "run" as const,
     };
     const fakeResult = await fake.runPage(input);
     const realResult = await real.runPage(input);
@@ -1289,6 +1324,7 @@ describe("runTree() — the type check inside the whole-tree pass (design §8 st
         treeRoot: "/proj/.termcraft/design",
         expectedFiles: [],
         entryRelPath: "pages/home.tsx",
+        smoke: "run",
       });
       expect(pageResult.errors.some((error) => error.kind === "type")).toBe(false);
     },

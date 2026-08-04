@@ -26,6 +26,9 @@ export type GateRunnerCall =
       readonly treeRoot: string;
       readonly expectedFileCount: number;
       readonly entryRelPath: string;
+      /** The caller's own design §8 step 8 decision, logged verbatim — the only way a test can
+       *  observe which pages were scoped out of the smoke stage. */
+      readonly smoke: "run" | "skip";
     }
   | {
       readonly method: "runTree";
@@ -94,6 +97,9 @@ export function createFakeGateRunner(): FakeGateRunner {
     expectedFiles: readonly DesignFileEntryV1[];
     entryRelPath: string;
     closure?: ClosureV1;
+    /** Required, exactly as on the port — this fake gives it no default either, or a caller
+     *  that forgot to decide would look identical to one that decided `"run"`. */
+    smoke: "run" | "skip";
   }): Promise<GateRunResultV1> {
     calls.push({
       method: "runPage",
@@ -104,6 +110,7 @@ export function createFakeGateRunner(): FakeGateRunner {
       // fixture-hash transcription exercise.
       expectedFileCount: input.expectedFiles.length,
       entryRelPath: input.entryRelPath,
+      smoke: input.smoke,
     });
     const queued = pageResults.shift();
     if (queued !== undefined) return queued;

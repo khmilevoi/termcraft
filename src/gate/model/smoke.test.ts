@@ -92,7 +92,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
   test("runGate rejects a candidate whose smoke render fails", async () => {
     const { renderer } = fakeRenderer({ ok: false, code: "MOUNT_FAILED", message: "mount failed" });
     const result = await runGate(
-      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY_RELPATH },
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY_RELPATH, smoke: "run" },
       { smokeRender: createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH) },
     );
     expect(result.ok).toBe(false);
@@ -102,7 +102,7 @@ describe("createSmokeRender (phase-3 T6, host-supervision §11.3)", () => {
   test("runGate passes a candidate whose smoke render succeeds", async () => {
     const { renderer } = fakeRenderer({ ok: true });
     const result = await runGate(
-      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY_RELPATH },
+      { source: cleanSource, slug: SLUG, entryRelPath: ENTRY_RELPATH, smoke: "run" },
       { smokeRender: createSmokeRender(renderer, TREE_CONTEXT, ENTRY_RELPATH) },
     );
     expect(result.ok).toBe(true);

@@ -269,13 +269,42 @@ export interface GateRunner {
      */
     readonly entryRelPath: string;
     /**
-     * The entry's resolved closure (design §7), threaded through for the smoke stage and
-     * design §8 step 8's future smoke scoping. Optional: `page-descriptors.ts` has no closure to
-     * give, and deriving one per descriptor publish would mean running the synchronous
-     * whole-tree scan whose cost Task 3 exists to bound — controller ruling #15's trade,
-     * unchanged.
+     * The entry's resolved closure (design §7), threaded through for the smoke stage. Optional:
+     * `page-descriptors.ts` has no closure to give, and deriving one per descriptor publish
+     * would mean running the synchronous whole-tree scan whose cost Task 3 exists to bound —
+     * controller ruling #15's trade, unchanged.
+     *
+     * NOT what decides {@link smoke}: "did this page change" is a comparison against the turn's
+     * SEND-TIME read set, which no implementation of this port can see.
      */
     readonly closure?: ClosureV1;
+    /**
+     * Design §8 step 8 — whether this page's SMOKE RENDER runs at all. Everything else the
+     * per-page pipeline does still runs either way; only the stage that spawns a host child
+     * process is scoped.
+     *
+     * REQUIRED, WITH NO DEFAULT ANYWHERE IN THE CHAIN (port, adapter, gate model), because both
+     * possible defaults fail silently: `"skip"` would stop smoke-testing everything the moment a
+     * caller forgot the field, and `"run"` would make a caller that forgot to scope
+     * indistinguishable from one that scoped correctly — which is the entire regression this
+     * field exists to prevent. So each caller states it:
+     *
+     * - `core/turns/model/validation.ts` passes `"run"` exactly for the slugs
+     *   `core/turns/model/candidate.ts`'s `selectChangedPages` reports as changed between the
+     *   turn's send-time read set and the frozen candidate — the SAME function that produces the
+     *   turn's own `changedPages` report, called rather than re-derived so the Gate's smoke
+     *   selection and that report can never disagree — plus any page whose closure
+     *   {@link runTree} did not prove, since "I cannot prove it is unchanged" is never
+     *   "unchanged".
+     * - `core/kernel/model/handlers/page-descriptors.ts` passes `"run"` unconditionally: a
+     *   descriptor publish has no send-time read set to diff a closure against, and quietly
+     *   weakening what a project open validates is not what smoke scoping is for.
+     *
+     * WHY THIS MATTERS (design §8: "Step 8 is what keeps the Gate affordable"): a smoke render
+     * is a host child process per page. Without scoping, one edit to a module three pages share
+     * smokes all three on every attempt — up to four attempts a turn.
+     */
+    readonly smoke: "run" | "skip";
   }): Promise<GateRunResultV1>;
   /**
    * THE WHOLE-TREE PASS (design §8 steps 4 and 5) — the single place a tree is judged, run ONCE

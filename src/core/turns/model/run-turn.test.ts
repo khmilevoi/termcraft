@@ -169,6 +169,9 @@ function baseRunTurnInput(): RunTurnInputV1 {
       manifestText: "[]",
       treePaths: ["screens/landing.tsx"],
       treeInventory: [{ relPath: "screens/landing.tsx", sha256: "0".repeat(64) }],
+      // A first turn's own send-time read set (design §8 step 8): nothing to diff against, so
+      // every page this driver's fixtures reach smokes — the behaviour these tests already had.
+      sendTimeInventory: { files: [] },
       files: new Map([["screens/landing.tsx", "export default function Home() {}"]]),
       designRoot: "/fake-candidate/design",
     }),

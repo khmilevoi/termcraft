@@ -1819,6 +1819,7 @@ describe('turnHandlers["turn.start"]', () => {
       readonly treeRoot: string;
       readonly expectedFiles: readonly { readonly relPath: string; readonly sha256: string }[];
       readonly entryRelPath: string;
+      readonly smoke: "run" | "skip";
     }[] = [];
     const gateRunner: GateRunner = {
       // The slice IS what decides which pages `runPage` runs for (task 14), so this double
@@ -1942,6 +1943,11 @@ describe('turnHandlers["turn.start"]', () => {
     // in it, hashed, so the mount can verify the bytes it is about to run (task 15).
     expect(call.treeRoot).toBe(`/fake-candidate/${turnId}/design`);
     expect(call.expectedFiles.map((file) => file.relPath)).toContain(defaultFakeEntry(HOME));
+    // …and `buildValidationInput` supplied a smoke DECISION, which the port requires and gives
+    // no default for (design-tree phase 2 Task 9). `"run"` here is the honest answer for this
+    // fixture rather than a constant: the `runTree` double above proves no closure at all, and a
+    // page whose closure this turn could not establish can never be reported as unchanged.
+    expect(call.smoke).toBe("run");
   });
 
   test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged location travels separately in `runPage`'s own `treeRoot` (Finding #6)", async () => {

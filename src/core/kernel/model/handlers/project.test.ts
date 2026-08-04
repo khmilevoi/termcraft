@@ -1115,6 +1115,12 @@ describe("project.open", () => {
         treeRoot: "/tmp/proj/.termcraft/design",
         // 3 = both entries plus `pages.json`, the fake tree's whole inventory.
         expectedFileCount: 3,
+        // A DESCRIPTOR PUBLISH SMOKES EVERY PAGE, and says so explicitly (design-tree phase 2
+        // Task 9). There is no send-time read set on this path to diff a closure against, and
+        // quietly weakening what an open validates is not what smoke scoping is for — so this
+        // caller passes `"run"` unconditionally rather than inheriting a default (there is
+        // none: `smoke` is required on the port precisely so no caller can forget to decide).
+        smoke: "run",
       });
       expect(runPageCalls[1]).toEqual({
         method: "runPage",
@@ -1123,6 +1129,7 @@ describe("project.open", () => {
         treeRoot: "/tmp/proj/.termcraft/design",
         // 3 = both entries plus `pages.json`, the fake tree's whole inventory.
         expectedFileCount: 3,
+        smoke: "run",
       });
     });
   });

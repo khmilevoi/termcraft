@@ -112,11 +112,14 @@ export interface GateInput {
    */
   readonly entryRelPath: string;
   /**
-   * The entry's resolved closure (design §7) — so the smoke stage and design §8 step 8 (smoke
-   * scoped to only the pages whose `closureHash` changed) have it once that lands. Step 5's
+   * The entry's resolved closure (design §7) — threaded through for the smoke stage. Step 5's
    * whole-tree `tsc` program does NOT read it: that check runs over the whole tree at once, in
-   * `gate/adapters/gate-runner.ts`'s `runTree`, and never per page. `closure` is threaded through
-   * today so the pipeline's shape is already correct, not because any stage here reads it yet.
+   * `gate/adapters/gate-runner.ts`'s `runTree`, and never per page.
+   *
+   * NOT WHAT DECIDES {@link smoke} EITHER, which is the other thing design §8 step 8 could have
+   * been built on and deliberately was not: whether a closure CHANGED is a comparison against
+   * the turn's send-time read set, which this ring cannot see and must never guess at from the
+   * file list in hand.
    *
    * STAYS OPTIONAL, deliberately, unlike `entryRelPath` above (task 16): `page-descriptors.ts`
    * has no closure to give, and deriving one per descriptor publish would mean running the
@@ -124,6 +127,26 @@ export interface GateInput {
    * trade, unchanged.
    */
   readonly closure?: ClosureV1;
+  /**
+   * Design §8 step 8 — whether this page's SMOKE RENDER runs at all. The caller decides:
+   * `core/turns/model/validation.ts` passes `"run"` only for the pages whose closure hash
+   * differs from the turn's send-time read set (`core/turns/model/candidate.ts`'s
+   * `selectChangedPages`, the same function that produces the turn's own `changedPages`
+   * report), `"skip"` for the rest; `core/kernel/model/handlers/page-descriptors.ts` passes
+   * `"run"` unconditionally, having no send-time read set to diff against.
+   *
+   * REQUIRED, WITH NO DEFAULT, and the two possible defaults are why. `"skip"` would silently
+   * stop smoke-testing everything the day a caller forgot the field — a catastrophic, invisible
+   * regression. `"run"` would hide exactly the caller this task exists to scope, so a
+   * regression to "smoke every page on every attempt" would look identical to correct code.
+   * Neither failure is detectable from a call site, so the field is stated at every call site.
+   *
+   * SCOPES THE SMOKE STAGE ALONE. Everything else {@link runGate} does — the page contract, the
+   * determinism lints, the manifest stage — still runs for every page, and the existing
+   * precondition (nothing fatal yet) is untouched: `"run"` never forces a smoke render onto a
+   * candidate whose contract is broken.
+   */
+  readonly smoke: "run" | "skip";
   /** Ids the caller's current selection or open pins reference (`dropped-id`). */
   readonly referencedIds?: readonly string[];
   /** The staged manifest slice's page list (`unlisted-navigation`). */
@@ -226,7 +249,14 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   if (errors.length === 0 && descriptor !== null) {
     if (ports.checkManifest !== undefined)
       errors.push(...(await ports.checkManifest(descriptor, input.source)));
-    if (ports.smokeRender !== undefined)
+    // TWO INDEPENDENT PRECONDITIONS ON THE SMOKE STAGE, and the second is ADDITIVE (design §8
+    // step 8). The one above is about SAFETY — a candidate with a broken contract must never be
+    // imported or rendered — and is unchanged. This one is about COST: rendering a page whose
+    // whole closure is byte-identical to the send-time read set spawns a host child process per
+    // page per attempt (up to four attempts a turn) to re-derive an answer that cannot have
+    // moved. `input.smoke` is the caller's decision, never inferred here — see
+    // {@link GateInput.smoke} for why it has no default on either side.
+    if (input.smoke === "run" && ports.smokeRender !== undefined)
       errors.push(...(await ports.smokeRender(descriptor, input.source)));
   }
 
@@ -253,9 +283,9 @@ export function hasTreePath(treePaths: readonly string[]): (relPath: string) => 
  *
  * DONE SINCE (design §8 step 5): the type check is no longer one `tsc` program per entry file —
  * `gate/adapters/gate-runner.ts`'s `runTree` runs ONE program over the whole tree, in the same
- * pass this scan opens. STILL NOT DONE (design §8 step 8): smoke runs for every present page
- * rather than only those whose `closureHash` changed. That is correct as it stands — simply more
- * expensive than the design's end state.
+ * pass this scan opens. DONE SINCE (design §8 step 8): the smoke render no longer runs for every
+ * present page — {@link GateInput.smoke} carries the caller's per-page decision, and
+ * `core/turns/model/validation.ts` sets it from the closures THIS pass resolves.
  *
  * WIRED (task 14 — the red-debt.md entry this used to carry is closed). This function's only
  * production caller is `gate/adapters/gate-runner.ts`'s `runTree` port method, which

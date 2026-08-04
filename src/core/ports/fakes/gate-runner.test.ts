@@ -21,6 +21,7 @@ describe("createFakeGateRunner", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
@@ -83,6 +84,7 @@ describe("createFakeGateRunner", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(first).toEqual(scripted);
     const second = await runner.runPage({
@@ -91,6 +93,7 @@ describe("createFakeGateRunner", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(second.ok).toBe(true);
   });
@@ -104,7 +107,29 @@ describe("createFakeGateRunner", () => {
       treeRoot: "/proj/.termcraft/design",
       expectedFiles: [],
       entryRelPath: "pages/home.tsx",
+      smoke: "run",
     });
     expect(runner.calls.map((c) => c.method)).toEqual(["runManifestSlice", "runPage"]);
+  });
+
+  test("records each runPage call's own smoke decision — design §8 step 8's whole observable", async () => {
+    // The decision is the CALLER's (`core/turns/model/validation.ts`), so the only way a test
+    // can prove a page was scoped out of the smoke stage is to see the decision this fake
+    // received. Logged verbatim, never defaulted here.
+    const runner = createFakeGateRunner();
+    for (const smoke of ["run", "skip"] as const) {
+      await runner.runPage({
+        source: "x",
+        slug: slug("home"),
+        treeRoot: "/proj/.termcraft/design",
+        expectedFiles: [],
+        entryRelPath: "pages/home.tsx",
+        smoke,
+      });
+    }
+    expect(runner.calls.map((c) => (c.method === "runPage" ? c.smoke : null))).toEqual([
+      "run",
+      "skip",
+    ]);
   });
 });

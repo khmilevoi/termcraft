@@ -225,6 +225,14 @@ export async function buildPageDescriptors(
         treeRoot,
         expectedFiles: index.inventory.files,
         entryRelPath: source.relPath,
+        // EVERY PAGE, UNCONDITIONALLY (design-tree phase 2 Task 9). Design §8 step 8 scopes the
+        // smoke stage to the pages whose closure changed SINCE THE TURN'S SEND-TIME READ SET —
+        // a diff this path has no side of: a descriptor publish (project open, and after every
+        // commit) is not a turn and holds no read set to compare against. Passing `"run"` here
+        // is therefore the honest answer, not a conservative one; inventing a baseline to skip
+        // against would quietly weaken what an open validates. Stated explicitly because the
+        // port deliberately gives `smoke` no default — see `core/ports/gate-runner.ts`.
+        smoke: "run",
       }),
     );
 

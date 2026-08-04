@@ -113,6 +113,10 @@ async function validateTree(
         relPath,
         sha256: String(index).padStart(64, "0"),
       })),
+      // A FIRST TURN, deliberately (design §8 step 8): with no send-time read set every page's
+      // closure counts as changed, so the smoke stage runs for all of them — this file is about
+      // the import perimeter, and a fixture that let a page skip a stage would weaken it.
+      sendTimeInventory: { files: [] },
       files,
       designRoot: "/nonexistent-candidate/design",
     }),

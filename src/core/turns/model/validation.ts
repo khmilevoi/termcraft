@@ -18,8 +18,10 @@ import type {
   ManifestSliceV1,
 } from "core/ports";
 import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
-import type { DesignFileEntryV1 } from "entities/design-tree";
+import type { DesignFileEntryV1, DesignTreeInventoryV1 } from "entities/design-tree";
 import { trace } from "infrastructure/debug-log";
+
+import { selectChangedPages } from "./candidate";
 
 /**
  * Gate validation over one frozen candidate — the `validating` sub-phase's own work
@@ -42,6 +44,14 @@ import { trace } from "infrastructure/debug-log";
  * Every entry then runs `runPage` regardless of whether an earlier one already failed, so a
  * rejection carries the COMPLETE set of diagnostics across every page in one report, not just
  * the first failure.
+ *
+ * ONE STAGE INSIDE THAT LOOP IS SCOPED, AND ONLY ONE (design §8 step 8): the SMOKE RENDER runs
+ * for a page only when its closure hash differs from the turn's send-time read set — a host
+ * child process per page per attempt is the Gate's real cost, and a shared-module edit would
+ * otherwise pay it for every page reaching that module, four times a turn. The page contract and
+ * the determinism lints still judge every listed page. The decision is `selectChangedPages`'
+ * (`./candidate`), called here rather than restated, so it is literally the same rule that
+ * produces the turn's own `changedPages` report — see the `changedSlugs` computation below.
  *
  * WHAT FOLLOWS DESCRIBES THE CALLER, not the perimeter: this module calls the Gate, it is not
  * the Gate. The scan's own source coverage — a separate problem this file used to say was still
@@ -111,6 +121,23 @@ export interface RunTurnValidationInputV1 {
    * become a filtered view of the other.
    */
   readonly treeInventory: readonly DesignFileEntryV1[];
+  /**
+   * The turn's OWN SEND-TIME design-tree inventory — the `before` side of design §8 step 8's
+   * closure diff, against which {@link treeInventory} is the `after`. Built by
+   * `core/turns/model/candidate.ts`'s `readSetTreeInventory` from the staged read set
+   * (`core/kernel/model/handlers/turn.ts`'s `buildValidationInput`), the SAME helper
+   * `buildFinalizeInput` already calls for the turn's own `changedPages` report — one
+   * construction, read by both, so the Gate's smoke selection and the report the agent is shown
+   * can never be built from two different readings of "what the tree looked like when this turn
+   * was sent".
+   *
+   * AN EMPTY INVENTORY IS AN HONEST FIRST TURN, not a degraded input: with no send-time hashes
+   * no closure hash can be computed on that side, so every page counts as changed and every
+   * page smokes. That is exactly design §8 step 8's "a first turn … smokes everything", and it
+   * is the fail-SAFE direction — the failure this ordering must never allow is skipping a smoke
+   * render for a page nothing can prove unchanged.
+   */
+  readonly sendTimeInventory: DesignTreeInventoryV1;
   /**
    * Every tree file's source text, keyed by the SAME tree-relative path as `treePaths` —
    * complete, with no filter of this ring's own.
@@ -271,6 +298,26 @@ export async function runTurnValidation(
 
   const closureBySlug = new Map(treePass.closures.map((closure) => [closure.slug, closure]));
 
+  // Design §8 step 8 — WHICH PAGES THE SMOKE STAGE RUNS FOR, computed ONCE for the whole turn
+  // rather than per entry: `selectChangedPages` hashes every closure it is given on both sides,
+  // so calling it inside the loop would redo the same whole-tree comparison once per page.
+  //
+  // CALLED, NEVER RE-DERIVED (this is the point of the task, not an implementation detail).
+  // `selectChangedPages` is the SAME function `core/kernel/model/handlers/turn.ts`'s
+  // `buildFinalizeInput` uses to produce the turn's own `changedPages` — the list the agent and
+  // the chat record are shown. A second "did this page change" rule here could disagree with
+  // that one, and the disagreement would be invisible: the Gate would skip a page the turn
+  // simultaneously reports as changed. It also already answers, for free and correctly, every
+  // edge this stage would otherwise have to special-case — a first turn and a newly listed slug
+  // have no send-time hash to match, and an uncomputable hash on EITHER side counts as changed.
+  const changedSlugs = new Set(
+    selectChangedPages({
+      closures: treePass.closures,
+      beforeInventory: input.sendTimeInventory,
+      afterInventory: { files: input.treeInventory },
+    }),
+  );
+
   // Design §8's per-entry stage. Driven off the VALIDATED manifest, never off a caller-supplied
   // page list: which file a page lives in is `pages.json`'s `entry` value, and a slug-derived
   // path is precisely what the design tree retires. An undecodable manifest yields no entries
@@ -306,6 +353,14 @@ export async function runTurnValidation(
         // never the absolute path, which would leak a filesystem location into agent-facing
         // Gate messages.
         entryRelPath: entry.entry,
+        // Design §8 step 8, decided per entry off the ONE set computed above. A page with NO
+        // proven closure smokes too, and that is not a fallback but the same honesty rule
+        // `selectChangedPages` itself applies to an uncomputable hash: such a slug is absent
+        // from `changedSlugs` only because the pass established no file set to hash for it at
+        // all, so "not reported as changed" here means "nothing could be compared", never
+        // "unchanged". Reading that as `"skip"` would silently drop the smoke render for
+        // precisely the pages this turn understands least.
+        smoke: closure === undefined || changedSlugs.has(entry.slug) ? "run" : "skip",
         // Only when this pass PROVED the closure complete. `runTree`'s CONTRACT makes
         // the two cases exclusive: a slug absent from `closures` always carries a fatal in
         // `errors`, so omitting `closure` here can never quietly hand a downstream stage a
