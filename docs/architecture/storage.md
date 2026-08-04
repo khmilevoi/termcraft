@@ -129,12 +129,24 @@ flowchart TB
    all fields to match and the backend to bind the resumed run to the new turn
    workspace; otherwise a fresh session is seeded with at most 32 complete recent
    records and 64 KiB, dropping oldest whole records first.
-10. **Rebuildable projections.** Page metadata is cached by page slug, source
-    hash, and extractor version. Current diagnostics are cached by page slug,
-    source hash, and `kitApiVersion`. `ChatIndex` stores valid-prefix byte offsets
-    and record/turn lookup. Render artifacts use content-addressed keys. Every
-    projection can be deleted and rebuilt from portable sources and is never a
-    commit or recovery authority.
+10. **Rebuildable projections.** All three page-scoped caches are keyed on the
+    page's whole CLOSURE, not on its entry file: a page is its entry plus every
+    tree file that entry transitively imports, so a cache keyed on the entry's own
+    bytes would serve a stale answer after an edit to a shared module. Page
+    metadata is cached by page slug, closure hash, and extractor version. Current
+    diagnostics are cached by page slug, closure hash, and `kitApiVersion` (no
+    production caller reads or writes this store today — it is re-keyed ahead of
+    one). Render artifacts use content-addressed keys whose content half is the
+    closure hash, alongside `kitApiVersion`, renderer version, size, theme, and
+    export flags. The closure hash is a Merkle fold over the closure's
+    `(relative path, sha256)` pairs, and is *absent* when any closure member is
+    missing from the tree inventory — an honest "cannot be computed", which every
+    consumer treats as a forced miss, never as "unchanged". Each of the three
+    stores carries its own generation stamp, all bumped from 1 to 2 when the key
+    changed, so entries written under the old key are a clean miss-and-rebuild
+    rather than a schema error. `ChatIndex` stores valid-prefix byte offsets
+    and record/turn lookup. Every projection can be deleted and rebuilt from
+    portable sources and is never a commit or recovery authority.
 11. **Safe filesystem boundary.** `SafeProjectFs` mediates managed reads and
     writes in `.termcraft` and copies agent output into immutable candidates. It
     rejects absolute/traversing/UNC/alternate-stream paths, Windows normalization
@@ -280,13 +292,18 @@ flowchart TB
   (`evaluateSessionResume`), the bounded fresh-session seed (32 records / 64
   KiB), and the prefix-hash computation
 - `src/store/projections/model/page-meta-cache.ts` — item 10: the unbounded
-  page-metadata cache keyed by `(pageSlug, sourceHash, extractorVersion)`
+  page-metadata cache keyed by `(pageSlug, closureHash, extractorVersion)`,
+  generation 2
 - `src/store/projections/model/diagnostics-store.ts` — item 10: the
   current-diagnostics cache keyed by `(pageSlug, closureHash, kitApiVersion)`,
-  128 MiB default quota with least-recently-written eviction
+  generation 2, 128 MiB default quota with least-recently-written eviction
 - `src/store/projections/model/render-cache.ts` — item 10: the
-  content-addressed export render cache, 512 MiB default quota with
-  least-recently-written eviction
+  content-addressed export render cache, whose canonical key is
+  `(closureHash, kitApiVersion, rendererVersion, size, theme, flags)`,
+  generation 2, 512 MiB default quota with least-recently-written eviction
+- `src/entities/design-tree/model/closure.ts` — item 10: `resolveClosure` and
+  the `computeClosureHash`/`computeTreeRevision` Merkle folds those keys are
+  built from, including the "absent when a member is missing" rule
 - `src/store/jsonl/model/chat-index.ts` — item 10: `ChatIndex`, the paginated
   record-id/turn-id/timestamp/changed-pages index over a chat log
 - `src/store/jsonl/model/chat-index-store.ts` — item 10: the disk persistence

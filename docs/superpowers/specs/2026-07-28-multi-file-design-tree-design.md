@@ -480,8 +480,72 @@ landing on a working system:
    seeded refactor turn. Separable from plan 1 and worth its own plan: it is the only part
    that touches existing user data, and its two tracks have very different risk profiles.
 2. **Closure graph everywhere.** §7, §8 — re-key every cache, switch the type check to one
-   whole-tree program, and scope smoke to changed closures. Purely internal; no user-visible
-   behavior changes except that turns get faster.
+   whole-tree program, and scope smoke to changed closures.
+   **NOT "purely internal" — this bullet's original wording ("purely internal; no user-visible
+   behavior changes except that turns get faster") was FALSE, and is corrected here rather than
+   quietly dropped.** Two measurements taken while writing plan 2 falsify it, both recorded in
+   that plan's own header:
+   - **The Gate rejected every page that imported a shared module.** The type check ran one
+     hermetic `tsc` program per ENTRY FILE whose virtual FS served only that one file, so a
+     relative edge resolved to nothing — `pages/home.tsx` importing `../lib/theme` produced a
+     fatal `TS2307 Cannot find module`. That rejected the turn (four attempts, then
+     `GATE_RETRY_EXHAUSTED`) AND marked the page `status: "invalid"` on every descriptor
+     publish. Plan 1's headline capability — the agent can write shared code — did not survive
+     contact with the Gate. §8 step 5 was therefore a CORRECTNESS FIX, not the cost
+     optimization §8's prose frames it as (plan 2 tasks 2-3).
+   - **A shared-module edit left the live preview stale forever.** The UI asked for a preview
+     session on `slug@sourceHash` (the ENTRY file's hash), and the supervisor keyed a live
+     incarnation the same way, so an edit to `lib/theme.ts` moved no key: the memo returned
+     early, and even a re-ask returned the existing child whose module registry still held the
+     old module. Fixed by plan 2 task 10.
+   What IS true of the original wording: turns do get faster (one `tsc` program per tree instead
+   of one per page; smoke only for the pages whose closure changed).
+   **LANDED** — `0360b94..70a29dd` on branch `design-tree`, plan
+   `docs/superpowers/plans/2026-08-03-design-tree-phase-2-closure-graph.md`, tasks 1-10 (the
+   closeout's own doc commit extends the range by one). Four decisions this plan settled that the
+   design above left implicit, recorded here so plans 1b/3 inherit them rather than re-deciding:
+   1. **The whole-tree pass is ONE port method, `GateRunner.runTree`, shared by the turn path and
+      every non-turn path** (tasks 3 and 5). One call does allowlist scan, closure resolution,
+      ONE `tsc` program over the whole tree, and cycle/reachability analysis, and returns
+      closures + diagnostics together (`core/ports/gate-runner.ts:407`). The turn calls it from
+      `core/turns/model/validation.ts:288`; the non-turn paths — descriptor publishing, preview
+      settings, export capture — call it through the one read-through module
+      `core/project/model/tree-index.ts:156` (`readCanonicalTreeIndex`), never by inventing an
+      answer of their own. A new consumer that needs closures asks this port; it does not walk
+      the import graph itself, and `core` may not (it has no scanner and may not import one).
+   2. **`GateErrorV1.blockedPages` means "the pages this whole-tree diagnostic is attributed
+      to"** (task 3) — widened from the old "pages this fatal blocks". One field, one meaning,
+      two producers inside the same pass: the closure walk (for a fact that stopped a closure
+      being proved, where this is the ONLY surviving signal that the page was excluded) and the
+      type check (attributed from the closures that same pass just resolved). ABSENT is not
+      "harmless" and covers two different facts, told apart by `GateErrorV1.file`: absent WITH a
+      file is an orphan module — a diagnostic in a file no closure reaches, which invalidates no
+      descriptor and is logged; absent with NO file is a statement about the TREE (most
+      consequentially `TYPE_CHECK_UNAVAILABLE`), and a per-page consumer must invalidate EVERY
+      page for it. Reading the second as "names no page, so it invalidates nothing" publishes a
+      whole project as valid on the strength of a compiler that never ran — the exact fail-open
+      that cost task 3 a fix round.
+   3. **A `null` closure hash ALWAYS means changed / miss / re-run — never unchanged / hit /
+      skip** (tasks 5, 6, 8, 9). `computeClosureHash` returns `null` when any closure member is
+      absent from the inventory: an honest "cannot be computed", never a hash over a partial set.
+      Every consumer implements the same rule rather than inventing a local one — the page-meta
+      cache is SKIPPED entirely (no `get`, no `put`) so no caller can construct a key from an
+      unprovable closure; the export render key turns `null` into a forced cache miss; smoke
+      selection runs the page. The cost of the rule is redundant work; the cost of the opposite
+      is serving a stale answer for a tree nobody proved.
+   4. **The supervisor's session key moved to `(pageSlug, treeRevision)` AHEAD of plan 3**
+      (task 10), which otherwise owns §9. The argument for taking it early, in one expression:
+      §7's preview-session row is undeliverable without it. Plan 2 had to thread `treeRevision`
+      to the UI anyway (`page.descriptorsChanged` -> the mirror -> the ask memo), and shipping
+      that plumbing while leaving the supervisor keyed on the entry file's `sourceHash` would
+      have left a defect a user actually sees — the re-ask arrives, `preview()` matches the old
+      key and returns the LIVE child with the pre-edit module registry, so nothing changes on
+      screen, and switching pages and back does not help because the other page's closure is
+      stale too. `sourceHash` stays on the spec: verifying a mount and identifying a session are
+      different questions. Plan 3 inherits the key, not the decision.
+   Consequence plan 3 should know about: the restart budget follows that key, so a crash-looping
+   page now gets a fresh budget on ANY tree edit, not only an edit to its own entry
+   (`host/supervisor/model/restart-policy.ts:53-57`).
 3. **Host O2.** §9, §11 — the revision-keyed incarnation, repeated `mount`, warm spare,
    watchdog, and the export package shape. This is the plan that delivers instant page
    switching and is the one with the accepted isolation trade-off.
@@ -502,10 +566,21 @@ other.
 - `src/gate/model/manifest.ts` — the manifest check, rewritten against §4's schema
 - `src/gate/model/import-scan.ts` — §6's authoritative allowlist, now per-file across the
   tree
-- `src/gate/model/gate.ts` — §8's stage ordering, including closure-scoped smoke selection
+- `src/gate/model/gate.ts` — §8's stage ordering; it HONORS closure-scoped smoke selection
+  through the required `GateInput.smoke` field, which the caller decides (see
+  `core/turns/model/validation.ts` below) and this module never infers
 - `src/gate/model/type-check.ts` — §8 step 5's single whole-tree program
+  (`createTreeTypeChecker`; the per-entry `createTypeChecker` it replaced is deleted)
+- `src/gate/adapters/gate-runner.ts` — `runTree`: the ONE whole-tree pass (scan, closures, the
+  type-check program, the module graph), where the two new warnings (`dead-module`,
+  `import-cycle`) are produced and where `blockedPages` attribution is computed
+- `src/core/project/model/tree-index.ts` — `readCanonicalTreeIndex`: the single read-through the
+  non-turn paths (descriptor publishing, preview settings, export capture) obtain closures,
+  `treeRevision` and the tree pass's verdict through
 - `src/gate/model/page-contract.ts` — §5's unchanged literal-only `meta` rule
-- `src/gate/model/lints.ts` — the two new warnings (`dead-module`, `import-cycle`)
+- `src/gate/model/lints.ts` — the per-page determinism/quality lints (NOT the graph warnings:
+  a cycle and an unreachable module are whole-tree facts, so they live in `gate/adapters/
+  gate-runner.ts` above)
 - `src/host/session/model/source-mount.ts` — `loadPage`/`scanPageImports`: §9.2's
   whole-tree verification and §6's graph-aware rescan
 - `src/host/session/model/host-state-machine.ts` — §9.2's repeated-`mount` acceptance

@@ -695,6 +695,19 @@ for each is in `.superpowers/sdd/2026-08-02-design-tree-phase-1-closeout/progres
   the on-disk key's space-separated "no field can forge a boundary" invariant — a `store/projections`
   schema/generation-bump change, out of scope for the task that found it. Owner: whichever task next
   touches `store/projections`' key encoding.
+  **CLOSED — design-tree-phase-2 Task 6 (commit `352fdbe`).** The task this row named as its owner
+  ("whichever task next touches `store/projections`' key encoding") arrived, and it closed the row
+  WITHOUT widening the key: `PageMetaKeyV1` is now `(pageSlug, closureHash, extractorVersion)`
+  (`core/ports/projections.ts:33-37`, mirroring `store/projections/model/page-meta-cache.ts`), and
+  `closureHash` already carries the entry's PATH. Proof, read off the code rather than argued:
+  `resolveClosure` seeds its visited set with the entry itself (`entities/design-tree/model/
+  closure.ts:38`, `new Set([input.entry])`), so a closure always transitively contains its own entry;
+  `computeClosureHash` folds each member as a `(relPath, sha256)` PAIR (`closure.ts:124-135` through
+  `foldMerkle`), so the entry's `relPath` is inside the hash. The `.tsx` -> `.ts` rename with
+  unchanged bytes this row was written about therefore MOVES the key. The row's own reason for not
+  widening also evaporates rather than being overridden: nothing path-shaped is encoded on disk — the
+  new field is a hex `Sha256Hex` — so `pages/my page.tsx`'s space cannot forge a key boundary. The
+  generation bump the row anticipated was paid as part of the re-key.
 - **The root `*.d.ts` admission is still by EXTENSION, not exact name** (Task 6, commit `d3c49cb` +
   `756d8e8`) — `limits.ts`'s single-component branch admits ANY `*.d.ts` at a workspace/candidate
   root, one level up from the NESTED wildcard this task deleted. Evidence the wildcard admits
@@ -778,3 +791,243 @@ decorative: the mutation passed all 363 `src/host` tests until fix round 1 close
   was bumped three times in this plan alone (Tasks 7, 9, 10: 888 → 890 → 891 → 893), so the
   instruction is exercised often enough to be worth correcting. Left as a follow-up rather than fixed
   here, because this pass was markdown-only by construction.
+
+## Debt accumulated by design-tree-phase-2 (closure graph everywhere), recorded here by its own Task 11
+
+Plan `docs/superpowers/plans/2026-08-03-design-tree-phase-2-closure-graph.md`, tasks 1-10, commits
+`0360b94..70a29dd`. Everything below postdates every row above. It is the complete set of
+deferred/parked items its ten task reviews produced, minus the ones that already have a better home
+than a ledger row — those are listed at the end of this section by their exact site, so a reader can
+tell "considered and homed" from "forgotten". Full per-task evidence is in
+`.superpowers/sdd/2026-08-03-design-tree-phase-2-closure-graph/progress.md`.
+
+Same rule this file has followed since the phase-1 closeout: closing a debt row must not create a
+fresh, untracked one. This plan closed one row (`PageMetaKeyV1` above) and narrowed another (the
+aliased-`require` row above); these are what it opened.
+
+### `diagnosticsCache` has no production caller — NO OWNER, and here is the evidence
+
+**MEASURED, before and after Task 7's re-key.** `DiagnosticsCache` is constructed and injected at
+the composition root (`entrypoint/model/create-shell.ts:189`, `diagnosticsCache:
+projections.diagnostics`) and declared on the Kernel's deps (`core/kernel/types.ts:80`), but
+`grep -rn "diagnosticsCache\." src` finds **zero** call sites — no `get`, no `put`, anywhere outside
+the store's own tests (`store/adapters/projections.test.ts:86,106,124`). The other half of the same
+measurement: nothing in `src/` emits `diagnostics.changed` either, so even the event this cache was
+shaped around (`core/ports/projections.ts:13-16`) has no producer.
+
+Task 7 re-keyed the store `sourceHash` -> `closureHash` and bumped it to generation 2
+(`store/projections/model/diagnostics-store.ts:61`) anyway, and said so in the port's own doc rather
+than implying a fix: "UNLIKE {@link PageMetaKeyV1}'s Task 6 re-key, this cache has NO PRODUCTION
+CALLER TODAY … this re-key buys correctness ahead of a future caller, not a fix for a live
+invalidation defect" (`core/ports/projections.ts:51-58`). That framing is the honest one and must
+not be upgraded on retelling.
+
+**The trap this leaves for whoever wires the first caller**, already flagged inline at the write site
+(`store/adapters/projections.ts:99-108`): `toDiagnosticDtoV1` writes `key.closureHash` into
+`DiagnosticDtoV1.sourceHash`. Both are `Sha256Hex`, so it type-checks; the WIRE field was not renamed
+because `core/protocol`'s DTO was out of Task 7's scope. Dead on two independently unreached paths
+today — hence cosmetic, not a live bug — but a reader of `DiagnosticDtoV1.sourceHash` must not assume
+it holds the page's own source bytes' hash.
+
+NO OWNER: wiring a caller is a product decision about where diagnostics are surfaced, not something a
+re-key gets to make. Named as deliberately-undone in the plan's own closing table.
+
+### A closure never contains `pages.json`, so a manifest repoint to byte-identical bytes reads as "skip" — NEEDS AN OWNER
+
+Pre-existing, and inherited by Task 9 rather than introduced by it. Closures are resolved by walking
+IMPORT EDGES from the entry (`entities/design-tree/model/closure.ts:38-52`), so `design/pages.json`
+is never a member of any closure. Edit the manifest to point `home` at a different file whose bytes
+happen to equal the old entry's and no closure hash moves: Task 9's `selectChangedPages` reuse then
+selects "skip" for smoke, and the `changedPages` report says nothing, although the page now renders
+different content. Task 9 could not fix it without violating its brief's explicit "reuse
+`selectChangedPages` verbatim" requirement, and the identical gap already existed in the changed-pages
+report it reused.
+
+What DOES cover the case, so the severity is not overstated: `treeRevision` folds the ENTIRE inventory
+including `pages.json` (`closure.ts:144-149`), so the live preview session re-establishes on such an
+edit (Task 10's key). Only the smoke-selection and `changedPages` halves are blind to it.
+
+### `buildPageDescriptors` never reads the tree pass's `warnings` — owner: whoever next touches `page-descriptors.ts`
+
+Found by Task 5's own fix round, in a function that round did not touch. `routePassErrors` and
+`buildPageDescriptors` (`core/kernel/model/handlers/page-descriptors.ts`) read `index.errors` only —
+`.warnings` has zero matches in that file — so the `import-cycle` and `dead-module` warnings Task 4
+added reach the TURN path (`core/turns/model/prompt.ts:65-68`) but never a descriptor publish. Same
+class as the Important finding Task 5's round 1 fixed for dropped tree-pass ERRORS, one function over.
+
+### `export.start` runs two whole-tree passes, and a third whole-tree reader still exists — owner: plan 3 (§11)
+
+`resolveExportPageInputs` reads the canonical index (`core/kernel/model/handlers/preview-export.ts:
+1452`), which runs `GateRunner.runTree` — a full allowlist scan and one `tsc` program — for page
+order, inventory and `closureHash`. `resolveExportClosures` (`:1515`) then runs a SECOND `runTree`,
+over the FROZEN snapshot's bytes, after the write permit is released. They cannot be cleanly
+collapsed: different trees (live vs. snapshot) and different lock phases, which is exactly the point
+of the second one. The first pass's `runTree` output beyond the index is unused — its diagnostics feed
+only the warn at `:1454`.
+
+Why this is a ledger row and not just a cost: `resolveExportClosures`'s own doc block
+(`:1480-1498`) argues the second pass is proportionate but never says the FIRST one exists, so a
+future reader who spots the duplication can "fix" it by collapsing them and silently break the
+package's revision identity.
+
+Related, and named in the plan's own closing table: `core/export/model/snapshot.ts`'s private
+`readWholeTree` remains a THIRD whole-tree reader alongside the shared `readCanonicalTreeIndex` Task 5
+introduced. Folding it in is a clean follow-up, not a correctness fix.
+
+### `publish.ts`'s `settingsStillMatch` never compares `expectedFiles`/`closureHash` — owner: plan 3 (§11)
+
+Pre-existing, confirmed by Task 8 as not worsened by the re-key. `core/export/model/publish.ts:112-129`
+compares `pageSlug`, `manifestIndex`, `theme`, `kitApiVersion` and `minSize` — nothing about the tree.
+A SHARED-MODULE drift between snapshot capture and publish therefore does not surface as
+`EXPORT_SNAPSHOT_STALE`, while an ENTRY drift does (the per-page `readPageEntrySource` re-read at
+`:166`). Practical risk stays low — the host's mount verification fails on a drifted closure, so a
+SUCCESSFUL export always describes one revision — but it is a policy asymmetry now that a page is its
+whole closure rather than its entry file.
+
+### Bare `await`s on helpers that `wrap` internally — eight RTM-A04 sites, NEEDS AN OWNER
+
+Opened as one item because it is one pattern, and because this closeout's own `/reatom-audit` run is
+what measured its extent. Task 5's review flagged the first site and noted "Reatom audit clean";
+**that note does not hold** — auditing the nine Reatom-touching files this plan changed, by EXPLICIT
+PATH rather than by `--changed` (the router consumes its cache, so a second `--changed` run reports
+"already audited" without auditing), returned seven RTM-A04 findings plus one RTM-S02. The rule in
+every case is the same: an inner `wrap()` inside a helper does not cover the caller's outer `await`
+over that helper, so everything after the await resumes outside the Reatom frame.
+
+- `core/project/model/tree-index.ts:153` — `await readTreeSources(...)` bare, while all three of its
+  neighbours go through `wrap` (`:138`, `:150`, `:156`). This is Task 5's flagged site.
+- `core/kernel/model/handlers/preview-export.ts:361, 364` (`resolvePageSettings`), `:1459`
+  (`resolveExportPageInputs`' per-page loop), and the `resolvePageMeta` chain's port calls at
+  `:209, 251, 254, 296`.
+- `core/kernel/model/handlers/turn.ts:508, 512` — inside `createContentCachingStaging`, contradicting
+  that file's own stated rule at `:425-426` that every port call is wrapped.
+- `core/project/model/descriptors.ts:117`; `core/turns/model/candidate.ts:293`.
+- RTM-S02, `ui/app/model/deps.ts:634` — `lastKernelPageSlug` plus a `mirror.project.subscribe` is a
+  hand-rolled sync effect keeping `pageOverride` aligned with the Kernel's slug; the same factory
+  already does the owned-by-the-atom form at `:735`.
+
+**NOT A REGRESSION FROM THIS PLAN, verified by blame and by reading the pre-images.** Every flagged
+shape predates it: `git blame` puts four of the sites on this plan's commits, but the code they
+replaced awaited the same helpers just as bare (`page-descriptors.ts:218`'s
+`await readTreeSources(...)` and `preview-export.ts:1331/1336/1342`'s three bare awaits at
+`bf7a1ae`), and the four remaining sites blame to commits outside this plan's range entirely. The
+plan ADDED wraps (`await wrap(readCanonicalTreeIndex(...))`, `await wrap(readPageOrder(...))`) rather
+than removing any. Left unfixed here because this closeout is a docs-only commit and a fix is a code
+change across five files in four modules; ledgered rather than dropped because this repository has
+already paid once for exactly this shape.
+
+### `page-descriptors.ts:270` branches on `errors.length === 0` rather than `result.ok` — owner: whoever next touches that branch
+
+Task 3's rewrite. Production-equivalent, because `createGateResult` derives `ok` from `errors.length`
+— but a scripted fake (`queueRunPageResult({ ok: false, errors: [] })`) now publishes `status: "ready"`
+where it used to publish `"invalid"`. Fixture-only today. Recorded so the next reader treats it as
+intentional rather than as an accident nobody noticed.
+
+### `resolveExportClosures`'s dropped-diagnostic warning also fires for `type`-kind diagnostics — owner: whoever next touches that warning
+
+`preview-export.ts:1522-1526` tells the operator that pages "it could not resolve ship without a
+closure listing" for ANY error the pass reports. Since Task 3 folded the type check into the same
+pass, that now includes `type`-kind diagnostics, which do not affect closure resolution at all. The
+VERDICT is right (the pass did report errors); the message misdescribes why.
+
+### The double entry-file read in `buildPageDescriptors`, and its one new consequence — owner: whoever next touches `page-descriptors.ts`
+
+Pre-existing and already documented inline as a "KNOWN, OWNED COST"
+(`core/kernel/model/handlers/page-descriptors.ts:222-228`): `readPageEntrySource` re-reads the entry
+file the tree index above already read. Two notes this plan adds rather than the cost itself. (1) The
+inline reason given ("`readPageEntrySource` is what owns 'the manifest binds this slug to this file,
+and here is its hash'") describes the manifest lookup, not the second READ, so the comment
+under-describes what it is defending — and the second read slightly widens the TOCTOU window between
+the `runTree` verdict and the published `sourceHash`. (2) Task 10's consequence specifically: in the
+narrow window where the entry moved but the inventory read has not caught up, the new
+`(pageSlug, treeRevision)` key can miss a re-ask the old entry-hash key would have made. Self-corrects
+on the next publish, and `treeRevision` is the more authoritative of the two values.
+
+### `export`'s `resolveMountTreeRevision` recomputes a `treeRevision` `core` already holds — no owner, cost named
+
+`host/adapters/mount-tree-revision.ts:30`, called from `export-render.ts:55` and `smoke-renderer.ts:40`.
+Self-flagged by Task 10 as its own Concern 1. No behavior consequence — the derivation is over the same
+`expectedFiles` inventory — purely a duplicated fold. Closing it is more expensive than it looks: the
+value would have to be threaded through `ExportPageSnapshotV1`, not just `ExportRenderTaskV1`, and the
+smoke path would need the Gate's `runPage` port widened to carry it.
+
+### Tests this plan left thinner than they read — no owner, each named at its own file
+
+Coverage breadth, not defects; grouped because no one of them is worth a row.
+
+- **Task 1**: no regression test pins the `require(nonLiteralArg)` behavior CHANGE (it used to be
+  silently dropped, it is now flagged). The bare-reference branch itself is tested at both the unit and
+  turn levels; this is the neighbouring case the same edit moved.
+- **Task 2**: `createTreeTypeChecker`'s crash path (`TYPE_CHECK_UNAVAILABLE`) has no direct test. It was
+  verified as a structural mirror of the already-tested `createTypeChecker` crash path — which Task 3
+  then deleted, so the mirror no longer has an original.
+- **Task 9**: the end-to-end, turn-level "skip" assertion is unreachable in the harness because the
+  fixture's staging and design-store hashes disagree. Verified test-infrastructure-only: production runs
+  the same `sha256Hex` over the same normalized paths on both sides, and "skip" does fire there.
+- **Task 10**: `deps.test.ts`'s "fallback biases toward more asks" is a FORWARD guard only — the
+  pre-task code produced the same slug-only key at the same point (`snapshot()` defaults to
+  `pageDescriptors: []`), so it does not reproduce a RED without the fix. A true guard needs a snapshot
+  carrying the active page's descriptor with a matching `sourceHash`.
+
+### Stale prose the re-keys left in code comments and test names — no owner, fix in passing
+
+Comments and names only; no behavior depends on any of them. Listed so a reader who trips on one knows
+it was seen.
+
+- `gate/model/smoke.ts:38-41` still says it "Mirrors `createTypeChecker`'s factory shape
+  (`type-check.ts:242-253`)" — Task 3 deleted `createTypeChecker`.
+- `entrypoint/model/smoke.test.ts:617-619`'s TODO still tells a future extension to seed the page-meta
+  cache under `sourceHash`; the key has been `closureHash` since Task 6.
+- `core/kernel/model/kernel.integration.test.ts:335` seeds `closureHash` from a constant still named
+  `HOME_SOURCE_HASH` (correctness moot — that value is proven dead in the test).
+- `preview-export.ts`'s `entryRelPath` JSDoc moved to `extractPageMetaOnly` in Task 6 and was not
+  restored on `extractAndCachePageMeta`, which still takes and forwards the parameter.
+- `gate/model/type-check.ts:245` cites TypeScript's own `FileSystem` interface as
+  `node_modules/typescript/dist/api/fs.d.ts:5-21`; the interface is 5-19 — 20-21 are the
+  `fsCallbackNames` const and its comment.
+- `store/projections/model/render-cache.ts:62-70`'s generation-bump justification overstates what the
+  bump buys — schema validation already treats a parse failure as a clean miss, and the field rename
+  moves `keyHash` anyway. The bump itself is correct and required; only the reasoning is imprecise.
+- `gate/model/import-scan.ts`'s `require(nonLiteralArg)` message reads "reading the binding at all…"
+  at what is an actual call site, inherited verbatim from the brief's prescribed code.
+- `core/turns/model/validation.ts:363`'s `closure === undefined` branch is defense-in-depth against a
+  contract violation (`runTree`'s own contract says an unclosured slug always carries a fatal), and its
+  test does not say so — a reader may mistake it for a second change-rule. It can only err toward an
+  extra smoke, never toward skipping one that should run.
+
+### Accepted consequences this plan chose knowingly — recorded, not open
+
+Neither needs an owner; both are documented at the site that causes them.
+
+- **A crash-looping page now gets a fresh restart budget on ANY tree edit**, not only an edit to its own
+  entry file — the direct consequence of Task 10's session key, documented in
+  `host/supervisor/model/restart-policy.ts:53-57`. The budget follows `supervisor.ts`'s key by design
+  and derives nothing itself.
+- **The Gate now rejects display copy containing the word `require`** — Task 1's over-approximation,
+  the same one `eval` already took, argued in `gate/model/import-scan.ts`'s "NO PROSE SUPPRESSION"
+  section and restated in the aliased-`require` row above.
+
+### Erratum in the plan's own text — no code change
+
+The plan's Task 4 Step 4 says `DETERMINISM_WARNING_KINDS` "must stay exactly the four it names". It
+holds exactly TWO (`unguarded-timer`, `unguarded-randomness`, `core/turns/model/prompt.ts:59-62`);
+"four" is a different set, the header's excluded-kinds list. The implementer read past the wording
+correctly: the two-kind set was left untouched and Task 4's new `import-cycle`/`dead-module` warnings
+were routed through a separate `GRAPH_WARNING_KINDS` and header (`prompt.ts:64-68`), which is the
+semantically right call — a cycle is not a wall-clock or randomness fact. Recorded because the plan
+file is a historical record that will be read again, not because anything in `src/` is wrong.
+
+### Considered and homed elsewhere — deliberately NOT given a row here
+
+- Task 7's `DiagnosticDtoV1.sourceHash` trap — inline at the write site
+  (`store/adapters/projections.ts:99-108`), and restated in the `diagnosticsCache` row above because
+  that is when it would bite.
+- Task 10's restart-budget consequence — inline at `restart-policy.ts:53-57`; listed above as an
+  accepted consequence rather than a gap.
+- Task 5's `PAGE_NOT_JUDGED` guard without a test, its mirror-direction race, and the tree pass's
+  dropped diagnostics on the preview/export paths — all three were FIXED in Task 5's own fix round
+  (`64fb46a..fba7c2c`), not deferred.
+- Task 3's file-less-pass-error fail-open — FIXED under a human ruling in Task 3's fix round
+  (`61a51ab..91f5a34`); a file-less `TYPE_CHECK_UNAVAILABLE` now invalidates every descriptor.
+- The three separate task reviews flagging `docs/architecture/storage.md` as stale (Tasks 6, 7, 8) —
+  FIXED by this closeout's own Step 3, so there is nothing left to track.
