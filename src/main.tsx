@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  MigrationDeclinedError,
   bootstrap,
   createProcessBoundary,
   formatExportOutcome,
@@ -159,7 +160,11 @@ if (import.meta.main) {
       exit: interactiveExit,
     });
 
-    if (app instanceof Error) {
+    // `esc later` is a choice, not a crash: one plain line, exit 0, terminal already released
+    // (`runMigrationPrompt` disposes the migration root on this path before returning).
+    if (app instanceof MigrationDeclinedError) {
+      console.error(app.message);
+    } else if (app instanceof Error) {
       // Same flush-then-exit concern as the `_host` branch's own fatal report above.
       // `reportFatalAndExit` returns `void` rather than `never` (its injected `exit` seam is a
       // test-doubleable callback, not a guaranteed-never-return like `process.exit`), so the

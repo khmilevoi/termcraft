@@ -3,10 +3,11 @@ import path from "node:path";
 import type { UiEnv, UiRootAdapters } from "ui";
 
 import type { EntrypointMode, ProcessBoundary, RunningApp } from "../types";
-import { ShellCompositionError, createShell } from "./create-shell";
+import { ShellCompositionError, createShell, createStoreForShell } from "./create-shell";
 import type { ShellDeps } from "./create-shell";
 import type { ProcessExit } from "./process-boundary";
 import { AppStartupError, runApp } from "./run-app";
+import { MigrationDeclinedError, runMigrationPrompt } from "./run-migration";
 
 export interface BootstrapDeps {
   /** Arguments after the executable and script — `process.argv.slice(2)`. */
@@ -34,22 +35,44 @@ export interface BootstrapDeps {
 export async function bootstrap(
   mode: EntrypointMode,
   deps: BootstrapDeps,
-): Promise<AppStartupError | ShellCompositionError | RunningApp> {
-  const shell = await createShell(mode, resolveEnv(mode, deps), deps.shell);
-  if (shell instanceof Error) return shell;
-  // Task 8 replaces this refusal with the real pre-Kernel migration surface.
-  if ("kind" in shell)
-    return new ShellCompositionError({
-      root: shell.root,
-      reason: "the project is on format 1 and the migration surface is not wired yet",
+): Promise<AppStartupError | ShellCompositionError | MigrationDeclinedError | RunningApp> {
+  const env = resolveEnv(mode, deps);
+  const first = await createShell(mode, env, deps.shell);
+  if (first instanceof Error) return first;
+  if (!("kind" in first))
+    return runApp({
+      shell: first,
+      process: deps.process,
+      adapters: deps.adapters,
+      exit: deps.exit,
     });
 
-  return runApp({
-    shell,
-    process: deps.process,
+  // A version-1 project: the migrate offer is the ONLY thing this process draws until it is
+  // answered (design §12.1). No Kernel, no adapters, no UI deps have been built at this point.
+  const migrated = await runMigrationPrompt({
+    required: first,
+    store: createStoreForShell(deps.shell),
     adapters: deps.adapters,
-    exit: deps.exit,
   });
+  if (migrated instanceof MigrationDeclinedError) return migrated;
+  // Anything else `runMigrationPrompt` can fail with — `createMigrationRoot`'s own `UiRootError`
+  // or `store.migrateProject`'s bare `Error` — is a genuine startup failure, wrapped the same way
+  // `runApp` below wraps every other layer's failure into `AppStartupError` (never left as a bare
+  // `Error` this function's own return type does not carry).
+  if (migrated instanceof Error) return new AppStartupError({ cause: migrated });
+
+  // Migrated: build the real shell from scratch. `createShell` re-opens the project, which now
+  // decodes as format 2. A second `needs-migration` here would mean the migration reported success
+  // without changing the manifest — refused loudly rather than looping.
+  const second = await createShell(mode, env, deps.shell);
+  if (second instanceof Error) return second;
+  if ("kind" in second)
+    return new ShellCompositionError({
+      root: env.root,
+      reason: "the migration reported success but the project still reads as format 1",
+    });
+
+  return runApp({ shell: second, process: deps.process, adapters: deps.adapters, exit: deps.exit });
 }
 
 /**

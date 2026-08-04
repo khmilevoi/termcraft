@@ -94,6 +94,17 @@ export class ShellCompositionError extends errore.createTaggedError({
   message: "could not prepare a project at $root: $reason",
 }) {}
 
+/**
+ * THE store construction, extracted so `bootstrap`'s pre-Kernel migration branch builds the same
+ * one `interactiveShell` does. Two independently-constructed stores over one project would each
+ * take the lease, and the second would refuse.
+ */
+export function createStoreForShell(deps?: ShellDeps): Store {
+  return createStore(
+    nodeStoreDeps({ userStateRoot: deps?.userStateRoot ?? resolveDefaultUserStateRoot() }),
+  );
+}
+
 async function interactiveShell(
   env: UiEnv,
   deps: ShellDeps,
@@ -119,8 +130,7 @@ async function interactiveShell(
     });
   }
 
-  const userStateRoot = deps.userStateRoot ?? resolveDefaultUserStateRoot();
-  const store = createStore(nodeStoreDeps({ userStateRoot }));
+  const store = createStoreForShell(deps);
 
   const prepared = await openOrCreateProject(store, env.root);
   if (prepared instanceof Error) return prepared;

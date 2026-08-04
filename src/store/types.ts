@@ -539,7 +539,12 @@ export type {
 
 // ---- migration (storage-identity §12) ------------------------------------------------
 
-export type { BackupStore, MigrationError, MigrationRegistry } from "store/migration";
+export type {
+  BackupStore,
+  MigrationError,
+  MigrationPlanV1,
+  MigrationRegistry,
+} from "store/migration";
 
 // ---- orphan turn scan (turn-durability §7.7) -----------------------------------------
 

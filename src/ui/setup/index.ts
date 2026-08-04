@@ -4,3 +4,5 @@
 export type { MigratePromptViewV1 } from "./types";
 export type { MigratePromptProps } from "./ui/MigratePrompt";
 export { MigratePrompt, migrateBullets } from "./ui/MigratePrompt";
+export type { MigrationChoiceV1 } from "./model/migration-root";
+export { createMigrationRoot, migrationChoiceForKey } from "./model/migration-root";

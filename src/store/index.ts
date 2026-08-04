@@ -33,6 +33,8 @@ export type {
   LoadResult,
   ManifestStore,
   MigrationError,
+  MigrationOutcomeV1,
+  MigrationPlanV1,
   MigrationRegistry,
   OpenProject,
   OrphanTurnOutcome,

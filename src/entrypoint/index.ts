@@ -18,6 +18,7 @@ export { AppShutdownError, AppStartupError, runApp } from "./model/run-app";
 export type { RunAppOptions } from "./model/run-app";
 export { bootstrap } from "./model/bootstrap";
 export type { BootstrapDeps } from "./model/bootstrap";
+export { MigrationDeclinedError, runMigrationPrompt } from "./model/run-migration";
 export {
   ExportDriverError,
   ExportRefusedError,
