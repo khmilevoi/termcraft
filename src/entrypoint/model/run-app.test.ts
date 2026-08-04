@@ -70,10 +70,40 @@ function fakeShell(
     env: { root: "(demo)", workspaceIdentity: "demo", projectExists: false },
     agentRegistry,
     launch,
+    seedTurnText: null,
     close: () => {
       calls.push("shell-close");
       return Promise.resolve();
     },
+  };
+}
+
+/**
+ * This suite's existing `fakeShell(calls, agentRegistry, port, launch)` double, wrapped so the
+ * startup dispatch is recorded and the new `seedTurnText` field is set.
+ *
+ * `runApp` reaches the port through `createDispatcher`, which builds the raw envelope
+ * `{ protocolVersion, commandId, expectedRevision, kind, payload }` — `KernelPort.dispatch` takes
+ * `raw: unknown` (`ui/kernel/types.ts:31`), so `kind`/`payload` are read off the envelope.
+ */
+function recordingShell(input: {
+  readonly hasContent: boolean;
+  readonly seedTurnText: string | null;
+  readonly dispatched: Array<{ kind: string; payload: unknown }>;
+}): ShellWithAgentRegistry {
+  const calls: string[] = [];
+  const kernel = createFakeKernel();
+  const port: ShellWithAgentRegistry["port"] = {
+    ...kernel,
+    dispatch: (raw: unknown) => {
+      const envelope = raw as { kind: string; payload: unknown };
+      input.dispatched.push({ kind: envelope.kind, payload: envelope.payload });
+      return kernel.dispatch(raw);
+    },
+  };
+  return {
+    ...fakeShell(calls, null, port, { existing: true, hasContent: input.hasContent }),
+    seedTurnText: input.seedTurnText,
   };
 }
 
@@ -343,6 +373,33 @@ describe("runApp", () => {
 
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
+    });
+  });
+
+  describe("track 2's seeded refactor turn (design-tree §12.2)", () => {
+    test("the startup project.open carries the seed text when the shell has one", async () => {
+      const dispatched: Array<{ kind: string; payload: unknown }> = [];
+      const shell = recordingShell({ hasContent: true, seedTurnText: "refactor please", dispatched });
+      const app = await runApp({ shell, adapters: recordingAdapters([]), process: fakeBoundary() });
+      if (app instanceof Error) throw app;
+
+      expect(dispatched).toContainEqual({
+        kind: "project.open",
+        payload: { root: shell.env.root, text: "refactor please" },
+      });
+
+      await app.close();
+    });
+
+    test("the startup project.open omits text entirely when there is no seed", async () => {
+      const dispatched: Array<{ kind: string; payload: unknown }> = [];
+      const shell = recordingShell({ hasContent: true, seedTurnText: null, dispatched });
+      const app = await runApp({ shell, adapters: recordingAdapters([]), process: fakeBoundary() });
+      if (app instanceof Error) throw app;
+
+      expect(dispatched).toContainEqual({ kind: "project.open", payload: { root: shell.env.root } });
+
+      await app.close();
     });
   });
 

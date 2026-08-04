@@ -154,7 +154,14 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
       port: shell.port,
       revision: () => peekStateRevision(shell.port),
     });
-    const result = await dispatcher.dispatch("project.open", { root: shell.env.root });
+    // `text` is OMITTED, not set to `undefined`: `projectOpenPayloadSchema` is a `strictObject`
+    // and an explicit `undefined` key is a decode failure, not an absent field (design-tree
+    // §12.2 track 2).
+    const payload =
+      shell.seedTurnText === null
+        ? { root: shell.env.root }
+        : { root: shell.env.root, text: shell.seedTurnText };
+    const result = await dispatcher.dispatch("project.open", payload);
     if (result instanceof Error) {
       console.error(
         `termcraft: the startup project.open failed to dispatch: ${result.message}`,

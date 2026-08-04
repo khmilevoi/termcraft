@@ -66,6 +66,13 @@ export interface ShellWithAgentRegistry extends AppShell {
   readonly agentRegistry: AgentRegistry | null;
   /** The open-vs-create discriminator (Gap D) — see {@link ShellLaunchV1}'s own doc comment. */
   readonly launch: ShellLaunchV1;
+  /**
+   * The text the startup `project.open` seeds a first turn with, or `null` for an ordinary launch.
+   * Non-null only immediately after a migration (design-tree §12.2 track 2). `runProjectReadySequence`
+   * decides whether it actually becomes a turn: it needs a trusted project and an active chat, and
+   * an untrusted project refuses the turn through the ordinary `PROJECT_UNTRUSTED` guard.
+   */
+  readonly seedTurnText: string | null;
 }
 
 /**

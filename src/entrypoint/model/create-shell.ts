@@ -71,8 +71,21 @@ export async function createShell(
   mode: EntrypointMode,
   env: UiEnv,
   deps: ShellDeps = {},
+  options?: ShellOptions,
 ): Promise<ShellCompositionError | MigrationRequiredV1 | ShellWithAgentRegistry> {
-  return mode === "demo" ? demoShell(env) : interactiveShell(env, deps);
+  return mode === "demo" ? demoShell(env) : interactiveShell(env, deps, options);
+}
+
+/**
+ * Caller-supplied seeding for the shell this call builds — distinct from {@link ShellDeps}, which
+ * overrides the seams `interactiveShell` otherwise computes from the real process. Only
+ * `bootstrap.ts`'s post-migration `createShell` call passes this today (design-tree §12.2 track 2):
+ * the FIRST `createShell` call in a run never has a migration to seed a refactor turn from.
+ */
+export interface ShellOptions {
+  /** Threaded straight through to {@link ShellWithAgentRegistry.seedTurnText} — see that field's
+   *  own doc comment (`../types.ts`). */
+  readonly seedTurnText?: string;
 }
 
 /**
@@ -108,6 +121,7 @@ export function createStoreForShell(deps?: ShellDeps): Store {
 async function interactiveShell(
   env: UiEnv,
   deps: ShellDeps,
+  options?: ShellOptions,
 ): Promise<ShellCompositionError | MigrationRequiredV1 | ShellWithAgentRegistry> {
   // The Gate's `typeCheck` stage needs a spawnable `tsc` resolved from the INSTALLED
   // `typescript` package (Task 4's `resolveCompilerPath()`, `gate/model/tsc-extract.ts`) —
@@ -233,6 +247,7 @@ async function interactiveShell(
     env: resolvedEnv,
     agentRegistry,
     launch,
+    seedTurnText: options?.seedTurnText ?? null,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
     // last — `open` was acquired first, so it is released last. Each step is guarded (see
@@ -709,6 +724,9 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
     // A demo owns no project on disk (Gap D) — never an existing project, never any content
     // to route a startup `project.open` dispatch against.
     launch: { existing: false, hasContent: false },
+    // No real project has just been migrated in an offline demo (design-tree §12.2 track 2) —
+    // never a synthesized refactor turn to seed.
+    seedTurnText: null,
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

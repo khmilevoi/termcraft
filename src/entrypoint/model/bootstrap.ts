@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { migrationRefactorSeed } from "agent/prompt";
 import type { UiEnv, UiRootAdapters } from "ui";
 
 import type { EntrypointMode, ProcessBoundary, RunningApp } from "../types";
@@ -64,7 +65,13 @@ export async function bootstrap(
   // Migrated: build the real shell from scratch. `createShell` re-opens the project, which now
   // decodes as format 2. A second `needs-migration` here would mean the migration reported success
   // without changing the manifest — refused loudly rather than looping.
-  const second = await createShell(mode, env, deps.shell);
+  //
+  // Track 2 (design-tree §12.2): the seed rides ONLY this second `createShell` call — the first
+  // call above never got this far without hitting the `needs-migration` branch, so there is never
+  // a migration to seed a refactor turn from on an ordinary (non-migrated) launch.
+  const second = await createShell(mode, env, deps.shell, {
+    seedTurnText: migrationRefactorSeed({ pageCount: first.plan.pageCount }),
+  });
   if (second instanceof Error) return second;
   if ("kind" in second)
     return new ShellCompositionError({
