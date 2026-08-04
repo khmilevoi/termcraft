@@ -419,7 +419,9 @@ describe("openProject — existing-project launch ordering (storage-identity §1
           extractorVersion: 1,
         }),
       ).toBeNull();
-      expect(reopened.migrations.chain).toEqual([{ kind: "project.toml", fromVersion: 1, toVersion: 2 }]);
+      expect(reopened.migrations.chain).toEqual([
+        { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+      ]);
     } finally {
       await reopened.close();
     }
@@ -1215,7 +1217,7 @@ function exportPublishPlan(transactionId: string): PlanFixture {
   };
 }
 
-/** Infra-only migration (storage-identity §12): a thin `kind: "migration"` plan — no shipped migration exists, but the engine/recovery protocol must already be proven for this kind (T14's own scope note). */
+/** Infra-only migration (storage-identity §12): a thin `kind: "migration"` plan exercising the engine/recovery protocol for this kind directly, independent of the one real shipped migration (`project.toml` format 1 -> 2, `MIGRATION_CHAIN`) and its `migrateProject` caller (T14's own scope note). */
 function migrationPlan(transactionId: string): PlanFixture {
   const bytes = bytesOf(
     encodeProjectManifest({

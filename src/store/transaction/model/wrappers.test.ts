@@ -1034,7 +1034,7 @@ describe("buildExportPublishTransaction (infrastructure only — no MVP caller)"
   });
 });
 
-describe("buildMigrationTransaction (infrastructure only — no shipped migration exists)", () => {
+describe("buildMigrationTransaction (infrastructure proven directly — `migrateProject` is its real production caller)", () => {
   test("runs caller-built operations under kind migration", async () => {
     const manifest: ProjectManifest = {
       formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,

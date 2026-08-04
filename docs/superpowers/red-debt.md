@@ -1038,7 +1038,7 @@ Plan `docs/superpowers/plans/2026-08-04-design-tree-phase-1b-migration.md`, task
 `802a980..72d003d`. Full per-task evidence, including the fix rounds and the deferred minors
 listed in each task's own line, is in
 `.superpowers/sdd/2026-08-04-design-tree-phase-1b-migration/progress.md`. This plan shipped the
-first real migration a termcraft project ever runs; the four rows below are what it deliberately
+first real migration a termcraft project ever runs; the five rows below are what it deliberately
 left open rather than closed, each with the evidence for why it is real.
 
 ### The four `migration.*` Kernel commands and `MIGRATION_TRANSITION_TABLE` are still dead — real divergence, not a scheduling gap
@@ -1111,3 +1111,20 @@ project is left untouched (the backup-then-transaction ordering guarantees that 
 message the user sees is a generic I/O failure, not "not enough space for the backup". NO OWNER:
 adding a free-space probe is a straightforward addition to `createBackupStore`'s own pre-flight
 sequence, but it is new code this docs-only closeout does not add.
+
+### Headless `termcraft export` still refuses a version-1 project outright, with no migration path — unlike the interactive path
+
+`entrypoint/model/run-export.ts`'s `runHeadlessExport` composes the same `createShell("interactive",
+...)` graph the interactive root uses, and when that call reports `"kind" in shell` (a version-1
+project, `ManifestMigrationRequiredError`), it returns a `ShellCompositionError` naming the reason
+"the project is on format 1 and the migration surface is not wired yet" — a straight refusal, with
+no `runMigrationPrompt` call and no way for a headless run to migrate the project and continue. The
+interactive path (`bootstrap.ts`) no longer has this gap: it now draws the real `migrate-80` offer
+and, on `⏎ migrate`, drives `store.migrateProject` before re-running `createShell`. Headless export
+was left behind — `runHeadlessExport`'s own comment still calls this "the same temporary refusal as
+`bootstrap.ts`", which was true before this plan and is no longer true after it. A user who only
+ever drives `termcraft export <dir>` against a version-1 project — never opening it interactively
+first — has no way to get past this refusal short of running `termcraft` interactively once. NO
+OWNER: wiring a migration offer into a non-interactive CLI path (no terminal, no keypress to answer
+`⏎ migrate` / `esc later` with) is a real design question — an unattended CLI cannot show a dialog
+and wait for a key the way the interactive root does — not a mechanical port of the interactive fix.

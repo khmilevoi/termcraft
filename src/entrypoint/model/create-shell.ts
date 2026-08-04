@@ -108,9 +108,16 @@ export class ShellCompositionError extends errore.createTaggedError({
 }) {}
 
 /**
- * THE store construction, extracted so `bootstrap`'s pre-Kernel migration branch builds the same
- * one `interactiveShell` does. Two independently-constructed stores over one project would each
- * take the lease, and the second would refuse.
+ * THE store construction, extracted so `bootstrap`'s pre-Kernel migration branch (`store:
+ * createStoreForShell(deps.shell)`, ahead of `runMigrationPrompt`) builds a store the same way
+ * `interactiveShell` does below, instead of re-deriving `nodeStoreDeps({...})` a second time.
+ * The real reason is ONE consistent `userStateRoot` resolution shared by both call sites — not
+ * lease contention: construction itself takes no lease (`createStore` just wires adapters), so
+ * `bootstrap` legitimately builds TWO independent stores over the same project across a
+ * migration run (this one for the pre-Kernel `migrateProject` call, then `interactiveShell`'s own
+ * for the post-migration `createShell` retry) — that only works because the first store's lease,
+ * acquired inside `migrateProject` itself, is released before the second one ever calls
+ * `openProject`.
  */
 export function createStoreForShell(deps?: ShellDeps): Store {
   return createStore(

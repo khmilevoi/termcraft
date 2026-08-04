@@ -75,6 +75,19 @@ function fitPathFromRight(value: string, budget: number): string {
  * key row is therefore replaced by `⠹ migrating…`, transferred from the design's own
  * `home('checking')` state (`termcraft-engine.js:148`,`:158`) — existing design vocabulary for
  * "this is working", not an invented indicator. Like design's own, the glyph is static.
+ *
+ * DIVERGENCE 4 — no rule, no bottom anchor: `migrate()` (`termcraft-engine.js:832-833`) draws an
+ * `hline` with `├`/`┤` connectors at `py+ph-3`, then the key row at the fixed offset `py+ph-2` —
+ * two rows up from the box's own bottom border, regardless of how tall the content above it is.
+ * This component draws neither: no rule is rendered, and the key/working row sits wherever
+ * ordinary column flex flow puts it, directly under the backup-path text. Any leftover height
+ * from the box's fixed budget (`BOX_HEIGHT`, same formula as the mock's `ph`) ends up as blank
+ * space below the key row instead of between the backup path and it. The mock's canvas draws by
+ * absolute (x, y) coordinate, so "two rows above the border" costs nothing extra; reproducing
+ * that here would need an explicit spacer (e.g. a flex-grow filler row) this component does not
+ * have. That is a plausible reason, not a confirmed one — no design note or task record says the
+ * anchor was deliberately dropped, so this is recorded as an unreconciled gap, not a verified
+ * tradeoff.
  */
 export function MigratePrompt(props: MigratePromptProps) {
   const bullets = migrateBullets(props.view);
@@ -111,7 +124,12 @@ export function MigratePrompt(props: MigratePromptProps) {
           will migrate to the current format:
         </text>
         {bullets.map((bullet, index) => (
-          <text id={`${props.id}-bullet-${index}`} key={bullet} fg={SHELL_PALETTE.fg} marginLeft={2}>
+          <text
+            id={`${props.id}-bullet-${index}`}
+            key={bullet}
+            fg={SHELL_PALETTE.fg}
+            marginLeft={2}
+          >
             {`• ${bullet}`}
           </text>
         ))}

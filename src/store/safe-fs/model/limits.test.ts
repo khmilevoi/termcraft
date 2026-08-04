@@ -442,7 +442,9 @@ describe("the project-migration root kind (design-tree §12.2's mechanical track
   });
 
   test("the migration root admits the retired page source under design-source", () => {
-    expect(classifyNamespace("project-migration", "pages/dashboard/page.tsx")).toBe("design-source");
+    expect(classifyNamespace("project-migration", "pages/dashboard/page.tsx")).toBe(
+      "design-source",
+    );
   });
 
   test("the migration root admits the retired pin log under comments-jsonl", () => {

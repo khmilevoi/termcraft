@@ -1868,10 +1868,7 @@ async function planMigration(deps: StoreDeps, root: AbsPath): Promise<Error | Mi
 }
 
 /** `Store.migrateProject` — see that method's own doc comment. */
-async function migrateProject(
-  deps: StoreDeps,
-  root: AbsPath,
-): Promise<Error | MigrationOutcomeV1> {
+async function migrateProject(deps: StoreDeps, root: AbsPath): Promise<Error | MigrationOutcomeV1> {
   const context = await openMigrationContext(deps, root);
   if (context instanceof Error) return context;
 

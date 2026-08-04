@@ -294,8 +294,10 @@ describe("createBackupStore — the §12 verified-backup protocol", () => {
 // ==========================================================================================
 // Synthetic end-to-end migration (turn-durability §14.8): backup -> verify -> transform ->
 // MigrationTransaction, through the LIVE infra (real filesystem, real store/transaction,
-// real store/safe-fs). No production migration exists (model/registry.ts's empty
-// MIGRATION_CHAIN) — this is the test-only proof that the shared protocol works end to end.
+// real store/safe-fs). This predates and stays independent of the one shipped migration
+// (model/registry.ts's `MIGRATION_CHAIN`, `project.toml` format 1 -> 2) and its real
+// production caller, `store/model/factory.ts`'s `migrateProject` — it is the test-only proof
+// that the shared protocol works end to end against a synthetic chain, not against the real one.
 // ==========================================================================================
 
 describe("synthetic end-to-end migration", () => {

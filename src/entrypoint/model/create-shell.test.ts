@@ -260,7 +260,11 @@ function expectFullShell(
 describe("createShell", () => {
   test("the demo shell seeds a trusted project so the workspace is reachable offline", async () => {
     const shell = expectFullShell(
-      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+      await createShell("demo", {
+        root: "(demo)",
+        workspaceIdentity: "demo",
+        projectExists: false,
+      }),
     );
     const payload = await firstSnapshot(shell.port);
 
@@ -274,7 +278,11 @@ describe("createShell", () => {
 
   test("closing the demo shell is idempotent and ends its preview stream", async () => {
     const shell = expectFullShell(
-      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+      await createShell("demo", {
+        root: "(demo)",
+        workspaceIdentity: "demo",
+        projectExists: false,
+      }),
     );
     const handle = shell.port.preview();
     if (handle === null) throw new Error("demo shell must expose a preview handle");
@@ -400,7 +408,11 @@ describe("createShell", () => {
 
   test("the demo shell exposes no agent registry — there is no real agent to probe offline", async () => {
     const shell = expectFullShell(
-      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+      await createShell("demo", {
+        root: "(demo)",
+        workspaceIdentity: "demo",
+        projectExists: false,
+      }),
     );
 
     expect(shell.agentRegistry).toBeNull();

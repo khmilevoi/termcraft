@@ -653,8 +653,11 @@ export interface Store {
   planMigration(root: AbsPath): Promise<Error | MigrationPlanV1>;
   /**
    * Run the mechanical migration (design-tree §12.2 track 1): verified backup, then ONE
-   * transaction, then release. Re-scans rather than trusting a plan handed in from the dialog —
-   * the only thing carried across is the plan id, so the journal and the offer agree on identity.
+   * transaction, then release. Takes only `root` — nothing from a prior `planMigration` call
+   * is carried in, not even its `migrationPlanId`. This deliberately re-scans and re-derives
+   * everything itself, including minting a fresh `migrationPlanId`/`migrationActionId` pair
+   * at commit time, because it does not trust anything computed for the read-only offer
+   * (storage §17).
    */
   migrateProject(root: AbsPath): Promise<Error | MigrationOutcomeV1>;
 }

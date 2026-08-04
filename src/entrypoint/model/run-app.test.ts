@@ -379,7 +379,11 @@ describe("runApp", () => {
   describe("track 2's seeded refactor turn (design-tree §12.2)", () => {
     test("the startup project.open carries the seed text when the shell has one", async () => {
       const dispatched: Array<{ kind: string; payload: unknown }> = [];
-      const shell = recordingShell({ hasContent: true, seedTurnText: "refactor please", dispatched });
+      const shell = recordingShell({
+        hasContent: true,
+        seedTurnText: "refactor please",
+        dispatched,
+      });
       const app = await runApp({ shell, adapters: recordingAdapters([]), process: fakeBoundary() });
       if (app instanceof Error) throw app;
 

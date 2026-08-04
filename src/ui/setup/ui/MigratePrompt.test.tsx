@@ -75,7 +75,10 @@ describe("MigratePrompt (design/16-wizard-migration.dc.html)", () => {
   });
 
   test("draws the git-history note verbatim, in faint", async () => {
-    const run = findRun(await draw(), "git history is left untouched — only current sources migrate");
+    const run = findRun(
+      await draw(),
+      "git history is left untouched — only current sources migrate",
+    );
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
   });

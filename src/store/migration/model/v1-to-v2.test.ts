@@ -1,8 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, describe, expect, test } from "bun:test";
 
 import type { PageSlug } from "entities/page";
 import { createSafeProjectFs, nodeSafeFsDeps, openManagedRoot } from "store/safe-fs";

@@ -49,10 +49,9 @@ const legacyProjectManifestSchema = z.strictObject({
   name: z.string(),
   created_at: rfc3339UtcSchema,
   target_stack: z.enum(TARGET_STACKS),
-  pages: z.array(pageSlugSchema).refine(
-    (slugs) => new Set(slugs).size === slugs.length,
-    "pages must not repeat a slug",
-  ),
+  pages: z
+    .array(pageSlugSchema)
+    .refine((slugs) => new Set(slugs).size === slugs.length, "pages must not repeat a slug"),
 });
 
 /** `pages/<slug>/page.tsx` — the retired per-page source path. */
@@ -144,7 +143,11 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
     const pinsPath = legacyPinsPath(slug);
     const pinsPresent = probeLeaf(safeFs, pinsPath);
     if (pinsPresent instanceof Error) return pinsPresent;
-    pages.push({ slug, legacySourcePath: sourcePath, legacyPinsPath: pinsPresent ? pinsPath : null });
+    pages.push({
+      slug,
+      legacySourcePath: sourcePath,
+      legacyPinsPath: pinsPresent ? pinsPath : null,
+    });
   }
 
   return {

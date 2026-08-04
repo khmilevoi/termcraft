@@ -1095,7 +1095,7 @@ export interface MigrationTransactionInput {
   readonly precondition?: () => (Error | null) | Promise<Error | null>;
 }
 
-/** `MigrationTransaction`: a thin `kind: "migration"` pass-through — see the module header for scope. No shipped migration exists yet (storage-identity §12), so this has no MVP caller either. */
+/** `MigrationTransaction`: a thin `kind: "migration"` pass-through — see the module header for scope. As of design-tree phase 1b this has a real production caller: `store/model/factory.ts`'s `migrateProject`, via the engine's `runMigration`. */
 export async function buildMigrationTransaction(
   deps: TransactionWrapperDeps,
   input: MigrationTransactionInput,

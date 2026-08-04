@@ -35,8 +35,10 @@ import { buildTrustStatus, grantImplicitTrust, resolveTrustDecision } from "./tr
  * exposes "open a project" as an operation; `core/ports/project-store.ts`'s `ProjectStore`
  * represents an ALREADY-open, ALREADY-leased project), `readJournalFormat` (TD step 3),
  * `recoverPendingMigrations` (TD step 6 — completing an in-flight schema migration is
- * out of THIS slice's scope; `MIGRATION_CHAIN` is empty by design per this phase's master
- * plan), `validateSchemas` (TD step 7), and `findIntendedRecoveryDomain` (KCC §12.7's
+ * out of THIS slice's scope; recovering a migration left mid-transaction by a crash is
+ * distinct from running one, and stays unbuilt even though `MIGRATION_CHAIN` now carries
+ * one real step, `project.toml` format 1 -> 2, per design-tree phase 1b), `validateSchemas`
+ * (TD step 7), and `findIntendedRecoveryDomain` (KCC §12.7's
  * "journal inspection... proves durable commit intent" — no port names WHICH domain
  * (Restore/Export/Migration) an intended journal belongs to; `RecoveryService.recover()`
  * returns only aggregate counts and `classify(transactionId)` needs a `transactionId`

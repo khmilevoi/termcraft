@@ -1,8 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, describe, expect, test } from "bun:test";
 
 import { createStore, nodeStoreDeps } from "./factory";
 
@@ -21,9 +20,9 @@ afterEach(() => {
 function readTree(dir: string): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
   const walk = (current: string, prefix: string) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
+    for (const entry of fs
+      .readdirSync(current, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))) {
       const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
       // `lock` is the lease file, `export/` holds generation artifacts a migration never touches,
       // and `transactions.local/` is the journal the migration itself just wrote. None is part of

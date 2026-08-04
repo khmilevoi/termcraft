@@ -1,8 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, describe, expect, test } from "bun:test";
 
 import { BACKUP_VERIFIED_FILENAME } from "store/migration";
 
@@ -42,7 +41,12 @@ function seedV1Project(slugs: readonly string[] = ["dashboard", "calendar"]) {
       `export const meta = { title: "${slug}" };\n`,
     );
   }
-  return { root, userStateRoot, termcraftDir, store: createStore(nodeStoreDeps({ userStateRoot })) };
+  return {
+    root,
+    userStateRoot,
+    termcraftDir,
+    store: createStore(nodeStoreDeps({ userStateRoot })),
+  };
 }
 
 describe("Store.planMigration (design-tree §12.1's offer)", () => {
@@ -62,7 +66,8 @@ describe("Store.planMigration (design-tree §12.1's offer)", () => {
     const seeded = seedV1Project([]);
     fs.writeFileSync(
       path.join(seeded.termcraftDir, "project.toml"),
-      fs.readFileSync(path.join(seeded.termcraftDir, "project.toml"), "utf8")
+      fs
+        .readFileSync(path.join(seeded.termcraftDir, "project.toml"), "utf8")
         .replace("format_version = 1", "format_version = 2")
         .replace("pages = []\n", ""),
     );
@@ -104,9 +109,9 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
     expect(outcome.backupDir.includes(".termcraft")).toBe(false);
     expect(fs.existsSync(path.join(outcome.backupDir, BACKUP_VERIFIED_FILENAME))).toBe(true);
     // The backup holds the OLD paths verbatim, so a restore is a plain copy back.
-    expect(
-      fs.existsSync(path.join(outcome.backupDir, "pages", "dashboard", "page.tsx")),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(outcome.backupDir, "pages", "dashboard", "page.tsx"))).toBe(
+      true,
+    );
     expect(fs.existsSync(path.join(outcome.backupDir, "project.toml"))).toBe(true);
   });
 

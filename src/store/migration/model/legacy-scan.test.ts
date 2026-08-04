@@ -1,8 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import { afterEach, describe, expect, test } from "bun:test";
 
 import { createSafeProjectFs, nodeSafeFsDeps, openManagedRoot } from "store/safe-fs";
 import type { SafeProjectFs } from "store/safe-fs";
@@ -10,7 +9,7 @@ import type { SafeProjectFs } from "store/safe-fs";
 import { LegacyScanError, scanLegacyProject } from "./legacy-scan";
 
 const V1_MANIFEST = [
-  'format_version = 1',
+  "format_version = 1",
   'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"',
   'name = "clock"',
   'created_at = "2026-07-26T19:58:57.883Z"',
@@ -46,7 +45,10 @@ function seedLegacyProject(input: {
     );
   }
   for (const slug of input.pinnedSlugs ?? []) {
-    fs.writeFileSync(path.join(termcraftDir, "pages", slug, "comments.jsonl"), '{"kind":"header"}\n');
+    fs.writeFileSync(
+      path.join(termcraftDir, "pages", slug, "comments.jsonl"),
+      '{"kind":"header"}\n',
+    );
   }
   const deps = nodeSafeFsDeps();
   const root = openManagedRoot({ kind: "project-migration", path: termcraftDir, deps });
@@ -113,7 +115,9 @@ describe("scanLegacyProject (design-tree §12.2 track 1's only reader of the old
   test("refuses a version-1 manifest missing the pages array", () => {
     const scanned = scanLegacyProject(
       seedLegacyProject({
-        manifest: V1_MANIFEST.split("\n").filter((line) => !line.startsWith("pages")).join("\n"),
+        manifest: V1_MANIFEST.split("\n")
+          .filter((line) => !line.startsWith("pages"))
+          .join("\n"),
         slugs: [],
       }),
     );

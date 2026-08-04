@@ -50,9 +50,15 @@ export async function runMigrationPrompt(input: {
   }
 
   // The dialog stays mounted while track 1 runs — there is nothing else to draw, and the key row
-  // says so. Disposed on BOTH paths below so the terminal is never left in raw mode.
+  // says so. `try`/`finally`, not a following statement, so `dispose()` runs even if
+  // `migrateProject` throws instead of returning its error as a value (errore discipline means it
+  // shouldn't, but this makes "never leaves the terminal in raw mode" structurally true rather
+  // than merely likely — the same shape `mountRenderRoot` itself uses on its own release paths,
+  // `ui/app/model/render-root.tsx`).
   root.setWorking(true);
-  const outcome = await input.store.migrateProject(input.required.root);
-  root.dispose();
-  return outcome;
+  try {
+    return await input.store.migrateProject(input.required.root);
+  } finally {
+    root.dispose();
+  }
 }

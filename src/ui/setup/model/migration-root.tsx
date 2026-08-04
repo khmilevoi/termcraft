@@ -78,8 +78,14 @@ export async function createMigrationRoot(options: {
   };
 }
 
-/** The keyboard handler and the one atom read, kept in a component so `useKeyboard` has a host. */
-const MigrationSurface = reatomComponent<{
+/**
+ * The keyboard handler and the one atom read, kept in a component so `useKeyboard` has a host.
+ * Exported so `migration-root.test.tsx` can mount it directly through a real headless renderer
+ * and drive real keypresses at `useKeyboard` — `createMigrationRoot`'s own adapters seam only
+ * ever reaches `onChoice` synthetically (see `run-migration.test.ts`'s `answeringAdapters`),
+ * never through a real key.
+ */
+export const MigrationSurface = reatomComponent<{
   readonly size: { readonly w: number; readonly h: number };
   readonly view: MigratePromptViewV1;
   readonly working: Atom<boolean>;
