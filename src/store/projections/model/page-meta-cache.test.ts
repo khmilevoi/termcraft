@@ -5,7 +5,11 @@ import path from "node:path";
 import type { Clock } from "infrastructure/clock";
 
 import type { PageMetaEntry, PageMetaKey, ProjectionFsDeps } from "../types";
-import { PageMetaCacheIoError, createPageMetaCache } from "./page-meta-cache";
+import {
+  PAGE_META_CACHE_GENERATION,
+  PageMetaCacheIoError,
+  createPageMetaCache,
+} from "./page-meta-cache";
 
 const ROOT = "C:/project/.termcraft/cache/page-meta";
 
@@ -62,7 +66,7 @@ function cacheOver(memory: ReturnType<typeof memoryFs>, storeGeneration?: number
   return createPageMetaCache({ root: ROOT, fs: memory.deps, clock, storeGeneration });
 }
 
-const baseKey: PageMetaKey = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+const baseKey: PageMetaKey = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
 const baseEntry: PageMetaEntry = {
   key: baseKey,
   meta: { kitApiVersion: 1, title: "Home", minSize: { w: 40, h: 12 }, theme: "dark" },
@@ -95,12 +99,12 @@ describe("createPageMetaCache", () => {
     expect(await cache.get(baseKey)).toEqual(baseEntry);
   });
 
-  test("changing sourceHash alone is a miss — never falls back to a different source hash", async () => {
+  test("changing closureHash alone is a miss — never falls back to a different closure hash", async () => {
     const memory = memoryFs();
     const cache = cacheOver(memory);
     await cache.put(baseEntry);
 
-    const changedKey: PageMetaKey = { ...baseKey, sourceHash: "b".repeat(64) };
+    const changedKey: PageMetaKey = { ...baseKey, closureHash: "b".repeat(64) };
     expect(await cache.get(changedKey)).toBeNull();
   });
 
@@ -168,6 +172,22 @@ describe("createPageMetaCache", () => {
     for (const key of memory.files.keys()) expect(key.startsWith(normalizedRoot)).toBe(true);
   });
 
+  test("the real PAGE_META_CACHE_GENERATION bump this task makes (1 -> 2) invalidates a pre-bump entry under the DEFAULT cache", async () => {
+    // Not the generic mechanism test above (which pins its own 1/2 pair regardless of the
+    // module constant) — this one is tied to the actual bump design-tree phase 2 Task 6 makes,
+    // re-keying `PageMetaKey.sourceHash` -> `closureHash`. `PAGE_META_CACHE_GENERATION` itself
+    // is the proof the bump landed; the behavioral half proves it actually invalidates old data.
+    expect(PAGE_META_CACHE_GENERATION).toBe(2);
+
+    const memory = memoryFs();
+    const preTask6 = cacheOver(memory, 1); // simulates an entry written under the old generation
+    await preTask6.put(baseEntry);
+    expect(await preTask6.get(baseKey)).toEqual(baseEntry);
+
+    const current = cacheOver(memory); // no override — the real, current PAGE_META_CACHE_GENERATION
+    expect(await current.get(baseKey)).toBeNull();
+  });
+
   test("put surfaces a durable-write failure as a tagged error", async () => {
     const memory = memoryFs();
     memory.failWrites(new Error("disk full"));
@@ -189,6 +209,6 @@ describe("createPageMetaCache", () => {
 
 /** Re-derive the content-addressed filename the store itself would compute for `key`, for direct-poison tests. */
 function cacheEntryHash(key: PageMetaKey): string {
-  const canonical = [key.pageSlug, key.sourceHash, String(key.extractorVersion)].join(" ");
+  const canonical = [key.pageSlug, key.closureHash, String(key.extractorVersion)].join(" ");
   return crypto.createHash("sha256").update(new TextEncoder().encode(canonical)).digest("hex");
 }

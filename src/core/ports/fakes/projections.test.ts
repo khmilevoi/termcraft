@@ -18,13 +18,13 @@ const FAILURE: FailureDtoV1 = {
 describe("createFakePageMetaCache", () => {
   test("get() misses (null) for a key that was never put — never an error", async () => {
     const cache = createFakePageMetaCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
     expect(await cache.get(key)).toBeNull();
   });
 
   test("put() then get() round-trips the exact entry", async () => {
     const cache = createFakePageMetaCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
     const entry = {
       key,
       meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
@@ -33,10 +33,10 @@ describe("createFakePageMetaCache", () => {
     expect(await cache.get(key)).toEqual(entry);
   });
 
-  test("a key with a different sourceHash is a distinct cache slot (a miss)", async () => {
+  test("a key with a different closureHash is a distinct cache slot (a miss)", async () => {
     const cache = createFakePageMetaCache();
-    const key1 = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
-    const key2 = { pageSlug: "home", sourceHash: "b".repeat(64), extractorVersion: 1 };
+    const key1 = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
+    const key2 = { pageSlug: "home", closureHash: "b".repeat(64), extractorVersion: 1 };
     await cache.put({
       key: key1,
       meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
@@ -46,7 +46,7 @@ describe("createFakePageMetaCache", () => {
 
   test("failNext() queues one failure for get()", async () => {
     const cache = createFakePageMetaCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
     cache.failNext("get", FAILURE);
     expect(await cache.get(key)).toEqual(FAILURE);
     expect(await cache.get(key)).toBeNull();
@@ -92,7 +92,7 @@ describe("createFakeRenderCache", () => {
 
   test("records get/put calls in order across all three caches independently", async () => {
     const pageMeta = createFakePageMetaCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
     await pageMeta.get(key);
     await pageMeta.put({
       key,

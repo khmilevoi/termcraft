@@ -20,9 +20,19 @@ import type { PageMeta } from "entities/page";
 
 // ---- page-meta cache (storage-identity §7) ---------------------------------------
 
+/**
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 6): mirrors
+ * `store/projections/model/page-meta-cache.ts`'s own `PageMetaKey` field-for-field — see that
+ * file's header for the honest accounting of what the re-key buys (vocabulary consistency
+ * across design §7's whole consumer table) and does not buy (no correctness fix for `meta`
+ * extraction itself, which stays strictly literal). `closureHash` is always a real, non-null
+ * `Sha256Hex`: `core/kernel/handlers/preview-export.ts`'s `resolvePageMeta` skips this cache
+ * entirely — no `get`, no `put` — when the tree index's `closureHashOf` returns `null`, so no
+ * caller may construct a `PageMetaKeyV1` from an unprovable closure.
+ */
 export interface PageMetaKeyV1 {
   readonly pageSlug: string;
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly extractorVersion: number;
 }
 

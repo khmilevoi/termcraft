@@ -415,7 +415,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       expect(
         await reopened.projections.pageMetaGet({
           pageSlug: "home",
-          sourceHash: sha256Hex(new Uint8Array()),
+          closureHash: sha256Hex(new Uint8Array()),
           extractorVersion: 1,
         }),
       ).toBeNull();

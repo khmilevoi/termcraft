@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { context, wrap } from "@reatom/core";
 
@@ -20,6 +20,7 @@ import {
   type PreviewSession,
 } from "core/ports";
 import {
+  type FakeGateRunner,
   createFakeAgentBackend,
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
@@ -57,7 +58,7 @@ import {
   type UUIDv7,
   eventPayloadV1SchemaByKind,
 } from "core/protocol";
-import { computeSourceHash } from "entities/design-tree";
+import { computeClosureHash, computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
@@ -80,11 +81,74 @@ const HOME = slug("home");
 const HOME_SOURCE_TEXT = "export const meta = {}";
 const HOME_SOURCE_BYTES = new TextEncoder().encode(HOME_SOURCE_TEXT);
 const HOME_SOURCE_HASH = computeSourceHash(HOME_SOURCE_BYTES);
+// The entry `design/pages.json` binds `HOME` to — `createFakeDesignStoreForPages`'s own default,
+// never `pages/home.tsx` (see `defaultFakeEntry`'s own doc for why a slug-shaped path would
+// prove nothing).
+const HOME_ENTRY_REL_PATH = defaultFakeEntry(HOME);
+// The REAL `closureHash` design-tree phase 2 Task 6 re-keys `PageMetaCache` onto — computed the
+// same way `readCanonicalTreeIndex` computes it, not a hand-picked literal (the same discipline
+// `HOME_SOURCE_HASH` above already follows). `HOME_SOURCE_TEXT` carries no import, so this
+// fixture's true closure is its own entry file alone: `computeClosureHash` over the single
+// `(HOME_ENTRY_REL_PATH, HOME_SOURCE_HASH)` pair.
+const HOME_CLOSURE_HASH: string = (() => {
+  const hash = computeClosureHash({
+    files: [HOME_ENTRY_REL_PATH],
+    sha256Of: (relPath) => (relPath === HOME_ENTRY_REL_PATH ? HOME_SOURCE_HASH : null),
+  });
+  if (hash === null) {
+    throw new Error(
+      "HOME_CLOSURE_HASH: computeClosureHash unexpectedly returned null for a single-file fixture",
+    );
+  }
+  return hash;
+})();
+
+/**
+ * `createFakeGateRunner()`'s own `runTree()` default is an HONEST EMPTY (`closures: []`,
+ * documented loudly on that fake as a deliberate trap for a caller that forgets to script it) —
+ * so under it, EVERY page's `closureHashOf` is unconditionally `null`. Design-tree phase 2
+ * Task 6 makes `resolvePageMeta` skip the page-meta cache entirely on `null`, which is the
+ * correct behavior this suite has a dedicated test for (see "skips the page-meta cache
+ * entirely" below) — but it would also silently turn every OTHER test's `seedPageMeta`/cache
+ * HIT-or-MISS assertion into "always extract directly, cache never touched", which is not what
+ * those tests are about.
+ *
+ * This wrapper supplies the closure this suite's own fixtures actually have: none of
+ * `HOME_SOURCE_TEXT` (or any other page source this file seeds) contains an import, so a page's
+ * TRUE closure is its own entry file alone — exactly `{slug, files: [page.entry]}` per page in
+ * `runTree`'s own input. It only synthesizes this when NOTHING was explicitly queued
+ * (`queueRunTreeResult` still wins), and it still calls through to the real fake so `.calls` and
+ * any queued diagnostics/blockers keep working normally. A test that wants the genuine `null`
+ * path uses the RAW `createFakeGateRunner()` via `buildDeps({gateRunner: ...})` instead.
+ */
+function createGateRunnerWithFixtureClosures(): FakeGateRunner {
+  const fake = createFakeGateRunner();
+  let scriptedTreeResults = 0;
+  return {
+    ...fake,
+    queueRunTreeResult(result) {
+      scriptedTreeResults += 1;
+      fake.queueRunTreeResult(result);
+    },
+    async runTree(input) {
+      if (scriptedTreeResults > 0) {
+        scriptedTreeResults -= 1;
+        return fake.runTree(input);
+      }
+      const result = await fake.runTree(input);
+      return {
+        ...result,
+        closures: input.pages.map((page) => ({ slug: page.slug, files: [page.entry] })),
+      };
+    },
+  };
+}
 
 function buildDeps(overrides?: {
   readonly hostSupervisor?: KernelDeps["hostSupervisor"];
   readonly pageMetaCache?: KernelDeps["pageMetaCache"];
   readonly projectStore?: KernelDeps["projectStore"];
+  readonly gateRunner?: KernelDeps["gateRunner"];
 }): KernelDeps {
   const chatStore = createFakeChatStore();
   const pageStore = createFakeDesignStoreForPages({
@@ -116,7 +180,7 @@ function buildDeps(overrides?: {
     renderCache: createFakeRenderCache(),
     sessionCheckpoint: createFakeSessionCheckpointService(),
     recovery: createFakeRecoveryService(),
-    gateRunner: createFakeGateRunner(),
+    gateRunner: overrides?.gateRunner ?? createGateRunnerWithFixtureClosures(),
     hostSupervisor: overrides?.hostSupervisor ?? createFakeHostSupervisorPort(),
     exportRender: createFakeExportRenderPort(),
     exportPublish: createFakeExportPublish(),
@@ -260,7 +324,7 @@ function seedPageMeta(cache: ReturnType<typeof createFakePageMetaCache>): void {
   void cache.put({
     key: {
       pageSlug: HOME,
-      sourceHash: HOME_SOURCE_HASH,
+      closureHash: HOME_CLOSURE_HASH,
       extractorVersion: PAGE_META_EXTRACTOR_VERSION,
     },
     meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
@@ -478,7 +542,7 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     expect(put).toBeDefined();
     expect(put!.key).toEqual({
       pageSlug: HOME,
-      sourceHash: HOME_SOURCE_HASH,
+      closureHash: HOME_CLOSURE_HASH,
       extractorVersion: PAGE_META_EXTRACTOR_VERSION,
     });
   });
@@ -525,6 +589,39 @@ describe("previewHandlers.selectPage / selectCurrent — real, end to end", () =
     );
     expect(parsedState.action).toBe("kernel.preview.sessionFailed");
     expect(parsedState.nextTag).toBe("failed");
+  });
+
+  test("a page whose closure cannot be proved (closureHashOf returns null) skips the page-meta cache entirely — no get, no put — and logs once", async () => {
+    // The RAW fake, deliberately NOT `createGateRunnerWithFixtureClosures()`: its own
+    // `runTree()` default is an honest `closures: []`, so `readCanonicalTreeIndex`'s
+    // `closureHashOf(HOME)` is unconditionally `null` here — exactly the "cannot prove this
+    // page's closure" case design-tree phase 2 Task 6 requires `resolvePageMeta` to skip the
+    // cache for entirely, never encode as a sentinel key.
+    const deps = buildDeps({ gateRunner: createFakeGateRunner() });
+    const cache = deps.pageMetaCache as ReturnType<typeof createFakePageMetaCache>;
+    const harness = buildTestContext(deps);
+    enable(harness.handlerContext.machines);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    previewHandlers["preview.selectPage"]({ pageSlug: HOME }, harness.handlerContext);
+    const events = await wrap(harness.launched[0]!.run());
+
+    // The page still resolves for real, through the Gate's own direct extraction — a `null`
+    // closure is a cache-skip, never a "this page has no settings" refusal.
+    expect(harness.handlerContext.machines.preview.phase()).toBe("live");
+    expect(events.some((event) => event.kind === "preview.sourceChanged")).toBe(true);
+
+    // The proof: NEITHER a `get` NOR a `put` ever reached the cache. Not "returns something
+    // reasonable" — the cache was never touched at all.
+    expect(cache.calls).toHaveLength(0);
+
+    // Logged once (errore rule 21: an intentionally un-propagated branch must leave a trace).
+    expect(warnSpy).toHaveBeenCalled();
+    const closureWarning = warnSpy.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("no provable closureHash"),
+    );
+    expect(closureWarning).toBeDefined();
+    warnSpy.mockRestore();
   });
 
   test("async completion, host supervisor rejects: sessionFailed + preview.failed carrying the host's own failure", async () => {

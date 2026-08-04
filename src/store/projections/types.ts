@@ -45,10 +45,14 @@ export interface ProjectionFsDeps {
  * `entities/page` `PageSlug`), matching the plan's `store/types.ts` port sketch: a key
  * read back out of a stored entry is a lookup value, not a value that needs the slug
  * grammar re-validated to serve as one.
+ *
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 6). See
+ * `model/page-meta-cache.ts`'s own file header for the honest accounting of what this trade
+ * buys and does not buy — this field alone is not a correctness fix.
  */
 export interface PageMetaKey {
   readonly pageSlug: string;
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly extractorVersion: number;
 }
 

@@ -320,13 +320,19 @@ function buildDeps(
   });
   const pinStore = createFakePinStore();
   // Seeded so `export.start`'s real composition can resolve `HOME`'s settings via
-  // `resolvePageSettings` (`preview-export.ts`) — a genuine cache miss would otherwise
-  // refuse the export honestly rather than fabricate a size/theme/version.
+  // `resolvePageSettings` (`preview-export.ts`). NOTE (design-tree phase 2 Task 6): this
+  // file's `gateRunner` is the RAW `createFakeGateRunner()` (never `queueRunTreeResult`-ed
+  // in this file), so its `runTree()` default (`closures: []`) makes `closureHashOf(HOME)`
+  // unconditionally `null` here — `resolvePageMeta` therefore always SKIPS this cache and
+  // extracts directly through the Gate's own default `extractPageMeta` (also never scripted
+  // to fail in this file), which returns a real, valid `PageMeta` either way. The seed below
+  // is kept so a real HIT is still possible if a future edit gives this fixture a provable
+  // closure, but nothing in this file's current scenarios depends on it being read.
   const pageMetaCache = createFakePageMetaCache();
   void pageMetaCache.put({
     key: {
       pageSlug: HOME,
-      sourceHash: HOME_SOURCE_HASH,
+      closureHash: HOME_SOURCE_HASH,
       extractorVersion: PAGE_META_EXTRACTOR_VERSION,
     },
     meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },

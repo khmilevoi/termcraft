@@ -127,7 +127,9 @@ import { noOpOutcome, startedOutcome } from "./types";
  *
  * CLOSED (was a NARROWER, SEPARATELY-FLAGGED GAP): `core/ports`'s `PageReader` gives only
  * `listSlugs()`/`readSource(slug)` (bytes + a live `sourceHash`, no settings), so the settings
- * come from `PageMetaCache`, keyed by `{pageSlug, sourceHash, extractorVersion}`. That
+ * come from `PageMetaCache`. RE-KEYED (design-tree phase 2 Task 6) from
+ * `{pageSlug, sourceHash, extractorVersion}` to `{pageSlug, closureHash, extractorVersion}` —
+ * see {@link resolvePageMeta} for the real reason and for the `closureHash === null` skip. That
  * `extractorVersion` had no owner and this file carried a local
  * `PAGE_META_EXTRACTOR_VERSION_PLACEHOLDER` for it, with a cache miss reported as an honest
  * "cannot resolve this page's settings today" failure. Both halves are now real:
@@ -184,6 +186,32 @@ function pageMetaUnavailableFailure(pageSlug: PageSlug, reason: string): Failure
 }
 
 /**
+ * The Gate's own contract-only extraction (`GateRunner.extractPageMeta`), with NO cache
+ * involved on either side — the shared core of both {@link extractAndCachePageMeta} (the
+ * normal cache-MISS path) and {@link resolvePageMeta}'s `closureHash === null` branch (which
+ * must never touch the cache at all, see that function's own doc).
+ */
+async function extractPageMetaOnly(
+  deps: HandlerContext["deps"],
+  pageSlug: PageSlug,
+  sourceBytes: Uint8Array,
+  /** The `design/pages.json` entry bound to `pageSlug` — the caller already read the source
+   *  through it (`readPageEntrySource`'s own `relPath`), so this is forwarded, never re-derived. */
+  entryRelPath: string,
+): Promise<FailureDtoV1 | PageMeta> {
+  const extraction = await deps.gateRunner.extractPageMeta({
+    source: new TextDecoder().decode(sourceBytes),
+    slug: pageSlug,
+    entryRelPath,
+  });
+  if (extraction.meta === null) {
+    const reason = extraction.errors[0]?.message ?? "the page contract did not parse";
+    return pageMetaUnavailableFailure(pageSlug, reason);
+  }
+  return extraction.meta;
+}
+
+/**
  * The `PageMetaCache` MISS path: extract the page's `meta` from the source that just missed,
  * and write it back under the SAME key the read missed on so the next call is a hit.
  *
@@ -211,27 +239,58 @@ async function extractAndCachePageMeta(
   pageSlug: PageSlug,
   key: PageMetaKeyV1,
   sourceBytes: Uint8Array,
-  /** The `design/pages.json` entry bound to `pageSlug` — the caller already read the source
-   *  through it (`readPageEntrySource`'s own `relPath`), so this is forwarded, never re-derived. */
   entryRelPath: string,
 ): Promise<FailureDtoV1 | PageMeta> {
-  const extraction = await deps.gateRunner.extractPageMeta({
-    source: new TextDecoder().decode(sourceBytes),
-    slug: pageSlug,
-    entryRelPath,
-  });
-  if (extraction.meta === null) {
-    const reason = extraction.errors[0]?.message ?? "the page contract did not parse";
-    return pageMetaUnavailableFailure(pageSlug, reason);
-  }
+  const meta = await extractPageMetaOnly(deps, pageSlug, sourceBytes, entryRelPath);
+  if ("code" in meta) return meta;
 
-  const written = await deps.pageMetaCache.put({ key, meta: extraction.meta });
+  const written = await deps.pageMetaCache.put({ key, meta });
   if (written !== undefined) {
     console.warn(
       `core/kernel/handlers/preview-export: could not cache the extracted page meta for "${pageSlug}": ${written.safeMessage}`,
     );
   }
-  return extraction.meta;
+  return meta;
+}
+
+/**
+ * Resolve a page's `PageMeta`, keyed on its CLOSURE rather than its own source hash
+ * (design-tree phase 2 Task 6; storage-identity §7's consumer table). `closureHash` is
+ * `CanonicalTreeIndexV1.closureHashOf(pageSlug)` — `null` means the pass could not PROVE this
+ * page's closure complete, which is a fact about the TREE, never a synonym for "unchanged".
+ *
+ * THE `null` BRANCH IS THE ONE PLACE THIS RE-KEY NEEDS REAL JUDGMENT. A `null` must never be
+ * encoded into a cache key: a literal `"null"` string would collide two different pages', or
+ * two different points in time's, unprovable closures onto the identical cache slot — a false
+ * HIT is worse than the extra work a miss costs. So this cache is skipped ENTIRELY on `null` —
+ * no `get`, no `put` — and the page's meta is extracted directly through the Gate every time,
+ * which is correct but not free (see `page-meta-cache.ts`'s own header for the honest cost).
+ * The skip is not an error and nothing propagates it, so it is logged once here rather than
+ * silently swallowed (errore rule 21's "log what you don't propagate").
+ */
+async function resolvePageMeta(
+  deps: HandlerContext["deps"],
+  pageSlug: PageSlug,
+  closureHash: string | null,
+  source: { readonly bytes: Uint8Array; readonly relPath: string },
+): Promise<FailureDtoV1 | PageMeta> {
+  if (closureHash === null) {
+    console.warn(
+      `core/kernel/handlers/preview-export: resolvePageMeta("${pageSlug}") has no provable closureHash — the page-meta cache is skipped entirely (no get, no put) and meta is extracted directly`,
+    );
+    return extractPageMetaOnly(deps, pageSlug, source.bytes, source.relPath);
+  }
+
+  const key: PageMetaKeyV1 = {
+    pageSlug,
+    closureHash,
+    extractorVersion: PAGE_META_EXTRACTOR_VERSION,
+  };
+  const cached = await deps.pageMetaCache.get(key);
+  if (cached !== null && "code" in cached) return cached;
+  if (cached !== null) return cached.meta;
+
+  return extractAndCachePageMeta(deps, pageSlug, key, source.bytes, source.relPath);
 }
 
 /**
@@ -242,9 +301,11 @@ async function extractAndCachePageMeta(
  * and consuming only `index.pages`/`index.inventory` dropped them on the floor: exactly the
  * "know and don't say" defect errore rule 21 forbids, and a direct contradiction of
  * `CanonicalTreeIndexV1.errors`' own contract ("carried so a caller can attribute them; never
- * swallowed"). Attribution proper is not this task's — Task 6 is where this path starts consuming
- * `closureHashOf` and a per-page reading becomes meaningful — so the honest interim is a trace
- * that names every diagnostic.
+ * swallowed"). Per-page ATTRIBUTION (mapping a diagnostic onto a `PageDescriptorV1`) is still not
+ * this file's job — that lives in `handlers/page-descriptors.ts`, the one path that publishes a
+ * descriptor to attribute onto. `resolvePageMeta` (design-tree phase 2 Task 6) now consumes
+ * `closureHashOf` for real, but only to key the meta cache, not to attribute a diagnostic to a
+ * page — so the honest interim here stays a trace that names every diagnostic, not an attribution.
  *
  * ONCE PER INDEX BUILT, NEVER ONCE PER PAGE: {@link resolvePageSettings} logs only when it built
  * the index ITSELF. A caller-supplied index was already reported by whoever built it, and logging
@@ -293,18 +354,7 @@ async function resolvePageSettings(
   const source = await readPageEntrySource(deps.designReader, pageSlug, index.pages);
   if ("code" in source) return source;
 
-  const key: PageMetaKeyV1 = {
-    pageSlug,
-    sourceHash: source.sourceHash,
-    extractorVersion: PAGE_META_EXTRACTOR_VERSION,
-  };
-  const cached = await deps.pageMetaCache.get(key);
-  if (cached !== null && "code" in cached) return cached;
-
-  const meta =
-    cached === null
-      ? await extractAndCachePageMeta(deps, pageSlug, key, source.bytes, source.relPath)
-      : cached.meta;
+  const meta = await resolvePageMeta(deps, pageSlug, index.closureHashOf(pageSlug), source);
   if ("code" in meta) return meta;
 
   return {

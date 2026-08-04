@@ -15,7 +15,7 @@ afterEach(cleanupScratchRoots);
 describe("createProjectionsAdapter — contract test (fake vs. real)", () => {
   test("pageMeta: a miss is null on both the fake and the real adapter; put()+get() round-trips", async () => {
     const fake = createFakePageMetaCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), extractorVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), extractorVersion: 1 };
     expect(await fake.get(key)).toBeNull();
 
     const { open, deps } = await createRealProjectFixture();
