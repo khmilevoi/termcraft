@@ -282,7 +282,7 @@ flowchart TB
 - `src/store/projections/model/page-meta-cache.ts` — item 10: the unbounded
   page-metadata cache keyed by `(pageSlug, sourceHash, extractorVersion)`
 - `src/store/projections/model/diagnostics-store.ts` — item 10: the
-  current-diagnostics cache keyed by `(pageSlug, sourceHash, kitApiVersion)`,
+  current-diagnostics cache keyed by `(pageSlug, closureHash, kitApiVersion)`,
   128 MiB default quota with least-recently-written eviction
 - `src/store/projections/model/render-cache.ts` — item 10: the
   content-addressed export render cache, 512 MiB default quota with

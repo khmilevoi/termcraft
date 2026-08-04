@@ -96,7 +96,16 @@ function toDiagnosticDtoV1(key: DiagnosticsKeyV1, item: DiagnosticItem): Diagnos
     code: item.code,
     safeMessage: item.message,
     pageSlug: key.pageSlug,
-    sourceHash: key.sourceHash,
+    // ANOTHER FLAG, alongside `scope` above (design-tree phase 2 Task 7): `key.closureHash`
+    // (re-keyed from `key.sourceHash`) is carried through into this wire DTO's `sourceHash`
+    // field verbatim — both are `Sha256Hex`, but `DiagnosticDtoV1.sourceHash` (core/protocol
+    // §9) is a DIFFERENT, unversioned wire field this task's scope does not own or rename, so
+    // it keeps its old name while now holding a closure hash rather than a literal source
+    // hash. Nothing reads this field downstream today (this cache has no production caller
+    // either, see the file header), so the mismatch is cosmetic, not a live bug — but a
+    // future reader of `DiagnosticDtoV1.sourceHash` must not assume it is the page's own
+    // source bytes' hash.
+    sourceHash: key.closureHash,
   };
 }
 

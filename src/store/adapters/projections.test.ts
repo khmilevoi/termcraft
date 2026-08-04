@@ -77,7 +77,7 @@ describe("createProjectionsAdapter — contract test (fake vs. real)", () => {
 
   test("diagnostics: a miss is null; put()+get() round-trips, minting a schema-valid UUIDv7 diagnosticId and a documented placeholder scope", async () => {
     const fake = createFakeDiagnosticsCache();
-    const key = { pageSlug: "home", sourceHash: "c".repeat(64), kitApiVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "c".repeat(64), kitApiVersion: 1 };
     expect(await fake.get(key)).toBeNull();
 
     const { open, deps } = await createRealProjectFixture();

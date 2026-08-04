@@ -180,20 +180,28 @@ commit.
 
 ### 6.1 Key and value
 
+**Amended (design-tree phase 2 Task 7, 2026-08-03):** re-keyed from `sourceHash` to
+`closureHash` — see `docs/superpowers/specs/2026-07-28-multi-file-design-tree-design.md`
+§7's consumer table. This store has no production caller as of the amendment, so the
+re-key is correctness ahead of a future caller, not a fix for an observed invalidation
+defect.
+
 The logical key is exactly:
 
 ```ts
 type DiagnosticsKey = {
   pageSlug: string
-  sourceHash: string
+  closureHash: string
   kitApiVersion: number
 }
 ```
 
-`sourceHash` is the SHA-256 digest of the exact canonical or historical source bytes
-that were analyzed. `kitApiVersion` is the page's declared static integer, not the
-termcraft binary version. The slug remains part of the key because diagnostics may
-legitimately depend on page identity, navigation targets, or slug-specific rules.
+`closureHash` is the Merkle hash over the page's transitive closure — the `(relPath,
+sha256)` pairs of every file the page's entry reaches, sorted by `relPath` — rather than
+the SHA-256 digest of the entry file's own bytes alone (the original `sourceHash`
+reading). `kitApiVersion` is the page's declared static integer, not the termcraft
+binary version. The slug remains part of the key because diagnostics may legitimately
+depend on page identity, navigation targets, or slug-specific rules.
 
 The value contains the diagnostics schema version, normalized diagnostic codes and
 severities, bounded messages and source ranges, provenance (`gate` or `host`), and
@@ -203,7 +211,7 @@ recomputes entries; it does not add an undeclared fourth logical key field.
 
 Static Gate diagnostics replace the static portion of an entry atomically. Runtime
 host diagnostics may update the runtime portion only when the host handshake names
-the same page slug, source hash, and kit API version. Events from an old preview
+the same page slug, closure hash, and kit API version. Events from an old preview
 session or fenced turn cannot update the current entry.
 
 ### 6.2 Prompt semantics
@@ -838,9 +846,10 @@ frame-delta proposal; regression percentages still govern later baseline changes
   design is classified machine-local, is rebuildable or operational-only, and is
   rejected by every termcraft Git commit scope, dirty count, status dot, and commit
   preview.
-- `DiagnosticsStore` uses exactly `(pageSlug, sourceHash, kitApiVersion)` as its
-  logical key. Current prompt diagnostics do not depend on the active chat; stored
-  chat warnings remain historical snapshots only.
+- `DiagnosticsStore` uses exactly `(pageSlug, closureHash, kitApiVersion)` as its
+  logical key (amended by design-tree phase 2 Task 7; see §6.1). Current prompt
+  diagnostics do not depend on the active chat; stored chat warnings remain historical
+  snapshots only.
 - No `VersionIndex`, Git commit mirror, or Git-commit-to-turn/prompt/record
   correlation exists. `GitHistory` alone owns page history.
 - `ChatIndex` indexes only record id, optional turn id, timestamp, `changedPages`, and

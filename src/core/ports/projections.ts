@@ -48,9 +48,17 @@ export interface PageMetaCache {
 
 // ---- diagnostics cache (projections §6) -------------------------------------------
 
+/**
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 7): mirrors
+ * `store/projections/model/diagnostics-store.ts`'s own `DiagnosticsKey` field-for-field —
+ * see that file's header for the honest accounting. UNLIKE {@link PageMetaKeyV1}'s Task 6
+ * re-key, this cache has NO PRODUCTION CALLER TODAY (wired at the composition root, never
+ * read or written outside its own tests) — this re-key buys correctness ahead of a future
+ * caller, not a fix for a live invalidation defect.
+ */
 export interface DiagnosticsKeyV1 {
   readonly pageSlug: string;
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly kitApiVersion: number;
 }
 

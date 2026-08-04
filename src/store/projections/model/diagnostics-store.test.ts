@@ -5,7 +5,11 @@ import path from "node:path";
 import type { Clock } from "infrastructure/clock";
 
 import type { DiagnosticsEntry, DiagnosticsKey, ProjectionFsDeps } from "../types";
-import { DiagnosticsStoreIoError, createDiagnosticsStore } from "./diagnostics-store";
+import {
+  DIAGNOSTICS_STORE_GENERATION,
+  DiagnosticsStoreIoError,
+  createDiagnosticsStore,
+} from "./diagnostics-store";
 
 const ROOT = "C:/project/.termcraft/diagnostics";
 
@@ -74,7 +78,11 @@ function storeOver(
   return createDiagnosticsStore({ root: ROOT, fs: memory.deps, clock, ...options });
 }
 
-const baseKey: DiagnosticsKey = { pageSlug: "home", sourceHash: "a".repeat(64), kitApiVersion: 1 };
+const baseKey: DiagnosticsKey = {
+  pageSlug: "home",
+  closureHash: "a".repeat(64),
+  kitApiVersion: 1,
+};
 const baseEntry: DiagnosticsEntry = {
   key: baseKey,
   schemaVersion: 1,
@@ -91,7 +99,7 @@ const baseEntry: DiagnosticsEntry = {
 };
 
 function entryHash(key: DiagnosticsKey): string {
-  const canonical = [key.pageSlug, key.sourceHash, String(key.kitApiVersion)].join(" ");
+  const canonical = [key.pageSlug, key.closureHash, String(key.kitApiVersion)].join(" ");
   return crypto.createHash("sha256").update(new TextEncoder().encode(canonical)).digest("hex");
 }
 
@@ -117,12 +125,12 @@ describe("createDiagnosticsStore", () => {
     expect(await store.get(changedKey)).toEqual(rebuilt);
   });
 
-  test("changing sourceHash alone is a miss — no diagnostic cross-talk between source-identical-looking pages", async () => {
+  test("changing closureHash alone is a miss — no diagnostic cross-talk between closure-identical-looking pages", async () => {
     const memory = memoryFs();
     const store = storeOver(memory);
     await store.put(baseEntry);
 
-    const changedKey: DiagnosticsKey = { ...baseKey, sourceHash: "b".repeat(64) };
+    const changedKey: DiagnosticsKey = { ...baseKey, closureHash: "b".repeat(64) };
     expect(await store.get(changedKey)).toBeNull();
   });
 
@@ -160,12 +168,29 @@ describe("createDiagnosticsStore", () => {
     for (const key of memory.files.keys()) expect(key.startsWith(normalizedRoot)).toBe(true);
   });
 
+  test("the real DIAGNOSTICS_STORE_GENERATION bump this task makes (1 -> 2) invalidates a pre-bump entry under the DEFAULT store", async () => {
+    // Not the generic mechanism test above (which pins its own 1/2 pair regardless of the
+    // module constant) — this one is tied to the actual bump design-tree phase 2 Task 7 makes,
+    // re-keying `DiagnosticsKey.sourceHash` -> `closureHash`. `DIAGNOSTICS_STORE_GENERATION`
+    // itself is the proof the bump landed; the behavioral half proves it actually invalidates
+    // old data rather than surfacing a schema-validation error where a caller expects a miss.
+    expect(DIAGNOSTICS_STORE_GENERATION).toBe(2);
+
+    const memory = memoryFs();
+    const preTask7 = storeOver(memory, { storeGeneration: 1 }); // simulates an entry written under the old generation
+    await preTask7.put(baseEntry);
+    expect(await preTask7.get(baseKey)).toEqual(baseEntry);
+
+    const current = storeOver(memory); // no override — the real, current DIAGNOSTICS_STORE_GENERATION
+    expect(await current.get(baseKey)).toBeNull();
+  });
+
   test("no chat id anywhere in the key or entry shape", () => {
     // Compile-time/structural guard: DiagnosticsKey and DiagnosticsEntry simply have no
     // chat-id-shaped field to assign — this test documents the invariant for a reader.
     const key: DiagnosticsKey = baseKey;
     const entry: DiagnosticsEntry = baseEntry;
-    expect(Object.keys(key)).toEqual(["pageSlug", "sourceHash", "kitApiVersion"]);
+    expect(Object.keys(key)).toEqual(["pageSlug", "closureHash", "kitApiVersion"]);
     expect(Object.keys(entry)).toEqual([
       "key",
       "schemaVersion",

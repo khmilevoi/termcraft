@@ -70,9 +70,22 @@ export interface PageMetaEntry {
 
 // ---- diagnostics store (projections §6) ------------------------------------------
 
+/**
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 7; design §7's own
+ * consumer table). See `model/diagnostics-store.ts`'s own file header for the honest
+ * accounting of what this trade buys and does not buy for THIS store specifically — this
+ * field alone is not a claimed correctness fix.
+ *
+ * UNLIKE `PageMetaKey`'s Task 6 re-key, this store has NO PRODUCTION CALLER TODAY: it is
+ * wired at the composition root (`entrypoint/model/create-shell.ts`) and never read or
+ * written outside its own tests (`grep -rn "diagnosticsCache\." src` finds nothing else).
+ * This re-key makes the store correct WHEN it does get a caller; it does not fix a live
+ * invalidation defect, because nothing today can observe one. The missing caller remains
+ * its own open ledger item.
+ */
 export interface DiagnosticsKey {
   readonly pageSlug: string;
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly kitApiVersion: number;
 }
 

@@ -1,11 +1,23 @@
 // `diagnostics-store.ts` — the current-diagnostics projection (projections §6). Keyed
-// exactly `(pageSlug, sourceHash, kitApiVersion)` — NO chat id anywhere in the key or
+// exactly `(pageSlug, closureHash, kitApiVersion)` — NO chat id anywhere in the key or
 // the entry, because current diagnostics never depend on which chat is active (§6.2:
 // "prompt assembly ... never asks the active chat for current warnings"). A hit
 // requires every key field to match; a missing/malformed/generation-stale entry is a
 // miss, never an error. Entries are written atomically via `infrastructure/durability`
 // (temp-write -> verify -> rename -> flush-dir), with a 128 MiB default per-project
 // quota and least-recently-written eviction across unpinned keys.
+//
+// RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 7; design §7's own
+// consumer table, same key vocabulary as `page-meta-cache.ts`'s Task 6 re-key). READ THIS
+// HONESTLY: THIS STORE HAS NO PRODUCTION CALLER TODAY. It is wired at the composition root
+// (`entrypoint/model/create-shell.ts`) and never read or written outside its own tests
+// (`grep -rn "diagnosticsCache\." src` finds nothing else) — so there is no live
+// invalidation defect this re-key fixes, because nothing today can observe one. What it
+// buys is correctness AHEAD of a future caller: when something does start calling
+// `diagnosticsGet`/`diagnosticsPut`, the key already speaks the same closure-hash
+// vocabulary as every other §7 consumer, rather than needing its own separate re-key
+// later. The missing caller is its own open ledger item, not something this task claims
+// to close.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -37,8 +49,16 @@ export class DiagnosticsStoreIoError extends errore.createTaggedError({
 
 // ---- generation + quota -------------------------------------------------------------
 
-/** Bumped on a diagnostics schema/algorithm change that does NOT change `kitApiVersion` (§6.1). */
-export const DIAGNOSTICS_STORE_GENERATION = 1;
+/**
+ * Bumped on a diagnostics schema/algorithm change that does NOT change `kitApiVersion` (§6.1).
+ *
+ * BUMPED 1 -> 2 (design-tree phase 2 Task 7): `DiagnosticsKey`'s shape itself changed
+ * (`sourceHash` -> `closureHash`), so every generation-1 entry's `key.sourceHash` would
+ * otherwise decode as an extra/missing field under the new `diagnosticsKeySchema` below —
+ * the generation bump is what makes that a clean miss-and-rebuild instead of a
+ * schema-validation error surfacing where a caller expects only a MISS or a real I/O fault.
+ */
+export const DIAGNOSTICS_STORE_GENERATION = 2;
 
 /** §6.2: "128 MiB default per-project quota, configurable locally from 32 MiB through 512 MiB." */
 export const DIAGNOSTICS_DEFAULT_QUOTA_BYTES = 128 * MiB;
@@ -62,7 +82,7 @@ function resolveQuota(quotaBytes: number | undefined): number {
 
 const diagnosticsKeySchema = z.object({
   pageSlug: z.string().min(1),
-  sourceHash: z.string().min(1),
+  closureHash: z.string().min(1),
   kitApiVersion: z.number().int(),
 });
 
@@ -96,7 +116,7 @@ function sha256Hex(bytes: Uint8Array): Sha256Hex {
 }
 
 function canonicalKeyString(key: DiagnosticsKey): string {
-  return [key.pageSlug, key.sourceHash, String(key.kitApiVersion)].join(" ");
+  return [key.pageSlug, key.closureHash, String(key.kitApiVersion)].join(" ");
 }
 
 /** Content-addressed by the key: changing ANY ONE field yields a different path — automatically a miss. */
@@ -304,7 +324,7 @@ export interface DiagnosticsStoreDeps {
 }
 
 export interface DiagnosticsStore {
-  /** A HIT only on an exact `(pageSlug, sourceHash, kitApiVersion)` match (§6.1). */
+  /** A HIT only on an exact `(pageSlug, closureHash, kitApiVersion)` match (§6.1). */
   get(key: DiagnosticsKey): Promise<DiagnosticsStoreIoError | DiagnosticsEntry | null>;
   /** Atomic whole-entry replace, then a quota-eviction sweep; never mutates portable state. */
   put(entry: DiagnosticsEntry): Promise<DiagnosticsStoreIoError | undefined>;

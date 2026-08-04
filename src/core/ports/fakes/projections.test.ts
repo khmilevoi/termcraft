@@ -56,7 +56,7 @@ describe("createFakePageMetaCache", () => {
 describe("createFakeDiagnosticsCache", () => {
   test("put() then get() round-trips", async () => {
     const cache = createFakeDiagnosticsCache();
-    const key = { pageSlug: "home", sourceHash: "a".repeat(64), kitApiVersion: 1 };
+    const key = { pageSlug: "home", closureHash: "a".repeat(64), kitApiVersion: 1 };
     const entry = {
       key,
       schemaVersion: 1,
