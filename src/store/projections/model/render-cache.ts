@@ -9,6 +9,26 @@
 // identical complete entry is valid" under concurrent writers), with a 512 MiB default
 // per-project quota and least-recently-written eviction among entries not pinned by an
 // active export.
+//
+// RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 8; design §7's own
+// consumer table). UNLIKE `page-meta-cache.ts`'s Task 6 and `diagnostics-store.ts`'s Task 7
+// re-keys — one bought vocabulary consistency, the other bought correctness ahead of a caller
+// that does not exist yet — THIS ONE FIXES A LIVE DEFECT. A rendered frame is drawn by executing
+// the page module, which executes everything it imports: a shared palette, a layout helper, a
+// theme constant. Keyed on the ENTRY file's own `sourceHash`, an export run after a shared
+// module was edited served the previously cached frame and shipped it — a silently wrong
+// user-visible artifact, not merely a stale metadata field. `closureHash` folds every member of
+// the page's closure, so any edit anywhere in it is a different key and therefore a miss.
+//
+// THE `null` PATH IS OWNED BY THE CALLER, NOT THIS FILE, exactly as in `page-meta-cache.ts`.
+// `closureHashOf` (`core/project`'s `readCanonicalTreeIndex`) returns `null` when a page's
+// closure could not be proved complete — "cannot compute", never "unchanged". Encoding it here
+// (a literal `"null"`, or a silent fall back to the entry's `sourceHash`) would collide two
+// different pages', or two different points in time's, unprovable closures onto ONE entry, and
+// the resulting false HIT is the very corruption this re-key exists to prevent. So the caller
+// (`core/export/model/render-jobs.ts`'s `buildExportRenderKey`) returns `null` instead of a key
+// and `renderJob` skips this store ENTIRELY — no `get`, no `put` — rendering fresh every time.
+// `ExportRenderKey.closureHash` is therefore always a real, non-null `Sha256Hex`.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,8 +58,17 @@ export class RenderCacheIoError extends errore.createTaggedError({
 
 // ---- generation + quota -------------------------------------------------------------
 
-/** Bumped on a render-envelope schema change (projections §4). A source/kit/renderer/size/theme/flag change is already a different content key and needs no generation bump. */
-export const RENDER_CACHE_GENERATION = 1;
+/**
+ * Bumped on a render-envelope schema change (projections §4). A closure/kit/renderer/size/theme/
+ * flag change is already a different content key and needs no generation bump.
+ *
+ * BUMPED 1 -> 2 (design-tree phase 2 Task 8): `ExportRenderKey`'s shape itself changed
+ * (`sourceHash` -> `closureHash`), so every generation-1 entry's `key.sourceHash` would otherwise
+ * decode as an extra/missing field under the new `exportRenderKeySchema` below — the generation
+ * bump is what makes that a clean miss-and-rebuild instead of a schema-validation error surfacing
+ * where a caller expects only a MISS or a real I/O fault.
+ */
+export const RENDER_CACHE_GENERATION = 2;
 
 export const RENDER_CACHE_DEFAULT_QUOTA_BYTES = 512 * MiB;
 /**
@@ -62,7 +91,7 @@ function resolveQuota(quotaBytes: number | undefined): number {
 const flagValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 const exportRenderKeySchema = z.object({
-  sourceHash: z.string().min(1),
+  closureHash: z.string().min(1),
   kitApiVersion: z.number().int(),
   rendererVersion: z.string().min(1),
   size: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }),
@@ -87,7 +116,7 @@ function sortedFlagEntries(
  */
 export function canonicalizeExportRenderKey(key: ExportRenderKey): string {
   return JSON.stringify({
-    sourceHash: key.sourceHash,
+    closureHash: key.closureHash,
     kitApiVersion: key.kitApiVersion,
     rendererVersion: key.rendererVersion,
     size: { width: key.size.width, height: key.size.height },

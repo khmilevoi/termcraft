@@ -81,9 +81,24 @@ export interface DiagnosticsCache {
  * The exact §10.2 logical key. `rendererVersion` is the known divergence this phase must
  * introduce (plan §5: "defined nowhere and must be introduced by this phase") — a render
  * cache key component with no prior owner until now.
+ *
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 8): mirrors
+ * `store/projections/model/render-cache.ts`'s own `ExportRenderKey` field-for-field. UNLIKE
+ * {@link PageMetaKeyV1}'s Task 6 and {@link DiagnosticsKeyV1}'s Task 7 re-keys, this one fixes a
+ * LIVE defect on a path with a real production caller — a frame is drawn by executing everything
+ * the page imports, so an entry-hash key served a stale render after any shared-module edit.
+ *
+ * `closureHash` is always a real, non-null `Sha256Hex`: `core/export/model/render-jobs.ts`'s
+ * `buildExportRenderKey` returns `null` INSTEAD OF A KEY when the tree index's `closureHashOf`
+ * could not prove the page's closure, and `renderJob` then skips this cache entirely — no `get`,
+ * no `put` — so no caller may construct an `ExportRenderKeyV1` from an unprovable closure.
+ *
+ * NOT TO BE CONFUSED WITH `ExportRenderTaskV1.sourceHash` (`core/ports/export-render.ts`), which
+ * stays the ENTRY file's own hash: that field answers "which source did the host mount", a
+ * different question from this key's "does a cached render still describe this page".
  */
 export interface ExportRenderKeyV1 {
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly kitApiVersion: number;
   readonly rendererVersion: string;
   readonly size: Readonly<{ width: number; height: number }>;

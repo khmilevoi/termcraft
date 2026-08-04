@@ -70,6 +70,11 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  // Inert for this file's assertions on purpose: `settingsStillMatch` deliberately does NOT
+  // compare `closureHash` (design-tree phase 2 Task 8 changed only the RENDER KEY; §12.5's
+  // revalidation vocabulary is `sourceHash` + the identity/settings list, and widening it is a
+  // separate decision). A non-null placeholder, distinct from `sourceHash`.
+  closureHash: "c".repeat(64),
   sourceHash: computeSourceHash(HOME_BYTES),
   bytes: HOME_BYTES,
 };
@@ -99,6 +104,7 @@ function currentPageInput(overrides: Partial<ExportPageInputV1> = {}): ExportPag
     minSize: HOME.minSize,
     theme: HOME.theme,
     kitApiVersion: HOME.kitApiVersion,
+    closureHash: HOME.closureHash,
     ...overrides,
   };
 }

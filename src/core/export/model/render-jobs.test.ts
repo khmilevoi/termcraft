@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { context } from "@reatom/core";
 
@@ -17,7 +17,7 @@ import {
   createFakeRenderCache,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
-import { computeSourceHash } from "entities/design-tree";
+import { computeClosureHash, computeSourceHash } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -43,6 +43,46 @@ const ABOUT_BYTES = new Uint8Array([2]);
 const HOME_SOURCE_HASH = computeSourceHash(HOME_BYTES);
 const ABOUT_SOURCE_HASH = computeSourceHash(ABOUT_BYTES);
 
+/**
+ * A page's `closureHash` computed the SAME way `readCanonicalTreeIndex` computes it —
+ * `computeClosureHash` over the closure's own `(relPath, sha256)` pairs — never a hand-picked
+ * hex literal, which would just be a more convincing fabrication (the discipline
+ * `HOME_SOURCE_HASH` above and `preview-export.test.ts`'s `HOME_CLOSURE_HASH` both follow).
+ */
+function closureHashOver(files: readonly (readonly [string, string])[]): string {
+  const sha256Of = new Map(files);
+  const hash = computeClosureHash({
+    files: files.map(([relPath]) => relPath),
+    sha256Of: (relPath) => sha256Of.get(relPath) ?? null,
+  });
+  if (hash === null)
+    throw new Error("closureHashOver: every file handed in is present in its own lookup");
+  return hash;
+}
+
+/**
+ * A module BOTH pages import and NEITHER page's entry file is — the exact thing a render cache
+ * keyed on the entry's own `sourceHash` could not see change (design-tree phase 2 Task 8).
+ */
+const SHARED_REL_PATH = "shared/palette.ts";
+const SHARED_BEFORE_HASH = computeSourceHash(new TextEncoder().encode("export const accent = 1"));
+const SHARED_AFTER_HASH = computeSourceHash(new TextEncoder().encode("export const accent = 2"));
+
+// Bound as `string` constants rather than read back off the fixtures below: the interface types
+// them `string | null`, which would make every assertion here nullable for no reason.
+const HOME_CLOSURE_HASH = closureHashOver([
+  ["pages/home.tsx", HOME_SOURCE_HASH],
+  [SHARED_REL_PATH, SHARED_BEFORE_HASH],
+]);
+const ABOUT_CLOSURE_HASH = closureHashOver([
+  ["pages/about.tsx", ABOUT_SOURCE_HASH],
+  [SHARED_REL_PATH, SHARED_BEFORE_HASH],
+]);
+const ABOUT_CLOSURE_HASH_AFTER_SHARED_EDIT = closureHashOver([
+  ["pages/about.tsx", ABOUT_SOURCE_HASH],
+  [SHARED_REL_PATH, SHARED_AFTER_HASH],
+]);
+
 const HOME: ExportPageSnapshotV1 = {
   pageSlug: slug("home"),
   treeRoot: "/proj/.termcraft/design",
@@ -52,6 +92,7 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  closureHash: HOME_CLOSURE_HASH,
   sourceHash: HOME_SOURCE_HASH,
   bytes: HOME_BYTES,
 };
@@ -65,8 +106,18 @@ const ABOUT: ExportPageSnapshotV1 = {
   minSize: { w: 200, h: 50 }, // larger than both standard sizes -> single-size ladder
   theme: "dark",
   kitApiVersion: 2,
+  closureHash: ABOUT_CLOSURE_HASH,
   sourceHash: ABOUT_SOURCE_HASH,
   bytes: ABOUT_BYTES,
+};
+
+/**
+ * The SAME page after `shared/palette.ts` was edited: identical slug, identical entry bytes,
+ * identical `sourceHash`, identical settings — only the closure moved.
+ */
+const ABOUT_AFTER_SHARED_EDIT: ExportPageSnapshotV1 = {
+  ...ABOUT,
+  closureHash: ABOUT_CLOSURE_HASH_AFTER_SHARED_EDIT,
 };
 
 /**
@@ -85,17 +136,52 @@ const SNAPSHOT: ExportSnapshotV1 = {
 };
 const RENDERER_VERSION = "1";
 
+/** `buildExportRenderKey` narrowed for the tests that need a REAL key to seed/probe the cache. */
+function requireKey(page: ExportPageSnapshotV1, size: { w: number; h: number }) {
+  const key = buildExportRenderKey(page, size, RENDERER_VERSION);
+  if (key === null) throw new Error(`expected a render key for "${page.pageSlug}"`);
+  return key;
+}
+
 describe("buildExportRenderKey", () => {
-  test("uses width/height field names and folds in sourceHash/kitApiVersion/theme/rendererVersion", () => {
+  test("uses width/height field names and folds in closureHash/kitApiVersion/theme/rendererVersion", () => {
     const key = buildExportRenderKey(HOME, { w: 120, h: 40 }, RENDERER_VERSION);
     expect(key).toEqual({
-      sourceHash: HOME.sourceHash,
+      closureHash: HOME_CLOSURE_HASH,
       kitApiVersion: HOME.kitApiVersion,
       rendererVersion: RENDERER_VERSION,
       size: { width: 120, height: 40 },
       theme: HOME.theme,
       flags: {},
     });
+  });
+
+  test("a shared module's edit changes the key even though the entry's own sourceHash is identical", () => {
+    // The whole point of the Task 8 re-key: a rendered frame depends on EVERY module the page
+    // imports, so an edit to a shared module the entry file does not itself contain must move
+    // the render key. Under the old `sourceHash` key these two were the identical key.
+    expect(ABOUT_AFTER_SHARED_EDIT.sourceHash).toBe(ABOUT.sourceHash);
+    expect(ABOUT_AFTER_SHARED_EDIT.entryRelPath).toBe(ABOUT.entryRelPath);
+
+    const before = buildExportRenderKey(ABOUT, { w: 200, h: 50 }, RENDERER_VERSION);
+    const after = buildExportRenderKey(
+      ABOUT_AFTER_SHARED_EDIT,
+      { w: 200, h: 50 },
+      RENDERER_VERSION,
+    );
+
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    expect(after).not.toEqual(before);
+  });
+
+  test("a page whose closure could not be proved has NO key at all — `null`, never a fabricated one", () => {
+    // `null` is "cannot compute", never "unchanged": encoding it into a key (a literal
+    // `"null"` string, or falling back to `sourceHash`) would collide two different pages',
+    // or two different points in time's, unprovable closures onto the same cache slot.
+    expect(
+      buildExportRenderKey({ ...ABOUT, closureHash: null }, { w: 200, h: 50 }, RENDERER_VERSION),
+    ).toBeNull();
   });
 });
 
@@ -139,7 +225,7 @@ describe("runExportRendering", () => {
     // covered, and `renderPort.calls` staying empty is a real (not accidental) assertion.
     const renderCache = createFakeRenderCache();
     const renderPort = createFakeExportRenderPort();
-    const key = buildExportRenderKey(ABOUT, { w: 200, h: 50 }, RENDERER_VERSION);
+    const key = requireKey(ABOUT, { w: 200, h: 50 });
     await renderCache.put({
       key,
       styledFrame: new Uint8Array([9]),
@@ -171,9 +257,70 @@ describe("runExportRendering", () => {
     );
 
     expect(renderPort.calls).toHaveLength(1);
-    const key = buildExportRenderKey(ABOUT, { w: 200, h: 50 }, RENDERER_VERSION);
+    const key = requireKey(ABOUT, { w: 200, h: 50 });
     const cached = await renderCache.get(key);
     expect(cached).not.toBeNull();
+  });
+
+  test("a render cached before a shared module changed is NOT served afterwards — the second run is a genuine MISS", async () => {
+    // THE LIVE BUG THIS TASK FIXES. Both runs render the identical page, at the identical
+    // size, from identical entry bytes; only `shared/palette.ts` moved between them. Keyed on
+    // the entry's `sourceHash` the second run was a HIT and the export shipped a frame drawn
+    // from the OLD shared module — a silently wrong user-visible artifact.
+    const renderCache = createFakeRenderCache();
+
+    const firstPort = createFakeExportRenderPort();
+    await runExportRendering(
+      { renderPort: firstPort, renderCache, rendererVersion: RENDERER_VERSION },
+      { pages: [ABOUT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
+    );
+    expect(firstPort.calls).toHaveLength(1); // cold cache: a real render, now cached
+
+    const secondPort = createFakeExportRenderPort();
+    const results = await runExportRendering(
+      { renderPort: secondPort, renderCache, rendererVersion: RENDERER_VERSION },
+      { pages: [ABOUT_AFTER_SHARED_EDIT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
+    );
+
+    expect(results[0]?.cacheHit).toBe(false);
+    expect(secondPort.calls).toHaveLength(1);
+
+    // ...and the unchanged closure is still a HIT, so the miss above is the shared module's
+    // doing rather than a cache that simply never hits.
+    const thirdPort = createFakeExportRenderPort();
+    const again = await runExportRendering(
+      { renderPort: thirdPort, renderCache, rendererVersion: RENDERER_VERSION },
+      { pages: [ABOUT], tree: TREE, capturedAt: SNAPSHOT.capturedAt },
+    );
+    expect(again[0]?.cacheHit).toBe(true);
+    expect(thirdPort.calls).toEqual([]);
+  });
+
+  test("a page whose closure cannot be proved (closureHash null) skips the render cache entirely — no get, no put — and logs once", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const renderCache = createFakeRenderCache();
+      const renderPort = createFakeExportRenderPort();
+
+      const results = await runExportRendering(
+        { renderPort, renderCache, rendererVersion: RENDERER_VERSION },
+        {
+          pages: [{ ...ABOUT, closureHash: null }],
+          tree: TREE,
+          capturedAt: SNAPSHOT.capturedAt,
+        },
+      );
+
+      // A FORCED MISS on BOTH sides. A wrong HIT here corrupts the exported artifact, and a
+      // `put` would poison the cache with an entry no honest key could ever describe.
+      expect(renderCache.calls).toEqual([]);
+      expect(renderPort.calls).toHaveLength(1);
+      expect(results[0]?.cacheHit).toBe(false);
+      // Skipped, not swallowed (errore rule 21) — once per (page, size), not once per await.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("a per-task render failure is reported on that task's outcome without blocking the others", async () => {
@@ -314,6 +461,7 @@ describe("runExportRendering", () => {
               minSize: HOME.minSize,
               theme: HOME.theme,
               kitApiVersion: HOME.kitApiVersion,
+              closureHash: HOME.closureHash,
             },
           ],
         },

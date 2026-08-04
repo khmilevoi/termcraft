@@ -55,6 +55,10 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  // Inert here: this file asserts on package assembly and the publish transaction, never on the
+  // render key — a non-null placeholder distinct from `sourceHash`, on the same hand-picked
+  // footing `sourceHash` already stands on in this fixture.
+  closureHash: "c".repeat(64),
   sourceHash: "a".repeat(64),
   bytes: new TextEncoder().encode("export default function Home() {}\n"),
 };
@@ -68,6 +72,7 @@ const ABOUT: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  closureHash: "d".repeat(64),
   sourceHash: "b".repeat(64),
   bytes: new TextEncoder().encode("export default function About() {}\n"),
 };

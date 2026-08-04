@@ -73,7 +73,7 @@ function cacheOver(
 }
 
 const baseKey: ExportRenderKey = {
-  sourceHash: "a".repeat(64),
+  closureHash: "a".repeat(64),
   kitApiVersion: 1,
   rendererVersion: "1.0.0",
   size: { width: 80, height: 24 },
@@ -128,7 +128,7 @@ describe("createRenderCache", () => {
   });
 
   test.each([
-    ["sourceHash", { ...baseKey, sourceHash: "b".repeat(64) }],
+    ["closureHash", { ...baseKey, closureHash: "b".repeat(64) }],
     ["kitApiVersion", { ...baseKey, kitApiVersion: 2 }],
     ["rendererVersion", { ...baseKey, rendererVersion: "2.0.0" }],
     ["size", { ...baseKey, size: { width: 100, height: 24 } }],

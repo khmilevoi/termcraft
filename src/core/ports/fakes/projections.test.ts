@@ -73,7 +73,7 @@ describe("createFakeRenderCache", () => {
   test("put() then get() round-trips opaque render bytes", async () => {
     const cache = createFakeRenderCache();
     const key = {
-      sourceHash: "a".repeat(64),
+      closureHash: "a".repeat(64),
       kitApiVersion: 1,
       rendererVersion: "1",
       size: { width: 80, height: 24 },

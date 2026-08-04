@@ -33,6 +33,10 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  // Inert here: this file asserts on package ASSEMBLY, never on the render key, so all this
+  // field needs to be is a non-null placeholder distinct from `sourceHash` — the same
+  // hand-picked-literal footing `sourceHash` already stands on in this fixture.
+  closureHash: "c".repeat(64),
   sourceHash: "a".repeat(64),
   bytes: HOME_BYTES,
 };

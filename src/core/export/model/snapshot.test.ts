@@ -9,7 +9,11 @@ import {
   defaultFakeEntry,
 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
-import { PAGES_MANIFEST_RELPATH, computeSourceHash } from "entities/design-tree";
+import {
+  PAGES_MANIFEST_RELPATH,
+  computeClosureHash,
+  computeSourceHash,
+} from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
@@ -37,6 +41,30 @@ function manualClock(startMs: number): Clock & { advance: (ms: number) => void }
   return { now: () => new Date(now), advance: (ms: number) => (now += ms) };
 }
 
+const HOME_BYTES = new Uint8Array([1, 2, 3]);
+const ABOUT_BYTES = new Uint8Array([4, 5, 6]);
+// Task 7 fix round 1: was `"a"`/`"b".repeat(64)` — fabricated, unrelated to `HOME_BYTES`/
+// `ABOUT_BYTES` above despite the direct round-trip assertion below (`sourceHash: HOME_HASH`)
+// depending on it matching what the fake actually reports for those exact bytes.
+const HOME_HASH = computeSourceHash(HOME_BYTES);
+const ABOUT_HASH = computeSourceHash(ABOUT_BYTES);
+
+/**
+ * A single-file closure hash computed the way `readCanonicalTreeIndex` computes it (design-tree
+ * phase 2 Task 8) — never a hand-picked literal. `closureHash` is CALLER-RESOLVED input here
+ * (`resolveExportPageInputs` fills it from the tree index): this file's job is to prove
+ * `captureExportSnapshot` carries it through into the snapshot untouched, alongside every other
+ * caller-resolved setting.
+ */
+function singleFileClosureHash(relPath: string, sha256: string): string {
+  const hash = computeClosureHash({
+    files: [relPath],
+    sha256Of: (candidate) => (candidate === relPath ? sha256 : null),
+  });
+  if (hash === null) throw new Error(`singleFileClosureHash: unexpected null for "${relPath}"`);
+  return hash;
+}
+
 const HOME_INPUT: ExportPageInputV1 = {
   pageSlug: slug("home"),
   treeRoot: "/proj/.termcraft/design",
@@ -46,6 +74,7 @@ const HOME_INPUT: ExportPageInputV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  closureHash: singleFileClosureHash("pages/home.tsx", HOME_HASH),
 };
 
 const ABOUT_INPUT: ExportPageInputV1 = {
@@ -57,15 +86,11 @@ const ABOUT_INPUT: ExportPageInputV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
+  // An UNPROVABLE closure, carried through as `null` rather than smoothed over: the snapshot
+  // must report exactly what the tree index reported, and `render-jobs.ts` turns it into a
+  // forced cache miss.
+  closureHash: null,
 };
-
-const HOME_BYTES = new Uint8Array([1, 2, 3]);
-const ABOUT_BYTES = new Uint8Array([4, 5, 6]);
-// Task 7 fix round 1: was `"a"`/`"b".repeat(64)` — fabricated, unrelated to `HOME_BYTES`/
-// `ABOUT_BYTES` above despite the direct round-trip assertion below (`sourceHash: HOME_HASH`)
-// depending on it matching what the fake actually reports for those exact bytes.
-const HOME_HASH = computeSourceHash(HOME_BYTES);
-const ABOUT_HASH = computeSourceHash(ABOUT_BYTES);
 
 function setup() {
   const machine = reatomExportStateMachine();
@@ -115,6 +140,13 @@ describe("captureExportSnapshot", () => {
     expect(result.snapshot.pages).toEqual([
       { ...HOME_INPUT, sourceHash: HOME_HASH, bytes: HOME_BYTES },
       { ...ABOUT_INPUT, sourceHash: ABOUT_HASH, bytes: ABOUT_BYTES },
+    ]);
+    // Spelled out because the spreads above would hide it: the caller-resolved `closureHash`
+    // reaches the snapshot verbatim, INCLUDING an honest `null` (design-tree phase 2 Task 8).
+    // `sourceHash` stays the entry file's own live hash and is never conflated with it.
+    expect(result.snapshot.pages.map((page) => page.closureHash)).toEqual([
+      HOME_INPUT.closureHash,
+      null,
     ]);
     expect(result.snapshot.capturedAt).toBe("2023-11-14T22:13:20.000Z");
     expect(readPhase()).toBe("rendering");

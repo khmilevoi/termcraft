@@ -123,9 +123,17 @@ export type DiagnosticsPinPredicate = (key: DiagnosticsKey) => boolean;
 
 // ---- render cache (projections §10.2) --------------------------------------------
 
-/** The exact §10.2 logical key. `flags` is canonicalized with SORTED keys before hashing/comparison. */
+/**
+ * The exact §10.2 logical key. `flags` is canonicalized with SORTED keys before
+ * hashing/comparison.
+ *
+ * RE-KEYED FROM `sourceHash` TO `closureHash` (design-tree phase 2 Task 8; design §7's own
+ * consumer table). UNLIKE `PageMetaKey`'s Task 6 and `DiagnosticsKey`'s Task 7 re-keys, this one
+ * is a REAL INVALIDATION FIX with a live production caller — see `model/render-cache.ts`'s own
+ * file header for the accounting.
+ */
 export interface ExportRenderKey {
-  readonly sourceHash: Sha256Hex;
+  readonly closureHash: Sha256Hex;
   readonly kitApiVersion: number;
   readonly rendererVersion: string;
   readonly size: { readonly width: number; readonly height: number };

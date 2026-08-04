@@ -1424,6 +1424,12 @@ function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
  * "second, narrower, compounding gap"; it closes the same way `resolvePageSettings`'s own
  * single-page call site already does: no new port, no fabricated value, an honest
  * `FailureDtoV1` refusal on the first page whose settings cannot be resolved.
+ *
+ * `closureHash` COMES FROM THE SAME INDEX READ AS `expectedFiles` (design-tree phase 2 Task 8).
+ * The render cache is keyed on it, and the host's mount verifies against `expectedFiles`; taking
+ * both from ONE `readCanonicalTreeIndex` means a cached render's identity and the inventory the
+ * render was actually produced under describe the same tree revision, never two. `null` is
+ * carried through honestly — `render-jobs.ts` turns it into a forced cache miss.
  */
 async function resolveExportPageInputs(
   context: HandlerContext,
@@ -1448,6 +1454,7 @@ async function resolveExportPageInputs(
       minSize: settings.minSize,
       theme: settings.theme,
       kitApiVersion: settings.kitApiVersion,
+      closureHash: index.closureHashOf(pageSlug),
     });
   }
   return pages;

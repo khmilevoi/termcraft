@@ -24,9 +24,36 @@ export interface ExportPageInputV1 {
   readonly minSize: Size;
   readonly theme: string;
   readonly kitApiVersion: number;
+  /**
+   * THE RENDER-CACHE KEY COMPONENT (design-tree phase 2 Task 8; design §7's consumer table) —
+   * `CanonicalTreeIndexV1.closureHashOf(pageSlug)` over the SAME tree read that resolved
+   * `expectedFiles` above, and that pairing is the point: a render's cache identity and the
+   * inventory its mount verifies against then describe one revision, never two. `null` is a
+   * FORCED MISS, honestly propagated — "the pass could not prove this page's closure", never
+   * "unchanged" — and `render-jobs.ts` renders fresh without touching the cache at all.
+   *
+   * DELIBERATELY ON THE *INPUT*, NOT COMPUTED INSIDE `model/snapshot.ts`. `snapshot.ts` holds
+   * one short `ProjectWritePermit` and has no `GateRunner`, so computing a closure there would
+   * mean a THIRD whole-tree `tsc` pass on the export path, run under the write lock, against a
+   * tree read a second time — and a closure hash folded from that second read could disagree
+   * with the `expectedFiles` inventory taken from the first, which is exactly the stale-key
+   * class of bug this task exists to close. Same rule as every other field here: caller-
+   * resolved once, then `snapshot.ts` re-reads only the entry's bytes/hash live to prove
+   * nothing drifted.
+   */
+  readonly closureHash: Sha256Hex | null;
 }
 
-/** One page's captured snapshot: caller-resolved identity/settings plus a source read taken live, under the permit. */
+/**
+ * One page's captured snapshot: caller-resolved identity/settings (including
+ * {@link ExportPageInputV1.closureHash}, carried through unchanged) plus a source read taken
+ * live, under the permit.
+ *
+ * `sourceHash` is the ENTRY FILE'S OWN hash and stays that: it is what `publish.ts` compares to
+ * detect that the entry's bytes drifted since capture, and what `ExportRenderTaskV1.sourceHash`
+ * carries as the mounted incarnation's identity. It is NOT the render cache's key — see
+ * `closureHash` above.
+ */
 export interface ExportPageSnapshotV1 extends ExportPageInputV1 {
   readonly sourceHash: Sha256Hex;
   readonly bytes: Uint8Array;

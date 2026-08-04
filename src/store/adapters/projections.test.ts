@@ -42,7 +42,7 @@ describe("createProjectionsAdapter — contract test (fake vs. real)", () => {
   test("render: a miss is null; put()+get() round-trips opaque bytes", async () => {
     const fake = createFakeRenderCache();
     const key = {
-      sourceHash: "b".repeat(64),
+      closureHash: "b".repeat(64),
       kitApiVersion: 1,
       rendererVersion: "1.0.0",
       size: { width: 80, height: 24 },
