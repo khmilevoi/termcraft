@@ -19,6 +19,7 @@ import { FsAccessError } from "store/safe-fs";
 import { WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
+import type { MigrationRequiredV1, ShellWithAgentRegistry } from "../types";
 import {
   ShellTeardownError,
   buildGateRunner,
@@ -240,14 +241,27 @@ async function firstSnapshot(port: {
   return snapshot.payload as Record<string, unknown>;
 }
 
+/**
+ * Narrows a `createShell` result to a full shell. Every fixture in this file (below the
+ * dedicated version-1 suite, design-tree §12.1) opens a fresh or format-2 project, so
+ * `"needs-migration"` reaching one of them here would be a test-setup bug, not a case to handle
+ * gracefully — this throws loudly instead of silently widening every one of this file's existing
+ * assertions to tolerate a shell that was never actually composed.
+ */
+function expectFullShell(
+  result: Error | MigrationRequiredV1 | ShellWithAgentRegistry,
+): ShellWithAgentRegistry {
+  if (result instanceof Error) throw result;
+  if ("kind" in result)
+    throw new Error(`expected a full shell, got a migration offer for ${result.root}`);
+  return result;
+}
+
 describe("createShell", () => {
   test("the demo shell seeds a trusted project so the workspace is reachable offline", async () => {
-    const shell = await createShell("demo", {
-      root: "(demo)",
-      workspaceIdentity: "demo",
-      projectExists: false,
-    });
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+    );
     const payload = await firstSnapshot(shell.port);
 
     expect(shell.mode).toBe("demo");
@@ -259,12 +273,9 @@ describe("createShell", () => {
   });
 
   test("closing the demo shell is idempotent and ends its preview stream", async () => {
-    const shell = await createShell("demo", {
-      root: "(demo)",
-      workspaceIdentity: "demo",
-      projectExists: false,
-    });
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+    );
     const handle = shell.port.preview();
     if (handle === null) throw new Error("demo shell must expose a preview handle");
 
@@ -280,8 +291,9 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-real-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
 
     expect(shell.mode).toBe("interactive");
     // The one behavioral proof `createFakeKernel()` cannot fake: a malformed raw envelope
@@ -297,12 +309,13 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-home-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell(
-      "interactive",
-      { root, workspaceIdentity: "placeholder", projectExists: false },
-      testShellDeps(scratch),
+    const shell = expectFullShell(
+      await createShell(
+        "interactive",
+        { root, workspaceIdentity: "placeholder", projectExists: false },
+        testShellDeps(scratch),
+      ),
     );
-    if (shell instanceof Error) throw shell;
 
     expect(shell.env.root).toBe(root);
     // `projectId` is null here NOT because `buildSnapshotPayload` hardcodes it — the §10
@@ -324,8 +337,9 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-create-");
     const root = path.join(scratch, "brand-new");
 
-    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
 
     expect(fs.existsSync(path.join(root, ".termcraft"))).toBe(true);
     expect(shell.env.workspaceIdentity).not.toBe(root);
@@ -338,13 +352,15 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-reopen-");
     const root = path.join(scratch, "project");
 
-    const first = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (first instanceof Error) throw first;
+    const first = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
     const firstIdentity = first.env.workspaceIdentity;
     await first.close();
 
-    const second = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (second instanceof Error) throw second;
+    const second = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
 
     expect(second.env.workspaceIdentity).toBe(firstIdentity);
     await second.close();
@@ -354,14 +370,15 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-close-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
     await shell.close();
     await shell.close();
 
-    const reopened = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    expect(reopened).not.toBeInstanceOf(Error);
-    if (reopened instanceof Error) throw reopened;
+    const reopened = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
     await reopened.close();
   });
 
@@ -369,8 +386,9 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-registry-");
     const root = path.join(scratch, "project");
 
-    const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
 
     expect(shell.agentRegistry).not.toBeNull();
     const capabilities = shell.agentRegistry?.list() ?? [];
@@ -381,12 +399,9 @@ describe("createShell", () => {
   });
 
   test("the demo shell exposes no agent registry — there is no real agent to probe offline", async () => {
-    const shell = await createShell("demo", {
-      root: "(demo)",
-      workspaceIdentity: "demo",
-      projectExists: false,
-    });
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(
+      await createShell("demo", { root: "(demo)", workspaceIdentity: "demo", projectExists: false }),
+    );
 
     expect(shell.agentRegistry).toBeNull();
 
@@ -397,14 +412,12 @@ describe("createShell", () => {
     const scratch = makeScratchDir("termcraft-shell-diff-");
     const root = path.join(scratch, "project");
 
-    const interactive = await createShell("interactive", envFor(root), testShellDeps(scratch));
-    if (interactive instanceof Error) throw interactive;
-    const demo = await createShell("demo", {
-      root: ".",
-      workspaceIdentity: "a",
-      projectExists: false,
-    });
-    if (demo instanceof Error) throw demo;
+    const interactive = expectFullShell(
+      await createShell("interactive", envFor(root), testShellDeps(scratch)),
+    );
+    const demo = expectFullShell(
+      await createShell("demo", { root: ".", workspaceIdentity: "a", projectExists: false }),
+    );
 
     const interactivePayload = await firstSnapshot(interactive.port);
     const demoPayload = await firstSnapshot(demo.port);
@@ -418,17 +431,16 @@ describe("createShell", () => {
   // --- gets captured on `ShellLaunchV1` instead --------------------------------------------
 
   test("reports a freshly created directory as a launch with no content", async () => {
-    const shell = await createShell("interactive", envFor(await emptyDir()), testDeps());
-    expect(shell instanceof Error).toBe(false);
-    if (shell instanceof Error) return;
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(await emptyDir()), testDeps()),
+    );
     expect(shell.launch).toEqual({ existing: false, hasContent: false });
     await shell.close();
   });
 
   test("reports a clone — pages present, zero chats — as existing content", async () => {
     const root = await projectWithPagesAndNoChats();
-    const shell = await createShell("interactive", envFor(root), testDeps());
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
     expect(shell.launch).toEqual({ existing: true, hasContent: true });
     // The SAME fact lands on `UiEnv.projectExists` (`resolveEnvWithProjectIdentity`) — `ui`'s
     // `home-submit` reads it, never `ShellLaunchV1` directly, to pick `project.open` over
@@ -441,16 +453,14 @@ describe("createShell", () => {
 
   test("an existing project with no pages but its first chat still present reaches the Workspace", async () => {
     const root = await existingProjectWithChatOnly();
-    const shell = await createShell("interactive", envFor(root), testDeps());
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
     expect(shell.launch).toEqual({ existing: true, hasContent: true });
     await shell.close();
   });
 
   test("an existing project with no pages and no chats — created yesterday, nothing generated yet — stays on Home", async () => {
     const root = await existingProjectWithNothing();
-    const shell = await createShell("interactive", envFor(root), testDeps());
-    if (shell instanceof Error) throw shell;
+    const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
     expect(shell.launch).toEqual({ existing: true, hasContent: false });
     await shell.close();
   });
@@ -757,8 +767,9 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hello from the c
       const scratch = makeScratchDir("termcraft-shell-gate-");
       const root = path.join(scratch, "project");
 
-      const shell = await createShell("interactive", envFor(root), testShellDeps(scratch));
-      if (shell instanceof Error) throw shell;
+      const shell = expectFullShell(
+        await createShell("interactive", envFor(root), testShellDeps(scratch)),
+      );
 
       const typed = await runGateOnFixture({ slug: HOME_SLUG, source: TYPE_ERROR_SOURCE });
       expect(typed.errors.some((e) => e.kind === "type")).toBe(true);
@@ -772,6 +783,91 @@ export default reatomComponent(() => <Panel id="p"><Text id="t">hello from the c
     },
     TYPE_CHECK_TEST_TIMEOUT_MS,
   );
+});
+
+const scratchRoots: string[] = [];
+afterEach(() => {
+  while (scratchRoots.length > 0) {
+    const root = scratchRoots.pop();
+    if (root !== undefined) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** A project root holding a one-page version-1 `.termcraft`. */
+function seedV1ProjectRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tc-shell-v1-"));
+  scratchRoots.push(root);
+  const termcraftDir = path.join(root, ".termcraft");
+  fs.mkdirSync(termcraftDir);
+  fs.writeFileSync(
+    path.join(termcraftDir, "project.toml"),
+    [
+      "format_version = 1",
+      'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"',
+      'name = "clock"',
+      'created_at = "2026-07-26T19:58:57.883Z"',
+      'target_stack = "js-opentui"',
+      'pages = ["dashboard"]',
+      "",
+    ].join("\n"),
+  );
+  fs.mkdirSync(path.join(termcraftDir, "pages", "dashboard"), { recursive: true });
+  fs.writeFileSync(
+    path.join(termcraftDir, "pages", "dashboard", "page.tsx"),
+    'export const meta = { title: "dashboard" };\n',
+  );
+  return { root };
+}
+
+describe("createShell on a version-1 project (design-tree §12.1)", () => {
+  test("returns the migration offer instead of a fatal composition error", async () => {
+    const seeded = seedV1ProjectRoot();
+    const outcome = await createShell("interactive", {
+      root: seeded.root,
+      workspaceIdentity: seeded.root,
+      projectExists: true,
+    });
+    expect(outcome).not.toBeInstanceOf(Error);
+    expect(outcome).toMatchObject({ kind: "needs-migration", root: seeded.root });
+    if (!("plan" in outcome)) throw new Error("expected a migration offer");
+    expect(outcome.plan.pageCount).toBe(1);
+  });
+
+  test("the offer writes nothing — the project is untouched", async () => {
+    const seeded = seedV1ProjectRoot();
+    const before = fs.readdirSync(path.join(seeded.root, ".termcraft")).sort();
+    await createShell("interactive", {
+      root: seeded.root,
+      workspaceIdentity: seeded.root,
+      projectExists: true,
+    });
+    const after = fs.readdirSync(path.join(seeded.root, ".termcraft")).sort();
+    // `store.openProject` acquires its lease BEFORE it ever reaches the manifest's
+    // `format_version` check (`store/model/factory.ts`'s own launch-sequence order: lease ->
+    // ... -> schemas), and the lease store's own contract never deletes the `lock` file a first
+    // acquire creates — `store/model/factory.ts`'s `openMigrationReadFs` doc comment says so
+    // explicitly, which is exactly why `planMigration` (Task 5) skips its own lease entirely. That
+    // is a harmless, permanent side effect of the OPEN ATTEMPT itself, predating this task and
+    // unrelated to the migration offer — excluded here so this assertion targets what THIS
+    // branch's own code writes, which is nothing.
+    expect(after.filter((name) => name !== "lock")).toEqual(before);
+  });
+
+  test("a genuinely empty directory still creates a project, unchanged", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tc-fresh-"));
+    scratchRoots.push(root);
+    const outcome = await createShell("interactive", {
+      root,
+      workspaceIdentity: root,
+      projectExists: false,
+    });
+    expect(outcome).not.toBeInstanceOf(Error);
+    expect("kind" in outcome && outcome.kind === "needs-migration").toBe(false);
+    // Windows keeps the project lease's lock file open until `close()` releases it, and the
+    // scratch-root cleanup above cannot delete a still-open file — close the composed shell so
+    // `afterEach` can clean up (every other fixture in this file already does the same).
+    if (!(outcome instanceof Error) && !("kind" in outcome)) await outcome.close();
+  });
 });
 
 describe("closeShellResources", () => {

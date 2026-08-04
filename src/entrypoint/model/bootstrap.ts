@@ -37,6 +37,12 @@ export async function bootstrap(
 ): Promise<AppStartupError | ShellCompositionError | RunningApp> {
   const shell = await createShell(mode, resolveEnv(mode, deps), deps.shell);
   if (shell instanceof Error) return shell;
+  // Task 8 replaces this refusal with the real pre-Kernel migration surface.
+  if ("kind" in shell)
+    return new ShellCompositionError({
+      root: shell.root,
+      reason: "the project is on format 1 and the migration surface is not wired yet",
+    });
 
   return runApp({
     shell,

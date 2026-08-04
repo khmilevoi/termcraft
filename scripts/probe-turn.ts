@@ -40,15 +40,22 @@ const prompt =
 console.log(`[probe] root=${root}`);
 console.log(`[probe] prompt=${JSON.stringify(prompt)}`);
 
-const shell = await createShell("interactive", {
+const composed = await createShell("interactive", {
   root,
   workspaceIdentity: root,
   projectExists: false,
 });
-if (shell instanceof Error) {
-  console.error(`[probe] shell composition failed: ${shell.message}`);
+if (composed instanceof Error) {
+  console.error(`[probe] shell composition failed: ${composed.message}`);
   process.exit(1);
 }
+if ("kind" in composed) {
+  console.error(
+    `[probe] project at ${composed.root} is on format 1 — this harness has no migration surface`,
+  );
+  process.exit(1);
+}
+const shell = composed;
 console.log("[probe] shell composed");
 
 // Minimal event tracker: `run-export.ts` keeps its own private one, so this mirrors it rather

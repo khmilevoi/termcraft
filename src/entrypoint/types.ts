@@ -1,4 +1,5 @@
 import type { AgentRegistry } from "core/ports";
+import type { MigrationPlanV1 } from "store/migration";
 import type { KernelPort, UiEnv } from "ui";
 
 /**
@@ -65,6 +66,18 @@ export interface ShellWithAgentRegistry extends AppShell {
   readonly agentRegistry: AgentRegistry | null;
   /** The open-vs-create discriminator (Gap D) — see {@link ShellLaunchV1}'s own doc comment. */
   readonly launch: ShellLaunchV1;
+}
+
+/**
+ * A project the composition root refuses to open because it is on format 1 (design-tree §12.1: "a
+ * version-1 project never opens"). Carries the read-only plan the `migrate-80` dialog is drawn
+ * from. NOT an `Error`: nothing is broken — the user has a project and a choice, and reporting
+ * this through the fatal path is exactly the defect this outcome removes.
+ */
+export interface MigrationRequiredV1 {
+  readonly kind: "needs-migration";
+  readonly root: string;
+  readonly plan: MigrationPlanV1;
 }
 
 /**

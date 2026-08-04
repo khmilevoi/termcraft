@@ -44,10 +44,16 @@ import {
   nodeStoreDeps,
 } from "store";
 import type { OpenProject, Store, StoreAdapterDeps } from "store";
+import { ManifestMigrationRequiredError } from "store/toml";
 import type { KernelPort, PreviewSessionHandle, UiEnv, UiPreviewFrame } from "ui";
 import { TEST_SHA, createFakeKernel, createFakePreviewSession } from "ui/testing";
 
-import type { EntrypointMode, ShellLaunchV1, ShellWithAgentRegistry } from "../types";
+import type {
+  EntrypointMode,
+  MigrationRequiredV1,
+  ShellLaunchV1,
+  ShellWithAgentRegistry,
+} from "../types";
 
 /**
  * Builds the Kernel boundary one run drives.
@@ -65,7 +71,7 @@ export async function createShell(
   mode: EntrypointMode,
   env: UiEnv,
   deps: ShellDeps = {},
-): Promise<ShellCompositionError | ShellWithAgentRegistry> {
+): Promise<ShellCompositionError | MigrationRequiredV1 | ShellWithAgentRegistry> {
   return mode === "demo" ? demoShell(env) : interactiveShell(env, deps);
 }
 
@@ -91,7 +97,7 @@ export class ShellCompositionError extends errore.createTaggedError({
 async function interactiveShell(
   env: UiEnv,
   deps: ShellDeps,
-): Promise<ShellCompositionError | ShellWithAgentRegistry> {
+): Promise<ShellCompositionError | MigrationRequiredV1 | ShellWithAgentRegistry> {
   // The Gate's `typeCheck` stage needs a spawnable `tsc` resolved from the INSTALLED
   // `typescript` package (Task 4's `resolveCompilerPath()`, `gate/model/tsc-extract.ts`) —
   // resolved here, first, before any project I/O runs. A failed resolution surfaces as a
@@ -118,6 +124,9 @@ async function interactiveShell(
 
   const prepared = await openOrCreateProject(store, env.root);
   if (prepared instanceof Error) return prepared;
+  // The offer travels to `bootstrap` untouched: no Kernel, no adapters, no UI root is built for a
+  // project that is not opening (design-tree §12.1).
+  if ("kind" in prepared) return prepared;
   const { open, existing } = prepared;
 
   const resolvedEnv = await resolveEnvWithProjectIdentity(env, open, existing);
@@ -319,7 +328,7 @@ interface OpenedProjectV1 {
 async function openOrCreateProject(
   store: Store,
   root: string,
-): Promise<ShellCompositionError | OpenedProjectV1> {
+): Promise<ShellCompositionError | MigrationRequiredV1 | OpenedProjectV1> {
   // Both `Store.openProject` and `Store.createProject` run a pre-flight durability probe
   // that opens `root` itself with Win32 `OPEN_EXISTING` (`store/model/factory.ts`'s own
   // header: "the flush probe targets `root` ... which is guaranteed to exist here") — a
@@ -338,6 +347,28 @@ async function openOrCreateProject(
 
   const opened = await store.openProject(root);
   if (!(opened instanceof Error)) return { open: opened, existing: true };
+
+  // A version-1 project is NOT "no project here yet". Before this branch existed, its typed
+  // refusal fell through to `createProject`, which refuses an existing `.termcraft`, and the pair
+  // of failures became a `ShellCompositionError` that `main.tsx` reported as fatal — the binary
+  // could not start against the user's own project. `findCause`, not `instanceof`: today
+  // `openProject`'s manifest-read step (`store/model/factory.ts`) returns this error unwrapped,
+  // but `findCause` checks the error itself before walking `.cause`, so this stays correct if a
+  // later open-sequence layer ever wraps it, and it is the errore-idiomatic way to test a typed
+  // error's identity regardless.
+  if (errore.findCause(opened, ManifestMigrationRequiredError) !== undefined) {
+    const plan = await store.planMigration(root);
+    // A project that says "migrate me" but cannot say what migrating would change is a genuine
+    // failure — the offer would have nothing honest to draw. Reported, not silently downgraded to
+    // the create path.
+    if (plan instanceof Error)
+      return new ShellCompositionError({
+        root,
+        reason: `the project is on format 1 but its migration plan could not be read (${plan.message})`,
+        cause: plan,
+      });
+    return { kind: "needs-migration", root, plan };
+  }
 
   const created = await store.createProject({
     root,

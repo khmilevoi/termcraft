@@ -367,6 +367,13 @@ export async function runHeadlessExport(
 ): Promise<ShellCompositionError | ExportDriverError | ExportRefusedError | RunExportResult> {
   const shell = await createShell("interactive", deps.env, deps.shell);
   if (shell instanceof Error) return shell;
+  // Same temporary refusal as `bootstrap.ts` (design-tree phase-1b Task 6): this headless driver
+  // has no migration surface either, and wiring one is out of this task's scope.
+  if ("kind" in shell)
+    return new ShellCompositionError({
+      root: shell.root,
+      reason: "the project is on format 1 and the migration surface is not wired yet",
+    });
 
   return runHeadlessExportOverShell({ shell, root: deps.env.root, timeoutMs: deps.timeoutMs });
 }
