@@ -177,3 +177,27 @@ export interface LegacyProjectV1 {
   /** Manifest order, which IS page order in format 1 and becomes `design/pages.json`'s order. */
   readonly pages: readonly LegacyPageV1[];
 }
+
+/** One file the mechanical track relocates, and what kind of file it is. */
+export interface MigrationMoveV1 {
+  readonly from: string;
+  readonly to: string;
+  readonly what: "page-source" | "pin-log";
+}
+
+/**
+ * The immutable migration plan (kernel-command-contract §7.7: "an immutable migration plan has one
+ * UUIDv7 `migrationPlanId`"). Computed before the offer is drawn and never mutated; confirm-time
+ * re-derivation produces an equal value from a fresh scan.
+ */
+export interface MigrationPlanV1 {
+  readonly migrationPlanId: string;
+  readonly fromVersion: 1;
+  readonly toVersion: 2;
+  readonly projectId: string;
+  readonly moves: readonly MigrationMoveV1[];
+  readonly pageCount: number;
+  readonly pinLogCount: number;
+  /** `{userStateRoot}/backups/<projectId>` — the real location, shown verbatim in the dialog. */
+  readonly backupsDir: AbsPath;
+}

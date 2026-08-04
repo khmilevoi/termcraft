@@ -419,7 +419,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
           extractorVersion: 1,
         }),
       ).toBeNull();
-      expect(reopened.migrations.chain).toEqual([]);
+      expect(reopened.migrations.chain).toEqual([{ kind: "project.toml", fromVersion: 1, toVersion: 2 }]);
     } finally {
       await reopened.close();
     }

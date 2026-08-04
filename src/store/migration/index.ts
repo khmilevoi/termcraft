@@ -59,3 +59,7 @@ export {
   scanLegacyProject,
 } from "./model/legacy-scan";
 export type { LegacyScanCodeV1 } from "./model/legacy-scan";
+
+export type { MigrationMoveV1, MigrationPlanV1 } from "./types";
+export { PROJECT_TOML_MIGRATION_KIND } from "./model/registry";
+export { migratedPinsPath, migratedSourcePath, planV1ToV2 } from "./model/v1-to-v2";

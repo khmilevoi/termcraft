@@ -12,13 +12,31 @@ import {
   readFormatCounter,
 } from "./registry";
 
-describe("MIGRATION_CHAIN (storage-identity §12: no shipped migration exists)", () => {
-  test("the shipped chain is empty", () => {
-    expect(MIGRATION_CHAIN).toEqual([]);
+describe("MIGRATION_CHAIN (design-tree §12.3: the first shipped migration)", () => {
+  test("the shipped chain is exactly the project.toml 1 -> 2 step", () => {
+    expect(MIGRATION_CHAIN).toEqual([
+      { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+    ]);
   });
 
-  test("the live default registry wires the same empty chain", () => {
-    expect(migrationRegistry.chain).toEqual([]);
+  test("the live default registry wires that same chain", () => {
+    expect(migrationRegistry.chain).toEqual(MIGRATION_CHAIN);
+  });
+
+  test("the live registry resolves a real path from 1 to 2", () => {
+    const steps = migrationRegistry.findSteps({
+      kind: "project.toml",
+      fromVersion: 1,
+      toVersion: 2,
+    });
+    expect(steps).not.toBeInstanceOf(Error);
+    expect(steps).toHaveLength(1);
+  });
+
+  test("the live registry still refuses a kind it has no step for", () => {
+    expect(
+      migrationRegistry.findSteps({ kind: "chat-jsonl", fromVersion: 1, toVersion: 2 }),
+    ).toBeInstanceOf(NoMigrationPathError);
   });
 });
 
@@ -76,8 +94,8 @@ describe("findMigrationSteps", () => {
     expect(result).toEqual([]);
   });
 
-  test("any other request against the shipped empty chain has no path", () => {
-    const result = findMigrationSteps({ kind: "project.toml", fromVersion: 1, toVersion: 2 });
+  test("any other request against the shipped chain has no path if not in the chain", () => {
+    const result = findMigrationSteps({ kind: "unknown-kind", fromVersion: 1, toVersion: 2 });
     expect(result).toBeInstanceOf(NoMigrationPathError);
   });
 
@@ -92,7 +110,9 @@ describe("findMigrationSteps", () => {
       { kind: "widget", fromVersion: 1, toVersion: 2 },
       { kind: "widget", fromVersion: 2, toVersion: 3 },
     ]);
-    expect(MIGRATION_CHAIN).toEqual([]); // the shipped constant is untouched by the synthetic chain
+    expect(MIGRATION_CHAIN).toEqual([
+      { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+    ]); // the shipped constant is untouched by the synthetic chain
   });
 
   test("a broken synthetic chain (missing intermediate step) has no path", () => {
@@ -103,9 +123,9 @@ describe("findMigrationSteps", () => {
 });
 
 describe("createMigrationRegistry", () => {
-  test("defaults to the shipped empty chain", () => {
+  test("defaults to the shipped chain", () => {
     const registry = createMigrationRegistry();
-    expect(registry.chain).toEqual([]);
+    expect(registry.chain).toEqual(MIGRATION_CHAIN);
     expect(registry.findSteps({ kind: "project.toml", fromVersion: 1, toVersion: 1 })).toEqual([]);
   });
 

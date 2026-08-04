@@ -63,12 +63,24 @@ export function checkFormatCounter(input: {
 // ---- the migration chain (storage-identity §12) ---------------------------------------
 
 /**
- * THE SHIPPED MIGRATION CHAIN. Empty by design (storage-identity §12) and MUST stay
- * empty until a real migration ships — `registry.test.ts` asserts this array's length
- * directly. Not exported as mutable: appending a migration means editing this literal,
- * not calling a `register()` function at runtime.
+ * The `kind` naming `project.toml`'s own format counter. A `MigrationStep`'s `kind` is a plain
+ * string (see `types.ts`), so the one place the literal lives is here.
  */
-export const MIGRATION_CHAIN: readonly MigrationStep[] = [];
+export const PROJECT_TOML_MIGRATION_KIND = "project.toml";
+
+/**
+ * THE SHIPPED MIGRATION CHAIN. One step as of the multi-file design tree (design §12.3): the
+ * portable manifest's format 1 -> 2, i.e. the flat `pages/<slug>/page.tsx` layout with an ordered
+ * `pages` array in `project.toml` becoming the `design/` tree with `design/pages.json`.
+ *
+ * A `MigrationStep` is a DECLARATION, not a transform: it says a path exists between two versions
+ * of one artifact family, and `findMigrationSteps` walks it. The transform itself is
+ * `model/v1-to-v2.ts` plus `store/model/factory.ts`'s `migrateProject` driver. Appending a future
+ * migration means editing this literal, not calling a `register()` function at runtime.
+ */
+export const MIGRATION_CHAIN: readonly MigrationStep[] = [
+  { kind: PROJECT_TOML_MIGRATION_KIND, fromVersion: 1, toVersion: 2 },
+];
 
 /** No registered step walks `kind` from `fromVersion` to `toVersion` in the given chain. */
 export class NoMigrationPathError extends errore.createTaggedError({
