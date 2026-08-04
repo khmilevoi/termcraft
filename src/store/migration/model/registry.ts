@@ -13,15 +13,15 @@ import type { FormatCounterField, MigrationRegistry, MigrationStep } from "../ty
 //    `JournalTooNewError`); this module is the generic, reusable form a future migration
 //    caller (or a not-yet-landed durable-JSON kind) can share instead of re-deriving it.
 //
-// 2. The migration chain itself. §12: "This repository is pre-code. ... The first
-//    implementation adopts this document directly as format version 1. No migration or
-//    compatibility reader for an abandoned version is created." `MIGRATION_CHAIN` is
-//    therefore EMPTY — but it is still LIVE infrastructure: `findMigrationSteps` is the
-//    real lookup a future migration caller (phase 6) would walk, wired against this
-//    exact array. Landing a migration means appending an entry here, never inventing a
-//    second lookup mechanism. `registry.test.ts` asserts the shipped chain stays empty —
-//    that assertion IS this phase's proof that no production migration exists
-//    (turn-durability §14.8).
+// 2. The migration chain itself (design-tree §12.3): the LIVE infrastructure holding one or more
+//    registered steps for any shipped migration. `findMigrationSteps` is the real lookup a
+//    migration caller walks, wired against `MIGRATION_CHAIN` directly. As of the multi-file
+//    design tree, one step lives here: the portable manifest's format 1 -> 2 migration
+//    (the flat `pages/<slug>/page.tsx` layout becoming the `design/` tree). Landing a future
+//    migration means appending an entry to `MIGRATION_CHAIN`, never inventing a second
+//    lookup mechanism. Each `MigrationStep` is a DECLARATION (not a transform) — it says
+//    a path exists between two versions of one artifact family; `model/v1-to-v2.ts` holds
+//    the planner, and `store/model/factory.ts`'s `migrateProject` drives the transform.
 
 /**
  * A durable file declares a format counter newer than this binary supports
@@ -122,7 +122,7 @@ export function findMigrationSteps(input: {
   return steps;
 }
 
-/** Build a {@link MigrationRegistry} over `chain` (defaults to the shipped, empty {@link MIGRATION_CHAIN}). */
+/** Build a {@link MigrationRegistry} over `chain` (defaults to the shipped {@link MIGRATION_CHAIN} with one step: `project.toml` 1 → 2). */
 export function createMigrationRegistry(
   chain: readonly MigrationStep[] = MIGRATION_CHAIN,
 ): MigrationRegistry {
@@ -133,5 +133,5 @@ export function createMigrationRegistry(
   };
 }
 
-/** THE live, shipped registry: an empty chain, wired through the real gate. */
+/** THE live, shipped registry: one `project.toml` 1 → 2 step in the chain, wired through the real gate. */
 export const migrationRegistry: MigrationRegistry = createMigrationRegistry();
