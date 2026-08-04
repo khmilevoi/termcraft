@@ -13,7 +13,7 @@ import {
   decodeControlEnvelope,
 } from "../../protocol";
 import type { LayoutNode, RenderHandle } from "../../render";
-import type { HostMode, InteractionMode } from "../../types";
+import type { HostMode, InteractionMode, Size } from "../../types";
 import type { HostSession, HostSessionDeps, MountRequestBody, ReadyBody } from "../types";
 
 type Phase = "awaiting-hello" | "awaiting-mount" | "ready" | "closed";
@@ -33,6 +33,16 @@ const EXPECTED_FILES_MAX = 10_000;
  * is process order (§7). A fatal `ProtocolError` past handshake emits a best-effort
  * `error` envelope, then requests exit; before handshake it only requests exit
  * (no identity to echo).
+ *
+ * PHASE `ready` ACCEPTS A REPEATED `mount` (design §9.2, phase 3). An incarnation is keyed by
+ * TREE REVISION on the supervisor side, so one process serves every page of one revision and a
+ * page switch is a second `mount` rather than a second process. Each mount replaces the React
+ * tree in the live renderer, re-seeds `sourceHash` so subsequent frames name the new page, and
+ * keeps `frameCounter` running — `frameSeq` stays strictly monotonic across the switch, which
+ * is what lets the supervisor's broker keep its ordering guard unchanged.
+ *
+ * `smoke`/`export` are unaffected: both request exit at the end of their FIRST mount and the
+ * phase is `closed` before any second envelope could be read.
  */
 export function createHostSession(deps: HostSessionDeps): HostSession {
   let phase: Phase = "awaiting-hello";
@@ -41,6 +51,10 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
 
   let renderer: RenderHandle | null = null;
   let sourceHash: string | null = null;
+  // The size the live renderer is currently at. `createRenderer(size)` sets it on the first
+  // mount; a later mount at a different size resizes rather than rebuilding. Tracked here and
+  // not read back off the handle because `RenderHandle` exposes no size getter.
+  let lastSize: Size = { w: 0, h: 0 };
   let mountedMode: HostMode | null = null;
   let frameCounter = 1n;
   let lastFrameSeq = "0";
@@ -71,6 +85,11 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       return fail(unknownKind(envelope.kind, phase));
     }
     // phase === "ready"
+    // A REPEATED MOUNT IS A PAGE SWITCH (design §9.2). An incarnation belongs to a tree revision
+    // now, not to a page: mounting a second entry implicitly unmounts the first, reuses the live
+    // renderer, and keeps this process's module registry — which is exactly why a switch is cheap
+    // and exactly why module-level state in a shared module crosses pages (§9.5).
+    if (envelope.kind === "mount") return handleMount(envelope);
     if (envelope.kind === "resize") return handleResize(envelope);
     if (envelope.kind === "set-mode") return handleSetMode(envelope);
     if (envelope.kind === "ping") return handlePing(envelope);
@@ -194,8 +213,23 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     });
     if (loaded instanceof ProtocolError) return fail(loaded);
 
-    const handle = await deps.createRenderer(request.size);
+    // REUSE THE LIVE HANDLE, NEVER A SECOND RENDERER. `RenderHandle.mount` is documented as
+    // "mount (or replace) the React tree" and re-creates its error sink per call
+    // (`render/model/renderer.ts:33-41`), so a page switch is a tree replace plus, when the
+    // requested viewport moved, a resize of the SAME renderer. Creating a second
+    // `createCliRenderer` in one process is never needed and is not attempted.
+    //
+    // WHAT A SWITCH DOES AND DOES NOT PRESERVE (design §9.5, stated so it is not found as a
+    // bug): React unmounts the previous page's tree, so component-local state is gone. Every
+    // module-scope Reatom atom — in the page's own module and in every shared module it
+    // imports — survives, because the module registry is untouched. That is the idiomatic
+    // shape in this runtime, which is why §9.5 can say the page is "as you left it".
+    const handle = renderer ?? (await deps.createRenderer(request.size));
+    if (renderer !== null && (lastSize.w !== request.size.w || lastSize.h !== request.size.h)) {
+      handle.resize(request.size);
+    }
     renderer = handle;
+    lastSize = request.size;
     sourceHash = loaded.sourceHash;
     mountedMode = request.mode;
 
@@ -422,6 +456,7 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     const size = parseSize(envelope.body.size);
     if (size instanceof ProtocolError) return fail(size);
     renderer.resize(size);
+    lastSize = size;
     await renderer.render();
     const captured = renderer.capture();
     const frameIdentity = sealFrameIdentity();

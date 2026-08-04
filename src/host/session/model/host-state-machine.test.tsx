@@ -12,7 +12,12 @@ import {
   encodeClientHello,
   encodeControlEnvelope,
 } from "../../protocol";
-import { type LayoutNode, type RenderHandle, createHeadlessRenderer } from "../../render";
+import {
+  type LayoutNode,
+  type RenderHandle,
+  type RenderSize,
+  createHeadlessRenderer,
+} from "../../render";
 import type { HostSessionDeps, OutboundMessage } from "../types";
 import { createHostSession } from "./host-state-machine";
 
@@ -133,6 +138,7 @@ function mountEnvelope(
   over: Partial<ControlEnvelope["body"]> = {},
   sessionId = SESSION_ID,
   nonce = NONCE,
+  requestId = "1",
 ): Uint8Array {
   const envelope: ControlEnvelope = {
     protocolVersion: 1,
@@ -140,7 +146,7 @@ function mountEnvelope(
     sessionId,
     nonce,
     messageId: "1",
-    requestId: "1",
+    requestId,
     body: {
       treeRoot: "/unused/in/fake/loadPage/design",
       entryRelPath: "pages/home.tsx",
@@ -314,6 +320,187 @@ describe("host session — mount", () => {
     expect(h.out.some((m) => m.type === "frame")).toBe(false);
     expect(h.exits).toHaveLength(1);
     expect(h.exits[0]!.code).toBe(1);
+  });
+});
+
+/**
+ * Wraps the real headless renderer with call counters and a one-shot forced `renderError()`,
+ * so re-mount tests can observe "was the SAME renderer reused" and "did this specific mount
+ * fail" without a second fake `RenderHandle` (design §9.2, phase-3 task 1).
+ */
+function trackingRendererFactory() {
+  const createdRenderers: RenderHandle[] = [];
+  const resizeCalls: RenderSize[] = [];
+  let mountCallCount = 0;
+  let forcedRenderError: Error | null = null;
+
+  const createRenderer = async (size: RenderSize): Promise<RenderHandle> => {
+    const real = await createHeadlessRenderer(size);
+    liveRenderer = real;
+    const tracked: RenderHandle = {
+      ...real,
+      mount(node) {
+        mountCallCount += 1;
+        real.mount(node);
+      },
+      resize(next) {
+        resizeCalls.push(next);
+        real.resize(next);
+      },
+      renderError() {
+        if (forcedRenderError !== null) {
+          const error = forcedRenderError;
+          forcedRenderError = null;
+          return error;
+        }
+        return real.renderError();
+      },
+    };
+    createdRenderers.push(tracked);
+    return tracked;
+  };
+
+  return {
+    createRenderer,
+    createdRenderers,
+    resizeCalls,
+    mountCallCount: () => mountCallCount,
+    forceNextRenderError: (error: Error) => {
+      forcedRenderError = error;
+    },
+  };
+}
+
+/** `loadPage` stub that answers a different `sourceHash` per `entryRelPath` (re-mount tests). */
+function loadPageByEntry(hashes: Record<string, string>) {
+  return async ({ entryRelPath }: { entryRelPath: string }) => ({
+    meta: {
+      kitApiVersion: 1,
+      title: "Dashboard",
+      minSize: { w: 16, h: 3 },
+      theme: "dark-default",
+    },
+    component: FixtureComponent,
+    sourceHash: hashes[entryRelPath] ?? "a".repeat(64),
+  });
+}
+
+describe("host session — ready-phase re-mount (design §9.2)", () => {
+  const A_HASH = "a".repeat(64);
+  const B_HASH = "b".repeat(64);
+
+  test("a second mount in the ready phase is accepted and re-mounts the live renderer", async () => {
+    const tracker = trackingRendererFactory();
+    const { h, session } = await handshaken({ createRenderer: tracker.createRenderer });
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/a.tsx" }, SESSION_ID, NONCE, "1"),
+    );
+    const rendererCount = tracker.createdRenderers.length;
+
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/b.tsx" }, SESSION_ID, NONCE, "2"),
+    );
+
+    // exactly one renderer for the whole incarnation
+    expect(tracker.createdRenderers.length).toBe(rendererCount);
+    // the live handle was told to replace its tree
+    expect(tracker.mountCallCount()).toBe(2);
+    // the ready response correlates to the SECOND request
+    const readyMessages = h.out.filter(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "ready",
+    ) as { payload: ControlEnvelope }[];
+    expect(readyMessages.at(-1)?.payload.responseTo).toBe("2");
+  });
+
+  test("frames after a re-mount carry the new page's source hash and a higher frameSeq", async () => {
+    const tracker = trackingRendererFactory();
+    const { h, session } = await handshaken({
+      createRenderer: tracker.createRenderer,
+      loadPage: loadPageByEntry({ "pages/a.tsx": A_HASH, "pages/b.tsx": B_HASH }),
+    });
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/a.tsx" }, SESSION_ID, NONCE, "1"),
+    );
+    const first = (h.out.filter((m) => m.type === "frame").at(-1) as { payload: FrameEnvelope })
+      .payload;
+
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/b.tsx" }, SESSION_ID, NONCE, "2"),
+    );
+    const second = (h.out.filter((m) => m.type === "frame").at(-1) as { payload: FrameEnvelope })
+      .payload;
+
+    expect(first.sourceHash).toBe(A_HASH);
+    expect(second.sourceHash).toBe(B_HASH);
+    expect(BigInt(second.frameSeq) > BigInt(first.frameSeq)).toBe(true);
+  });
+
+  test("a re-mount at a different size resizes the live renderer, it does not rebuild it", async () => {
+    const tracker = trackingRendererFactory();
+    const { h, session } = await handshaken({ createRenderer: tracker.createRenderer });
+    await session.receiveControlPayload(
+      mountEnvelope(
+        { entryRelPath: "pages/a.tsx", size: { w: 80, h: 24 } },
+        SESSION_ID,
+        NONCE,
+        "1",
+      ),
+    );
+    await session.receiveControlPayload(
+      mountEnvelope(
+        { entryRelPath: "pages/b.tsx", size: { w: 100, h: 30 } },
+        SESSION_ID,
+        NONCE,
+        "2",
+      ),
+    );
+
+    expect(tracker.createdRenderers.length).toBe(1);
+    expect(tracker.resizeCalls).toEqual([{ w: 100, h: 30 }]);
+    const lastFrame = (h.out.filter((m) => m.type === "frame").at(-1) as { payload: FrameEnvelope })
+      .payload;
+    expect(lastFrame.width).toBe(100);
+    expect(lastFrame.height).toBe(30);
+  });
+
+  test("a re-mount whose page throws while rendering fails that mount, not the earlier one", async () => {
+    const tracker = trackingRendererFactory();
+    const { h, session } = await handshaken({ createRenderer: tracker.createRenderer });
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/a.tsx" }, SESSION_ID, NONCE, "1"),
+    );
+    tracker.forceNextRenderError(new Error("boom"));
+
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/b.tsx" }, SESSION_ID, NONCE, "2"),
+    );
+
+    const errorMsg = h.out
+      .filter(
+        (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+      )
+      .at(-1) as { payload: ControlEnvelope } | undefined;
+    expect(errorMsg).toBeDefined();
+    expect((errorMsg!.payload.body as { code: string }).code).toBe("PAGE_RENDER_FAILED");
+    expect(h.exits.at(-1)?.code).toBe(1);
+  });
+
+  test("a smoke mount still exits after its first frame and never accepts a second", async () => {
+    const { h, session } = await handshaken();
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/a.tsx", mode: "smoke" }, SESSION_ID, NONCE, "1"),
+    );
+    expect(h.exits.at(-1)?.code).toBe(0);
+
+    await session.receiveControlPayload(
+      mountEnvelope({ entryRelPath: "pages/b.tsx", mode: "smoke" }, SESSION_ID, NONCE, "2"),
+    );
+    // phase is "closed": the payload is dropped, no second ready, no second exit request
+    const readyMessages = h.out.filter(
+      (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "ready",
+    );
+    expect(readyMessages.length).toBe(1);
+    expect(h.exits.length).toBe(1);
   });
 });
 
