@@ -1,6 +1,6 @@
 export { registerRuntimeResolver } from "./model/resolver";
-export { computeSourceHash, scanClosureImports } from "./model/source-mount";
-export { loadPage } from "./model/source-mount";
+export { computeSourceHash, createPageLoader, scanClosureImports } from "./model/source-mount";
+export type { PageLoaderDeps } from "./model/source-mount";
 export { createHostSession } from "./model/host-state-machine";
 export { parseHostArgs, runHostStdio } from "./model/entry";
 export type { HostStdioIo } from "./model/entry";

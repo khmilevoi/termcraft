@@ -1,5 +1,4 @@
 import type { Stats } from "node:fs";
-import { lstat } from "node:fs/promises";
 
 import * as errore from "errore";
 import { z } from "zod";
@@ -186,11 +185,15 @@ function checkTreeRelPath(relPath: string): ProtocolError | void {
  * It also remembers the absolute prefixes it has already proved, so a shared module reached from
  * a deep entry no longer re-stats `lib/` and `lib/deep/` once per closure member.
  *
- * PER CALL, NEVER MODULE-LEVEL: a memo that outlived a mount would answer for a tree that has
- * since been replaced, which is the staleness class this whole file exists to refuse. Sound
- * WITHIN one mount for the same reason the hash verification is — if a directory turned into a
- * link between two members of one closure, every byte this mount already read is suspect, and
- * the hash check is what catches that.
+ * PER INCARNATION, NEVER MODULE-LEVEL: a memo that outlived the incarnation would answer for a
+ * tree revision that has been replaced, which is the staleness class this whole file exists to
+ * refuse. Sound WITHIN one incarnation for the same reason the hash verification is — if a
+ * directory turned into a link between two members of one closure (whether both are read in the
+ * same mount or across two mounts this incarnation serves), every byte already read is suspect,
+ * and the hash check is what catches that. An incarnation does not outlive its revision (Task 5,
+ * not yet landed, will make this literally true; today it is still the right invariant to state)
+ * — the same assumption {@link createPageLoader}'s `verified` map rests on, one scope wider than
+ * this verifier used to be memoized at.
  *
  * The FINAL component is memoized only after its own check passes, exactly like every prefix, so
  * a file that is itself a symlink is still refused even when its directory was verified for a
@@ -313,12 +316,18 @@ async function readTreeFile(
  * refusing is {@link scanClosureImports}' job and stating the rule once is what keeps the two
  * from drifting apart — a skipped edge cannot hide anything, since the file it fails to name is
  * one this walk then never vouches for.
+ *
+ * `verified`/`readCache` are {@link createPageLoader}'s per-incarnation memo, not per-call state:
+ * a member already proved by an earlier mount in this incarnation is served from `readCache`
+ * instead of being read again — see the rationale on `verified`'s own declaration.
  */
 async function readClosure(
   args: LoadPageArgs,
   has: (relPath: string) => boolean,
   sha256Of: (relPath: string) => string | undefined,
   verifyPath: (treeRoot: string, relPath: string) => Promise<ProtocolError | void>,
+  verified: Map<string, string>,
+  readCache: Map<string, ReadTreeFileV1>,
 ): Promise<ProtocolError | ReadonlyMap<string, ReadTreeFileV1>> {
   const read = new Map<string, ReadTreeFileV1>();
   const queue: string[] = [args.entryRelPath];
@@ -333,9 +342,30 @@ async function readClosure(
       // `resolveDesignSpecifier` resolved it against `has`, which IS the expected inventory.
       return malformed(`${relPath} is not listed in the mount's expected design-tree inventory`);
     }
-    const file = await readTreeFile(args.treeRoot, relPath, expectedSha256, verifyPath);
+
+    const provenSha256 = verified.get(relPath);
+    if (provenSha256 !== undefined && provenSha256 !== expectedSha256) {
+      // The SAME path with a DIFFERENT expected hash means the caller handed this incarnation
+      // two different tree revisions. That is a supervisor bug, not a drifted file: an
+      // incarnation is keyed by revision (design §9.2) and its inventory is fixed for its whole
+      // life. Refuse loudly rather than link a module verified against somebody else's inventory.
+      return sourceHashMismatch(
+        `${relPath} was verified as ${provenSha256} earlier in this incarnation but this mount expects ${expectedSha256}`,
+      );
+    }
+
+    // A member this incarnation already proved is served from `readCache` instead of being
+    // read again — see "AND WHY A VERIFIED MEMBER IS NOT RE-READ" on `verified`'s declaration in
+    // {@link createPageLoader}: once linked, `import()`/`deps.link` serves the cached module for
+    // the rest of the process, so re-reading bytes now could only produce a hash for bytes that
+    // are not what is running.
+    const file =
+      readCache.get(relPath) ??
+      (await readTreeFile(args.treeRoot, relPath, expectedSha256, verifyPath));
     if (file instanceof ProtocolError) return file;
     read.set(relPath, file);
+    verified.set(relPath, file.sha256);
+    readCache.set(relPath, file);
 
     for (const specifier of file.edges) {
       const resolved = resolveDesignSpecifier({ from: relPath, specifier, has });
@@ -350,94 +380,153 @@ async function readClosure(
   return read;
 }
 
+/** The dependencies one incarnation's page loader closes over. Both fields are REQUIRED — no
+ * default value lives inside {@link createPageLoader}, so a caller can never silently fall back
+ * to a production behavior it did not ask for. */
+export interface PageLoaderDeps {
+  /**
+   * Link one absolute module path and return its exports. §9.5's SEAM, and the only route page
+   * code takes into this process. Today `entry.ts` supplies `(absPath) => import(absPath)`; a
+   * future in-process module registry (own transpile + own `Map`-backed linker, invalidating
+   * changed modules and their importers by reverse edge) replaces THIS ONE FUNCTION and nothing
+   * else. That registry is deliberately not built by this plan: its only gain over the
+   * revision-keyed incarnation is avoiding one respawn per edit, and the warm spare already
+   * pre-pays that cost.
+   */
+  readonly link: (absolutePath: string) => Promise<unknown>;
+  /** `node:fs/promises`' `lstat`, injected so the symlink refusal is testable. */
+  readonly lstat: (path: string) => Promise<Stats>;
+}
+
 /**
- * Load and validate a page module together with its whole closure (host-supervision §6.5-6.6,
- * runtime-api §7.2, design §6 and §9.2).
+ * Build ONE INCARNATION's page loader (design §9.2, §9.5). `createPageLoader` closes over
+ * exactly two pieces of per-incarnation state and returns a function with the same signature
+ * `loadPage` used to have as a free function:
  *
- * The supervisor supplies the tree root, the entry's tree-relative path (whatever
- * `design/pages.json` bound to the slug — never a slug-derived guess) and the expected
- * inventory of the tree revision being mounted. In order, and each step's reason:
+ * - `verifyPath`, {@link createTreePathVerifier}'s symlink memo, now spans the whole incarnation
+ *   rather than one mount (see the widened "PER INCARNATION" argument on that function).
+ * - `verified`/`readCache`, this factory's own memo of every closure member this incarnation has
+ *   already hash-verified, so a second mount that shares a module with an earlier one in the
+ *   same incarnation never re-reads it.
  *
- * 1. Walk the closure from the entry, reading and hash-verifying EVERY member against
- *    `expectedFiles`. A missing file or a drifted hash anywhere in the closure is
- *    `SOURCE_HASH_MISMATCH` and no code is imported — a shared module whose bytes moved
- *    changes what the page renders just as surely as the entry's own bytes moving.
- * 2. Decode each code member to UTF-8 with `{ fatal: true }`.
- * 3. {@link scanClosureImports} over the decoded sources — the graph-aware rescan.
- * 4. Re-derive the closure with `entities/design-tree`'s own {@link resolveClosure} and refuse
- *    unless it names EXACTLY the set step 1 read. A file the walk names but never verified
- *    would be a silent extra import; a file it verified but the closure does not name would
- *    mean this module read something the page does not use. Neither is a state a mount may
- *    proceed from, and asking the entity that owns closure semantics is what keeps this file
- *    from becoming a second definition of "closure".
- * 5. `import()` the entry's absolute path and validate `meta` + the default export, as before.
- *
- * Every boundary (`lstat`, `Bun.file`, the UTF-8 decode, `scanImports`, `import()`) is wrapped
- * and carries its `cause`: a read/decode/link failure becomes a typed `ProtocolError`, never a
- * throw.
+ * ONE LOADER PER PROCESS = one per incarnation: its verified-file set and its symlink memo are
+ * facts about THIS tree revision, and one `_host` child process serves exactly one (`entry.ts`
+ * builds it once, outside `createHostSession`).
  */
-export async function loadPage(args: LoadPageArgs): Promise<ProtocolError | LoadedPage> {
-  const shaByRelPath = new Map(args.expectedFiles.map((file) => [file.relPath, file.sha256]));
-  const has = (relPath: string): boolean => shaByRelPath.has(relPath);
-  const sha256Of = (relPath: string): string | undefined => shaByRelPath.get(relPath);
+export function createPageLoader(
+  deps: PageLoaderDeps,
+): (args: LoadPageArgs) => Promise<ProtocolError | LoadedPage> {
+  const verifyPath = createTreePathVerifier({ lstat: deps.lstat });
 
-  if (!has(args.entryRelPath)) {
-    return malformed(
-      `the mount's entry ${JSON.stringify(args.entryRelPath)} is not listed in its expected design-tree inventory`,
-    );
-  }
+  /**
+   * Tree-relative path → the sha256 THIS INCARNATION proved for it.
+   *
+   * AND WHY A VERIFIED MEMBER IS NOT RE-READ. Once a file has been linked, `import()` serves the
+   * cached module for the rest of the process. Re-reading its bytes on a later mount can only
+   * produce a hash for bytes that are not what is running — so a "drift" found there would be
+   * reported against code the incarnation is not executing. The honest answer to a tree that
+   * moved under a live incarnation is that the revision moved, which closes this incarnation
+   * outright (Task 5). Record this at the call site; it is a decision, not an optimisation.
+   */
+  const verified = new Map<string, string>();
 
-  const verifyPath = createTreePathVerifier({ lstat });
-  const read = await readClosure(args, has, sha256Of, verifyPath);
-  if (read instanceof ProtocolError) return read;
+  /** The decoded {@link ReadTreeFileV1} (with its `edges`) for every member `verified` has
+   * proved, so `readClosure`'s closure re-derivation still has every already-verified member's
+   * edges without a second read. */
+  const readCache = new Map<string, ReadTreeFileV1>();
 
-  const sources = new Map<string, string>();
-  for (const [relPath, file] of read) {
-    if (file.sourceText !== null) sources.set(relPath, file.sourceText);
-  }
+  /**
+   * Load and validate a page module together with its whole closure (host-supervision §6.5-6.6,
+   * runtime-api §7.2, design §6 and §9.2).
+   *
+   * The supervisor supplies the tree root, the entry's tree-relative path (whatever
+   * `design/pages.json` bound to the slug — never a slug-derived guess) and the expected
+   * inventory of the tree revision being mounted. In order, and each step's reason:
+   *
+   * 1. Walk the closure from the entry, reading and hash-verifying every member THIS
+   *    INCARNATION HAS NOT ALREADY PROVED against `expectedFiles`. A missing file or a drifted
+   *    hash anywhere in the closure is `SOURCE_HASH_MISMATCH` and no code is imported — a shared
+   *    module whose bytes moved changes what the page renders just as surely as the entry's own
+   *    bytes moving. A member this incarnation already verified is not re-read (see `verified`
+   *    above) and the SAME guarantee still holds, because nothing is ever linked that was not
+   *    hash-verified against this revision's inventory at some point in this incarnation's life.
+   * 2. Decode each code member to UTF-8 with `{ fatal: true }`.
+   * 3. {@link scanClosureImports} over the decoded sources — the graph-aware rescan.
+   * 4. Re-derive the closure with `entities/design-tree`'s own {@link resolveClosure} and refuse
+   *    unless it names EXACTLY the set step 1 read. A file the walk names but never verified
+   *    would be a silent extra import; a file it verified but the closure does not name would
+   *    mean this module read something the page does not use. Neither is a state a mount may
+   *    proceed from, and asking the entity that owns closure semantics is what keeps this file
+   *    from becoming a second definition of "closure".
+   * 5. `deps.link` the entry's absolute path (§9.5's seam — `(absPath) => import(absPath)` today)
+   *    and validate `meta` + the default export, as before.
+   *
+   * Every boundary (`lstat`, `Bun.file`, the UTF-8 decode, `scanImports`, `deps.link`) is wrapped
+   * and carries its `cause`: a read/decode/link failure becomes a typed `ProtocolError`, never a
+   * throw.
+   */
+  return async function loadPage(args: LoadPageArgs): Promise<ProtocolError | LoadedPage> {
+    const shaByRelPath = new Map(args.expectedFiles.map((file) => [file.relPath, file.sha256]));
+    const has = (relPath: string): boolean => shaByRelPath.has(relPath);
+    const sha256Of = (relPath: string): string | undefined => shaByRelPath.get(relPath);
 
-  const scanError = scanClosureImports({ sources, has });
-  if (scanError instanceof ProtocolError) return scanError;
+    if (!has(args.entryRelPath)) {
+      return malformed(
+        `the mount's entry ${JSON.stringify(args.entryRelPath)} is not listed in its expected design-tree inventory`,
+      );
+    }
 
-  const closure = resolveClosure({
-    entry: args.entryRelPath,
-    has,
-    edgesOf: (relPath) => read.get(relPath)?.edges ?? [],
-  });
-  if (closure instanceof Error) {
-    return malformed(
-      `the closure of ${args.entryRelPath} does not resolve: ${closure.reason}`,
-      closure,
-    );
-  }
-  if (closure.files.length !== read.size || closure.files.some((relPath) => !read.has(relPath))) {
-    return malformed(
-      `the closure of ${args.entryRelPath} names ${closure.files.length} file(s) but ${read.size} were verified`,
-    );
-  }
+    const read = await readClosure(args, has, sha256Of, verifyPath, verified, readCache);
+    if (read instanceof ProtocolError) return read;
 
-  const entry = read.get(args.entryRelPath);
-  if (entry === undefined) {
-    // Defensive only: `readClosure` seeds its queue with the entry and returns early on any
-    // failure, so a returned map always holds it. Never assumed silently (errore rule 21).
-    return malformed(`the entry ${args.entryRelPath} was not read`);
-  }
+    const sources = new Map<string, string>();
+    for (const [relPath, file] of read) {
+      if (file.sourceText !== null) sources.set(relPath, file.sourceText);
+    }
 
-  const absoluteEntry = `${args.treeRoot}/${args.entryRelPath}`;
-  const linked = await import(absoluteEntry).catch((cause) =>
-    malformed(`failed to link page at ${args.entryRelPath}`, cause),
-  );
-  if (linked instanceof ProtocolError) return linked;
+    const scanError = scanClosureImports({ sources, has });
+    if (scanError instanceof ProtocolError) return scanError;
 
-  const meta = validateMeta((linked as { meta?: unknown }).meta);
-  if (meta instanceof ProtocolError) return meta;
+    const closure = resolveClosure({
+      entry: args.entryRelPath,
+      has,
+      edgesOf: (relPath) => read.get(relPath)?.edges ?? [],
+    });
+    if (closure instanceof Error) {
+      return malformed(
+        `the closure of ${args.entryRelPath} does not resolve: ${closure.reason}`,
+        closure,
+      );
+    }
+    if (closure.files.length !== read.size || closure.files.some((relPath) => !read.has(relPath))) {
+      return malformed(
+        `the closure of ${args.entryRelPath} names ${closure.files.length} file(s) but ${read.size} were verified`,
+      );
+    }
 
-  const component = (linked as { default?: unknown }).default;
-  if (typeof component !== "function") {
-    return malformed("page default export must be a component function");
-  }
+    const entry = read.get(args.entryRelPath);
+    if (entry === undefined) {
+      // Defensive only: `readClosure` seeds its queue with the entry and returns early on any
+      // failure, so a returned map always holds it. Never assumed silently (errore rule 21).
+      return malformed(`the entry ${args.entryRelPath} was not read`);
+    }
 
-  return { meta, component, sourceHash: entry.sha256 };
+    const absoluteEntry = `${args.treeRoot}/${args.entryRelPath}`;
+    const linked = await deps
+      .link(absoluteEntry)
+      .catch((cause) => malformed(`failed to link page at ${args.entryRelPath}`, cause));
+    if (linked instanceof ProtocolError) return linked;
+
+    const meta = validateMeta((linked as { meta?: unknown }).meta);
+    if (meta instanceof ProtocolError) return meta;
+
+    const component = (linked as { default?: unknown }).default;
+    if (typeof component !== "function") {
+      return malformed("page default export must be a component function");
+    }
+
+    return { meta, component, sourceHash: entry.sha256 };
+  };
 }
 
 const THEME_MAX = 64;

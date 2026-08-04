@@ -1,20 +1,37 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { lstat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import type { DesignFileEntryV1 } from "entities/design-tree";
 
 import { ProtocolError } from "../../protocol";
+import type { LoadPageArgs, LoadedPage } from "../types";
 import { DynamicCodeDeniedError, denyDynamicCodeCapability } from "./capability-denial";
 import { registerRuntimeResolver } from "./resolver";
 import {
   computeSourceHash,
+  createPageLoader,
   createTreePathVerifier,
   computeSourceHash as hashBytes,
-  loadPage,
   scanClosureImports,
   warmPageMetaValidator,
 } from "./source-mount";
+
+/** The real `import()` seam — what `entry.ts` supplies in production. */
+const realLink = (absolutePath: string): Promise<unknown> => import(absolutePath);
+
+/**
+ * A fresh single-mount loader per call — the direct drop-in for the free `loadPage` these
+ * tests exercised before task 2's `createPageLoader` factory. Every test in the `loadPage`
+ * describe block below asserts ONE mount's behavior in isolation, exactly like the free
+ * function used to, so each call gets its OWN loader rather than sharing one across tests —
+ * sharing would let an earlier test's `verified` entry answer a later test's differently-hashed
+ * mount of the same path, which is a real behavior (see `createPageLoader`'s own describe
+ * block below) but not what these per-mount tests are about.
+ */
+function loadPage(args: LoadPageArgs): Promise<ProtocolError | LoadedPage> {
+  return createPageLoader({ link: realLink, lstat })(args);
+}
 
 describe("computeSourceHash", () => {
   test("is the lowercase-hex SHA-256 of the exact bytes", () => {
@@ -181,6 +198,53 @@ export default function Home() {
 
 const THEME = `export const theme = "one"\n`;
 const THEME_EDITED = `export const theme = "two"\n`;
+
+/** Two distinct pages sharing one module — the shape `createPageLoader`'s own memo tests need. */
+const PAGE_A_IMPORTING_THEME = `import { definePage } from "@termcraft/runtime"
+import { theme } from "../lib/theme"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "A",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function A() {
+  return <text>{theme}</text>
+}
+`;
+
+const PAGE_B_IMPORTING_THEME = `import { definePage } from "@termcraft/runtime"
+import { theme } from "../lib/theme"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "B",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function B() {
+  return <text>{theme}</text>
+}
+`;
+
+/** A page with no closure beyond itself — used where `link` is faked, so no real `import()`
+ * of `@termcraft/runtime` ever happens and `registerRuntimeResolver()` is not needed. */
+const PAGE_STANDALONE = `import { definePage } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "Standalone",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function P() {
+  return null
+}
+`;
 
 /**
  * Write a design tree into its OWN fresh temporary directory and return its absolute root.
@@ -418,6 +482,145 @@ describe("loadPage", () => {
     expect(result).toBeInstanceOf(ProtocolError);
     expect((result as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
     expect((result as ProtocolError).reason).toContain("traversing");
+  });
+});
+
+describe("createPageLoader: one loader per incarnation, with the module-link seam", () => {
+  test("a second load of a page sharing a module re-reads only what it has not verified", async () => {
+    const root = await writeTree({
+      "pages/a.tsx": PAGE_A_IMPORTING_THEME,
+      "pages/b.tsx": PAGE_B_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    const expectedFiles = await inventoryOf(root, ["pages/a.tsx", "pages/b.tsx", "lib/theme.ts"]);
+    registerRuntimeResolver();
+
+    const lstatted: string[] = [];
+    const countingLstat = async (path: string) => {
+      lstatted.push(path);
+      return lstat(path);
+    };
+    // ONE loader for both mounts — this is the incarnation the memo is scoped to.
+    const loader = createPageLoader({ link: realLink, lstat: countingLstat });
+
+    const first = await loader({ treeRoot: root, entryRelPath: "pages/a.tsx", expectedFiles });
+    if (first instanceof ProtocolError) throw first;
+
+    lstatted.length = 0;
+    const second = await loader({ treeRoot: root, entryRelPath: "pages/b.tsx", expectedFiles });
+    if (second instanceof ProtocolError) throw second;
+
+    // pages/b.tsx is a member this loader has never verified, so it is stat-checked as usual;
+    // lib/theme.ts was already proved while loading pages/a.tsx and must not be touched again.
+    expect(lstatted.some((path) => path.endsWith("pages/b.tsx"))).toBe(true);
+    expect(lstatted.some((path) => path.endsWith("lib/theme.ts"))).toBe(false);
+  });
+
+  test("two loaders never share a verified set", async () => {
+    const root = await writeTree({
+      "pages/a.tsx": PAGE_A_IMPORTING_THEME,
+      "pages/b.tsx": PAGE_B_IMPORTING_THEME,
+      "lib/theme.ts": THEME,
+    });
+    const expectedFiles = await inventoryOf(root, ["pages/a.tsx", "pages/b.tsx", "lib/theme.ts"]);
+    registerRuntimeResolver();
+
+    const loaderA = createPageLoader({ link: realLink, lstat });
+    const first = await loaderA({ treeRoot: root, entryRelPath: "pages/a.tsx", expectedFiles });
+    if (first instanceof ProtocolError) throw first;
+
+    const lstatted: string[] = [];
+    const countingLstat = async (path: string) => {
+      lstatted.push(path);
+      return lstat(path);
+    };
+    // A SECOND, independent loader — its own verified/readCache maps, empty from the start.
+    const loaderB = createPageLoader({ link: realLink, lstat: countingLstat });
+    const second = await loaderB({ treeRoot: root, entryRelPath: "pages/b.tsx", expectedFiles });
+    if (second instanceof ProtocolError) throw second;
+
+    // lib/theme.ts was already proved by loaderA, but loaderB re-verifies it anyway: nothing
+    // is vouched for across two separate createPageLoader calls.
+    expect(lstatted.some((path) => path.endsWith("lib/theme.ts"))).toBe(true);
+  });
+
+  test("a closure member absent from expectedFiles is still refused on the SECOND load", async () => {
+    const PAGE_B_IMPORTING_MISSING = `import { definePage } from "@termcraft/runtime"
+import { missing } from "../lib/missing"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "B",
+  minSize: { w: 10, h: 2 },
+  theme: "dark-default",
+})
+
+export default function B() {
+  return <text>{missing}</text>
+}
+`;
+    const root = await writeTree({
+      "pages/a.tsx": PAGE_A_IMPORTING_THEME,
+      "pages/b.tsx": PAGE_B_IMPORTING_MISSING,
+      "lib/theme.ts": THEME,
+      "lib/missing.ts": "export const missing = 1\n",
+    });
+    // The mount's own inventory never lists lib/missing.ts. pages/b.tsx's closure reaching a
+    // file absent from `expectedFiles` must still be refused even though this loader already
+    // verified other members while loading pages/a.tsx earlier in the same incarnation — the
+    // incremental memo must never widen what a later mount is allowed to import.
+    const expectedFiles = await inventoryOf(root, ["pages/a.tsx", "pages/b.tsx", "lib/theme.ts"]);
+    registerRuntimeResolver();
+
+    const loader = createPageLoader({ link: realLink, lstat });
+    const first = await loader({ treeRoot: root, entryRelPath: "pages/a.tsx", expectedFiles });
+    if (first instanceof ProtocolError) throw first;
+
+    const result = await loader({ treeRoot: root, entryRelPath: "pages/b.tsx", expectedFiles });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect(String((result as ProtocolError).code)).toBe("MALFORMED_PROTOCOL");
+  });
+
+  test("link is the only route to page code, and it receives the entry's ABSOLUTE path", async () => {
+    const root = await writeTree({ "pages/a.tsx": PAGE_STANDALONE });
+    const expectedFiles = await inventoryOf(root, ["pages/a.tsx"]);
+
+    const linked: string[] = [];
+    const loader = createPageLoader({
+      link: async (absolutePath: string) => {
+        linked.push(absolutePath);
+        return {
+          meta: {
+            kitApiVersion: 1,
+            title: "Standalone",
+            minSize: { w: 10, h: 2 },
+            theme: "dark-default",
+          },
+          default: () => null,
+        };
+      },
+      lstat,
+    });
+
+    const result = await loader({ treeRoot: root, entryRelPath: "pages/a.tsx", expectedFiles });
+    if (result instanceof ProtocolError) throw result;
+    expect(linked).toEqual([`${root}/pages/a.tsx`]);
+  });
+
+  test("a link rejection is a typed ProtocolError carrying its cause, never a throw", async () => {
+    const root = await writeTree({ "pages/a.tsx": PAGE_STANDALONE });
+    const expectedFiles = await inventoryOf(root, ["pages/a.tsx"]);
+    const cause = new Error("link exploded");
+    const loader = createPageLoader({
+      link: async () => {
+        throw cause;
+      },
+      lstat,
+    });
+
+    const result = await loader({ treeRoot: root, entryRelPath: "pages/a.tsx", expectedFiles });
+    expect(result).toBeInstanceOf(ProtocolError);
+    expect((result as ProtocolError).cause).toBe(cause);
   });
 });
 
