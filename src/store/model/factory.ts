@@ -12,6 +12,7 @@ import {
 import type { PageEntryV1, PagesManifestInvalidError, PagesManifestV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import { foldPins } from "entities/pin";
+import { TERMCRAFT_VERSION } from "infrastructure/build-info";
 import { systemClock } from "infrastructure/clock";
 import { durableFileWrite, flushDir, probeDurability } from "infrastructure/durability";
 import { formatFsIdentity, isReparsePoint } from "infrastructure/fs-guard";
@@ -42,11 +43,14 @@ import {
 } from "store/lease";
 import type { LeaseStore } from "store/lease";
 import {
+  buildV1ToV2Operations,
   createBackupStore,
   migrationRegistry as defaultMigrationRegistry,
   nodeBackupStoreDeps,
+  planV1ToV2,
+  scanLegacyProject,
 } from "store/migration";
-import type { BackupStore, DataFormatTooNewError } from "store/migration";
+import type { BackupStore, DataFormatTooNewError, MigrationPlanV1 } from "store/migration";
 import {
   createDiagnosticsStore,
   createPageMetaCache,
@@ -91,6 +95,7 @@ import {
   // `store/transaction` already does. `pageCommentsPath` was RENAMED, not deleted (pin logs
   // are still slug-keyed, design §3) — its call sites below use `pinsJsonlPath`, a
   // mechanical rename with no behavior change.
+  buildMigrationTransaction,
   buildPinEventOperations,
   buildWorkspaceLocalPatchOperation,
   chatJsonlPath,
@@ -131,6 +136,7 @@ import type {
   CreateChatInput,
   CreateProjectInput,
   ManifestStore,
+  MigrationOutcomeV1,
   OpenProject,
   OrphanTurnOutcome,
   PinStore,
@@ -464,6 +470,22 @@ function makeTransactionEngine(
     async recover() {
       const recoveryFsDeps = buildRecoveryFsDeps(fs.safeFs, deps);
       return withPermit(mutex, (permit) => recoverTransactions(recoveryFsDeps, mutex, permit));
+    },
+
+    async runMigration(input) {
+      return withPermit(mutex, (permit) =>
+        buildMigrationTransaction(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: deps.uuidv7(),
+          migrationPlanId: input.migrationPlanId,
+          migrationActionId: input.migrationActionId,
+          backupManifestDigest: input.backupManifestDigest,
+          operations: input.operations,
+          payloads: input.payloads,
+          createdAt: deps.clock.now().toISOString(),
+        }),
+      );
     },
 
     // ---- named domain methods (phase-6 blocker B3) -----------------------------------
@@ -1715,11 +1737,191 @@ async function createProject(
   });
 }
 
+// ---- version-1 migration (design-tree design §12.2 track 1) -----------------------------
+
+/**
+ * Everything one migration needs, over a `project-migration` root: the lease that keeps a second
+ * termcraft out, the widened-grammar filesystem, and the engine bound to it. Built by
+ * {@link openMigrationContext}, torn down by its `release`.
+ */
+interface MigrationContextV1 {
+  readonly safeFs: SafeProjectFs;
+  readonly engine: TransactionEngine;
+  readonly release: () => Promise<void>;
+}
+
+/**
+ * Steps 0-4 of `openProject`'s own launch sequence, against the `project-migration` root kind.
+ * Recovery runs BEFORE the scan for the same reason it does there: a half-applied prior
+ * transaction must be rolled forward before anything CASes against the files it touched.
+ *
+ * The schemas step is deliberately absent — decoding `project.toml` under the version-2 schema is
+ * exactly what fails for the project this function exists to open.
+ */
+async function openMigrationContext(
+  deps: StoreDeps,
+  root: AbsPath,
+): Promise<Error | MigrationContextV1> {
+  const termcraftDir = path.join(root, ".termcraft");
+
+  const durabilityError = probeDurability(root, { flush: deps.flushDir });
+  if (durabilityError instanceof Error) return durabilityError;
+
+  const lease = await makeLeaseStore(deps).acquire(root);
+  if (lease instanceof Error) return lease;
+
+  const safeFsDeps = resolveSafeFsDeps(deps);
+  const managedRoot = openManagedRoot({
+    kind: "project-migration",
+    path: termcraftDir,
+    deps: safeFsDeps,
+  });
+  if (managedRoot instanceof Error) {
+    await lease.release();
+    return managedRoot;
+  }
+  const safeFs = createSafeProjectFs(managedRoot, safeFsDeps);
+
+  const journalFormat = readJournalFormat({ safeFs });
+  if (journalFormat instanceof Error) {
+    await lease.release();
+    return journalFormat;
+  }
+
+  const engineFsDeps = buildTransactionFsDeps(safeFs, deps);
+  const recoveryFsDeps = buildRecoveryFsDeps(safeFs, deps);
+  const recoveryMutex = createWriteMutex();
+  const recovery = await withPermit(recoveryMutex, (permit) =>
+    recoverTransactions(recoveryFsDeps, recoveryMutex, permit),
+  );
+  if (!recovery.ok) {
+    await lease.release();
+    return recovery.error;
+  }
+
+  // `ensureJournalFormat` for the same reason `createProject` calls it: a version-1 project
+  // predates the journal-format record, so the first transaction it ever runs must lay one down.
+  const journalWritten = ensureJournalFormat(engineFsDeps);
+  if (journalWritten instanceof Error) {
+    await lease.release();
+    return journalWritten;
+  }
+
+  const writeMutex = createWriteMutex();
+  return {
+    safeFs,
+    engine: makeTransactionEngine(writeMutex, engineFsDeps, deps),
+    release: () => lease.release(),
+  };
+}
+
+/**
+ * A read-only `SafeProjectFs` over the `project-migration` root kind, with NO lease and NO
+ * journal-format write. Unlike {@link openMigrationContext} — which `migrateProject` uses because
+ * it is about to WRITE and needs the same single-writer exclusion `openProject` holds for that —
+ * `planMigration` only ever reads, and the lease store's own contract never deletes the `lock`
+ * file it creates on first acquire (`store/lease`'s own header comment), so acquiring one here
+ * would be a PERMANENT side effect of a call that promises to write nothing. `planMigration`'s own
+ * doc comment already treats this read as best-effort — `migrateProject` re-scans and re-derives
+ * rather than trusting a plan carried across from here — so skipping the lease costs nothing this
+ * store does not already account for.
+ */
+function openMigrationReadFs(deps: StoreDeps, root: AbsPath): Error | SafeProjectFs {
+  const termcraftDir = path.join(root, ".termcraft");
+
+  const durabilityError = probeDurability(root, { flush: deps.flushDir });
+  if (durabilityError instanceof Error) return durabilityError;
+
+  const safeFsDeps = resolveSafeFsDeps(deps);
+  const managedRoot = openManagedRoot({
+    kind: "project-migration",
+    path: termcraftDir,
+    deps: safeFsDeps,
+  });
+  if (managedRoot instanceof Error) return managedRoot;
+  return createSafeProjectFs(managedRoot, safeFsDeps);
+}
+
+/** `Store.planMigration` — see that method's own doc comment. */
+async function planMigration(deps: StoreDeps, root: AbsPath): Promise<Error | MigrationPlanV1> {
+  const safeFs = openMigrationReadFs(deps, root);
+  if (safeFs instanceof Error) return safeFs;
+
+  const scanned = scanLegacyProject(safeFs);
+  if (scanned instanceof Error) return scanned;
+
+  return planV1ToV2({
+    scan: scanned,
+    userStateRoot: deps.userStateRoot,
+    migrationPlanId: deps.uuidv7(),
+  });
+}
+
+/** `Store.migrateProject` — see that method's own doc comment. */
+async function migrateProject(
+  deps: StoreDeps,
+  root: AbsPath,
+): Promise<Error | MigrationOutcomeV1> {
+  const context = await openMigrationContext(deps, root);
+  if (context instanceof Error) return context;
+
+  const scanned = scanLegacyProject(context.safeFs);
+  if (scanned instanceof Error) {
+    await context.release();
+    return scanned;
+  }
+
+  const wrapperDeps: TransactionWrapperDeps = {
+    fs: buildTransactionFsDeps(context.safeFs, deps),
+    append: { newPayloadId: deps.uuidv7 },
+  };
+  const built = buildV1ToV2Operations(wrapperDeps, {
+    scan: scanned,
+    newPayloadId: deps.uuidv7,
+  });
+  if (built instanceof Error) {
+    await context.release();
+    return built;
+  }
+
+  // THE ORDER §12 REQUIRES: a complete, VERIFIED backup exists before the first target byte is
+  // rewritten. `createBackup` writes its `VERIFIED` marker only after reopening and re-hashing
+  // every copy against both the source bytes and the manifest's own entry, so reaching the line
+  // below means every original is recoverable.
+  const migrationPlanId = deps.uuidv7();
+  const migrationActionId = deps.uuidv7();
+  const backup = await makeBackupStore(deps).createBackup({
+    projectId: scanned.projectId,
+    migrationActionId,
+    canonicalProjectPath: root,
+    termcraftVersion: TERMCRAFT_VERSION,
+    files: built.backupFiles,
+  });
+  if (backup instanceof Error) {
+    await context.release();
+    return backup;
+  }
+
+  const committed = await context.engine.runMigration({
+    migrationPlanId,
+    migrationActionId,
+    backupManifestDigest: backup.manifestDigest,
+    operations: built.operations,
+    payloads: built.payloads,
+  });
+  await context.release();
+  if (committed instanceof Error) return committed;
+
+  return { migrationPlanId, migrationActionId, backupDir: backup.backupDir };
+}
+
 // ---- the factory ----------------------------------------------------------------------
 
 export function createStore(deps: StoreDeps): Store {
   return {
     openProject: (root) => openProject(deps, root),
     createProject: (input) => createProject(deps, input),
+    planMigration: (root) => planMigration(deps, root),
+    migrateProject: (root) => migrateProject(deps, root),
   };
 }

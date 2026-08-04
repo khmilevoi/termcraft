@@ -9,6 +9,7 @@ import type { LeaseLockApi, ProjectLease } from "store/lease";
 import type {
   BackupStore,
   MigrationBackupFailedError,
+  MigrationPlanV1,
   MigrationRegistry,
   MigrationStaleError,
 } from "store/migration";
@@ -479,6 +480,19 @@ export interface TransactionEngine {
   setWorkspaceLocal(input: SetWorkspaceLocalInput): Promise<Error | CommittedMarker>;
   /** Checkpoint persistence (storage-identity §6.2): hashes the target chat's current prefix and durably records the advanced checkpoint. */
   advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput): Promise<Error | CommittedMarker>;
+
+  /**
+   * The v1 -> v2 mechanical migration's single transaction (turn-durability §11). Distinct from
+   * `runProjectMutation` because the journal records the migration's own identity — the plan id,
+   * the action id, and the digest of the verified backup that must exist before this runs.
+   */
+  runMigration(input: {
+    readonly migrationPlanId: string;
+    readonly migrationActionId: string;
+    readonly backupManifestDigest: Sha256Hex;
+    readonly operations: readonly TransactionOperation[];
+    readonly payloads: ReadonlyMap<string, Uint8Array>;
+  }): Promise<Error | CommittedMarker>;
 }
 
 // ---- trust (storage-identity §8) ---------------------------------------------------
@@ -573,6 +587,14 @@ export interface CreateProjectInput {
   readonly targetStack: ProjectManifest["targetStack"];
 }
 
+/** What one completed migration produced — the identities the journal and the backup share. */
+export interface MigrationOutcomeV1 {
+  readonly migrationPlanId: string;
+  readonly migrationActionId: string;
+  /** `{userStateRoot}/backups/<projectId>/<migrationActionId>` — the VERIFIED backup. */
+  readonly backupDir: AbsPath;
+}
+
 /** Everything one open project session exposes — the factory's return value, and what the composition root injects into `core`. */
 export interface OpenProject {
   readonly root: AbsPath;
@@ -618,6 +640,18 @@ export interface Store {
    * file, and the first chat header — then records the implicit trust grant.
    */
   createProject(input: CreateProjectInput): Promise<Error | OpenProject>;
+  /**
+   * Read a version-1 project and describe what migrating it would change (design-tree §12.1).
+   * WRITES NOTHING — this is the read behind the `migrate-80` offer. Fails for any project that is
+   * not a readable version 1, including one already on format 2.
+   */
+  planMigration(root: AbsPath): Promise<Error | MigrationPlanV1>;
+  /**
+   * Run the mechanical migration (design-tree §12.2 track 1): verified backup, then ONE
+   * transaction, then release. Re-scans rather than trusting a plan handed in from the dialog —
+   * the only thing carried across is the plan id, so the journal and the offer agree on identity.
+   */
+  migrateProject(root: AbsPath): Promise<Error | MigrationOutcomeV1>;
 }
 
 export type {
