@@ -80,6 +80,9 @@ export interface RootAggregateLimit {
  */
 export const ROOT_LIMITS: Record<ManagedRootKind, RootAggregateLimit> = {
   project: { maxFiles: null, totalBytes: null, maxDepth: MAX_PATH_COMPONENTS },
+  // Identical to `project` by construction: this root is the same `.termcraft` directory, opened
+  // for one migration. A tighter budget here would refuse a project the ordinary root accepts.
+  "project-migration": { maxFiles: null, totalBytes: null, maxDepth: MAX_PATH_COMPONENTS },
   workspace: { maxFiles: 512, totalBytes: 64 * MiB, maxDepth: 8 },
   candidate: { maxFiles: 512, totalBytes: 64 * MiB, maxDepth: 8 },
   "export-candidate": { maxFiles: 20_000, totalBytes: 1024 * MiB, maxDepth: MAX_PATH_COMPONENTS },
@@ -168,6 +171,28 @@ function classifyProject(components: readonly string[]): ManagedNamespace | null
 }
 
 /**
+ * The RETIRED format-1 page layout (`pages/<slug>/page.tsx`, `pages/<slug>/comments.jsonl`),
+ * admitted ONLY under the `project-migration` root kind — design-tree §12.1: "no compatibility
+ * reader for it exists anywhere in the system ... the old layout is understood by exactly one
+ * thing: the migration step itself."
+ *
+ * Each legacy path maps onto the namespace it migrates INTO rather than getting a budget row of
+ * its own: `pages/<slug>/page.tsx` becomes `design/pages/<slug>.tsx` and
+ * `pages/<slug>/comments.jsonl` becomes `pins/<slug>.jsonl`, so the bytes are governed here by
+ * exactly the limits that will govern them a transaction later. An invented third budget would
+ * be a number with no source.
+ */
+function classifyLegacyProject(components: readonly string[]): ManagedNamespace | null {
+  if (components.length !== 3) return null;
+  const [first, slug, leaf] = components;
+  if (first !== "pages" || slug === undefined || leaf === undefined) return null;
+  if (parsePageSlug(slug) instanceof Error) return null;
+  if (leaf === "page.tsx") return "design-source";
+  if (leaf === "comments.jsonl") return "comments-jsonl";
+  return null;
+}
+
+/**
  * Map a validated managed relative path to its §5.3 namespace, or reject it as outside
  * every namespace of this root. The root kind decides the grammar: a turn workspace and
  * `.termcraft` deliberately do not accept each other's names.
@@ -180,6 +205,11 @@ export function classifyNamespace(
   const namespace = (() => {
     if (rootKind === "workspace" || rootKind === "candidate") return classifyWorkspace(components);
     if (rootKind === "project") return classifyProject(components);
+    // `?? classifyLegacyProject(...)`, not a replacement: a migration root reads and writes the
+    // CURRENT layout too (project.toml, design/**, pins/**, transactions.local/**) in the same
+    // transaction that retires the old one.
+    if (rootKind === "project-migration")
+      return classifyProject(components) ?? classifyLegacyProject(components);
     // An export candidate and a migration backup are whole opaque trees produced by
     // termcraft itself; §5.3 gives each a single row covering every file it holds.
     if (rootKind === "export-candidate") return "export-artifact" as const;

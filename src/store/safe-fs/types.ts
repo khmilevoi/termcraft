@@ -14,8 +14,21 @@ import type { NameCollisionError, PathRuleError } from "./model/path-rules";
  * or a migration backup. The root kind selects both the namespace grammar (§5.4) and the
  * aggregate limit row (§5.3) — a name legal in a turn workspace is not legal under
  * `.termcraft`, and vice versa.
+ *
+ * `"project-migration"` is `"project"` for the duration of ONE migration and nothing else: its
+ * grammar is `classifyProject`'s plus the retired format-1 `pages/<slug>/` shape, so the
+ * mechanical track (design-tree §12.2) can read the old files and delete them inside the same
+ * transaction that writes their replacements. It is deliberately a separate kind rather than a
+ * widening of `classifyProject`: the retired names must never become legal for the live project
+ * root again, and a root kind is the narrowest scope this module can give them.
  */
-export type ManagedRootKind = "project" | "workspace" | "candidate" | "export-candidate" | "backup";
+export type ManagedRootKind =
+  | "project"
+  | "project-migration"
+  | "workspace"
+  | "candidate"
+  | "export-candidate"
+  | "backup";
 
 /**
  * A managed namespace — one row of the turn-durability §5.3 limit table. Every managed

@@ -430,3 +430,49 @@ describe("createLimitBudget — checked again while streaming (§5.3)", () => {
     ).toBeInstanceOf(StorageLimitExceededError);
   });
 });
+
+describe("the project-migration root kind (design-tree §12.2's mechanical track)", () => {
+  test("the ordinary project root still refuses the retired page layout", () => {
+    expect(classifyNamespace("project", "pages/dashboard/page.tsx")).toBeInstanceOf(
+      UnknownNamespaceError,
+    );
+    expect(classifyNamespace("project", "pages/dashboard/comments.jsonl")).toBeInstanceOf(
+      UnknownNamespaceError,
+    );
+  });
+
+  test("the migration root admits the retired page source under design-source", () => {
+    expect(classifyNamespace("project-migration", "pages/dashboard/page.tsx")).toBe("design-source");
+  });
+
+  test("the migration root admits the retired pin log under comments-jsonl", () => {
+    expect(classifyNamespace("project-migration", "pages/dashboard/comments.jsonl")).toBe(
+      "comments-jsonl",
+    );
+  });
+
+  test("the migration root still admits everything the project grammar admits", () => {
+    expect(classifyNamespace("project-migration", "project.toml")).toBe("project-config");
+    expect(classifyNamespace("project-migration", "design/pages.json")).toBe("design-source");
+    expect(classifyNamespace("project-migration", "pins/dashboard.jsonl")).toBe("comments-jsonl");
+    expect(classifyNamespace("project-migration", "transactions.local/t1/plan.json")).toBe(
+      "transaction-payload",
+    );
+  });
+
+  test("the legacy grammar is exact — no other file under pages/ is admitted", () => {
+    for (const relPath of [
+      "pages/dashboard/other.tsx", // only page.tsx and comments.jsonl
+      "pages/dashboard", // the directory itself is not a leaf
+      "pages/dashboard/nested/page.tsx", // exactly three components
+      "pages/Dashboard/page.tsx", // the slug mask rejects capitals
+      "pages/page.tsx", // no slug component
+    ]) {
+      expect(classifyNamespace("project-migration", relPath)).toBeInstanceOf(UnknownNamespaceError);
+    }
+  });
+
+  test("the migration root carries the project root's own aggregate budget", () => {
+    expect(ROOT_LIMITS["project-migration"]).toEqual(ROOT_LIMITS.project);
+  });
+});
