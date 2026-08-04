@@ -426,15 +426,29 @@ describe('turnHandlers["turn.start"]', () => {
     expect(handlerContext.readKernelState().turn.activeTurnId).toBeNull();
   }
 
-  test("starts an operation synchronously and ADMITS before any async work runs; a later refusal (nothing selected in this fixture) recovers to idle (Gap 4 closed, fix round 1)", async () => {
-    const { handlerContext, getLaunchedOperations } = buildTestContext();
+  test("starts an operation synchronously and ADMITS before any async work runs; a later refusal (chat minting also fails in this fixture) recovers to idle (Gap 4 closed, fix round 1)", async () => {
+    // `activeChatId: null` alone no longer refuses on its own — `runTurnStart` now mints a
+    // chat for it (`mintActiveChat`, `./chat.ts`, Gap D follow-up) — so this fixture forces
+    // the mint itself to fail too, keeping the branch this test actually exercises (an early
+    // refusal recovering to idle) reachable.
+    const chatStore = createFakeChatStore();
+    chatStore.failNext("create", {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "fake chat store refuses to mint",
+      details: {},
+    });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+    });
     // Unlike the old no-op: the handler now ALWAYS starts an operation — whether admission
     // proceeds is decided asynchronously, inside it (`selection`/`model` families' own
     // precedent for "nothing about the outcome is known until the promise settles").
     await assertEarlyPortRefusalRecoversToIdle(
       handlerContext,
       getLaunchedOperations,
-      "no active chat yet",
+      "no active chat yet and minting one failed",
     );
     expect(getLaunchedOperations()[0]?.label).toBe("kernel.turn.run");
   });
