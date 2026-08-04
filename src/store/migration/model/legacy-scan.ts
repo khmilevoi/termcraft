@@ -122,6 +122,7 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
       artifact: PROJECT_MANIFEST_FILENAME,
       code: "MANIFEST_SHAPE",
       reason: `${issue?.path.join(".") ?? "SHAPE"}: ${issue?.message ?? "invalid input"}`,
+      cause: decoded.error,
     });
   }
 
