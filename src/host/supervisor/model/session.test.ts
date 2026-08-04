@@ -1096,12 +1096,14 @@ function emitReadyFor(child: ScriptedChild, id: CapturedIdentity, requestId: str
 }
 
 /**
- * One recorded call into a spying `FrameBroker` (below) — order-of-calls evidence, not timing
- * evidence. Proves `broker.expect(newHash)` was actually invoked BETWEEN the old page's last
- * accepted publish and the new page's first publish, which an `await`-based assertion on
- * `mount()`'s own promise cannot: awaiting that promise only proves the re-seed happened by
- * SOME point before the await resolves, not that it happened synchronously, inline, in the
- * exact pump iteration that decoded the switch's `ready` (session.ts's pending-mount hook).
+ * One recorded call into a spying `FrameBroker` (below) — order-of-calls evidence recording
+ * that `broker.expect(newHash)` lands, in call order, between the old page's last accepted
+ * publish and the new page's first publish. Kept as regression-pinning/documentation of the
+ * INTENDED call order, not as proof of synchronicity: verified empirically (see the header
+ * comment on the test using this below) that in Bun's actual scheduling this ordering holds
+ * even against a deliberately injected `.then()`-deferred variant of the reseed, so it cannot,
+ * on its own, discriminate the two implementations. The primary evidence that the reseed is
+ * synchronous/inline is the structural code trace of `session.ts`'s pump hook, not this test.
  */
 type BrokerCall =
   | { readonly kind: "expect"; readonly sourceHash: string }
@@ -1241,13 +1243,35 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
     expect(second.value?.frameSeq).toBe("2");
     expect(second.done).toBe(false);
 
-    // Only once the switch's `ready` is OBSERVED does the guard's expected hash move.
+    // Only once the switch's `ready` is OBSERVED does the guard's expected hash move. Emit the
+    // switch's `ready` and the new page's first frame BACK TO BACK — deliberately with NO
+    // `await` of `mountPromise` in between, and frame B's bytes are not written until AFTER
+    // `ready`'s. Awaiting `mountPromise` first (as an earlier version of this test did) would
+    // let ANY implementation's reseed — synchronous-inline (correct) OR deferred via a
+    // `.then()` on this exact promise (the bug this test exists to catch) — run to completion
+    // before frame B even exists on the wire, which guarantees these assertions pass either
+    // way and proves nothing on its own.
+    //
+    // HONEST LIMITATION (verified empirically, not asserted): this reordering, and even a
+    // stronger variant that concatenates `ready` + frame B into ONE emitted chunk (so
+    // `readInbound`'s decoder yields both from a single `child.stdout` read), still cannot
+    // observably distinguish this synchronous-inline implementation from a deliberately
+    // injected `.then()`-on-the-same-promise variant in Bun's actual scheduling — the pump's
+    // multi-layer async-generator chain (byte queue -> `readInbound` -> `runPump`'s `for
+    // await`) costs MORE microtask hops to deliver frame B than the single hop a `.then()`
+    // reaction needs to fire, so the buggy reseed reliably wins the race and frame B is
+    // accepted either way, 10/10 runs against both variants. The `brokerCalls` order
+    // assertions below are kept as regression-pinning/documentation of the intended call
+    // order, not as proof the pump is synchronous-inline — that property's primary evidence
+    // is the structural code trace (no `await`/`.then` between decoding `ready` and calling
+    // `broker.expect()` in `session.ts`'s pump hook), verified by reading the code directly.
     emitReadyFor(child, id, secondRequestId);
+    emitFrame(child, id, PAGE_B_SOURCE_HASH, "3");
+
     const mountResult = await mountPromise;
     expect(mountResult).not.toBeInstanceOf(Error);
 
     // A NEW-page frame after the switch's ready — accepted under the re-seeded guard.
-    emitFrame(child, id, PAGE_B_SOURCE_HASH, "3");
     const third = await iterator.next();
     expect(third.value?.frameSeq).toBe("3");
     expect(third.done).toBe(false);
