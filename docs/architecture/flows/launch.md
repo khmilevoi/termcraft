@@ -154,9 +154,11 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
    canonical source as part of the open sequence: each page becomes a `ready`
    descriptor or, when its source fails the Gate, an `invalid` one, and the Workspace
    still opens with that error surfaced and the composer available so the designer can
-   send a repair turn against the broken source. The Gate's source-only stages
-   (import-allowlist, page-contract, lints) run this way today, and its type-check
-   stage runs live too (phase-8 Task 7 — a resolved compiler path plus the generated
+   send a repair turn against the broken source. The Gate's per-page source stages
+   (page-contract, lints) run this way today, and so does the whole-tree pass that
+   carries the import allowlist and the type check — one `tsc` program per publish
+   rather than one per page since design-tree phase 2, and live in the shipped
+   configuration (phase-8 Task 7 — a resolved compiler path plus the generated
    `runtimeDts` are always supplied by the composition root). The
    host's own hash-verified page load is composed into the Kernel and runs once a
    preview session is established for a page (`preview.select*`), which now happens at
@@ -236,7 +238,7 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
 - `src/store/toml/model/project-toml.ts` — `project.toml`'s schema (`project_id`, `name`, `created_at`, `target_stack`, `pages`) and its own format-too-new gate.
 - `src/store/toml/model/workspace-toml.ts` — `workspace.local.toml`'s schema and its independent format counter; a corrupt file is preserved and reported, never silently discarded.
 - `src/store/toml/model/gitignore.ts` — the generated `.termcraft/.gitignore` exclusion rules written at project creation.
-- `src/gate/model/gate.ts` — `runGate`: the static import-allowlist, page-contract, and all five warning-lint checks that always run over a candidate source, plus the optional type-check/manifest/smoke-render stages a caller can inject; the `dropped-id` and `unlisted-navigation` lints each take an extra optional `GateInput` field (`referencedIds`, `listedSlugs`) and skip silently when the caller omits it. The composition root wires this Gate adapter into the Kernel, so the source-only stages AND the type-check stage (phase-8 Task 7) run over every canonical source at open.
+- `src/gate/model/gate.ts` — `runGate`: the page-contract and all six warning-lint checks that always run over a candidate source, plus the two optional stages a caller can inject, `checkManifest` and `smokeRender`; the `dropped-id` and `unlisted-navigation` lints each take an extra optional `GateInput` field (`referencedIds`, `listedSlugs`) and skip silently when the caller omits it. Neither the import allowlist nor the type check is a per-page stage any more (design-tree phase 2 Task 3 deleted the injectable `typeCheck` port outright): both belong to `gate/adapters/gate-runner.ts`'s `runTree`, the single whole-tree pass, because a shared module belongs to no one page. The composition root wires this Gate adapter into the Kernel, so both the per-page stages and that whole-tree pass run over every canonical source at open.
 - `src/host/session/model/source-mount.ts` — `loadPage`: the host child's source-hash verification, defense-in-depth import re-scan, dynamic import, and `meta`/default-export validation — the host side of "sources pass Gate and host load". Composed into the Kernel via the host-supervisor adapter and reached at launch, once the shell's preview subscriber (`src/ui/app/model/deps.ts`) dispatches `preview.selectPage` for the active page a trusted project's descriptors name.
 - `src/agent/health/model/probe.ts` — `runHealthProbe`: the shared background health-check policy of step 9 — the bounded deadline, closing the adopted process tree on every path, and the refusal to report ready on an ambiguous answer; a backend supplies only its own message classifier
 - `src/agent/claude/backend/model/probe.ts` — `probeClaudeHealth`: Claude's half of the same check — the isolated ping's query options and the installed/not-logged-in/ready classification of Claude's own message vocabulary, plus the scratch working directory that keeps a project's own settings from executing before the trust prompt is answered
