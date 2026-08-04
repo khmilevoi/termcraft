@@ -775,7 +775,17 @@ describe("createGateRunnerAdapter", () => {
           }).toEqual({ row: row.name, slug: page.slug, resolvedOrAttributed: true });
         }
         // The other half: never both. A page in `closures` is a page this pass PROVED complete,
-        // so nothing may claim its closure was blocked.
+        // so no CLOSURE BLOCKER may claim its closure was blocked.
+        //
+        // WHAT THIS DOES AND DOES NOT SAY, since `blockedPages` is wider than the blocker set
+        // (Task 3's widening; final whole-branch review extended it to the scan stage). A
+        // diagnostic that merely SITS IN a proven closure — a type error, an `EVAL_CALL` in a
+        // shared module — legitimately names a page that IS in `closures`; the port's own doc
+        // calls that asymmetry out. Every row below plants only blocker-shaped faults (a rejected
+        // edge, missing source, an unreadable edge list), each of which excludes its pages from
+        // `closures` by construction, so the two sets stay disjoint here. A future row planting a
+        // merely-reached fatal would falsify this line legitimately and must relax it rather than
+        // "fix" the adapter.
         for (const slug of resolved) expect(attributed.has(slug)).toBe(false);
       }
     });
@@ -1342,5 +1352,125 @@ describe("runTree() — the type check inside the whole-tree pass (design §8 st
       pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
     });
     expect(result.errors.some((error) => error.kind === "type")).toBe(false);
+  });
+});
+
+/**
+ * THE SCAN STAGE'S FATALS GO THROUGH THE SAME CLOSURE INDEX AS THE TYPE CHECK'S (final
+ * whole-branch review of design-tree phase 2, Important). Task 3 widened
+ * {@link GateErrorV1.blockedPages} to "every page whose closure CONTAINS `file`" and taught the
+ * TYPE stage to honour it, but left the flat scan's own fatals on the older, narrower mechanism:
+ * "the pages whose closure WALK BROKE AT this file". For most scan codes the two agree by
+ * construction — `REEXPORT`/`DYNAMIC_IMPORT`/`REQUIRE_CALL`/`UNSCANNABLE_SOURCE` are exactly the
+ * codes that make a closure unprovable, and a rejected specifier stops the walk at the same file
+ * the flat scan names. `EVAL_CALL`/`FUNCTION_CALL` are the family where they do NOT: neither
+ * touches a module edge, so the closure resolves normally and nothing ever "broke" at that file.
+ *
+ * THE FAIL-OPEN THAT LEFT OPEN, reproduced by the reviewer and pinned by the first two tests
+ * below: `lib/theme.ts` holding `eval("1")` yielded one fatal `EVAL_CALL` with NO `blockedPages`,
+ * so `core/kernel/model/handlers/page-descriptors.ts`'s `routePassErrors` read it as the
+ * orphan-module case (a diagnostic no descriptor can honestly carry), logged it, and published
+ * the importing page `"ready"` — a page containing a deliberately security-relevant dynamic-code
+ * violation. The own-entry shape was worse still: `blockedPages` was absent even for the page's
+ * OWN file.
+ *
+ * Deliberately NOT gated on a compiler (`withTsc`): the whole point is that these are the flat
+ * scan's fatals, so they must be attributed on the very path that returns BEFORE the type check
+ * ever runs. That early return is where the pre-fix code computed the closure index too late.
+ */
+describe("runTree() — the SAME closure index attributes the scan stage's fatals (final review, Important)", () => {
+  /** A page in the shape the fixtures above use, importing the shared module. */
+  const sharedImporter = (title: string) =>
+    `import { TITLE } from "../lib/theme"\n${consumerPage(title)}`;
+
+  test("an `eval` in a SHARED module blocks every page whose closure contains it, not none", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const result = await adapter.runTree({
+      files: new Map([
+        // `eval` is not a module edge, so the closure walk sails straight through this file and
+        // proves both pages' closures complete — which is exactly why the walk-based mechanism
+        // had nothing to attribute the fatal to.
+        ["lib/theme.ts", `export const TITLE = eval("1")\n`],
+        ["pages/home.tsx", sharedImporter("Home")],
+        ["pages/about.tsx", sharedImporter("About")],
+      ]),
+      treePaths: TREE_PATHS,
+      pages: TREE_PAGES,
+    });
+
+    const scanErrors = result.errors.filter((error) => error.code === "EVAL_CALL");
+    expect(scanErrors).toHaveLength(1);
+    expect(scanErrors[0]?.file).toBe("lib/theme.ts");
+    // SORTED, both pages, one diagnostic — the same shape the type check's own shared-module
+    // attribution test above asserts, because it is now literally the same lookup.
+    expect(scanErrors[0]?.blockedPages).toEqual(["about", "home"] as PageSlug[]);
+    // And the closures are still PROVEN: a dynamic-code fatal does not make a file set unknown,
+    // exactly as a type error does not (`core/ports/gate-runner.ts`'s "note the asymmetry").
+    expect(result.closures).toHaveLength(2);
+  });
+
+  test("an `eval` in a page's OWN entry blocks that page — the shape that had `blockedPages` absent even for its own file", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const result = await adapter.runTree({
+      files: new Map([
+        ["lib/theme.ts", SHARED_CLEAN],
+        ["pages/home.tsx", `const injected = eval("1")\n${consumerPage("Home")}`],
+        ["pages/about.tsx", consumerPage("About")],
+      ]),
+      treePaths: TREE_PATHS,
+      pages: TREE_PAGES,
+    });
+
+    const scanErrors = result.errors.filter((error) => error.code === "EVAL_CALL");
+    expect(scanErrors).toHaveLength(1);
+    expect(scanErrors[0]?.file).toBe("pages/home.tsx");
+    expect(scanErrors[0]?.blockedPages).toEqual(["home"] as PageSlug[]);
+  });
+
+  test("`new Function` in a shared module is attributed the same way — the rule is the family, not one code", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const result = await adapter.runTree({
+      files: new Map([
+        ["lib/theme.ts", `export const TITLE = new Function("return 1")()\n`],
+        ["pages/home.tsx", sharedImporter("Home")],
+        ["pages/about.tsx", sharedImporter("About")],
+      ]),
+      treePaths: TREE_PATHS,
+      pages: TREE_PAGES,
+    });
+
+    const scanErrors = result.errors.filter((error) => error.code === "FUNCTION_CALL");
+    expect(scanErrors).toHaveLength(1);
+    expect(scanErrors[0]?.blockedPages).toEqual(["about", "home"] as PageSlug[]);
+  });
+
+  test("a GENUINE orphan module's `eval` still names no page — the widening must not fabricate an attribution", async () => {
+    const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+    const result = await adapter.runTree({
+      files: new Map([
+        ["lib/theme.ts", SHARED_CLEAN],
+        ["lib/orphan.ts", `export const X = eval("1")\n`],
+        ["pages/home.tsx", consumerPage("Home")],
+        ["pages/about.tsx", consumerPage("About")],
+      ]),
+      treePaths: [...TREE_PATHS, "lib/orphan.ts"],
+      pages: TREE_PAGES,
+    });
+
+    const scanErrors = result.errors.filter((error) => error.code === "EVAL_CALL");
+    expect(scanErrors).toHaveLength(1);
+    expect(scanErrors[0]?.file).toBe("lib/orphan.ts");
+    // ABSENT, never `[]` — no closure contains this file and no walk broke there, so there is no
+    // descriptor it could honestly invalidate. This is the one case `page-descriptors.ts`'s
+    // orphan-module warn branch is still for, and the case that keeps that message truthful.
+    expect(scanErrors[0]?.blockedPages).toBeUndefined();
+    // The pass says WHY nothing reaches it, in the same run (design §8 step 3).
+    expect(result.warnings).toEqual([
+      {
+        kind: "dead-module",
+        file: "lib/orphan.ts",
+        message: expect.stringContaining("lib/orphan.ts"),
+      },
+    ]);
   });
 });

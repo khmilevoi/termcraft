@@ -102,10 +102,20 @@ interface PassErrorRoutingV1 {
  *    running is never evidence that the tree is clean.
  *
  * 3. No `blockedPages` but a real `file` — the orphan-module case: a genuine diagnostic in a file
- *    no page's closure reaches. It invalidates nothing, because there is no descriptor it could
- *    honestly belong to, and it is LOGGED rather than dropped (errore: never swallow an error
- *    without leaving a trace). This is not a defect in the pass; the `dead-module` warning that
- *    will explain why nothing reaches that file is a later task's job.
+ *    no page's RESOLVED closure contains. It invalidates nothing, because there is no descriptor
+ *    it could honestly belong to, and it is LOGGED rather than dropped (errore: never swallow an
+ *    error without leaving a trace). The pass's own `dead-module` warning (design §8 step 3) is
+ *    what tells the agent why nothing reaches that file.
+ *
+ *    THE WARNING'S WORDING IS LOAD-BEARING, and it was inaccurate for one whole review round
+ *    (final whole-branch review of design-tree phase 2, Minor). The pass used to attribute the
+ *    flat scan's `EVAL_CALL`/`FUNCTION_CALL` fatals through a NARROWER rule than its type errors —
+ *    "the pages whose closure walk broke at this file" — so a fatal in a shared module every page
+ *    imports arrived here with no `blockedPages` and was logged as an orphan while being nothing
+ *    of the sort; the pages published `"ready"`. `gate/adapters/gate-runner.ts` now routes every
+ *    stage's diagnostics through one closure index, so this branch really is only reached by a
+ *    file no closure contains — and the message says exactly that, rather than the looser "no
+ *    page's closure reaches it" which was false for the case that used to land here.
  */
 function routePassErrors(errors: readonly GateErrorV1[]): PassErrorRoutingV1 {
   const treeWide: GateErrorV1[] = [];
@@ -128,7 +138,7 @@ function routePassErrors(errors: readonly GateErrorV1[]): PassErrorRoutingV1 {
       continue;
     }
     console.warn(
-      `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file}" that no page's closure reaches, so it invalidates no descriptor: ${error.message}`,
+      `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file}" and attributed it to no page — no page's RESOLVED closure contains that file — so it invalidates no descriptor: ${error.message}`,
     );
   }
   return { treeWide, byPage };

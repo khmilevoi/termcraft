@@ -128,7 +128,8 @@ function createTreeTypeCheckStage(
 
 /**
  * Every slug whose resolved closure contains a given file, sorted — built ONCE from the closures
- * {@link resolveTreeClosures} just produced, and read once per type diagnostic.
+ * {@link resolveTreeClosures} just produced, and read once per diagnostic the walk left
+ * unattributed (see {@link attributeToReachingPages}).
  *
  * THE ATTRIBUTION IS A LOOKUP, NEVER A SECOND WALK. Design §8 step 5 asks for "a diagnostic in a
  * shared file attributed to every page whose closure contains it", and the pass already holds
@@ -155,6 +156,44 @@ function createClosureIndex(
     // module, or a global/config diagnostic with no `file` at all) stays fatal and unattributed.
     return slugs === undefined ? undefined : sortedSlugs(slugs);
   };
+}
+
+/**
+ * Attribute ONE whole-tree diagnostic to every page whose PROVEN closure contains its file —
+ * {@link GateError.blockedPages}'s own documented meaning — leaving an already-attributed
+ * diagnostic and an unplaceable one (no `file`, or a file no closure contains) exactly as they
+ * are.
+ *
+ * ONE MECHANISM FOR EVERY STAGE, and it was two until the final whole-branch review of
+ * design-tree phase 2. Task 3 widened the field to "every page whose closure CONTAINS `file`" and
+ * routed the TYPE stage through {@link createClosureIndex}, but the flat scan's own fatals kept
+ * the older, narrower reading {@link resolveTreeClosures} produces — "the pages whose closure WALK
+ * BROKE AT this file". For most scan codes the two coincide by construction, which is why the
+ * split survived review: {@link CLOSURE_UNVERIFIABLE_SCAN_CODES} are precisely the codes that stop
+ * a closure being proved, and a rejected specifier breaks the walk at the same file the flat scan
+ * names. `EVAL_CALL`/`FUNCTION_CALL` are the family where they do not — neither is a module edge,
+ * so the closure resolves normally and nothing ever "broke" at that file. The fatal therefore came
+ * back with NO `blockedPages`, `core/kernel`'s `routePassErrors` read it as the orphan-module case,
+ * and the importing page published `"ready"` while containing a dynamic-code violation. Measured;
+ * `gate-runner.test.ts`'s scan-attribution block reproduces it.
+ *
+ * WHY THE UNION WITH THE WALK'S OWN ATTRIBUTION IS SAFE, rather than a second reading that can
+ * disagree with the first. The two name DISJOINT slug sets by construction: a page the walk
+ * blocked is excluded from `closures` entirely, so it can never be what this lookup returns, and a
+ * page in `closures` was never blocked. Nor can this widen a diagnostic the walk already owns — a
+ * file the walk broke at cannot sit in any PROVEN closure, because every page reaching it breaks
+ * there too (a source-missing file is source-missing for every walk that reaches it; an
+ * unverifiable edge list is unverifiable for all of them; a rejected specifier is rejected for
+ * all). Hence applying this only where `blockedPages` is absent loses nothing: where it is
+ * present, this lookup would return nothing to add.
+ */
+function attributeToReachingPages(
+  error: GateError,
+  blockedBy: (file: string | undefined) => readonly PageSlug[] | undefined,
+): GateError {
+  if (error.blockedPages !== undefined) return error;
+  const blockedPages = blockedBy(error.file);
+  return blockedPages === undefined ? error : { ...error, blockedPages };
 }
 
 /**
@@ -845,9 +884,12 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
    *    and which it found to carry an edge form the closure walk does not follow, is what
    *    decides both whether a closure may be called complete and whether a fact already has a
    *    diagnostic.
-   * 3. the whole-tree type check, when a compiler was supplied. Its diagnostics are attributed
-   *    through {@link createClosureIndex} over step 2's OWN closures — the pass never walks the
-   *    import graph a second time to answer "which pages reach this file".
+   * 3. the whole-tree type check, when a compiler was supplied.
+   *
+   * EVERY diagnostic this method returns — step 1's and step 3's alike — is then attributed
+   * through ONE {@link createClosureIndex} over step 2's OWN closures (see
+   * {@link attributeToReachingPages}); the pass never walks the import graph a second time to
+   * answer "which pages reach this file", and no stage gets an attribution rule of its own.
    *
    * `warnings` (design-tree phase 2 Task 4, design §8 steps 2/3) is {@link findImportCycles} and
    * {@link findDeadModules} over step 2's OWN `closures`/`edges` — the SAME data, not a fourth
@@ -876,17 +918,22 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
         anyClosureBlocked: resolved.anyClosureBlocked,
       }),
     ];
+    // HOISTED ABOVE THE TYPE-CHECK BRANCH DELIBERATELY (final whole-branch review, Important).
+    // The scan stage's fatals need the SAME index the type stage reads, and they are returned on
+    // the branch below that never reaches a compiler at all — computing it inside that branch is
+    // what left `EVAL_CALL`/`FUNCTION_CALL` unattributed. It depends on nothing but `resolved`,
+    // so there is no ordering to respect here beyond that.
+    const blockedBy = createClosureIndex(resolved.closures);
+    const passErrors = resolved.errors.map((error) => attributeToReachingPages(error, blockedBy));
     if (treeTypeCheck === undefined) {
-      return { errors: resolved.errors, warnings, closures: resolved.closures };
+      return { errors: passErrors, warnings, closures: resolved.closures };
     }
 
-    const blockedBy = createClosureIndex(resolved.closures);
-    const typeErrors = (await treeTypeCheck({ files: input.files })).map((error) => {
-      const blockedPages = blockedBy(error.file);
-      return blockedPages === undefined ? error : { ...error, blockedPages };
-    });
+    const typeErrors = (await treeTypeCheck({ files: input.files })).map((error) =>
+      attributeToReachingPages(error, blockedBy),
+    );
     return {
-      errors: [...resolved.errors, ...typeErrors],
+      errors: [...passErrors, ...typeErrors],
       warnings,
       closures: resolved.closures,
     };

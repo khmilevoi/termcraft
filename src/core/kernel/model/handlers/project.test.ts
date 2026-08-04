@@ -1211,6 +1211,68 @@ describe("project.open", () => {
     });
   });
 
+  test("a page whose SHARED module contains an `eval` is `invalid` — a scan-stage fatal routes exactly like a type error", async () => {
+    await context.start(async () => {
+      const home = slug("home");
+      const about = slug("about");
+      const designReader = createFakeDesignStoreForPages({
+        pages: [
+          { pageSlug: home, bytes: FAKE_SOURCE_BYTES, entry: "pages/home.tsx" },
+          { pageSlug: about, bytes: FAKE_SOURCE_BYTES, entry: "pages/about.tsx" },
+        ],
+        extraFiles: new Map([
+          ["lib/theme.ts", { bytes: new TextEncoder().encode(`export const X = eval("1")\n`) }],
+        ]),
+      });
+      const gateRunner = createFakeGateRunner();
+      // THE OTHER HALF OF THE PASS, and it was fail-open for one whole review round (final
+      // whole-branch review of design-tree phase 2, Important). The type-error test directly
+      // above pins the TYPE stage; this pins the FLAT SCAN's own fatals, which the adapter used
+      // to attribute through a narrower rule — "the pages whose closure WALK BROKE at this file"
+      // — that an `EVAL_CALL` never satisfies, because `eval` is not a module edge and the
+      // closure resolves perfectly well around it. The fatal therefore arrived here with NO
+      // `blockedPages`, `routePassErrors` logged it as an orphan module, and this page published
+      // `"ready"` while containing a deliberately security-relevant dynamic-code violation.
+      //
+      // The adapter-side proof that the attribution now EXISTS is
+      // `gate/adapters/gate-runner.test.ts`'s scan-attribution block, driving the real
+      // `runTree` (`core` may not import `gate`, so it cannot be driven from here). This test
+      // owns the other link in the chain: that an `import`-kind fatal carrying `blockedPages`
+      // invalidates exactly the pages it names, with no type-error special case anywhere.
+      gateRunner.queueRunTreeResult({
+        errors: [
+          {
+            kind: "import",
+            code: "EVAL_CALL",
+            message: "`eval` is not allowed — a page executes no dynamic code",
+            file: "lib/theme.ts",
+            line: 1,
+            column: 20,
+            blockedPages: [home],
+          },
+        ],
+        warnings: [],
+        closures: [],
+      });
+      const harness = buildTestContext({ gateRunner, designReader });
+
+      const manifest = await designReader.readManifest();
+      if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
+
+      const bySlug = new Map(descriptors.map((descriptor) => [descriptor.pageSlug, descriptor]));
+      const homeDescriptor = bySlug.get(home);
+      expect(homeDescriptor?.status).toBe("invalid");
+      expect(homeDescriptor?.status === "invalid" ? homeDescriptor.error.code : null).toBe(
+        "EVAL_CALL",
+      );
+      // And ONLY the page the pass named: `about` reaches no module that runs dynamic code.
+      expect(bySlug.get(about)?.status).toBe("ready");
+    });
+  });
+
   test("a CRASHED type check invalidates EVERY descriptor — a compiler that never ran is not evidence the tree is clean", async () => {
     await context.start(async () => {
       const home = slug("home");
