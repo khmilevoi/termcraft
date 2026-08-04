@@ -1,5 +1,7 @@
+import type { PageSlug } from "entities/page";
 import type { Clock } from "infrastructure/clock";
 import type { DurabilityError } from "infrastructure/durability";
+import type { TargetStack } from "store/toml";
 
 import type {
   MigrationBackupFailedError,
@@ -152,3 +154,26 @@ export type MigrationError =
   | MigrationBackupFailedError
   | MigrationIoError
   | MigrationStaleError;
+
+// ---- the retired format-1 layout (design-tree §12.2 track 1) ---------------------------
+
+/** One version-1 page as found on disk: its slug and the two retired paths that hold it. */
+export interface LegacyPageV1 {
+  readonly slug: PageSlug;
+  /** `pages/<slug>/page.tsx` — always present; a listed page without one fails the scan. */
+  readonly legacySourcePath: string;
+  /** `pages/<slug>/comments.jsonl`, or `null` when the page never accumulated pins. */
+  readonly legacyPinsPath: string | null;
+}
+
+/** A version-1 project's portable facts, read by `model/legacy-scan.ts`'s `scanLegacyProject`. */
+export interface LegacyProjectV1 {
+  readonly formatVersion: 1;
+  readonly projectId: string;
+  readonly name: string;
+  /** UTC RFC 3339, carried forward verbatim — a migration never restamps creation time. */
+  readonly createdAt: string;
+  readonly targetStack: TargetStack;
+  /** Manifest order, which IS page order in format 1 and becomes `design/pages.json`'s order. */
+  readonly pages: readonly LegacyPageV1[];
+}

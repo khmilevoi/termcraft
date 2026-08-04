@@ -3,12 +3,9 @@
 // turn-durability §11 verified-backup protocol every durable file kind's first rewrite
 // must complete before target rewrites are even planned.
 //
-// No shipped migration exists yet — `MIGRATION_CHAIN` is empty and `registry.test.ts`
-// asserts it stays that way. `BackupStore` and `MigrationStaleError` are exercised end to
-// end (backup → verify → transform → `store/transaction`'s `MigrationTransaction`) by a
-// synthetic, test-only migration in `backup-store.test.ts` — MVP wires no production
-// caller, matching `store/transaction`'s own "infrastructure only" note on
-// `buildMigrationTransaction`.
+// The version-1 -> version-2 migration (design-tree design §12) ships here: `model/legacy-scan.ts`
+// is the system's ONLY reader of the retired `pages/<slug>/` layout, `model/v1-to-v2.ts` turns
+// that reading into one transaction's operations, and `MIGRATION_CHAIN` names the step.
 export type {
   AbsPath,
   BackupFileInput,
@@ -52,3 +49,13 @@ export {
   nodeBackupStoreDeps,
   projectBackupsDir,
 } from "./model/backup-store";
+
+export type { LegacyPageV1, LegacyProjectV1 } from "./types";
+export {
+  LEGACY_PROJECT_FORMAT_VERSION,
+  LegacyScanError,
+  legacyPinsPath,
+  legacySourcePath,
+  scanLegacyProject,
+} from "./model/legacy-scan";
+export type { LegacyScanCodeV1 } from "./model/legacy-scan";
