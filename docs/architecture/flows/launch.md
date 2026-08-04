@@ -8,13 +8,13 @@ flowchart TD
     lockq -- "held or ownership ambiguous" --> refuse["polite refusal; no mutation"]
     lockq -- "yes" --> recover["classify journals: discard prepared · roll intended forward · recognize committed"] --> formatq{"project format"}
     formatq -- "current" --> trustq{"composite TrustSubject trusted?"}
-    formatq -- "older" --> trustq
+    formatq -- "version 1: must migrate" --> migoffer["migrate-80 dialog — pre-Kernel, no Workspace yet"]
+    migoffer -- "esc later" --> migdeclined["exit 0; nothing written"]
+    migoffer -- "⏎ migrate" --> migrun["verified backup + MigrationTransaction"] --> reopen2["reopen on format 2, second createShell"] --> trustq
     formatq -- "newer than this build" --> toonew["hard error naming the offending file; Workspace does not open"]
-    trustq -- "created here / already trusted" --> posttrust{"older format?"}
-    trustq -- "prompt accepted" --> posttrust
+    trustq -- "created here / already trusted" --> load["load the canonical design tree"]
+    trustq -- "prompt accepted" --> load
     trustq -- "prompt declined" --> untrusted["project ready but untrusted/read-only: chat visible · execution disabled"]
-    posttrust -- "no" --> load["load the canonical design tree"]
-    posttrust -- "yes" --> offer["bulk migration offer"] --> migrate["verified external backup + MigrationTransaction"] --> load
     load --> sourceq{"sources pass Gate and host load?"}
     sourceq -- "yes" --> ws["Workspace"]
     sourceq -- "no" --> broken["Workspace: preview error, composer available for repair"]
@@ -115,12 +115,18 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
    drive or a volume with no write-through — before any mutation is attempted.
 2. Project discovery has three outcomes: a missing `.termcraft/` opens Home; a
    current project acquires its lease, finishes transaction recovery, and proceeds
-   through trust; an older project performs the same journal recovery, then after
-   trust offers bulk migration before design-code execution. There is no project
-   picker. The verified-backup-then-`MigrationTransaction` protocol the offer would
-   run is built and fault-injection tested, but the shipped migration chain is
-   empty — no project format newer than 1 has ever existed, so this branch has
-   nothing to migrate yet. Migration mechanics: `flows/migration.md`.
+   through trust; a version-1 project performs the same lease-and-recovery sequence,
+   then fails its manifest read with a typed `ManifestMigrationRequiredError` — BEFORE
+   trust, and before any Kernel exists to build a Workspace around. That failure is not
+   fatal: the composition root (`entrypoint/model/create-shell.ts`) catches it and
+   offers the `migrate-80` dialog as the ONLY thing the process draws, `⏎ migrate` runs
+   the verified-backup-then-`MigrationTransaction` protocol, and the project reopens on
+   format 2 through a second, ordinary `createShell` call that proceeds through trust
+   exactly like any current-format project — the "posttrust" bulk-offer this diagram
+   used to draw never happens, because there is no live path that reaches trust while
+   still on format 1. There is no project picker. `esc later` exits the process with one
+   line and writes nothing (recorded divergence from design §12.1's "returns to Home" —
+   `docs/superpowers/red-debt.md`). Migration mechanics: `flows/migration.md`.
 3. Before Workspace, prepared plans without commit intent are discarded, every
    durable intent is rolled forward, and committed journals are recognized without
    rechecking targets. Unexpected target hashes stop in recovery conflict and are
@@ -217,8 +223,8 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
 ## Source anchors
 
 - `src/main.tsx` — the interactive executable root, the installed package's `bin` target run through Bun: an argv scan dispatches one of three modes of the SAME entry — `_host --stdio` runs the design-host stdio loop, `termcraft export [dir]` runs the headless export CLI, and anything else `bootstrap`s the interactive app; guarded by `import.meta.main` so importing it never seizes the terminal.
-- `src/entrypoint/model/bootstrap.ts` — resolves the project root from argv against the working directory, then composes the shell (`createShell`) and the running app (`runApp`).
-- `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, and now returns which one happened (`existing`) alongside the `OpenProject` handle; `probeProjectContent` (Gap D, fix-bundle spec §2.4) folds that with one manifest read and one `ChatStore.list()` into a three-way `"has-content" | "no-content" | "unknown"` outcome (fix round 1, Finding 1 — a failed read is never folded into a fabricated `"no-content"`), and `resolveShellLaunch` turns that into `ShellLaunchV1 { existing, hasContent }`, exposed on the shell's own `launch` field and echoed onto `UiEnv.projectExists`. Also wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`), and a live run now reaches it — `kernel.preview.enable` fires once trust resolves to `trusted` and the shell dispatches `preview.selectPage` for the active page, so the preview machine reaches `live` (`flows/interactive-prototype.md`).
+- `src/entrypoint/model/bootstrap.ts` — resolves the project root from argv against the working directory, then composes the shell (`createShell`) and the running app (`runApp`). As of design-tree phase 1b, the first `createShell` result can carry `MigrationRequiredV1` instead of a shell (`"kind" in first`); when it does, `bootstrap` routes to `run-migration.ts`'s `runMigrationPrompt` instead of `runApp`, and on success rebuilds `createShell` a SECOND time against the now-migrated project, seeding the track-2 refactor turn (`flows/migration.md` item 12).
+- `src/entrypoint/model/create-shell.ts` — the composition root: `openOrCreateProject` opens (or, for a fresh directory, creates) the project on disk BEFORE the Kernel exists, and now returns which one happened (`existing`) alongside the `OpenProject` handle, OR, for a version-1 project, `MigrationRequiredV1` instead of either (`flows/migration.md` item 12); `probeProjectContent` (Gap D, fix-bundle spec §2.4) folds that with one manifest read and one `ChatStore.list()` into a three-way `"has-content" | "no-content" | "unknown"` outcome (fix round 1, Finding 1 — a failed read is never folded into a fabricated `"no-content"`), and `resolveShellLaunch` turns that into `ShellLaunchV1 { existing, hasContent }`, exposed on the shell's own `launch` field and echoed onto `UiEnv.projectExists`. Also wires the 17 store/gate/host/agent adapters into `createKernel`, adapts the composed `Kernel` to `ui`'s `KernelPort`, and closes in reverse-acquisition order (Kernel → host supervisor → project lease) so a teardown rejection can never abandon the lease. `acknowledgeDisplay` is wired to a real frame-token ledger (phase-8 Task 16, via `toPreviewSessionHandle`), and a live run now reaches it — `kernel.preview.enable` fires once trust resolves to `trusted` and the shell dispatches `preview.selectPage` for the active page, so the preview machine reaches `live` (`flows/interactive-prototype.md`).
 - `src/entrypoint/model/run-app.ts` — `runApp`'s Gap D startup dispatch: when `shell.launch.hasContent` is true, dispatches `project.open` at the `KernelPort` right after the shutdown path is wired up (after `startShutdownPath`, fix round 1 — so SIGINT/SIGTERM are already handled before this awaits), using a synchronous `peekStateRevision`/`peekSnapshotEnvelope` bootstrap-snapshot peek (shared with the pre-existing `peekRunningTurn`) to build the dispatcher's `expectedRevision`; a rejection or a dispatch failure is logged, never silently left as Home.
 - `src/core/kernel/model/handlers/project.ts` — `runProjectReadySequence`, the post-admission "reach ready" spine `project.create`/`project.open`/`project.retryOpen` share: transaction recovery, the orphan-turn scan, trust resolution (implicit grant on create; a prior durable grant honored on open, else `untrusted-read-only`), `enablePreviewIfTrusted` (fix-bundle Gap A, spec §2.2 — applies `kernel.preview.enable` right after trust resolves to `trusted`, before `finishOpen`, so the Preview machine leaves `disabled` for the snapshot the UI first sees; an untrusted project stays `disabled`), per-page Gate descriptors, durable export-pointer validation, `finishOpen`, two independent chat reads (fix-bundle Gap E, `flows/chats.md` for the full picture): `listChatSummaries` publishes the project's FULL on-disk chat listing as `chat.changed`, and `restoreActiveChatTail` restores only the active chat's persisted tail as `chat.records` — a listing failure degrades to the active chat alone, a tail failure costs only the scrollback — and, last, `beginTurn` (fix-bundle Gap C, spec §3.1, closed): when `trustSource` carries a first-turn `text` and trust resolved to `"trusted"`, the SAME function `turn.start`'s own handler uses starts the first turn from it, chained after `finishOpen` and the chat-tail restore because admission reads `workspace.local.toml`'s `activeChatId`. Also `project.setTrust`, the follow-up accept/decline (which calls the SAME `enablePreviewIfTrusted` helper when it grants trust on an already-open project), and the documented no-interactive-prompt gap (a one-shot open command cannot block on a prompt).
 - `src/core/kernel/model/handlers/turn.ts` — `beginTurn`: mints the turn id, applies `beginAdmission`, and records the id as the Kernel's active turn, all three synchronously with no `await` between them, then launches the turn's async composition. Both `turn.start`'s own handler and `runProjectReadySequence`'s Gap C chain call this SAME function — there is exactly one path into a turn.
@@ -230,11 +236,11 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
 - `src/store/transaction/model/journal-format.ts` — the separate `transactions.local/format.json` gate, read before any transaction directory is even listed; a newer journal format blocks the Workspace, a missing one is treated as version 1.
 - `src/store/transaction/model/recovery.ts` — the startup scan: classifies each prepared transaction directory as discard / roll-forward / already-complete / conflict, in stable lexical order, before any project state is exposed.
 - `src/store/transaction/model/engine.ts` — the old/new-image comparison applied during roll-forward: a target matching neither its planned old nor new image writes a conflict marker and is never overwritten.
-- `src/store/transaction/model/wrappers.ts` — `admitTurn` (the turn-admission transaction that creates the first user record before an agent starts) is now called by the live turn spine (`turn.start` → `runAdmission`); the infrastructure-only `buildRestoreTransaction`/`buildMigrationTransaction` remain built-and-tested with no live caller (Restore and migration stay unwired).
+- `src/store/transaction/model/wrappers.ts` — `admitTurn` (the turn-admission transaction that creates the first user record before an agent starts) is now called by the live turn spine (`turn.start` → `runAdmission`); `buildMigrationTransaction` now has a live caller too (`store/model/factory.ts`'s `TransactionEngine.runMigration`, design-tree phase 1b — `flows/migration.md`); `buildRestoreTransaction` remains built-and-tested with no live caller (Restore stays unwired).
 - `src/store/trust/model/trust-store.ts` — `TrustStore`: builds a `TrustSubject` from canonical project path, project-root filesystem identity, `projectId`, and optional Git identity; checks and durably records grants; never fails open on a missing, corrupt, or tampered record.
 - `src/store/trust/model/subject.ts` — the exact `TrustSubjectV1` byte encoding and SHA-256 key derivation; HEAD, branch, and commit deliberately never participate in the key.
-- `src/store/migration/model/registry.ts` — the format-too-new gate shared by every durable file kind, and the migration chain itself, which is empty by design (no format newer than 1 has shipped yet).
-- `src/store/migration/model/backup-store.ts` — the verified-backup protocol (copy every file → write manifest → durably flush → reopen and verify → `VERIFIED` marker) a bulk migration would run first; built and unit-tested, with no live caller yet.
+- `src/store/migration/model/registry.ts` — the format-too-new gate shared by every durable file kind, and the migration chain itself — no longer empty: one step, `project.toml` format 1 -> 2 (design-tree phase 1b — `flows/migration.md`).
+- `src/store/migration/model/backup-store.ts` — the verified-backup protocol (copy every file → write manifest → durably flush → reopen and verify → `VERIFIED` marker) a bulk migration runs first; built and unit-tested, and, as of design-tree phase 1b, has a real production caller (`store/model/factory.ts`'s `migrateProject`).
 - `src/store/toml/model/project-toml.ts` — `project.toml`'s schema (`project_id`, `name`, `created_at`, `target_stack`, `pages`) and its own format-too-new gate.
 - `src/store/toml/model/workspace-toml.ts` — `workspace.local.toml`'s schema and its independent format counter; a corrupt file is preserved and reported, never silently discarded.
 - `src/store/toml/model/gitignore.ts` — the generated `.termcraft/.gitignore` exclusion rules written at project creation.
@@ -257,4 +263,4 @@ directory (or an existing-but-empty one), and its Enter is the only entry into t
 - `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md` — §4/§10.2 source-of-record for startup transaction recovery, which `store/transaction` above implements
 - `design/01-home.dc.html` — Home screen states
 - `design/14-first-generation.dc.html` — first generation experience
-- `design/16-wizard-migration.dc.html` — v1 wizard and migration offer screens
+- `design/16-wizard-migration.dc.html` — the `migrate-80` migration offer screen, transcribed to `src/ui/setup/ui/MigratePrompt.tsx` (design-tree phase 1b — `flows/migration.md`); this file's own first-run wizard screens remain v1, no code yet

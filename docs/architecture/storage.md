@@ -51,10 +51,14 @@ flowchart TB
    static `meta` in its own entry file is the only source of title, minimum size,
    theme, and integer `kitApiVersion`.
    - *Failure:* a project still at `format_version = 1` is refused with a typed
-     "must be migrated" error rather than read leniently — no compatibility reader for
-     the version-1 layout exists anywhere in the system, deliberately. A real
-     version-1 project is preserved verbatim at `test-fixtures/format-v1-project/` as
-     the migration's future test subject.
+     "must be migrated" error (`ManifestMigrationRequiredError`) rather than read
+     leniently — no compatibility reader for the version-1 layout exists in the
+     ORDINARY open path, deliberately. The one place that DOES understand it,
+     `store/migration/model/legacy-scan.ts`'s `scanLegacyProject`, is reached only
+     from the migration itself (`flows/migration.md`). A real version-1 project is
+     preserved verbatim at `test-fixtures/format-v1-project/`, and it is no longer
+     only a future subject: `src/store/model/migration-fixture.test.ts` runs the
+     real, shipped migration against it.
 2. **Local workspace state.** `workspace.local.toml` carries active page/chat,
    backend/model/effort, preview size mode and custom dimensions, theme/color
    override, static/interactive mode, fullscreen flag, and scoped session
@@ -152,7 +156,15 @@ flowchart TB
     rejects absolute/traversing/UNC/alternate-stream paths, Windows normalization
     ambiguity, case collisions, symlinks, junctions, reparse points, hardlinks,
     non-regular files, and configured path/count/depth/byte limit violations.
-    The Gate separately validates TypeScript and import semantics.
+    The Gate separately validates TypeScript and import semantics. Six root kinds
+    share this boundary (`store/safe-fs/model/limits.ts`'s `ROOT_LIMITS`): the
+    ordinary `.termcraft` `project` root; `workspace` and `candidate` for a turn's
+    staged tree and its Gate-validated output; `export-candidate` and `backup` for
+    the two other whole-tree copies termcraft produces itself; and, as of
+    design-tree phase 1b, `project-migration` — the SAME `.termcraft` directory as
+    `project`, opened with a widened grammar for exactly one migration, admitting
+    the retired `pages/<slug>/{page.tsx,comments.jsonl}` layout that every other
+    root kind refuses (`flows/migration.md`).
 12. **Transactions.** Recoverable plans and payloads live under
     `transactions.local/`. Prepared plans without commit intent are discarded.
     Plans with durable commit intent roll forward idempotently before Workspace
@@ -200,15 +212,25 @@ flowchart TB
     with no renderer.
 17. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
     independent format counter. A page's entry file instead declares `kitApiVersion`.
-    Planning mints `migrationPlanId`; confirmation mints `migrationActionId`, and the
-    migration journal domain persists both.
+    The shipped migration mints its own `migrationPlanId`/`migrationActionId` pair
+    inside `migrateProject` at commit time (`store/model/factory.ts`); a separate,
+    read-only `planMigration` call mints its own `migrationPlanId` purely for the
+    offer's PREVIEW (best-effort, never durably persisted, never reused by
+    `migrateProject`, which re-scans and re-derives instead of trusting a plan
+    carried over). The Kernel-command design's two-step plan-then-confirm mint, with
+    the migration journal domain persisting both ids from one shared flow, remains
+    unbuilt (`flows/migration.md` items 4/11) — this migration never reaches a Kernel.
     Before any old bytes are rewritten, migration creates and verifies a backup
     generation in machine-local user state outside `.termcraft`, regardless of
     Git status. Lazy migration may transform in memory, but its first write must
-    add the original bytes to the verified migration backup. Canonical current
-    sources may be codemodded; Git historical objects never are. (The format-counter
-    gate and the verified-backup protocol are implemented and tested, but the
-    migration chain itself is currently empty — no migration has shipped.)
+    add the original bytes to the verified migration backup — the LAZY mechanism
+    itself remains unimplemented; the shipped migration is the BULK one, and it
+    follows this exact ordering. Canonical current sources may be codemodded; Git
+    historical objects never are. (The format-counter gate and the verified-backup
+    protocol are implemented and tested, and, as of design-tree phase 1b, so is the
+    migration itself: `MIGRATION_CHAIN` carries one real step — `project.toml`
+    format 1 -> 2 — proven end to end by `src/store/model/migration-fixture.test.ts`.
+    `flows/migration.md` has the whole path and what is still unbuilt.)
 18. **Operations log.** Bounded rotated local telemetry may record UUIDv7
     `recordId`, backend name, model, `sessionStartMode`, timings, retries, Gate result, cancellation/exit reason,
     and host restarts. It never stores prompts, reasoning, credentials, file
@@ -220,10 +242,14 @@ flowchart TB
     separation, pin events, and explicit `kitApiVersion` are the initial shipped
     formats — implemented across `entities/`, `store/`, and `infrastructure/` and
     exercised by their own test suites. No migration from the abandoned
-    numbered-page design exists, and the (empty) migration chain has never had to
-    run one. The components that consume this storage have now landed: the
-    assembled Kernel (`core`) reaches it through the `store/adapters` ring behind
-    `core/ports`, and the composed UI shell drives that graph under `bun start`.
+    numbered-page design exists — that layout never shipped, so there was never
+    anything to migrate FROM it. The migration chain is no longer empty: it carries
+    one real step for the format-1 layout that DID ship (`project.toml`'s own
+    ordered `pages` array, flat `pages/<slug>/page.tsx` files) becoming the
+    `design/` tree — see `flows/migration.md` for the whole path. The components
+    that consume this storage have now landed: the assembled Kernel (`core`)
+    reaches it through the `store/adapters` ring behind `core/ports`, and the
+    composed UI shell drives that graph under `bun start`.
 
 ## Source anchors
 
@@ -393,11 +419,20 @@ flowchart TB
   both open paths (shallow structural parse plus a referenced-generation-dir
   existence check; `null` — never published — never blocks)
 - `src/store/migration/model/registry.ts` — item 17: the format-counter
-  too-new gate shared by every durable-file kind, and `MIGRATION_CHAIN` —
-  deliberately empty; no migration has shipped
+  too-new gate shared by every durable-file kind, and `MIGRATION_CHAIN` — no
+  longer empty: one step, `project.toml` format 1 -> 2 (design-tree phase 1b,
+  `flows/migration.md`)
+- `src/store/migration/model/legacy-scan.ts`, `model/v1-to-v2.ts` — item 17: the
+  retired-layout reader and the plan/transaction builder for that one step
+  (`flows/migration.md` has the full walkthrough)
 - `src/store/migration/model/backup-store.ts` — item 17: the verified-backup
   protocol (copy → manifest → flush → reopen-verify → `VERIFIED` marker) under
-  `{userStateRoot}/backups/<projectId>/<migrationActionId>/`
+  `{userStateRoot}/backups/<projectId>/<migrationActionId>/`, with its first
+  production caller as of design-tree phase 1b (`store/model/factory.ts`'s
+  `migrateProject`)
+- `src/store/safe-fs/model/limits.ts` — item 11: the `project-migration` root
+  kind, admitting the retired `pages/<slug>/{page.tsx,comments.jsonl}` layout
+  only there (`flows/migration.md`)
 - `docs/superpowers/specs/2026-07-16-projections-observability-scale-design.md`
   — item 18: the bounded rotated operations log (`logs/operational.jsonl` +
   rotation) — no writer exists anywhere in the codebase yet; only its

@@ -1031,3 +1031,83 @@ file is a historical record that will be read again, not because anything in `sr
   (`61a51ab..91f5a34`); a file-less `TYPE_CHECK_UNAVAILABLE` now invalidates every descriptor.
 - The three separate task reviews flagging `docs/architecture/storage.md` as stale (Tasks 6, 7, 8) —
   FIXED by this closeout's own Step 3, so there is nothing left to track.
+
+## Debt accumulated by design-tree-phase-1b (migration), recorded here by its own Task 11
+
+Plan `docs/superpowers/plans/2026-08-04-design-tree-phase-1b-migration.md`, tasks 1-10, commits
+`802a980..72d003d`. Full per-task evidence, including the fix rounds and the deferred minors
+listed in each task's own line, is in
+`.superpowers/sdd/2026-08-04-design-tree-phase-1b-migration/progress.md`. This plan shipped the
+first real migration a termcraft project ever runs; the four rows below are what it deliberately
+left open rather than closed, each with the evidence for why it is real.
+
+### The four `migration.*` Kernel commands and `MIGRATION_TRANSITION_TABLE` are still dead — real divergence, not a scheduling gap
+
+A migration now runs in production (`store/model/factory.ts`'s `migrateProject`), and it drives
+NONE of `migration.plan`/`migration.confirm`/`migration.discardPlan`/`migration.retryRecovery` —
+all four still route to the well-formed `migrationPostMvpHandler` no-op
+(`core/kernel/model/handlers/index.ts`), and the `MigrationState` machine
+(`core/machines/model/migration-machine.ts`) is instantiated but never transitioned. This is
+because the migration happens entirely BEFORE a Kernel exists: `entrypoint/model/create-shell.ts`
+catches `ManifestMigrationRequiredError` and offers the `migrate-80` dialog pre-Kernel
+(`docs/architecture/flows/migration.md` item 12), so nothing in its path can ever dispatch a
+Kernel command. That makes this a real, permanent divergence between
+`docs/superpowers/specs/2026-07-16-kernel-command-contract-design.md` §7.7 (which describes
+`migration.plan`/`migration.confirm` minting `migrationPlanId`/`migrationActionId` through a
+Kernel-mediated two-step flow) and the shipped path (which mints both ids directly inside
+`migrateProject` at commit time, with no Kernel involved) — not a scheduling gap waiting for a
+future task. `core/kernel/model/handlers/index.ts`'s own header comment (task 18, MVP phase-8)
+still frames the no-op as waiting on "a second storage format version" shipping; one has now
+(`project.toml` 1 -> 2), so that comment is itself stale and was flagged rather than edited
+(`docs/architecture/flows/migration.md`'s own source-anchor entry for this file says so) — this
+plan's scope is docs-only, so the code comment was left for whoever next touches that file.
+NO OWNER: closing this means deciding whether a FUTURE migration shape (one that runs against an
+already-open project) is worth building the Kernel-command family for; nothing in this plan needs
+it.
+
+### `project.retryOpen`'s `{kind: "migration", migrationActionId}` branch has no producer
+
+`core/protocol/model/command-payload.ts:99`'s `projectRetryOpenPayloadSchema` types this
+discriminated-union member, and `core/project/model/recovery-routing.ts:71` and
+`core/project/model/open-sequence.ts:229` both branch on `"migration"` as one of three legal
+recovery domains — but `grep -rn '"migration"' src/ui src/entrypoint` finds no caller that ever
+constructs a `project.retryOpen` command carrying it, in `ui` or `entrypoint`. In practice this is
+not a live gap because the two crash windows it would matter for are both already covered by
+OTHER, correct machinery: a migration interrupted AFTER its commit intent is durable is rolled
+forward by the fully generic `recoverTransactions` scan (same as any other transaction `kind`),
+and a migration interrupted BEFORE commit intent is simply discarded — the next launch re-reads
+whatever `pages/**` files remain and re-offers the `migrate-80` dialog from scratch
+(`docs/architecture/flows/migration.md` item 11). Both outcomes are CORRECT. What is missing is
+narration: neither path tells the user "a migration was interrupted and recovered" or "your
+previous migration attempt did not complete" — they just silently resume as if nothing happened.
+NO OWNER: wiring this recovery domain's UI is a product decision about whether that narration is
+worth a dedicated screen, not something this plan's scope covers.
+
+### `esc later` exits the process — recorded as a UX defect against design §12.1, not an accepted limitation
+
+Design §12.1 states plainly: "`esc later` returns to Home having written nothing." The shipped
+behavior (`entrypoint/model/run-migration.ts`'s `MigrationDeclinedError`) exits the process with
+one printed line instead — nothing is written, matching half of the design sentence, but there is
+no return to Home. This is NOT a documentation nit to wave through: it is undeliverable as
+specified, and per this repository's own standing rule, an outcome that looks broken from the
+design's stated behavior is a defect to record where it will be acted on, not a "known
+limitation" to launder past review. The root cause is structural, not an oversight — Home renders
+inside an app built from a Kernel, which is itself built from an `OpenProject`, and §12.1's own
+premise is that a version-1 project cannot produce one, so there is no Kernel and no Home to
+return to. Fixing it for real needs a project-less Kernel mode (a Kernel, and therefore a Home
+screen, that can exist without any `OpenProject` behind it) — a structural change larger than this
+migration itself, which was ruled out when this plan was written
+(`entrypoint/model/run-migration.ts`'s own doc comment on `MigrationDeclinedError` records the
+same reasoning). NO OWNER: gated on that project-less Kernel mode, which is its own piece of work.
+
+### No pre-flight free-space check before the backup — pre-existing, now reachable in production for the first time
+
+Pre-existing gap (`docs/architecture/flows/migration.md` item 5, tracked before this plan under
+the MVP-phase-8 ledger too), but this plan is the first time it is reachable through a live user
+action rather than only through the store's own tests: `store/migration/model/backup-store.ts`'s
+`createBackupStore` has no pre-flight free-space check, so a backup that runs out of disk on a
+real, user-triggered migration just fails the copy step it is on, like any other I/O error — the
+project is left untouched (the backup-then-transaction ordering guarantees that much), but the
+message the user sees is a generic I/O failure, not "not enough space for the backup". NO OWNER:
+adding a free-space probe is a straightforward addition to `createBackupStore`'s own pre-flight
+sequence, but it is new code this docs-only closeout does not add.

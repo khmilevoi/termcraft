@@ -1,7 +1,7 @@
 import type { ParsedKey } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { type Atom, atom, wrap } from "@reatom/core";
-import { reatomComponent } from "@reatom/react";
+import { type Atom, atom } from "@reatom/core";
+import { reatomComponent, useWrap } from "@reatom/react";
 
 import { UiRootError, defaultAdapters, mountRenderRoot } from "ui/app";
 import type { UiRootAdapters } from "ui/app";
@@ -85,14 +85,15 @@ const MigrationSurface = reatomComponent<{
   readonly working: Atom<boolean>;
   readonly onChoice: (choice: MigrationChoiceV1) => void;
 }>((props) => {
-  // `wrap` so the handler's own reads/writes stay inside the Reatom frame (RTM-C02).
-  useKeyboard(
-    wrap((key: ParsedKey) => {
-      if (props.working()) return; // the migration is running; both keys are spent
-      const choice = migrationChoiceForKey(key);
-      if (choice !== null) props.onChoice(choice);
-    }),
-  );
+  // `useWrap`, not a bare `wrap` — `useKeyboard`'s handler is invoked later by @opentui's keyboard
+  // event source, not a frame the component is already inside, so it needs the adapter-bound form
+  // (RTM-A04's own exception list; the identical shape at `ui/app/ui/App.tsx`'s `onKey`).
+  const onKey = useWrap((key: ParsedKey) => {
+    if (props.working()) return; // the migration is running; both keys are spent
+    const choice = migrationChoiceForKey(key);
+    if (choice !== null) props.onChoice(choice);
+  });
+  useKeyboard(onKey);
   return (
     <MigratePrompt
       id="setup-migrate"

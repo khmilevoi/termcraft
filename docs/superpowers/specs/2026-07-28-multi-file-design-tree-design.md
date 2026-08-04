@@ -479,6 +479,53 @@ landing on a working system:
    the first `MIGRATION_CHAIN` entry over the existing verified-backup protocol, and the
    seeded refactor turn. Separable from plan 1 and worth its own plan: it is the only part
    that touches existing user data, and its two tracks have very different risk profiles.
+   **"`findSteps` wired into the open sequence" did not happen as this bullet's own wording
+   implies** — corrected here rather than left to mislead a future reader. `findSteps` is real,
+   live, and unit-tested against the shipped chain, but nothing calls it from
+   `core/project/model/open-sequence.ts` (whose `runOpenSequence` has no production caller at
+   all — see §15's corrected anchor below) or from any other production path. Decision 3 below
+   explains why that is a deliberate choice, not a dropped task.
+   **LANDED** — `802a980..72d003d` on branch `design-tree`, plan
+   `docs/superpowers/plans/2026-08-04-design-tree-phase-1b-migration.md`, tasks 1-10 (the
+   closeout's own doc commit extends the range by one). Four decisions this plan settled that
+   the design above left implicit, recorded here so plan 3 inherits them rather than
+   re-deciding:
+   1. **The migrate offer is a pre-Kernel surface, and `esc` exits rather than returning to
+      Home.** §12.1's "returns to Home" is undeliverable: Home renders inside an app whose
+      Kernel is built from an `OpenProject`, which §12.1's own premise says a version-1
+      project cannot produce. `esc later` resolves `MigrationDeclinedError`
+      (`entrypoint/model/run-migration.ts`) instead — the process exits with one line, and
+      nothing is written. Recorded as an open UX defect against §12.1, not an accepted
+      limitation (`docs/superpowers/red-debt.md`).
+   2. **The retired `pages/**` grammar lives in a `project-migration` root kind**, never in
+      `classifyProject`. `store/safe-fs/model/limits.ts`'s `classifyLegacyProject` admits
+      `pages/<slug>/{page.tsx,comments.jsonl}` only under this root kind, identical in every
+      other budget to the ordinary `project` root since it is the same `.termcraft` directory
+      opened for one migration. The migration deletes the old files inside the SAME
+      transaction that writes their replacements (`store/migration/model/v1-to-v2.ts`'s
+      `buildV1ToV2Operations`, writes before deletes), and the engine resolves every operation
+      through one `SafeProjectFs`.
+   3. **`MIGRATION_CHAIN`'s entry is a declaration, not a transform.** `MigrationStep` is
+      `{kind, fromVersion, toVersion}`; the transform is
+      `store/migration/model/v1-to-v2.ts`'s `planV1ToV2`/`buildV1ToV2Operations`, driven by
+      `store/model/factory.ts`'s `migrateProject` — not by `findSteps` itself, which the
+      shipped path never calls: the driver branches on the decoder's own typed
+      `ManifestMigrationRequiredError` refusal, since that refusal already carries `found` and
+      `supported` and routing the same decision through a second lookup would be ceremony. The
+      chain's value here is that it declares the path exists and gives a future step somewhere
+      to register.
+   4. **The `examples/clock` oracle.** §12.3's "migrated by running the real migration" is
+      satisfied by `src/store/model/migration-fixture.test.ts` comparing the real migration's
+      output against the hand-built example byte for byte, since the example was in fact
+      rebuilt by hand in `ea4197d`.
+
+   Two things this plan deliberately did NOT do, both recorded as open debt rather than
+   silently dropped (`docs/superpowers/red-debt.md`): the four `migration.*` Kernel commands
+   and `MIGRATION_TRANSITION_TABLE` stay wholly undriven, because this migration never
+   dispatches through a Kernel at all; and `project.retryOpen`'s
+   `{kind: "migration", migrationActionId}` recovery branch has no producer, since a migration
+   interrupted before its commit intent is silently discarded and re-offered on the next
+   launch rather than narrated as an interruption.
 2. **Closure graph everywhere.** §7, §8 — re-key every cache, switch the type check to one
    whole-tree program, and scope smoke to changed closures.
    **NOT "purely internal" — this bullet's original wording ("purely internal; no user-visible
@@ -600,12 +647,20 @@ other.
 - `src/core/kernel/model/handlers/preview-export.ts`,
   `src/core/kernel/model/handlers/page-descriptors.ts` — the session-establishing and
   descriptor-publishing paths that carry the new key
-- `src/store/migration/model/registry.ts` — §12.1's first `MIGRATION_CHAIN` entry, and the
-  `checkNotTooNew`-only wiring that is why `findSteps` must gain a production caller
+- `src/store/migration/model/registry.ts` — §12.1's first `MIGRATION_CHAIN` entry (LANDED, plan
+  1b). `findSteps` deliberately did NOT gain a production caller (plan 1b's own decision 3,
+  above): the driver branches on the decoder's typed `ManifestMigrationRequiredError` refusal
+  instead, so `registry.ts`'s live wiring remains `checkNotTooNew`-only in practice even though
+  the chain itself is real
 - `src/store/migration/model/backup-store.ts` — §12.2's verified backup, gaining its first
   production caller; the site of §12.3's recorded divergence on backup location
-- `src/core/project/model/open-sequence.ts` — where §12.1's version detection and the
-  migration offer enter the canonical open path
+- `src/core/project/model/open-sequence.ts` — **NOT where §12.1's version detection and the
+  migration offer enter a live path**: `runOpenSequence` has no production caller (confirmed
+  again by plan 1b's closeout — still true at HEAD). The live gate is
+  `src/store/model/factory.ts`'s `openProject`, whose manifest-read step returns
+  `ManifestMigrationRequiredError`; `src/entrypoint/model/create-shell.ts`'s
+  `openOrCreateProject` is what turns that refusal into the `migrate-80` offer
+  (`docs/architecture/flows/migration.md` item 12)
 - `design/16-wizard-migration.dc.html`, `design/termcraft-engine.js`'s `migrate()` — §12.1's
   visual source of truth for the `migrate-80` dialog, its copy, and its two keys
 - `design/03-workspace-generating.dc.html` — the presentation §12.2's track 2 reuses, since
