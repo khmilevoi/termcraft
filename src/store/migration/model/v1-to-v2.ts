@@ -1,7 +1,27 @@
-import { DESIGN_DIRNAME } from "entities/design-tree";
+import {
+  DESIGN_DIRNAME,
+  PAGES_MANIFEST_RELPATH,
+  PAGES_MANIFEST_SCHEMA_VERSION,
+  encodePagesManifest,
+} from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { sha256Hex } from "store/jsonl";
+import type { SafeFsError } from "store/safe-fs";
+import {
+  PROJECT_MANIFEST_FILENAME,
+  PROJECT_MANIFEST_FORMAT_VERSION,
+  encodeProjectManifest,
+} from "store/toml";
+import { designFilePath, observeFileImage } from "store/transaction";
+import type { TransactionOperation, TransactionWrapperDeps } from "store/transaction";
 
-import type { AbsPath, LegacyProjectV1, MigrationMoveV1, MigrationPlanV1 } from "../types";
+import type {
+  AbsPath,
+  BackupFileInput,
+  LegacyProjectV1,
+  MigrationMoveV1,
+  MigrationPlanV1,
+} from "../types";
 import { projectBackupsDir } from "./backup-store";
 
 /** `design/pages/<slug>.tsx` — where a migrated version-1 page lands (design §12.2). */
@@ -66,4 +86,141 @@ export function planV1ToV2(input: {
     // so naming it here would be a path that does not exist yet.
     backupsDir: projectBackupsDir(input.userStateRoot, input.scan.projectId),
   };
+}
+
+/**
+ * The complete v1 -> v2 change, ready to run: the operations, their payloads, and the exact byte
+ * set the verified backup must hold first.
+ */
+export interface V1ToV2OperationsV1 {
+  readonly operations: readonly TransactionOperation[];
+  readonly payloads: ReadonlyMap<string, Uint8Array>;
+  /** Every file the transaction overwrites or deletes — never a superset, never a subset. */
+  readonly backupFiles: readonly BackupFileInput[];
+}
+
+/**
+ * Build the ONE transaction that performs the mechanical migration (design-tree §12.2 track 1).
+ *
+ * ORDER IS LOAD-BEARING: every `replace` precedes every `delete`. The engine applies operations in
+ * index order and rolls forward idempotently after a crash, so a roll-forward that stops midway
+ * has, at every point, either the old file or the new one — never neither. Deleting first would
+ * open a window in which a page exists nowhere.
+ *
+ * `oldImage` is observed for every target, so the engine's own CAS refuses the transaction if any
+ * source byte drifted between the scan/backup and the commit intent (turn-durability §11 step 6).
+ * That is why this function reads through `deps.fs.safeFs` rather than trusting the scan's paths:
+ * the bytes it hands the backup and the images it CASes on are read in the same pass.
+ *
+ * `deps.fs.safeFs` MUST be opened on the `project-migration` root kind — every `pages/**` target
+ * below is refused by the ordinary project grammar.
+ */
+export function buildV1ToV2Operations(
+  deps: TransactionWrapperDeps,
+  input: { readonly scan: LegacyProjectV1; readonly newPayloadId: () => string },
+): SafeFsError | V1ToV2OperationsV1 {
+  const writes: TransactionOperation[] = [];
+  const deletes: TransactionOperation[] = [];
+  const payloads = new Map<string, Uint8Array>();
+  const backupFiles: BackupFileInput[] = [];
+
+  /** One `replace` whose payload is `bytes`, CASed against whatever is at `target` today. */
+  const write = (target: string, bytes: Uint8Array): SafeFsError | undefined => {
+    const oldImage = observeFileImage(deps.fs, target);
+    if (oldImage instanceof Error) return oldImage;
+    const payloadId = input.newPayloadId();
+    payloads.set(payloadId, bytes);
+    writes.push({
+      index: 0, // renumbered densely below, once both halves are known
+      target,
+      mode: "replace",
+      oldImage,
+      newImage: { state: "file", sha256: sha256Hex(bytes), size: bytes.byteLength },
+      payloadId,
+    });
+    return undefined;
+  };
+
+  /** One `delete`, CASed against the bytes the backup just took. */
+  const remove = (target: string): SafeFsError | undefined => {
+    const oldImage = observeFileImage(deps.fs, target);
+    if (oldImage instanceof Error) return oldImage;
+    deletes.push({ index: 0, target, mode: "delete", oldImage, newImage: { state: "absent" } });
+    return undefined;
+  };
+
+  // --- 1 + 2: relocate every page source and every pin log, bytes untouched ----------------
+  for (const page of input.scan.pages) {
+    const sourceBytes = deps.fs.safeFs.readFile(page.legacySourcePath);
+    if (sourceBytes instanceof Error) return sourceBytes;
+    backupFiles.push({
+      relPath: page.legacySourcePath,
+      bytes: sourceBytes,
+      sourceFormat: "page.tsx@1",
+    });
+    const wroteSource = write(migratedSourcePath(page.slug), sourceBytes);
+    if (wroteSource instanceof Error) return wroteSource;
+    const removedSource = remove(page.legacySourcePath);
+    if (removedSource instanceof Error) return removedSource;
+
+    if (page.legacyPinsPath === null) continue;
+    const pinBytes = deps.fs.safeFs.readFile(page.legacyPinsPath);
+    if (pinBytes instanceof Error) return pinBytes;
+    backupFiles.push({
+      relPath: page.legacyPinsPath,
+      bytes: pinBytes,
+      sourceFormat: "comments.jsonl@1",
+    });
+    // The pin RECORDS are unchanged: `entities/pin`'s schema keys a pin by `pageSlug`, which the
+    // migration preserves, so only the file's location moves.
+    const wrotePins = write(migratedPinsPath(page.slug), pinBytes);
+    if (wrotePins instanceof Error) return wrotePins;
+    const removedPins = remove(page.legacyPinsPath);
+    if (removedPins instanceof Error) return removedPins;
+  }
+
+  // --- 3: synthesize design/pages.json from project.toml's existing order -------------------
+  const pagesManifestBytes = new TextEncoder().encode(
+    encodePagesManifest({
+      schemaVersion: PAGES_MANIFEST_SCHEMA_VERSION,
+      pages: input.scan.pages.map((page) => ({
+        slug: page.slug,
+        // Tree-RELATIVE, i.e. without the `design/` prefix — `PagesManifestV1.entry` is resolved
+        // against the tree root (design §4), and `designFilePath` adds the prefix for the target.
+        entry: `pages/${page.slug}.tsx`,
+      })),
+      // Format 1 had no "requested active page" concept — `workspace.local.toml`'s own
+      // `activePageSlug` already carries the user's last active page and survives untouched, so
+      // there is nothing to request here. `null` is the honest empty, not a placeholder.
+      requestedActivePage: null,
+    }),
+  );
+  const wroteManifest = write(designFilePath(PAGES_MANIFEST_RELPATH), pagesManifestBytes);
+  if (wroteManifest instanceof Error) return wroteManifest;
+
+  // --- 4: rewrite project.toml — drop `pages`, set format_version 2 -------------------------
+  const oldManifestBytes = deps.fs.safeFs.readFile(PROJECT_MANIFEST_FILENAME);
+  if (oldManifestBytes instanceof Error) return oldManifestBytes;
+  backupFiles.push({
+    relPath: PROJECT_MANIFEST_FILENAME,
+    bytes: oldManifestBytes,
+    sourceFormat: `${PROJECT_MANIFEST_FILENAME}@${input.scan.formatVersion}`,
+  });
+  const newManifestBytes = new TextEncoder().encode(
+    // Identity, name, creation time and target stack are carried forward VERBATIM. A migration
+    // that restamped `created_at` or re-minted `project_id` would break the trust ledger's own
+    // subject (`store/trust`) and orphan every existing grant.
+    encodeProjectManifest({
+      formatVersion: PROJECT_MANIFEST_FORMAT_VERSION,
+      projectId: input.scan.projectId,
+      name: input.scan.name,
+      createdAt: input.scan.createdAt,
+      targetStack: input.scan.targetStack,
+    }),
+  );
+  const wroteProjectToml = write(PROJECT_MANIFEST_FILENAME, newManifestBytes);
+  if (wroteProjectToml instanceof Error) return wroteProjectToml;
+
+  const ordered = [...writes, ...deletes].map((operation, index) => ({ ...operation, index }));
+  return { operations: ordered, payloads, backupFiles };
 }
