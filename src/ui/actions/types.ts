@@ -12,7 +12,8 @@ export type UiActionExecution =
         | "page-prev"
         | "page-next"
         | "chat-scroll-up"
-        | "chat-scroll-down";
+        | "chat-scroll-down"
+        | "chat-follow-latest";
     }
   | {
       readonly kind: "command";

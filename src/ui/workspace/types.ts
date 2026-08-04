@@ -60,6 +60,23 @@ export interface WorkspaceLocalState {
   readonly chatViewport: Atom<ChatViewport | null>;
   /** The older-page load latch — see `ui/chat`'s {@link ChatOlderPageState}. */
   readonly olderPage: Atom<ChatOlderPageState>;
+  /**
+   * Whether the chat viewport is currently pinned at the tail (design iteration 10 answers 2/6,
+   * `design/termcraft-engine.js:1525` — `o.following`). Seeded `true` (a freshly mounted chat
+   * opens at the bottom); `Workspace.tsx` recomputes it from {@link ChatViewport.atBottom} right
+   * after every scroll it drives (the wheel via `onMouseScroll`, PgUp/PgDn via `scrollByPage`,
+   * `^D` via `scrollToBottom`) — a plain discrete fact, not the continuous `scrollTop` metric
+   * {@link ChatViewport}'s own doc comment says the UI must never read.
+   *
+   * A REAL, not merely mocked, fact for every scroll position — including the true start of
+   * chat, where the design's own `wsScrollStart` mockup happens not to compose the follow banner
+   * with the start-of-chat marker in that one illustration. Read as "the mockup didn't stack two
+   * things in one scene," not "the banner is suppressed at the top": nothing in `chatViewport`'s
+   * own code ties `following` to `top.mode`, and the true start is exactly where a reader is
+   * furthest from the tail — `^D` staying offered there is the more useful behavior, not a new
+   * decision invented on top of the mockup.
+   */
+  readonly chatFollowing: Atom<boolean>;
   /** The mounted composer editor, or `null`. See `ui/app/model/primary-input.ts`. */
   readonly composerEditor: Atom<TextEditorHandle | null>;
   /**

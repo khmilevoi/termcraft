@@ -703,6 +703,12 @@ describe("Workspace action-derived hotkey hints", () => {
    * — so the row now carries them too, right after F2 (`HOTKEYS`' own array order,
    * `ui/actions/model/registry.ts`). Two separate entries, not the design's one combined
    * `PgUp/PgDn scroll` — see that registry's own divergence comment on why.
+   *
+   * UPDATED AGAIN (review finding I5): this fixture seeds no chat history at all, so
+   * `mirror.history().prevCursor` stays `null` — the true start of chat, `wsScrollStart`'s own
+   * `PgDn`-only key row (`design/termcraft-engine.js:1588`). `PgUp` now drops from this
+   * assertion for that reason, not a change to the general rule; the "history loaded, mid-chat"
+   * describe block below covers the row with both `PgUp`/`PgDn` present.
    */
   test("draws exactly the design's idle key row — no bound-but-undrawn page-step keys", async () => {
     const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
@@ -722,20 +728,116 @@ describe("Workspace action-derived hotkey hints", () => {
     // The status bar is the frame's bottom row; its right-aligned cluster is the key row.
     const statusRow = (rows.at(-1) ?? []).map((run) => run.text).join("");
     // `^E export` never appears — `StatusBar`'s own `HIDDEN_HINT_GLYPHS` drops it (design
-    // `hintKeys`, `termcraft-engine.js:500`), which is why the row is these six and only
-    // these six: F2 full · PAGEUP scroll up · PAGEDOWN scroll down · F3 tweaks · F4 act ·
-    // Ctrl+P preview. `full`/`act` are the design's own shortenings (`hintKeys`,
-    // `termcraft-engine.js:499`) of `fullscreen`/`interact`.
+    // `hintKeys`, `termcraft-engine.js:500`); `PgUp` doesn't either, for the reason this test's
+    // own doc comment now gives — which is why the row is these five and only these five: F2
+    // full · PgDn scroll down · F3 tweaks · F4 act · Ctrl+P preview. `full`/`act` are the
+    // design's own shortenings (`hintKeys`, `termcraft-engine.js:499`) of `fullscreen`/`interact`.
     expect(
       statusRow
         .trimEnd()
-        .endsWith(
-          " F2  full  PAGEUP  scroll up  PAGEDOWN  scroll down  F3  tweaks  F4  act  Ctrl+P  preview",
-        ),
+        .endsWith(" F2  full  PgDn  scroll down  F3  tweaks  F4  act  Ctrl+P  preview"),
     ).toBe(true);
     for (const absent of ["Ctrl+B", "Ctrl+N", "prev page", "next page"]) {
       expect(allText(rows)).not.toContain(absent);
     }
+  });
+});
+
+// Review findings I2/I3/I5 (design iteration 10 answers 2/6/7): the follow-latest banner, the
+// `^D` binding, and the status-bar key row's `following`/`atStart`/`olderPageFailed` conditionals.
+describe("Workspace follow-latest (design iteration 10 answers 2/6/7)", () => {
+  test("mid-chat, still following: both PgUp and PgDn show, no follow key", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ kind: "ready", agent: "claude" }),
+    );
+    seedHistory(deps, { loaded: 5, total: 40, cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.agentHealth.set({ kind: "ready", agent: "claude" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const statusRow = (handle.capture().rows.at(-1) ?? []).map((run) => run.text).join("");
+    expect(statusRow).toContain("PgUp");
+    expect(statusRow).toContain("scroll up");
+    expect(statusRow).toContain("PgDn");
+    expect(statusRow).not.toContain("Ctrl+D");
+  });
+
+  test("scrolled away: the composer shows the away banner and the row gains Ctrl+D follow", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ kind: "ready", agent: "claude" }),
+    );
+    seedHistory(deps, { loaded: 5, total: 40, cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.agentHealth.set({ kind: "ready", agent: "claude" });
+    deps.local.chatFollowing.set(false);
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    expect(allText(rows)).toContain("scrolled up · ^D follow latest");
+    const statusRow = statusBarText(rows);
+    expect(statusRow).toContain("Ctrl+D");
+    expect(statusRow).toContain("follow");
+  });
+
+  test("a running turn while scrolled away shows the scroll/follow trio, not the disabled send hint", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ kind: "ready", agent: "claude" }),
+    );
+    seedHistory(deps, { loaded: 5, total: 40, cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.agentHealth.set({ kind: "ready", agent: "claude" });
+    deps.local.chatFollowing.set(false);
+    deps.mirror.apply(event("turn.started", { turnId: uuidv7(), chatId: CHAT, deadline: TEST_TS }));
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const rows = handle.capture().rows;
+    expect(allText(rows)).toContain("turn running below · ^D follow latest");
+    const statusRow = statusBarText(rows);
+    expect(statusRow).toContain("PgUp");
+    expect(statusRow).toContain("PgDn");
+    expect(statusRow).toContain("Ctrl+D");
+    expect(statusRow).toContain("esc");
+    expect(statusRow).not.toContain("⏎");
+  });
+
+  test("a failed older-page load relabels PgUp to 'retries'", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ kind: "ready", agent: "claude" }),
+    );
+    seedHistory(deps, { loaded: 5, total: 40, cursor: { generation: 1, beforeOffset: 400 } });
+    deps.local.agentHealth.set({ kind: "ready", agent: "claude" });
+    deps.local.olderPage.set({ kind: "failed", safeMessage: "page unreadable" });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    const statusRow = statusBarText(handle.capture().rows);
+    expect(statusRow).toContain("PgUp");
+    expect(statusRow).toContain("retries");
+    expect(statusRow).not.toContain("scroll up");
+  });
+
+  test("scrolling away from the tail clears following, and ^D restores it", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, undefined, () =>
+      Promise.resolve({ kind: "ready", agent: "claude" }),
+    );
+    seedHistory(deps, { loaded: 40, total: 40, cursor: null });
+    const handle = await createHeadlessRenderer({ w: 120, h: 36 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    expect(deps.local.chatFollowing()).toBe(true);
+
+    deps.local.chatViewport()?.scrollByPage(-1);
+    await handle.render();
+    expect(deps.local.chatFollowing()).toBe(false);
+
+    deps.local.chatViewport()?.scrollToBottom();
+    await handle.render();
+    expect(deps.local.chatFollowing()).toBe(true);
   });
 });
 

@@ -93,11 +93,9 @@ describe("resolveKey — global keys (design §3.8)", () => {
     });
   });
 
-  test("PgUp/PgDn and their ctrl aliases resolve to the chat scroll actions", () => {
+  test("PgUp/PgDn resolve to the chat scroll actions, ctrl+u as PgUp's own alias", () => {
     const context = ctx({}); // reuse this file's own context builder
-    expect(
-      resolveKey(key({ name: "pageup", ctrl: false, sequence: "\x1b[5~" }), context),
-    ).toEqual({
+    expect(resolveKey(key({ name: "pageup", ctrl: false, sequence: "\x1b[5~" }), context)).toEqual({
       kind: "action-execute",
       actionId: "chat.scroll-up",
     });
@@ -111,9 +109,16 @@ describe("resolveKey — global keys (design §3.8)", () => {
       kind: "action-execute",
       actionId: "chat.scroll-up",
     });
+  });
+
+  // Review finding I3: `ctrl+d` used to double as `chat.scroll-down`'s own alias, colliding with
+  // the design's real assignment for it — `design/termcraft-engine.js:1525,1557,1602` binds `^D`
+  // to "follow latest", a different action entirely.
+  test("ctrl+d resolves to follow-latest, not scroll-down", () => {
+    const context = ctx({});
     expect(resolveKey(key({ name: "d", ctrl: true, sequence: "\x04" }), context)).toEqual({
       kind: "action-execute",
-      actionId: "chat.scroll-down",
+      actionId: "chat.follow-latest",
     });
   });
 });

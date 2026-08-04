@@ -107,6 +107,10 @@ export interface UiLocalState {
   readonly chatViewport: Atom<ChatViewport | null>;
   /** The older-page load latch — see `ui/chat`'s {@link ChatOlderPageState}. */
   readonly olderPage: Atom<ChatOlderPageState>;
+  /** Whether the chat viewport is pinned at the tail — see `ui/workspace`'s identical field on
+   *  {@link WorkspaceLocalState.chatFollowing} for the full doc comment; this is that same fact,
+   *  mirrored here for the same structural reason every other Workspace-read atom is. */
+  readonly chatFollowing: Atom<boolean>;
   /**
    * The `operationId` of the last export result the user dismissed (M14), or `null`. There is
    * no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member — export
@@ -428,7 +432,43 @@ export function createUiDeps(
   // `ui/workspace/model/page-selection.ts` for why the user's page choice is UI-local state.
   // Declared here, above `runtime`, because that atom's connect hook drives the preview session
   // off `activePageSlug` below.
-  const pageOverride = atom<string | null>(null, "ui.local.pageOverride");
+  //
+  // NARROWED off `mirror.project()` on purpose (reatom-audit RTM-S02, fix round 2): `project` is
+  // a compound object that also carries `trust`/`openFailure`/`opening`, so a `withComputed`
+  // reading it directly would recompute — and, without care, reset `pageOverride` — on every
+  // ONE of those unrelated fields changing too. Reatom only propagates a `computed`'s own update
+  // to its dependents when the OUTPUT actually differs (verified against the installed
+  // `@reatom/core`: a sibling field changing leaves a narrowed `computed` un-notified), so this
+  // narrowed slug is what turns "the compound object changed" into "the Kernel's active slug
+  // itself changed" — the exact edge `KERNEL TRUTH RETIRES THE USER'S TAB PICK` below now reads.
+  const kernelActivePageSlug = computed<string | null>(
+    () => mirror.project().activePageSlug,
+    "ui.app.kernelActivePageSlug",
+  );
+  // KERNEL TRUTH RETIRES THE USER'S TAB PICK (page switching, 2026-07-27; moved onto the atom
+  // itself, reatom-audit RTM-S02 fix round 2 — see `kernelActivePageSlug` just above for why a
+  // narrowed dependency is what makes this correct). `pageOverride` only ever covers the window
+  // between a tab click and the Kernel publishing an active slug of its own. When that slug
+  // arrives it either MATCHES the pick (`preview.selectPage` persisted it into
+  // `workspace.local.toml`, so `resolveActivePageSlug` hands it back) — resetting to `null`
+  // changes nothing on screen, since `activePageSlug` below reads `pageOverride() ?? Kernel`
+  // either way — or it DIFFERS, which per §6.2 means `pages.json` requested the move on apply,
+  // and the Kernel's choice must win. Both cases are the same rule: a changed Kernel slug retires
+  // the override, unconditionally — this is why the body below ignores `state` entirely, the same
+  // shape the upstream `page`/`search` example uses. Direct writes (`selectPage`'s own
+  // `pageOverride.set(rawPageSlug)`) still pass straight through untouched — `withComputed`
+  // overrides only ON RECOMPUTE, triggered by `kernelActivePageSlug` itself changing, never by an
+  // unrelated write to this atom.
+  const pageOverride = atom<string | null>(null, "ui.local.pageOverride").extend(
+    withComputed(() => {
+      kernelActivePageSlug();
+      return null;
+    }),
+  );
+  // Prime the computation here, the same reason `slashSelection`/`olderPage` below do it — while
+  // `mirror.project()` is still at its pristine post-construction value: the FIRST natural read
+  // otherwise belongs to whichever component happens to read `pageOverride()` first.
+  void pageOverride();
   const activePageSlug = computed<string | null>(
     () => pageOverride() ?? mirror.project().activePageSlug,
     "ui.app.activePageSlug",
@@ -630,16 +670,15 @@ export function createUiDeps(
       // back to the slug alone rather than inventing a hash — one redundant re-select is
       // cheaper than a preview stuck on stale content.
       let lastRequestedPageKey: string | null = null;
-      // TWO WAYS TO RETIRE THE TAB STRIP'S OPTIMISTIC PICK, and they are not interchangeable.
-      // Both are declared HERE, above their first use, for the same reason `active` is:
-      // `bind(...)` must be created in this hook body, before anything async, so the
-      // `pageOverride.set` each performs from a promise continuation or a subscriber lands in the
-      // runtime's own Reatom context rather than the default one (RTM-A04).
+      // THE ONE REMAINING IMPERATIVE RETIREMENT ROUTE — the Kernel-truth route now lives on
+      // `pageOverride`'s own `withComputed` (see its declaration above, reatom-audit RTM-S02 fix
+      // round 2); this one covers what a derivation on the atom cannot: a refusal is scoped to
+      // the ONE dispatch it belongs to, not a fact `kernelActivePageSlug` changing would ever
+      // represent. Declared HERE, above its first use, for the same reason `active` is: `bind(
+      // ...)` must be created in this hook body, before anything async, so the `pageOverride.set`
+      // it performs from a promise continuation lands in the runtime's own Reatom context rather
+      // than the default one (RTM-A04).
       //
-      // UNCONDITIONAL — one caller, the Kernel-truth subscriber further down. When the Kernel
-      // publishes an active slug of its own it is authoritative whatever the pick was, so there
-      // is nothing to compare against.
-      const retirePageOverride = bind(() => pageOverride.set(null));
       // SCOPED TO ITS OWN DISPATCH — the two terminal-refusal branches below. The memo is keyed
       // `slug@hash`, so two quick clicks leave two `preview.selectPage` dispatches in flight at
       // once. An unconditional clear would let the FIRST one's refusal wipe the SECOND,
@@ -750,20 +789,6 @@ export function createUiDeps(
           }
         });
       });
-      // KERNEL TRUTH RETIRES THE USER'S TAB PICK (page switching, 2026-07-27). `pageOverride`
-      // only ever covers the window between a tab click and the Kernel publishing an active slug
-      // of its own. When that slug arrives it either MATCHES the pick (`preview.selectPage`
-      // persisted it into `workspace.local.toml`, so `resolveActivePageSlug` hands it back) —
-      // clearing changes nothing on screen — or it DIFFERS, which per §6.2 means `pages.json`
-      // requested the move on apply, and the Kernel's choice must win. Both cases are the same
-      // rule: a changed Kernel slug retires the override. Starts `null` rather than reading
-      // `mirror.project()` here, which would make this connect hook depend on the project slice:
-      // no override can exist before the first tab click anyway, so the first notification's
-      // clear is a no-op. This is the ONLY caller of the unconditional `retirePageOverride`
-      // (declared above): Kernel truth outranks the pick whatever it was, so unlike the refusal
-      // branches — which use the slug-scoped `retirePageOverrideIfCurrent`, since a refusal only
-      // speaks for the dispatch it belongs to — there is nothing here worth comparing against.
-      let lastKernelPageSlug: string | null = null;
       // RETRY A PREVIEW REQUEST THE GUARD REFUSED WHILE UNTRUSTED (defect fix, 2026-08-03).
       //
       // `requestPreviewForActivePage`'s own `rejected` branch above forgets its memo SPECIFICALLY
@@ -783,16 +808,13 @@ export function createUiDeps(
       // and on every other trusted write (where `activePageRequest` is unchanged) it collapses into
       // that same memo and costs nothing.
       //
-      // `startupOpenPending`'s success-path clearer used to be a third branch on THIS subscriber,
-      // guarded on `project.projectId !== null`. It is now a `withComputed` on the atom itself
-      // (see its declaration above and `UiLocalState.startupOpenPending`'s doc comment): the same
-      // `mirror.project().projectId` fact, read where the flag lives instead of where one
-      // subscription happened to notice it.
+      // `startupOpenPending`'s success-path clearer, and `pageOverride`'s Kernel-truth reset
+      // (reatom-audit RTM-S02 fix round 2), both used to be branches on THIS subscriber, guarded
+      // on `project.projectId !== null` / a hand-tracked `lastKernelPageSlug` respectively. Both
+      // are now a `withComputed` on the atom itself (see their declarations above): the same
+      // underlying facts, read where each flag lives instead of where one subscription happened
+      // to notice them.
       const unsubscribeProject = mirror.project.subscribe((project) => {
-        if (project.activePageSlug !== lastKernelPageSlug) {
-          lastKernelPageSlug = project.activePageSlug;
-          retirePageOverride();
-        }
         // `projectId === null` is what says the open never finished: `finishOpen` clears
         // `openFailure` anyway, so this pair only ever holds for a genuinely blocked open — never
         // for the panel lingering after a successful recovery, which has already been closed.
@@ -919,15 +941,22 @@ export function createUiDeps(
   // plain `computed`, exactly as `slashSelection`'s own comment already explains.
   const olderPage = atom<ChatOlderPageState>({ kind: "idle" }, "ui.local.olderPage").extend(
     withComputed((state) => {
-      // Read every dependency BEFORE the early return, matching `slashSelection` above: an
+      // Read every dependency BEFORE any early return, matching `slashSelection` above: an
       // early return that skipped reading one would register no dependency for it, and this
-      // atom would never recompute again once THAT value changed. `mirror.history()`'s own
-      // return value is intentionally discarded here — the record count growing is what marks
-      // a SUCCESSFUL page (chat-scroll spec §6.6: "a FAILED page changes no record count and a
-      // SUCCESSFUL one clears no failure"), but which count it grows TO doesn't matter to the
-      // branch below; only that this atom is asked to recompute again when it does.
-      mirror.history();
+      // atom would never recompute again once THAT value changed.
+      const heldHistory = mirror.history();
       const olderFailure = mirror.lastOlderPageFailure();
+      // A RESET window — `mirror.ts`'s own `EMPTY_HISTORY`, published only by `chat.changed`
+      // switching `activeChatId` — can only mean the active chat changed since this atom last
+      // held a non-idle value (review finding C1): `Workspace.tsx`'s own `maybeLoadOlder`
+      // never dispatches without a non-null `prevCursor`, so neither `"loading"` nor
+      // `"failed"` can be genuinely reached while the held window is empty with no prior page.
+      // Without this, a load that failed in one chat left `{kind:"failed"}` permanently latched
+      // — `state.kind !== "loading"` below never lets it move again — and it rode straight into
+      // every chat switched to afterward, showing that chat a banner for someone else's failure.
+      if (heldHistory.records.length === 0 && heldHistory.prevCursor === null) {
+        return { kind: "idle" };
+      }
       if (state.kind !== "loading") return state;
       return olderFailure === null
         ? { kind: "idle" }
@@ -960,6 +989,9 @@ export function createUiDeps(
     pageOverride,
     chatViewport: atom<ChatViewport | null>(null, "ui.local.chatViewport"),
     olderPage,
+    // Seeded `true`: a freshly mounted chat opens sticky-bottom (`Workspace.tsx`'s own
+    // `stickyStart="bottom"`). See `WorkspaceLocalState.chatFollowing`'s doc comment.
+    chatFollowing: atom(true, "ui.local.chatFollowing"),
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),

@@ -140,6 +140,12 @@ function modeChip(
 function hotkeyGlyph(key: string): string {
   if (key === "ctrl+e") return "^E";
   if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
+  // CORRECTED (review finding I5): a bare `.toUpperCase()` read `pageup`/`pagedown` as
+  // `PAGEUP`/`PAGEDOWN` — two spellings of the same key on one screen, since
+  // `ChatScrollback`'s own retry row already writes the design's literal `PgUp`
+  // (`design/termcraft-engine.js:1505-1506`).
+  if (key === "pageup") return "PgUp";
+  if (key === "pagedown") return "PgDn";
   return key.toUpperCase();
 }
 
@@ -170,14 +176,35 @@ function hintKeys(
   turn: TurnMirror,
   fullscreen: boolean,
   previewHalt: PreviewHalt,
+  // `following`/`atStart`/`olderPageFailed` (review finding I5): the chat-scroll key entries
+  // this row derives from `HOTKEYS` all vary with the chat viewport's own state, not merely
+  // with the four facts this function already took.
+  chat: Readonly<{ following: boolean; atStart: boolean; olderPageFailed: boolean }>,
 ): readonly StatusBarHintKey[] {
   if (fullscreen) return fullscreenHint("windowed");
   // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
-  if (turn.phase === "running")
+  if (turn.phase === "running") {
+    // CORRECTED (review finding I5): `wsScrollLive` (`design/termcraft-engine.js:1605`) is a
+    // THIRD running-turn key row the citation above doesn't cover — scrolled away from a live
+    // block that keeps growing off-screen below. Its row drops the disabled-send hint for the
+    // scroll/follow trio instead: there is nothing to send toward (the turn already owns the
+    // composer), but there IS somewhere to scroll back to.
+    if (!chat.following) {
+      return [
+        ...HOTKEYS.filter(
+          (action) => action.id === "chat.scroll-up" || action.id === "chat.scroll-down",
+        ).map((action) => hotkeyHint(action)),
+        ...HOTKEYS.filter((action) => action.id === "chat.follow-latest").map((action) =>
+          hotkeyHint(action),
+        ),
+        ["esc", "cancel"],
+      ];
+    }
     return [
       ["⏎", "send", "dis"],
       ["esc", "cancel"],
     ];
+  }
   // `preview.retry` and `preview.repair` are advertised ONLY where they actually act. Showing
   // them unconditionally would put a live-looking `F5 retry`/`F6 repair` in the status bar for
   // the entire session, for actions that do nothing in every other phase — the same "advertised
@@ -185,19 +212,31 @@ function hintKeys(
   //
   // `F6` additionally requires the PAGE to be at fault: `wsHostUnavailable`'s own key row is
   // `F5 · F2 · F3` with no repair key at all, because no page edit could start a host.
+  //
+  // `chat.scroll-up`/`chat.follow-latest` are ALSO conditional (review finding I5): PgUp drops
+  // at the true start of chat — `wsScrollStart`'s own key row is `PgDn`-only, there is nothing
+  // above to page to — and `^D follow` draws only while `!following`, matching every mockup
+  // that shows it (`wsScrollMid`/`wsScrollLive`; `wsScrollLoaded`/`wsScrollLoading`/
+  // `wsScrollFailed`/`wsScrollStart` all omit it).
   return HOTKEYS.filter((action) => {
     // A key bound without being drawn (the page-step extension, `HotkeyAction.hint`) never
     // enters the row: this row is a transcription of the design's own key rows.
     if (action.hint === false) return false;
     if (action.id === "preview.retry") return previewHalt !== null;
     if (action.id === "preview.repair") return previewHalt?.designAtFault === true;
+    if (action.id === "chat.scroll-up") return !chat.atStart;
+    if (action.id === "chat.follow-latest") return !chat.following;
     return true;
-  }).map((action) =>
-    action.id === "preview.retry" && previewHalt?.retryAvailable === false
-      ? // Both no-retry variants mark F5 `dis` in the key row.
-        [hotkeyGlyph(action.key), action.label, "dis"]
-      : hotkeyHint(action),
-  );
+  }).map((action): StatusBarHintKey => {
+    if (action.id === "preview.retry" && previewHalt?.retryAvailable === false)
+      // Both no-retry variants mark F5 `dis` in the key row.
+      return [hotkeyGlyph(action.key), action.label, "dis"];
+    // design/termcraft-engine.js:1505-1506 / `ChatScrollback`'s own "PgUp retries" row copy:
+    // the SAME gesture that requested the failed page retries it.
+    if (action.id === "chat.scroll-up" && chat.olderPageFailed)
+      return [hotkeyGlyph(action.key), "retries"];
+    return hotkeyHint(action);
+  });
 }
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
@@ -567,6 +606,9 @@ export const Workspace = reatomComponent<{
   const pinRows = derivePinListRows(pins);
   const history = mirror.history();
   const records = history.records;
+  // Read once, like `history` above — the status-bar key row's "retries" label (review finding
+  // I5) and `ChatScrollback`'s own indicator row must read the identical latch.
+  const olderPage = local.olderPage();
   const selection = mirror.selection();
   const previewNotice = mirror.previewNotice();
   // The one preview state the status bar, the composer attach line and the preview panel all
@@ -597,8 +639,13 @@ export const Workspace = reatomComponent<{
   // Only the crash panel takes it: `HostUnavailablePanel` names no repair key at all (the host
   // never got as far as the page), so there is no F6 promise there to correct.
   const agentBlocked = agentBlockedNote(local.agentHealth());
+  // Read once here, like `activePageSlug`/`previewHalt` above: the composer attach line
+  // (design iteration 10 answers 2/6) and the status-bar key row below both branch on it, and
+  // reading it twice would risk the two disagreeing about whether the pane is following.
+  const following = local.chatFollowing();
   const composerAttach = deriveComposerAttach({
     readOnly: props.readOnly,
+    following,
     selection,
     activePageSlug,
     openPins: pins,
@@ -709,6 +756,12 @@ export const Workspace = reatomComponent<{
     });
   };
 
+  /** Whether `box`'s own scroll position currently shows the tail — the one expression
+   *  {@link ChatViewport.atBottom} and the `chatFollowing` tracking below both need; kept in one
+   *  place so the two can never drift apart on what "at the bottom" means. */
+  const isAtBottom = (box: ScrollBoxRenderable) =>
+    box.scrollTop + box.viewport.height >= box.scrollHeight;
+
   /**
    * Publishes the live `ScrollBoxRenderable` as a {@link ChatViewport} (chat-scroll spec §5.5).
    * `useWrap` because the callback writes a Reatom atom from React's commit phase — outside any
@@ -740,9 +793,12 @@ export const Workspace = reatomComponent<{
       },
       scrollToBottom() {
         box.scrollTo({ x: 0, y: box.scrollHeight });
+        // `^D` (design iteration 10 answers 2/6, review finding I2/I3) always lands exactly at
+        // the tail, so this is unconditionally the follow state — no read-back needed.
+        local.chatFollowing.set(true);
       },
       atBottom() {
-        return box.scrollTop + box.viewport.height >= box.scrollHeight;
+        return isAtBottom(box);
       },
       anchorFromBottom() {
         return box.scrollHeight - box.scrollTop - box.viewport.height;
@@ -764,6 +820,12 @@ export const Workspace = reatomComponent<{
    * indicator row (`ChatScrollback`'s `onLoadOlder` below). Four guards, in the order they can
    * refuse most cheaply.
    *
+   * ALSO the one place `chatFollowing` (design iteration 10 answers 2/6, review finding I2)
+   * refreshes: every route above is a route through here, so recomputing it first, before any of
+   * this function's OWN gates, covers the wheel and the keyboard in one spot rather than three.
+   * The indicator-row click is along for the ride too — harmless, since that row is reachable
+   * only near the top, where `isAtBottom` already reads `false`.
+   *
    * `withAsync` is deliberately NOT used here even though it is this project's default
    * (RTM-A02/A03), and the reason is worth stating: the operation does not complete when the
    * dispatch promise resolves — it completes when `chat.records.older` arrives. The dispatch
@@ -773,6 +835,7 @@ export const Workspace = reatomComponent<{
   const maybeLoadOlder = useWrap(() => {
     const box = viewportRef.current;
     if (box === null) return;
+    local.chatFollowing.set(isAtBottom(box));
     if (box.scrollTop > TOP_TRIGGER_ROWS) return;
 
     const held = mirror.history();
@@ -988,7 +1051,7 @@ export const Workspace = reatomComponent<{
                   width={chatContentWidth}
                   unloadedCount={Math.max(0, history.totalRecordCount - records.length)}
                   atStart={history.prevCursor === null}
-                  olderPage={local.olderPage()}
+                  olderPage={olderPage}
                   onLoadOlder={maybeLoadOlder}
                 />
                 {/* Below the persisted tail, above the live turn block — chronologically the crash
@@ -1168,7 +1231,15 @@ export const Workspace = reatomComponent<{
                   }
                 : healthBadge
         }
-        hintKeys={filling ? opening.hintKeys : hintKeys(turn, fullscreen, previewHalt)}
+        hintKeys={
+          filling
+            ? opening.hintKeys
+            : hintKeys(turn, fullscreen, previewHalt, {
+                following,
+                atStart: history.prevCursor === null,
+                olderPageFailed: olderPage.kind === "failed",
+              })
+        }
       />
     </box>
   );

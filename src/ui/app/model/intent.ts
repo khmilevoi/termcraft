@@ -450,6 +450,17 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     viewport.scrollByPage(execution.effect === "chat-scroll-down" ? 1 : -1);
     return;
   }
+  if (execution.effect === "chat-follow-latest") {
+    // `^D` (design iteration 10 answers 2/6, review finding I2/I3) — the same viewport port
+    // above, the same "reachable but inert with no viewport" reasoning.
+    const viewport = deps.local.chatViewport();
+    if (viewport === null) {
+      trace("ui.chat.followLatest.refused", { reason: "no viewport" });
+      return;
+    }
+    viewport.scrollToBottom();
+    return;
+  }
   if (execution.effect === "compose-repair") {
     // The composer is the destination, so the same refusal `composer-submit` applies here:
     // filling an input that cannot send would promise an action the screen does not offer.

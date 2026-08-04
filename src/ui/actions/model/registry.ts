@@ -152,19 +152,28 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // into one combined glyph/label tuple — every other hint in this file is one glyph, one
     // label, 1:1 with one action, and building a merge mechanism for this single pair is out
     // of scope for the task that dropped `hint: false` below (chat-scroll spec, Task 12). So
-    // the status bar renders TWO separate entries, `PAGEUP scroll up` and `PAGEDOWN scroll
-    // down` (this registry's own glyph/label pair below), rather than the design's one
+    // the status bar renders TWO separate entries, `PgUp scroll up` and `PgDn scroll down`
+    // (this registry's own glyph/label pair below — `Workspace.tsx`'s `hotkeyGlyph` renders
+    // `pageup`/`pagedown` as `PgUp`/`PgDn`, review finding I5), rather than the design's one
     // `PgUp/PgDn scroll`.
     //
-    // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u`/`ctrl+d` AS ALIASES:
+    // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u` AN ALIAS:
     //   - it must be GLOBAL tier: the composer owns focus by default, so a bare letter would
     //     be swallowed as text — the same hazard `keymap.ts`'s `home-recheck` note records;
     //   - `PgUp`/`PgDn` arrive as multi-character CSI sequences, which `printableChar`
     //     rejects on length alone, so they can never reach the composer as input;
-    //   - `ctrl+u`/`ctrl+d` are C0 control bytes (0x15 / 0x04): one byte, no encoding to get
-    //     wrong, and below 0x20 so `printableChar` rejects them too;
+    //   - `ctrl+u` is a C0 control byte (0x15): one byte, no encoding to get wrong, and below
+    //     0x20 so `printableChar` rejects it too;
     //   - `ctrl+`-arrows are deliberately NOT bound — they were dead on the maintainer's
     //     terminal, which is exactly why `page.prev`/`page.next` are `ctrl+b`/`ctrl+n`.
+    //
+    // NO `ctrl+d` ALIAS HERE (review finding I3, fix round 1) — an earlier version of this row
+    // gave `chat.scroll-down` the same C0-byte alias treatment as `chat.scroll-up`'s `ctrl+u`,
+    // reading only the encoding argument above and missing that the design already assigns `^D`
+    // a DIFFERENT meaning: `design/termcraft-engine.js:1525` (`o.following===false` branch) and
+    // both `wsScrollMid`/`wsScrollLive`'s own key rows (`:1557`,`:1605`) bind it to "follow
+    // latest", not "page down". `chat.follow-latest` below is the real `^D`; this entry keeps
+    // only its PgDn glyph.
     id: "chat.scroll-up",
     execution: { kind: "local", effect: "chat-scroll-up" },
     hotkey: {
@@ -181,10 +190,19 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: {
       id: "chat.scroll-down",
       key: "pagedown",
-      aliases: ["ctrl+d"],
       label: "scroll down",
       capability: null,
     },
+  },
+  {
+    // FOLLOW LATEST (design iteration 10 answers 2/6, review finding I2/I3): `^D`,
+    // `design/termcraft-engine.js:1525,1557,1602`. Bound GLOBAL tier and unconditionally
+    // resolvable — same reasoning as the scroll pair above — so it always jumps the chat
+    // viewport to its tail; `Workspace.tsx`'s `hintKeys()` decides when to DRAW it (only while
+    // `!following`, matching every mockup that shows it), not `resolveKey`.
+    id: "chat.follow-latest",
+    execution: { kind: "local", effect: "chat-follow-latest" },
+    hotkey: { id: "chat.follow-latest", key: "ctrl+d", label: "follow", capability: null },
   },
   {
     id: "preview.tweaks",

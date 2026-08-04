@@ -23,6 +23,15 @@ export interface ComposerAttachInput {
    * exact design sources; both are distinct screens, not one generic "a turn is running" line.
    */
   readonly turnRunning: boolean;
+  /**
+   * Whether the chat viewport is currently pinned at the tail (design iteration 10 answers 2/6,
+   * `design/termcraft-engine.js:1525` — `o.following`; see `ui/workspace`'s
+   * `WorkspaceLocalState.chatFollowing` for the full derivation). Read FIRST, right after
+   * `readOnly`: the engine's own `chatViewport` never checks `attach`/`chip` when
+   * `following===false` — its pinned-row draw is `if (following===false) … else if (attach) …
+   * else if (chip) …`, an unconditional priority, so this input outranks every branch below it.
+   */
+  readonly following: boolean;
   /** The composer's current draft text. Only its emptiness is read here. */
   readonly composerValue: string;
   /**
@@ -56,9 +65,18 @@ export interface ComposerAttachInput {
 }
 
 /**
- * Derives the Composer's single meta line (design §3.1/§3.2), priority read-only → selection →
- * open pins → turn-time line → halted preview → none:
+ * Derives the Composer's single meta line (design §3.1/§3.2), priority read-only → NOT
+ * following → selection → open pins → turn-time line → halted preview → none:
  * - **read-only** — the existing `read-only — Send disabled` line, `SHELL_PALETTE.red`.
+ * - **not following** (design iteration 10 answers 2/6, review finding I2) — `▼ scrolled up ·
+ *   ^D follow latest`, or `▼ turn running below · ^D follow latest` while a turn runs,
+ *   `amberHi` bold, `design/termcraft-engine.js:1525`. Ranked ahead of selection/pins/turn-time
+ *   below because the engine's own draw order does — see {@link ComposerAttachInput.following}'s
+ *   own doc comment. Ranked BELOW `readOnly`: read-only is this project's own MVP gate on
+ *   sending, a concept the design engine's `chatViewport` does not model at all, so nothing in
+ *   it says which of the two should win — kept consistent with every OTHER UI-only concern this
+ *   function already layers on top of the engine's states (see the halted-preview branch below,
+ *   also project-only) by leaving `readOnly` as the one tier the engine cannot override.
  * - **selection present** — the design `wsSelect` chip (`chipTag`, glyph `▣`), e.g. `▣ gauge-cpu`.
  * - **no selection, open pins present** — `N open pins attached · sent next`, `amberHi` bold
  *   (`wsPins`' `attach` line, `chatSeq:447`).
@@ -124,6 +142,14 @@ export function deriveComposerAttach(
   input: ComposerAttachInput,
 ): Readonly<{ text: string; fg: ShellToken }> | null {
   if (input.readOnly) return { text: "read-only — Send disabled", fg: "red" };
+  if (!input.following) {
+    return {
+      text: input.turnRunning
+        ? "▼ turn running below · ^D follow latest"
+        : "▼ scrolled up · ^D follow latest",
+      fg: "amberHi",
+    };
+  }
   const selectionOnActivePage =
     input.selection !== null && input.selection.pageSlug === input.activePageSlug
       ? input.selection

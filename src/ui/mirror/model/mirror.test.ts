@@ -1750,6 +1750,47 @@ describe("chat history paging (chat-scroll spec §6.5)", () => {
     expect(history.totalRecordCount).toBe(41);
   });
 
+  // Review finding I4: `mergeTail` used to keep the held cursor whenever the client held more
+  // records than the fresh tail brought, with no check on WHICH generation it belonged to. A
+  // rebuild-from-byte-zero (§7.4 — a truncated trailing record, a same-length branch switch)
+  // bumps the chat index's generation, and `loadChatIndexBefore` hard-refuses any cursor from an
+  // earlier one (`ChatIndexCursorStaleError`). Re-serving the held cursor past that point meant
+  // every retry failed forever, discarding the valid cursor the fresh tail actually carried.
+  test("a rebuild's generation bump replaces the held cursor rather than re-serving a stale one", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [userRecord("r1"), userRecord("r2")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    // A rebuild bumped the index generation to 2 — every generation-1 cursor, including the one
+    // just held above, is now stale.
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3"), userRecord("r4")],
+        prevCursor: { generation: 2, beforeOffset: 120 },
+        totalRecordCount: 41,
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(history.prevCursor).toEqual({ generation: 2, beforeOffset: 120 });
+  });
+
   test("a failed older page keeps the window and the cursor untouched", () => {
     const mirror = createMirror();
     ready(mirror);

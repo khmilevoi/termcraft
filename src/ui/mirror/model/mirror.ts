@@ -650,10 +650,18 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         // not contain: those are older, so its own cursor points further back than the fresh
         // tail's does. Taking the incoming one would walk the paging back down toward the
         // tail and re-request pages the window already has.
+        //
+        // ONLY when its generation still matches the fresh tail's own cursor (review finding
+        // I4): a rebuild-from-byte-zero (a truncated trailing record, a same-length branch
+        // switch, §7.4) bumps the chat index's generation, and `loadChatIndexBefore` hard-
+        // refuses a stale-generation cursor (`ChatIndexCursorStaleError`). A held cursor from
+        // before the rebuild would then be re-served forever — discarding the valid one this
+        // fresh tail carries — and every retry after it would fail permanently.
         const kept = records.length - p.records.length;
+        const keepHeld = kept > 0 && held.prevCursor?.generation === p.prevCursor?.generation;
         history.set({
           records,
-          prevCursor: kept > 0 ? held.prevCursor : p.prevCursor,
+          prevCursor: keepHeld ? held.prevCursor : p.prevCursor,
           totalRecordCount: p.totalRecordCount,
         });
         return;

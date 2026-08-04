@@ -1261,4 +1261,49 @@ describe("createUiDeps chat viewport and older page", () => {
     expect(deps.local.chatViewport()).toBeNull();
     expect(deps.local.olderPage()).toEqual({ kind: "idle" });
   });
+
+  // Review finding C1: a failed older-page load used to latch `{kind:"failed"}` permanently —
+  // `withComputed` only ever transitioned OUT of `"loading"`, so nothing reset it once the user
+  // switched to an unrelated chat, and the stale banner rode along into whatever they opened
+  // next. `mirror.ts`'s own `chat.changed` handler already resets `history`/
+  // `lastOlderPageFailure` to their empty values on an `activeChatId` change; the fix teaches
+  // this atom to recognize that reset rather than ignore it.
+  test("a failed older-page load clears once the active chat switches away from it", () => {
+    const CHAT_A = uuidv7();
+    const CHAT_B = uuidv7();
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(
+      event("chat.changed", { activeChatId: CHAT_A, added: [], updated: [], removedChatIds: [] }),
+    );
+    deps.mirror.apply(
+      event("chat.records", {
+        chatId: CHAT_A,
+        records: [],
+        prevCursor: { generation: 1, beforeOffset: 400 },
+        totalRecordCount: 40,
+      }),
+    );
+    // Simulates the state `Workspace.tsx`'s own `maybeLoadOlder` sets right before dispatching.
+    deps.local.olderPage.set({ kind: "loading" });
+    deps.mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT_A,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+        failure: {
+          code: "PERSISTENCE_FAILED",
+          retryable: true,
+          safeMessage: "page unreadable",
+          details: {},
+        },
+      }),
+    );
+    expect(deps.local.olderPage()).toEqual({ kind: "failed", safeMessage: "page unreadable" });
+
+    deps.mirror.apply(
+      event("chat.changed", { activeChatId: CHAT_B, added: [], updated: [], removedChatIds: [] }),
+    );
+    expect(deps.local.olderPage()).toEqual({ kind: "idle" });
+  });
 });
