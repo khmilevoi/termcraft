@@ -351,10 +351,27 @@ describe("pageDescriptorsChangedPayloadV1Schema", () => {
     descriptors: [],
     changes: [],
     activePageSlug: "dashboard",
+    treeRevision: SHA,
   };
 
   test("accepts a valid change set and rejects an unknown key", () => {
     expectStrict(pageDescriptorsChangedPayloadV1Schema, valid);
+  });
+
+  /**
+   * `treeRevision` is a `computeTreeRevision` digest, so the schema validates it as one
+   * (design-tree phase 2 Task 10) — a bare `z.string()` would have let a producer put anything
+   * in the field the UI keys its live preview session on.
+   */
+  test("rejects a treeRevision that is not a sha-256 hex digest", () => {
+    expect(
+      pageDescriptorsChangedPayloadV1Schema.safeParse({ ...valid, treeRevision: "not-a-digest" })
+        .success,
+    ).toBe(false);
+    expect(
+      pageDescriptorsChangedPayloadV1Schema.safeParse({ ...valid, treeRevision: undefined })
+        .success,
+    ).toBe(false);
   });
 
   test("rejects a reason outside the closed 8-member union", () => {

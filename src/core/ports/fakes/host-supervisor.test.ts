@@ -13,6 +13,7 @@ const spec: HostSessionSpecV1 = {
   entryRelPath: "pages/home.tsx",
   expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
   sourceHash: "a".repeat(64),
+  treeRevision: "a".repeat(64),
   kitApiVersion: 1,
   size: { w: 80, h: 24 },
   theme: "default",

@@ -355,9 +355,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `store/model/factory.ts`, taking it to 891; task 10 adds
     // `host/session/model/capability-denial.ts` and its own `capability-denial.test.ts`, taking
     // it to 893; design-tree-phase-2 task 5 adds `core/project/model/tree-index.ts` and its own
-    // `tree-index.test.ts`, taking it to 895 — update BOTH this number and the count quoted in
+    // `tree-index.test.ts`, taking it to 895; task 10 adds
+    // `host/adapters/mount-tree-revision.ts` and its own `mount-tree-revision.test.ts`, taking
+    // it to 897 — update BOTH this number and the count quoted in
     // `lexer.oracle.test.ts` when the corpus grows.
-    expect(files.length).toBe(895);
+    expect(files.length).toBe(897);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

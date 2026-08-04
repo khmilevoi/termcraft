@@ -17,7 +17,22 @@ import { createFakePreviewSession } from "./preview-session";
 export type HostSupervisorFailableMethod = "preview";
 
 export type HostSupervisorCall =
-  | { readonly method: "preview"; readonly pageSlug: string }
+  | {
+      readonly method: "preview";
+      readonly pageSlug: string;
+      /**
+       * The spec's session key alongside the page it names (design-tree phase 2 Task 10) — the
+       * real supervisor's `keyOf` is `(pageSlug, treeRevision)`, so recording only the slug
+       * could not tell "the same session was reused" from "a second one was established".
+       */
+      readonly treeRevision: string;
+      /**
+       * The ENTRY file's own hash. Recorded next to the revision precisely because they are
+       * DIFFERENT questions: a shared-module edit moves the revision and leaves this untouched,
+       * which is exactly the case a test needs to be able to state.
+       */
+      readonly sourceHash: string;
+    }
   | { readonly method: "liveCount" }
   | { readonly method: "stopAll" };
 
@@ -50,7 +65,12 @@ export function createFakeHostSupervisorPort(): FakeHostSupervisorPort {
   }
 
   async function preview(spec: HostSessionSpecV1): Promise<FailureDtoV1 | PreviewSession> {
-    calls.push({ method: "preview", pageSlug: spec.pageSlug });
+    calls.push({
+      method: "preview",
+      pageSlug: spec.pageSlug,
+      treeRevision: spec.treeRevision,
+      sourceHash: spec.sourceHash,
+    });
     const queued = queues.preview.shift();
     if (queued !== undefined) return queued;
 

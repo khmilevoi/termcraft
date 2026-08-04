@@ -31,9 +31,10 @@ export type HostModeV1 = "preview" | "historical" | "smoke" | "export";
 /**
  * `treeRoot`/`entryRelPath`/`expectedFiles` REPLACED a single `sourcePath` in task 15 (design
  * §6, §9.2): a preview mounts the page's whole closure, so the spec names the tree it reads and
- * the inventory it expects to find there. `sourceHash` stays the ENTRY file's own hash — it is
- * the session's identity (every `PreviewFrame` carries it, the supervisor keys restart on it),
- * never a verification input; the host verifies bytes against `expectedFiles`.
+ * the inventory it expects to find there. `sourceHash` stays the ENTRY file's own hash — every
+ * `PreviewFrame` carries it and the mount verifies it against the entry's inventory row
+ * (`host/supervisor/model/mount-request.ts`) — but it is NO LONGER the supervisor's session key:
+ * see {@link HostSessionSpecV1.treeRevision}.
  */
 export interface HostSessionSpecV1 {
   readonly mode: HostModeV1;
@@ -46,6 +47,18 @@ export interface HostSessionSpecV1 {
   /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
   readonly expectedFiles: readonly DesignFileEntryV1[];
   readonly sourceHash: Sha256Hex;
+  /**
+   * `computeTreeRevision` over the sorted inventory (`entities/design-tree`) — the SESSION KEY
+   * the supervisor identifies a live incarnation by (design-tree phase 2 Task 10).
+   *
+   * `(pageSlug, sourceHash)` was that key until then, and it could not see a shared-module edit:
+   * a turn rewriting a module the page imports moves no entry hash, so `preview(spec)` matched
+   * the existing key and handed back the LIVE child — whose module registry still held the old
+   * module. Nothing re-mounted, so nothing re-verified the closure and nothing reached the
+   * screen. The revision covers every file under `treeRoot`, which strictly includes the entry,
+   * so it answers the entry-edit case the old key handled as well.
+   */
+  readonly treeRevision: string;
   readonly kitApiVersion: number;
   readonly size: Size;
   readonly theme: string;

@@ -288,12 +288,19 @@ export function computePageDescriptorChanges(
  * lists have no duplicate `pageSlug` before diffing — a duplicate is a producer bug
  * (two descriptors for one page cannot both be "the" descriptor for that slug) and is
  * surfaced as a typed error rather than silently diffed against one arbitrary copy.
+ *
+ * `treeRevision` is threaded straight through, exactly like `after`: it is the caller's own
+ * fact about the tree it read this list from (`readCanonicalTreeIndex`'s `treeRevision`),
+ * and nothing here could recompute it — the descriptors carry entry hashes only, never the
+ * shared modules those entries import. See `PageDescriptorsChangedPayloadV1`'s own header
+ * for why the payload needs a field KCC:797 does not list.
  */
 export function buildPageDescriptorsChangedPayload(
   reason: PageDescriptorsChangedReasonV1,
   before: readonly PageDescriptorV1[],
   after: readonly PageDescriptorV1[],
   activePageSlug: PageSlug | null,
+  treeRevision: string,
 ): PageDescriptorsAssemblyError | PageDescriptorsChangedPayloadV1 {
   const duplicateBefore = findDuplicateSlug(before);
   if (duplicateBefore !== null) {
@@ -313,5 +320,6 @@ export function buildPageDescriptorsChangedPayload(
     descriptors: after,
     changes: computePageDescriptorChanges(before, after),
     activePageSlug,
+    treeRevision,
   };
 }

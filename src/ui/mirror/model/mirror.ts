@@ -42,6 +42,25 @@ export interface Mirror {
   readonly project: Atom<ProjectMirror>;
   readonly capabilities: Atom<ReadonlyMap<CommandKindV1, CapabilityState>>;
   readonly pageDescriptors: Atom<readonly PageDescriptorV1[]>;
+  /**
+   * The canonical design tree's revision as of the last `page.descriptorsChanged`, or `null`
+   * when the only producer seen so far was a `kernel.snapshot` (design-tree phase 2 Task 10).
+   *
+   * WHY A SEPARATE SLICE AND NOT A DESCRIPTOR FIELD: every descriptor carries its own ENTRY
+   * file's hash, and a page spans its whole closure — so a turn that rewrites a shared module
+   * moves no descriptor at all. `ui/app/model/deps.ts` keys its preview request on this value;
+   * without it a shared-module edit is invisible to the UI and the live preview keeps rendering
+   * the pre-turn closure forever.
+   *
+   * `null` IS DELIBERATE AND ITS DIRECTION IS LOAD-BEARING. `kernel.snapshot` — the second
+   * producer of {@link pageDescriptors} — carries no revision (`KernelSnapshotPayloadV1` has no
+   * such field), so this reports `null` rather than keeping whatever a previous
+   * `page.descriptorsChanged` left. That makes the preview memo's key fall back to the slug
+   * alone, which costs at most one redundant re-ask; carrying a stale revision forward would
+   * make it MISS an ask, which is a preview frozen on stale content. One re-ask is a re-render;
+   * a missed one is a wrong screen.
+   */
+  readonly treeRevision: Atom<string | null>;
   readonly turn: Atom<TurnMirror>;
   readonly preview: Atom<PreviewMirror>;
   /**
@@ -200,6 +219,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     "ui.mirror.capabilities",
   );
   const pageDescriptors = atom<readonly PageDescriptorV1[]>([], "ui.mirror.pageDescriptors");
+  const treeRevision = atom<string | null>(null, "ui.mirror.treeRevision");
   const turn = atom<TurnMirror>(IDLE_TURN, "ui.mirror.turn");
   const preview = atom<PreviewMirror>(NO_PREVIEW, "ui.mirror.preview");
   /**
@@ -304,6 +324,11 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         project.set(projectFromSnapshot(payload));
         capabilities.set(capabilitiesFromSnapshot(payload));
         pageDescriptors.set(payload.pageDescriptors);
+        // THE SNAPSHOT KNOWS THE DESCRIPTORS BUT NOT THE TREE (design-tree phase 2 Task 10):
+        // `KernelSnapshotPayloadV1` carries `pageDescriptors` and no revision, so the honest
+        // reading here is "unknown", not "whatever the last `page.descriptorsChanged` said".
+        // See {@link Mirror.treeRevision} for why `null` must bias toward MORE preview re-asks.
+        treeRevision.set(null);
         chats.set({ activeChatId: payload.activeChatId, summaries: new Map() });
         agentIdentity.set(agentIdentityFromSnapshot(payload));
         // A fresh snapshot is the authoritative reset point; transient slices (turn, preview,
@@ -460,6 +485,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
       }
       case "page.descriptorsChanged": {
         pageDescriptors.set(envelope.payload.descriptors);
+        treeRevision.set(envelope.payload.treeRevision);
         project.set({ ...project(), activePageSlug: envelope.payload.activePageSlug });
         return;
       }
@@ -695,6 +721,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     project,
     capabilities,
     pageDescriptors,
+    treeRevision,
     turn,
     preview,
     previewNotice,

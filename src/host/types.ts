@@ -31,11 +31,14 @@ export interface TerminalCapabilities {
  * `treeRoot`/`entryRelPath`/`expectedFiles` REPLACED a single `sourcePath` in task 15 (design
  * §6, §9.2): a page spans its whole closure now, so the mount names the tree it reads from and
  * the inventory it expects to find there rather than one file. `sourceHash` STAYS, and stays
- * the ENTRY file's own hash: it is this session's identity (`HostSessionIdentity`, every
- * `FrameEnvelope`, the supervisor's `sourceHashPrefix` diagnostics and the restart key), not a
- * verification input. `loadPage` verifies bytes against `expectedFiles`; the supervisor checks
- * that `sourceHash` agrees with the entry's row there before it mounts, so identity and
- * verification can never describe different bytes.
+ * the ENTRY file's own hash: it names this incarnation's source (`HostSessionIdentity`, every
+ * `FrameEnvelope`, the supervisor's `sourceHashPrefix` diagnostics), and the supervisor checks
+ * that it agrees with the entry's row in `expectedFiles` before it mounts, so identity and
+ * verification can never describe different bytes. `loadPage` verifies the rest of the closure
+ * against `expectedFiles` the same way.
+ *
+ * WHAT `sourceHash` IS NO LONGER is the supervisor's SESSION KEY — {@link
+ * HostSessionSpec.treeRevision} is (design-tree phase 2 Task 10).
  */
 export interface HostSessionSpec {
   readonly mode: HostMode;
@@ -47,8 +50,22 @@ export interface HostSessionSpec {
   readonly entryRelPath: string;
   /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
   readonly expectedFiles: readonly DesignFileEntryV1[];
-  /** The ENTRY file's own hash — this session's identity, see the interface header. */
+  /** The ENTRY file's own hash — this incarnation's source, see the interface header. */
   readonly sourceHash: string;
+  /**
+   * `computeTreeRevision` over the sorted inventory (`entities/design-tree`) — the key
+   * `supervisor.ts`'s `keyOf` identifies one logical session by (design-tree phase 2 Task 10).
+   *
+   * `(pageSlug, sourceHash)` was that key until then, and it could not see a shared-module edit:
+   * rewriting a module the page imports moves no ENTRY hash, so the supervisor matched the
+   * existing key and returned the LIVE child, whose module registry still held the old module.
+   * The revision covers every file under `treeRoot`, entry included.
+   *
+   * Carried by all four modes, not only `preview`: a one-shot smoke/export mount has no session
+   * to key, but it does render one specific revision of one specific tree, and naming it is what
+   * keeps this field a fact about the mount rather than a supervisor-only annotation.
+   */
+  readonly treeRevision: string;
   readonly kitApiVersion: number;
   readonly size: Size;
   readonly theme: string;

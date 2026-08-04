@@ -44,6 +44,7 @@ describe("real-spawn handshake + graceful stop (integration)", () => {
       // discovered where this test means it to be: in the child, after it reads the bytes.
       expectedFiles: [{ relPath: WRAPPER_RELPATH, sha256: "0".repeat(64) }],
       sourceHash: "0".repeat(64),
+      treeRevision: "0".repeat(64),
       kitApiVersion: CURRENT_KIT_API_VERSION,
       size: { w: 80, h: 24 },
       theme: "dark-default",

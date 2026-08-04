@@ -33,6 +33,7 @@ function specFor(overrides: Partial<HostSessionSpec> = {}): HostSessionSpec {
     entryRelPath: "pages/dash.tsx",
     expectedFiles: [{ relPath: "pages/dash.tsx", sha256: "a".repeat(64) }],
     sourceHash: "a".repeat(64),
+    treeRevision: "a".repeat(64),
     kitApiVersion: 1,
     size: { w: 80, h: 24 },
     theme: "dark-default",

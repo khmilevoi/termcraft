@@ -497,29 +497,56 @@ describe("mirror.apply — capabilities changed", () => {
 });
 
 describe("mirror.apply — pages", () => {
+  const TREE_REVISION_A = "a".repeat(64);
+
+  const descriptorsChanged = (treeRevision: string) =>
+    event("page.descriptorsChanged", {
+      reason: "turn-apply",
+      treeRevision,
+      descriptors: [
+        {
+          status: "ready",
+          pageSlug: "main",
+          entry: "pages/main.tsx",
+          sourceHash: TEST_SHA,
+          title: "Main",
+          minSize: { w: 80, h: 24 },
+          theme: "dark-default",
+          kitApiVersion: 1,
+        },
+      ],
+      changes: [],
+      activePageSlug: "main",
+    });
+
   test("page.descriptorsChanged replaces descriptors and updates the active page", () => {
     const m = createMirror();
-    m.apply(
-      event("page.descriptorsChanged", {
-        reason: "turn-apply",
-        descriptors: [
-          {
-            status: "ready",
-            pageSlug: "main",
-            entry: "pages/main.tsx",
-            sourceHash: TEST_SHA,
-            title: "Main",
-            minSize: { w: 80, h: 24 },
-            theme: "dark-default",
-            kitApiVersion: 1,
-          },
-        ],
-        changes: [],
-        activePageSlug: "main",
-      }),
-    );
+    m.apply(descriptorsChanged(TREE_REVISION_A));
     expect(m.pageDescriptors()).toHaveLength(1);
     expect(m.project().activePageSlug).toBe("main");
+  });
+
+  test("page.descriptorsChanged folds the tree revision it carries", () => {
+    const m = createMirror();
+    expect(m.treeRevision()).toBeNull();
+    m.apply(descriptorsChanged(TREE_REVISION_A));
+    expect(m.treeRevision()).toBe(TREE_REVISION_A);
+  });
+
+  /**
+   * THE DIRECTION OF THIS FALLBACK IS THE WHOLE POINT (design-tree phase 2 Task 10).
+   * `kernel.snapshot` is the SECOND producer of `pageDescriptors` and carries no tree revision
+   * at all (`KernelSnapshotPayloadV1` has no such field), so the mirror reports `null` rather
+   * than keeping the revision a previous `page.descriptorsChanged` left behind. `null` makes
+   * `ui/app/model/deps.ts`'s preview memo key change, which costs one redundant re-ask; keeping
+   * the stale value would make it MISS an ask, which is a preview frozen on stale content.
+   */
+  test("a kernel.snapshot carries no tree revision, so the mirror reports null rather than a stale one", () => {
+    const m = createMirror();
+    m.apply(descriptorsChanged(TREE_REVISION_A));
+    expect(m.treeRevision()).toBe(TREE_REVISION_A);
+    m.apply(snapshot({ activePageSlug: "main" }));
+    expect(m.treeRevision()).toBeNull();
   });
 });
 

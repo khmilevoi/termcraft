@@ -778,3 +778,193 @@ describe("the preview render-failure regression (2026-07-27)", () => {
     }
   }, 30_000);
 });
+
+/**
+ * THE SHARED-MODULE EDIT (design-tree phase 2 Task 10), driven through the composed app.
+ *
+ * A page spans its whole closure now, and every identity the preview path used to key on spoke
+ * only about ENTRY files: `page.descriptorsChanged`'s per-descriptor `sourceHash`, the UI memo in
+ * `ui/app/model/deps.ts`, and the host supervisor's own session key. So a turn that rewrote a
+ * module the page IMPORTS moved nothing any of them could see — the UI re-asked for no session,
+ * and had it asked, the supervisor would have returned the live child with the OLD module still
+ * in its registry. The user's edit was invisible for the rest of the run.
+ *
+ * WHAT THIS TEST ACTUALLY REACHES, stated exactly. Real `store` (a real on-disk project and two
+ * real committed turns), real `gate` (the source-only stages over the real staged bytes), the
+ * real `core` Kernel, and the real `ui` mirror + `createUiDeps` subscriber — which is the
+ * producer under test: nothing here dispatches `preview.selectPage` by hand. The host side is
+ * the FAKE `HostSupervisorPort` this file fakes everywhere (see the file header), so what is
+ * proven end to end is that a shared-module edit reaches `HostSupervisorPort.preview` as a
+ * SECOND call carrying a NEW session key for an entry file that did not move. That the REAL
+ * supervisor then spawns a second incarnation for that new key — rather than handing back the
+ * live child — is pinned separately, at its own layer, by
+ * `host/supervisor/model/supervisor.test.ts`'s "a spec differing ONLY in treeRevision produces a
+ * second incarnation, never the live one".
+ */
+describe("a shared-module edit re-establishes the preview session (design-tree phase 2 Task 10)", () => {
+  /** The shared module the page imports — the only file the SECOND turn rewrites. */
+  const SHARED_LABELS_REL_PATH = "shared/labels.ts";
+  const sharedLabels = (greeting: string) => `export const GREETING = "${greeting}"\n`;
+
+  /**
+   * The page, importing that shared module. `../../shared/labels` from
+   * `screens/home/index.tsx` resolves to `shared/labels.ts` through design §6's own
+   * extension probe (`entities/design-tree`'s `RESOLUTION_EXTENSIONS`) — a real closure edge,
+   * not a second copy of the text.
+   */
+  const HOME_PAGE_WITH_SHARED_IMPORT = `import { definePage, reatomComponent, Panel, Text } from "@termcraft/runtime"
+import { GREETING } from "../../shared/labels"
+export const meta = definePage({ kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark-default" })
+export default reatomComponent(() => <Panel id="p"><Text id="t">{GREETING}</Text></Panel>)
+`;
+
+  const PAGES_MANIFEST = JSON.stringify({
+    schemaVersion: 1,
+    pages: [{ slug: "home", entry: HOME_ENTRY_REL_PATH }],
+    requestedActivePage: "home",
+  });
+
+  /** Every `preview()` the composed Kernel asked the (faked) host port for, in order. */
+  function previewCalls(hostSupervisor: FakeHostSupervisorPort) {
+    return hostSupervisor.calls.filter(
+      (call): call is Extract<typeof call, { method: "preview" }> => call.method === "preview",
+    );
+  }
+
+  /**
+   * Writes the given TREE-relative files into the live turn's real workspace and completes the
+   * fake agent's run, resolving on the turn's terminal event. The WHOLE tree is written every
+   * time on purpose: it makes the entry file's bytes identical across both turns by
+   * construction, so "the entry hash did not move" is a fact this fixture establishes rather
+   * than one it assumes about how a workspace is seeded.
+   */
+  async function completeFakeAgentTurn(
+    composed: Awaited<ReturnType<typeof composeRealShell>>,
+    files: ReadonlyMap<string, string>,
+  ): Promise<EventEnvelopeV1> {
+    const startCalls = composed.agentBackend.calls.filter((call) => call.method === "startTurn");
+    const startCall = startCalls[startCalls.length - 1];
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    const workspacePath = composed.agentBackend.lastWorkspacePath();
+    if (workspacePath === null) throw new Error("fixture bug: no workspace path captured");
+
+    for (const [relPath, contents] of files) {
+      const absolute = path.join(workspacePath, "design", ...relPath.split("/"));
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, contents, "utf8");
+    }
+
+    const terminal = waitForEvent(
+      composed.kernel,
+      (envelope) => envelope.kind === "turn.completed" || envelope.kind === "turn.failed",
+    );
+    composed.agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "shared-module-session",
+    });
+    return terminal;
+  }
+
+  test("a turn that rewrites ONLY a shared module still asks the host for a new session on the unchanged active page", async () => {
+    const scratch = makeScratchDir("termcraft-shared-module-");
+    const root = path.join(scratch, "project");
+    const composed = await composeRealShell(root, path.join(scratch, "user-state"));
+    const { kernel, hostSupervisor } = composed;
+    const port = toRealKernelPort(kernel);
+
+    let renderer: ReactTestRenderer | null = null;
+    try {
+      const env: UiEnv = { root, workspaceIdentity: root, projectExists: false };
+      const deps = createUiDeps(port, { w: 120, h: 36 }, env, () =>
+        Promise.resolve({ kind: "ready", agent: "claude" }),
+      );
+      // The App stays MOUNTED for the whole test: `createUiDeps`'s Kernel subscription AND its
+      // `preview.selectPage` producer both live in one atom connect hook (RTM-L01), and that
+      // producer is exactly what this test is measuring.
+      const appElement = createElement(App, { deps }) as Parameters<
+        typeof createReactTestRenderer
+      >[0];
+      renderer = await createReactTestRenderer(appElement, { width: 120, height: 36 });
+      await renderer.waitForFrame((frame) => frame.includes("termcraft"));
+      await renderer.waitFor(() => deps.local.homeHealth().kind === "ready");
+
+      const projectReady = waitForEvent(
+        kernel,
+        (envelope) =>
+          envelope.kind === "kernel.stateChanged" &&
+          (envelope.payload as EventPayloadByKindV1["kernel.stateChanged"]).action ===
+            "kernel.project.finishOpen",
+      );
+      const firstAttemptStarted = waitForEvent(kernel, (e) => e.kind === "turn.attemptStarted");
+      await renderer.act(() => renderer?.mockInput.typeText("build the home page"));
+      await renderer.act(() => renderer?.mockInput.pressEnter());
+      await projectReady;
+      await firstAttemptStarted;
+
+      // ---- TURN 1: the page plus the shared module it imports ------------------------------
+      const firstTerminal = await completeFakeAgentTurn(
+        composed,
+        new Map([
+          ["pages.json", PAGES_MANIFEST],
+          [HOME_ENTRY_REL_PATH, HOME_PAGE_WITH_SHARED_IMPORT],
+          [SHARED_LABELS_REL_PATH, sharedLabels("hello from the fake agent")],
+        ]),
+      );
+      expect(firstTerminal.kind).toBe("turn.completed");
+
+      // Nothing is dispatched by hand here: the mounted App's own subscriber is what turns the
+      // post-commit `page.descriptorsChanged` into a `preview.selectPage`.
+      await renderer.waitFor(() => previewCalls(hostSupervisor).length >= 1);
+      const firstPreview = previewCalls(hostSupervisor)[0];
+      if (firstPreview === undefined) throw new Error("expected a first preview() call");
+      expect(firstPreview.pageSlug).toBe("home");
+
+      // ---- TURN 2: the shared module, and NOTHING else --------------------------------------
+      const secondAttemptStarted = waitForEvent(
+        kernel,
+        (e) => e.kind === "turn.attemptStarted",
+        10_000,
+      );
+      // Dispatched through the UI's own `Dispatcher`, not `kernel.dispatch` directly: it stamps
+      // the CURRENT `stateRevision` off the live mirror, and the first turn's terminal envelope
+      // is already stale by the time its own `page.descriptorsChanged` and the preview events
+      // that follow have landed.
+      const startResult = await deps.dispatcher.dispatch("turn.start", {
+        text: "reword the greeting",
+      });
+      if (startResult instanceof Error) throw startResult;
+      expect(startResult.status).toBe("accepted");
+      await secondAttemptStarted;
+
+      const secondTerminal = await completeFakeAgentTurn(
+        composed,
+        new Map([
+          ["pages.json", PAGES_MANIFEST],
+          // Byte-identical to turn 1 — this is what makes the entry hash stand still.
+          [HOME_ENTRY_REL_PATH, HOME_PAGE_WITH_SHARED_IMPORT],
+          [SHARED_LABELS_REL_PATH, sharedLabels("hello from the SECOND turn")],
+        ]),
+      );
+      expect(secondTerminal.kind).toBe("turn.completed");
+
+      // THE DEFECT, INVERTED: before Task 10 nothing here happened at all — the memo key and the
+      // supervisor key were both the entry hash, which did not move, so no second ask was ever
+      // made and the live child kept the pre-edit module.
+      await renderer.waitFor(() => previewCalls(hostSupervisor).length >= 2);
+      const calls = previewCalls(hostSupervisor);
+      const latest = calls[calls.length - 1];
+      if (latest === undefined) throw new Error("expected a second preview() call");
+
+      expect(latest.pageSlug).toBe("home");
+      // The entry file did not move — the whole point of the case.
+      expect(latest.sourceHash).toBe(firstPreview.sourceHash);
+      // ...and the session key did, so the host is being asked for a NEW session, not the live one.
+      expect(latest.treeRevision).not.toBe(firstPreview.treeRevision);
+    } finally {
+      if (renderer !== null) await renderer.destroy();
+      await composed.close();
+    }
+  }, 40_000);
+});

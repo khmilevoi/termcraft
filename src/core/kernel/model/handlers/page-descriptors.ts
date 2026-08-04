@@ -161,10 +161,21 @@ function routePassErrors(errors: readonly GateErrorV1[]): PassErrorRoutingV1 {
  * and a per-page `closureHash` together, so the descriptor path and the preview/export paths can
  * no longer derive different answers about the same tree.
  */
+export interface PageDescriptorsReadV1 {
+  readonly descriptors: readonly PageDescriptorV1[];
+  /**
+   * The revision of the tree these descriptors were read from (design-tree phase 2 Task 10).
+   * Returned alongside them rather than recomputed by the caller: it comes from the SAME
+   * `readCanonicalTreeIndex` read this function already performs, so the announcement can never
+   * name a revision the descriptors did not come from.
+   */
+  readonly treeRevision: string;
+}
+
 export async function buildPageDescriptors(
   context: HandlerContext,
   pages: readonly PageEntryV1[],
-): Promise<FailureDtoV1 | readonly PageDescriptorV1[]> {
+): Promise<FailureDtoV1 | PageDescriptorsReadV1> {
   // Read ONCE for the whole publish, like the manifest list threaded in above: the inventory the
   // Gate's smoke stage hash-verifies each page's closure against (design §9.2), the text the
   // whole-tree pass scans and type-checks, and that pass's own verdict.
@@ -283,7 +294,7 @@ export async function buildPageDescriptors(
           : { code: "GATE_REJECTED", safeMessage: "page failed Gate validation" },
     });
   }
-  return descriptors;
+  return { descriptors, treeRevision: index.treeRevision };
 }
 
 /**
@@ -322,10 +333,10 @@ export async function publishPageDescriptorsChanged(
     return [];
   }
 
-  const descriptors = await wrap(buildPageDescriptors(context, pages));
-  if ("code" in descriptors) {
+  const read = await wrap(buildPageDescriptors(context, pages));
+  if ("code" in read) {
     console.warn(
-      `core/kernel/handlers/page-descriptors: could not read a page source for a "${reason}" descriptor announcement: ${descriptors.safeMessage}`,
+      `core/kernel/handlers/page-descriptors: could not read a page source for a "${reason}" descriptor announcement: ${read.safeMessage}`,
     );
     return [];
   }
@@ -339,8 +350,9 @@ export async function publishPageDescriptorsChanged(
   const payload = buildPageDescriptorsChangedPayload(
     reason,
     context.currentPageDescriptors(),
-    descriptors,
+    read.descriptors,
     activePageSlug,
+    read.treeRevision,
   );
   if (payload instanceof PageDescriptorsAssemblyError) {
     console.warn(

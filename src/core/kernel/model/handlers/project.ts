@@ -600,9 +600,9 @@ async function runProjectReadySequence(
   // subscriber from the Kernel's own true state.
   if ("code" in pages) return [...events, ...blockOpen(context, "page-list-failed", pages)];
 
-  const descriptors = await wrap(buildPageDescriptors(context, pages));
-  if ("code" in descriptors) {
-    return [...events, ...blockOpen(context, "page-source-read-failed", descriptors)];
+  const descriptorsRead = await wrap(buildPageDescriptors(context, pages));
+  if ("code" in descriptorsRead) {
+    return [...events, ...blockOpen(context, "page-source-read-failed", descriptorsRead)];
   }
 
   // TD §12 step 9's "...export pointer..." (WP-5 Phase C task C4, D-Q3): this is the LIVE
@@ -625,8 +625,9 @@ async function runProjectReadySequence(
   const descriptorsPayload = buildPageDescriptorsChangedPayload(
     "project-open",
     [],
-    descriptors,
+    descriptorsRead.descriptors,
     activePageSlug,
+    descriptorsRead.treeRevision,
   );
   if (descriptorsPayload instanceof PageDescriptorsAssemblyError) {
     // Not otherwise propagated (errore rule 21) — the open itself still proceeds, since

@@ -155,11 +155,16 @@ ordinary finalize/terminalize arc.*
     BEFORE `turn.completed` in the same batch, so a subscriber that reacts to the turn
     ending already sees the pages that turn produced. This is the event the UI's page
     model is built from, and it is what closes the loop from "the agent wrote a page" to
-    "the designer sees it": the mirror takes `activePageSlug` and every descriptor's
-    `sourceHash` from this event alone, and the UI's own preview subscriber asks for a
-    session keyed on `(slug, sourceHash)` — so a turn that CREATES a page finally gives
-    the Workspace a page to preview, and a turn that EDITS the page already on screen
-    changes the key and re-establishes the session against the new bytes. A failure to
+    "the designer sees it": the mirror takes `activePageSlug`, every descriptor's
+    `sourceHash`, AND the payload's own `treeRevision` from this event alone, and the
+    UI's own preview subscriber asks for a session keyed on `(slug, treeRevision)` — so
+    a turn that CREATES a page finally gives the Workspace a page to preview, and a turn
+    that EDITS anything the page renders from re-establishes the session against the new
+    bytes. The revision, not the descriptor's `sourceHash`, is the key: `sourceHash` is
+    the ENTRY file's digest, so a turn that rewrites a module the page merely IMPORTS
+    moves no descriptor at all, and an entry-hash-keyed ask returned early and left the
+    live session rendering the pre-turn closure. `treeRevision` covers every file in the
+    tree, entry included, so it answers both cases with one key. A failure to
     assemble the announcement is logged, never propagated: the turn already committed
     durably, and an unannounced commit must not be reported as a failed one. The UI
     mirror (`ui/mirror/model/mirror.ts`) also reflects the resulting `stateRevision` and

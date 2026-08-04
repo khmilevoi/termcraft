@@ -42,6 +42,7 @@ function specFor(overrides: Partial<HostSessionSpec> = {}): HostSessionSpec {
     entryRelPath: "pages/dash.tsx",
     expectedFiles: [{ relPath: "pages/dash.tsx", sha256: "a".repeat(64) }],
     sourceHash: "a".repeat(64),
+    treeRevision: "a".repeat(64),
     kitApiVersion: 1,
     size: { w: 80, h: 24 },
     theme: "dark-default",
@@ -387,24 +388,62 @@ describe("createHostSupervisor — restart budget + backoff + circuit (§10, §1
 });
 
 describe("createHostSupervisor — keys, source change, frames relay (§10, §10.1)", () => {
-  test("a source change is a new key with a fresh sessionId + budget; a size change keeps the key/handle", async () => {
+  /**
+   * RE-KEYED ON `treeRevision` (design-tree phase 2 Task 10). The key used to be
+   * `(pageSlug, sourceHash)` — the ENTRY file's own hash — so a turn that rewrote a module the
+   * page merely IMPORTS matched the existing key, `preview()` handed back the SAME child, and
+   * that child's module registry still held the old shared module. Nothing re-mounted, so the
+   * user's edit never reached the screen. `treeRevision` covers every file in the tree, so a
+   * shared-module edit is a new key exactly like an entry-file edit already was; `sourceHash`
+   * stays on the spec as the mount's own verification against the entry's inventory row
+   * (`mount-request.ts`), which is a different question from session identity.
+   */
+  test("a tree-revision change is a new key with a fresh sessionId + budget; a size change keeps the key/handle", async () => {
     const factory = fakeFactory();
     const { supervisor } = makeSupervisor(factory);
     const a = supervisor.preview(specFor());
     if (a instanceof Error) throw a;
     await waitUntil(() => a.state() === "ready", "a ready");
 
-    // size change, same page + source hash → SAME handle, same sessionId, no new incarnation
+    // size change, same page + tree revision → SAME handle, same sessionId, no new incarnation
     const aResized = supervisor.preview(specFor({ size: { w: 100, h: 30 } }));
     if (aResized instanceof Error) throw aResized;
     expect(aResized.identity.sessionId).toBe(a.identity.sessionId);
     expect(factory.incarnations).toHaveLength(1);
 
-    // source change → new key, new sessionId, its own incarnation + budget
-    const b = supervisor.preview(specFor({ sourceHash: "b".repeat(64) }));
+    // an IDENTICAL spec reuses the one incarnation too — the key is the whole comparison
+    const aAgain = supervisor.preview(specFor());
+    if (aAgain instanceof Error) throw aAgain;
+    expect(aAgain.identity.sessionId).toBe(a.identity.sessionId);
+    expect(factory.incarnations).toHaveLength(1);
+
+    // tree-revision change → new key, new sessionId, its own incarnation + budget
+    const b = supervisor.preview(specFor({ treeRevision: "b".repeat(64) }));
     if (b instanceof Error) throw b;
     await waitUntil(() => b.state() === "ready", "b ready");
     expect(b.identity.sessionId).not.toBe(a.identity.sessionId);
+    expect(factory.incarnations).toHaveLength(2);
+    await supervisor.stopAll();
+  });
+
+  /**
+   * THE SHARED-MODULE EDIT, at the host's own layer: the entry file is byte-identical (same
+   * `sourceHash`) and only the tree moved. Under the old key this returned the LIVE child
+   * unchanged — the exact half of the defect the UI-side memo fix alone could not reach.
+   */
+  test("a spec differing ONLY in treeRevision produces a second incarnation, never the live one", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const before = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    if (before instanceof Error) throw before;
+    await waitUntil(() => before.state() === "ready", "before ready");
+
+    const after = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
+    if (after instanceof Error) throw after;
+    await waitUntil(() => after.state() === "ready", "after ready");
+
+    expect(after.identity.sourceHash).toBe(before.identity.sourceHash);
+    expect(after.identity.sessionId).not.toBe(before.identity.sessionId);
     expect(factory.incarnations).toHaveLength(2);
     await supervisor.stopAll();
   });

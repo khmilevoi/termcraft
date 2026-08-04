@@ -142,10 +142,19 @@ describe("computePageDescriptorChanges", () => {
 });
 
 describe("buildPageDescriptorsChangedPayload", () => {
+  /** A tree revision as `computeTreeRevision` produces it: a 64-char lowercase sha-256 hex. */
+  const TREE_REVISION = "e".repeat(64);
+
   test("assembles a schema-valid payload with the given reason, descriptors, and activePageSlug", () => {
     const before: readonly PageDescriptorV1[] = [];
     const after = [ready(slug("home"), HASH_A)];
-    const payload = buildPageDescriptorsChangedPayload("project-open", before, after, slug("home"));
+    const payload = buildPageDescriptorsChangedPayload(
+      "project-open",
+      before,
+      after,
+      slug("home"),
+      TREE_REVISION,
+    );
     if (payload instanceof Error) throw payload;
     expect(payload).toEqual(eventPayloadV1SchemaByKind["page.descriptorsChanged"].parse(payload));
     expect(payload.reason).toBe("project-open");
@@ -156,16 +165,44 @@ describe("buildPageDescriptorsChangedPayload", () => {
     ]);
   });
 
+  /**
+   * THE FIELD THE UI CANNOT ANSWER WITHOUT (design-tree phase 2 Task 10). Every descriptor
+   * carries only its own entry hash, so a publish whose sole change is a SHARED module is
+   * indistinguishable from a no-op to a consumer reading descriptors alone.
+   */
+  test("carries the tree revision the publish was read at, through the wire schema", () => {
+    const after = [ready(slug("home"), HASH_A)];
+    const payload = buildPageDescriptorsChangedPayload(
+      "turn-apply",
+      after,
+      after,
+      slug("home"),
+      TREE_REVISION,
+    );
+    if (payload instanceof Error) throw payload;
+    expect(payload.treeRevision).toBe(TREE_REVISION);
+    expect(payload.changes).toEqual([]);
+    expect(eventPayloadV1SchemaByKind["page.descriptorsChanged"].parse(payload).treeRevision).toBe(
+      TREE_REVISION,
+    );
+  });
+
   test("keeps the after list COMPLETE and in the exact given order, even with no changes", () => {
     const list = [ready(slug("b"), HASH_A), ready(slug("a"), HASH_B)];
-    const payload = buildPageDescriptorsChangedPayload("external-refresh", list, list, null);
+    const payload = buildPageDescriptorsChangedPayload(
+      "external-refresh",
+      list,
+      list,
+      null,
+      TREE_REVISION,
+    );
     if (payload instanceof Error) throw payload;
     expect(payload.descriptors).toEqual(list);
   });
 
   test("rejects a descriptor list with a duplicate pageSlug rather than silently accepting it", () => {
     const dup = [ready(slug("home"), HASH_A), ready(slug("home"), HASH_B)];
-    const payload = buildPageDescriptorsChangedPayload("turn-apply", [], dup, null);
+    const payload = buildPageDescriptorsChangedPayload("turn-apply", [], dup, null, TREE_REVISION);
     expect(payload).toBeInstanceOf(Error);
   });
 });

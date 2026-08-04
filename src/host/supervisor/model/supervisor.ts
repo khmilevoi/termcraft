@@ -22,7 +22,11 @@ import { createHostSession } from "./session";
 const DEFAULT_MAX_GLOBAL_HOSTS = 10;
 const DEFAULT_START_QUEUE_CAPACITY = 64;
 
-/** Per-key supervised session state. One `KeyState` lives for one logical `sessionId`. */
+/**
+ * Per-key supervised session state. One `KeyState` lives for one logical `sessionId`, and the
+ * key is `(pageSlug, treeRevision)` — see {@link keyOf}, which owns the whole argument for why
+ * the tree's revision and not the entry file's hash.
+ */
 interface KeyState {
   readonly key: string;
   spec: HostSessionSpec;
@@ -78,7 +82,15 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   const keys = new Map<string, KeyState>();
   const startQueue: KeyState[] = [];
 
-  const keyOf = (spec: HostSessionSpec) => `${spec.pageSlug} ${spec.sourceHash}`;
+  // THE SESSION KEY IS `(pageSlug, treeRevision)` (design-tree phase 2 Task 10) — it was
+  // `(pageSlug, sourceHash)`, the ENTRY file's hash, and that could not see a shared-module
+  // edit: a turn rewriting a module the page imports moves no entry hash, so `preview()` below
+  // matched this key and returned the LIVE child, whose module registry still held the old
+  // module. No re-mount, therefore no closure re-verification and nothing new on screen, for the
+  // rest of the run. `sourceHash` stays on the spec — `mount-request.ts` verifies the entry
+  // against its inventory row with it — because verifying the mount and identifying the session
+  // are different questions.
+  const keyOf = (spec: HostSessionSpec) => `${spec.pageSlug} ${spec.treeRevision}`;
   const hashPrefix = (spec: HostSessionSpec) => spec.sourceHash.slice(0, 8);
   const emit = (event: SupervisorEvent) => deps.onEvent?.(event);
 

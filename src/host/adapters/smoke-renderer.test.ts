@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { computeTreeRevision, createDesignTreeInventory } from "entities/design-tree";
 import type { SmokeRequest } from "gate";
 import { DEFAULT_THEME_ID } from "runtime";
 
@@ -19,6 +20,17 @@ function requestFor(overrides: Partial<SmokeRequest> = {}): SmokeRequest {
   };
 }
 
+/**
+ * The revision the adapter derives for a one-shot mount (design-tree phase 2 Task 10) —
+ * recomputed here from the SAME inventory rather than hardcoded, so this fixture cannot drift
+ * from `resolveMountTreeRevision`'s own answer.
+ */
+function treeRevisionFor(request: SmokeRequest): string {
+  const inventory = createDesignTreeInventory(request.expectedFiles);
+  if (inventory instanceof Error) throw inventory;
+  return computeTreeRevision(inventory);
+}
+
 describe("createSmokeRendererAdapter (M4: SmokeRenderer over runOneShotSession)", () => {
   test("render() reports { ok: true } for a clean one-shot session", async () => {
     const request = requestFor();
@@ -33,6 +45,7 @@ describe("createSmokeRendererAdapter (M4: SmokeRenderer over runOneShotSession)"
           entryRelPath: request.entryRelPath,
           expectedFiles: request.expectedFiles,
           sourceHash: request.sourceHash,
+          treeRevision: treeRevisionFor(request),
           kitApiVersion: request.kitApiVersion,
           size: request.size,
           theme: "dark-default",
@@ -59,6 +72,7 @@ describe("createSmokeRendererAdapter (M4: SmokeRenderer over runOneShotSession)"
             entryRelPath: request.entryRelPath,
             expectedFiles: request.expectedFiles,
             sourceHash: request.sourceHash,
+            treeRevision: treeRevisionFor(request),
             kitApiVersion: request.kitApiVersion,
             size: request.size,
             theme: "dark-default",
@@ -97,6 +111,7 @@ describe("createSmokeRendererAdapter (M4: SmokeRenderer over runOneShotSession)"
           entryRelPath: request.entryRelPath,
           expectedFiles: request.expectedFiles,
           sourceHash: request.sourceHash,
+          treeRevision: treeRevisionFor(request),
           kitApiVersion: request.kitApiVersion,
           size: request.size,
           theme: "dark-default",

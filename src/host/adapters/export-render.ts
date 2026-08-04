@@ -20,6 +20,7 @@ import {
 } from "../supervisor";
 import type { Clock, ExportTask, PreviewFrame, SpawnCommand, SpawnFn } from "../supervisor";
 import type { HostSessionSpec, TerminalCapabilities } from "../types";
+import { resolveMountTreeRevision } from "./mount-tree-revision";
 
 /**
  * `createExportRenderAdapter`: the production `ExportRenderPort` over `host`'s real
@@ -48,7 +49,11 @@ import type { HostSessionSpec, TerminalCapabilities } from "../types";
 
 const EXPORT_CAPABILITIES: TerminalCapabilities = { colorDepth: 24 };
 
-function toExportSessionSpec(task: ExportRenderTaskV1): HostSessionSpec {
+function toExportSessionSpec(task: ExportRenderTaskV1): SupervisorError | HostSessionSpec {
+  // `ExportRenderTaskV1` carries the inventory but no revision — see
+  // `resolveMountTreeRevision`'s own doc for why a one-shot derives it rather than threading it.
+  const treeRevision = resolveMountTreeRevision(task.expectedFiles);
+  if (treeRevision instanceof Error) return treeRevision;
   return {
     mode: "export",
     interactionMode: "static",
@@ -57,6 +62,7 @@ function toExportSessionSpec(task: ExportRenderTaskV1): HostSessionSpec {
     entryRelPath: task.entryRelPath,
     expectedFiles: task.expectedFiles,
     sourceHash: task.sourceHash,
+    treeRevision,
     kitApiVersion: task.kitApiVersion,
     size: task.size,
     theme: task.theme,
@@ -128,10 +134,9 @@ export function createExportRenderAdapter(deps: ExportRenderAdapterDeps): Export
   });
 
   async function renderOne(task: ExportRenderTaskV1): Promise<FailureDtoV1 | ExportRenderResultV1> {
-    const exportTask: ExportTask = {
-      spec: toExportSessionSpec(task),
-      manifestIndex: task.manifestIndex,
-    };
+    const spec = toExportSessionSpec(task);
+    if (spec instanceof Error) return toExportFailureDto(spec);
+    const exportTask: ExportTask = { spec, manifestIndex: task.manifestIndex };
     const outcomes = await pool.run([exportTask]);
     if (outcomes instanceof Error) return toExportFailureDto(outcomes);
     const outcome = outcomes[0];

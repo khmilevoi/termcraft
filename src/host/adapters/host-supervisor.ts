@@ -62,6 +62,7 @@ function toHostSessionSpec(spec: HostSessionSpecV1): HostSessionSpec {
     entryRelPath: spec.entryRelPath,
     expectedFiles: spec.expectedFiles,
     sourceHash: spec.sourceHash,
+    treeRevision: spec.treeRevision,
     kitApiVersion: spec.kitApiVersion,
     size: spec.size,
     theme: spec.theme,

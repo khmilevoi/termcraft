@@ -19,6 +19,7 @@ function specFor(size: Size, overrides: Partial<HostSessionSpec> = {}): HostSess
     entryRelPath: "pages/dash.tsx",
     expectedFiles: [{ relPath: "pages/dash.tsx", sha256: "a".repeat(64) }],
     sourceHash: "a".repeat(64),
+    treeRevision: "a".repeat(64),
     kitApiVersion: 1,
     size,
     theme: "dark-default",

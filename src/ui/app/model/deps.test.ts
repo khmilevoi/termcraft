@@ -13,6 +13,7 @@ import {
   createFakeKernel,
   createFakePreviewSession,
   event,
+  snapshot,
 } from "ui/testing";
 
 import { UiPreviewStreamError, createUiDeps } from "./deps";
@@ -289,9 +290,15 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
    * (`ui/mirror/model/mirror.ts`'s `case "page.descriptorsChanged"`). The descriptor list itself is
    * irrelevant to this subscriber — only the active slug is — so it stays empty here.
    */
+  /** A fixed tree revision for the publishes whose subject is the SLUG, not the tree. */
+  const TREE_REVISION_A = "a".repeat(64);
+  /** A second, different revision — what any change to any tree file produces. */
+  const TREE_REVISION_B = "b".repeat(64);
+
   const activePage = (activePageSlug: string | null) =>
     event("page.descriptorsChanged", {
       reason: "turn-apply",
+      treeRevision: TREE_REVISION_A,
       descriptors: [],
       changes: [],
       activePageSlug,
@@ -327,9 +334,10 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
   });
 
   /** The same event, but carrying a real descriptor for the active page — what the Kernel publishes after a turn commits. */
-  const activePageWithHash = (activePageSlug: string, sourceHash: string) =>
+  const activePageAt = (activePageSlug: string, sourceHash: string, treeRevision: string) =>
     event("page.descriptorsChanged", {
       reason: "turn-apply",
+      treeRevision,
       descriptors: [
         {
           status: "ready",
@@ -346,24 +354,82 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
       activePageSlug,
     });
 
-  test("re-selects the SAME page when a turn changes its source — the memo is keyed on content, not just the slug", async () => {
+  test("re-selects the SAME page when a turn changes its entry file — the memo is keyed on content, not just the slug", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     const unsubscribe = deps.runtime.subscribe(() => undefined);
     await tick();
 
-    kernel.emit(activePageWithHash("main", "a".repeat(64)));
+    kernel.emit(activePageAt("main", "a".repeat(64), TREE_REVISION_A));
     await tick();
     // The user asks the agent to change the page they are already looking at: same slug, new
     // bytes. A slug-keyed memo returned early here and the live session went on rendering the
-    // pre-turn source — the user's own change was invisible.
-    kernel.emit(activePageWithHash("main", "b".repeat(64)));
+    // pre-turn source — the user's own change was invisible. The entry file is one of the tree's
+    // own inventory rows, so rewriting it moves the tree revision too; both move together here
+    // because that is what actually happens on disk, never one without the other.
+    kernel.emit(activePageAt("main", "b".repeat(64), TREE_REVISION_B));
     await tick();
     // ...and an unchanged republish must still NOT re-establish a session.
-    kernel.emit(activePageWithHash("main", "b".repeat(64)));
+    kernel.emit(activePageAt("main", "b".repeat(64), TREE_REVISION_B));
     await tick();
 
     expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "main" }]);
+    unsubscribe();
+  });
+
+  /**
+   * THE SHARED-MODULE EDIT (design-tree phase 2 Task 10). A turn that rewrites a module the
+   * page IMPORTS moves no entry hash at all — `sourceHash` is the entry file's own digest — so a
+   * `sourceHash`-keyed memo returned early and the live session went on rendering the page built
+   * from the OLD shared module. FOREVER: nothing else ever re-asks for the active page. The
+   * `treeRevision` covers every file in the tree, so the shared module's new bytes move it.
+   */
+  test("re-selects the SAME page when only the tree revision moves — a shared-module edit changes no entry hash", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    const unchangedEntryHash = "c".repeat(64);
+    kernel.emit(activePageAt("main", unchangedEntryHash, TREE_REVISION_A));
+    await tick();
+    kernel.emit(activePageAt("main", unchangedEntryHash, TREE_REVISION_B));
+    await tick();
+    // ...and republishing the SAME revision must still NOT re-establish a session.
+    kernel.emit(activePageAt("main", unchangedEntryHash, TREE_REVISION_B));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([{ pageSlug: "main" }, { pageSlug: "main" }]);
+    unsubscribe();
+  });
+
+  /**
+   * THE FALLBACK'S DIRECTION, PINNED. `kernel.snapshot` is the second producer of
+   * `pageDescriptors` and carries no tree revision, so the mirror reports `null` and the memo
+   * key falls back to the slug alone. That must cost EXTRA asks, never a missed one: this test
+   * fails if the mirror ever starts carrying a stale revision across a snapshot, because the
+   * middle ask would then disappear.
+   */
+  test("a snapshot's missing tree revision biases toward MORE asks, never fewer", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    kernel.emit(activePageAt("main", "a".repeat(64), TREE_REVISION_A));
+    await tick();
+    // The slug is unchanged across the snapshot, so the revision going `null` is the ONLY thing
+    // that can move the key here.
+    kernel.emit(snapshot({ activePageSlug: "main" }));
+    await tick();
+    kernel.emit(activePageAt("main", "a".repeat(64), TREE_REVISION_A));
+    await tick();
+
+    expect(selectedPages(kernel)).toEqual([
+      { pageSlug: "main" },
+      { pageSlug: "main" },
+      { pageSlug: "main" },
+    ]);
     unsubscribe();
   });
 
@@ -503,7 +569,7 @@ describe("createUiDeps preview session (phase-8 Task 21 / Gap A §4.7)", () => {
 
   test("a stale refusal does not retire a NEWER tab pick that is still in flight", async () => {
     // Two clicks in quick succession leave two `preview.selectPage` dispatches in flight (the
-    // memo is keyed `slug@hash`, so the second is not swallowed). If the FIRST one's refusal
+    // memo is keyed `slug@treeRevision`, so the second is not swallowed). If the FIRST one's refusal
     // retired the override unconditionally, it would wipe the SECOND, still-pending pick — the
     // effective slug would snap back to the Kernel's page and the strip would once again show a
     // page the user did not choose. That is the very defect this branch exists to fix,

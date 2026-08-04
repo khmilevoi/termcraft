@@ -37,6 +37,7 @@ function pageDescriptorsEnvelope(
 ): EventOf<"page.descriptorsChanged"> {
   return event("page.descriptorsChanged", {
     reason: "project-open",
+    treeRevision: "f".repeat(64),
     descriptors,
     changes: [],
     activePageSlug: descriptors[0]?.pageSlug ?? null,

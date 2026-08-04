@@ -146,6 +146,13 @@ import { noOpOutcome, startedOutcome } from "./types";
  */
 export interface ResolvedPageSettingsV1 {
   readonly sourceHash: Sha256Hex;
+  /**
+   * The revision of the tree {@link expectedFiles} was read from — `computeTreeRevision` over
+   * that same sorted inventory (design-tree phase 2 Task 10). Taken from the SAME
+   * `readCanonicalTreeIndex` read as `expectedFiles` so a session can never be keyed on one
+   * revision while mounting the inventory of another; it is the host supervisor's session key.
+   */
+  readonly treeRevision: string;
   /** The ABSOLUTE `…/design` directory this page is mounted from (task 15, design §9.2). */
   readonly treeRoot: string;
   /** TREE-relative — the `entry` `design/pages.json` bound to the slug, never slug-derived. */
@@ -359,6 +366,7 @@ async function resolvePageSettings(
 
   return {
     sourceHash: source.sourceHash,
+    treeRevision: index.treeRevision,
     treeRoot: designTreeRoot(deps.projectStore.root),
     entryRelPath: source.relPath,
     expectedFiles: index.inventory.files,
@@ -514,6 +522,11 @@ function selectCurrentSource(
       entryRelPath: settings.entryRelPath,
       expectedFiles: settings.expectedFiles,
       sourceHash: settings.sourceHash,
+      // The supervisor's session key (design-tree phase 2 Task 10) — the same revision
+      // `expectedFiles` above was read at, so the key and the mounted inventory always describe
+      // one tree. A shared-module edit moves this and nothing else on the spec, which is exactly
+      // what makes the host re-establish the session for an otherwise unchanged page.
+      treeRevision: settings.treeRevision,
       kitApiVersion: settings.kitApiVersion,
       size: sizeFromWorkspaceState(workspace.state),
       theme: workspace.state.themeOverride ?? settings.theme,

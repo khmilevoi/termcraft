@@ -42,13 +42,19 @@ interface KeyState {
 }
 
 /**
- * The per-`(pageSlug, sourceHash)` restart budget + base-2 backoff + circuit
+ * The per-`(pageSlug, treeRevision)` restart budget + base-2 backoff + circuit
  * breaker (host-supervision §10). Pure and clock-free: `now` is a parameter, so a
  * budgeted failure count is a deterministic function of the recorded timestamps.
  * "60 s continuous ready clears the history" is realized by the rolling-60 s
  * window prune in `recordFailure` — a child that stays `ready` 60 s ages every
  * prior failure out of the window, which is exactly that clear (no background
  * timer needed). The circuit latches open until a user `retry` clears the key.
+ *
+ * The budget FOLLOWS `supervisor.ts`'s own key, whatever it is: this module is keyed by an
+ * opaque `string` and never derives one. That key became `(pageSlug, treeRevision)` in
+ * design-tree phase 2 Task 10 (it was `(pageSlug, sourceHash)`), so a crash-loop budget now
+ * belongs to one page at one tree revision — any tree edit starts a fresh budget, exactly as
+ * any entry-file edit already did.
  */
 export function createRestartPolicy(opts?: {
   windowMs?: number;

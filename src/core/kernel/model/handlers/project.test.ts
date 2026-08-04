@@ -1196,8 +1196,9 @@ describe("project.open", () => {
 
       const manifest = await designReader.readManifest();
       if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
-      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
-      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
 
       const bySlug = new Map(descriptors.map((descriptor) => [descriptor.pageSlug, descriptor]));
       const homeDescriptor = bySlug.get(home);
@@ -1237,8 +1238,9 @@ describe("project.open", () => {
 
       const manifest = await designReader.readManifest();
       if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
-      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
-      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
 
       // BOTH pages, not just one, and not none: the fake's default `runPage` passes every page, so
       // a version that dropped this error would publish two "ready" descriptors here.
@@ -1281,8 +1283,9 @@ describe("project.open", () => {
 
       const manifest = await designReader.readManifest();
       if ("code" in manifest) throw new Error("fixture bug: readManifest failed");
-      const descriptors = await buildPageDescriptors(harness.handlerContext, manifest.pages);
-      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, manifest.pages);
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
 
       expect(descriptors.map((descriptor) => descriptor.status)).toEqual(["ready"]);
       expect(warnSpy).toHaveBeenCalled();
@@ -1316,11 +1319,12 @@ describe("project.open", () => {
       // `home`, so NOTHING the pass reports can ever name `ghost` in `blockedPages` — and the
       // fake's default `runPage` passes every page. Without the `unjudged` guard this publishes
       // `ghost` as "ready" on the strength of a type check that never covered it.
-      const descriptors = await buildPageDescriptors(harness.handlerContext, [
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, [
         ...manifest.pages,
         { slug: ghost, entry: GHOST_ENTRY },
       ]);
-      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
 
       const bySlug = new Map(descriptors.map((descriptor) => [descriptor.pageSlug, descriptor]));
       const ghostDescriptor = bySlug.get(ghost);
@@ -1363,10 +1367,11 @@ describe("project.open", () => {
       const harness = buildTestContext({ gateRunner, designReader });
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-      const descriptors = await buildPageDescriptors(harness.handlerContext, [
+      const descriptorsRead = await buildPageDescriptors(harness.handlerContext, [
         { slug: home, entry: "pages/home.tsx" },
       ]);
-      if ("code" in descriptors) throw new Error("fixture bug: buildPageDescriptors failed");
+      if ("code" in descriptorsRead) throw new Error("fixture bug: buildPageDescriptors failed");
+      const descriptors = descriptorsRead.descriptors;
 
       expect(descriptors.map((descriptor) => descriptor.status)).toEqual(["ready"]);
       expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('"about"'))).toBe(true);

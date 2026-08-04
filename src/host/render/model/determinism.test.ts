@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
+import { computeTreeRevision } from "entities/design-tree";
+
 import { EMBEDDED_RUNTIME_DECLARATION } from "../../protocol";
 import type { FrameIdentity } from "../../protocol";
 import { computeSourceHash } from "../../session";
@@ -79,6 +81,9 @@ async function buildSpec(): Promise<HostSessionSpec> {
     entryRelPath: FIXTURE_RELPATH,
     expectedFiles: [{ relPath: FIXTURE_RELPATH, sha256: computeSourceHash(bytes) }],
     sourceHash: computeSourceHash(bytes),
+    treeRevision: computeTreeRevision({
+      files: [{ relPath: FIXTURE_RELPATH, sha256: computeSourceHash(bytes) }],
+    }),
     kitApiVersion: 1,
     size: { w: 20, h: 5 },
     theme: "dark-default", // the fixture's own `meta.theme` (probe-page.tsx)

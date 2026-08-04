@@ -37,6 +37,10 @@ function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
 }
 
+/** The entry hash and the tree revision every `baseSpec()` carries — asserted on by the recorded fake-port calls below. */
+const BASE_SOURCE_HASH = "a".repeat(64);
+const BASE_TREE_REVISION = "a".repeat(64);
+
 function baseSpec(overrides: Partial<HostSessionSpecV1> = {}): HostSessionSpecV1 {
   return {
     mode: "preview",
@@ -45,7 +49,8 @@ function baseSpec(overrides: Partial<HostSessionSpecV1> = {}): HostSessionSpecV1
     treeRoot: "/proj/.termcraft/design",
     entryRelPath: "pages/home.tsx",
     expectedFiles: [{ relPath: "pages/home.tsx", sha256: "0".repeat(64) }],
-    sourceHash: "a".repeat(64),
+    sourceHash: BASE_SOURCE_HASH,
+    treeRevision: BASE_TREE_REVISION,
     kitApiVersion: 1,
     size: { w: 80, h: 24 },
     theme: "dark",
@@ -162,7 +167,14 @@ describe("createPreviewSessionCommands — selectPage/selectCurrent/selectHistor
 
       expect(outcome).toEqual({ kind: "accepted" });
       expect(h.machine.phase()).toBe("live");
-      expect(h.hostSupervisor.calls).toEqual([{ method: "preview", pageSlug: "home" }]);
+      expect(h.hostSupervisor.calls).toEqual([
+        {
+          method: "preview",
+          pageSlug: "home",
+          treeRevision: BASE_TREE_REVISION,
+          sourceHash: BASE_SOURCE_HASH,
+        },
+      ]);
     });
   });
 
@@ -400,8 +412,18 @@ describe("createPreviewSessionCommands — retry", () => {
       expect(outcome).toEqual({ kind: "accepted" });
       expect(h.machine.phase()).toBe("live");
       expect(h.hostSupervisor.calls).toEqual([
-        { method: "preview", pageSlug: "home" },
-        { method: "preview", pageSlug: "home" },
+        {
+          method: "preview",
+          pageSlug: "home",
+          treeRevision: BASE_TREE_REVISION,
+          sourceHash: BASE_SOURCE_HASH,
+        },
+        {
+          method: "preview",
+          pageSlug: "home",
+          treeRevision: BASE_TREE_REVISION,
+          sourceHash: BASE_SOURCE_HASH,
+        },
       ]);
     });
   });
@@ -441,7 +463,14 @@ describe("createPreviewSessionCommands — retry", () => {
 
       expect(outcome).toEqual({ kind: "accepted" });
       expect(h.machine.phase()).toBe("live");
-      expect(h.hostSupervisor.calls).toEqual([{ method: "preview", pageSlug: "about" }]);
+      expect(h.hostSupervisor.calls).toEqual([
+        {
+          method: "preview",
+          pageSlug: "about",
+          treeRevision: BASE_TREE_REVISION,
+          sourceHash: BASE_SOURCE_HASH,
+        },
+      ]);
     });
   });
 
@@ -467,7 +496,14 @@ describe("createPreviewSessionCommands — retry", () => {
       const outcome = await wrap(h.commands.retry());
 
       expect(outcome).toEqual({ kind: "accepted" });
-      expect(h.hostSupervisor.calls).toEqual([{ method: "preview", pageSlug: "pricing" }]);
+      expect(h.hostSupervisor.calls).toEqual([
+        {
+          method: "preview",
+          pageSlug: "pricing",
+          treeRevision: BASE_TREE_REVISION,
+          sourceHash: BASE_SOURCE_HASH,
+        },
+      ]);
     });
   });
 });

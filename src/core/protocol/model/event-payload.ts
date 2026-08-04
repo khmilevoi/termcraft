@@ -664,12 +664,26 @@ export type PageDescriptorsChangedReasonV1 = (typeof PAGE_DESCRIPTORS_CHANGED_RE
  * `page.descriptorsChanged`'s payload, given verbatim (§9 row, KCC:797): "The
  * descriptor list is complete and ordered; each non-removed descriptor and every
  * change carries its exact before/after source-hash binding."
+ *
+ * `treeRevision` IS THE ONE FIELD KCC:797 DOES NOT DESCRIBE, and the multi-file design
+ * tree's §7 is the newer authority for it (design-tree phase 2 Task 10). KCC was written
+ * when a page WAS one file, so its "exact before/after source-hash binding" per descriptor
+ * genuinely was the whole story about what a consumer is looking at. A page now spans its
+ * closure, and every field above still speaks only about ENTRY files — so a turn that
+ * rewrites a module three pages import moves no `sourceHash`, produces no `changes` entry,
+ * and is byte-for-byte identical to a no-op publish for anyone reading this payload. The UI
+ * cannot ask "is the live preview still rendering the right tree?" from the fields KCC
+ * lists; the tree's own revision (`computeTreeRevision` over the sorted inventory,
+ * `entities/design-tree`) is what answers it, and it is what `ui/app/model/deps.ts` keys
+ * its preview request on.
  */
 export interface PageDescriptorsChangedPayloadV1 {
   readonly reason: PageDescriptorsChangedReasonV1;
   readonly descriptors: readonly PageDescriptorV1[];
   readonly changes: readonly PageDescriptorChangeV1[];
   readonly activePageSlug: string | null;
+  /** The canonical tree's revision at the moment this list was read — see the interface header. */
+  readonly treeRevision: string;
 }
 
 export const pageDescriptorsChangedPayloadV1Schema = z.strictObject({
@@ -677,6 +691,9 @@ export const pageDescriptorsChangedPayloadV1Schema = z.strictObject({
   descriptors: z.array(pageDescriptorV1Schema).readonly(),
   changes: z.array(pageDescriptorChangeV1Schema).readonly(),
   activePageSlug: pageSlugSchema.nullable(),
+  // `computeTreeRevision` folds a sha-256 Merkle hash, so the wire shape is the same 64-char
+  // lowercase hex every other digest on this contract uses — validated, never merely `z.string()`.
+  treeRevision: sha256HexSchema,
 });
 
 // ---------------------------------------------------------------------------

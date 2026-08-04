@@ -36,7 +36,9 @@ document here that addresses how the source tree itself is laid out.
 > (WP-1, verified by `src/entrypoint/model/installed-package.test.ts` against an
 > installed tarball). The live preview loop is now closed end to end (Gap A, spec §2.2/§4.7):
 > `kernel.preview.enable` fires once trust resolves to `trusted`, the shell asks for a session
-> for the active page keyed on its `(slug, sourceHash)`, `preview.sessionReady` is published as
+> for the active page keyed on `(slug, treeRevision)` — the whole design tree's revision, so an
+> edit to a shared module re-keys the ask exactly as an edit to the page's own entry file does —
+> `preview.sessionReady` is published as
 > a real event rather than only as an internal machine transition, and a committed turn
 > republishes `page.descriptorsChanged` (`reason: "turn-apply"`) so a generated or edited page
 > reaches the shell's page model and re-keys that ask — which is what makes "describe a TUI and

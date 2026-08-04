@@ -11,6 +11,7 @@ const spec: HostSessionSpec = {
   entryRelPath: "pages/dashboard.tsx",
   expectedFiles: [{ relPath: "pages/dashboard.tsx", sha256: "a".repeat(64) }],
   sourceHash: "a".repeat(64),
+  treeRevision: "a".repeat(64),
   kitApiVersion: 1,
   size: { w: 80, h: 24 },
   theme: "dark-default",

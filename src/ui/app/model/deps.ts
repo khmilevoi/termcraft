@@ -15,7 +15,7 @@ import {
 } from "@reatom/core";
 import * as errore from "errore";
 
-import type { Sha256Hex, UUIDv7 } from "core/protocol";
+import type { UUIDv7 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
@@ -294,20 +294,29 @@ export function createUiDeps(
     () => pageOverride() ?? mirror.project().activePageSlug,
     "ui.app.activePageSlug",
   );
-  // What the preview session is asked for: the effective page AND the bytes it should be
-  // rendering. The `sourceHash` half is why this is not just `activePageSlug` — a turn that
-  // rewrites the page already on screen changes no slug at all, and a slug-keyed request would
-  // leave the host rendering the pre-turn source (the 2026-07-26 defect `requestPreviewForActive
-  // Page`'s own memo was rebuilt to fix). A page with no descriptor yet reports a `null` hash
-  // rather than inventing one.
+  // What the preview session is asked for: the effective page AND the TREE it should be
+  // rendering from. The `treeRevision` half is why this is not just `activePageSlug` — a turn
+  // that rewrites the page already on screen changes no slug at all, and a slug-keyed request
+  // would leave the host rendering the pre-turn source (the 2026-07-26 defect
+  // `requestPreviewForActivePage`'s own memo was rebuilt to fix).
+  //
+  // WHY THE TREE REVISION AND NOT THE DESCRIPTOR'S `sourceHash` (design-tree phase 2 Task 10).
+  // `sourceHash` is the ENTRY file's own digest, and a page is its whole closure now: a turn
+  // that rewrites a shared module three pages import moves no entry hash at all, so an
+  // entry-hash-keyed request returned early and the live session kept rendering the OLD shared
+  // module — forever, since nothing else ever re-asks for the active page. `treeRevision`
+  // (`computeTreeRevision` over the whole sorted inventory) moves for ANY file in the tree,
+  // which strictly includes every entry file, so it answers the entry-edit case too.
+  // `null` when the mirror has not seen a `page.descriptorsChanged` yet (a `kernel.snapshot`
+  // carries no revision) — never an invented value; see {@link Mirror.treeRevision} for why
+  // that absence must cost extra asks rather than skipped ones.
   const activePageRequest = computed<Readonly<{
     slug: string;
-    sourceHash: Sha256Hex | null;
+    treeRevision: string | null;
   }> | null>(() => {
     const slug = activePageSlug();
     if (slug === null) return null;
-    const descriptor = mirror.pageDescriptors().find((entry) => entry.pageSlug === slug);
-    return { slug, sourceHash: descriptor?.sourceHash ?? null };
+    return { slug, treeRevision: mirror.treeRevision() };
   }, "ui.app.activePageRequest");
 
   /**
@@ -411,9 +420,11 @@ export function createUiDeps(
        * REGRESSION FIX (2026-07-27) — leave a session the Kernel has already replaced.
        *
        * The loop below re-reads `port.preview()` only when the CURRENT frame stream ends, so a
-       * replacement session is picked up only if the predecessor's stream closes. Every page
-       * edit produces one: `HostSupervisor.preview` keys by page + source hash, so a new hash
-       * is a new key, a new relay, and a new `PreviewSession` object. `kernel.ts`'s
+       * replacement session is picked up only if the predecessor's stream closes. Every design
+       * edit produces one: `HostSupervisor.preview` keys by page + TREE REVISION (design-tree
+       * phase 2 Task 10 — it keyed by page + entry source hash until then, which a shared-module
+       * edit never moved), so an edited tree is a new key, a new relay, and a new
+       * `PreviewSession` object. `kernel.ts`'s
        * `setActivePreviewSession` now closes the predecessor, which ends its stream — this is
        * the UI's own half of that guarantee, so a producer that ever abandons a session
        * silently again costs one stale frame instead of freezing the preview on
@@ -474,11 +485,16 @@ export function createUiDeps(
       // forever. The user's own change was invisible unless they switched pages and back, which
       // a one-page project (the state every project starts in) cannot even do.
       //
-      // The page's `sourceHash` is the honest key: it is what actually decides whether the host
-      // is rendering the right bytes, and the Kernel now republishes it after every commit
-      // (`core/kernel/model/handlers/page-descriptors.ts`). A page with no descriptor yet falls
-      // back to the slug alone rather than inventing a hash — one redundant re-select is
-      // cheaper than a preview stuck on stale content.
+      // THE KEY IS THE TREE'S REVISION, NOT THE ENTRY FILE'S HASH (design-tree phase 2 Task 10).
+      // The 2026-07-26 fix keyed on the page's own `sourceHash`, which was the whole story while
+      // a page WAS one file. A page is its whole closure now: a turn that rewrites a shared
+      // module moves no entry hash, so that key returned early again and the live session kept
+      // rendering the pre-edit closure — the same defect, one road over, and with no way out at
+      // all (switching pages and back does not help; the other page's closure is stale too).
+      // `treeRevision` covers every file in the tree, so it answers both cases with one key.
+      // A mirror that has not seen a `page.descriptorsChanged` yet reports `null`, and the
+      // fallback below keys on the slug alone rather than inventing a revision — deliberately
+      // biased toward one redundant re-select over a preview stuck on stale content.
       let lastRequestedPageKey: string | null = null;
       // TWO WAYS TO RETIRE THE TAB STRIP'S OPTIMISTIC PICK, and they are not interchangeable.
       // Both are declared HERE, above their first use, for the same reason `active` is:
@@ -491,7 +507,7 @@ export function createUiDeps(
       // is nothing to compare against.
       const retirePageOverride = bind(() => pageOverride.set(null));
       // SCOPED TO ITS OWN DISPATCH — the two terminal-refusal branches below. The memo is keyed
-      // `slug@hash`, so two quick clicks leave two `preview.selectPage` dispatches in flight at
+      // `slug@treeRevision`, so two quick clicks leave two `preview.selectPage` dispatches in flight at
       // once. An unconditional clear would let the FIRST one's refusal wipe the SECOND,
       // still-pending pick — the effective slug would snap back to the Kernel's page and the strip
       // would again mark a page the user did not choose, which is precisely the defect this branch
@@ -504,61 +520,63 @@ export function createUiDeps(
         if (pageOverride() !== rawPageSlug) return;
         pageOverride.set(null);
       });
-      const requestPreviewForActivePage = bind((rawPageSlug: string, sourceHash: string | null) => {
-        const pageKey = `${rawPageSlug}@${sourceHash ?? ""}`;
-        if (pageKey === lastRequestedPageKey) return;
-        // `ProjectMirror.activePageSlug` is a plain `string` (the mirror folds whatever the Kernel
-        // published), while `preview.selectPage`'s payload wants the branded `PageSlug`. Validated
-        // through the existing guard rather than cast — and a slug that does not parse is refused
-        // and logged, never sent on (errore rule 21; "never fabricate a fact").
-        const pageSlug = parsePageSlug(rawPageSlug);
-        if (pageSlug instanceof Error) {
+      const requestPreviewForActivePage = bind(
+        (rawPageSlug: string, treeRevision: string | null) => {
+          const pageKey = `${rawPageSlug}@${treeRevision ?? ""}`;
+          if (pageKey === lastRequestedPageKey) return;
+          // `ProjectMirror.activePageSlug` is a plain `string` (the mirror folds whatever the Kernel
+          // published), while `preview.selectPage`'s payload wants the branded `PageSlug`. Validated
+          // through the existing guard rather than cast — and a slug that does not parse is refused
+          // and logged, never sent on (errore rule 21; "never fabricate a fact").
+          const pageSlug = parsePageSlug(rawPageSlug);
+          if (pageSlug instanceof Error) {
+            lastRequestedPageKey = pageKey;
+            console.warn(
+              `UI preview.selectPage skipped — active page slug "${rawPageSlug}" is not a valid PageSlug:`,
+              pageSlug.message,
+            );
+            return;
+          }
           lastRequestedPageKey = pageKey;
-          console.warn(
-            `UI preview.selectPage skipped — active page slug "${rawPageSlug}" is not a valid PageSlug:`,
-            pageSlug.message,
-          );
-          return;
-        }
-        lastRequestedPageKey = pageKey;
-        // DIAGNOSTIC (HANDOFF Finding 2): the ONE place a page choice becomes a Kernel command.
-        // Without this the log could not distinguish "the memo swallowed the click", "the
-        // dispatch was made and refused", and "the dispatch was accepted and the handler never
-        // ran" — three different bugs that all look identical as silence.
-        trace("ui.preview.request", { pageSlug, sourceHash, pageKey });
-        void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
-          // A PAGE SWITCH THAT DID NOT HAPPEN MUST NOT STAY ON THE TAB STRIP (defect fix,
-          // 2026-07-28). `ui/workspace/model/page-selection.ts` sets `pageOverride` optimistically
-          // BEFORE dispatching, and the only thing that used to retire it was the KERNEL's own
-          // active slug CHANGING — which a refusal, by definition, does not do. So every terminal
-          // refusal left the strip marking a page the preview was not showing, permanently:
-          // `activePageSlug` is `override ?? Kernel`, so the whole Workspace agreed on a page that
-          // was never established. Retiring it here drops the effective slug back to the Kernel's
-          // own page, which is what is actually on screen. Both branches below are terminal, so
-          // both must clear it — a rejected dispatch and a failed one are equally unbacked.
-          if (result instanceof Error) {
-            // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
-            // failures that make the UI unusable, and a preview that did not start is not one.
-            console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
-            lastRequestedPageKey = null;
-            retirePageOverrideIfCurrent(rawPageSlug);
-            return;
-          }
-          if (result.status === "rejected") {
-            // Not fatal — an untrusted project keeps preview `disabled` by design (spec §2.2),
-            // and the refusal is the honest outcome there. Clearing the memo lets a later
-            // descriptor change retry once the guard's precondition actually holds.
-            console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
-            lastRequestedPageKey = null;
-            retirePageOverrideIfCurrent(rawPageSlug);
-            return;
-          }
-          // The accepted path used to be silent, which is what made Finding 2 unreadable: an
-          // accepted dispatch and a never-attempted one left the same (empty) evidence. Same
-          // channel and shape `page-selection.ts` already uses for `selection.clear`.
-          trace("ui.dispatch.result", { kind: "preview.selectPage", pageSlug, result });
-        });
-      });
+          // DIAGNOSTIC (HANDOFF Finding 2): the ONE place a page choice becomes a Kernel command.
+          // Without this the log could not distinguish "the memo swallowed the click", "the
+          // dispatch was made and refused", and "the dispatch was accepted and the handler never
+          // ran" — three different bugs that all look identical as silence.
+          trace("ui.preview.request", { pageSlug, treeRevision, pageKey });
+          void dispatcher.dispatch("preview.selectPage", { pageSlug }).then((result) => {
+            // A PAGE SWITCH THAT DID NOT HAPPEN MUST NOT STAY ON THE TAB STRIP (defect fix,
+            // 2026-07-28). `ui/workspace/model/page-selection.ts` sets `pageOverride` optimistically
+            // BEFORE dispatching, and the only thing that used to retire it was the KERNEL's own
+            // active slug CHANGING — which a refusal, by definition, does not do. So every terminal
+            // refusal left the strip marking a page the preview was not showing, permanently:
+            // `activePageSlug` is `override ?? Kernel`, so the whole Workspace agreed on a page that
+            // was never established. Retiring it here drops the effective slug back to the Kernel's
+            // own page, which is what is actually on screen. Both branches below are terminal, so
+            // both must clear it — a rejected dispatch and a failed one are equally unbacked.
+            if (result instanceof Error) {
+              // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
+              // failures that make the UI unusable, and a preview that did not start is not one.
+              console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
+              lastRequestedPageKey = null;
+              retirePageOverrideIfCurrent(rawPageSlug);
+              return;
+            }
+            if (result.status === "rejected") {
+              // Not fatal — an untrusted project keeps preview `disabled` by design (spec §2.2),
+              // and the refusal is the honest outcome there. Clearing the memo lets a later
+              // descriptor change retry once the guard's precondition actually holds.
+              console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
+              lastRequestedPageKey = null;
+              retirePageOverrideIfCurrent(rawPageSlug);
+              return;
+            }
+            // The accepted path used to be silent, which is what made Finding 2 unreadable: an
+            // accepted dispatch and a never-attempted one left the same (empty) evidence. Same
+            // channel and shape `page-selection.ts` already uses for `selection.clear`.
+            trace("ui.dispatch.result", { kind: "preview.selectPage", pageSlug, result });
+          });
+        },
+      );
       // THE ESCAPE FROM A BLOCKED OPEN (defect fix, 2026-07-26).
       //
       // `handlers/project.ts` funnels nine startup failures through `blockOpen`, which leaves the
@@ -632,7 +650,7 @@ export function createUiDeps(
       // the same session twice.
       const unsubscribeActivePage = activePageRequest.subscribe((request) => {
         if (request === null) return;
-        requestPreviewForActivePage(request.slug, request.sourceHash);
+        requestPreviewForActivePage(request.slug, request.treeRevision);
       });
       void (async () => {
         // Frames flow through the PreviewSession facade, not the event stream (§7.6). Iterate
